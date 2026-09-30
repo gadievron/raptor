@@ -1,5 +1,6 @@
 """Tests for run provenance manifest capture (core/run/provenance.py)."""
 
+import hashlib
 import json
 import shutil
 import subprocess
@@ -155,6 +156,95 @@ class TestSourceControlSnapshot(unittest.TestCase):
             snap = source_control_snapshot(repo)
             self.assertTrue(snap["dirty"])
             self.assertIsNone(snap["diff_sha256"])
+
+    @unittest.skipUnless(_GIT, "git not available")
+    def test_untracked_only_dirt_is_verifiable(self):
+        # HONESTY CONTRACT: dirty=True must never be a bare, unverifiable
+        # claim. Untracked-only dirt states the dirt composition, carries a
+        # reproducible fingerprint of WHAT was dirty (sha256 over the sorted
+        # porcelain lines — hash only, never content), and names WHY the
+        # tracked-diff hash is null.
+        with TemporaryDirectory() as d:
+            repo = Path(d)
+            _init_repo(repo)
+            (repo / "new.txt").write_text("x\n")
+            snap = source_control_snapshot(repo)
+            self.assertTrue(snap["dirty"])
+            self.assertIsNone(snap["diff_sha256"])
+            self.assertEqual(snap["dirty_reason"], "untracked_only")
+            self.assertEqual(snap["diff_sha256_reason"], "untracked_only")
+            expected = hashlib.sha256(b"?? new.txt").hexdigest()
+            self.assertEqual(snap["status_sha256"], expected)
+
+    @unittest.skipUnless(_GIT, "git not available")
+    def test_tracked_dirt_states_reason_without_diff_excuse(self):
+        # Tracked dirt: composition + fingerprint recorded, diff hash set —
+        # so no diff_sha256_reason key (the reason exists only to explain a
+        # null hash, never to shadow a present one).
+        with TemporaryDirectory() as d:
+            repo = Path(d)
+            _init_repo(repo)
+            (repo / "a.txt").write_text("hello\nworld\n")
+            snap = source_control_snapshot(repo)
+            self.assertEqual(snap["dirty_reason"], "tracked_only")
+            self.assertRegex(snap["status_sha256"], r"^[0-9a-f]{64}$")
+            self.assertRegex(snap["diff_sha256"], r"^[0-9a-f]{64}$")
+            self.assertNotIn("diff_sha256_reason", snap)
+
+    @unittest.skipUnless(_GIT, "git not available")
+    def test_mixed_dirt_states_both_kinds(self):
+        with TemporaryDirectory() as d:
+            repo = Path(d)
+            _init_repo(repo)
+            (repo / "a.txt").write_text("hello\nworld\n")
+            (repo / "new.txt").write_text("x\n")
+            snap = source_control_snapshot(repo)
+            self.assertEqual(snap["dirty_reason"], "tracked_and_untracked")
+            self.assertRegex(snap["diff_sha256"], r"^[0-9a-f]{64}$")
+            self.assertNotIn("diff_sha256_reason", snap)
+            # Fingerprint covers ALL dirt: per-line whitespace-stripped
+            # (the git helper strips the whole output's ends, so the first
+            # line's leading status-column space is unreliable), sorted for
+            # reproducibility, newline-joined.
+            expected = hashlib.sha256(b"?? new.txt\nM a.txt").hexdigest()
+            self.assertEqual(snap["status_sha256"], expected)
+
+    @unittest.skipUnless(_GIT, "git not available")
+    def test_clean_repo_carries_no_dirt_claims(self):
+        # A clean tree has no dirt claim to substantiate — the return shape
+        # stays exactly the pre-existing one (no additive keys).
+        with TemporaryDirectory() as d:
+            repo = Path(d)
+            _init_repo(repo)
+            snap = source_control_snapshot(repo)
+            self.assertFalse(snap["dirty"])
+            self.assertNotIn("dirty_reason", snap)
+            self.assertNotIn("status_sha256", snap)
+            self.assertNotIn("diff_sha256_reason", snap)
+
+    @unittest.skipUnless(_GIT, "git not available")
+    def test_failed_diff_hash_states_diff_unavailable(self):
+        # A FAILED `git diff` must be distinguishable from a legitimately
+        # empty one — the previously silent hashing failure gets a name.
+        import core.run.provenance as prov
+        with TemporaryDirectory() as d:
+            repo = Path(d)
+            _init_repo(repo)
+            (repo / "a.txt").write_text("changed\n")
+            real_git = prov._git
+
+            def failing_diff(repo_dir: Path, *args: str,
+                             **kwargs: bool) -> str | None:
+                if args and args[0] == "diff":
+                    return None
+                return real_git(repo_dir, *args, **kwargs)
+
+            with mock.patch.object(prov, "_git", failing_diff):
+                snap = source_control_snapshot(repo)
+            self.assertTrue(snap["dirty"])
+            self.assertIsNone(snap["diff_sha256"])
+            self.assertEqual(snap["dirty_reason"], "tracked_only")
+            self.assertEqual(snap["diff_sha256_reason"], "diff_unavailable")
 
 
 class TestTargetSnapshot(unittest.TestCase):
@@ -510,6 +600,23 @@ class TestPublicView(unittest.TestCase):
         self.assertEqual(m["engines"]["semgrep"], "1.79.0")
         self.assertEqual(m["models"][0]["resolved"], "gemini-2.5-pro")
         self.assertIs(m["deterministically_reproducible"], False)
+
+    def test_forwards_dirt_accounting_fields(self):
+        # The dirt-accounting trio is publish-safe by the same argument as
+        # diff_sha256: a hash and fixed enum strings — never content/paths —
+        # and a citation reader needs them to verify the dirty claim.
+        md = _full_run_metadata()
+        md["manifest"]["source_control"] = {
+            "base_sha": "beef1234", "dirty": True, "diff_sha256": None,
+            "dirty_reason": "untracked_only",
+            "status_sha256": "c" * 64,
+            "diff_sha256_reason": "untracked_only",
+        }
+        sc = public_view(md)["manifest"]["source_control"]
+        self.assertEqual(sc["dirty_reason"], "untracked_only")
+        self.assertEqual(sc["status_sha256"], "c" * 64)
+        self.assertEqual(sc["diff_sha256_reason"], "untracked_only")
+        self.assertIsNone(sc["diff_sha256"])
 
     def test_allowlist_drops_unknown_future_fields(self):
         md = _full_run_metadata()

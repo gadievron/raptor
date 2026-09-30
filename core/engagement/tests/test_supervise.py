@@ -29,6 +29,10 @@ from core.project import sessions
 _PIN = {"base_sha": "a" * 40, "dirty": False,
         "diff_sha256": None, "models_sha256": "m" * 64}
 
+# The real pin builder, grabbed before the autouse fixture stubs the
+# module attribute — the carry-through tests exercise the genuine one.
+_REAL_CODE_SNAPSHOT = sup.code_snapshot
+
 
 @pytest.fixture(autouse=True)
 def _hermetic(monkeypatch, tmp_path):
@@ -228,6 +232,70 @@ def test_launch_records_code_pin_and_segments(tmp_path, monkeypatch):
     assert state["code_pin"] == _PIN
     assert state["segments"] >= 2
     assert state["launched_at"]
+
+
+def test_code_snapshot_carries_dirt_accounting(monkeypatch):
+    """RECORD HONESTY: when the framework snapshot states the dirt
+    composition, status fingerprint, and null-diff reason, the pin
+    carries them through — a reader of engagement-state.json can then
+    verify WHAT was dirty and why the diff hash is null, instead of
+    facing a bare ``dirty: true, diff_sha256: null`` claim."""
+    import core.run.provenance as prov
+    snap = {"base_sha": "b" * 40, "dirty": True, "diff_sha256": None,
+            "version": "3.0.0-test",
+            "dirty_reason": "untracked_only",
+            "status_sha256": "d" * 64,
+            "diff_sha256_reason": "untracked_only"}
+    monkeypatch.setattr(prov, "source_control_snapshot",
+                        lambda: dict(snap))
+    monkeypatch.setattr(sup, "_models_config_hash", lambda: "m" * 64)
+    pin = _REAL_CODE_SNAPSHOT()
+    assert pin["dirty"] is True
+    assert pin["diff_sha256"] is None
+    assert pin["dirty_reason"] == "untracked_only"
+    assert pin["status_sha256"] == "d" * 64
+    assert pin["diff_sha256_reason"] == "untracked_only"
+    assert pin["models_sha256"] == "m" * 64
+
+
+def test_code_snapshot_clean_tree_pin_shape_unchanged(monkeypatch):
+    """A clean tree makes no dirt claim — the pin keeps exactly the
+    legacy four-field shape (no additive keys to drift against)."""
+    import core.run.provenance as prov
+    snap = {"base_sha": "b" * 40, "dirty": False, "diff_sha256": None,
+            "version": "3.0.0-test"}
+    monkeypatch.setattr(prov, "source_control_snapshot",
+                        lambda: dict(snap))
+    monkeypatch.setattr(sup, "_models_config_hash", lambda: "m" * 64)
+    pin = _REAL_CODE_SNAPSHOT()
+    assert set(pin) == {"base_sha", "dirty", "diff_sha256",
+                        "models_sha256"}
+
+
+def test_pin_drift_ignores_additive_dirt_fields():
+    """A legacy pin (recorded before the dirt-accounting fields) must
+    not read as drifted against a current pin that carries them —
+    additive fields are record honesty, never drift triggers (a
+    status fingerprint over untracked scratch churn would otherwise
+    park the engagement on every unrelated scratch file)."""
+    legacy = {"base_sha": "a" * 40, "dirty": True,
+              "diff_sha256": None, "models_sha256": "m" * 64}
+    current = dict(legacy, dirty_reason="untracked_only",
+                   status_sha256="e" * 64,
+                   diff_sha256_reason="untracked_only")
+    assert sup.pin_drift(legacy, current) == []
+
+
+def test_interim_report_shows_dirt_reason(tmp_path, monkeypatch):
+    """The report's code-pin line surfaces the dirt composition, so a
+    dirty pin is never an unexplained ``dirty=True``."""
+    pin = dict(_PIN, dirty=True, dirty_reason="untracked_only")
+    monkeypatch.setattr(sup, "code_snapshot", lambda: dict(pin))
+    out, _ = _build(tmp_path)
+    _ChainStub(monkeypatch, default=chain_elf.RC_NOTHING)
+    sup.supervise(out, uncapped=True)
+    report = sup.interim_report_path(out).read_text()
+    assert "untracked_only" in report
 
 
 # ── failure → deaths → sticky artifact park (M4/M5) ──────────────────

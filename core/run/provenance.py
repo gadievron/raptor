@@ -113,12 +113,37 @@ def source_control_snapshot(repo_dir: Path | None = None) -> dict[str, Any]:
                    dirty, else None. The diff *content* is never stored —
                    only its hash — so the manifest cannot leak source. Note
                    an untracked-only modification sets dirty=True but leaves
-                   diff_sha256 None (``git diff HEAD`` omits untracked files).
+                   diff_sha256 None (``git diff HEAD`` omits untracked files)
+                   — ``diff_sha256_reason`` then says so.
       version      human-readable ``git describe`` of the framework (e.g.
                    ``3.0.0-1786-g7fcf38ea``), or None if unknowable. Unlike the
                    banner's ``RaptorConfig.effective_version()`` this never
                    falls back to the baked constant — provenance must report
                    what it can actually verify, not a substituted value.
+
+    Dirt accounting — ``dirty=True`` is never a bare, unverifiable claim;
+    three additive keys are present ONLY when ``dirty`` is True (a clean or
+    unknowable tree keeps the exact legacy shape):
+      dirty_reason        dirt composition from the porcelain codes:
+                          ``tracked_only`` / ``untracked_only`` /
+                          ``tracked_and_untracked``.
+      status_sha256       sha256 hex over the ``git status --porcelain``
+                          lines, each whitespace-stripped, sorted, joined
+                          with ``\\n`` — a reproducible fingerprint of WHAT
+                          was dirty (hash only, never content). Per-line
+                          stripped because ``_git`` strips the whole
+                          output's ends, so the first line's leading
+                          status-column space is unreliable; sorted so the
+                          contract does not lean on git's line ordering.
+      diff_sha256_reason  present iff ``diff_sha256`` is None while dirty —
+                          the stated reason a hash could not be recorded:
+                          ``untracked_only`` (no tracked dirt, the empty
+                          diff is expected), ``diff_unavailable`` (the
+                          ``git diff`` invocation itself failed), or
+                          ``empty_diff`` (diff ran empty despite tracked
+                          dirt in the porcelain — honest catch-all). A
+                          reader can now tell "nothing tracked to hash"
+                          from "diff hashing failed silently".
     """
     repo_dir = repo_dir or _REPO_ROOT
     sha = _git(repo_dir, "rev-parse", "HEAD")
@@ -133,7 +158,23 @@ def source_control_snapshot(repo_dir: Path | None = None) -> dict[str, Any]:
     dirty = bool(porcelain) if porcelain is not None else None
 
     diff_sha256 = None
+    dirt_fields: dict[str, Any] = {}
     if dirty:
+        # Dirt accounting (see the docstring's contract): composition +
+        # reproducible fingerprint, so dirty=True is a verifiable claim.
+        lines = sorted(
+            ln.strip() for ln in porcelain.splitlines() if ln.strip()
+        )
+        untracked_dirt = any(ln.startswith("??") for ln in lines)
+        tracked_dirt = any(not ln.startswith("??") for ln in lines)
+        dirt_fields["dirty_reason"] = (
+            "tracked_and_untracked" if tracked_dirt and untracked_dirt
+            else "untracked_only" if untracked_dirt
+            else "tracked_only"
+        )
+        dirt_fields["status_sha256"] = hashlib.sha256(
+            "\n".join(lines).encode("utf-8", "replace")
+        ).hexdigest()
         # --no-ext-diff: the hash must be a function of the tree contents,
         # not of whatever external diff driver the operator has configured.
         diff = _git(repo_dir, "diff", "--no-ext-diff", "HEAD")
@@ -141,6 +182,14 @@ def source_control_snapshot(repo_dir: Path | None = None) -> dict[str, Any]:
             diff_sha256 = hashlib.sha256(
                 diff.encode("utf-8", "replace")
             ).hexdigest()
+        elif diff is None:
+            # The diff call itself failed (non-zero / timeout / OSError) —
+            # previously indistinguishable from a legitimately empty diff.
+            dirt_fields["diff_sha256_reason"] = "diff_unavailable"
+        elif not tracked_dirt:
+            dirt_fields["diff_sha256_reason"] = "untracked_only"
+        else:
+            dirt_fields["diff_sha256_reason"] = "empty_diff"
 
     # Human-readable framework version, derived from the same checkout the
     # sha came from. ``--always`` falls back to a short sha for an untagged
@@ -150,7 +199,7 @@ def source_control_snapshot(repo_dir: Path | None = None) -> dict[str, Any]:
         version = version.lstrip("v")
 
     return {"base_sha": sha, "dirty": dirty, "diff_sha256": diff_sha256,
-            "version": version}
+            "version": version, **dirt_fields}
 
 
 def tool_version(name: str) -> str | None:
@@ -592,6 +641,12 @@ def public_view(run_metadata: dict[str, Any] | None) -> dict[str, Any]:
             "dirty": _pub_bool,
             # Hash only — the diff content is never stored, so this is safe.
             "diff_sha256": _pub_opt_str,
+            # Dirt accounting: a hash and fixed enum strings — the same
+            # publish-safety class as diff_sha256, and what lets a citation
+            # reader verify the dirty claim instead of trusting it.
+            "dirty_reason": _pub_str,
+            "status_sha256": _pub_str,
+            "diff_sha256_reason": _pub_str,
         })
         if sc_pub:
             pub["source_control"] = sc_pub

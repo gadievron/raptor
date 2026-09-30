@@ -126,8 +126,22 @@ _MAX_PASSES = 8
 #: evidence surfaces ``measured_artifact_spend`` sums over.
 _LLM_STAGE_DIRS = ("study", "audit", "audit-rereview")
 
-#: Code-pin fields compared on resume (M6).
+#: Code-pin fields compared on resume (M6). Deliberately NOT the pin's
+#: full key set: the dirt-accounting fields (``dirty_reason`` /
+#: ``status_sha256`` / ``diff_sha256_reason`` — see ``_PIN_RECORD_FIELDS``)
+#: are record honesty, never drift triggers. Comparing them would (a)
+#: read legacy pins' absent keys as drift and spuriously park every
+#: pre-existing engagement on resume, and (b) make the status fingerprint
+#: — which covers ALL dirt including unrelated untracked scratch churn —
+#: park the engagement on every new scratch file. Drift keeps its
+#: surface: base sha, dirty flag, tracked-diff hash, models hash.
 _PIN_FIELDS = ("base_sha", "dirty", "diff_sha256", "models_sha256")
+
+#: Additive dirt-accounting fields carried into the pin verbatim when the
+#: framework snapshot states them — they make ``dirty: true`` with a null
+#: ``diff_sha256`` a verifiable claim (what was dirty, why no diff hash)
+#: instead of a bare one. Recorded, rendered, never drift-compared.
+_PIN_RECORD_FIELDS = ("dirty_reason", "status_sha256", "diff_sha256_reason")
 
 
 def _say(message: str) -> None:
@@ -182,15 +196,24 @@ def code_snapshot() -> dict[str, Any]:
     flag, diff hash — from ``core.run.provenance``) plus the models
     config hash. ``base_sha=None`` means the framework checkout is
     not a verifiable git repo — drift detection degrades to the
-    models hash alone (recorded as a residual at pin time)."""
+    models hash alone (recorded as a residual at pin time).
+
+    A dirty snapshot's dirt-accounting fields (``_PIN_RECORD_FIELDS``)
+    ride along verbatim so the recorded pin is verifiable — a reader
+    can tell WHAT was dirty and why ``diff_sha256`` is null. They are
+    record-only: ``pin_drift`` never compares them."""
     from core.run.provenance import source_control_snapshot
     snap = source_control_snapshot()
-    return {
+    pin: dict[str, Any] = {
         "base_sha": snap.get("base_sha"),
         "dirty": snap.get("dirty"),
         "diff_sha256": snap.get("diff_sha256"),
         "models_sha256": _models_config_hash(),
     }
+    for field in _PIN_RECORD_FIELDS:
+        if field in snap:
+            pin[field] = snap[field]
+    return pin
 
 
 def pin_drift(pin: dict[str, Any],
@@ -455,8 +478,12 @@ def write_interim_report(output_dir: Path | str, *,
     pin = state.get("code_pin") or {}
     if isinstance(pin, dict):
         sha = str(pin.get("base_sha") or "unverifiable")
+        # Dirt composition, when recorded — a dirty pin is never an
+        # unexplained ``dirty=True``. State-file bytes, so escaped.
+        dirt = (f" ({_esc(str(pin['dirty_reason']), 32)})"
+                if pin.get("dirty_reason") else "")
         lines.append(
-            f"Code pin: {sha[:12]} dirty={pin.get('dirty')} "
+            f"Code pin: {sha[:12]} dirty={pin.get('dirty')}{dirt} "
             f"models={str(pin.get('models_sha256') or '?')[:12]} "
             f"(launched {_esc(str(state.get('launched_at') or '?'), 40)}, "
             f"segments run: {state.get('segments', 0)})")
