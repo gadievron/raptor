@@ -32,6 +32,40 @@ _RESERVED_LOGRECORD_NAMES = frozenset({
 
 CONSOLE_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
+# Third-party SDK loggers whose INFO output names infrastructure:
+# botocore's credential discovery logs the resolved IAM role ("Found
+# credentials from IAM Role: <name>"), urllib3 logs connection
+# endpoints. The root console handler deliberately surfaces
+# module-level INFO (see RaptorLogger.__init__), so without a cap
+# these lines interleave into run streams — and a report embedding
+# log excerpts would carry the identifiers out. The console escaping
+# chokepoint neutralises control bytes, not identifiers, so the cap
+# happens at the LOGGER: that way neither the console handlers nor
+# the JSONL audit trail record them. WARNING and above (auth
+# failures, retry exhaustion) still surface.
+NOISY_THIRD_PARTY_LOGGERS: tuple[str, ...] = (
+    "boto3",
+    "botocore",
+    # Child of "botocore", but pinned explicitly: it emits the
+    # credential-discovery line naming the IAM role, and an explicit
+    # level holds even if other code later reconfigures "botocore"
+    # itself to something looser.
+    "botocore.credentials",
+    "urllib3",
+)
+
+
+def quiet_third_party_loggers() -> None:
+    """Raise noisy third-party SDK loggers to WARNING.
+
+    Called by both logging-setup chokepoints (``RaptorLogger``
+    initialisation for run streams, :func:`configure_cli_logging` for
+    standalone CLIs). RAPTOR's own loggers — the ``raptor`` namespace
+    and stdlib-named project modules — are untouched. Idempotent.
+    """
+    for name in NOISY_THIRD_PARTY_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
+
 
 def _raptor_logger() -> logging.Logger:
     return logging.getLogger("raptor")
@@ -326,6 +360,12 @@ class RaptorLogger:
                 if root_logger.level == logging.NOTSET or root_logger.level > logging.INFO:
                     root_logger.setLevel(logging.INFO)
 
+            # The root handler above surfaces third-party INFO too —
+            # cap the known-noisy SDK loggers so infrastructure
+            # identifiers (IAM role names, endpoints) stay out of run
+            # streams and the audit trail.
+            quiet_third_party_loggers()
+
             RaptorLogger._initialized = True
 
         self.debug(f"RAPTOR logging initialized - audit trail: {log_file}")
@@ -569,6 +609,9 @@ def configure_cli_logging(
     for handler in root.handlers:
         if id(handler) not in before and _is_console_handler(handler):
             handler.setFormatter(EscapingConsoleFormatter(fmt))
+    # Standalone CLIs get the same third-party SDK cap as run streams
+    # (infrastructure identifiers in botocore/urllib3 INFO lines).
+    quiet_third_party_loggers()
 
 
 def configure_run_logging(log_level: str | None, verbose: bool) -> None:
