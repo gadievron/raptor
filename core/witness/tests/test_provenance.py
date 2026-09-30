@@ -340,6 +340,88 @@ class TestUnconditionalBooleanClamp:
         assert stats["exploitable_demoted"] == 0
 
 
+class TestTierStatusClamp:
+    """``final_status`` / ``status`` are open string channels into the
+    same verdict tier the boolean clamp guards. The tier clamp must
+    (a) normalise spelling variants BEFORE the membership test — the
+    display layer's open fallback title-cases anything, so an
+    unnormalised "EXPLOITABLE" that slips past renders identically to
+    the canonical value — and (b) accept a verified feasibility record
+    only for the tier its OWN verdict maps to (the validation-helper
+    VERDICT_MAP families): a genuine "unlikely" record beside a forged
+    "exploitable" claim is a borrowed receipt, not support."""
+
+    def test_case_variant_final_status_clamped(self, tmp_path):
+        f = _finding(final_status="EXPLOITABLE")
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert f["final_status"] == "confirmed_unverified"
+        assert stats["final_status_demoted"] == 1
+
+    def test_title_case_final_status_clamped(self, tmp_path):
+        f = _finding(final_status="Likely Exploitable")
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert f["final_status"] == "confirmed_unverified"
+        assert stats["final_status_demoted"] == 1
+
+    def test_case_variant_status_clamped_without_final_status(self, tmp_path):
+        # No final_status at all: the top-level status is a display
+        # channel of its own (get_display_status falls through to it)
+        # and must be clamped independently.
+        f = _finding(status="EXPLOITABLE")
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert f["status"] == "confirmed_unverified"
+        assert stats["final_status_demoted"] == 1
+
+    def test_tier_claim_beside_mismatched_verified_verdict_clamped(self, tmp_path):
+        # The stamped record is genuine — but its verdict ("unlikely",
+        # mapping to confirmed_blocked) cannot support an "exploitable"
+        # claim. Pre-fix any verified analyzed record supported ANY
+        # tier claim.
+        f = _finding(final_status="exploitable")
+        feas = {"status": "analyzed", "verdict": "unlikely",
+                "binary_path": "/bin/app"}
+        f["feasibility"] = feas
+        prov.stamp_feasibility(f, feas, tmp_path)
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert f["final_status"] == "confirmed_unverified"
+        assert stats["final_status_demoted"] == 1
+        # The verified record itself survives untouched.
+        assert f["feasibility"]["verdict"] == "unlikely"
+        assert stats["feasibility_demoted"] == 0
+
+    def test_matching_tier_claim_survives_each_family(self, tmp_path):
+        for verdict, tier in (
+            ("exploitable", "exploitable"),
+            ("likely", "likely_exploitable"),
+            ("likely_exploitable", "likely_exploitable"),
+            ("difficult", "confirmed_constrained"),
+            ("unlikely", "confirmed_blocked"),
+        ):
+            f = _finding(final_status=tier)
+            feas = {"status": "analyzed", "verdict": verdict,
+                    "binary_path": "/bin/app"}
+            f["feasibility"] = feas
+            prov.stamp_feasibility(f, feas, tmp_path)
+            stats = prov.sanitise_findings_evidence(
+                {"findings": [f]}, tmp_path)
+            assert f["final_status"] == tier, verdict
+            assert stats["final_status_demoted"] == 0, verdict
+
+    def test_supported_case_variant_canonicalised(self, tmp_path):
+        # Even a SUPPORTED claim has its spelling canonicalised: the
+        # sanitised output feeds the display fallback, which must never
+        # see a tier value it cannot exact-match.
+        f = _finding(final_status="Exploitable", status="EXPLOITABLE")
+        feas = {"status": "analyzed", "verdict": "exploitable",
+                "binary_path": "/bin/app"}
+        f["feasibility"] = feas
+        prov.stamp_feasibility(f, feas, tmp_path)
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert f["final_status"] == "exploitable"
+        assert f["status"] == "exploitable"
+        assert stats["final_status_demoted"] == 0
+
+
 class TestVersionedRunBinding:
     """v2 nonced run binding: same-basename directories no longer
     verify interchangeably; legacy records keep verifying at the

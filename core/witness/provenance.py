@@ -79,6 +79,7 @@ from typing import Any
 from core.logging import get_logger
 from core.run.finding_status import read_verdict
 from core.security import mac_key
+from core.status import normalize_status
 
 logger = get_logger(__name__)
 
@@ -661,6 +662,21 @@ _EXPLOITABLE_VERDICTS = frozenset({
     "exploitable", "likely", "likely_exploitable",
 })
 
+#: Feasibility verdict → the tier status its Stage-F mapping
+#: (validation-helper VERDICT_MAP / orchestrator verdict_to_status)
+#: legitimately produces. A verified record supports ONLY its own
+#: tier: a genuine "unlikely" record beside a claimed "exploitable"
+#: is a borrowed receipt, not support. Verdicts absent here
+#: (unknown / error) map to confirmed_unverified, which is not a
+#: tier status — they support no tier claim.
+_VERDICT_TIER_STATUS = {
+    "exploitable": "exploitable",
+    "likely": "likely_exploitable",
+    "likely_exploitable": "likely_exploitable",
+    "difficult": "confirmed_constrained",
+    "unlikely": "confirmed_blocked",
+}
+
 
 def _strip_witness_claim(finding: dict) -> None:
     """Remove an unverified witness_execution record AND every ruling
@@ -787,20 +803,44 @@ def sanitise_findings_evidence(
         # Verdict-tier clamp: exploitable-family final statuses are
         # only ever produced by mapping a feasibility verdict (Stage E
         # / validation-helper VERDICT_MAP / the E-5 skill table), so
-        # they require a VERIFIED analyzed feasibility record. A
-        # pre-set "exploitable" with no (or a forged) record is
-        # quarantined until a mechanical stage re-derives it.
-        if finding.get("final_status") in FEASIBILITY_TIER_STATUSES:
+        # they require a VERIFIED analyzed feasibility record WHOSE
+        # OWN VERDICT maps to the claimed tier — any verified record
+        # supporting any tier claim lets a forged "exploitable" ride
+        # a genuine "unlikely" stamp. Claims are normalised BEFORE the
+        # membership test (the display fallback title-cases anything,
+        # so an unnormalised "EXPLOITABLE" renders identically to the
+        # canonical value), and both string channels — final_status
+        # AND top-level status — are clamped: each one reaches
+        # get_display_status on its own. Unsupported claims are
+        # quarantined until a mechanical stage re-derives them;
+        # supported ones are rewritten to the canonical spelling.
+        claimed_final = normalize_status(finding.get("final_status"))
+        claimed_status = normalize_status(finding.get("status"))
+        if (claimed_final in FEASIBILITY_TIER_STATUSES
+                or claimed_status in FEASIBILITY_TIER_STATUSES):
             feasibility = finding.get("feasibility")
-            supported = (
+            verified = (
                 isinstance(feasibility, dict)
                 and feasibility.get("status") == "analyzed"
                 and verify_feasibility(finding, run_dir)
             )
-            if not supported:
-                finding["final_status"] = "confirmed_unverified"
-                if finding.get("status") in FEASIBILITY_TIER_STATUSES:
+            verdict_tier = _VERDICT_TIER_STATUS.get(
+                str(feasibility.get("verdict") or "").strip().lower()
+            ) if verified else None
+            demoted = False
+            if claimed_final in FEASIBILITY_TIER_STATUSES:
+                if verdict_tier == claimed_final:
+                    finding["final_status"] = claimed_final
+                else:
+                    finding["final_status"] = "confirmed_unverified"
+                    demoted = True
+            if claimed_status in FEASIBILITY_TIER_STATUSES:
+                if verdict_tier == claimed_status:
+                    finding["status"] = claimed_status
+                else:
                     finding["status"] = "confirmed_unverified"
+                    demoted = True
+            if demoted:
                 stats["final_status_demoted"] += 1
 
         # Boolean-verdict clamp — runs on EVERY finding, deliberately
