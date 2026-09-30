@@ -290,8 +290,14 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
             if fr_blocks:
                 sub_sections: list[str] = []
                 for sub_title, sub_diagram in fr_blocks:
+                    # The block title carries entry-point id + host
+                    # strings from context-map.json — same provenance
+                    # as the flow-trace headings below, so it gets the
+                    # same md_inline pass (headings are live markdown:
+                    # image/link markup would otherwise survive into
+                    # an autofetch lane).
                     sub_sections.append(_section(
-                        sub_title,
+                        md_inline(sub_title),
                         f"```mermaid\n{_fence(sub_diagram)}\n```",
                         level=3,
                     ))
@@ -379,12 +385,23 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
                 trace_id = _sanitize(raw_id)
                 name = _sanitize(data.get("name", raw_id))
                 diagram = flow_trace.generate(data)
-                body = (f"_Source: `{tf.name}`_{_provenance_note(data)}"
+                # tf.name is an on-disk file name from the run dir —
+                # same slot as the error path below: a backtick in the
+                # name closes the wrapping code span (the tail renders
+                # as live markdown) and ESC bytes ride into diagrams.md
+                # raw, so md_inline it here too.
+                body = (f"_Source: `{md_inline(tf.name)}`_{_provenance_note(data)}"
                         f"\n\n```mermaid\n{_fence(diagram)}\n```")
                 heading = md_inline(f"{trace_id}: {name}")
                 trace_sections.append(_section(heading, body, level=3))
             except Exception as exc:  # noqa: BLE001
-                trace_sections.append(_section(tf.stem, f"> Could not render `{tf.name}`: {_err(exc)}", level=3))
+                # tf.stem / tf.name are on-disk file names from the
+                # run dir — md_inline both: the heading is live
+                # markdown, and in the body a backtick in the name
+                # would close the wrapping code span (the tail then
+                # renders as live markdown) while ESC bytes would
+                # ride into diagrams.md raw.
+                trace_sections.append(_section(md_inline(tf.stem), f"> Could not render `{md_inline(tf.name)}`: {_err(exc)}", level=3))
         sections.append(_section("Data Flow Traces", "\n".join(trace_sections)))
 
     # --- Attack tree (with companion files for enrichment) ---

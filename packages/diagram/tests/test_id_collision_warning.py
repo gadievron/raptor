@@ -142,3 +142,82 @@ class TestSectionHeadingInjection:
         heading_lines = [ln for ln in out.splitlines()
                          if ln.lstrip().startswith("#")]
         assert not any("![" in ln for ln in heading_lines)
+
+    def test_forward_reachable_heading_strips_autofetch(self, tmp_path):
+        """Hostile entry-point id/host text renders inert on the
+        per-entry forward-reachability heading — an image beacon
+        there is a zero-click fetch in any markdown preview, and a
+        link is a click-lane redirect."""
+        (tmp_path / "context-map.json").write_text(json.dumps({
+            "entry_points": [{
+                "id": "![b](https://evil.example/x.png)",
+                "method": "GET",
+                "path": "/api",
+                "forward_reachable": {
+                    "host": "[click](https://evil.example/c?d=leak)",
+                    "internal_names": ["helper"],
+                    "external_names": ["ext1"],
+                    "internal_count": 1,
+                    "external_count": 1,
+                },
+            }],
+            "trust_boundaries": [],
+            "sinks": [],
+            "functions": [],
+            "flows": [],
+        }), encoding="utf-8")
+        out = render_directory(tmp_path, target="testapp")
+        heading_lines = [ln for ln in out.splitlines()
+                         if ln.lstrip().startswith("#")]
+        assert not any("![" in ln for ln in heading_lines)
+        assert not any("](https://evil.example" in ln
+                       for ln in heading_lines)
+
+    def test_flow_trace_error_heading_strips_autofetch(self, tmp_path):
+        """The flow-trace parse-failure path headlines the file STEM —
+        run-dir writers choose file names, so the stem needs the same
+        markdown-heading defang as the happy-path heading."""
+        (tmp_path / "flow-trace-![y](x.png).json").write_text(
+            "{not json", encoding="utf-8")
+        out = render_directory(tmp_path)
+        heading_lines = [ln for ln in out.splitlines()
+                         if ln.lstrip().startswith("#")]
+        assert not any("![" in ln for ln in heading_lines)
+
+    def test_flow_trace_error_body_defangs_file_name(self, tmp_path):
+        """The parse-failure BODY quotes the file NAME inside a code
+        span — a backtick in a hostile run-dir file name closes the
+        span early (the tail renders as live markdown) and ESC bytes
+        ride into diagrams.md raw. The name gets the same inline
+        defang as the heading."""
+        (tmp_path / "flow-trace-\x1b]0;pwned\x07`[c](leak.png).json"
+         ).write_text("{not json", encoding="utf-8")
+        out = render_directory(tmp_path)
+        assert "\x1b" not in out
+        assert "\x07" not in out
+        body_line = next(ln for ln in out.splitlines()
+                         if "Could not render" in ln)
+        # Only the wrapping code-span pair survives — the name's own
+        # backtick cannot terminate the span.
+        assert body_line.count("`") == 2
+
+    def test_flow_trace_source_line_defangs_file_name(self, tmp_path):
+        """The success-path body quotes the file NAME in a `_Source:`
+        code span — a hostile run-dir file name holding VALID trace
+        JSON reaches it, so a backtick in the name closes the span
+        early (the tail renders as live markdown) and ESC bytes ride
+        into diagrams.md raw. Same inline defang as the error path."""
+        (tmp_path / "flow-trace-\x1b]0;pwned\x07`](http:evil)x.json"
+         ).write_text(json.dumps({
+            "id": "TRACE-1",
+            "name": "demo",
+            "steps": [{"step": 1, "type": "entry", "description": "d"}],
+        }), encoding="utf-8")
+        out = render_directory(tmp_path)
+        assert "\x1b" not in out
+        assert "\x07" not in out
+        source_line = next(ln for ln in out.splitlines()
+                           if "_Source:" in ln)
+        # Only the wrapping code-span pair survives — the name's own
+        # backtick cannot terminate the span.
+        assert source_line.count("`") == 2
