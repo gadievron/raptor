@@ -985,13 +985,34 @@ def _project_run_gate(project_dir: Path, output_dir: Path, command: str,
     # Re-entrant stamp: raptor.py's lifecycle wrapper start_run()s the
     # run dir, then the child (raptor_agentic.py) start_run()s the SAME
     # dir to enrich metadata. The second call is not a new run start —
-    # gating it against siblings could kill a run whose parent already
-    # passed the gate.
+    # gating it against SIBLINGS could kill a run whose parent already
+    # passed the gate. It still queues on the project op lock exactly
+    # like a fresh start: without the flock, a start_run into a dir
+    # whose own metadata reads status=running (the crashed-run-dir
+    # restart shape as much as the documented enrichment flows) wrote
+    # its metadata mid-sweep behind the journal-reindex sweep's back —
+    # the one writer class the sweep's whole-duration ``.op.lock``
+    # could not fence. Same wait=True posture as the fresh path below,
+    # and safe from self-deadlock by the lock's own discipline: the
+    # flock guards only each holder's short read-modify-write window
+    # (the parent's gate released it before the child ever runs), and
+    # no run-machinery path calls start_run while holding ``.op.lock``
+    # (holders are this gate, the journal sweep, and the mutating
+    # /project subcommands). Non-waiting semantics would be dishonest
+    # here in both directions: refusing on contention could kill a
+    # legitimate enrichment mid-flight, and proceeding on contention
+    # would keep the bypass. Lock order unchanged: ``.op.lock``
+    # (outermost) before the metadata lock start_run takes inside.
+    own_running = False
     with contextlib.suppress(OSError):
         own = _load_meta(Path(output_dir) / RUN_METADATA_FILE)
-        if isinstance(own, dict) and own.get("status") == STATUS_RUNNING:
+        own_running = (isinstance(own, dict)
+                       and own.get("status") == STATUS_RUNNING)
+    if own_running:
+        with project_op_lock(project_dir, f"run-start:{command}",
+                             wait=True):
             yield
-            return
+        return
 
     waiting_printed = False
     while True:
