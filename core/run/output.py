@@ -347,6 +347,8 @@ def _check_target_mismatch(target_path: str, project_name: str,
     project source tree (build dirs, installed paths, fuzzing
     harnesses); an out-of-tree binary warns instead of raising.
     """
+    from core.security.log_sanitisation import sanitise_for_terminal
+
     if _URL_SCHEME_RE.match(target_path):
         if _URL_SCHEME_RE.match(project_target):
             # Both sides are URLs: compare them (trailing-slash
@@ -373,9 +375,14 @@ def _check_target_mismatch(target_path: str, project_name: str,
                                    parts.fragment))
 
             if _url_norm(target_path) != _url_norm(project_target):
+                # sanitise_for_terminal instead of !r: repr already
+                # escapes control bytes, but leaves length unbounded —
+                # a hostile project target can flood the terminal.
+                st = sanitise_for_terminal(str(target_path), max_len=256)
+                sp = sanitise_for_terminal(str(project_target), max_len=256)
                 raise TargetMismatchError(
-                    f"Run target {target_path!r} does not match the active "
-                    f"project's target {project_target!r}. Use --out to "
+                    f"Run target '{st}' does not match the active "
+                    f"project's target '{sp}'. Use --out to "
                     "direct the run elsewhere, or switch projects."
                 )
         return
@@ -415,10 +422,20 @@ def _check_target_mismatch(target_path: str, project_name: str,
     # Remediation: pre-fix the hint said create-then-'/project use
     # none', which leaves the just-created project inactive AND the
     # mismatching one active — following it verbatim changed nothing.
+    #
+    # Escape before interpolating: project name/target can be
+    # adopt-inferred from child-writable run metadata or
+    # import-restored (same class as the volatile-target banner in
+    # resolve_default_target), and every catcher prints this message
+    # raw to stderr (raptor.py, packages/binary_analysis/cli.py) —
+    # the bare print does not escape the way the logger lane does.
+    st = sanitise_for_terminal(str(target_path), max_len=256)
+    sn = sanitise_for_terminal(str(project_name), max_len=120)
+    sp = sanitise_for_terminal(str(project_target), max_len=256)
     msg = (
-        f"target {target_path} is outside project {project_name} ({project_target})\n"
+        f"target {st} is outside project {sn} ({sp})\n"
         f"  A project tracks one target. To analyze a different codebase:\n"
-        f"    /project create <name> --target {target_path}   (activates for this session)\n"
+        f"    /project create <name> --target {st}   (activates for this session)\n"
         f"  Or pin just this run: pass --project <name> (or --project - for no project)\n"
         f"  Or clear this session's project: /project none"
     )

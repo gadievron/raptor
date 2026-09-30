@@ -136,6 +136,40 @@ class TestTargetMismatch(unittest.TestCase):
                 self.assertTrue(
                     any("outside project" in m for m in cm.output))
 
+    def test_mismatch_message_escapes_hostile_path_fields(self):
+        """Project name/target can be adopt-inferred from
+        child-writable run metadata or import-restored, and every
+        catcher bare-prints str(e) to stderr — so all three
+        interpolated fields (target, name, project target) must arrive
+        escaped, including inside the /project create remedy line."""
+        from core.run.output import _check_target_mismatch
+        hostile = "\x1b]0;pwned\x07\x1b[2J"
+        with self.assertRaises(TargetMismatchError) as ctx:
+            _check_target_mismatch(
+                f"/does/not/exist{hostile}",
+                f"proj{hostile}name",
+                f"/srv/other{hostile}",
+            )
+        msg = str(ctx.exception)
+        self.assertIn("outside project", msg)
+        self.assertNotIn("\x1b", msg)
+        self.assertNotIn("\x07", msg)
+        self.assertIn("pwned", msg)  # content survives, escaped
+
+    def test_url_mismatch_message_is_length_bounded(self):
+        """The URL branch already escaped control bytes via !r, but
+        left length unbounded — a hostile project target could flood
+        the terminal. Both sides must be bounded with the elision
+        marker."""
+        from core.run.output import _check_target_mismatch
+        flood = "https://example.com/" + "A" * 10000
+        with self.assertRaises(TargetMismatchError) as ctx:
+            _check_target_mismatch(
+                flood, "p", "https://example.com/repo")
+        msg = str(ctx.exception)
+        self.assertLess(len(msg), 1000)
+        self.assertIn("...[+", msg)  # elision marker, not silent loss
+
     def test_fuzz_in_tree_binary_ok_silently(self):
         with TemporaryDirectory() as d:
             with _mock_project(d) as target:
