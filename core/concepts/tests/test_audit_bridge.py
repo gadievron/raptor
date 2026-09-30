@@ -1061,6 +1061,7 @@ class TestDomainBugPatterns:
         assert block is not None
         assert "hinted pattern" in block
 
+    @pytest.mark.slow
     def test_worst_admitted_shape_cost_bounded(self, tmp_path):
         """Cost pin for the worst shapes the guard ADMITS, CONSTRUCTED
         from the cost model's own bounds (the model at
@@ -1105,10 +1106,24 @@ class TestDomainBugPatterns:
         ~3.4 s total single-threaded light-load; the CPU-time
         bound leaves headroom for slower cores while staying far
         below the shapes the bounds exist to refuse (the 246-char
-        literal-tail reproducer measured ~8.7 s here; the
-        pre-token-bar shape at the saturated walk, refused,
-        ~1.8 s), and the alarm turns a cost regression into a
-        failure instead of a hang."""
+        literal-tail reproducer measured ~8.7 s here cache-cold
+        single-run, 7.22 s min-of-3; the pre-token-bar shape at
+        the saturated walk, refused, ~1.8 s), and the alarm turns
+        a cost regression into a failure instead of a hang.
+
+        Billed as a min-of-3 thread-CPU RATIO against an in-test
+        reference workload (same shapes, quarter-clamp source, same
+        single-threaded regex machinery), not a host-absolute
+        ceiling: the previous absolute 8.0 s bound was authored on
+        one host (~3.4 s there) and failed deterministically on
+        slower per-core CI runners (8.819 s and 9.093 s thread-CPU
+        on two runs of the same tree) — legitimate cost, not a
+        regression. Per-core throughput multiplies numerator and
+        denominator alike, so the ratio transfers across hosts.
+        Marked slow: one admitted-worst evaluation already runs
+        ~9 s wall on CI runners and min-of-3 triples that, past the
+        default tier budget; the three milder sibling pins in this
+        class stay default-tier as the always-on sentinels."""
         import signal
         import time
 
@@ -1195,36 +1210,109 @@ class TestDomainBugPatterns:
         }), encoding="utf-8")
         n = _MAX_REGEX_SOURCE_CHARS
         src = ("aab" * (n // 3 + 1))[:n]  # no "z" or "q" anywhere
+        # Reference workload: the SAME three shapes through the SAME
+        # domain_bug_patterns machinery against a quarter-clamp slice
+        # of the SAME saturated source. Evaluation cost is quadratic
+        # in source length here (restart count x span length both
+        # scale with it), so the reference is ~1/16 of the measured
+        # load — ~0.21 s CPU on the authoring host, large enough to
+        # be timing-stable under min-of-3 while keeping three
+        # reference runs cheap. Numerator and denominator are the
+        # same kind of single-threaded in-process regex CPU work, so
+        # per-core throughput cancels in the ratio.
+        ref_dir = tmp_path / "ref"
+        ref_dir.mkdir()
+        (ref_dir / "domain-model.json").write_text(json.dumps({
+            "bug_patterns": [
+                {"id": "w", "description": "arithmetic-worst shape",
+                 "what_to_grep": worst},
+                {"id": "r", "description": "bar-carrying runner-up",
+                 "what_to_grep": runner},
+                {"id": "m", "description": "measured-worst pre-token",
+                 "what_to_grep": pretoken},
+            ],
+        }), encoding="utf-8")
+        src_ref = src[: n // 4]
 
         def _on_alarm(signum: int, frame: object) -> None:
             msg = "admitted-hint evaluation exceeded the alarm bound"
             raise AssertionError(msg)
 
         old = signal.signal(signal.SIGALRM, _on_alarm)
-        signal.alarm(60)
+        # 3 measured runs + 3 reference runs; one measured run is
+        # already ~9 s wall on slow CI cores, so the hang net covers
+        # the whole min-of-3 schedule with load headroom.
+        signal.alarm(120)
         try:
             # CPU time of THIS thread, not wall clock: the evaluation
-            # is single-threaded in-process regex work, so thread CPU
-            # time IS its cost, and a loaded host's scheduler delays
-            # (which stretch wall clock without adding a cycle of
-            # regex work) cannot inflate it. The wall-clock hang net
-            # stays with the alarm above.
-            t0 = time.thread_time()
-            block = domain_bug_patterns(tmp_path, "a.c", "f", src)
-            dt = time.thread_time() - t0
+            # is single-threaded in-process regex work (no-thread
+            # tripwire on this machinery lives in
+            # test_hostile_pattern_list_slice_hash_bounded), so thread
+            # CPU time IS its cost, and a loaded host's scheduler
+            # delays (which stretch wall clock without adding a cycle
+            # of regex work) cannot inflate it. Min-of-3, matching
+            # the sibling pins in this class: bill the cheapest run,
+            # so cache-cold first-run work (guard and pattern lru
+            # misses, memo build) and residual CPU jitter are not
+            # billed as the admitted shapes' cost. The wall-clock
+            # hang net stays with the alarm above. The reference is
+            # billed min-of-3 the same way; repeated calls redo the
+            # regex work every time (nothing memoises the evaluation
+            # result), so the denominator cannot be optimised away
+            # to a cached near-zero that would inflate the ratio.
+            samples: list[float] = []
+            for _ in range(3):
+                t0 = time.thread_time()
+                block = domain_bug_patterns(tmp_path, "a.c", "f", src)
+                samples.append(time.thread_time() - t0)
+                assert block is None  # regex fails; nothing relevant
+            dt = min(samples)
+            ref_samples: list[float] = []
+            for _ in range(3):
+                t0 = time.thread_time()
+                ref_block = domain_bug_patterns(
+                    ref_dir, "a.c", "f", src_ref)
+                ref_samples.append(time.thread_time() - t0)
+                assert ref_block is None
+            ref_dt = min(ref_samples)
         finally:
             signal.alarm(0)
             signal.signal(signal.SIGALRM, old)
-        assert block is None  # regex fails; relevance finds nothing
-        # Two directions: not tighter, because the three admitted
-        # shapes legitimately cost ~3.4 s CPU at the clamp on this
-        # host and per-core throughput varies across hosts; not
-        # looser, because the cheapest shape the bounds exist to
-        # REFUSE measured ~8.7 s here — a cost regression that lifts
-        # the admitted ceiling into refused-shape territory must fail
-        # rather than pass.
-        assert dt < 8.0, (
-            f"worst admitted shapes took {dt:.3f}s CPU at clamp"
+        # Loose absolute floor on the denominator: the reference
+        # measures 0.209 s on the authoring host, so even a far
+        # faster core clears 5 ms by orders of magnitude — but a
+        # future evaluation-result memoisation (both sides cached to
+        # ~us under min-of-3) trips it loudly instead of letting the
+        # ratio pass as noise-over-noise.
+        assert ref_dt > 0.005, (
+            f"reference workload collapsed to {ref_dt:.6f}s CPU — "
+            "evaluation looks memoised; ratio pin would be vacuous"
+        )
+        # Ratio bound, two directions (min-of-3 CPU on the authoring
+        # host: admitted 3.42 s, reference 0.209 s, ratio 16.4; the
+        # cheapest REFUSED shape — the 246-char literal-tail
+        # reproducer, guard opened in a scratch harness — 7.22 s,
+        # ratio 34.6). Not tighter, because the three admitted shapes
+        # legitimately cost ~16.4x the reference and per-host cache /
+        # allocator jitter needs headroom (24 is ~1.46x the measured
+        # admitted ratio); not looser, because a cost regression that
+        # lifts the admitted ceiling into refused-shape territory
+        # (~34.6x) must fail — 24 sits at the geometric middle of the
+        # corridor, clearly below the refused ratio (~1.44x margin).
+        # The ratio, unlike the absolute ceiling this replaces,
+        # transfers across hosts: both sides are the same
+        # single-threaded regex CPU work, so per-core throughput
+        # cancels. That cancellation is also the designed blind
+        # spot: a UNIFORM per-unit slowdown of the machinery is
+        # indistinguishable from a slower host and passes here by
+        # design — what this pin catches is complexity-class growth
+        # at the clamp (superquadratic cost lifting admitted work
+        # toward the refused corridor); flat/per-call regressions
+        # are the default-tier absolute sibling pins' net.
+        assert dt < 24.0 * ref_dt, (
+            f"worst admitted shapes took {dt:.3f}s CPU at clamp vs "
+            f"reference {ref_dt:.3f}s (ratio {dt / ref_dt:.1f}, "
+            f"bound 24)"
         )
 
     def test_milder_admitted_shapes_cost_bounded(self, tmp_path):
@@ -1288,9 +1376,10 @@ class TestDomainBugPatterns:
         # host and per-core throughput varies across hosts — slower
         # cores must still pass; not looser, because these shapes are
         # pinned as MILD — a cost regression lifting them toward the
-        # constructed admitted worst (~3.4 s CPU at the clamp, bounded
-        # at 8.0 in test_worst_admitted_shape_cost_bounded) must fail
-        # here rather than hide under a slack bound.
+        # constructed admitted worst (~3.4 s CPU at the clamp,
+        # ratio-bounded at 24x its in-test reference in the slow-tier
+        # test_worst_admitted_shape_cost_bounded) must fail here
+        # rather than hide under a slack bound.
         assert dt < 5.0, (
             f"milder admitted shapes took {dt:.3f}s CPU at clamp"
         )
