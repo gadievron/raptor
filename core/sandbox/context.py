@@ -804,6 +804,41 @@ def _cmd_visible_in_mount_tree(cmd, target, output, extra_paths) -> bool:
     regardless of which path we take.
     """
     from .mount_ns import _SYSTEM_RO_DIRS
+
+    def _visible(abs_path: str, canon) -> bool:
+        # ``canon`` canonicalises each GRANT before the prefix
+        # comparison. The literal leg passes os.path.abspath: binds
+        # land at the caller-SPELLED grant path (mount_ns
+        # canonical_bind_path never resolves symlinks), so a
+        # symlink-spelled grant is visible at its spelled name — its
+        # realpath spelling may not exist in the tree at all. The
+        # realpath leg passes os.path.realpath, matching what the
+        # spelled bind actually exposes.
+        # System bind-mount prefixes (must match
+        # mount_ns._SYSTEM_RO_DIRS). /tmp is the per-sandbox tmpfs —
+        # host /tmp content is NOT visible, so a binary at /tmp/X
+        # would be invisible inside the sandbox; we deliberately do
+        # NOT add /tmp to the visible list.
+        for sysdir in _SYSTEM_RO_DIRS:
+            prefix = f"/{sysdir}"
+            if abs_path == prefix or abs_path.startswith(prefix + "/"):
+                return True
+        # target / output bind-mounts (visible at original absolute
+        # path).
+        for d in (target, output):
+            if d:
+                d_abs = canon(d)
+                if abs_path == d_abs or abs_path.startswith(d_abs + "/"):
+                    return True
+        # Caller-supplied extras (readable_paths + tool_paths union).
+        for d in (extra_paths or []):
+            if not d:
+                continue
+            d_abs = canon(d)
+            if abs_path == d_abs or abs_path.startswith(d_abs + "/"):
+                return True
+        return False
+
     if not cmd:
         return True
     cmd0 = cmd[0]
@@ -815,32 +850,17 @@ def _cmd_visible_in_mount_tree(cmd, target, output, extra_paths) -> bool:
         # Can't determine — let the call proceed; the subprocess will
         # fail with a clear ENOENT if the binary doesn't exist anywhere.
         return True
-    # Follow symlinks so we check the real binary path. A symlink at
-    # /usr/local/bin/X → /home/USER/bin/X resolves to the home path
-    # and would correctly fail the visibility check.
+    # BOTH ends of a symlink chain must be visible: the child execs
+    # the LITERAL argv path, so an invisible location pointing at a
+    # visible target (a venv's bin/python3 → /usr/bin/python3) fails
+    # exec just as surely as a visible location pointing at an
+    # invisible target (/usr/local/bin/X → /home/USER/bin/X).
+    # abspath normalises without following the final symlink.
+    literal = os.path.abspath(resolved)
+    if not _visible(literal, os.path.abspath):
+        return False
     abs_path = os.path.realpath(resolved)
-    # System bind-mount prefixes (must match mount_ns._SYSTEM_RO_DIRS).
-    # /tmp is the per-sandbox tmpfs — host /tmp content is NOT visible,
-    # so a binary at /tmp/X would be invisible inside the sandbox; we
-    # deliberately do NOT add /tmp to the visible list.
-    for sysdir in _SYSTEM_RO_DIRS:
-        prefix = f"/{sysdir}"
-        if abs_path == prefix or abs_path.startswith(prefix + "/"):
-            return True
-    # target / output bind-mounts (visible at original absolute path).
-    for d in (target, output):
-        if d:
-            d_abs = os.path.realpath(d)
-            if abs_path == d_abs or abs_path.startswith(d_abs + "/"):
-                return True
-    # Caller-supplied extras (readable_paths + tool_paths union).
-    for d in (extra_paths or []):
-        if not d:
-            continue
-        d_abs = os.path.realpath(d)
-        if abs_path == d_abs or abs_path.startswith(d_abs + "/"):
-            return True
-    return False
+    return literal == abs_path or _visible(abs_path, os.path.realpath)
 
 
 _UNSET = object()

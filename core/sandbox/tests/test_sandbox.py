@@ -2445,6 +2445,67 @@ class TestCmdVisibleInMountTree(unittest.TestCase):
         self.assertTrue(_cmd_visible_in_mount_tree(
             ["/data/target/run.sh"], "/data/target", None, None))
 
+    def test_invisible_symlink_to_visible_target_not_visible(self):
+        """The venv shape: a symlink at an INVISIBLE location pointing
+        at a visible target (venv/bin/python3 → /usr/bin/env-alike).
+        The child execs the LITERAL argv path, which does not exist in
+        the bind tree — realpath alone said 'visible' and bought a
+        guaranteed-to-fail mount-ns spawn plus a misleading
+        bind-tree-unusable memo for the binary."""
+        from core.sandbox.context import _cmd_visible_in_mount_tree
+        with TemporaryDirectory() as td:
+            link = Path(td) / "venv-bin" / "python3"
+            link.parent.mkdir()
+            link.symlink_to("/usr/bin/env")
+            self.assertFalse(_cmd_visible_in_mount_tree(
+                [str(link)], None, None, None))
+            # The documented remedy: granting the symlink's directory
+            # (tool_paths / readable_paths) makes BOTH ends visible.
+            self.assertTrue(_cmd_visible_in_mount_tree(
+                [str(link)], None, None, [str(link.parent)]))
+
+    def test_symlink_spelled_grant_visible_at_its_spelling(self):
+        """Grants spelled THROUGH a symlink stay visible: binds land at
+        the caller-spelled path (mount_ns canonical_bind_path never
+        resolves symlinks), so a command under the spelled grant execs
+        fine in the tree — comparing the literal leg against the
+        grant's REALPATH would falsely pre-demote every symlink-spelled
+        target/tool_paths grant to the mountless backend, silently.
+        Both grant channels: extras (tool_paths) and target."""
+        from core.sandbox.context import _cmd_visible_in_mount_tree
+        with TemporaryDirectory() as td:
+            real = Path(td) / "real-tools"
+            real.mkdir()
+            tool = real / "mytool"
+            tool.write_text("#!/bin/sh\n")
+            spelled = Path(td) / "spelled-tools"
+            spelled.symlink_to(real)
+            cmd = str(spelled / "mytool")
+            # tool_paths grant spelled via the symlink.
+            self.assertTrue(_cmd_visible_in_mount_tree(
+                [cmd], None, None, [str(spelled)]))
+            # target spelled via the symlink (everyday operator shape:
+            # a symlinked workspace path).
+            self.assertTrue(_cmd_visible_in_mount_tree(
+                [cmd], str(spelled), None, None))
+
+    def test_visible_symlink_to_invisible_target_not_visible(self):
+        """The original direction stays caught: a granted location
+        whose symlink resolves OUTSIDE the granted set is still
+        invisible — the conjunction never regresses to literal-only."""
+        from core.sandbox.context import _cmd_visible_in_mount_tree
+        with TemporaryDirectory() as td:
+            bin_dir = Path(td) / "bin"
+            bin_dir.mkdir()
+            hidden = Path(td) / "hidden" / "tool"
+            hidden.parent.mkdir()
+            hidden.write_text("#!/bin/sh\n")
+            link = bin_dir / "tool"
+            link.symlink_to(hidden)
+            # Only the LINK's directory is granted; the target is not.
+            self.assertFalse(_cmd_visible_in_mount_tree(
+                [str(link)], None, None, [str(bin_dir)]))
+
     def test_relative_cmd_falls_through_to_true(self):
         """Can't resolve a non-PATH-findable cmd → don't trigger fallback;
         let the subprocess fail naturally with ENOENT. The point of
