@@ -718,6 +718,75 @@ class TestProvenanceAndRender:
         for line in lines:
             assert all(c.isprintable() for c in line), line
 
+    def test_render_escapes_rewritten_document_fields(self, tmp_path):
+        """Render reads ledger.json back from the run output dir — a
+        target-writable surface. Vocabulary fields (class, tier,
+        state, identity_kind, by_class keys) are closed at BUILD time
+        but arrive from the DOCUMENT at render time: a rewritten row
+        must reach the terminal inert, not as live ESC/CSI/OSC."""
+        esc_title = "\x1b]0;pwned\x07evil"
+        esc_csi = "\x1b[2J\x1b[H FAKE-CLEAN"
+        doc = {
+            "counts": {"rows": 1, "by_class": {esc_csi: 1}},
+            "target_root": "/tmp/benign",
+            "rows": [{
+                "artifact_id": esc_title,
+                "class": esc_csi,
+                "format_tier": "\x1b[8mHIDDEN",
+                "path": "bin/app",
+                "status": {"state": "\x1b[31mforged",
+                           "updated_at": "\x1b[31mt0",
+                           "depth": "T\x1b[31m2"},
+                "identity": {"kind": "buildid", "value": "aa"},
+                "size_bytes": 1,
+                "exposure": [{"feature": "net\x1b[31m",
+                              "value": "x",
+                              "extractor": "elf\x1b[31m"}],
+                "provenance": {"origin": "archive_member",
+                               "parent": "p\x1b[31m.zip",
+                               "member_path": "m"},
+                "derived_from_target": ["path", "x\x1b[31m"],
+            }],
+            "residuals": [],
+            "collisions": [
+                {"identity_kind": "\x1b]0;boom\x07buildid",
+                 "artifact_ids": ["a"]},
+            ],
+        }
+        out = tmp_path / "out"
+        out.mkdir()
+        for line in render_status_lines(doc, out):
+            assert "\x1b" not in line and "\x07" not in line, line
+        for line in render_artifact_lines(doc["rows"][0]):
+            assert "\x1b" not in line and "\x07" not in line, line
+
+    def test_render_escapes_rewritten_family_examples(self, tmp_path):
+        """family.examples_escaped promises write-time escaping in its
+        NAME, but the values arrive from the run-dir document — a
+        rewritten ledger.json omits the escaping, so the e.g. lines
+        must re-escape at render (idempotent for honest entries, like
+        the router's consumption side)."""
+        row = {
+            "artifact_id": "corpusfam",
+            "class": "corpus_family",
+            "format_tier": "corpus",
+            "path": None,
+            "size_bytes": 0,
+            "status": {"state": "pending", "updated_at": "t0"},
+            "family": {
+                "key": "k",
+                "member_count": 2,
+                "examples_escaped": ["\x1b]0;pwned\x07ex1",
+                                     "\x1b[2Jex2"],
+            },
+        }
+        lines = render_artifact_lines(row)
+        example_lines = [ln for ln in lines if "e.g." in ln]
+        assert len(example_lines) == 2
+        assert any("pwned" in ln for ln in example_lines)  # content kept
+        for line in lines:
+            assert "\x1b" not in line and "\x07" not in line, line
+
     def test_status_table_row_cap_elides(self, tmp_path, monkeypatch):
         doc, _target, out = _build(tmp_path)
         monkeypatch.setattr(ledger_mod, "MAX_STATUS_TABLE_ROWS", 2)

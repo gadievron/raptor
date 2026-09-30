@@ -1773,13 +1773,26 @@ def render_status_lines(
     per-artifact checklist slots when present."""
     lines: list[str] = []
     counts = doc.get("counts") or {}
+    # Every doc field below is read back from the run-dir JSON — a
+    # writer with run-dir access controls all of it, so even the
+    # "internal" slots (class names, states, counts) escape at render.
     lines.append(
-        f"Ledger: {counts.get('rows', 0)} rows "
+        f"Ledger: {_esc(str(counts.get('rows', 0)))} rows "
         f"(target {_esc(str(doc.get('target_root', '')))})"
     )
     by_class = counts.get("by_class") or {}
-    for cls in sorted(by_class):
-        lines.append(f"  {cls:<20s} {by_class[cls]:>5d}")
+    for cls in sorted(by_class, key=str):
+        # Slice raw, then escape, then pad: escaping after the width
+        # slice can widen the cell but never re-forms a control
+        # sequence from a cut escape. Counts render intact when they
+        # really are ints; anything else is a rewritten doc and gets
+        # the escape.
+        count = by_class[cls]
+        shown_count = (str(count) if isinstance(count, int)
+                       else _esc(str(count)[:20]))
+        lines.append(
+            f"  {_esc(str(cls)[:20]):<20s} {shown_count:>5s}"
+        )
     lines.append("")
     header = (f"  {'artifact':<26s} {'class':<14s} {'tier':<18s} "
               f"{'state':<12s} {'items':>6s}  path")
@@ -1797,9 +1810,11 @@ def render_status_lines(
         flag = " ⚠" if row.get("elevated_interest") else ""
         shown = row.get("path") or (row.get("family") or {}).get("key", "")
         lines.append(
-            f"  {artifact_id[:26]:<26s} {str(row.get('class'))[:14]:<14s} "
-            f"{str(row.get('format_tier'))[:18]:<18s} {state[:12]:<12s} "
-            f"{items:>6s}  {_esc(str(shown))}{flag}"
+            f"  {_esc(artifact_id[:26]):<26s} "
+            f"{_esc(str(row.get('class'))[:14]):<14s} "
+            f"{_esc(str(row.get('format_tier'))[:18]):<18s} "
+            f"{_esc(state[:12]):<12s} "
+            f"{_esc(items[:6]):>6s}  {_esc(str(shown))}{flag}"
         )
     if len(rows) > len(shown_rows):
         lines.append(
@@ -1815,7 +1830,7 @@ def render_status_lines(
     for collision in doc.get("collisions") or []:
         lines.append(
             "  collision: forged/colliding "
-            f"{collision.get('identity_kind')} identity — demoted "
+            f"{_esc(str(collision.get('identity_kind')))} identity — demoted "
             f"{len(collision.get('artifact_ids') or [])} artifact(s) "
             "to content-hash identity (elevated interest)"
         )
@@ -1824,11 +1839,16 @@ def render_status_lines(
 
 def render_artifact_lines(row: dict[str, Any]) -> list[str]:
     """Full single-row view — every target-derived field escaped."""
+    # The row is read back from run-dir JSON — a writer with run-dir
+    # access controls every slot, so the "internal" fields (class,
+    # tier, state, counts) escape at render alongside the obviously
+    # target-derived ones.
     lines = [
         f"Artifact: {_esc(str(row.get('artifact_id')))}",
-        f"  class: {row.get('class')}  tier: {row.get('format_tier')}",
+        f"  class: {_esc(str(row.get('class')))}  "
+        f"tier: {_esc(str(row.get('format_tier')))}",
         f"  path: {_esc(str(row.get('path') or ''))}",
-        f"  size: {row.get('size_bytes')}",
+        f"  size: {_esc(str(row.get('size_bytes')))}",
     ]
     ident = row.get("identity") or {}
     if ident:
@@ -1851,30 +1871,35 @@ def render_artifact_lines(row: dict[str, Any]) -> list[str]:
         shown = (_esc(str(value)) if not isinstance(value, (bool, int))
                  else str(value))
         lines.append(
-            f"  exposure {feature.get('feature')}: {shown} "
-            f"[{feature.get('extractor')}]"
+            f"  exposure {_esc(str(feature.get('feature')))}: {shown} "
+            f"[{_esc(str(feature.get('extractor')))}]"
         )
     family = row.get("family") or {}
     if family:
         lines.append(
             f"  family: {_esc(str(family.get('key')))} "
-            f"({family.get('member_count')} member(s))"
+            f"({_esc(str(family.get('member_count')))} member(s))"
         )
         for example in family.get("examples_escaped") or []:
-            lines.append(f"    e.g. {example}")
+            # The field name promises write-time escaping, but the
+            # value arrives from the run-dir document — a rewritten
+            # ledger.json omits it, so re-escape at render (idempotent
+            # for honestly-escaped entries; the router's consumption
+            # side already does the same).
+            lines.append(f"    e.g. {_esc(str(example))}")
     prov = row.get("provenance") or {}
     if prov.get("origin") == "archive_member":
         lines.append(
-            f"  from archive: {prov.get('parent')} "
+            f"  from archive: {_esc(str(prov.get('parent')))} "
             f"member {_esc(str(prov.get('member_path') or ''))}"
         )
     status = row.get("status") or {}
     lines.append(
-        f"  status: {status.get('state')} "
-        f"({status.get('updated_at', '?')})"
+        f"  status: {_esc(str(status.get('state')))} "
+        f"({_esc(str(status.get('updated_at', '?')))})"
     )
     if status.get("depth"):
-        lines.append(f"  depth: {status['depth']}")
+        lines.append(f"  depth: {_esc(str(status['depth']))}")
     if row.get("caps_hit"):
         lines.append(
             "  caps hit: "
@@ -1882,7 +1907,9 @@ def render_artifact_lines(row: dict[str, Any]) -> list[str]:
         )
     lines.append(
         "  target-derived fields: "
-        + (", ".join(row.get("derived_from_target") or []) or "none")
+        + (", ".join(_esc(str(f))
+                     for f in row.get("derived_from_target") or [])
+           or "none")
     )
     return lines
 
