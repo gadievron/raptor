@@ -1111,10 +1111,17 @@ def format_context_for_prompt(
     here: they change as the run learns and must not churn the cached
     prefix.
     """
+    # Stale-stamp guard: this ctx dict re-enters prompt assembly
+    # (timeout retries, deepen re-reviews, bucket/budget changes) — a
+    # budget event from a previous pass must never survive a pass that
+    # did not elide.  Cleared before ANY early return so a glance-path
+    # or budget-0 re-entry cannot carry a stale stamp forward.
+    ctx.pop("prompt_budget_event", None)
+
     if ctx.get("triage_bucket") == "glance":
         return _format_glance_prompt(ctx)
 
-    from core.llm.prompt_budget import PromptSection, fit_to_budget
+    from core.llm.prompt_budget import PromptSection, fit_to_budget_report
 
     sections: list[PromptSection] = []
 
@@ -2789,7 +2796,12 @@ def format_context_for_prompt(
 
     # ── Budget gate ─────────────────────────────────────────────────
     if budget_limit > 0:
-        kept, shed = fit_to_budget(sections, budget_limit)
+        # (stale-stamp guard runs at function top, before any early
+        # return — see the top of format_context_for_prompt)
+        report = fit_to_budget_report(
+            sections, budget_limit, elide_priority0=True,
+        )
+        kept, shed = report.kept, report.shed
         if shed:
             labels = [s.label for s in shed]
             logger.debug(
@@ -2797,6 +2809,28 @@ def format_context_for_prompt(
                 len(shed), ctx.get("file", "?"), ctx.get("function", "?"),
                 ", ".join(labels),
             )
+        if report.elisions or report.overshoot_tokens:
+            # One operator-visible line per affected row: without it
+            # the overshoot is invisible in run accounting — the send
+            # either burns a provider context-length failure (retry +
+            # spend) or the provider silently truncates exactly the
+            # evidence tail the review needs.
+            tokens_elided = sum(e.tokens_elided for e in report.elisions)
+            logger.warning(
+                "prompt_budget: %s:%s — elided %d tokens from %d "
+                "priority-0 section(s), %d tokens still over budget",
+                ctx.get("file", "?"), ctx.get("function", "?"),
+                tokens_elided, len(report.elisions),
+                report.overshoot_tokens,
+            )
+            ctx["prompt_budget_event"] = {
+                "tokens_elided": tokens_elided,
+                "overshoot_tokens": report.overshoot_tokens,
+                "elisions": [
+                    {"label": e.label, "tokens_elided": e.tokens_elided}
+                    for e in report.elisions
+                ],
+            }
         return "\n".join(s.text for s in kept)
 
     return "\n".join(s.text for s in sections)

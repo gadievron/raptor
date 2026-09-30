@@ -1371,6 +1371,16 @@ def make_review_fn(
 
         duration = time.monotonic() - t0
 
+        # Prompt-budget disclosure: format_context_for_prompt stamps
+        # ``ctx["prompt_budget_event"]`` when the assembled prompt had
+        # priority-0 content elided (or was still over budget after
+        # elision). Ride it on the result dict so the audit-log
+        # writers (Collector.submit / _commit_outcome) persist it on
+        # this row's durable record.
+        budget_event = ctx.get("prompt_budget_event")
+        if budget_event and isinstance(result, dict):
+            result["prompt_budget_event"] = budget_event
+
         status = result.get("status", "suspicious")
         if status not in ("clean", "suspicious", "finding", "dormant"):
             logger.warning(

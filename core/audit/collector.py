@@ -635,6 +635,11 @@ class Collector:
             entry["evidence_tool"] = outcome.evidence_tool
         if outcome.review_result and outcome.review_result.get("preconditions"):
             entry["preconditions"] = outcome.review_result["preconditions"]
+        if outcome.review_result and outcome.review_result.get("prompt_budget_event"):
+            # Prompt-budget disclosure (priority-0 elision / residual
+            # overshoot) rides the same per-row audit-log channel as
+            # preconditions.
+            entry["prompt_budget"] = outcome.review_result["prompt_budget_event"]
         strategies = gap.get("strategies")
         if strategies:
             entry["strategies"] = strategies

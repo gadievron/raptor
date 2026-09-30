@@ -13152,6 +13152,11 @@ def _commit_outcome(
         entry["preconditions"] = outcome.review_result["preconditions"]
     if outcome.review_result and outcome.review_result.get("intent_trace"):
         entry["intent_trace"] = outcome.review_result["intent_trace"]
+    if rr.get("prompt_budget_event"):
+        # Prompt-budget disclosure (priority-0 elision / residual
+        # overshoot) rides the same per-row audit-log channel as
+        # preconditions/intent_trace.
+        entry["prompt_budget"] = rr["prompt_budget_event"]
     if rr.get("relies_on"):
         entry["relies_on"] = rr["relies_on"]
     strategies = gap.get("strategies")
