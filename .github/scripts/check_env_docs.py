@@ -253,6 +253,12 @@ OVERRIDES: dict[str, str] = {
     "SAGE_IDENTITY_PATH": "internal",
     "SAGE_PROJECT": "internal",
     "SAGE_PROVIDER": "internal",
+    # Test synchronization hook: only the forwarder's own tests set
+    # it (to hold the supervisor at the pre-spawn gate); the read in
+    # packages/joern/netns_forwarder.py is the hook's implementation,
+    # which trips the prod-read-only → operator heuristic. Operators
+    # never set it.
+    "RAPTOR_NETNS_FORWARDER_TEST_PRESPAWN_GATE": "test-only",
 }
 
 VAR_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
