@@ -17,7 +17,6 @@ import logging
 import os
 from pathlib import Path
 import re
-import stat as _stat_mod
 from typing import Any, TYPE_CHECKING
 
 from core.atomic_fs import write_text_atomically
@@ -845,7 +844,7 @@ def _model_write_lock(json_path: Path) -> Iterator[None]:
     """
     json_path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        import fcntl
+        import fcntl  # noqa: F401 — availability probe only
     except ImportError:  # pragma: no cover — non-POSIX fallback
         yield
         return
@@ -866,10 +865,27 @@ def _model_write_lock(json_path: Path) -> Iterator[None]:
         0o600,
     )
     try:
-        if not _stat_mod.S_ISREG(os.fstat(fd).st_mode):
-            msg = f"lock path {lock_path} is not a regular file"
+        # Regularity plus foreign-uid refusal (shared checker): a
+        # pre-created lock file opens FINE, so a hostile owner would
+        # otherwise slip past the tamper checks and hold LOCK_EX over
+        # every saver. This lock's contract is raise-on-failure — a
+        # refused lock file fails the save loudly.
+        from core.atomic_fs.fs_lock import (
+            acquire_flock_bounded,
+            validate_lock_fd,
+        )
+        validate_lock_fd(fd, lock_path)
+        # Bounded announce-once acquisition: save_model must not
+        # proceed unserialised, so a holder that outlives the
+        # generous deadline fails the save loudly rather than
+        # stalling it silently and forever.
+        if not acquire_flock_bounded(
+                fd, lock_path, subject="threat model", stamp=True):
+            msg = (
+                f"threat-model lock {lock_path} still held past the "
+                "bounded wait — refusing to save unserialised"
+            )
             raise OSError(msg)
-        fcntl.flock(fd, fcntl.LOCK_EX)
         yield
     finally:
         os.close(fd)
