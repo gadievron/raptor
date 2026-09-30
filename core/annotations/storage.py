@@ -602,7 +602,25 @@ def _file_lock(path: Path):
         )
         raise AnnotationFileError(msg) from e
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        # Bounded announce-once acquisition (shared helper). NO
+        # foreign-uid refusal here, deliberately: this lock is the
+        # documented two-operator rendezvous — operator B legitimately
+        # takes operator A's lock file across uids (hence the 0o666
+        # mode and the O_RDONLY open above); the bounded deadline is
+        # the protection against a wedged holder. No pid stamp either
+        # — the fd is read-only and the file's emptiness is part of
+        # its cross-uid contract.
+        from core.atomic_fs.fs_lock import acquire_flock_bounded
+        if not acquire_flock_bounded(
+                fd, lock_path, subject="annotation store"):
+            msg = (
+                f"annotation lock {lock_path} still held past the "
+                "bounded wait — refusing to write unserialised. The "
+                "lock file only serialises writers and holds no "
+                "content (safe to delete when no write is in "
+                "flight); clear the wedged holder, then retry"
+            )
+            raise AnnotationFileError(msg)
         try:
             yield
         finally:
