@@ -130,3 +130,84 @@ class TestIsBudgetExceededClassifier:
 
     def test_unrelated_error_does_not_match(self):
         assert not self._classify(RuntimeError("connection reset"))
+
+
+class TestBudgetRemedyWording:
+    """The exhaustion message must name surfaces an operator can act
+    on (CLI caps, tuning.json default) — not the ``LLMConfig``
+    constructor spelling only a code caller can use — while keeping
+    the ``LLM budget exceeded:`` prefix the legacy string classifier
+    keys on.
+    """
+
+    def _entry_check_message(self, method, *args) -> str:
+        client = _client()
+        with patch.object(client, "_check_budget", return_value=False), \
+                pytest.raises(LLMBudgetExceededError) as excinfo:
+            method(client, *args)
+        return str(excinfo.value)
+
+    def _reservation_message(self, method, *args) -> str:
+        client = _client()
+        check, acquire, get_provider = _budget_race(client)
+        with check, acquire, get_provider, \
+                pytest.raises(LLMBudgetExceededError) as excinfo:
+            method(client, *args)
+        return str(excinfo.value)
+
+    def _assert_remedy(self, msg: str) -> None:
+        cap = _client().config.max_cost_per_scan
+        suggested = max(cap * 2, 0.01)
+        assert msg.startswith("LLM budget exceeded:")
+        assert f"--max-cost-usd {suggested:.2f}" in msg
+        assert f"--max-cost {suggested:.2f}" in msg
+        assert '"default_max_cost_usd" in tuning.json' in msg
+        assert "LLMConfig(" not in msg
+
+    def test_generate_entry_check(self):
+        self._assert_remedy(
+            self._entry_check_message(LLMClient.generate, "prompt"))
+
+    def test_generate_structured_entry_check(self):
+        self._assert_remedy(self._entry_check_message(
+            LLMClient.generate_structured, "prompt", _SCHEMA))
+
+    def test_generate_reservation(self):
+        msg = self._reservation_message(LLMClient.generate, "prompt")
+        self._assert_remedy(msg)
+        assert "estimated" in msg
+
+    def test_generate_structured_reservation(self):
+        msg = self._reservation_message(
+            LLMClient.generate_structured, "prompt", _SCHEMA)
+        self._assert_remedy(msg)
+        assert "estimated" in msg
+
+    def test_legacy_classifier_still_matches_new_wording(self):
+        # A caller re-wrapping the message as a bare RuntimeError
+        # (the legacy channel) must still classify.
+        from core.llm.client import is_budget_exceeded_error
+        msg = self._entry_check_message(LLMClient.generate, "prompt")
+        assert is_budget_exceeded_error(RuntimeError(msg))
+
+    def test_tiny_cap_never_suggests_fail_open_zero(self):
+        # Both named CLI surfaces treat a 0 cap as "no cap"
+        # (fail-open), so no cap — however tiny — may produce a
+        # copy-pasteable 0.0 suggestion.
+        import re
+
+        from core.llm.client import _budget_remedy
+        for cap in (0.001, 0.004, 0.02, 0.049):
+            msg = _budget_remedy(cap)
+            amounts = re.findall(r"--max-cost(?:-usd)? (\d+\.\d+)", msg)
+            assert len(amounts) == 2, msg
+            assert all(float(a) > 0 for a in amounts), msg
+
+    def test_constructor_spelling_gone_from_source(self):
+        # Source-level pin: no message site regrows the
+        # code-caller-only remedy.
+        import inspect
+
+        import core.llm.client as client_mod
+        assert "LLMConfig(max_cost_per_scan=" not in inspect.getsource(
+            client_mod)

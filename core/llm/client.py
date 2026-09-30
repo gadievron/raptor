@@ -228,6 +228,27 @@ def is_budget_exceeded_error(exc: BaseException) -> bool:
     )
 
 
+def _budget_remedy(cap: float) -> str:
+    """Operator-facing remedy for a tripped LLM spend cap.
+
+    Names the surfaces an operator can actually act on — the CLI
+    caps and the tuning.json standing default, the same trio the
+    uncapped-run banner in ``_ensure_cost_ceiling`` names — never
+    the ``LLMConfig`` constructor spelling, which only a code
+    caller can use.
+    """
+    # Floor at one cent, render two decimals: both named CLI surfaces
+    # treat a 0 cap as "no cap" (fail-open), so the copy-pasteable
+    # suggestion must never round a tiny cap down to 0.0 — and two
+    # decimals alone still print 0.00 for caps below half a cent.
+    suggested = max(cap * 2, 0.01)
+    return (
+        f"Raise the cap to continue: --max-cost-usd {suggested:.2f} "
+        f"(raptor.py pipelines) / --max-cost {suggested:.2f} (/audit, "
+        f'study CLIs), or set "default_max_cost_usd" in tuning.json.'
+    )
+
+
 class MidResponseDeathError(RuntimeError):
     """Transport death AFTER the upstream response started — the
     upstream fully processed (and billed) the generation before the
@@ -2919,7 +2940,7 @@ class LLMClient:
         if not self._check_budget():
             msg = (
                 f"LLM budget exceeded: ${self.total_cost:.4f} spent > ${self.config.max_cost_per_scan:.4f} limit. "
-                f"Increase budget with: LLMConfig(max_cost_per_scan={self.config.max_cost_per_scan * 2:.1f})"
+                + _budget_remedy(self.config.max_cost_per_scan)
             )
             raise LLMBudgetExceededError(msg)
 
@@ -3125,9 +3146,8 @@ class LLMClient:
                             msg = (
                                 f"LLM budget exceeded: ${self.total_cost:.4f} spent "
                                 f"+ ${reservation:.4f} estimated > "
-                                f"${self.config.max_cost_per_scan:.4f} limit. Increase budget "
-                                f"with: LLMConfig(max_cost_per_scan="
-                                f"{self.config.max_cost_per_scan * 2:.1f})"
+                                f"${self.config.max_cost_per_scan:.4f} limit. "
+                                + _budget_remedy(self.config.max_cost_per_scan)
                             )
                             raise LLMBudgetExceededError(msg)
                         # monotonic() — wall clock can jump under NTP/DST,
@@ -3518,7 +3538,7 @@ class LLMClient:
         if not self._check_budget():
             msg = (
                 f"LLM budget exceeded: ${self.total_cost:.4f} spent > ${self.config.max_cost_per_scan:.4f} limit. "
-                f"Increase budget with: LLMConfig(max_cost_per_scan={self.config.max_cost_per_scan * 2:.1f})"
+                + _budget_remedy(self.config.max_cost_per_scan)
             )
             raise LLMBudgetExceededError(msg)
 
@@ -3715,9 +3735,8 @@ class LLMClient:
                             msg = (
                                 f"LLM budget exceeded: ${self.total_cost:.4f} spent "
                                 f"+ ${reservation:.4f} estimated > "
-                                f"${self.config.max_cost_per_scan:.4f} limit. Increase budget "
-                                f"with: LLMConfig(max_cost_per_scan="
-                                f"{self.config.max_cost_per_scan * 2:.1f})"
+                                f"${self.config.max_cost_per_scan:.4f} limit. "
+                                + _budget_remedy(self.config.max_cost_per_scan)
                             )
                             raise LLMBudgetExceededError(msg)
 
