@@ -256,17 +256,26 @@ class TestSameTsRepair:
 
     def test_older_verifying_copy_never_rewinds_newer_row(self, tmp_path):
         """The repair fires at EQUAL ``ts`` only — a verifying but
-        older row must not replace a newer stored copy, broken or
-        not (history is never rewound)."""
+        older row must not replace a newer VERIFIED stored copy
+        (history among verified rows is never rewound). A stored copy
+        that never verified takes the cross-``ts`` adjudication path
+        instead (pinned in test_journal_merge_trust.py)."""
         project = tmp_path / "project"
         run = project / "run_1"
         run.mkdir(parents=True)
         append_entry(run, _entry())
-        key = _seed_broken_index_copy(project, run)
-        # Bump the STORED copy's ts past the journal row's.
+        assert merge_into_index(project, run) == 1
+        # Bump the STORED copy's ts past the journal row's, re-minting
+        # its token so the newer copy positively verifies.
         path = project / INDEX_FILENAME
         data = json.loads(path.read_text(encoding="utf-8"))
-        data["entries"][key]["ts"] = "9999-12-31T23:59:59.999999Z"
+        (key,) = data["entries"]
+        stored = data["entries"][key]
+        stored["ts"] = "9999-12-31T23:59:59.999999Z"
+        stored.pop(journal_mac.TOKEN_KEY, None)
+        token = journal_mac.mint_row(stored)
+        assert token, "test key must be usable"
+        stored[journal_mac.TOKEN_KEY] = token
         path.write_text(
             json.dumps(data, separators=(",", ":")) + "\n",
             encoding="utf-8")

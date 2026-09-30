@@ -3488,6 +3488,7 @@ def merge_into_index(project_dir: Path, run_dir: Path, *,
         upgraded = 0
         healed = 0
         refused = 0
+        superseded = 0
         # Each merged key remembers the PRE-RUN value it displaced so
         # the byte-eviction arm below can RESTORE it: an evicted
         # incoming identity reaches the index as an aggregate, and the
@@ -3615,9 +3616,13 @@ def merge_into_index(project_dir: Path, run_dir: Path, *,
                 # the index could never heal from its own source of
                 # truth. A row that verifies under this install's key
                 # replaces a same-key, same-``ts`` copy that does not
-                # (absent or failing token). Never fires across
-                # timestamps — history is not rewound — and never
-                # replaces a verifying row. Healed keys register in
+                # (absent or failing token). This arm never fires
+                # across timestamps — repair is confined to the exact
+                # instant, so healing can never reorder the verified
+                # timeline (cross-timestamp movement exists only in
+                # the adjudication arm below, and only against rows
+                # that never verified at all). Never replaces a
+                # verifying row. Healed keys register in
                 # ``merged_rows`` with the same slot discipline so the
                 # byte-eviction arm restores their pre-run priors too.
                 slot = merged_rows.get(key)
@@ -3628,6 +3633,49 @@ def merge_into_index(project_dir: Path, run_dir: Path, *,
                     slot[2] += 1
                 index[key] = row
                 healed += 1
+                merged += 1
+            elif (entry.ts < _row_ts(existing) and incoming_verified
+                    and not _row_provenance_ok(existing)):
+                # Cross-timestamp trust adjudication: verified
+                # supersedes never-verified. A row that POSITIVELY
+                # verified under this install's MAC key in this loop
+                # (``incoming_verified`` — so the key is demonstrably
+                # usable right now) replaces a stored copy that does
+                # not verify, even though the stored ``ts`` is newer.
+                # Why: the replacement gate above protects only
+                # ESTABLISHED verified authority — an unstamped row
+                # planted on a FREE key with a fabricated future
+                # ``ts`` won the race for the empty slot and then
+                # blocked every later honest verified row under
+                # latest-wins, forever. A never-verified row's ``ts``
+                # is unproven writer content; it never earned a place
+                # in the verified timeline, so displacing it is not a
+                # rewind of history — among rows that verify, strict
+                # latest-wins is untouched in both directions, and
+                # the same-``ts`` repair arm above keeps its
+                # same-instant-only scope. Stand-downs, by
+                # construction: under a key outage nothing verifies,
+                # so ``incoming_verified`` is False and the merge
+                # stays plain latest-wins (never guess on
+                # unverifiable state — the gate's fail direction);
+                # never-verified vs never-verified stays plain
+                # latest-wins (the arm demands positive incoming
+                # verification). Accepted cost: an honest newer row
+                # whose append-time mint failed and that slipped into
+                # the index during a merge-side key outage is
+                # displaced by an older verified copy on the next
+                # merge — the same fixed point the oldest→newest
+                # sweep already converges to (the gate refuses the
+                # never-verified row on replay), and the producing
+                # run journal keeps the displaced copy in full.
+                slot = merged_rows.get(key)
+                if slot is None:
+                    merged_rows[key] = [entry, existing, 1]
+                else:
+                    slot[0] = entry
+                    slot[2] += 1
+                index[key] = row
+                superseded += 1
                 merged += 1
 
         if stripped:
@@ -3663,12 +3711,24 @@ def merge_into_index(project_dir: Path, run_dir: Path, *,
                 "keeps the rows — a later verifying copy of the same "
                 "identity merges normally)", refused, run_dir,
             )
+        if superseded:
+            logger.warning(
+                "journal index: %d verified row(s) from %s superseded "
+                "stored copies that never verified but carried NEWER "
+                "self-declared timestamps (a free-key squat or an "
+                "outage-window acceptance — an unproven ts does not "
+                "hold a slot against positive provenance; the "
+                "displaced copies stay in their producing run "
+                "journals)", superseded, run_dir,
+            )
         if stats is not None:
             # Caller-visible mirror of the disclosures above, recorded
-            # at the point they are logged. The byte-eviction arm
-            # below sheds ROWS, never the strip/heal/refuse events
-            # that already happened on the way in — so these counts
-            # always match the log lines.
+            # at the point they are logged — except ``superseded``,
+            # deliberately disclosure-only (the warning log plus the
+            # ``merged`` total carry it; no stats key). The
+            # byte-eviction arm below sheds ROWS, never the
+            # strip/heal/refuse events that already happened on the
+            # way in — so these counts always match the log lines.
             stats["stripped"] = stats.get("stripped", 0) + stripped
             stats["healed"] = stats.get("healed", 0) + healed
             stats["refused"] = stats.get("refused", 0) + refused

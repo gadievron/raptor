@@ -131,11 +131,18 @@ class TestSlimAtMerge:
         # A fat row an earlier (pre-slim) writer left on disk slims on
         # the next merge THROUGH THE SAME CHOKEPOINT — even a merge
         # that updates no entry (merged == 0) rewrites the document.
+        # The stored row carries a verifying token: only a VERIFIED
+        # newer copy holds its slot against an older verified merge
+        # (a never-verified one would be adjudicated away instead).
         project = tmp_path / "project"
         project.mkdir()
         fat = _entry(1, ts="2026-01-02T00:00:00.000000Z")
+        fat_row = fat.to_dict()
+        token = journal_mac.mint_row(fat_row)
+        assert token, "test key must be usable"
+        fat_row[journal_mac.TOKEN_KEY] = token
         journal_mod._write_index(
-            project / INDEX_FILENAME, {fat.index_key: fat.to_dict()})
+            project / INDEX_FILENAME, {fat.index_key: fat_row})
         assert _index_rows(project)[fat.index_key]["body"] == _BODY
 
         # Merge an OLDER row of the same identity: latest-wins keeps
