@@ -1192,8 +1192,10 @@ def main() -> int:
                     help="Initial semantic concepts (comma-separated).")
     ap.add_argument("--model", default=None,
                     help="LLM model override for study-run.")
-    ap.add_argument("--batch-target", type=int, default=80,
-                    help="Items per Phase-2 study batch (passed to raptor-study-run).")
+    ap.add_argument("--batch-target", type=int, default=None,
+                    help="Items per Phase-2 study batch (passed to "
+                         "raptor-study-run; default: study-run "
+                         "computes it within the output budget).")
     ap.add_argument("--include-dir", action="append", default=None,
                     dest="include_dirs", metavar="DIR",
                     help="Additional include search directories (repeatable).")
@@ -1409,7 +1411,7 @@ def main() -> int:
             run_cmd = [sys.executable, run_bin, str(output_dir)]
             if parsed.model:
                 run_cmd.extend(["--model", parsed.model])
-            if parsed.batch_target != 80:
+            if parsed.batch_target is not None:
                 run_cmd.extend(["--batch-target", str(parsed.batch_target)])
             if parsed.max_cost is not None:
                 run_cmd.extend(["--max-cost", str(parsed.max_cost)])

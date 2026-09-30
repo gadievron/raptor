@@ -101,11 +101,12 @@ def main() -> int:
     ap.add_argument("output_dir", help="Directory with study-list.json.")
     ap.add_argument("--model", default=None,
                     help="LLM model override (e.g. claude-sonnet-4-6).")
-    ap.add_argument("--batch-target", type=int, default=80,
-                    help="Items per Phase-2 LLM batch (default 80). "
-                         "Lower it for slow/thinking models whose "
-                         "single-batch responses outlive transport "
-                         "read timeouts.")
+    ap.add_argument("--batch-target", type=int, default=None,
+                    help="Items per Phase-2 LLM batch (default: "
+                         "computed within the per-call output-budget "
+                         "ceiling). Lower it for slow/thinking models "
+                         "whose single-batch responses outlive "
+                         "transport read timeouts.")
     ap.add_argument("--max-cost", type=float, default=None,
                     metavar="USD",
                     help="Maximum LLM cost in USD before stopping — "

@@ -4328,3 +4328,108 @@ class TestDerivedConfidenceDeliberatelyUncompiled:
         )])
         assert compile_model(model, tmp_path, _NeverCalled(),
                              min_confidence="inferred") == []
+
+
+class TestBatchTargetWithinCeiling:
+    """The DEFAULT Phase 2 batch target is computed WITHIN the
+    output-budget ceiling — ``min(heuristic, ceiling)`` at computation
+    time, derivation visible in one place — so the default path never
+    trips a dispatch-time clamp warning. Only an EXPLICIT operator
+    target above the ceiling still clamps, with disclosure."""
+
+    def _items(self, n: int) -> list[StudyItem]:
+        return [StudyItem(id=f"i{k}", kind="function", name=f"fn{k}",
+                          file=f"f{k}.c") for k in range(n)]
+
+    class _CountingClient:
+        """Answers every batch; records how many items each carried."""
+
+        def __init__(self) -> None:
+            self.batch_sizes: list[int] = []
+
+        def generate_structured(self, prompt: str, schema, **kw):
+            import re as _re
+            names = set(_re.findall(r"\bfn\d+\b", prompt))
+            self.batch_sizes.append(len(names))
+            return ({"concepts": [
+                {"id": n, "description": f"desc {n}",
+                 "evidence": [{"type": "doc", "file": "x.c",
+                               "observation": "obs"}],
+                 "confidence": "inferred"} for n in sorted(names)],
+                "invariants": [], "contracts": []}, "raw")
+
+    def test_target_derivation_ceiling_binds(self, monkeypatch) -> None:
+        # Budget 1024 → ceiling 1024//512 = 2 < heuristic → ceiling wins.
+        import core.concepts.study as study
+        monkeypatch.setenv("RAPTOR_STUDY_MAX_OUTPUT_TOKENS", "1024")
+        assert study._phase2_batch_target() == 2
+
+    def test_target_derivation_heuristic_binds(self, monkeypatch) -> None:
+        # Budget 131072 → ceiling 256 > heuristic → heuristic wins:
+        # a lifted output budget must not balloon batches past the
+        # clustering-granularity heuristic.
+        import core.concepts.study as study
+        monkeypatch.setenv("RAPTOR_STUDY_MAX_OUTPUT_TOKENS", "131072")
+        assert (study._phase2_batch_target()
+                == study._PHASE2_BATCH_TARGET_HEURISTIC)
+
+    def test_defaults_arithmetic_pinned(self, monkeypatch) -> None:
+        # At the shipped defaults (16384-token budget / ~512 tokens
+        # per item) the computed target IS the 32-item ceiling.
+        import core.concepts.study as study
+        monkeypatch.delenv("RAPTOR_STUDY_MAX_OUTPUT_TOKENS",
+                           raising=False)
+        assert study._phase2_batch_target() == 32
+
+    def test_default_path_computes_within_ceiling_no_warning(
+        self, monkeypatch, caplog,
+    ) -> None:
+        """No batch_target passed → target computed within the
+        ceiling; the dispatch-time clamp disclosure must NOT fire."""
+        import logging as _logging
+        monkeypatch.setenv("RAPTOR_STUDY_MAX_OUTPUT_TOKENS", "1024")
+        items = self._items(4)
+        client = self._CountingClient()
+        with caplog.at_level(_logging.DEBUG,
+                             logger="core.concepts.study"):
+            concepts, *_ = run_phase2(items, "t/", client)
+        assert client.batch_sizes
+        assert all(s <= 2 for s in client.batch_sizes)
+        assert len(concepts) == 4
+        clamp_records = [
+            r for r in caplog.records
+            if "exceeds the output-budget ceiling" in r.getMessage()
+        ]
+        assert clamp_records == []
+
+    def test_explicit_over_ceiling_still_clamps_with_disclosure(
+        self, monkeypatch, caplog,
+    ) -> None:
+        """An operator-passed target above the ceiling keeps the
+        existing contract: clamped, and disclosed at INFO."""
+        import logging as _logging
+        monkeypatch.setenv("RAPTOR_STUDY_MAX_OUTPUT_TOKENS", "1024")
+        items = self._items(4)
+        client = self._CountingClient()
+        with caplog.at_level(_logging.INFO,
+                             logger="core.concepts.study"):
+            concepts, *_ = run_phase2(items, "t/", client,
+                                      batch_target=80)
+        assert all(s <= 2 for s in client.batch_sizes)
+        assert len(concepts) == 4
+        assert any(
+            "exceeds the output-budget ceiling" in r.getMessage()
+            and r.levelno == _logging.INFO
+            for r in caplog.records
+        )
+
+    def test_run_study_default_is_computed_not_eighty(self) -> None:
+        # run_study resolves its default through the same one-place
+        # derivation (None sentinel), so the derived-attention cap
+        # sees the effective target, never a raw over-ceiling 80.
+        import inspect
+
+        sig = inspect.signature(run_study)
+        assert sig.parameters["batch_target"].default is None
+        sig2 = inspect.signature(run_phase2)
+        assert sig2.parameters["batch_target"].default is None

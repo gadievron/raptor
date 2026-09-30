@@ -568,8 +568,9 @@ def main() -> int:
                     help="Comma-separated abstract concepts to study.")
     ap.add_argument("--model", default=None,
                     help="LLM model override for study-run.")
-    ap.add_argument("--batch-target", type=int, default=80,
-                    help="Items per Phase-2 study batch.")
+    ap.add_argument("--batch-target", type=int, default=None,
+                    help="Items per Phase-2 study batch (default: "
+                         "computed within the output budget).")
     ap.add_argument("--prep-only", action="store_true",
                     help="Materialize the tree and run prep only "
                          "(phase 2 runs in-session).")
@@ -681,11 +682,18 @@ def main() -> int:
     bridge_file = None
     if not parsed.no_bridge_seeds:
         try:
+            from core.concepts.study import _phase2_batch_target
             from core.orchestration.binary_study_bridge import (
                 build_bridge_seeds,
             )
+            # No explicit --batch-target → hand the bridge the same
+            # ceiling-folded target the study itself will compute, so
+            # its item budget matches the batches that actually run.
+            item_budget = (parsed.batch_target
+                           if parsed.batch_target is not None
+                           else _phase2_batch_target())
             bridge_file = build_bridge_seeds(
-                output_dir, db, item_budget=parsed.batch_target)
+                output_dir, db, item_budget=item_budget)
         except Exception as exc:  # noqa: BLE001 — bridge is enrichment
             print(f"binary-study: map→study bridge skipped: "
                   f"{_sft(str(exc), max_len=200)}", file=sys.stderr)
@@ -744,8 +752,9 @@ def main() -> int:
                # that cannot produce one must fail at the study
                # loop's own exit with the cause recorded, not exit 0
                # and surface here as a bare no-model symptom.
-               "--require-domain-model",
-               "--batch-target", str(parsed.batch_target)]
+               "--require-domain-model"]
+        if parsed.batch_target is not None:
+            cmd.extend(["--batch-target", str(parsed.batch_target)])
         if identifiers:
             cmd.extend(["--identifier", identifiers])
         if bridge_file is not None and pass_no == 1:

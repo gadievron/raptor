@@ -730,13 +730,26 @@ _TRUNCATION_FAIL_LIMIT = 6
 # Estimated structured-output tokens ONE focus item costs in a Phase 2
 # response (concept + invariant/contract share, with evidence quotes).
 # Divides the per-call output budget into the batch-size ceiling
-# (``_phase2_batch_ceiling``) that ``run_phase2`` clamps
-# ``batch_target`` to. Both directions hurt: estimate too LOW and the
+# (``_phase2_batch_ceiling``) that bounds the computed batch target
+# (``_phase2_batch_target``) and clamps an explicit over-ceiling
+# operator target. Both directions hurt: estimate too LOW and the
 # ceiling admits batches whose response truncates at the output cap —
 # a wasted full-prompt round-trip before split-retry recovers; too
 # HIGH and batches shrink, multiplying prompt-side token cost (each
 # batch re-sends the header, doc context, and context items).
 _PHASE2_ITEM_OUTPUT_TOKENS_EST = 512
+
+# Heuristic upper bound on focus items per Phase 2 batch when the
+# operator passes no explicit --batch-target. Both directions hurt:
+# too LOW splits coherent subsystems across batches — cross-file
+# cohesion is lost (``_cluster_items`` keeps a sub-target subsystem
+# whole) and prompt-side token cost multiplies (each batch re-sends
+# the header, doc context, and context items); too HIGH is inert at
+# the shipped output budget (the ceiling in ``_phase2_batch_target``
+# binds first) but would balloon single batches — and their
+# truncation exposure — the moment a raised output budget lifts the
+# ceiling past it.
+_PHASE2_BATCH_TARGET_HEURISTIC = 80
 
 
 def _phase2_batch_ceiling() -> int:
@@ -753,6 +766,19 @@ def _phase2_batch_ceiling() -> int:
     return max(
         1, _study_text_output_tokens() // _PHASE2_ITEM_OUTPUT_TOKENS_EST,
     )
+
+
+def _phase2_batch_target() -> int:
+    """Default Phase 2 batch target, computed WITHIN the ceiling.
+
+    ``min(heuristic, output-budget ceiling)`` at computation time:
+    the ceiling every batch is always subject to is folded into the
+    target here — in one visible place — so the computed default
+    never needs a dispatch-time clamp (only an EXPLICIT over-ceiling
+    operator target does). Computed at call time because the ceiling
+    derives from the env-tunable output budget.
+    """
+    return min(_PHASE2_BATCH_TARGET_HEURISTIC, _phase2_batch_ceiling())
 
 
 class _BatchLLMError(Exception):
@@ -2022,7 +2048,7 @@ def _cluster_items(
     in_scope: list[StudyItem],
     deps: list[StudyItem],
     max_context: int = 20,
-    batch_target: int = 80,
+    batch_target: int = _PHASE2_BATCH_TARGET_HEURISTIC,
 ) -> list[tuple[list[StudyItem], list[StudyItem]]]:
     """Group in-scope items into batches with relevant context.
 
@@ -3485,7 +3511,7 @@ def run_phase2(
     correlate: list[str] | None = None,
     discard_sink: list | None = None,
     vocab_sink: list | None = None,
-    batch_target: int = 80,
+    batch_target: int | None = None,
     should_stop: Any = None,
     phase_stats: dict | None = None,
 ) -> tuple[
@@ -3496,6 +3522,11 @@ def run_phase2(
 
     When the model's RPM allows it, batches run in parallel using
     ``derive_max_workers`` from the audit executor to cap concurrency.
+
+    ``batch_target``: items per batch. ``None`` (the default) means
+    "compute it" — ``_phase2_batch_target`` folds the output-budget
+    ceiling into the heuristic at computation time. An explicit value
+    is the operator's ask and is honoured up to the ceiling.
 
     ``should_stop``: zero-arg callable polled at every batch boundary;
     True stops dispatching NEW paid calls (in-flight batches finish).
@@ -3528,20 +3559,31 @@ def run_phase2(
         len(in_scope), len(deps),
     )
 
-    # Clamp (never replace) batch_target to the output-budget ceiling:
-    # a batch whose structured response cannot fit under the per-call
-    # output cap truncates deterministically and wastes the whole
-    # round-trip before split-retry recovers.
-    ceiling = _phase2_batch_ceiling()
-    if batch_target > ceiling:
-        logger.info(
-            "Phase 2: batch_target %d exceeds the output-budget "
-            "ceiling %d (%d-token response budget / ~%d tokens per "
-            "item) — clamping",
-            batch_target, ceiling, _study_text_output_tokens(),
-            _PHASE2_ITEM_OUTPUT_TOKENS_EST,
+    # Batch sizing: the DEFAULT target is computed within the
+    # output-budget ceiling (``_phase2_batch_target`` folds the
+    # ceiling in at computation time), so it never needs a clamp.
+    # Only an EXPLICIT operator target above the ceiling is clamped
+    # (never replaced) — with disclosure, because the response budget
+    # cannot honour the ask: a batch whose structured response cannot
+    # fit under the per-call output cap truncates deterministically
+    # and wastes the whole round-trip before split-retry recovers.
+    if batch_target is None:
+        batch_target = _phase2_batch_target()
+        logger.debug(
+            "Phase 2: batch target %d (computed within the "
+            "output-budget ceiling)", batch_target,
         )
-        batch_target = ceiling
+    else:
+        ceiling = _phase2_batch_ceiling()
+        if batch_target > ceiling:
+            logger.info(
+                "Phase 2: batch_target %d exceeds the output-budget "
+                "ceiling %d (%d-token response budget / ~%d tokens per "
+                "item) — clamping",
+                batch_target, ceiling, _study_text_output_tokens(),
+                _PHASE2_ITEM_OUTPUT_TOKENS_EST,
+            )
+            batch_target = ceiling
 
     batches = _cluster_items(in_scope, deps, batch_target=batch_target)
 
@@ -4841,7 +4883,7 @@ def run_study(
     *,
     on_progress: Any = None,
     correlate: list[str] | None = None,
-    batch_target: int = 80,
+    batch_target: int | None = None,
     should_stop: Any = None,
     phase_stats: dict | None = None,
 ) -> DomainModel:
@@ -4855,6 +4897,12 @@ def run_study(
         correlate: Identifier names to correlate. When set, the LLM
             is additionally asked to examine the relationship between
             these identifiers (shared callers, contract kind, invariants).
+        batch_target: Items per Phase 2 batch. ``None`` (the default)
+            computes it within the output-budget ceiling
+            (``_phase2_batch_target``); an explicit value is honoured
+            up to the ceiling (see ``run_phase2``). Resolved HERE so
+            downstream consumers (the derived-attention cap, Phase 2)
+            all see the same effective target.
         should_stop: Zero-arg callable polled at every paid-call
             boundary (Phase 2 batches, threat-frame derivation);
             True stops buying new calls while keeping results already
@@ -4868,6 +4916,9 @@ def run_study(
     Returns:
         The assembled DomainModel.
     """
+    if batch_target is None:
+        batch_target = _phase2_batch_target()
+
     from core.json import load_json
     raw = load_json(study_list_path, strict=True, max_bytes=64 * 1024 * 1024)
     if raw is None:
@@ -5469,8 +5520,11 @@ def _derived_attention_cap(batch_target: int) -> int:
     bridge: ``core.orchestration.binary_study_bridge``). The
     denominator is the EFFECTIVE per-batch item budget: the caller's
     ``batch_target`` clamped to the phase-2 output-budget ceiling,
-    exactly as ``run_phase2`` clamps its batches — computed on the
-    raw batch_target (default 80 against a 32-item ceiling) the
+    exactly as ``run_phase2`` clamps its batches (the computed
+    default already arrives within the ceiling; only an explicit
+    over-ceiling value still needs the min here) — computed on a
+    raw over-ceiling target (an explicit 80 against a 32-item
+    ceiling) the
     "fraction of a batch" was a fraction of a batch that never runs,
     and derived attention could own an entire PAID batch outright.
     Floor of 1 so a tiny operator batch target degrades to "one
