@@ -877,3 +877,100 @@ class TestChecklistSlots:
         lines = render_status_lines(doc, out)
         assert any("42" in line and artifact_id[:26] in line
                    for line in lines)
+
+    # ── frame authentication on the slot (key isolation + warn-once
+    #    resets come from this suite's autouse conftest fixture) ──────
+
+    def test_write_mints_verified_frame_reader_pops_token(
+            self, tmp_path):
+        from core.inventory import checklist_frame_mac as cm
+        from core.json import load_json
+        out = tmp_path / "out"
+        out.mkdir()
+        aid = "sha256-" + "a" * 16
+        slot = write_artifact_checklist(
+            out, aid, {"total_items": 3, "files": []})
+        raw = load_json(slot)
+        assert cm.frame_provenance(
+            raw, cm.frame_binding(slot), cm.FORM_SINGLE,
+        ) == cm.FRAME_VERIFIED
+        loaded = read_artifact_checklist(out, aid)
+        assert loaded["total_items"] == 3
+        assert cm.FRAME_TOKEN_KEY not in loaded
+
+    def test_tampered_slot_refused(self, tmp_path, caplog):
+        """An in-place edit under a kept token reads as absent — the
+        safe degrade direction for a coverage denominator — with a
+        loud refusal in the log."""
+        from core.json import load_json, save_json
+        out = tmp_path / "out"
+        out.mkdir()
+        aid = "sha256-" + "b" * 16
+        slot = write_artifact_checklist(
+            out, aid, {"total_items": 3, "files": []})
+        doc = load_json(slot)
+        doc["total_items"] = 9999
+        save_json(slot, doc)
+        with caplog.at_level("WARNING", logger="core.engagement"):
+            assert read_artifact_checklist(out, aid) is None
+        assert "FAILED frame authentication" in caplog.text
+
+    def test_unstamped_in_era_slot_demoted_not_refused(
+            self, tmp_path, caplog):
+        """A bare write that bypasses the stamping writer (the
+        pre-fix shape) still reads — at legacy tier, with the in-era
+        demotion warning."""
+        from core.json import save_json
+        out = tmp_path / "out"
+        out.mkdir()
+        aid = "sha256-" + "c" * 16
+        slot = checklist_slot_path(out, aid)
+        slot.parent.mkdir(parents=True, exist_ok=True)
+        save_json(slot, {"artifact_id": aid, "total_items": 5,
+                         "files": []})
+        with caplog.at_level("INFO"):
+            loaded = read_artifact_checklist(out, aid)
+        assert loaded["total_items"] == 5
+        assert any(
+            "no integrity token" in rec.getMessage()
+            and rec.levelname == "WARNING"
+            for rec in caplog.records)
+
+    def test_cross_slot_copy_lands_relocated(
+            self, tmp_path, caplog):
+        """A frame minted for a sibling slot must not verify here:
+        demoted with the relocated warning, never refused — every
+        slot holds a different artifact."""
+        import shutil
+        out = tmp_path / "out"
+        out.mkdir()
+        src_id = "sha256-" + "d" * 16
+        dst_id = "sha256-" + "e" * 16
+        src = write_artifact_checklist(
+            out, src_id, {"total_items": 4, "files": []})
+        shutil.copy2(src, checklist_slot_path(out, dst_id))
+        with caplog.at_level("WARNING"):
+            loaded = read_artifact_checklist(out, dst_id)
+        assert loaded is not None
+        assert loaded["total_items"] == 4
+        assert "minted for a different slot" in caplog.text
+
+    def test_stale_input_token_never_reserialised(
+            self, tmp_path):
+        """A token riding in on the input document is replaced by a
+        fresh mint — never re-serialised as this writer's own."""
+        from core.inventory import checklist_frame_mac as cm
+        from core.json import load_json
+        out = tmp_path / "out"
+        out.mkdir()
+        aid = "sha256-" + "f" * 16
+        stale = {"slot": "/somewhere/else", "mac": "00" * 32}
+        slot = write_artifact_checklist(
+            out, aid,
+            {"total_items": 6, "files": [],
+             cm.FRAME_TOKEN_KEY: dict(stale)})
+        raw = load_json(slot)
+        assert raw[cm.FRAME_TOKEN_KEY] != stale
+        assert cm.frame_provenance(
+            raw, cm.frame_binding(slot), cm.FORM_SINGLE,
+        ) == cm.FRAME_VERIFIED

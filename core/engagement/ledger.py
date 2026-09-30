@@ -1684,10 +1684,30 @@ def write_artifact_checklist(
     stem can verify it holds the artifact it thinks it does — stems
     collide, content identities do not (extra top-level keys are
     tolerated by every checklist consumer).
+
+    The written document carries an HMAC frame token (same scheme as
+    the inventory writers — :mod:`core.inventory.checklist_frame_mac`)
+    bound to this slot's own resolved path, so an in-place edit or a
+    document copied between slots is detectable on read. No usable
+    key ⇒ persist unstamped; the reader then applies legacy-tier
+    semantics.
     """
+    from core.inventory import checklist_frame_mac
+
     slot = checklist_slot_path(output_dir, artifact_id)
     payload = dict(checklist)
     payload["artifact_id"] = artifact_id
+    # Strip any token riding in on the input FIRST: it must never be
+    # re-serialised as if this writer had freshly minted it.
+    payload.pop(checklist_frame_mac.FRAME_TOKEN_KEY, None)
+    # Binding is the slot FILE path (not the shared slots dir): every
+    # slot in the directory holds a different artifact, so a document
+    # copied between sibling slots must land RELOCATED, not verified.
+    token = checklist_frame_mac.mint_frame(
+        payload, checklist_frame_mac.frame_binding(slot),
+        checklist_frame_mac.FORM_SINGLE)
+    if token is not None:
+        payload[checklist_frame_mac.FRAME_TOKEN_KEY] = token
     with artifact_lock(slot, subject="artifact checklist"):
         save_json(slot, payload)
     return slot
@@ -1697,10 +1717,38 @@ def read_artifact_checklist(
     output_dir: Path | str,
     artifact_id: str,
 ) -> dict[str, Any] | None:
-    """One artifact's checklist slot, or ``None`` when absent."""
+    """One artifact's checklist slot, or ``None`` when absent.
+
+    Frame-authenticated: a TAMPERED frame (token present but wrong
+    for this document/slot) is refused — the caller sees the slot as
+    absent, the safe degrade direction for a coverage denominator.
+    Unstamped or relocated frames are demoted to legacy tier (warned
+    once, era-fenced) and still returned. The token never reaches
+    consumers.
+    """
+    from core.inventory import checklist_frame_mac
+
     slot = checklist_slot_path(output_dir, artifact_id)
     doc = load_json(slot)
-    return doc if isinstance(doc, dict) else None
+    if not isinstance(doc, dict):
+        return None
+    provenance = checklist_frame_mac.frame_provenance(
+        doc, checklist_frame_mac.frame_binding(slot),
+        checklist_frame_mac.FORM_SINGLE)
+    if provenance == checklist_frame_mac.FRAME_TAMPERED:
+        logger.warning(
+            "artifact checklist slot %s FAILED frame authentication "
+            "— its integrity token does not match the document "
+            "(in-place edit or forged frame). Refusing the slot; "
+            "re-run the chain checklist stage to rebuild it.", slot,
+        )
+        return None
+    if provenance in (checklist_frame_mac.FRAME_UNSTAMPED,
+                      checklist_frame_mac.FRAME_RELOCATED):
+        checklist_frame_mac.warn_demoted_frame(
+            slot, provenance, "artifact checklist slot")
+    doc.pop(checklist_frame_mac.FRAME_TOKEN_KEY, None)
+    return doc
 
 
 def list_artifact_checklists(output_dir: Path | str) -> list[str]:
