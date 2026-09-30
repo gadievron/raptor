@@ -4382,6 +4382,114 @@ class ScanRestartNightly(unittest.TestCase):
                          "pins:\n  " + "\n  ".join(violations))
 
 
+class LadderExponentPins(unittest.TestCase):
+    """Deterministic pins on the oracle's exponent fit and probe
+    sampler: synthetic ladders and a scripted clock, no real timing,
+    so they run in the default tier.  Each pin names the property
+    that regresses without it."""
+
+    @staticmethod
+    def _ladder(coeff: float, power: float) -> list[tuple[int, float]]:
+        """``t = coeff * n**power`` at the worker's doubling sizes."""
+        return [(n, coeff * n ** power)
+                for n in (500, 1000, 2000, 4000, 8000, 16000, 32000)]
+
+    def test_clean_linear_ladder_measures_linear(self) -> None:
+        exponent, status = _ladder_exponent(self._ladder(2e-7, 1.0))
+        self.assertEqual(status, "ok")
+        self.assertLess(exponent, _SUPERLINEAR_EXP)
+
+    def test_one_spiked_final_sample_cannot_mint_superlinear(
+            self) -> None:
+        """THE noise-shape pin: a linear ladder whose FINAL sample
+        alone is inflated 4x (a contention burst on the largest
+        probe) crosses the trust floor, and a last-two log-ratio
+        prices it at exactly 3.0 — the full-ladder fit keeps it
+        linear (1.4).  This pin also holds the RAISE direction of
+        ``_LADDER_NOISE_FLOOR_S``: push the noise floor toward the
+        trust floor and the fit collapses to the top one or two
+        probes, which is the last-two ratio again — this test reds
+        at any floor >= 1.25e-4."""
+        probes = self._ladder(6e-8, 1.0)
+        n_final, t_final = probes[-1]
+        probes[-1] = (n_final, t_final * 4)
+        self.assertGreaterEqual(probes[-1][1], _TRUST_FLOOR_S)
+        exponent, status = _ladder_exponent(probes)
+        self.assertEqual(status, "ok")
+        self.assertLess(exponent, _SUPERLINEAR_EXP)
+
+    def test_clean_quadratic_ladder_measures_superlinear(self) -> None:
+        exponent, status = _ladder_exponent(self._ladder(2e-10, 2.0))
+        self.assertEqual(status, "ok")
+        self.assertGreaterEqual(exponent, _SUPERLINEAR_EXP)
+
+    def test_one_dipped_sample_cannot_hide_superlinear(self) -> None:
+        """Fail-open direction guard: a quadratic ladder with one 4x
+        DOWNWARD-spiked mid-ladder sample still measures superlinear
+        — de-noising must never damp genuine growth below the
+        census threshold."""
+        probes = self._ladder(2e-10, 2.0)
+        n_mid, t_mid = probes[4]
+        probes[4] = (n_mid, t_mid / 4)
+        exponent, status = _ladder_exponent(probes)
+        self.assertEqual(status, "ok")
+        self.assertGreaterEqual(exponent, _SUPERLINEAR_EXP)
+
+    def test_sub_floor_ladder_stays_fast(self) -> None:
+        """The trust floor is judged on the FINAL probe: a ladder
+        that never clears 5ms is linear-with-noise, not evidence.
+        The values are a measured worst-case fixed-arm shape (the
+        string-literal alternation lane: 3.5ms at n=32000 with a
+        natural last-two ratio of 2.64 — only 0.2 of exponent under
+        the census threshold)."""
+        measured = [(500, 3.5e-5), (1000, 7.7e-5), (2000, 1.51e-4),
+                    (4000, 3.38e-4), (8000, 9.59e-4),
+                    (16000, 1.326e-3), (32000, 3.505e-3)]
+        self.assertEqual(_ladder_exponent(measured), (1.0, "fast"))
+
+    def test_noise_floor_excludes_quantized_bottom(self) -> None:
+        """Direction pin for LOWERING ``_LADDER_NOISE_FLOOR_S``:
+        probe deltas at sub-timer-resolution sizes quantize to near
+        zero, and included in the fit they drag this linear ladder's
+        slope to ~3.3 — excluded, it prices linear."""
+        probes = self._ladder(2e-7, 1.0)
+        for i in range(3):
+            probes[i] = (probes[i][0], 1e-7)
+        exponent, status = _ladder_exponent(probes)
+        self.assertEqual(status, "ok")
+        self.assertLess(exponent, _SUPERLINEAR_EXP)
+
+    def test_probe_sampler_takes_the_min_of_three(self) -> None:
+        """Direction pin for LOWERING ``_PROBE_SAMPLES``: the
+        scripted clock hands the three samples 10ms, 5ms and 2ms —
+        the reported probe is the 2ms min, which only the THIRD
+        sample supplies (one sample would report the 10ms inflated
+        reading, two would report 5ms)."""
+        from unittest import mock
+
+        with mock.patch("time.process_time",
+                        side_effect=[0.000, 0.010,
+                                     0.010, 0.015,
+                                     0.015, 0.017]):
+            got = _min_probe_seconds(lambda: None, 1.0)
+        self.assertAlmostEqual(got, 0.002)
+
+    def test_probe_sampler_never_resamples_over_budget(self) -> None:
+        """Direction pin for RAISING ``_PROBE_SAMPLES`` — the cost
+        bound that makes min-sampling safe inside the lane's wall
+        deadline: once every sample so far exceeds the budget the
+        sampler stops, so an over-budget probe (which ends the
+        ladder anyway) is paid for exactly once no matter the
+        sample count."""
+        from unittest import mock
+
+        clock = mock.Mock(side_effect=[0.0, 1.5])
+        with mock.patch("time.process_time", clock):
+            got = _min_probe_seconds(lambda: None, 1.0)
+        self.assertAlmostEqual(got, 1.5)
+        self.assertEqual(clock.call_count, 2)
+
+
 class NestedQuantifierCensus(unittest.TestCase):
     """Rule N arm: exponential-composition membership is static and
     single-stage (the rule is the verdict); the CPU-time growth probe
