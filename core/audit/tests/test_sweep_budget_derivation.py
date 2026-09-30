@@ -12,6 +12,19 @@ from __future__ import annotations
 
 
 
+class _VirtualClock:
+    """Frozen monotonic clock: stands still unless advanced."""
+
+    def __init__(self) -> None:
+        self.now: float = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def advance(self, dt: float) -> None:
+        self.now += dt
+
+
 def _texts_with_sites(n: int) -> dict[str, str]:
     # Real call sites so census entries exist and truncation is
     # observable — a site-less fixture cannot distinguish budgets.
@@ -110,8 +123,26 @@ class TestPrepassCensusLane:
         # prepass budget must NOT trip the dimension gates in derived
         # mode (deadline re-anchors after the census) — and MUST trip
         # them under an explicit budget (which bounds the whole
-        # prepass deliberately).
-        cp, calls = self._capture_census(monkeypatch, sleep_s=0.25)
+        # prepass deliberately). The prepass wall is VIRTUALIZED (a
+        # frozen fake clock only the fake census advances, by 0.25):
+        # a loaded runner otherwise spends the 0.1s dimension budget
+        # on scheduling noise and flips the derived-mode direction,
+        # while the explicit direction keeps tripping off the same
+        # 0.25 > 0.1 arithmetic either way.
+        from types import SimpleNamespace
+
+        import core.audit.consistency_prepass as cp
+        clock = _VirtualClock()
+
+        def fake_census(
+                source_texts: dict[str, str], **kwargs: object,
+        ) -> dict[str, object]:
+            clock.advance(0.25)
+            return {}
+
+        monkeypatch.setattr(cp, "build_return_census", fake_census)
+        monkeypatch.setattr(
+            cp, "time", SimpleNamespace(monotonic=clock.monotonic))
         monkeypatch.setattr(cp, "PREPASS_BUDGET_S", 0.1)
         result = cp.run_consistency_prepass({"a.c": "int x;\n"})
         assert not result["telemetry"].get("budget_exceeded")
