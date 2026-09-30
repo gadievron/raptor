@@ -949,6 +949,27 @@ Two tiers, selected automatically:
   survives it. Callers that need the namespace guarantee pass
   `pid_ns="require"`, which refuses instead of degrading.
 
+  The group tier's kill verification reads `/proc`, so it defends the
+  evidence it reads: each scan holds one private fd on
+  `/proc/self/mounts` (checked to really be procfs where `fstatfs` is
+  available), which latches the kernel's mount-event signal for the
+  whole scan window. Any mount-table change during the scan --
+  including an overmount attached and detached entirely between the
+  scan's own reads -- marks the scan occluded instead of trusted;
+  occluded scans are retried on a fresh fd a bounded number of times,
+  then refuse loudly. This NARROWS the `/proc`-masking channel, it
+  does not close it: a hidepid-class superblock flip made from a
+  sibling mount namespace does not fire the mount-event signal (a
+  persisting flip is still declared by the scan's ordinary reads, and
+  the channel is bounded to cross-uid group members), and fully forged
+  `/proc` content served through an undetected mask remains out of
+  scope for a `/proc`-based proof. On kernels without the mounts poll
+  hook the signal simply never fires and behaviour is unchanged from
+  the pre-latch posture. A co-resident able to churn mounts (for
+  example via a setuid FUSE helper) can delay or force loud refusal of
+  verification, never a silent false verify -- and kills themselves
+  are never suppressed by occlusion.
+
 Every spawn states its fate explicitly: `on_parent_death="kill"` ties
 the tree's lifetime to the owning process; `"survive"` lets it outlive
 the owner (for shared servers that later runs reattach to). Teardown
