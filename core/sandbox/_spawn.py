@@ -278,17 +278,20 @@ def _scrub_env_image_values(names: Iterable[bytes]) -> None:
     ``/proc/<pid>/environ`` serves exactly that region — so every
     un-exec'd process in the spawn chain re-publishes the invoking
     orchestrator's FULL environment (session credential included) to
-    any reader the kernel's ptrace gate admits. Host processes
-    proper are unreadable on default-hardened hosts because of YAMA
-    ptrace scope (``ptrace_scope>=1`` refuses the PTRACE_MODE_READ
-    check for same-uid non-descendants — a HOST CONFIGURATION, not a
-    kernel invariant; the user namespace contributes nothing to that
-    verdict, and a ``ptrace_scope=0`` host serves same-kuid environ
-    across the userns mapping). The spawn chain's own processes are
-    our descendants, so the gate passes for them regardless: on any
-    lane where host procfs is visible (skip_pid_ns,
-    operator-accepted degrades) the image is one ``/proc`` read away
-    from the target.
+    any reader the kernel's ptrace gate admits. That gate is the
+    ``PTRACE_MODE_READ`` check, and for a dumpable same-cred target
+    (an un-exec'd spawn-chain fork is both) it passes for every
+    same-uid reader at every Yama scope: Yama's ``ptrace_scope``
+    hooks only ATTACH-class access (``/proc/<pid>/mem``,
+    ``PTRACE_ATTACH``/``SEIZE``), never environ reads — verified on
+    a live scope-1 kernel, where a same-uid non-descendant environ
+    read succeeds while ``/proc/<pid>/mem`` on the same pid is
+    denied. Where a sandboxed reader IS denied on such a target,
+    the denial is this sandbox's own Landlock ptrace scoping
+    (out-of-domain target), never host Yama hardening: on any lane
+    where host procfs is visible and no such domain intervenes
+    (skip_pid_ns, operator-accepted degrades) the image is one
+    ``/proc`` read away from the target.
 
     Values are zeroed in place; names survive, so ``getenv()`` of a
     scrubbed name returns the empty string and everything else is
@@ -3180,17 +3183,21 @@ def run_sandboxed(
                 # with the host-pid procfs bind retained, the target
                 # can read /proc/<pid>/environ of the sandbox's own
                 # in-userns spawn-chain intermediary (an un-exec'd fork
-                # of the invoking process: same user namespace, so the
-                # kernel's ptrace gate passes, and its environ image is
-                # the parent's FULL pre-strip environment — session
-                # credential included). Host processes proper stay
-                # unreadable only where YAMA ptrace scope refuses
-                # same-uid non-descendant reads (ptrace_scope>=1 —
-                # host configuration, not a userns property; a
-                # scope-0 host serves same-kuid environ across the
-                # mapping); the spawn chain's own processes are our
-                # descendants, the exception the earlier
-                # warn-and-continue rationale missed on every host.
+                # of the invoking process whose environ image is the
+                # parent's FULL pre-strip environment — session
+                # credential included). Dumpable same-cred host
+                # processes are exposed the same way: the kernel's
+                # PTRACE_MODE_READ check passes for any same-uid
+                # reader of such a target at every Yama scope — Yama
+                # hooks only ATTACH-class access (/proc/<pid>/mem,
+                # PTRACE_ATTACH/SEIZE), never environ reads (verified
+                # on a live scope-1 kernel: same-uid non-descendant
+                # environ read succeeds while /proc/<pid>/mem on the
+                # same pid is denied). A denial here is never host
+                # Yama hardening — the sandbox's own Landlock ptrace
+                # scoping denies out-of-domain targets, and a
+                # non-dumpable target denies to everyone — so this
+                # mount, not the host, is the credential boundary.
                 #
                 # skip_pid_ns runs (gdb) keep the host procfs bind on
                 # purpose: gdb's host-info probe needs the host pid
