@@ -3788,10 +3788,15 @@ def _run_phase2_parallel(
                 completed = _successes[0]
                 _abort.set()
             if first:
+                # Unlike the sequential twin, this count is only a
+                # lower bound: batches already past the abort check
+                # keep running and fold in after this line prints —
+                # the post-join summary below carries the final count.
                 logger.error(
                     "Phase 2: LLM budget exhausted — stopping "
-                    "dispatch cleanly with %d completed batch(es): "
-                    "%s", completed, exc,
+                    "dispatch (%d batch(es) done at the trip; "
+                    "in-flight batches still fold in): %s",
+                    completed, exc,
                 )
             return exc.partial
         truncated = (
@@ -3847,6 +3852,16 @@ def _run_phase2_parallel(
             )
             phase_stats["truncation_capped"] = (
                 _truncation_failures[0] >= _TRUNCATION_FAIL_LIMIT
+            )
+
+    if _budget_stopped[0]:
+        # The trip-time line above could only see a lower bound.
+        # run_parallel has joined every worker here, so this count is
+        # the final one — the record the operator should trust.
+        with _fail_lock:
+            logger.error(
+                "Phase 2: budget-stopped — kept output from %d of "
+                "%d batch(es)", _successes[0], total,
             )
 
     _ext_stop = should_stop is not None and should_stop()

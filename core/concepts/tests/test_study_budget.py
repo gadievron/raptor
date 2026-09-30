@@ -213,3 +213,89 @@ class TestBinaryStudyBudget:
         (tmp_path / "study-cost.json").write_text(
             '{"cost_usd": 1.75}')
         assert mod._read_pass_cost(tmp_path) == 1.75
+
+
+class TestParallelBudgetStopDiagnostics:
+    """The parallel budget-trip log lines must not lie about counts.
+
+    ``_on_batch_error`` fires in a worker thread while sibling
+    batches past the abort check are still running; whatever
+    ``_successes`` reads there is only a lower bound. The trip line
+    must say so, and the authoritative count belongs to a post-join
+    summary (``run_parallel`` has joined every worker by then).
+    """
+
+    def _run(self, monkeypatch, caplog, *, salvage_partial=None):
+        import logging
+        import threading
+
+        from core.concepts import study
+
+        in_flight = threading.Event()
+        proceed = threading.Event()
+        tripped = threading.Lock()
+        first_trip = [True]
+
+        def fake_batch(idx, total, focus, ctx, *args, **kwargs):
+            if idx == 0:
+                # Deterministically in flight past the abort check
+                # when the trip fires, folding in only afterwards.
+                in_flight.set()
+                proceed.wait(timeout=30)
+                return ([], [], [], [], [])
+            in_flight.wait(timeout=30)
+            proceed.set()
+            with tripped:
+                first, first_trip[0] = first_trip[0], False
+            partial = salvage_partial if first else None
+            raise study._PhaseBudgetExhausted(
+                "LLM budget exceeded: test cap", partial=partial)
+
+        monkeypatch.setattr(
+            study, "_run_batch_splitting_on_truncation", fake_batch)
+        caplog.set_level(logging.ERROR, logger="core.concepts.study")
+        return study._run_phase2_parallel(
+            [([], []), ([], []), ([], [])],
+            "target", "src", object(), None, None, 2,
+        )
+
+    def _lines(self, caplog, needle):
+        return [r.getMessage() for r in caplog.records
+                if needle in r.getMessage()]
+
+    def test_trip_line_once_and_marked_lower_bound(
+        self, monkeypatch, caplog,
+    ):
+        self._run(monkeypatch, caplog)
+        trips = self._lines(
+            caplog, "LLM budget exhausted — stopping dispatch")
+        # First-gated: one trip line even when a second queued batch
+        # also hits the exhausted cap.
+        assert len(trips) == 1
+        # The count printed at trip time is racy by construction —
+        # the line must flag it as non-final.
+        assert "in-flight batches still fold in" in trips[0]
+
+    def test_post_join_summary_counts_folded_in_flight_batch(
+        self, monkeypatch, caplog,
+    ):
+        self._run(monkeypatch, caplog)
+        summaries = self._lines(caplog, "budget-stopped — kept output")
+        assert len(summaries) == 1
+        # Batch 0 completed only AFTER the trip; the joined summary
+        # must count it.
+        assert "kept output from 1 of 3 batch(es)" in summaries[0]
+
+    def test_salvaged_partial_counts_and_rides_output(
+        self, monkeypatch, caplog,
+    ):
+        marker = object()
+        result = self._run(
+            monkeypatch, caplog,
+            salvage_partial=([marker], [], [], [], []))
+        # Paid split-sibling salvage folds into the phase output …
+        assert marker in result[0]
+        # … and into the authoritative post-join count.
+        summaries = self._lines(caplog, "budget-stopped — kept output")
+        assert len(summaries) == 1
+        assert "kept output from 2 of 3 batch(es)" in summaries[0]
