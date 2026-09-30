@@ -1570,13 +1570,29 @@ class TestStallKillAddressesTheGroup:
             t.start()
             t.join(15)
             proc.wait(10)
-            deadline = time_mod.monotonic() + 5
+            # The deadline bounds only the FAILURE mode: a grandchild
+            # the kill genuinely missed is a 300s sleeper that stays
+            # not-gone for every poll, while a killed one satisfies
+            # the first poll that observes it — so a generous ceiling
+            # buys load immunity without ever masking a miss.
+            gone = False
+            deadline = time_mod.monotonic() + 20
             while time_mod.monotonic() < deadline:
                 if self._gone(grandchild, anchor):
+                    gone = True
                     break
                 time_mod.sleep(0.05)
             assert mon.was_killed
-            assert self._gone(grandchild, anchor), (
+            # Assert the RECORDED observation — never re-roll the
+            # predicate. ``_gone`` answers a racy question (kill-0 +
+            # /proc reads on a pid a churning host may already have
+            # recycled to a short-lived stranger), and its transient
+            # not-gone answers (stat vanishing between kill-0 and the
+            # read, a momentary dead-transitional state) are benign
+            # inside the poll loop but final in a re-evaluation: one
+            # transient after the loop already saw the kill land
+            # would indict a kill that landed.
+            assert gone, (
                 "wrapper-spawned grandchild survived the stall kill"
             )
         finally:
