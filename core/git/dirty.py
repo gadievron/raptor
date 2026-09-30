@@ -62,6 +62,10 @@ __all__ = ["WorktreeDirt", "probe_worktree_dirt"]
 # quoting, embedded newlines stay literal) followed by git's
 # fixed-shape stat block. Matches must tile the output exactly —
 # any gap means an unrecognised format and the probe fails closed.
+# The consumer matches anchored at the current offset (never a
+# scanning search): entry paths are target-chosen bytes, and a
+# scanning retry over an unrecognised buffer would re-run the
+# pattern from every attempt position instead of failing once.
 _DEBUG_ENTRY_RE = re.compile(
     rb"(?P<path>[^\0]+)\0"
     rb"  ctime: \d+:\d+\n"
@@ -140,9 +144,10 @@ def _stat_dirty_paths(repo: Path, timeout: float) -> set[bytes] | None:
     repo_b = os.fsencode(repo)
     dirty: set[bytes] = set()
     pos = 0
-    for match in _DEBUG_ENTRY_RE.finditer(out):
-        if match.start() != pos:
-            return None  # unrecognised interleaved output — fail closed
+    while pos < len(out):
+        match = _DEBUG_ENTRY_RE.match(out, pos)
+        if match is None:
+            return None  # unrecognised entry shape — fail closed
         pos = match.end()
         path = match.group("path")
         try:
@@ -160,8 +165,6 @@ def _stat_dirty_paths(repo: Path, timeout: float) -> set[bytes] | None:
             # nsec is compared only when the index recorded one —
             # git builds without nanosecond support store 0 there.
             dirty.add(path)
-    if pos != len(out):
-        return None  # trailing unparsed bytes — fail closed
     return dirty
 
 

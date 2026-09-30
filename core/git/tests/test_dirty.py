@@ -138,3 +138,61 @@ class TestStatComparison:
         (repo / name).write_text("v2 longer\n")
         dirt = probe_worktree_dirt(repo)
         assert dirt.tracked == (name,)
+
+
+class TestDebugParseFailsClosed:
+    """The ls-files --debug parse must tile the buffer exactly with
+    anchored matches: any unrecognised bytes — before, between, or
+    after entries — mean an unknown format, and the channel degrades
+    to None (unknowable) instead of guessing or rescanning."""
+
+    ENTRY = (
+        b"a.txt\0"
+        b"  ctime: 1:2\n"
+        b"  mtime: 3:4\n"
+        b"  dev: 5\tino: 6\n"
+        b"  uid: 7\tgid: 8\n"
+        b"  size: 4\tflags: 0\n"
+    )
+
+    def _probe_with_output(
+            self, monkeypatch: pytest.MonkeyPatch, repo: Path,
+            out: bytes) -> set[bytes] | None:
+        import core.git.dirty as dirty_mod
+
+        def fake_run_git(repo_arg: Path, args: tuple[str, ...],
+                         timeout: float) -> bytes:
+            if args[:2] == ("ls-files", "--debug"):
+                return out
+            return b""
+
+        monkeypatch.setattr(dirty_mod, "_run_git", fake_run_git)
+        return dirty_mod._stat_dirty_paths(repo, 15)
+
+    def test_wellformed_entry_parses(self, monkeypatch, repo):
+        # The entry's cached mtime (second 3 of the epoch) can never
+        # match the fixture file's real mtime, so the parsed entry is
+        # deterministically stat-dirty.
+        got = self._probe_with_output(monkeypatch, repo, self.ENTRY)
+        assert got == {b"a.txt"}
+
+    def test_garbage_prefix_fails_closed(self, monkeypatch, repo):
+        # NUL-carrying junk cannot fold into a path token (a pure
+        # non-NUL prefix would concatenate into the raw path —
+        # newlines and all — which is the documented -z path format,
+        # not a tiling gap).
+        got = self._probe_with_output(
+            monkeypatch, repo, b"junk\0not a stat block\n" + self.ENTRY)
+        assert got is None
+
+    def test_garbage_between_entries_fails_closed(
+            self, monkeypatch, repo):
+        got = self._probe_with_output(
+            monkeypatch, repo,
+            self.ENTRY + b"junk\0not a stat block\n" + self.ENTRY)
+        assert got is None
+
+    def test_trailing_bytes_fail_closed(self, monkeypatch, repo):
+        got = self._probe_with_output(
+            monkeypatch, repo, self.ENTRY + b"  trailing\n")
+        assert got is None
