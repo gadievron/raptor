@@ -107,6 +107,7 @@ if TYPE_CHECKING:
 # the loader's ``journal_spend_usd`` view. Module-level import is
 # cycle-free: ``core.audit.resume`` imports only ``core.json`` at
 # module scope.
+from core.atomic_fs.fs_lock import acquire_flock_bounded
 from core.audit.resume import _MAX_SPEND_EVIDENCE_USD
 from core.json import loads
 
@@ -596,7 +597,20 @@ class _SidecarWriter:
                 )
                 raise OSError(msg)
             if _HAS_FCNTL:
-                fcntl.flock(fd, fcntl.LOCK_EX)
+                # Bounded, announce-once acquisition (shared helper):
+                # a second slim walk legitimately queues behind the
+                # first's whole-walk hold, but a wedged or hostile
+                # holder must abort THIS walk loudly rather than park
+                # it forever. No pid stamp — this flock is on the
+                # sidecar DATA file, not a disposable lock sidecar.
+                if not acquire_flock_bounded(
+                        fd, self._path, subject="compaction sidecar"):
+                    msg = (
+                        f"compaction sidecar {self._path} lock still "
+                        "held past the bounded wait — refusing to "
+                        "append"
+                    )
+                    raise OSError(msg)
                 st = os.fstat(fd)
         except BaseException:
             # Exception AND KeyboardInterrupt unwind: never leak the
@@ -989,8 +1003,20 @@ def _compact_one_file(
             # appenders (core.coverage.journal.append_entry) take the
             # same lock per row, so no cooperating writer can slip a
             # row between the pass-1 census and the pass-2 copy.
+            # Bounded (shared helper): a wedged or hostile holder
+            # aborts this shard loudly — the shard stays untouched —
+            # instead of parking the compactor forever. No pid stamp:
+            # the flock is on the shard DATA file.
             if _HAS_FCNTL:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+                if not acquire_flock_bounded(
+                        fh.fileno(), journal_path,
+                        subject="journal shard"):
+                    msg = (
+                        f"journal shard {journal_path} lock still "
+                        "held past the bounded wait — compaction of "
+                        "this shard abandoned (shard untouched)"
+                    )
+                    raise OSError(msg)
             try:
                 # Sweep tmp files leaked by a pre-rename kill of an
                 # earlier compaction (own prefix only, bounded). Safe

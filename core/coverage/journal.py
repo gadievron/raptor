@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO, Any, Union, get_args, get_origin, get_type_hints
 
+from core.atomic_fs.fs_lock import acquire_flock_bounded, sidecar_flock
 from core.json import load_json, loads
 
 try:
@@ -975,7 +976,22 @@ def append_entry(out_dir: Path, entry: ReviewJournalEntry) -> None:
                     )
                     raise OSError(msg)
                 if _HAS_FCNTL:
-                    fcntl.flock(fd, fcntl.LOCK_EX)
+                    # Bounded, announce-once acquisition (shared
+                    # helper): appenders legitimately queue behind a
+                    # compactor's whole-shard hold, but a wedged or
+                    # hostile holder must fail the append loudly (row
+                    # NOT appended, same disposition as the swap
+                    # give-up below) rather than stall every journal
+                    # writer forever. No pid stamp — this flock is on
+                    # the DATA file, not a disposable sidecar.
+                    if not acquire_flock_bounded(
+                            fd, journal_path, subject="journal shard"):
+                        msg = (
+                            f"journal shard {journal_path} lock still "
+                            "held past the bounded wait — giving up "
+                            "without writing (row NOT appended)"
+                        )
+                        raise OSError(msg)
                     locked = True
                     if not _fd_at_path(fd, journal_path):
                         # A compactor's rename swapped the file between
@@ -2997,56 +3013,18 @@ def latest_entries(
 def _flock(path: Path):
     """Advisory flock on a .lock sidecar.
 
-    O_NOFOLLOW + degrade-with-warning mirrors the store's
-    ``coverage_store_lock``: a planted symlink at the sidecar path
-    would otherwise make this process create and flock an
-    attacker-chosen path. A refused open degrades to the no-lock path
-    (same as non-POSIX) rather than crashing the merge.
+    The hoisted sidecar idiom (``core.atomic_fs.fs_lock``), same as
+    the store's ``coverage_store_lock``: hardened open (a planted
+    symlink or FIFO at the sidecar path must neither steer nor wedge
+    the merge), foreign-uid refusal (a pre-created lock file opens
+    fine and would otherwise hand its creator a standing hold over
+    every merge), and a bounded announce-once wait. Every
+    lock-unavailable shape degrades to the no-lock path (same as
+    non-POSIX) rather than crashing the merge.
     """
-    if not _HAS_FCNTL:
-        yield
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_suffix(path.suffix + ".lock")
-    # O_NONBLOCK: an O_WRONLY open of a planted reader-less FIFO
-    # blocked the merge forever; with the flag it fails fast (ENXIO,
-    # → the warn-and-degrade arm below) and a FIFO that has a reader
-    # is refused by the regularity check on the opened fd.
-    flags = (
-        os.O_WRONLY | os.O_CREAT
-        | getattr(os, "O_NOFOLLOW", 0)
-        | getattr(os, "O_CLOEXEC", 0)
-        | _O_NONBLOCK
-    )
-    try:
-        fd = os.open(str(lock_path), flags, 0o600)
-    except OSError as exc:
-        logger.warning(
-            "journal index lock %s: refusing to open (%s); proceeding "
-            "WITHOUT cross-process lock — investigate a planted "
-            "symlink or FIFO at that path", lock_path, exc)
+    with sidecar_flock(lock_path, subject="journal index"):
         yield
-        return
-    try:
-        regular = _fd_is_regular(fd)
-    except OSError:
-        regular = False
-    if not regular:
-        os.close(fd)
-        logger.warning(
-            "journal index lock %s is not a regular file; proceeding "
-            "WITHOUT cross-process lock — investigate a planted "
-            "FIFO/device at that path", lock_path)
-        yield
-        return
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-    finally:
-        os.close(fd)
 
 # contextmanager must wrap the generator
 _flock = contextlib.contextmanager(_flock)

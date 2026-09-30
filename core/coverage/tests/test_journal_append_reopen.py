@@ -69,7 +69,9 @@ class TestRenameRace:
             # swap AFTER the appender's open but BEFORE its lock is
             # granted (the compactor held the flock across its swap
             # and released it just before we were woken).
-            if op == fcntl.LOCK_EX and not state["swapped"]:
+            # Acquisition is LOCK_NB-first: match the exclusive bit,
+            # not the exact op value.
+            if op & fcntl.LOCK_EX and not state["swapped"]:
                 state["swapped"] = True
                 os.rename(journal, archived)
                 journal.write_bytes(original_line)  # "compacted" live file
@@ -127,7 +129,9 @@ class TestRenameRace:
         ex_locks = {"n": 0}
 
         def counting_flock(fd: int, op: int) -> None:
-            if op == fcntl.LOCK_EX:
+            # LOCK_NB-first acquisition: count exclusive attempts by
+            # the bit, not the exact op value.
+            if op & fcntl.LOCK_EX:
                 ex_locks["n"] += 1
             real_flock(fd, op)
 

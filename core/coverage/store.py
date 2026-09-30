@@ -34,12 +34,15 @@ from __future__ import annotations
 import bisect
 import contextlib
 import os
-import stat as pystat
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 from core.atomic_fs import write_text_atomically
+from core.atomic_fs.fs_lock import (
+    _HAS_FCNTL,  # noqa: F401 — re-exported lock-availability probe
+    sidecar_flock,
+)
 from core.json import dumps_artifact
 from core.logging import get_logger as _get_logger
 
@@ -55,12 +58,6 @@ from .schema import (
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-
-try:
-    import fcntl
-    _HAS_FCNTL = True
-except ImportError:                      # non-POSIX (Windows)
-    _HAS_FCNTL = False
 
 COVERAGE_STORE_FILE = "coverage.json"
 SCHEMA_VERSION = 1
@@ -91,58 +88,20 @@ def coverage_store_lock(coverage_path):
     excluded and degrade to last-writer-wins. A store on the distro's
     Linux filesystem keeps the full guarantee. See docs/wsl.md.
     """
-    if not _HAS_FCNTL:
-        yield
-        return
+    # The hoisted sidecar idiom (core.atomic_fs.fs_lock): hardened
+    # open (O_NOFOLLOW / O_NONBLOCK / regularity — the lock file lives
+    # in a run directory sandboxed target code may hold a write grant
+    # on), foreign-uid refusal (a pre-created lock file opens FINE and
+    # would otherwise hand its creator a standing hold over every
+    # snapshot writer), and a bounded announce-once wait so a wedged
+    # holder degrades loudly instead of stalling snapshots forever.
+    # Every lock-unavailable shape degrades to the no-lock path (same
+    # as non-POSIX) — snapshot writers are best-effort.
     path = Path(coverage_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_suffix(path.suffix + ".lock")
-    # O_NOFOLLOW: the lock file lives in a run directory that sandboxed
-    # target code may hold a write grant on — a symlink planted at
-    # coverage.json.lock would otherwise make the operator-side process
-    # create and flock an attacker-chosen path. A refused symlink
-    # degrades to the no-lock path (same as non-POSIX) with a loud
-    # warning rather than crashing the best-effort snapshot writers.
-    # O_NONBLOCK + the regularity check on the opened fd: a planted
-    # FIFO at the sidecar path blocked this O_WRONLY open forever
-    # (reader-less; O_NOFOLLOW does not help) or, with a reader,
-    # opened as a non-regular file — either way the run-completion
-    # snapshot wedged. Both now degrade like the symlink case.
-    flags = (
-        os.O_WRONLY | os.O_CREAT
-        | getattr(os, "O_NOFOLLOW", 0)
-        | getattr(os, "O_CLOEXEC", 0)
-        | getattr(os, "O_NONBLOCK", 0)
-    )
-    try:
-        fd = os.open(str(lock_path), flags, 0o600)
-    except OSError as exc:
-        _get_logger(__name__).warning(
-            "coverage store lock %s: refusing to open (%s); proceeding "
-            "WITHOUT cross-process lock — investigate a planted symlink "
-            "or FIFO at that path", lock_path, exc)
+    with sidecar_flock(lock_path, subject="coverage store"):
         yield
-        return
-    try:
-        regular = pystat.S_ISREG(os.fstat(fd).st_mode)
-    except OSError:
-        regular = False
-    if not regular:
-        os.close(fd)
-        _get_logger(__name__).warning(
-            "coverage store lock %s is not a regular file; proceeding "
-            "WITHOUT cross-process lock — investigate a planted "
-            "FIFO/device at that path", lock_path)
-        yield
-        return
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-    finally:
-        os.close(fd)
 
 
 def _coalesce(intervals: list[Interval]) -> list[Interval]:
