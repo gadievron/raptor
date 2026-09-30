@@ -35,6 +35,7 @@ from core.git import get_safe_git_env
 # See `core.git.clone.safe_git_command` for the threat model
 # (CVE-2024-32002 family: hostile per-repo .git/config).
 from core.git.clone import safe_git_command
+from core.git.dirty import probe_worktree_dirt
 from core.hash import sha256_string
 from core.json import load_json, save_json
 from core.logging import get_logger
@@ -560,7 +561,7 @@ class DatabaseManager:
                 # checkout, so an operator iterating on a fix kept
                 # getting the stale database (for up to the 7-day
                 # TTL). Fold in a digest of the dirty state — the
-                # porcelain listing plus size/mtime of each dirty
+                # dirty-file listing plus size/mtime of each dirty
                 # path, so re-editing an already-dirty file also
                 # invalidates. Clean tree → digest is None → key is
                 # unchanged from before (cache continuity).
@@ -657,47 +658,41 @@ class DatabaseManager:
         """Short digest of the working tree's uncommitted state, or
         None when the tree is clean / the probe fails.
 
-        Mixes the ``git status --porcelain`` listing (which files are
-        dirty and how) with each dirty path's size and mtime_ns (so a
-        further edit to an ALREADY-dirty file still changes the
-        digest — the porcelain line alone would not). mtime noise is
-        confined to the dirty set: a clean tree keeps the pure
+        The target repo can arrive with its own hostile ``.git``: a
+        committed ``* filter=x`` .gitattributes plus a
+        ``filter.x.clean`` command in ``.git/config`` turns any probe
+        that re-hashes worktree content (``git status``'s index
+        refresh, but also racy-entry re-verification in ``diff-index``
+        / ``ls-files -m``) into command execution at the operator's
+        uid. ``core.git.dirty`` is the one probe that never lets git
+        open a worktree file; its stat-cache comparison may count a
+        touched-but-identical file as dirty — conservative
+        over-invalidation of the cache, never a stale hit.
+
+        Mixes the dirty-path listings with each path's size and
+        mtime_ns (so a further edit to an ALREADY-dirty file still
+        changes the digest — the listing alone would not). mtime noise
+        is confined to the dirty set: a clean tree keeps the pure
         HEAD-based key.
         """
-        try:
-            status = subprocess.run(
-                safe_git_command("status", "--porcelain"),
-                cwd=repo_path,
-                capture_output=True,
-                text=True,
-                timeout=15,
-                check=False,
-                env=get_safe_git_env(),
-            )
-        except (subprocess.SubprocessError, OSError) as exc:
-            logger.debug(
-                "codeql DM: git status failed for %s: %s", repo_path, exc,
-            )
+        dirt = probe_worktree_dirt(repo_path)
+        if dirt.tracked is None or dirt.untracked is None:
             return None
-        if status.returncode != 0 or not status.stdout.strip():
+        if not dirt.tracked and not dirt.untracked:
             return None
         hasher = hashlib.sha256()
-        hasher.update(
-            status.stdout.encode("utf-8", errors="surrogateescape"),
-        )
-        for line in status.stdout.splitlines():
-            if len(line) < 4:
-                continue
-            path_part = line[3:]
-            # Rename lines read "old -> new"; the new path is live.
-            if " -> " in path_part:
-                path_part = path_part.split(" -> ", 1)[1]
-            path_part = path_part.strip().strip('"')
+        hasher.update(b"tracked\x00")
+        hasher.update("\x00".join(dirt.tracked).encode(
+            "utf-8", errors="surrogateescape"))
+        hasher.update(b"\x00untracked\x00")
+        hasher.update("\x00".join(dirt.untracked).encode(
+            "utf-8", errors="surrogateescape"))
+        for path_part in (*dirt.tracked, *dirt.untracked):
             try:
                 st = (repo_path / path_part).stat()
             except (OSError, ValueError):
-                # Deleted / unstat-able path — the porcelain line
-                # above already reflects its state.
+                # Deleted / unstat-able path — the listing above
+                # already reflects its state.
                 continue
             hasher.update(
                 f"{path_part}:{st.st_size}:{st.st_mtime_ns}".encode(

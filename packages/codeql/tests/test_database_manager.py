@@ -1186,6 +1186,38 @@ class TestRepoHashDirtyTree:
         (repo / "new.py").write_text("y = 1\n")
         assert db_manager.compute_repo_hash(repo) != clean
 
+    def test_dirty_probe_never_executes_repo_configured_filters(
+        self, db_manager, tmp_path,
+    ):
+        """A target delivered WITH its own .git can ship `* filter=evil`
+        in a committed .gitattributes plus `filter.evil.clean=<cmd>` in
+        .git/config. Any dirty probe that re-hashes worktree content
+        (`git status`, an index refresh) executes that command at the
+        operator's uid. The digest must come from plumbing that never
+        re-hashes — the filter driver must not run."""
+        repo = self._git_repo(tmp_path)
+        marker = tmp_path / "filter-executed"
+        (repo / ".gitattributes").write_text("* filter=evil\n")
+        self._git(repo, "add", ".gitattributes")
+        self._git(repo, "commit", "-q", "-m", "attrs")
+        self._git(repo, "config", "filter.evil.clean",
+                  f"touch {marker} && cat")
+        # Content+size change: exactly the state that forces a
+        # re-hashing probe through the clean filter.
+        (repo / "a.py").write_text("x = 22222\n")
+
+        clean_base = db_manager.compute_repo_hash(repo)
+
+        assert not marker.exists(), (
+            "the repo-configured clean filter EXECUTED during the "
+            "dirty-tree probe — attacker-shipped .git config ran a "
+            "command outside any sandbox"
+        )
+        # The probe still detects dirtiness without re-hashing.
+        (repo / "b.py").write_text("y = 1\n")
+        assert db_manager.compute_repo_hash(repo) != clean_base
+        assert not marker.exists()
+
     def test_non_git_fallback_detects_size_preserving_edit(
         self, db_manager, tmp_path,
     ):
