@@ -201,26 +201,22 @@ def target_snapshot(target_path: Any | None) -> dict[str, Any] | None:
     sha = _git(p, "rev-parse", "HEAD", untrusted=True)
     if sha is None:
         return None
-    # Dirtiness via plumbing that never re-hashes worktree content. `git
-    # status` refreshes the index, and the refresh pushes stat-stale files
-    # through any clean filter the repo's own .git/config defines
-    # (filter.<name>.clean — an arbitrary command under a repo-chosen name,
-    # which the -c safety overrides cannot blanket-disable; see
-    # _SAFE_GIT_OVERRIDES in core.git.clone). diff-index WITHOUT a preceding
-    # refresh compares HEAD against the index's stat cache only, and
-    # ls-files is a pure directory walk — neither executes target-configured
-    # code. Trade-off: a stat-touched but content-identical file counts as
-    # dirty. That conservative bias is fine for a provenance flag (and it
-    # also skips the index refresh + lock write `status` performs, which
-    # matters on large targets).
-    tracked = _git(p, "diff-index", "--no-ext-diff", "HEAD", untrusted=True)
-    untracked = _git(
-        p, "ls-files", "--others", "--exclude-standard", untrusted=True,
-    )
-    if tracked is None and untracked is None:
-        dirty = None  # both probes failed — unknowable, never guessed
-    else:
-        dirty = bool(tracked) or bool(untracked)
+    # Dirtiness via core.git.dirty — the one probe that never lets git
+    # open a worktree file. `git status` refreshes the index, pushing
+    # stat-stale files through any clean filter the repo's own
+    # .git/config defines (filter.<name>.clean — an arbitrary command
+    # under a repo-chosen name, which the -c safety overrides cannot
+    # blanket-disable; see _SAFE_GIT_OVERRIDES in core.git.clone), and
+    # even worktree-side plumbing (`diff-index HEAD`, `ls-files -m`)
+    # re-reads content through the same filter chain for racily-clean
+    # entries — a raciness the hostile repo's shipped index controls.
+    # The probe compares index stat data against os.lstat instead.
+    # Trade-off: a stat-touched but content-identical file counts as
+    # dirty. That conservative bias is fine for a provenance flag.
+    # dirty is None when a probe channel failed and no dirt was seen —
+    # unknowable, never guessed.
+    from core.git.dirty import probe_worktree_dirt
+    dirty = probe_worktree_dirt(p, timeout=_GIT_TIMEOUT_S).dirty
     branch = _git(p, "rev-parse", "--abbrev-ref", "HEAD", untrusted=True)
     return {
         "vcs": "git",
