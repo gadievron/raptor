@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -1071,6 +1072,48 @@ def _node_location(item: dict[str, Any]) -> str:
     return f"{file}:{line}" if file and line else str(file or "")
 
 
+# Bound on the ``graph-path-<ep>-<sink>`` compound id minted below.
+# Mirrors ``packages/diagram/sanitize.ID_MAX_LEN`` (=128) — core must
+# not import from packages, so the value is mirrored, not imported;
+# keep the two equal. The same mirror lives in
+# ``core/orchestration/understand_bridge.py`` for the flow-trace stem
+# fallback. Churn-prone limit — rationale in both directions:
+#
+# * Not smaller: the compound legally embeds TWO LLM-authored graph
+#   node ids (ingest neutralises their charset, never their length);
+#   128 keeps every observed honest compound byte-identical through
+#   the clamp.
+# * Not larger: the minted id persists byte-exact into
+#   attack-paths.json and lands in unquoted Mermaid node positions,
+#   where the diagram sanitizer truncates at ITS 128 — a wider mint
+#   bound would let two distinct long compounds silently collapse
+#   into one rendered node there.
+_ELEMENT_ID_MAX_LEN = 128
+
+# len("-" + sha256[:8]) — the suffix _clamp_element_id appends.
+_CLAMP_SUFFIX_LEN = 9
+
+
+def _clamp_element_id(raw: str) -> str:
+    """Bound a minted compound id to ``_ELEMENT_ID_MAX_LEN``.
+
+    Ids at or under the bound pass through byte-identical — the clamp
+    is behavior-invisible for the observed honest vocabulary. Over the
+    bound, the id is truncated and suffixed with ``-<sha256[:8]>`` of
+    the FULL raw id, so distinct long compounds stay distinct, the
+    mapping is deterministic, and re-clamping is the identity
+    (a clamped id is under the bound). Length-bounding only — no
+    charset rewriting and no refusal: no row is ever dropped or
+    renamed away from its short honest form. Same helper as
+    ``core/orchestration/understand_bridge.py`` — keep in step.
+    """
+    if len(raw) <= _ELEMENT_ID_MAX_LEN:
+        return raw
+    digest = hashlib.sha256(
+        raw.encode("utf-8", "backslashreplace")).hexdigest()[:8]
+    return raw[:_ELEMENT_ID_MAX_LEN - _CLAMP_SUFFIX_LEN] + "-" + digest
+
+
 def _path_item(
     context_map: dict[str, Any],
     ep_id: str,
@@ -1127,7 +1170,10 @@ def _path_item(
         "result": _node_location(sink),
     })
     return {
-        "id": f"graph-path-{ep_id}-{sink_id}",
+        # Compound of two LLM-authored node ids with unbounded length
+        # — clamp the COMPOSED id; the components stay verbatim in the
+        # entry/sink sub-objects below for joins and display.
+        "id": _clamp_element_id(f"graph-path-{ep_id}-{sink_id}"),
         "entry": {"id": ep_id, "label": _node_label(entry), "location": _node_location(entry), "raw": entry},
         "sink": {"id": sink_id, "label": _node_label(sink), "location": _node_location(sink), "raw": sink},
         "trust_boundaries": [

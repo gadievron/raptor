@@ -141,5 +141,7 @@ def test_clamp_identity_distinctness_idempotence() -> None:
 def test_bound_mirrors_are_coherent() -> None:
     """The mirrored constants must stay equal — cross-reference fence."""
     from core.orchestration.understand_bridge import _ELEMENT_ID_MAX_LEN
+    from core.understand_graph import queries
 
     assert _ELEMENT_ID_MAX_LEN == ID_MAX_LEN
+    assert queries._ELEMENT_ID_MAX_LEN == ID_MAX_LEN
