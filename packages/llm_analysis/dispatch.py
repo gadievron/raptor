@@ -9,7 +9,7 @@ import logging
 import sys
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from typing import Any
 
 # Error classification moved to the shared consumer-side envelope
@@ -455,7 +455,12 @@ def _dispatch_inner(
             future = executor.submit(_do_one)
             futures[future] = (model, item)
 
+        # Which futures the drain loop below actually consumed — the
+        # post-abort straggler sweep needs the complement.
+        drained_futures: set[Future] = set()
+
         for future in as_completed(futures):
+            drained_futures.add(future)
             model, item = futures[future]
             item_id = task.get_item_id(item)
             model_key = _model_key(model)
@@ -759,6 +764,137 @@ def _dispatch_inner(
                         break
 
     if abort:
+        # Straggler sweep. The executor context-exit above ran
+        # shutdown(wait=True), so every future is now drained,
+        # cancelled, or done-but-undrained. The undrained ones are
+        # stragglers: futures whose dead-check beat the dead-add, so a
+        # REAL API call ran to completion after the drain loop's abort
+        # break. Without this sweep a straggler's telemetry event was
+        # LOST and the backfill below rewrote its real outcome as
+        # "aborted (...)" — a paid-for result (or a real failure that
+        # telemetry must count) mislabelled as an abort casualty.
+        for future, (model, item) in futures.items():
+            if (future in drained_futures or future.cancelled()
+                    or not future.done()):
+                continue
+            item_id = task.get_item_id(item)
+            model_key = _model_key(model)
+            model_name = model.model_name if model is not None else "?"
+            err_str = None
+            dispatch_result = None
+            exc = future.exception()
+            if isinstance(exc, _ModelCircuitOpen):
+                # Short-circuited before dispatch: no API call, no
+                # fresh failure — same skip row as the drain loop.
+                results.append({
+                    "finding_id": item_id,
+                    "error": "skipped (model circuit-broken)",
+                    "error_type": "circuit_breaker",
+                    "analysed_by": model_name,
+                })
+                continue
+            if exc is not None:
+                err_str = str(exc)
+            else:
+                dispatch_result = future.result()
+                payload = getattr(dispatch_result, "result", None)
+                # Key-presence check, per _ErrorDictResult's contract
+                # (mirrors the drain loop's envelope handling).
+                if isinstance(payload, dict) and "error" in payload:
+                    err_str = str(payload.get("error"))
+                    _err_cost = getattr(dispatch_result, "cost", 0) or 0
+                    _err_tokens = getattr(
+                        dispatch_result, "tokens", 0) or 0
+                    _err_model = getattr(
+                        dispatch_result, "model", "") or ""
+                    if _err_cost > 0 or _err_tokens > 0:
+                        cost_tracker.add_cost(
+                            _err_model or "unknown", _err_cost,
+                            tokens=_err_tokens,
+                        )
+                    if _err_model:
+                        model_name = _err_model
+            if err_str is None:
+                try:
+                    processed = task.process_result(item, dispatch_result)
+                except Exception as e:  # noqa: BLE001 — per-item isolation, as in the drain loop
+                    err_str = str(e)
+                else:
+                    processed["finding_id"] = item_id
+                    processed["_quality"] = getattr(
+                        dispatch_result, "quality", 1.0)
+                    item_cost = processed.get("cost_usd", 0)
+                    item_tokens = getattr(
+                        dispatch_result, "tokens", 0) or 0
+                    item_thinking = getattr(
+                        dispatch_result, "thinking_tokens", 0) or 0
+                    if (item_cost > 0 or item_tokens > 0
+                            or item_thinking > 0):
+                        cost_tracker.add_cost(
+                            processed.get("analysed_by", "unknown"),
+                            item_cost, tokens=item_tokens,
+                            thinking_tokens=item_thinking,
+                        )
+                    # Nonce-leak check, mirroring the drain's success
+                    # path: the leak flag still has consumers after an
+                    # abort — the defense summary merged into run
+                    # output, and the cross-family recheck's item
+                    # selection (whose checker model can be healthy
+                    # even when every model here died). The recheck
+                    # skips rows carrying an "error" key, so the old
+                    # "aborted" mislabel accidentally quarantined a
+                    # leaking straggler; sweeping it in unflagged
+                    # would PROMOTE it instead.
+                    with _nonces_lock:
+                        nonce = _nonces.pop((item_id, model_key), "")
+                    if nonce and profile_name:
+                        raw = ""
+                        has_dict = (
+                            hasattr(dispatch_result, "result")
+                            and isinstance(dispatch_result.result, dict)
+                        )
+                        if has_dict:
+                            raw = dispatch_result.result.get("content", "")
+                        raw_text = raw or str(dispatch_result.result)
+                        defense_telemetry.record_response(
+                            model_id=processed.get(
+                                "analysed_by", "unknown"),
+                            profile_name=profile_name,
+                            nonce=nonce,
+                            raw_response=raw_text,
+                            schema_accepted=True,
+                            schema_retried=False,
+                        )
+                        from core.security.prompt_envelope import (
+                            nonce_leaked_in,
+                        )
+                        if nonce_leaked_in(nonce, raw_text):
+                            processed["_nonce_leaked"] = True
+                    results.append(processed)
+                    continue
+            error_type = _classify_error(err_str)
+            results.append({"finding_id": item_id, "error": err_str,
+                            "error_type": error_type,
+                            "analysed_by": model_name})
+            # Record the straggler's failure telemetry exactly like
+            # the drain loop would have (skip auth/network errors).
+            if error_type not in ("auth", "timeout") and profile_name:
+                with _nonces_lock:
+                    nonce = _nonces.pop((item_id, model_key), "")
+                if nonce:
+                    if model is None:
+                        model_id = "claude-code"
+                    else:
+                        model_id = getattr(model, "model_name", str(model))
+                    defense_telemetry.record_response(
+                        model_id=model_id,
+                        profile_name=profile_name,
+                        nonce=nonce,
+                        raw_response=err_str,
+                        schema_accepted=False,
+                        schema_retried=False,
+                    )
+
         completed_ids = {r.get("finding_id") for r in results}
         for item in selected:
             item_id = task.get_item_id(item)
