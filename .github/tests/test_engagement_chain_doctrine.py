@@ -51,12 +51,20 @@ def _module_ast() -> ast.Module:
 
 
 def _all_imports(tree: ast.Module) -> list[str]:
+    """Every dotted name an import statement loads: each ``ast.Import``
+    alias, and for ``ast.ImportFrom`` both the source module AND each
+    ``module.name`` pair — ``from core import llm`` binds the
+    ``core.llm`` module OBJECT (whatever the alias), so recording the
+    bare source module ``core`` alone would let every guarded
+    submodule in through its from-parent spelling."""
     names: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             names.extend(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             names.append(node.module)
+            names.extend(
+                f"{node.module}.{alias.name}" for alias in node.names)
     return names
 
 
@@ -68,6 +76,43 @@ def test_no_llm_or_dispatch_import() -> None:
         ), f"chain imports a classification-forbidden seam: {name}"
         assert "llm" not in name.lower(), (
             f"chain imports an LLM-adjacent module: {name}")
+
+
+def test_llm_import_census_sees_from_parent_evasions() -> None:
+    """Probe pin: ``_all_imports`` records the ``module.name`` binding
+    for every ImportFrom alias, so module-object spellings of the
+    guarded submodules (``from core import llm`` — plain, aliased,
+    multi-name, parenthesized) reach the forbidden-prefix check
+    instead of hiding behind the bare source module ``core``."""
+    flagged: tuple[str, ...] = (
+        "from core import llm",
+        "from core import llm as _l",
+        "from core import dispatch",
+        "from core import config, llm",
+        "from core import (\n    llm,\n    dispatch,\n)",
+        "from core.security import prompt",
+        "from packages import llm",
+        "from core import recall",
+    )
+    for snippet in flagged:
+        names = _all_imports(ast.parse(snippet))
+        assert any(
+            name == p or name.startswith(p + ".")
+            for name in names
+            for p in _FORBIDDEN_IMPORT_PREFIXES
+        ), f"census missed a module-object evasion: {snippet}"
+    clear: tuple[str, ...] = (
+        "from core import config",
+        "from core.engagement.ledger import load_ledger",
+        "import subprocess",
+    )
+    for snippet in clear:
+        names = _all_imports(ast.parse(snippet))
+        assert not any(
+            name == p or name.startswith(p + ".")
+            for name in names
+            for p in _FORBIDDEN_IMPORT_PREFIXES
+        ), f"census over-matched a non-evasion: {snippet}"
 
 
 def _functions(tree: ast.Module) -> list[ast.FunctionDef]:
