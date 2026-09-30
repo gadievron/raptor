@@ -62,6 +62,67 @@ requires_mount = pytest.mark.skipif(
 )
 
 
+def pidns_isolation_available() -> bool:
+    """True when the sandbox's namespace backend — and with it the
+    PID-namespace hiding of host pids — can engage on this host.
+
+    Mirrors production exactly: ``core.sandbox.context`` derives
+    ``use_sandbox`` (Linux) from ``check_net_available()`` (the
+    user-namespace foundation probe), and every namespace lane —
+    the PID-namespace unshare included — hangs off that verdict.
+    When it is False the sandbox runs in the Landlock-only posture:
+    host processes stay VISIBLE in ``/proc`` (enumeration and
+    world-readable entries like ``cmdline``), but out-of-domain
+    ``/proc/<pid>/environ`` / ``mem`` reads are still denied by the
+    sandbox's own Landlock ptrace scoping — the Landlock domain
+    gates the kernel's ptrace-mode access checks those files
+    require, on any Yama setting (Yama gates only ptrace ATTACH,
+    never the READ check environ opens use). What the posture loses
+    is PID hiding, so a test guarding the PID-namespace hiding
+    behaviour has nothing to measure and skips on this verdict with
+    the posture named.
+
+    Lazy (call it inside the test) so no probe cost rides module
+    import.
+    """
+    return _userns_available()
+
+
+# Own-pid ceiling below which the /proc/<own-pid> denial oracle is
+# unfalsifiable: the sandbox's fresh PID namespace re-allocates pids
+# from 1, so a probe pid this small can name the sandbox's OWN
+# processes instead of a hidden host process. Why not lower: every
+# spawn provably allocates pids 1 (the namespace init shim) and 2 (the
+# target command), and pipeline-shaped targets have been observed
+# allocating pids up to 8 — any lower ceiling reds the oracle on those
+# spawns. Why not higher: a single-command spawn allocates at
+# most a handful of pids, and every increment above that ceiling
+# silences the guard on runners that legitimately hold a small pid in
+# a long-lived namespace (fresh containers), where the oracle is valid.
+SANDBOX_PIDNS_PID_COLLISION_CEILING = 8
+
+
+def own_pid_collides_with_sandbox_pidns() -> bool:
+    """True when this process's own pid is small enough to be
+    re-allocated inside a sandbox's fresh PID namespace.
+
+    Only possible when the test process itself runs inside a nested
+    pid namespace (an ``unshare -Upf``-wrapped battery, a fresh
+    container) — on a host's init pid namespace an unprivileged test
+    runner never holds a single-digit pid. When it fires, a
+    ``/proc/<own-pid>`` probe inside the sandbox can resolve to the
+    sandbox's own init shim or target, so "the read failed" no longer
+    distinguishes PID-namespace isolation from pid collision — and
+    "the read succeeded" no longer proves a host leak (the shim's
+    environ image is the parent's execve image with credential values
+    zeroed — see ``core.sandbox._spawn._scrub_env_image_values``).
+    Lazy: the pid must be the RUNTIME pid of the process executing the
+    test (xdist workers fork after import).
+    """
+    import os
+    return os.getpid() <= SANDBOX_PIDNS_PID_COLLISION_CEILING
+
+
 def pid1_userns_owner_is_invoker() -> bool:
     """True when pid 1's user namespace is OWNED by the invoking uid —
     i.e. this process runs inside a self-owned nested user namespace
