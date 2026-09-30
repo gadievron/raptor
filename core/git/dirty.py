@@ -22,14 +22,25 @@ data (``ls-files --debug``) is compared against ``os.lstat`` — the
 same size/mtime test git itself applies, minus the content
 re-verification of racy entries.
 
-Accepted trade-offs (all in the conservative, fail-closed direction
-except the last two, which need an attacker-grade coincidence):
+Accepted trade-offs (the first two over-report, conservatively; the
+last two are misses):
 
 * a stat-touched but content-identical file counts dirty;
 * a sparse-checkout / skip-worktree entry with no file on disk counts
   dirty;
 * a same-size edit landing in the same mtime nanosecond is missed;
 * chmod-only changes are missed (the stat dump carries no mode).
+
+The misses are not edge-case coincidences against a hostile target:
+the index's cached stat data is itself part of the attacker-shipped
+``.git``, so an entry whose cached size/mtime matches a substituted
+file is constructible at will — ``dirty == False`` over different
+content, by the adversary's design. A clean verdict from an untrusted
+repository is therefore only a cache-freshness heuristic (exactly the
+stat trust git itself applies), NEVER a trust, integrity, or
+provenance signal. Consumers that need "this worktree matches HEAD"
+as a security claim must hash content through a non-git channel
+instead.
 """
 
 from __future__ import annotations
