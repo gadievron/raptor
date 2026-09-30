@@ -341,3 +341,28 @@ class TestSweepTrustGate:
         assert report2.total_merged == 0
         _assert_verified(_single_row(project_env.dir),
                          "reviewed, no concern")
+
+    def test_sweep_outcome_surfaces_refused(self, project_env):
+        """The merge's ``stats["refused"]`` count reaches the per-run
+        ``RunOutcome`` and the report total, the same channel
+        ``stripped``/``healed``/``unreadable`` ride — a sweep must be
+        able to say WHICH run's rows were refused, not report the run
+        as an empty no-op with only a warning in the log."""
+        from core.coverage.journal_sweep import reindex_project_journals
+
+        honest = project_env.dir / "scan-20260101-000000"
+        honest.mkdir()
+        append_entry(honest, _entry())
+
+        planted = project_env.dir / "scan-20260102-000000"
+        planted.mkdir()
+        _write_unstamped_row(
+            planted, _entry(body="planted demotion", ts=FUTURE_TS))
+
+        report = reindex_project_journals(project_env.name)
+
+        by_name = {o.run_name: o for o in report.outcomes}
+        assert by_name["scan-20260102-000000"].refused == 1
+        assert by_name["scan-20260102-000000"].merged == 0
+        assert by_name["scan-20260101-000000"].refused == 0
+        assert report.total_refused == 1

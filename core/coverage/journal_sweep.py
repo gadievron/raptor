@@ -83,13 +83,18 @@ class RunOutcome:
     JSON, permission-refused open, journal path is a directory) —
     the merge degrades those to ``merged=0`` for the location, so
     without this count the run is indistinguishable from a genuinely
-    empty one.
+    empty one. ``refused`` counts never-verified newer rows the
+    merge's replacement trust gate declined over a MAC-verified
+    stored copy — the same disclosure the merge logs and reports on
+    its ``stats`` out-param, without which a refused run reads as a
+    genuinely empty no-op.
     """
     run_name: str
     merged: int = 0
     stripped: int = 0
     healed: int = 0
     unreadable: int = 0
+    refused: int = 0
     skipped_reason: str | None = None
 
 
@@ -112,6 +117,10 @@ class SweepReport:
     @property
     def total_healed(self) -> int:
         return sum(o.healed for o in self.outcomes)
+
+    @property
+    def total_refused(self) -> int:
+        return sum(o.refused for o in self.outcomes)
 
     @property
     def swept(self) -> int:
@@ -282,3 +291,4 @@ def _sweep_project_locked(project: "Project", project_dir: Path,
         outcome.stripped = stats.get("stripped", 0)
         outcome.healed = stats.get("healed", 0)
         outcome.unreadable = stats.get("unreadable", 0)
+        outcome.refused = stats.get("refused", 0)

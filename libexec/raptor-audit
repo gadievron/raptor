@@ -2682,7 +2682,8 @@ def _journal_reindex_project(project_name: str) -> int:
         else:
             line = (f"  {name}: {outcome.merged} merged "
                     f"({outcome.healed} repaired, "
-                    f"{outcome.stripped} stripped)")
+                    f"{outcome.stripped} stripped, "
+                    f"{outcome.refused} refused)")
             if outcome.unreadable:
                 line += (f"; {outcome.unreadable} journal location(s) "
                          "unreadable or malformed — those rows NOT "
@@ -2690,7 +2691,8 @@ def _journal_reindex_project(project_name: str) -> int:
             print(line)
     totals = (f"  total: {report.total_merged} merged "
               f"({report.total_healed} repaired, "
-              f"{report.total_stripped} stripped) across "
+              f"{report.total_stripped} stripped, "
+              f"{report.total_refused} refused) across "
               f"{report.swept} run(s); {report.skipped} skipped")
     if report.unreadable_runs:
         totals += (f"; {report.unreadable_runs} run(s) with "

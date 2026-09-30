@@ -598,6 +598,29 @@ class TestSweepCli:
         assert "1 run(s) with unreadable journal(s)" in out
         assert "1 merged" in out
 
+    def test_refused_rows_show_in_summary(self, project_env, capsys):
+        """Trust-gate refusals reach the CLI summary line the same way
+        repaired/stripped counts do — the operator running the remedy
+        must see that a run's rows were declined, not a bare
+        ``0 merged`` indistinguishable from an empty run."""
+        run_honest = _make_run(project_env.dir, "scan-20260101-000000")
+        append_entry(run_honest, _entry())
+        run_planted = _make_run(project_env.dir, "scan-20260102-000000")
+        row = _entry(body="planted demotion",
+                     ts="2999-01-01T00:00:00.000000Z").to_dict()
+        assert journal_mac.TOKEN_KEY not in row
+        with open(run_planted / JOURNAL_FILENAME, "a",
+                  encoding="utf-8") as fh:
+            fh.write(json.dumps(row, separators=(",", ":")) + "\n")
+        cli = self._load_cli()
+
+        rc = self._reindex(cli, project=project_env.name)
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "1 refused" in out
+        assert "0 refused" in out          # the honest run's line
+        assert "total: 1 merged" in out
+
     def test_live_writer_refusal_is_rc1(
         self, project_env, monkeypatch, capsys,
     ):
