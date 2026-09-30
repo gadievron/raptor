@@ -42,6 +42,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 import types
 from typing import Callable
 
@@ -860,3 +861,265 @@ class TestStartupAttribution:
         ):
             jail.start()
         jail.stop()
+
+
+class TestReadyBudget:
+    """Load-derated confinement-handshake budget.
+
+    The derating is a pure function of injected inputs (schedulable
+    CPU count, 1-minute load average) so every shape is pinned
+    deterministically — no test here oversubscribes the host.
+    """
+
+    def test_idle_host_gets_the_floor(self) -> None:
+        assert (usage_scan_jail._derated_ready_timeout_s(8, 0.0)
+                == usage_scan_jail._READY_TIMEOUT_S)
+
+    def test_undersubscribed_host_gets_the_floor(self) -> None:
+        # Load below the CPU count: every runnable thread has a CPU,
+        # so the handshake runs at full speed — never stretch.
+        assert (usage_scan_jail._derated_ready_timeout_s(8, 7.5)
+                == usage_scan_jail._READY_TIMEOUT_S)
+
+    def test_exact_saturation_gets_the_floor(self) -> None:
+        assert (usage_scan_jail._derated_ready_timeout_s(8, 8.0)
+                == usage_scan_jail._READY_TIMEOUT_S)
+
+    def test_oversubscription_scales_the_budget_linearly(self) -> None:
+        # 3x oversubscription -> the same work takes ~3x the wall
+        # clock at a 1/3 CPU share -> 3x the budget.
+        assert (usage_scan_jail._derated_ready_timeout_s(4, 12.0)
+                == pytest.approx(
+                    3.0 * usage_scan_jail._READY_TIMEOUT_S))
+
+    def test_reproduced_starvation_shape_is_inside_the_budget(
+        self,
+    ) -> None:
+        # The shape that fired the fixed 10s budget: a 4-CPU affinity
+        # set contended by ~64 runnable spin-burners (~17x
+        # oversubscription), where the fresh-interpreter handshake
+        # legitimately needed >10s of wall clock. The derated budget
+        # must absorb that stretch (cap applies: 17x > the cap).
+        budget = usage_scan_jail._derated_ready_timeout_s(4, 64.0)
+        assert budget == pytest.approx(
+            usage_scan_jail._READY_TIMEOUT_S
+            * usage_scan_jail._READY_DERATE_CAP)
+        assert budget > 3 * usage_scan_jail._READY_TIMEOUT_S
+
+    def test_derate_factor_is_capped(self) -> None:
+        # A wedged worker must still surface as malfunction promptly
+        # however monstrous the load claims to be.
+        assert (usage_scan_jail._derated_ready_timeout_s(1, 10_000.0)
+                == pytest.approx(
+                    usage_scan_jail._READY_TIMEOUT_S
+                    * usage_scan_jail._READY_DERATE_CAP))
+
+    def test_zero_cpus_is_pathology_not_a_crash(self) -> None:
+        # A defective (or mocked-away) CPU probe must not divide by
+        # zero; treat it as a single CPU.
+        assert (usage_scan_jail._derated_ready_timeout_s(0, 4.0)
+                == pytest.approx(
+                    4.0 * usage_scan_jail._READY_TIMEOUT_S))
+
+    def test_budget_never_sinks_below_the_floor(self) -> None:
+        for cpus, load1 in ((1, 0.0), (64, 1.0), (2, 2.0), (0, 0.0)):
+            assert (usage_scan_jail._derated_ready_timeout_s(cpus, load1)
+                    >= usage_scan_jail._READY_TIMEOUT_S)
+
+    def test_spawn_time_sampling_feeds_the_derater(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # The live gatherer wires affinity + loadavg into the pure
+        # derater: the reproduced starvation shape, sampled live.
+        monkeypatch.setattr(
+            usage_scan_jail.os, "sched_getaffinity",
+            lambda pid: {0, 1, 2, 3})
+        monkeypatch.setattr(
+            usage_scan_jail.os, "getloadavg",
+            lambda: (64.0, 0.0, 0.0))
+        assert (usage_scan_jail._ready_timeout_s()
+                == pytest.approx(
+                    usage_scan_jail._READY_TIMEOUT_S
+                    * usage_scan_jail._READY_DERATE_CAP))
+
+    def test_unknowable_load_falls_back_to_the_floor(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Load probe raises: with no load figure there is no derating
+        # claim to make — the floor, never a guess.
+        def _no_load() -> "tuple[float, float, float]":
+            raise OSError("forced by test")
+
+        monkeypatch.setattr(usage_scan_jail.os, "getloadavg", _no_load)
+        assert (usage_scan_jail._ready_timeout_s()
+                == usage_scan_jail._READY_TIMEOUT_S)
+
+    def test_missing_loadavg_symbol_falls_back_to_the_floor(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # A platform without os.getloadavg raises AttributeError, not
+        # OSError — the spawn path must degrade to the floor, not
+        # crash on the very host shape the fallback exists for.
+        monkeypatch.delattr(usage_scan_jail.os, "getloadavg")
+        assert (usage_scan_jail._ready_timeout_s()
+                == usage_scan_jail._READY_TIMEOUT_S)
+
+    def test_unknowable_cpus_under_high_load_gets_the_floor(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # BOTH CPU probes unknowable while the load probe reports a
+        # huge figure: there is no denominator, so no honest
+        # oversubscription ratio exists. Inventing cpus=1 here would
+        # send a merely busy many-core host (load 64 on 64 CPUs)
+        # straight to the CAP on a fabricated ratio — the contract
+        # for unknowable inputs is the floor.
+        def _no_affinity(pid: int) -> "set[int]":
+            raise OSError("forced by test")
+
+        monkeypatch.setattr(
+            usage_scan_jail.os, "sched_getaffinity", _no_affinity)
+        monkeypatch.setattr(usage_scan_jail.os, "cpu_count", lambda: None)
+        monkeypatch.setattr(
+            usage_scan_jail.os, "getloadavg", lambda: (4096.0, 0.0, 0.0))
+        assert (usage_scan_jail._ready_timeout_s()
+                == usage_scan_jail._READY_TIMEOUT_S)
+
+    def test_affinity_unknowable_still_derates_via_cpu_count(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Intermediate case: the affinity probe fails but cpu_count()
+        # is real. The machine-total count is a legitimate (if wider)
+        # denominator — the budget still derates rather than flooring
+        # and re-admitting the starvation flake on such hosts.
+        def _no_affinity(pid: int) -> "set[int]":
+            raise OSError("forced by test")
+
+        monkeypatch.setattr(
+            usage_scan_jail.os, "sched_getaffinity", _no_affinity)
+        monkeypatch.setattr(usage_scan_jail.os, "cpu_count", lambda: 4)
+        monkeypatch.setattr(
+            usage_scan_jail.os, "getloadavg", lambda: (12.0, 0.0, 0.0))
+        assert (usage_scan_jail._ready_timeout_s()
+                == pytest.approx(
+                    3.0 * usage_scan_jail._READY_TIMEOUT_S))
+
+    def test_spawn_consults_the_derated_budget(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Plumbing: every worker spawn samples the budget afresh
+        # (load moves between respawn/recycle boundaries).
+        calls: "list[float]" = []
+        real = usage_scan_jail._ready_timeout_s
+
+        def _recording() -> float:
+            value = real()
+            calls.append(value)
+            return value
+
+        monkeypatch.setattr(
+            usage_scan_jail, "_ready_timeout_s", _recording)
+        jail = _fake_jail(monkeypatch, _READY_OK, _honest_responder)
+        jail.start()
+        try:
+            assert len(calls) == 1
+        finally:
+            jail.stop()
+
+
+class _TricklingWorker:
+    """Popen stand-in whose child dribbles a VALID ready frame one
+    byte at a time. Each byte lands well inside any per-recv idle
+    timeout, but the whole frame takes many multiples of the ready
+    budget — the shape that distinguishes a wall-clock handshake
+    deadline from a per-recv timeout.
+    """
+
+    def __init__(self, argv: list, *, pass_fds: tuple, gap_s: float,
+                 **_kwargs: object) -> None:
+        self._sock = socket.socket(fileno=os.dup(pass_fds[0]))
+        self._gap_s = gap_s
+        self._dead = threading.Event()
+        self.pid = -1  # never signalled: kill() is socket teardown here
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+        self._thread.start()
+
+    def _serve(self) -> None:
+        payload = json.dumps(_READY_OK).encode("utf-8")
+        frame = FRAME_HEADER.pack(len(payload), READY_FRAME_ID) + payload
+        try:
+            for i in range(len(frame)):
+                if self._dead.is_set():
+                    return
+                self._sock.sendall(frame[i:i + 1])
+                # Pacing IS the behaviour under test (a trickling
+                # child), not synchronization — this sleep stays.
+                time.sleep(self._gap_s)
+        except OSError:
+            pass
+        finally:
+            self.kill()
+
+    def poll(self) -> "int | None":
+        return 0 if self._dead.is_set() else None
+
+    def kill(self) -> None:
+        self._dead.set()
+        try:
+            self._sock.close()
+        except OSError:
+            pass
+
+    def wait(self, timeout: "float | None" = None) -> int:
+        self._thread.join(timeout)
+        if self._thread.is_alive():
+            raise subprocess.TimeoutExpired(
+                cmd="trickling fake worker", timeout=timeout or 0.0)
+        return 0
+
+
+class TestReadyDeadline:
+    """The ready budget bounds the WHOLE handshake in wall clock.
+
+    Enforced per recv instead, a child trickling one byte per
+    (budget - epsilon) stretches a ~50-byte ready frame across many
+    multiples of the budget while every individual recv succeeds —
+    the budget stops bounding anything.
+    """
+
+    def test_trickling_ready_frame_cannot_outlive_the_budget(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        budget = 0.5
+        gap_s = 0.1  # per byte: far under the budget, so every
+        # individual recv would succeed under per-recv enforcement,
+        # while the whole frame needs ~10x the budget.
+        monkeypatch.setattr(
+            usage_scan_jail, "_ready_timeout_s", lambda: budget)
+
+        def popen(argv: list, **kwargs: object) -> _TricklingWorker:
+            pass_fds = kwargs.pop("pass_fds")
+            return _TricklingWorker(
+                argv, pass_fds=pass_fds, gap_s=gap_s, **kwargs)
+
+        monkeypatch.setattr(
+            usage_scan_jail, "subprocess",
+            types.SimpleNamespace(
+                Popen=popen,
+                DEVNULL=subprocess.DEVNULL,
+                TimeoutExpired=subprocess.TimeoutExpired,
+            ))
+        jail = usage_scan_jail.UsageScanJail()
+        started = time.monotonic()
+        with pytest.raises(usage_scan_jail.UsageScanJailUnavailable):
+            jail.start()
+        elapsed = time.monotonic() - started
+        # Generous, load-tolerant slack: the failure path adds a
+        # proc.wait(timeout=0.5) attribution beat plus kill/reap
+        # joins. The pre-deadline behaviour this pins against needed
+        # >5s (52 bytes x 0.1s) and then SUCCEEDED, so 3s of slack
+        # cannot mask a regression.
+        assert elapsed < budget + 3.0, (
+            "handshake failure was not bounded by the wall-clock "
+            f"ready budget: took {elapsed:.2f}s against a "
+            f"{budget:.2f}s budget"
+        )

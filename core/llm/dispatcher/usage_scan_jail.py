@@ -88,10 +88,32 @@ TIER_JAIL_LANDLOCK = "jail_landlock"
 TIER_JAIL_NO_LANDLOCK = "jail_no_landlock"
 TIER_IN_PROCESS = "in_process"
 
-# Confinement handshake budget: interpreter start + package imports +
-# the Landlock probe/self-test/install. Sub-second in practice; 10s
-# absorbs a loaded host without masking a hung child for long.
+# Confinement handshake budget FLOOR: interpreter start + package
+# imports + the Landlock probe/self-test/install — a fresh
+# interpreter spawn, sub-second on an unloaded host. The wall clock
+# that work needs scales with CPU oversubscription (at a 1/N CPU
+# share it takes ~N times longer), so a fixed budget misreports a
+# merely starved host as a malfunctioning worker; the applied budget
+# is therefore derated by the oversubscription sampled at spawn time
+# (``_ready_timeout_s``), with this constant as the minimum that
+# always applies; the applied budget bounds the WHOLE handshake as a
+# wall-clock deadline (``_recv_exact_deadline``), not each recv
+# separately. Both directions: LOWER stops absorbing an
+# ordinarily busy host (cold-cache imports alone can take seconds);
+# HIGHER delays malfunction-first triage of a genuinely wedged child
+# on an UNLOADED host, where 10s is already a 10x-plus margin.
 _READY_TIMEOUT_S = 10.0
+# Ceiling on the oversubscription derate factor. The reproduced
+# spurious ready-timeout was a ~17x-oversubscribed host (a 4-CPU
+# affinity set contended by 64 spin-burners) stretching the
+# sub-second handshake past the fixed 10s; 6x the floor (60s) covers
+# that stretch with margin. Both directions: LOWER re-admits the
+# reproduced spurious firing (a derate that cannot reach the
+# observed stretch still reports starvation as malfunction); HIGHER
+# leaves a genuinely wedged child unreported for minutes whenever
+# the host is busy — the wedge must still surface promptly, loaded
+# or not.
+_READY_DERATE_CAP = 6.0
 # Per-scan round-trip budget. A scan of two 256 KiB windows is
 # milliseconds; a worker that takes longer is wedged or hostile —
 # kill it and book the scan as failed. Deliberately far below the
@@ -188,6 +210,58 @@ def _raptor_dir() -> str:
             raptor_dir,
         )
     return raptor_dir
+
+
+def _derated_ready_timeout_s(cpus: int, load1: float) -> float:
+    """Handshake budget derated by CPU oversubscription.
+
+    Pure, so the derating is unit-testable with injected inputs:
+    ``cpus`` is this process's schedulable CPU count, ``load1`` the
+    1-minute load average. Oversubscription at or below 1.0 (idle,
+    or busy-but-not-contended) never shrinks the budget — the floor
+    is a minimum, not a midpoint — and the factor is capped so a
+    wedged worker still surfaces as malfunction promptly (see
+    ``_READY_DERATE_CAP``).
+    """
+    oversubscription = load1 / max(cpus, 1)
+    factor = min(max(oversubscription, 1.0), _READY_DERATE_CAP)
+    return _READY_TIMEOUT_S * factor
+
+
+def _ready_timeout_s() -> float:
+    """The derated handshake budget for a spawn happening now.
+
+    Sampled per spawn (load moves; spawns only happen at
+    start/respawn/recycle boundaries, so the cost is negligible).
+    The load average is system-wide while the affinity set can be
+    narrower, so on a partitioned host the ratio can overestimate
+    contention — overestimation only widens the budget toward the
+    cap, never below the floor. Unknowable inputs never invent a
+    ratio: an unreadable affinity set falls back to the machine-total
+    ``os.cpu_count()`` — a wider but honest denominator, so high load
+    still derates — while a missing load figure, or a host where BOTH
+    CPU probes come up empty, yields the floor. Fabricating cpus=1
+    there would send any busy many-core host straight to the cap;
+    inventing headroom nobody measured would likewise trade prompt
+    malfunction triage for nothing.
+    """
+    try:
+        cpus = len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        cpus_probe = os.cpu_count()
+        if not cpus_probe:
+            # No denominator at all (None or a defective 0): no
+            # oversubscription ratio exists — the floor, never a
+            # fabricated cpus=1.
+            return _READY_TIMEOUT_S
+        cpus = cpus_probe
+    try:
+        load1 = os.getloadavg()[0]
+    except (AttributeError, OSError):
+        # Probe failed, or the platform lacks the symbol entirely
+        # (AttributeError): no load figure -> no derating claim.
+        load1 = 0.0
+    return _derated_ready_timeout_s(cpus, load1)
 
 
 def _empty_usage() -> "dict":
@@ -557,9 +631,13 @@ class UsageScanJail:
         finally:
             child_sock.close()
 
-        parent_sock.settimeout(_READY_TIMEOUT_S)
+        # The budget bounds the WHOLE handshake in wall clock (a
+        # deadline shared by every recv), not each recv separately —
+        # a child trickling one byte per (budget - epsilon) must not
+        # stretch the ready frame across many multiples of the budget.
+        ready_deadline = time.monotonic() + _ready_timeout_s()
         try:
-            ready = self._read_ready_frame(parent_sock)
+            ready = self._read_ready_frame(parent_sock, ready_deadline)
         except (_ProtocolError, OSError) as exc:
             parent_sock.close()
             # Attribute the worker's fate before the unconditional
@@ -628,18 +706,51 @@ class UsageScanJail:
         self._proc = proc
         self._sock = parent_sock
 
-    def _read_ready_frame(self, sock: socket.socket) -> "dict":
+    def _read_ready_frame(self, sock: socket.socket,
+                          deadline: float) -> "dict":
         length, frame_id = FRAME_HEADER.unpack(
-            self._recv_exact(sock, FRAME_HEADER.size))
+            self._recv_exact_deadline(sock, FRAME_HEADER.size, deadline))
         if frame_id != READY_FRAME_ID or length > MAX_FRAME_PAYLOAD:
             raise _ProtocolError("malformed ready frame header")
         try:
-            obj = json.loads(self._recv_exact(sock, length))
+            obj = json.loads(
+                self._recv_exact_deadline(sock, length, deadline))
         except (ValueError, UnicodeDecodeError) as exc:
             raise _ProtocolError("ready frame is not valid JSON") from exc
         if not isinstance(obj, dict):
             raise _ProtocolError("ready frame is not a JSON object")
         return obj
+
+    @staticmethod
+    def _recv_exact_deadline(sock: socket.socket, n: int,
+                             deadline: float) -> bytes:
+        """recv exactly ``n`` bytes before a shared wall-clock deadline.
+
+        Ready-handshake reads only. A plain per-recv timeout would let
+        a child dribble one byte per (budget - epsilon) and stretch
+        the ready frame across many multiples of the budget while
+        every individual recv succeeds; here each recv gets only the
+        time remaining until the caller's deadline. Post-ready
+        round-trips keep ``_recv_exact`` + the per-recv
+        ``_ROUNDTRIP_TIMEOUT_S`` idle semantics deliberately.
+        """
+        buf = b""
+        while len(buf) < n:
+            remaining = deadline - time.monotonic()
+            # Floor at a tiny positive epsilon: settimeout(0) means
+            # NON-BLOCKING (instant BlockingIOError, a different
+            # exception shape) and a negative value is a ValueError —
+            # an expired deadline must surface as the socket timeout
+            # (an OSError) the handshake failure path attributes.
+            # LOWER (0/negative) breaks the exception contract;
+            # HIGHER stretches the budget past its documented bound
+            # by up to the epsilon per recv.
+            sock.settimeout(max(remaining, 0.001))
+            chunk = sock.recv(n - len(buf))
+            if not chunk:
+                raise OSError("usage-scan worker closed the socket")
+            buf += chunk
+        return buf
 
     @staticmethod
     def _recv_exact(sock: socket.socket, n: int) -> bytes:
