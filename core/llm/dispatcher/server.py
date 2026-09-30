@@ -2466,11 +2466,14 @@ class LLMDispatcher:
 
     def _audit(self, ev: AuditEvent) -> None:
         # Defang nonprintable / ANSI escapes on operator-visible
-        # fields. ``token_id`` is already a hex prefix (12 chars)
-        # so it doesn't need scrubbing, and ``event`` / ``status``
+        # fields. ``token_id`` is dispatcher-minted hex ONLY on the
+        # issue path — on token.reject it is the first bytes of
+        # whatever the CLIENT put in the auth header, so it gets the
+        # same scrub (a no-op for minted ids). ``event`` / ``status``
         # are internally produced strings.
         safe_worker = _scrub(ev.worker_label)
         safe_reason = _scrub(ev.reason)
+        safe_token = _scrub(ev.token_id)
         # Log level chosen by event type:
         # * Events in ``_DEMOTED_AUDIT_EVENTS`` → DEBUG. These are
         #   duplicated by a higher-level layer's own operator-
@@ -2490,15 +2493,16 @@ class LLMDispatcher:
         # ``AuditEvent.token_id`` docstring) — explicitly NOT the
         # full token. Operator visibility for the auth flow needs
         # SOME identifier; the prefix gives correlation without
-        # disclosure.
+        # disclosure. On reject the prefix is caller-supplied bytes,
+        # hence ``safe_token`` below.
         # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
         parts = [f"llm-dispatcher {ev.event} {ev.status}"]
         if ev.peer_pid is not None:
             parts.append(f"pid={ev.peer_pid}")
         if ev.peer_uid is not None:
             parts.append(f"uid={ev.peer_uid}")
-        if ev.token_id:
-            parts.append(f"token={ev.token_id}")
+        if safe_token:
+            parts.append(f"token={safe_token}")
         if safe_worker:
             parts.append(f"label={safe_worker}")
         if safe_reason:
@@ -2526,7 +2530,7 @@ class LLMDispatcher:
                         "event": ev.event,
                         "peer_pid": ev.peer_pid,
                         "peer_uid": ev.peer_uid,
-                        "token_id": ev.token_id,
+                        "token_id": safe_token,
                         "worker_label": safe_worker,
                         "status": ev.status,
                         "reason": safe_reason,
@@ -2603,7 +2607,9 @@ class LLMDispatcher:
 
 def _short(token: str) -> str:
     """Return a short prefix of a token for audit correlation. Never
-    log the full token — it's a credential."""
+    log the full token — it's a credential. On the reject path the
+    input is caller-supplied header bytes, not a minted token; the
+    prefix is display-scrubbed at the ``_audit`` chokepoint."""
     return token[:12]
 
 
