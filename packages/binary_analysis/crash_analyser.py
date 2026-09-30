@@ -14,6 +14,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from core.binary.inspect import addr2line as _addr2line
 from core.binary.inspect import inspect_binary as _inspect_binary
 from core.binary.inspect import nm as _nm
 from core.binary.inspect import objdump as _objdump
@@ -25,12 +26,11 @@ from core.run.toolprobe import probe
 from core.sandbox import run as _sandbox_run
 from core.sandbox import run_trusted as _run_trusted
 
-# readelf/nm/file/objdump go through core.binary.inspect (FULL
-# sandbox — the bytes they parse are the crashing target's, and
-# binutils' ELF parsers have a long CVE history). _run_trusted
-# remains only for addr2line (its address operand follows -e
-# <binary>, needing a substrate extension), the darwin-only otool
-# seam, and the sysctl host probe.
+# readelf/nm/file/objdump/addr2line go through core.binary.inspect
+# (FULL sandbox — the bytes they parse are the crashing target's,
+# and binutils' ELF/DWARF parsers have a long CVE history).
+# _run_trusted remains only for the darwin-only otool seam and the
+# sysctl host probe.
 # Crash-analysis work runs a debugger or ASAN-instrumented binary:
 # - GDB / LLDB: need ptrace → profile='debug' (keeps net/Landlock/most seccomp).
 # - ASAN binary: no ptrace needed → default full sandbox via _sandbox_run.
@@ -297,24 +297,17 @@ class CrashAnalyser:
         if not is_valid_hex_address(address):
             return "unknown", "unknown"
             
-        try:
-            result = _run_trusted(
-                ["addr2line", "-f", "-C", "-e", str(self.binary), address],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            
-            if result.returncode == 0:
-                lines = result.stdout.strip().split("\n")
-                if len(lines) >= 2:
-                    function = lines[0].strip()
-                    file_line = lines[1].strip()
-                    return function, file_line
-                    
-        except Exception as e:  # noqa: BLE001 — defensive: degrade, never crash the analysis
-            logger.debug("addr2line failed: %s", e)
-            
+        # Full sandbox: addr2line walks the crashing target's DWARF,
+        # attacker-shaped bytes. Never raises; failure → rc=None.
+        result = _addr2line(self.binary, address, timeout=5)
+
+        if result.returncode == 0:
+            lines = result.stdout.strip().split("\n")
+            if len(lines) >= 2:
+                function = lines[0].strip()
+                file_line = lines[1].strip()
+                return function, file_line
+
         return "unknown", "unknown"
 
     def analyse_crash(self, crash_id: str, input_file: Path, signal: str) -> CrashContext:

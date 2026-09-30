@@ -27,11 +27,9 @@ Deliberately NOT swept (named, budgeted, or out-of-alternation):
   predates the substrate and its rewrite is owned with the sandbox
   module itself.
 * test directories — fixtures legitimately spell the retired idiom.
-* crash_analyser's ``addr2line`` call and the macOS ``otool`` calls
-  are outside the sweep by construction: neither tool is in the
-  regex's allowlisted-tool alternation (addr2line's operand order
-  needs a substrate extension first; otool is a documented
-  darwin-only seam).
+* the macOS ``otool`` calls are outside the sweep by construction:
+  otool is not in the regex's allowlisted-tool alternation (a
+  documented darwin-only seam).
 * analyzer.py's ``ldd`` (executes the loader), ``ROPgadget`` /
   one_gadget (not read-only binutils) and ``uname`` (host probe) —
   also outside the alternation.
@@ -73,8 +71,8 @@ _EXEMPTED_HIT_BUDGET: dict[str, int] = {
 # A re-grown raw invocation: run_trusted/_run_trusted with an
 # allowlisted inspection tool as argv[0].
 _HAND_ROLLED = re.compile(
-    r"""_?run_trusted\(\s*\n?\s*\[\s*['"](readelf|nm|objdump|strings|"""
-    r"""c\+\+filt|file)['"]"""
+    r"""_?run_trusted\(\s*\n?\s*\[\s*['"](addr2line|readelf|nm|objdump|"""
+    r"""strings|c\+\+filt|file)['"]"""
 )
 
 
@@ -127,6 +125,7 @@ def test_pattern_still_catches_the_retired_idiom():
     canonical = 'run_trusted(\n    ["readelf", "-h", str(binary)],'
     assert _HAND_ROLLED.search(canonical)
     assert _HAND_ROLLED.search('_run_trusted(["nm", path])')
+    assert _HAND_ROLLED.search('_run_trusted(["addr2line", "-f"])')
 
 
 def test_universe_is_mechanical_not_hand_picked():

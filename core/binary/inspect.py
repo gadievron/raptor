@@ -31,7 +31,8 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["InspectResult", "inspect_binary", "nm", "objdump", "readelf"]
+__all__ = ["InspectResult", "addr2line", "inspect_binary", "nm", "objdump",
+           "readelf"]
 
 # Read-only inspection tools this helper will exec. Anything that can
 # write, execute the target, or take a script stays out.
@@ -69,17 +70,31 @@ def inspect_binary(
     args: tuple[str, ...],
     binary: str | Path,
     *,
+    operands: tuple[str, ...] = (),
     timeout: float = 10,
 ) -> InspectResult:
-    """Run ``tool *args binary`` under the full sandbox.
+    """Run ``tool *args binary *operands`` under the full sandbox.
 
     The binary's parent directory becomes the sandbox ``target`` so
     the tool can read the file under the mount namespace; network is
-    blocked. Never raises.
+    blocked. Never raises on execution failure (``returncode=None``);
+    raises ``ValueError`` only on caller-contract violations (tool not
+    allowlisted, option-shaped operand).
+
+    ``operands`` land AFTER the binary path in the argv — for tools
+    whose positional inputs follow the file operand (addr2line's
+    addresses after ``-e <binary>``). They must be plain values, never
+    options: a dash- or @-leading operand would be parsed as a flag /
+    response file by binutils, so it is refused here rather than
+    passed through.
     """
     if tool not in _ALLOWED_TOOLS:
         msg = f"tool {tool!r} is not an allowlisted inspection tool"
         raise ValueError(msg)
+    for operand in operands:
+        if operand.startswith(("-", "@")):
+            msg = f"operand {operand!r} is option-shaped; refusing"
+            raise ValueError(msg)
     # Lazy import — keep this module independently importable in unit
     # tests that stub the sandbox (same convention as binary_oracle).
     from core.sandbox import run as _sandbox_run
@@ -94,7 +109,7 @@ def inspect_binary(
         return InspectResult(returncode=None)
     try:
         proc = _sandbox_run(
-            [tool, *args, str(resolved)],
+            [tool, *args, str(resolved), *operands],
             block_network=True,
             target=target,
             capture_output=True,
@@ -119,6 +134,18 @@ def readelf(binary: str | Path, *flags: str,
             timeout: float = 10) -> InspectResult:
     """Sandboxed ``readelf <flags> <binary>``."""
     return inspect_binary("readelf", flags, binary, timeout=timeout)
+
+
+def addr2line(binary: str | Path, *addresses: str,
+              timeout: float = 10) -> InspectResult:
+    """Sandboxed ``addr2line -f -C -e <binary> <addresses...>``.
+
+    The addresses are positional operands after the binary path;
+    ``inspect_binary`` refuses option-shaped values, so callers can
+    pass parsed (hex-validated) addresses straight through.
+    """
+    return inspect_binary("addr2line", ("-f", "-C", "-e"), binary,
+                          operands=addresses, timeout=timeout)
 
 
 def nm(binary: str | Path, *flags: str,
