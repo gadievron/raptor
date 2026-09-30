@@ -926,7 +926,15 @@ class _checklist_lock:
 
     def __enter__(self):
         import os
-        flags = os.O_WRONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+        # O_NONBLOCK: a planted reader-less FIFO at the predictable
+        # lock path would wedge the blocking O_WRONLY open FOREVER —
+        # before the bounded acquisition below ever runs. With
+        # O_NONBLOCK that open fails fast (ENXIO), and a FIFO that
+        # does have a reader still opens — which the regularity check
+        # in validate_lock_fd below then refuses.
+        flags = (os.O_WRONLY | os.O_NOFOLLOW
+                 | getattr(os, "O_CLOEXEC", 0)
+                 | getattr(os, "O_NONBLOCK", 0))
         if self._create:
             flags |= os.O_CREAT | os.O_TRUNC
         try:

@@ -68,3 +68,34 @@ def test_wedged_holder_fails_the_update_after_bounded_wait(
     finally:
         os.close(holder_fd)
         thread.join(timeout=10)
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"),
+                    reason="mkfifo unavailable (non-POSIX)")
+def test_fifo_at_lock_path_fails_the_update_promptly(tmp_path: Path):
+    """A planted reader-less FIFO at the predictable lock path must
+    fail the update promptly — a blocking open would stall every
+    checklist writer forever BEFORE the bounded wait even starts."""
+    checklist = tmp_path / "checklist.json"
+    os.mkfifo(tmp_path / "checklist.lock")
+    errors: list[BaseException] = []
+    done = threading.Event()
+
+    def updater() -> None:
+        try:
+            with _checklist_lock(checklist):
+                pass
+        except OSError as exc:
+            errors.append(exc)
+        finally:
+            done.set()
+
+    thread = threading.Thread(target=updater, daemon=True)
+    thread.start()
+    try:
+        assert done.wait(timeout=10), (
+            "updater wedged opening the planted FIFO lock path"
+        )
+        assert errors, "the FIFO lock path was neither refused nor hung"
+    finally:
+        thread.join(timeout=10)
