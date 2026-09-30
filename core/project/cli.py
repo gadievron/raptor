@@ -3036,7 +3036,12 @@ def _print_code_findings(merged, detailed: bool=False) -> None:
         status = sanitise_for_terminal(get_display_status(rep), max_len=32)
 
         cvss = rep.get("cvss_score_estimate")
-        cvss_str = str(cvss) if cvss is not None else "—"
+        # Same provenance as the three cells above (nothing upstream
+        # coerces it numeric — an import archive restores it verbatim),
+        # so it gets the same escape; also keeps len()-based column
+        # sizing honest for the aligned table below.
+        cvss_str = (sanitise_for_terminal(str(cvss), max_len=16)
+                    if cvss is not None else "—")
 
         grouped_rows.append((loc, vtype, status, cvss_str, findings, fpath))
 

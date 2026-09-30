@@ -34,6 +34,18 @@ def test_code_findings_table_and_detail_escaped(capsys):
         assert raw not in out
 
 
+def test_code_findings_cvss_cell_escaped(capsys):
+    # Nothing upstream coerces cvss_score_estimate numeric — an import
+    # archive restores it verbatim — so the cell gets the same escape
+    # as the file/type/status columns beside it.
+    _print_code_findings(
+        [_finding(cvss_score_estimate=f"9.8{HOSTILE}")], detailed=False)
+    out = capsys.readouterr().out
+    assert "9.8" in out
+    for raw in RAW:
+        assert raw not in out
+
+
 def test_correlate_counts_are_int_only(capsys):
     # The header helper coerces every value — a foreign string in a
     # count slot raises rather than rendering.
