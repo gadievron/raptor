@@ -76,3 +76,36 @@ def test_wedged_holder_raises_after_bounded_wait(
     finally:
         os.close(holder_fd)
         thread.join(timeout=10)
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"),
+                    reason="mkfifo unavailable (non-POSIX)")
+def test_fifo_at_lock_path_is_refused_loudly(tmp_path: Path):
+    """A planted reader-less FIFO at the predictable lock path must be
+    refused promptly — a blocking open would stall the writer forever
+    BEFORE the bounded wait even starts."""
+    md = tmp_path / "notes.md"
+    md.write_text("x")
+    os.mkfifo(tmp_path / "notes.md.lock")
+    errors: list[BaseException] = []
+    done = threading.Event()
+
+    def writer() -> None:
+        try:
+            with _file_lock(md):
+                pass
+        except AnnotationFileError as exc:
+            errors.append(exc)
+        finally:
+            done.set()
+
+    thread = threading.Thread(target=writer, daemon=True)
+    thread.start()
+    try:
+        assert done.wait(timeout=10), (
+            "writer wedged opening the planted FIFO lock path"
+        )
+        assert errors, "the FIFO lock path was neither refused nor hung"
+        assert "not a regular file" in str(errors[0])
+    finally:
+        thread.join(timeout=10)

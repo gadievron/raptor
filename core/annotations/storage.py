@@ -37,6 +37,7 @@ from __future__ import annotations
 import dataclasses
 import os
 import re
+import stat as pystat
 import unicodedata
 from contextlib import contextmanager
 from pathlib import Path
@@ -587,10 +588,17 @@ def _file_lock(path: Path):
     # no content — it only serialises the RMW window — so the wide
     # mode grants nothing beyond the ability to take the lock, which
     # any same-tree writer legitimately needs.
+    # O_NONBLOCK: a planted reader-less FIFO at the predictable lock
+    # path would wedge the blocking O_RDONLY open FOREVER — before the
+    # bounded acquisition below ever runs. With O_NONBLOCK an O_RDONLY
+    # FIFO open SUCCEEDS immediately (it does not fail), which is why
+    # the regularity refusal after the open is load-bearing, not
+    # belt-and-braces.
     try:
         fd = os.open(
             str(lock_path),
-            os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW,
+            os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW
+            | getattr(os, "O_NONBLOCK", 0),
             0o666,
         )
     except PermissionError as e:
@@ -601,6 +609,15 @@ def _file_lock(path: Path):
             f"flight), then retry"
         )
         raise AnnotationFileError(msg) from e
+    st = os.fstat(fd)
+    if not pystat.S_ISREG(st.st_mode):
+        os.close(fd)
+        msg = (
+            f"annotation lock path {lock_path} is not a regular file "
+            "— a planted FIFO or device node there would defeat the "
+            "bounded wait; remove it, then retry"
+        )
+        raise AnnotationFileError(msg)
     try:
         # Bounded announce-once acquisition (shared helper). NO
         # foreign-uid refusal here, deliberately: this lock is the
