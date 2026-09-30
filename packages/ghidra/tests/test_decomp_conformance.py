@@ -272,6 +272,50 @@ class TestSandboxPins:
         assert any("_conformance_child.py" in str(a)
                    for a in call["cmd"])
 
+    def test_production_ts_leg_grants_python_runtime_and_repo_root(
+            self, tmp_path, monkeypatch):
+        """A python-spawning sandbox call must grant the interpreter's
+        runtime roots (venv installs live outside the mount-ns
+        baseline, and the sandboxed child execs the ORIGINAL argv
+        path) plus the RAPTOR tree root the child self-anchors its
+        core.* imports on — neither is under target. Without the
+        grants every conformance scan pays a doomed mount-ns spawn
+        and demotes the whole process to the mountless backend for
+        the interpreter."""
+        import json as _json
+
+        import core.sandbox.context as sandbox_ctx
+        from core.sandbox.python_paths import python_runtime_tool_paths
+
+        import packages.ghidra.decomp_conformance as dc
+        from packages.ghidra.decomp_conformance import _sandboxed_ts_scan
+
+        root = _tree(tmp_path, {"g1.c": "int f(void) { return 0; }\n"})
+        calls: list = []
+
+        class _Proc:
+            returncode = 0
+            stderr = ""
+            stdout = _json.dumps({
+                "available": True, "reason": "", "files": {},
+            })
+
+        def _fake_run(cmd, **kwargs):
+            calls.append({"cmd": list(cmd), "kwargs": dict(kwargs)})
+            return _Proc()
+
+        monkeypatch.setattr(sandbox_ctx, "run", _fake_run)
+        _sandboxed_ts_scan(root)
+        assert len(calls) == 1
+        tool_paths = calls[0]["kwargs"].get("tool_paths") or []
+        # Interpreter runtime roots (empty on a bare system-python
+        # host — the helper excludes baseline prefixes).
+        for p in python_runtime_tool_paths():
+            assert p in tool_paths
+        # The tree root the child's sys.path anchor resolves to.
+        repo_root = Path(dc.__file__).resolve().parents[2]
+        assert str(repo_root) in tool_paths
+
 
 class TestBuildSeam:
     def _db(self) -> REDatabase:

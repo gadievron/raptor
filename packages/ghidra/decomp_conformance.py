@@ -85,6 +85,7 @@ def _sandboxed_ts_scan(tree_root: Path) -> dict:
     """
     try:
         from core.sandbox.context import run as sandbox_run
+        from core.sandbox.python_paths import python_runtime_tool_paths
     except ImportError:
         return {
             "available": False,
@@ -98,11 +99,21 @@ def _sandboxed_ts_scan(tree_root: Path) -> dict:
         # Default env handling (get_safe_env + the sandbox's own
         # target-exec scrub); the child needs no RAPTOR env at all —
         # it self-anchors its imports on its own path.
+        # tool_paths: a python-spawning sandbox call must grant the
+        # interpreter's runtime roots (venv/pyenv/conda installs live
+        # outside the mount-ns baseline, and the child execs the
+        # ORIGINAL argv path) plus the RAPTOR tree root, where the
+        # child script lives and self-anchors its core.* imports —
+        # neither is under target. Without these the mount-ns backend
+        # cannot see the interpreter and every call demotes to the
+        # mountless lane.
         proc = sandbox_run(
             [sys.executable, "-B", child, str(tree_root)],
             target=str(tree_root),
             block_network=True,
             caller_label="decomp-conformance",
+            tool_paths=(python_runtime_tool_paths()
+                        + [str(Path(child).parents[2])]),
             capture_output=True,
             text=True,
             timeout=TS_CHILD_TIMEOUT_S,
