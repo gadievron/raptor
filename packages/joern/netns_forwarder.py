@@ -24,7 +24,11 @@ The supervisor's lifetime tracks the wrapped command: when the child
 exits, the supervisor exits with the child's status, so the parent's
 ``Popen.poll()`` liveness checks keep working. SIGTERM/SIGINT are
 forwarded to the child; the parent's process-group SIGKILL escalation
-covers a child that ignores them.
+covers a child that ignores them. The handlers install before any
+externally observable boot milestone (the group-tier ready report,
+the socket appearing on disk), and a terminal signal that arrives
+while the child does not exist yet is honoured — prompt teardown
+instead of the spawn, or delivery right after it — never dropped.
 
 ``--self-probe`` exercises the full mechanism (unshare, uid map,
 loopback up, TCP round-trip, unix-socket bind) and exits 0/1 — the
@@ -839,6 +843,53 @@ def _positive_float(text: str) -> float:
     return value
 
 
+#: Test-only pre-spawn gate (see :func:`_hold_prespawn_gate`): the
+#: variable names a directory through which a test holds the boot open
+#: in the handlers-installed/child-not-yet-spawned window. Never set on
+#: real boots — the name is not on the spawn-side env allowlist
+#: (``RaptorConfig.SAFE_ENV_ALLOWLIST``), so ``get_safe_env()``-spawned
+#: supervisors can never see it.
+_TEST_PRESPAWN_GATE_ENV = "RAPTOR_NETNS_FORWARDER_TEST_PRESPAWN_GATE"
+#: Upper bound on the gate hold, in both directions: shorter and the
+#: boot-window tests cannot finish their held → signal → release
+#: handshake before the hold lapses (the deterministic window collapses
+#: back into a timing lottery — the tests need tens of milliseconds,
+#: plus xdist-load headroom); longer and a stray gate variable reaching
+#: a real boot would delay the wrapped server's spawn by the full bound
+#: (already a misconfiguration — see the allowlist note above — so it
+#: gets a bounded delay, never a wedge).
+_TEST_PRESPAWN_GATE_TIMEOUT_S = 10.0
+_TEST_PRESPAWN_GATE_POLL_S = 0.05
+
+
+def _hold_prespawn_gate(gate_dir: str | None) -> None:
+    """Test-only seam: park the boot between handler install and spawn.
+
+    The absorbed-signal defect lived exactly here — handlers installed,
+    ``child`` still ``None`` — a window microseconds wide in a real
+    boot and therefore untestable without a hold point the test
+    controls. When *gate_dir* is set, write ``held`` (our pid) so the
+    test knows the boot is parked, then wait for ``release`` to appear,
+    bounded by :data:`_TEST_PRESPAWN_GATE_TIMEOUT_S`. Signals arriving
+    during the hold take the normal recorded-pending path; the hold
+    itself never touches signal state. Best-effort: if ``held`` cannot
+    be written (bogus directory), skip the hold entirely rather than
+    waiting on a release nobody can key off the missing marker.
+    """
+    if not gate_dir:
+        return
+    try:
+        with open(os.path.join(gate_dir, "held"), "w",
+                  encoding="ascii") as f:
+            f.write(str(os.getpid()))
+    except OSError:
+        return
+    release = os.path.join(gate_dir, "release")
+    deadline = time.monotonic() + _TEST_PRESPAWN_GATE_TIMEOUT_S
+    while time.monotonic() < deadline and not os.path.exists(release):
+        time.sleep(_TEST_PRESPAWN_GATE_POLL_S)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Run a command in a private netns behind a unix socket",
@@ -956,7 +1007,36 @@ def main(argv: list[str] | None = None) -> int:
                 os.close(args.ready_fd)
         _ns_init_split(live_r, arm_w)  # returns only in C (PID 2)
         parent_gone_fd = gone_r
-    else:
+
+    # Terminal-signal handling installs FIRST — before the group-tier
+    # ready report and before the listener binds — so no consumer
+    # keying on either observable boot milestone can beat the handlers
+    # and hit the default disposition (supervisor death, socket left
+    # behind). A signal that arrives while the child does not exist
+    # yet is RECORDED, never dropped: the pre-spawn check below exits
+    # promptly on it, and the post-spawn drain covers one landing
+    # mid-``Popen``. (Pidns tier: a signal reaching C even earlier —
+    # before these lines — kills C, and B mirrors the death into a
+    # clean namespace collapse; P and B install their own forwarders,
+    # untouched by this ordering.)
+    child: subprocess.Popen | None = None
+    pending_signals: list[int] = []
+
+    def _forward_signal(signum: int, _frame: FrameType | None) -> None:
+        if child is not None:
+            with contextlib.suppress(OSError):
+                child.send_signal(signum)
+        else:
+            pending_signals.append(signum)
+
+    signal.signal(signal.SIGTERM, _forward_signal)
+    signal.signal(signal.SIGINT, _forward_signal)
+
+    if not args.pidns:
+        # Reported only after the handlers above: "ready" promises the
+        # consumer may signal the supervisor from the instant it reads
+        # the tier line without racing the default disposition. (The
+        # pidns tier's report lives in P, gated on the arm byte.)
         _report_tier(args.ready_fd, "group")
 
     # Listener bound (and 0700) BEFORE the server can be reached:
@@ -969,22 +1049,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     forwarder.start()
 
-    # Handlers installed BEFORE the child exists so a signal landing
-    # in the spawn window is forwarded (or absorbed) instead of taking
-    # the supervisor down with the default action and skipping socket
-    # cleanup. (Pidns tier: a signal landing on C even earlier —
-    # before these lines — kills C, and B mirrors the death into a
-    # clean namespace collapse.)
-    child: subprocess.Popen | None = None
-
-    def _forward_signal(signum: int, _frame: FrameType | None) -> None:
-        if child is not None:
-            with contextlib.suppress(OSError):
-                child.send_signal(signum)
-
-    signal.signal(signal.SIGTERM, _forward_signal)
-    signal.signal(signal.SIGINT, _forward_signal)
-
     # Armed BEFORE the child exists so a parent death inside the
     # spawn window is covered; the closure reads main()'s current
     # binding.
@@ -993,9 +1057,32 @@ def main(argv: list[str] | None = None) -> int:
         parent_gone_fd=parent_gone_fd,
     )
 
+    _hold_prespawn_gate(os.environ.get(_TEST_PRESPAWN_GATE_ENV))
+
+    if pending_signals:
+        # A terminal signal arrived before the child existed. Honour
+        # the same observable contract a forwarded signal produces —
+        # socket unlinked, socket dir removed, shell-convention
+        # 128+signum exit — WITHOUT spawning the command: the consumer
+        # asked the supervisor to die while there was no child, so
+        # booting a server only to kill it would waste the boot and
+        # reopen the window this block closes.
+        forwarder.stop()
+        with contextlib.suppress(OSError):
+            os.rmdir(os.path.dirname(args.socket))
+        return 128 + pending_signals[0]
+
     # stdio, env, cwd, and the namespace are inherited: the wrapped
     # server's stderr keeps flowing to the parent's boot-failure pipe.
     child = subprocess.Popen(cmd)
+    # A terminal signal can land while ``Popen`` is mid-spawn — the
+    # handler still sees ``child is None`` and records it. The child
+    # exists now: deliver, and let the normal wait/teardown below
+    # finish the contract. Between handler install and this line no
+    # terminal signal is ever dropped.
+    for signum in pending_signals:
+        with contextlib.suppress(OSError):
+            child.send_signal(signum)
 
     try:
         rc = child.wait()
