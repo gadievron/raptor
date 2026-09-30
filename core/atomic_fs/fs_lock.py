@@ -132,10 +132,21 @@ def stamp_lock_holder(fd: int) -> None:
     the exclusion contract. Only ever called on sidecar lock fds whose
     content is disposable — NEVER on data-file flocks (O_APPEND
     journals), where a write would corrupt the store.
+
+    Written IN PLACE, truncating only when the old content is longer:
+    this runs on every acquisition, and a truncate-to-zero before each
+    rewrite trips ext4's replace-via-truncate heuristic — a forced
+    data writeback per open → truncate → write → close cycle (~1ms
+    measured) that would tax every UNCONTENDED acquire on the
+    interactive paths. An equal-or-shorter old stamp is fully
+    overwritten by ``pwrite`` at offset 0; only a longer one (a wider
+    previous pid, hostile stuffing) pays the truncate.
     """
     with contextlib.suppress(OSError):
-        os.ftruncate(fd, 0)
-        os.write(fd, b"%d\n" % os.getpid())
+        stamp = b"%d\n" % os.getpid()
+        if os.fstat(fd).st_size > len(stamp):
+            os.ftruncate(fd, 0)
+        os.pwrite(fd, stamp, 0)
 
 
 def _holder_hint(lock_path: Path) -> str:

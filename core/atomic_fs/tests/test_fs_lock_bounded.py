@@ -453,3 +453,50 @@ class TestExpiryWarning:
         finally:
             os.close(holder_fd)
             os.close(victim_fd)
+
+
+class TestStampRewrite:
+    """The pid stamp is rewritten on EVERY acquisition, so its write
+    pattern is on the uncontended hot path. Truncate-to-zero before
+    each rewrite trips ext4's replace-via-truncate heuristic (a data
+    writeback per open→truncate→write→close cycle, ~1ms measured) —
+    the stamp must overwrite in place and shrink only when the old
+    content is longer."""
+
+    def test_restamp_same_size_issues_no_truncate(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ):
+        lock = tmp_path / "a.json.lock"
+        fd = os.open(str(lock), os.O_WRONLY | os.O_CREAT, 0o600)
+        fs_lock.stamp_lock_holder(fd)
+        os.close(fd)
+        calls: list[tuple] = []
+        real_ftruncate = os.ftruncate
+
+        def counting_ftruncate(*args):
+            calls.append(args)
+            return real_ftruncate(*args)
+
+        monkeypatch.setattr(os, "ftruncate", counting_ftruncate)
+        fd = os.open(str(lock), os.O_WRONLY)
+        try:
+            fs_lock.stamp_lock_holder(fd)
+        finally:
+            os.close(fd)
+        assert calls == []
+        assert lock.read_bytes() == b"%d\n" % os.getpid()
+
+    def test_oversized_content_is_shrunk_to_the_stamp(
+        self, tmp_path: Path,
+    ):
+        """The shrink arm still truncates: leftover bytes from a
+        longer previous stamp (or hostile stuffing) must not survive
+        past the fresh stamp."""
+        lock = tmp_path / "b.json.lock"
+        lock.write_bytes(b"999999999999999999 leftover junk")
+        fd = os.open(str(lock), os.O_WRONLY)
+        try:
+            fs_lock.stamp_lock_holder(fd)
+        finally:
+            os.close(fd)
+        assert lock.read_bytes() == b"%d\n" % os.getpid()
