@@ -16,6 +16,9 @@ tags:
 ## Purpose
 Trace all function calls in C/C++ programs with per-thread logs and Perfetto visualization.
 
+## Containment
+The traced project is untrusted — its build scripts and the produced binary execute arbitrary code. Every command that runs the target's build system or the instrumented binary goes through `libexec/raptor-run-sandboxed --output-dir <dir> <cmd> [args...]` (`--output-dir` = the directory the command writes into: the project tree for builds, the working directory for runs). The sandbox strips loader variables (`LD_LIBRARY_PATH`, `LD_PRELOAD`) by design; the instrumented link bakes an rpath instead, so the sandboxed run resolves `libtrace.so` with no loader variable. If a sandboxed step fails, fix the sandboxed path — never run the target bare. Building the instrumentation library itself (RAPTOR's own skill sources) needs no sandbox.
+
 ## Components
 
 ### 1. Instrumentation Library (trace_instrument.c)
@@ -38,20 +41,20 @@ g++ -O3 -std=c++17 trace_to_perfetto.cpp -o trace_to_perfetto
 ## Usage
 
 ### Step 1: Add to Build
+`LIBTRACE_DIR` is the absolute directory holding `libtrace.so`; the `-Wl,-rpath` makes the binary find it at run time inside the sandbox (which strips `LD_LIBRARY_PATH`).
 ```makefile
 CFLAGS += -finstrument-functions -g
-LDFLAGS += -L. -ltrace -ldl -lpthread
+LDFLAGS += -L$(LIBTRACE_DIR) -Wl,-rpath,$(LIBTRACE_DIR) -ltrace -ldl -lpthread
 ```
 
-### Step 2: Build Target
+### Step 2: Build Target (sandboxed — the build scripts are untrusted)
 ```bash
-make
+libexec/raptor-run-sandboxed --output-dir <project-dir> make ENABLE_TRACE=1
 ```
 
-### Step 3: Run
+### Step 3: Run (sandboxed; the rpath resolves libtrace.so — no loader variable)
 ```bash
-export LD_LIBRARY_PATH=.:$LD_LIBRARY_PATH
-./program
+libexec/raptor-run-sandboxed --output-dir <working-dir> <project-dir>/program
 # Creates trace_<tid>.log files
 ```
 
@@ -80,9 +83,9 @@ export LD_LIBRARY_PATH=.:$LD_LIBRARY_PATH
 1. Copy `trace_instrument.c` and `trace_to_perfetto.cpp` to project
 2. Build instrumentation library
 3. Add `-finstrument-functions` to CFLAGS
-4. Add `-L. -ltrace -ldl -lpthread` to LDFLAGS
-5. Build project
-6. Set `LD_LIBRARY_PATH` and run
+4. Add `-L$(LIBTRACE_DIR) -Wl,-rpath,$(LIBTRACE_DIR) -ltrace -ldl -lpthread` to LDFLAGS
+5. Build project via `libexec/raptor-run-sandboxed --output-dir <project-dir> ...`
+6. Run the instrumented binary via `libexec/raptor-run-sandboxed --output-dir <working-dir> ...` (the rpath resolves `libtrace.so`)
 7. Convert logs: `./trace_to_perfetto trace_*.log -o trace.json`
 8. Provide link to ui.perfetto.dev
 
@@ -92,7 +95,7 @@ export LD_LIBRARY_PATH=.:$LD_LIBRARY_PATH
 ENABLE_TRACE ?= 0
 ifeq ($(ENABLE_TRACE),1)
     CFLAGS += -finstrument-functions -g
-    LDFLAGS += -L. -ltrace -ldl -lpthread
+    LDFLAGS += -L$(LIBTRACE_DIR) -Wl,-rpath,$(LIBTRACE_DIR) -ltrace -ldl -lpthread
 endif
 ```
 
@@ -101,6 +104,8 @@ endif
 option(ENABLE_TRACE "Enable tracing" OFF)
 if(ENABLE_TRACE)
     add_compile_options(-finstrument-functions -g)
+    link_directories(${LIBTRACE_DIR})
+    add_link_options(-Wl,-rpath,${LIBTRACE_DIR})
     link_libraries(trace dl pthread)
 endif()
 ```

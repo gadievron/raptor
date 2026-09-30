@@ -15,30 +15,33 @@ tags:
 ## Purpose
 Instrument C/C++ programs with gcov to measure test coverage.
 
+## Containment
+The instrumented project is untrusted — its build scripts and the produced binary execute arbitrary code, and the `.gcda`/`.gcno` files that binary emits are untrusted bytes parsed by gcov/gcovr. Run every build, target-binary/test-suite execution, and gcov/gcovr invocation via `libexec/raptor-run-sandboxed --output-dir <dir> <cmd> [args...]` (`--output-dir` = the directory the command writes into). If a sandboxed step fails, fix the sandboxed invocation — never run the target's build system, binary, or the coverage extraction bare.
+
 ## How It Works
 
-### Build with Coverage
+### Build with Coverage (sandboxed)
 ```bash
-gcc --coverage -o program source.c
+libexec/raptor-run-sandboxed --output-dir <project-dir> gcc --coverage -o program source.c
 ```
 
-### Run Program
+### Run Program (sandboxed)
 ```bash
-./program
+libexec/raptor-run-sandboxed --output-dir <project-dir> <project-dir>/program
 # Creates .gcda files with execution data
 ```
 
 ### Generate Reports
 
-**Text report:**
+**Text report (sandboxed — gcov parses the untrusted .gcda/.gcno bytes):**
 ```bash
-gcov source.c
+libexec/raptor-run-sandboxed --output-dir <project-dir> gcov source.c
 # Creates source.c.gcov with line-by-line coverage
 ```
 
-**HTML report:**
+**HTML report (sandboxed):**
 ```bash
-gcovr --html-details -o coverage.html
+libexec/raptor-run-sandboxed --output-dir <project-dir> gcovr --html-details -o coverage.html
 ```
 
 ## Coverage Flags
@@ -69,12 +72,13 @@ endif()
 ## When User Requests Coverage
 
 ### Steps
+All build/run/report commands below go through `libexec/raptor-run-sandboxed --output-dir <project-dir> ...` (every `make` target — `clean` included — executes the untrusted Makefile's commands; `rm -f *.gcda *.gcno` is your own command and needs no wrapper):
 1. Detect build system (Makefile/CMake/other)
 2. Add `--coverage` to CFLAGS and LDFLAGS
-3. Clean previous build: `make clean` or `rm -f *.gcda *.gcno`
-4. Build with coverage: `make ENABLE_COVERAGE=1` or `cmake -DENABLE_COVERAGE=ON`
-5. Run tests: `make test` or `./test_suite`
-6. Generate report: `gcovr --html-details coverage.html --print-summary`
+3. Clean previous build: `libexec/raptor-run-sandboxed --output-dir <project-dir> make clean` (or bare `rm -f *.gcda *.gcno`)
+4. Build with coverage: `libexec/raptor-run-sandboxed --output-dir <project-dir> make ENABLE_COVERAGE=1` (or the `cmake -DENABLE_COVERAGE=ON` + build equivalent, same wrapper)
+5. Run tests: `libexec/raptor-run-sandboxed --output-dir <project-dir> make test` (or the project's test binary, same wrapper)
+6. Generate report: `libexec/raptor-run-sandboxed --output-dir <project-dir> gcovr --html-details coverage.html --print-summary`
 7. Present summary and path to HTML report
 
 ## Output

@@ -14,7 +14,7 @@ You will be invoked with the following information:
 
 Please create a "traces" subdirectory in the working directory to operate in.
 
-**Sandbox the untrusted build and run.** The target repository is untrusted — its build scripts execute arbitrary code. Run the target rebuild (step 2) and the crashing execution (step 3) via `libexec/raptor-run-sandboxed --output-dir <dir> <cmd> [args...]` with `--output-dir` naming the directory the command writes into (the repo tree for the build, the working directory for the run). Exception: if the sandbox's environment sanitisation strips a loader variable the instrumented run requires (`LD_LIBRARY_PATH` for `libtrace.so`), fall back to direct execution for that run only and note the exemption in your report. Building the instrumentation library itself (step 1, RAPTOR's own skill sources) needs no sandbox.
+**Sandbox the untrusted build and run.** The target repository is untrusted — its build scripts execute arbitrary code. Run the target rebuild (step 2) and the crashing execution (step 3) via `libexec/raptor-run-sandboxed --output-dir <dir> <cmd> [args...]` with `--output-dir` naming the directory the command writes into (the repo tree for the build, the working directory for the run). The sandbox strips loader variables (`LD_LIBRARY_PATH`, `LD_PRELOAD`) by design, so the instrumented link bakes an rpath instead (step 2) — the sandboxed run then needs no loader variable. If a sandboxed step fails, fix the sandboxed path (rpath, `--output-dir` scope); never run the target's build or binary outside the sandbox. Building the instrumentation library itself (step 1, RAPTOR's own skill sources) needs no sandbox.
 
 ## Generating Function Traces
 
@@ -33,19 +33,18 @@ To generate function-level execution traces, you need to:
    g++ -O3 -std=c++17 trace_to_perfetto.cpp -o trace_to_perfetto
    ```
 
-2. **Rebuild the target project** with instrumentation flags:
+2. **Rebuild the target project** with instrumentation flags (inside the sandbox — the build scripts are the untrusted code):
    - Add `-finstrument-functions -g` to CFLAGS
-   - Add `-L<path-to-libtrace> -ltrace -ldl -lpthread` to LDFLAGS
+   - Add `-L<abs-path-to-libtrace-dir> -Wl,-rpath,<abs-path-to-libtrace-dir> -ltrace -ldl -lpthread` to LDFLAGS — the rpath makes the produced binary find `libtrace.so` at run time with no `LD_LIBRARY_PATH` (which the sandbox strips)
 
    Adapt to the project's build system:
-   - **Autotools**: `./configure CFLAGS="-finstrument-functions -g" LDFLAGS="-L... -ltrace -ldl -lpthread"`
-   - **CMake**: Add flags via `-DCMAKE_C_FLAGS` and `-DCMAKE_EXE_LINKER_FLAGS`
-   - **Makefile**: Set `CFLAGS` and `LDFLAGS` environment variables or edit Makefile
+   - **Autotools**: `libexec/raptor-run-sandboxed --output-dir <repo> ./configure CFLAGS="-finstrument-functions -g" LDFLAGS="-L<abs-dir> -Wl,-rpath,<abs-dir> -ltrace -ldl -lpthread"` (then the build step the project uses, same wrapper)
+   - **CMake**: Add flags via `-DCMAKE_C_FLAGS` and `-DCMAKE_EXE_LINKER_FLAGS` (include the `-Wl,-rpath,<abs-dir>`), wrapped the same way
+   - **Makefile**: Set `CFLAGS` and `LDFLAGS` (with the rpath) on the sandboxed build command line or edit Makefile
 
-3. **Run the crashing program**:
+3. **Run the crashing program** inside the sandbox (the rpath from step 2 resolves `libtrace.so`; no loader variable needed or honoured):
    ```bash
-   export LD_LIBRARY_PATH=<path-to-libtrace>:$LD_LIBRARY_PATH
-   <crashing-command>
+   libexec/raptor-run-sandboxed --output-dir <working-dir> <crashing-command>
    # This creates trace_<tid>.log files
    ```
 
