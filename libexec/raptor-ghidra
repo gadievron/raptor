@@ -441,7 +441,10 @@ def _import_binary_fallback(binary: Path, out_dir: Path) -> int:
         try:
             db = import_binary_r2(binary)
         except (RuntimeError, ImportError) as e:
-            print(f"warning: r2 import failed ({e}) — falling back to "
+            # Exception text quotes binary-derived strings (section
+            # names, embedded paths) — scrub like the other relays.
+            print("warning: r2 import failed "
+                  f"({_safe_line(str(e), limit=300)}) — falling back to "
                   "objdump/nm", file=sys.stderr)
     if db is None:
         from packages.ghidra.objdump_import import import_binary_objdump
@@ -716,7 +719,8 @@ def _cmd_decompile(args: argparse.Namespace) -> int:
                 srv.open()
                 code = srv.decompile(func_id, timeout=args.timeout)
         except Exception as e:  # noqa: BLE001 — fall to next engine
-            print(f"note: sandboxed decompile server failed ({e}) — "
+            print("note: sandboxed decompile server failed "
+                  f"({_safe_line(str(e), limit=300)}) — "
                   "trying next engine", file=sys.stderr)
     if code is None and (prefer_in_process() or not pyghidra_available()):
         try:
@@ -725,7 +729,8 @@ def _cmd_decompile(args: argparse.Namespace) -> int:
                 code = session.decompile_function(
                     func_id, timeout=args.timeout)
         except GhidraSessionError as e:
-            print(f"note: in-process decompiler unavailable ({e}) — "
+            print("note: in-process decompiler unavailable "
+                  f"({_safe_line(str(e), limit=300)}) — "
                   "trying disassembly fallback", file=sys.stderr)
 
     if code is None:
