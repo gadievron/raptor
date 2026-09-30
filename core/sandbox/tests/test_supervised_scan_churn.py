@@ -231,3 +231,123 @@ class TestMountsFdMagic:
         with open(__file__, "rb") as regular:
             verdict = sup._mounts_fd_not_procfs(regular.fileno())
         assert verdict is not None and "not served by procfs" in verdict
+
+
+class TestUnreadableMountsArms:
+    """The scan's three unreadable-mounts arms fail CLOSED: a failed
+    latch open, a pre-read OSError, and a post-read OSError each map to
+    the unreadable-table occlusion. None is the retriable churn shape —
+    a rescan cannot honestly clear a table it cannot read — and a scan
+    that cannot read its own mount declarations must never take (or
+    trust) a churn verdict."""
+
+    @staticmethod
+    def _counting_poll(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+        """Quiet verdict-poll seam that records every call — the pins
+        below assert it never runs once the table is unreadable."""
+        polled: list[int] = []
+
+        def verdict(fd: int) -> bool:
+            polled.append(fd)
+            return False
+
+        monkeypatch.setattr(sup, "_mounts_churn_pending", verdict,
+                            raising=False)
+        return polled
+
+    def test_latch_open_failure_is_occlusion_without_poll(
+            self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # An EMFILE-class failure of the latch open: no latch fd means
+        # no declaration reads, no magic check, and no churn verdict —
+        # every one of them is guarded by the fd — so the ONLY honest
+        # result is the unreadable-table occlusion, in a single
+        # attempt. A mutant mapping the failed open to a clean
+        # declaration (filtered = None) silently disables EVERY mount
+        # defence the scan has and returns clean views; fd exhaustion
+        # in the supervising process must degrade to refusal, never to
+        # trust.
+        _pin_listing_to_self(monkeypatch)
+        declares: list[str] = []
+        _clean_detector(monkeypatch, log=declares)
+        polled = self._counting_poll(monkeypatch)
+        opens: list[None] = []
+
+        def failing_open() -> None:
+            opens.append(None)
+            return None
+
+        monkeypatch.setattr(sup, "_mounts_latch_open", failing_open,
+                            raising=False)
+        view = sup._group_sighted_members(os.getpgrp())
+        assert view is not None
+        assert view.occlusion is not None, (
+            "a failed latch open produced a CLEAN view — fd "
+            "exhaustion silently disables the mount defences")
+        assert "unreadable" in view.occlusion
+        assert len(opens) == 1, (
+            "an unreadable mounts table is not the retriable churn "
+            "shape — exactly one attempt")
+        assert declares == [] and polled == [], (
+            "no declaration read or verdict poll may run without the "
+            "latch fd")
+
+    def test_pre_read_oserror_is_occlusion_single_attempt(
+            self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The pre-scan declaration read failing on the latched fd is
+        # the unreadable-table occlusion in ONE attempt: no
+        # declaration rendered, no post-read, no verdict poll, no
+        # retry. A fail-open mutant of this arm claims a clean
+        # declaration off a table it never saw.
+        _pin_listing_to_self(monkeypatch)
+        declares: list[str] = []
+        _clean_detector(monkeypatch, log=declares)
+        polled = self._counting_poll(monkeypatch)
+        opened = _counting_latch(monkeypatch)
+        reads: list[int] = []
+
+        def broken_read(fd: int) -> bytes:
+            reads.append(fd)
+            raise OSError(5, "read failed")
+
+        monkeypatch.setattr(sup, "_mounts_table_read", broken_read,
+                            raising=False)
+        view = sup._group_sighted_members(os.getpgrp())
+        assert view is not None
+        assert view.occlusion is not None, (
+            "a failed pre-scan table read produced a CLEAN view")
+        assert "unreadable" in view.occlusion
+        assert len(opened) == 1 and len(reads) == 1, (
+            "a failed table read must fail closed in ONE attempt "
+            "with no further reads")
+        assert declares == [] and polled == []
+
+    def test_post_read_oserror_is_occlusion_single_attempt(
+            self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The post-scan declaration re-read failing: the pre-read's
+        # clean declaration is already stale evidence — a mount can
+        # have landed during the scan — so the arm must occlude, skip
+        # the verdict poll (a clean poll answer cannot rehabilitate an
+        # unreadable table), and not retry.
+        _pin_listing_to_self(monkeypatch)
+        declares: list[str] = []
+        _clean_detector(monkeypatch, log=declares)
+        polled = self._counting_poll(monkeypatch)
+        opened = _counting_latch(monkeypatch)
+        reads: list[int] = []
+
+        def read_then_break(fd: int) -> bytes:
+            reads.append(fd)
+            if len(reads) > 1:
+                raise OSError(5, "read failed")
+            return b""
+
+        monkeypatch.setattr(sup, "_mounts_table_read", read_then_break,
+                            raising=False)
+        view = sup._group_sighted_members(os.getpgrp())
+        assert view is not None
+        assert view.occlusion is not None, (
+            "a failed post-scan table read produced a CLEAN view")
+        assert "unreadable" in view.occlusion
+        assert len(opened) == 1 and len(reads) == 2, (
+            "a failed post-read must fail closed in ONE attempt")
+        assert declares == ["declare"] and polled == []
