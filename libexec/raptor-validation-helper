@@ -1367,6 +1367,7 @@ def _apply_stage_file(workdir, stage_letter):
         by_id = {f["id"]: f for f in container.get("findings", [])
                  if isinstance(f, dict) and f.get("id")}
         applied = 0
+        refused = 0
 
         if "updates" in staged and isinstance(staged["updates"], dict):
             # Preferred format: {"updates": {"FIND-001": {fields...}}}
@@ -1378,11 +1379,19 @@ def _apply_stage_file(workdir, stage_letter):
                     _deep_merge(finding, update_dict)
                     applied += 1
                 else:
+                    refused += 1
                     print(f"  WARNING: {_sft(str(finding_id), max_len=120)} not found in findings.json — skipped", file=sys.stderr)
 
         elif "findings" in staged and isinstance(staged["findings"], list):
-            # Fallback: Claude wrote a findings array — merge by ID, don't replace
+            # Fallback: Claude wrote a findings array — merge by ID.
+            # Update stages (B-F) never grow the inventory: an unknown
+            # id here is a whole-finding injection channel (a
+            # fabricated finding, verdict fields included, riding a
+            # stage file into findings.json after the inventory was
+            # fixed at Stage A), so it is refused, not appended.
             for staged_finding in staged["findings"]:
+                if not isinstance(staged_finding, dict):
+                    continue
                 fid = staged_finding.get("id")
                 if not fid:
                     continue
@@ -1391,10 +1400,8 @@ def _apply_stage_file(workdir, stage_letter):
                     _deep_merge(existing, staged_finding)
                     applied += 1
                 else:
-                    # New finding not in findings.json — append
-                    container["findings"].append(staged_finding)
-                    by_id[fid] = staged_finding
-                    applied += 1
+                    refused += 1
+                    print(f"  WARNING: {_sft(str(fid), max_len=120)} not found in findings.json — refused (update stages cannot add findings)", file=sys.stderr)
 
         # Propagate ruling.status → status so get_display_status
         # picks up the Stage D verdict instead of the stale Stage A
@@ -1434,7 +1441,10 @@ def _apply_stage_file(workdir, stage_letter):
 
         container["stage"] = staged.get("stage", stage_letter.upper())
         _save_artifact(findings_path, container)
-        print(f"  Merged stage-{stage_letter.lower()}.json: {applied} findings updated")
+        summary = f"  Merged stage-{stage_letter.lower()}.json: {applied} findings updated"
+        if refused:
+            summary += f" ({refused} unknown finding id(s) refused)"
+        print(summary)
 
     # Consume-by-copy: the stage file stays in place (delegated
     # agents re-read their stage output after the next prep runs;
