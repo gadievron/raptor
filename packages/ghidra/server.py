@@ -289,12 +289,18 @@ class GhidraServer:
 
         # The worker imports pyghidra from THIS interpreter's
         # environment — its prefix must be readable, alongside the
-        # worker script's package and the Ghidra install.
+        # worker script's package and the Ghidra install. Under a
+        # venv that is TWO roots: sys.prefix (the venv's
+        # site-packages) and sys.base_prefix (the base interpreter's
+        # stdlib). Derived from the prefixes directly — resolving
+        # sys.executable follows the venv symlink to the base
+        # interpreter and lands on the base prefix, not the venv.
         readable = [
-            str(Path(sys.executable).resolve().parent.parent),
             str(Path(sys.prefix).resolve()),
             str(worker.parent),
         ]
+        if sys.base_prefix != sys.prefix:
+            readable.append(str(Path(sys.base_prefix).resolve()))
         headless_path = shutil.which("analyzeHeadless")
         if headless_path:
             readable.extend(_install_read_paths(headless_path))
