@@ -966,22 +966,22 @@ Two tiers, selected automatically:
   declared by the scan's ordinary reads, and the channel is bounded
   to cross-uid group members); fully forged `/proc` content served
   through an undetected mask remains out of scope for a `/proc`-based
-  proof; and the latch covers only the scan window itself -- the
-  death corroboration's per-member `/proc/<pid>/task` re-reads run
-  after the scan's verdict poll has been consumed and its fd closed,
-  so a mount attached in that (tens-of-microseconds) gap is polled by
-  no one. That last gap is bounded: the member's process-level zombie
-  state was read inside the latched window, so it cannot fabricate
-  death for a live member -- only convert the designed refusal for a
-  zombie leader fronting live worker threads into a false verify --
-  and the next narrowing is to move the task reads inside the latched
-  window (or take the verdict poll only after them). On kernels
-  without the mounts poll
-  hook the signal simply never fires and behaviour is unchanged from
-  the pre-latch posture. A co-resident able to churn mounts (for
-  example via a setuid FUSE helper) can delay or force loud refusal of
-  verification, never a silent false verify -- and kills themselves
-  are never suppressed by occlusion.
+  proof. The death corroboration's per-member `/proc/<pid>/task`
+  reads run inside the same latched window -- after the membership
+  walk, before the scan's second declaration read and its verdict
+  poll -- and their verdict travels on the scan result, so no
+  verification path re-reads `/proc` after the scan's fd closed: a
+  mount attached after the scan cannot forge the task-tree evidence a
+  verify consumes (it can only affect the next scan, whose own latch
+  and declaration reads cover it). On kernels without the mounts poll
+  hook the signal simply never fires and the scan degrades to its
+  two-declaration-read posture over the whole window, task reads
+  included: a persisting mask is still declared, but a mask attached
+  and detached entirely inside the window -- the task reads' span
+  included -- goes undetected there. A co-resident able to churn
+  mounts (for example via a setuid FUSE helper) can delay or force
+  loud refusal of verification, never a silent false verify -- and
+  kills themselves are never suppressed by occlusion.
 
 Every spawn states its fate explicitly: `on_parent_death="kill"` ties
 the tree's lifetime to the owning process; `"survive"` lets it outlive
