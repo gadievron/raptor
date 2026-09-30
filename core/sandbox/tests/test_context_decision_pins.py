@@ -374,6 +374,26 @@ def test_mx_retry_memoises_failing_command_as_true(
     assert state._speculative_failure_cache.get(resolved) is True
 
 
+def test_mx_memo_line_carries_the_child_diagnostic_escaped(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        caplog: pytest.LogCaptureFixture) -> None:
+    """The memoise INFO must carry the child's setup-status category
+    and reason — the chained exception holding them is consumed by
+    the fallback, so this line is the only operator-visible record of
+    WHY the bind tree was declared unusable (a missing tool_paths
+    grant reads very differently from a real bind-mount failure).
+    Child-written text: rendered with non-printables escaped."""
+    with caplog.at_level("INFO", logger=context.logger.name):
+        _clean_run(monkeypatch, tmp_path,
+                   statuses=[("X", "exec: file\x1bnot found")])
+    memo = [r for r in caplog.records
+            if "bind tree is unusable" in r.getMessage()]
+    assert memo, "memoise INFO never fired"
+    msg = memo[0].getMessage()
+    assert "(X: exec: file\\x1bnot found)" in msg
+    assert "\x1b" not in msg
+
+
 def test_speculative_cache_hit_routes_mountless_by_resolved_path(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The cache lookup key is the RESOLVED command path: a bare name

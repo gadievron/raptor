@@ -6854,12 +6854,23 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                             state._speculative_failure_cache[
                                                 _resolved_cmd0] = True
                                     if _first_seen:
+                                        # The fallback consumes the
+                                        # chained exception, so this
+                                        # line is the only record of
+                                        # WHY. Child-written reason:
+                                        # escape it.
+                                        from core.security.log_sanitisation import (  # noqa: E501
+                                            escape_nonprintable,
+                                        )
                                         logger.info(
                                             "Sandbox: %r bind tree is "
-                                            "unusable; future runs will "
-                                            "use the reduced namespace "
-                                            "backend.",
+                                            "unusable (%s: %s); future "
+                                            "runs will use the reduced "
+                                            "namespace backend.",
                                             cmd[0],
+                                            _setup_status[0],
+                                            escape_nonprintable(
+                                                _setup_status[1]),
                                         )
                                     else:
                                         logger.debug(

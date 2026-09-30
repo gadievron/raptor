@@ -2776,7 +2776,11 @@ class TestSpeculativeFailureCache(unittest.TestCase):
         src = Path(_ctx.__file__).read_text()
         idx = src.find("if _first_seen:")
         assert idx > 0, "first-seen branch missing"
-        block = src[idx:idx + 1500]
+        # Window covers the whole if/else: big enough that comments or
+        # the diagnostic-carrying INFO call don't push the DEBUG arm
+        # out; small enough to stay inside this branch (the next
+        # logger call after the pair is several thousand chars on).
+        block = src[idx:idx + 2500]
         self.assertIn("logger.info(", block,
                       "first-failure-per-binary must log at INFO")
         self.assertIn("logger.debug(", block,
