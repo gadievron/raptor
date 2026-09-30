@@ -740,6 +740,11 @@ def main() -> int:
                # enforces the grading, this prevents the wasted (and
                # policy-violating) compile pass entirely.
                "--skip-compile",
+               # This driver's contract is domain-model.json: a pass
+               # that cannot produce one must fail at the study
+               # loop's own exit with the cause recorded, not exit 0
+               # and surface here as a bare no-model symptom.
+               "--require-domain-model",
                "--batch-target", str(parsed.batch_target)]
         if identifiers:
             cmd.extend(["--identifier", identifiers])

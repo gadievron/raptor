@@ -47,6 +47,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
 from core.config import RaptorConfig  # noqa: E402
 from core.json import load_json, save_json  # noqa: E402
+from core.concepts.study_failure import (  # noqa: E402
+    clear_study_failure,
+    write_study_failure,
+)
 from core.security.log_sanitisation import sanitise_for_terminal  # noqa: E402
 from core.security.prompt_output_sanitise import (  # noqa: E402
     sanitise_code,
@@ -1217,6 +1221,16 @@ def main() -> int:
                          "passed through to raptor-study-run (the "
                          "dominant-spend leg; the overview and "
                          "compile legs run on the config default).")
+    ap.add_argument("--require-domain-model", action="store_true",
+                    help="The caller consumes domain-model.json "
+                         "(binary study / engagement chains): a run "
+                         "that ends without it exits nonzero and "
+                         "records the cause in study-failure.json, "
+                         "and the overview-only fallback refuses "
+                         "instead of exiting 0 with no model. "
+                         "Without this flag the documented operator "
+                         "outcomes (overview shortcut, zero-item "
+                         "warning) keep their clean exits.")
     ap.add_argument("-v", "--verbose", action="store_true")
     parsed = ap.parse_args()
 
@@ -1233,6 +1247,11 @@ def main() -> int:
     target = Path(parsed.target).resolve()
     output_dir = Path(parsed.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # This run's outcome supersedes any earlier failure record — a
+    # stale one in a reused output dir must never be read as THIS
+    # run's diagnosis.
+    clear_study_failure(output_dir)
 
     concepts_dir = _detect_concepts_dir(output_dir)
     if concepts_dir:
@@ -1267,6 +1286,23 @@ def main() -> int:
     # depends on this.
     if (not identifiers and not concepts and not has_reading_list
             and not has_bridge_seeds):
+        if parsed.require_domain_model:
+            # The caller's contract needs domain-model.json and an
+            # overview-only run can never produce one — refuse HERE,
+            # before spending the overview LLM call, instead of
+            # exiting 0 and burning the caller's stage on a run that
+            # already cannot meet its contract (observed: the
+            # engagement chain converging on an overview-only pass
+            # and failing a stage later with a bare "no model").
+            detail = (
+                "the caller requires domain-model.json but no study "
+                "scope was given (no --identifier/--concept, no "
+                "reading list, no bridge seeds) — the overview-only "
+                "fallback cannot produce a domain model"
+            )
+            write_study_failure(output_dir, "no_domain_model", detail)
+            print(f"study-loop: ERROR: {detail}", file=sys.stderr)
+            return 1
         print("study-loop: no identifier/concept given — running overview",
               file=sys.stderr)
         overview_idents, overview_concepts, overview_summary, overview_title = (
@@ -1564,6 +1600,34 @@ def main() -> int:
             # present-but-null question: route like absent, not "None".
             q = sanitise_for_terminal(str(item.get("question") or ""), max_len=100)
             print(f"  - {q}", file=sys.stderr)
+
+    # --- Required-output contract (--require-domain-model) ---
+    # A contract-carrying run that ends without the model must fail
+    # AT THIS BOUNDARY with its actual cause, not exit 0 and leave
+    # the diagnosis to whichever consumer looks for the model next —
+    # one stage late and stripped of the cause. Legs that already
+    # failed (prep / study-run / compile) exited nonzero above and
+    # study-run wrote its own record, so exit_code == 0 here means
+    # no record describes this run yet.
+    if (parsed.require_domain_model and exit_code == 0
+            and not dm_path.is_file()):
+        dropped = data.get("reading_list_dropped")
+        if n_items == 0 and isinstance(dropped, int) and dropped > 0:
+            detail = (
+                f"prep derived no study scope — {dropped} "
+                "reading-list identifier(s) resolved to no file in "
+                "this tree (different binary?); no domain model was "
+                "produced"
+            )
+        elif n_items == 0:
+            detail = ("prep derived no study scope (0 study items) "
+                      "— no domain model was produced")
+        else:
+            detail = (f"study pass completed over {n_items} item(s) "
+                      "without writing domain-model.json")
+        write_study_failure(output_dir, "no_domain_model", detail)
+        print(f"study-loop: ERROR: {detail}", file=sys.stderr)
+        exit_code = 1
 
     # Promotion and SAGE storage are durable-store WRITES — a failed
     # run must not push its (possibly prior/stale) domain model over

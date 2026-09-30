@@ -748,3 +748,39 @@ class TestDecompCeilingIdentity:
             real_model.DECOMP_EVIDENCE_MAX_CONFIDENCE
         assert mod._DECOMP_TAG == real_model.DECOMP_EVIDENCE_TAG
         assert mod._CONF_ORDER == list(real_model.CONFIDENCE_GRADES)
+
+
+class TestStudyLoopContractFlag:
+    """Every study-loop invocation carries --require-domain-model:
+    the chain consumes domain-model.json, so a pass that cannot
+    produce one must fail at the study loop's own exit — with the
+    cause recorded — not at this driver's end-of-run check."""
+
+    def test_pass_cmd_requires_domain_model(self, monkeypatch,
+                                            tmp_path):
+        import sys as _sys
+        mod = _load_cli(monkeypatch)
+        redb = tmp_path / "re-database.json"
+        _write_redb(redb)
+        out = tmp_path / "out"
+        cmds: list[list[str]] = []
+
+        def _fake_run(cmd, verbose, gap_dir=None):
+            cmds.append(list(cmd))
+            (out / "domain-model.json").write_text(
+                '{"concepts": [], "invariants": [], "contracts": []}',
+                encoding="utf-8")
+            return 0
+
+        monkeypatch.setattr(mod, "_run", _fake_run)
+        monkeypatch.setattr(mod, "_pending_reading_names",
+                            lambda od: [])
+        monkeypatch.setattr(_sys, "argv", [
+            "raptor-binary-study", str(redb), str(out),
+            "--no-bridge-seeds",
+        ])
+        assert mod.main() == 0
+        loop_cmds = [c for c in cmds if "raptor-study-loop" in c[1]]
+        assert loop_cmds, "no study-loop invocation captured"
+        for c in loop_cmds:
+            assert "--require-domain-model" in c
