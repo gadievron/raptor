@@ -44,7 +44,6 @@ and preserves proxy env for the lazy blob fetch.
 from __future__ import annotations
 
 import argparse
-import fcntl
 import re
 import subprocess
 import sys
@@ -52,6 +51,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from core.atomic_fs.fs_lock import artifact_lock
 from core.git.clone import (
     get_safe_git_env,
     safe_git_command,
@@ -404,14 +404,13 @@ def pack_write_lock(path: Path):
     sidecar keeps the whole cycle single-writer; the lock file stays
     behind (unlinking a locked lock file races a third writer).
     """
-    lock_path = Path(str(path) + ".lock")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a") as fh:
-        fcntl.flock(fh, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(fh, fcntl.LOCK_UN)
+    # The hoisted sidecar idiom (core.atomic_fs.fs_lock): hardened
+    # open, foreign-uid refusal, bounded announce-once wait. Every
+    # lock-unavailable shape degrades LOUDLY to the unlocked path —
+    # the harvest keeps writing (merge-in-place is additive-only), it
+    # just loses the single-writer guarantee for that one cycle.
+    with artifact_lock(Path(path), subject="parser pack"):
+        yield
 
 
 def dumps_pack(pack: dict) -> str:
