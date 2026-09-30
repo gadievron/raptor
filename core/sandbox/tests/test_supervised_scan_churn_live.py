@@ -384,6 +384,135 @@ assert view.occlusion is not None, (
 print("MAGIC-OCCLUDED")
 '''
 
+# Design test: the post-scan task-read gap, end to end on the REAL
+# consumer path. A group member whose thread-group leader
+# pthread_exit()ed reads process-level Z while a worker thread runs on
+# — the exact pathology the per-member /proc/<pid>/task death proof
+# exists to refuse. The attack overmounts an EMPTY dir on /proc/<pid>
+# immediately AFTER a scan's verdict poll has been consumed (the
+# attach rides the poll seam, so it lands at the first instant the
+# latch no longer covers): a task read taken after the scan then hits
+# the FileNotFoundError arm and claims death. Gap-era code reads the
+# task trees after the scan returned and VERIFIES the teardown of a
+# live process (the permanent _group_verified false verify);
+# in-window code read the task trees before the poll, so the verify
+# is refused (or honestly retried until the member is genuinely
+# dead) — never granted while a task still runs.
+_POST_SCAN_TASK_FORGE_PROBE = _PROBE_PRELUDE + r'''
+from core.sandbox import supervised as sup
+from core.sandbox.supervised import (
+    SupervisedTeardownError,
+    spawn_supervised,
+)
+
+
+def live_tasks(pid):
+    """Non-Z tasks of pid, read through whatever /proc serves now."""
+    try:
+        tids = os.listdir(f"/proc/{pid}/task")
+    except OSError:
+        return []
+    alive = []
+    for tid in tids:
+        try:
+            with open(f"/proc/{pid}/task/{tid}/stat", "rb") as f:
+                tstate = f.read().rsplit(b")", 1)[1].split()[0]
+        except (OSError, IndexError):
+            continue
+        if tstate != b"Z":
+            alive.append(int(tid))
+    return alive
+
+
+zdir = tempfile.mkdtemp(prefix="zldr-")
+zpath = os.path.join(zdir, "zleader.py")
+with open(zpath, "w") as f:
+    f.write(
+        "import ctypes, signal, threading, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "threading.Thread(target=time.sleep, args=(300,)).start()\n"
+        "ctypes.CDLL(None).pthread_exit(None)\n")
+
+h = spawn_supervised(
+    ["/bin/sh", "-c", f'"{sys.executable}" "{zpath}" & exit 0'],
+    on_parent_death="kill", pid_ns="off",
+    env={"PATH": "/usr/bin:/bin"})
+pgid = h.pid  # start_new_session leader
+assert h.wait(timeout=15) == 0  # natural leader exit; anchor captured
+
+# The orphaned member reparents to the namespace init; wait for the
+# split state: process-level Z, at least one live worker task.
+member = None
+deadline = time.monotonic() + 15.0
+while time.monotonic() < deadline:
+    found = []
+    for e in os.listdir("/proc"):
+        if not e.isdigit():
+            continue
+        try:
+            with open(f"/proc/{e}/stat", "rb") as f:
+                rest = f.read().rsplit(b")", 1)[1].split()
+        except OSError:
+            continue
+        if rest and int(rest[2]) == pgid:
+            found.append((int(e), rest[0]))
+    zs = [p for p, st in found if st == b"Z"]
+    if len(found) == 1 and zs and live_tasks(zs[0]):
+        member = zs[0]
+        break
+    time.sleep(0.02)
+assert member is not None, f"Z-leader/live-worker never reached: {found}"
+
+# Arm the attack at the poll seam: the FIRST consumed verdict poll is
+# the first instant outside the latched window — attach the forged
+# (empty) view over /proc/<member> right there, and leave it standing
+# (a persisting mask is the strongest form: later scans must declare
+# it rather than trust it).
+forge = tempfile.mkdtemp(prefix="gapforge-")
+state = {"attached": False, "mount_err": None}
+real_poll = sup._mounts_churn_pending
+
+
+def poll_then_attach(fd):
+    verdict = real_poll(fd)
+    if not state["attached"] and state["mount_err"] is None:
+        try:
+            mount(forge, f"/proc/{member}", None, MS_BIND, None)
+            state["attached"] = True
+        except OSError as exc:
+            state["mount_err"] = exc
+    return verdict
+
+
+sup._mounts_churn_pending = poll_then_attach
+
+rc = None
+try:
+    try:
+        rc = h.terminate(grace_s=1.0)
+    except SupervisedTeardownError as exc:
+        print(f"REFUSED: {exc}")
+finally:
+    sup._mounts_churn_pending = real_poll
+    if state["attached"]:
+        umount_detach(f"/proc/{member}")
+
+if state["mount_err"] is not None:
+    print(f"SKIP: cannot bind-mount over /proc/<pid> here "
+          f"({state['mount_err']})")
+    sys.exit(0)
+assert state["attached"], "harness never armed the overmount"
+
+if rc is not None:
+    still = live_tasks(member)
+    assert still == [], (
+        f"FALSE-VERIFY rc={rc} live-tasks={still} — terminate() "
+        f"verified the group dead off a task tree forged AFTER the "
+        f"scan's verdict poll (the post-scan task-read gap)")
+    print(f"VERIFIED-HONESTLY rc={rc} (member genuinely dead)")
+print("POST-SCAN-TASK-FORGE-CAUGHT")
+'''
+
 
 class TestMountsLatchLive:
     def test_kernel_latch_contract(self, tmp_path):
@@ -399,3 +528,7 @@ class TestMountsLatchLive:
 
     def test_forged_mounts_table_is_occluded(self, tmp_path):
         _run_probe(tmp_path, _MAGIC_CHECK_PROBE, "MAGIC-OCCLUDED")
+
+    def test_post_scan_task_forge_cannot_verify(self, tmp_path):
+        _run_probe(tmp_path, _POST_SCAN_TASK_FORGE_PROBE,
+                   "POST-SCAN-TASK-FORGE-CAUGHT")

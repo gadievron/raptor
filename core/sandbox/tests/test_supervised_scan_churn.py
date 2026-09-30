@@ -351,3 +351,66 @@ class TestUnreadableMountsArms:
         assert len(opened) == 1 and len(reads) == 2, (
             "a failed post-read must fail closed in ONE attempt")
         assert declares == ["declare"] and polled == []
+
+
+class TestTaskReadsInsideLatchedWindow:
+    """The per-member death proofs (``_member_provably_dead``'s
+    /proc/<pid>/task reads) are evidence reads INSIDE the latched
+    window: per scan attempt they run after the membership walk and
+    BEFORE the post-scan declaration re-read and the single verdict
+    poll, and the verdict travels on the returned member
+    (``provably_dead``). A task read taken after the poll — or after
+    the scan returned, as the corroboration paths once did — sits
+    outside any latched window, where an overmount forging an all-Z
+    (or absent) task tree is polled by no one: the false-verify gap
+    the live probe in test_supervised_scan_churn_live.py demonstrates
+    end to end."""
+
+    def test_task_reads_precede_single_verdict_poll_every_attempt(
+            self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Call-shape pin under sustained churn: every attempt is
+        # pre-declare, task read, post-declare, then EXACTLY ONE
+        # verdict poll, last — the poll must postdate the last
+        # evidence read of ANY kind, task reads included, and a retry
+        # attempt must re-read the task trees afresh (evidence never
+        # crosses attempts).
+        events: list[str] = []
+        _pin_listing_to_self(monkeypatch)
+        _clean_detector(monkeypatch, log=events)
+
+        def task_read(pid: int, state: bytes) -> bool:
+            assert pid == os.getpid()
+            events.append("task")
+            return False
+
+        def verdict(fd: int) -> bool:
+            events.append("verdict")
+            return True
+
+        monkeypatch.setattr(sup, "_member_provably_dead", task_read)
+        monkeypatch.setattr(sup, "_mounts_churn_pending", verdict)
+        view = sup._group_sighted_members(os.getpgrp())
+        assert view is not None and view.occlusion is not None
+        assert events == ["declare", "task", "declare", "verdict"] * 3, (
+            f"task reads are not inside the latched window (after the "
+            f"walk, before the post-read and the single last verdict "
+            f"poll) on every attempt: {events}")
+
+    def test_scan_bakes_in_window_death_verdict_onto_members(
+            self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The in-window verdict must TRAVEL on the member: a consumer
+        # that re-derives it post-scan re-opens the gap, so the view
+        # itself carries provably_dead for the verify paths to consume
+        # without touching /proc again.
+        _pin_listing_to_self(monkeypatch)
+        _clean_detector(monkeypatch)
+        monkeypatch.setattr(sup, "_mounts_churn_pending",
+                            lambda fd: False)
+        monkeypatch.setattr(sup, "_member_provably_dead",
+                            lambda pid, state: True)
+        view = sup._group_sighted_members(os.getpgrp())
+        assert view is not None and view.occlusion is None
+        assert [m.pid for m in view.members] == [os.getpid()]
+        assert view.members[0].provably_dead is True, (
+            "the scan's in-window death verdict does not travel on "
+            "the sighted member")
