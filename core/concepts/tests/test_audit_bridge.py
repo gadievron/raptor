@@ -1102,8 +1102,8 @@ class TestDomainBugPatterns:
         group's alternatives are drawn from the prefix so they
         MATCH the saturated source — non-matching alternatives fail
         at the group and would hide the family's cost). Measures
-        ~3.4 s total single-threaded light-load; the wall-clock
-        bound leaves headroom for loaded hosts while staying far
+        ~3.4 s total single-threaded light-load; the CPU-time
+        bound leaves headroom for slower cores while staying far
         below the shapes the bounds exist to refuse (the 246-char
         literal-tail reproducer measured ~8.7 s here; the
         pre-token-bar shape at the saturated walk, refused,
@@ -1203,14 +1203,29 @@ class TestDomainBugPatterns:
         old = signal.signal(signal.SIGALRM, _on_alarm)
         signal.alarm(60)
         try:
-            t0 = time.perf_counter()
+            # CPU time of THIS thread, not wall clock: the evaluation
+            # is single-threaded in-process regex work, so thread CPU
+            # time IS its cost, and a loaded host's scheduler delays
+            # (which stretch wall clock without adding a cycle of
+            # regex work) cannot inflate it. The wall-clock hang net
+            # stays with the alarm above.
+            t0 = time.thread_time()
             block = domain_bug_patterns(tmp_path, "a.c", "f", src)
-            dt = time.perf_counter() - t0
+            dt = time.thread_time() - t0
         finally:
             signal.alarm(0)
             signal.signal(signal.SIGALRM, old)
         assert block is None  # regex fails; relevance finds nothing
-        assert dt < 8.0, f"worst admitted shapes took {dt:.3f}s at clamp"
+        # Two directions: not tighter, because the three admitted
+        # shapes legitimately cost ~3.4 s CPU at the clamp on this
+        # host and per-core throughput varies across hosts; not
+        # looser, because the cheapest shape the bounds exist to
+        # REFUSE measured ~8.7 s here — a cost regression that lifts
+        # the admitted ceiling into refused-shape territory must fail
+        # rather than pass.
+        assert dt < 8.0, (
+            f"worst admitted shapes took {dt:.3f}s CPU at clamp"
+        )
 
     def test_milder_admitted_shapes_cost_bounded(self, tmp_path):
         """Regression net for the milder shapes that stressed the
