@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).parents[3]))
 
 from packages.llm_analysis.dispatch import (
     DispatchTask, DispatchResult, dispatch_task, _format_elapsed,
-    _classify_error,
+    _classify_error, _breaker_should_open, _BREAKER_PROVEN_THRESHOLD,
 )
 from packages.llm_analysis.tasks import (
     AggregationTask, AnalysisTask, ExploitTask, PatchTask, ConsensusTask,
@@ -779,19 +779,52 @@ class TestCircuitBreakerEnforcement:
             cost_tracker=CostTracker(0),
             max_parallel=1,  # sequential: model-a items drain first
         )
+        # Read BEFORE the reset: every real model-a dispatch failed
+        # and must have been recorded exactly once, and the
+        # short-circuited futures must have recorded nothing — a
+        # mismatch means the drain lost or misattributed a failure
+        # event.
+        drained_a = _drained_a_failures()
         defense_telemetry.reset()
 
-        # Without enforcement every one of the 12 model-a futures called
-        # dispatch_fn (12 wasted API calls). With it the circuit opens
-        # after 3 consecutive failures; exactly one extra call (the one
-        # whose dead-check preceded the third failure's drain) gets in.
-        assert len(a_calls) == 4
+        # Without enforcement every one of the 12 model-a futures
+        # called dispatch_fn (12 wasted API calls). With it, the
+        # breaker's contract is best-effort fast-stop
+        # (_ModelCircuitOpen: a future whose model "has since been
+        # declared dead" is short-circuited at execution time), so
+        # the real-dispatch count is scheduling-dependent, not exact.
+        # The worker thread pulls the next pre-submitted future the
+        # moment the previous one raises, while the DRAIN loop (main
+        # thread) is still recording that failure — with the mock's
+        # drain sync holding, the reachable outcomes are:
+        #   3 — the third failure's dead-add landed before item 4's
+        #       dead-check (worker descheduled between futures);
+        #   4 — the common interleaving: exactly one straggler whose
+        #       dead-check preceded the third failure's drain;
+        #   5 — item 5's dead-check slipped into the gap between the
+        #       third failure's telemetry record and its dead-add.
+        # Item 6 can never dispatch: its dead-check runs only after
+        # item 5's mock observed the FOURTH drained failure, which
+        # the drain records strictly after the third failure's
+        # dead-add. Asserting the common count exactly (== 4) was a
+        # load flake; the open-after-3 threshold itself is pinned
+        # deterministically by TestBreakerShouldOpen.
+        assert 3 <= len(a_calls) <= 5
+        assert drained_a == len(a_calls)
 
         skipped = [r for r in results
                    if r.get("error_type") == "circuit_breaker"]
-        assert len(skipped) == 8
+        assert len(skipped) == 12 - len(a_calls)
         assert all(r["analysed_by"] == "model-a" for r in skipped)
         assert all("circuit-broken" in r["error"] for r in skipped)
+
+        # Every model-a future is accounted for exactly once: the
+        # dispatched ones failed for real, the rest were skipped.
+        a_failed = [r for r in results
+                    if r.get("analysed_by") == "model-a"
+                    and r.get("error_type") != "circuit_breaker"
+                    and "error" in r]
+        assert len(a_failed) == len(a_calls)
 
         # The healthy model still analysed every item.
         b_ok = [r for r in results
@@ -880,6 +913,41 @@ class TestCircuitBreakerEnforcement:
         aborted = [r for r in results if r.get("error", "").startswith("aborted")]
         for r in aborted:
             assert "auth failure" in r["error"]
+
+
+class TestBreakerShouldOpen:
+    """Deterministic pins for the breaker's open/stay-closed decision.
+
+    The integration tests above exercise the breaker through the
+    threaded dispatch path, where the number of real dispatches is
+    scheduling-dependent — these pin the threshold semantics exactly,
+    with no scheduler in the loop.
+    """
+
+    def test_never_succeeded_opens_at_three(self):
+        assert _breaker_should_open(consec=3, completed=3)
+
+    def test_two_consecutive_failures_stay_closed(self):
+        assert not _breaker_should_open(consec=2, completed=2)
+
+    def test_proven_model_rides_out_short_burst(self):
+        # Prior successes (completed > consec) suspend the fast path.
+        assert not _breaker_should_open(consec=3, completed=10)
+        assert not _breaker_should_open(
+            consec=_BREAKER_PROVEN_THRESHOLD - 1, completed=50,
+        )
+
+    def test_proven_model_opens_at_proven_threshold(self):
+        assert _breaker_should_open(
+            consec=_BREAKER_PROVEN_THRESHOLD, completed=50,
+        )
+
+    def test_proven_threshold_value_pinned(self):
+        # Regression pin for the constant itself — see its
+        # both-directions rationale before moving it in either
+        # direction.
+        assert not _breaker_should_open(consec=9, completed=50)
+        assert _breaker_should_open(consec=10, completed=50)
 
 
 class TestRetryTask:
@@ -1788,3 +1856,56 @@ class TestProvenModelBreakerThreshold:
                   if r.get("error_type") == "circuit_breaker"
                   or str(r.get("error", "")).startswith("aborted")]
         assert len(broken) >= 16
+
+    def test_success_resets_consecutive_failure_counter(self):
+        """The success branch's ``pm["consec"] = 0`` is what makes the
+        streak CONSECUTIVE rather than cumulative: a model alternating
+        failure/success accumulates 15 failures over 30 calls but never
+        two in a row, so the breaker must never open. Dropping the
+        reset would open the circuit at the proven threshold and
+        short-circuit the rest of the run for a mostly-healthy model.
+        The success direction is schedule-independent (a breaker that
+        never opens has no dead-check to race); the drain-sync below
+        exists so the mutated code reliably reaches the threshold
+        before the run completes."""
+        from core.security.prompt_telemetry import defense_telemetry
+        defense_telemetry.reset()
+
+        findings = [_make_finding(f"f-{i:03d}") for i in range(30)]
+        calls = []
+
+        def _drained_failures() -> int:
+            models = defense_telemetry.summary()[
+                "defense_telemetry"]["models"]
+            return sum(s["schema_failed"] for s in models.values())
+
+        def alternating(prompt, schema, system_prompt, temperature,
+                        model):
+            calls.append(1)
+            n = len(calls)
+            # Even-numbered calls fail; call 1 succeeds first so the
+            # model is proven (completed > consec forever after).
+            n_prior_failures = (n - 1) // 2
+            deadline = time.monotonic() + 10.0
+            while (_drained_failures() < n_prior_failures
+                    and time.monotonic() < deadline):
+                time.sleep(0.002)
+            if n % 2 == 0:
+                raise RuntimeError("intermittent blip")
+            return _make_dispatch_result()
+
+        results = dispatch_task(
+            task=AnalysisTask(),
+            items=findings,
+            dispatch_fn=alternating,
+            role_resolution={},
+            prior_results={},
+            cost_tracker=CostTracker(0),
+            max_parallel=1,
+        )
+        defense_telemetry.reset()
+
+        assert len(calls) == 30             # every item dispatched
+        assert not [r for r in results
+                    if r.get("error_type") == "circuit_breaker"
+                    or str(r.get("error", "")).startswith("aborted")]

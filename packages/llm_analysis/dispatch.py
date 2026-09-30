@@ -218,6 +218,26 @@ def _format_elapsed(seconds: float) -> str:
 _BREAKER_PROVEN_THRESHOLD = 10
 
 
+def _breaker_should_open(consec: int, completed: int) -> bool:
+    """Decide whether a model's circuit opens after its latest failure.
+
+    ``consec`` is the model's current consecutive-failure streak;
+    ``completed`` counts ALL of its drained completions this run
+    (successes included). Two independent triggers:
+
+    - Never-succeeded fast path: 3 consecutive failures from a model
+      whose every completion so far was one of those failures
+      (``completed == consec``) — a model that has produced nothing
+      but failures earns no patience.
+    - History-independent threshold: even a proven model (prior
+      successes this run) opens after ``_BREAKER_PROVEN_THRESHOLD``
+      consecutive failures — see the constant's both-directions
+      rationale.
+    """
+    return ((consec >= 3 and completed == consec)
+            or consec >= _BREAKER_PROVEN_THRESHOLD)
+
+
 def dispatch_task(
     task: DispatchTask,
     items: list,
@@ -707,26 +727,16 @@ def _dispatch_inner(
                 # fail/fail/fail-from-same-model bursts that the
                 # GLOBAL counter saw as universal failure even
                 # when other models had succeeded between them.
-                # Per-model counter only triggers when this model
-                # itself fails 3 times in a row AND has never
-                # succeeded (completed == consec: every completion
-                # so far was one of those failures). A proven model
-                # riding out a transient burst (timeout storm, proxy
-                # blip) keeps dispatching; a model that has produced
-                # nothing but failures gets circuit-broken (enforced
-                # by the dead-check in _do_one).
+                # Open/stay-closed logic lives in
+                # _breaker_should_open; a model whose circuit opens
+                # gets its remaining futures short-circuited by the
+                # dead-check in _do_one.
                 pm = _per_model_state.setdefault(
                     model_key, {"consec": 0, "completed": 0},
                 )
                 pm["completed"] += 1
                 pm["consec"] += 1
-                # Second, history-independent threshold: a proven
-                # model that fails _BREAKER_PROVEN_THRESHOLD times in
-                # a row (mid-run credential expiry, provider outage)
-                # must still open the breaker — see the constant's
-                # both-directions rationale.
-                if (pm["consec"] >= 3 and pm["completed"] == pm["consec"]) \
-                        or pm["consec"] >= _BREAKER_PROVEN_THRESHOLD:
+                if _breaker_should_open(pm["consec"], pm["completed"]):
                     print(
                         f"\n  Model {model_key}:"
                         f" {pm['consec']} consecutive"
