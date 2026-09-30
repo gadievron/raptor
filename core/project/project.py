@@ -15,17 +15,12 @@ from pathlib import Path
 from typing import ClassVar
 
 from core.config import RaptorConfig
+from core.atomic_fs.fs_lock import artifact_lock
 from core.json import load_json, save_json
 from core.logging import get_logger
 from core.sandbox.tiers import (
     CONSENTABLE_FLOOR_LABELS as VALID_SANDBOX_FLOORS,
 )
-
-try:
-    import fcntl
-    _HAS_FCNTL = True
-except ImportError:                                    # pragma: no cover
-    _HAS_FCNTL = False
 
 from . import registry_home as _registry_home
 
@@ -303,26 +298,16 @@ def project_file_lock(project_file: Path):
     The ``.lock`` file is deliberately left behind — unlinking after
     unlock races and can split lockers across two inodes.
     """
-    if not _HAS_FCNTL:
-        yield
-        return
+    # The hoisted sidecar idiom (core.atomic_fs.fs_lock): hardened
+    # open (O_NOFOLLOW / O_NONBLOCK / regularity), foreign-uid
+    # refusal, bounded announce-once wait. Every lock-unavailable
+    # shape — uncreatable (read-only dir, ENOSPC), tamper-shaped,
+    # foreign-uid, or held past the deadline — degrades LOUDLY to the
+    # unlocked path rather than failing the mutation (the previous
+    # silent degrade kept the same disposition but hid it).
     path = Path(project_file)
-    lock_path = path.with_suffix(path.suffix + ".lock")
-    try:
-        fd = os.open(str(lock_path), os.O_WRONLY | os.O_CREAT, 0o600)
-    except OSError:
-        # Lock file uncreatable (read-only dir, ENOSPC) — proceed
-        # unserialised rather than failing the mutation.
+    with artifact_lock(path, subject="project file"):
         yield
-        return
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-    finally:
-        os.close(fd)
 
 
 def _validate_trust_marker(marker: str) -> str:
