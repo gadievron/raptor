@@ -71,3 +71,21 @@ def test_wedged_holder_degrades_after_bounded_wait(
     finally:
         os.close(holder_fd)
         thread.join(timeout=10)
+
+
+def test_missing_parent_dir_is_not_conjured(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+):
+    """A missing projects dir means the owner removed it: the lock
+    degrades loudly to the unlocked path and must NOT resurrect the
+    directory as a side effect."""
+    missing = tmp_path / "gone" / "projects.json"
+    entered = False
+    with caplog.at_level("WARNING"):
+        with project_file_lock(missing):
+            entered = True
+    assert entered
+    assert not missing.parent.exists(), (
+        "the lock conjured the removed parent directory"
+    )
+    assert any("WITHOUT" in r.message for r in caplog.records)

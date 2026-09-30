@@ -306,7 +306,11 @@ def project_file_lock(project_file: Path):
     # unlocked path rather than failing the mutation (the previous
     # silent degrade kept the same disposition but hid it).
     path = Path(project_file)
-    with artifact_lock(path, subject="project file"):
+    # create_parent=False: a missing projects dir means the owner
+    # removed it — the lock degrades loudly to the unlocked path
+    # instead of resurrecting the directory as a side effect.
+    with artifact_lock(path, subject="project file",
+                       create_parent=False):
         yield
 
 

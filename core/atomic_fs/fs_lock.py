@@ -324,12 +324,22 @@ def sidecar_flock(
 
 
 @contextlib.contextmanager
-def artifact_lock(artifact: Path, *, subject: str = "artifact") -> Iterator[None]:
+def artifact_lock(
+    artifact: Path,
+    *,
+    subject: str = "artifact",
+    create_parent: bool = True,
+) -> Iterator[None]:
     """Exclusive cross-process lock over *artifact*'s read-modify-write
     window (flocks the sibling ``<artifact>.lock``).
 
     *subject* names the guarded resource in the degrade warning.
+    ``create_parent=False`` preserves callers whose missing parent dir
+    must degrade to the loud unlocked path rather than be created —
+    conjuring a directory the owner deliberately removed is a side
+    effect the lock has no business having.
     """
     lock_path = artifact.with_suffix(artifact.suffix + ".lock")
-    with sidecar_flock(lock_path, subject=subject):
+    with sidecar_flock(lock_path, subject=subject,
+                       create_parent=create_parent):
         yield
