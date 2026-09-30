@@ -773,15 +773,13 @@ def _metadata_lock(meta_path: Path):
         return
     try:
         if not acquire_flock_bounded(
-                fd, lock_path, subject="metadata", stamp=True):
+                fd, lock_path, subject="metadata", stamp=True,
+                expiry_note=("proceeding UNSERIALISED; concurrent "
+                             "status updates may be lost")):
             # A holder that outlives the generous bounded wait is
             # wedged or hostile — same loud unserialised disposition
-            # as an unopenable lock, never an unbounded silent stall.
-            logger.warning(
-                "metadata lock for %s: still held past the wait "
-                "deadline — proceeding UNSERIALISED; concurrent "
-                "status updates may be lost", path.name,
-            )
+            # as an unopenable lock, never an unbounded silent stall
+            # (the helper emits the warning at expiry).
             yield
             return
         try:

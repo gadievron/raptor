@@ -604,7 +604,8 @@ class _SidecarWriter:
                 # it forever. No pid stamp — this flock is on the
                 # sidecar DATA file, not a disposable lock sidecar.
                 if not acquire_flock_bounded(
-                        fd, self._path, subject="compaction sidecar"):
+                        fd, self._path, subject="compaction sidecar",
+                        expiry_note="refusing to append"):
                     msg = (
                         f"compaction sidecar {self._path} lock still "
                         "held past the bounded wait — refusing to "
@@ -1010,7 +1011,9 @@ def _compact_one_file(
             if _HAS_FCNTL:
                 if not acquire_flock_bounded(
                         fh.fileno(), journal_path,
-                        subject="journal shard"):
+                        subject="journal shard",
+                        expiry_note=("compaction of this shard "
+                                     "abandoned (shard untouched)")):
                     msg = (
                         f"journal shard {journal_path} lock still "
                         "held past the bounded wait — compaction of "

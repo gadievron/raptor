@@ -73,7 +73,7 @@ def test_wedged_holder_never_blocks_finalisers_unboundedly(
             for r in caplog.records
         )
         assert any(
-            "UNSERIALISED" in r.message for r in caplog.records
+            "UNSERIALISED" in r.getMessage() for r in caplog.records
         )
     finally:
         os.close(holder_fd)

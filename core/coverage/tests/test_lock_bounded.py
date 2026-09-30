@@ -149,3 +149,32 @@ def test_journal_append_fails_loudly_after_bounded_wait(
     finally:
         os.close(holder_fd)
         thread.join(timeout=10)
+
+
+def test_journal_append_expiry_warning_carries_row_loss(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    """The expiry warning (helper-emitted) states the row-loss fact —
+    the raise alone can be swallowed by broad best-effort handlers on
+    the producer side, turning a lost row silent."""
+    monkeypatch.setattr(fs_lock, "_ACQUIRE_DEADLINE_S", 0.5,
+                        raising=False)
+    monkeypatch.setattr(fs_lock, "_ACQUIRE_POLL_S", 0.05,
+                        raising=False)
+    import fcntl
+    append_entry(tmp_path, _entry(0))  # create the shard
+    shard = tmp_path / "review-journal.jsonl"
+    holder_fd = os.open(str(shard), os.O_WRONLY | os.O_APPEND)
+    try:
+        fcntl.flock(holder_fd, fcntl.LOCK_EX)
+        with caplog.at_level("WARNING"):
+            with pytest.raises(OSError, match="row NOT appended"):
+                append_entry(tmp_path, _entry(1))
+        assert any(
+            "still held after" in r.getMessage()
+            and "row NOT appended" in r.getMessage()
+            for r in caplog.records
+        ), "expiry warning must carry the row-loss consequence"
+    finally:
+        os.close(holder_fd)

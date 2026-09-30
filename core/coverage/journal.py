@@ -985,7 +985,9 @@ def append_entry(out_dir: Path, entry: ReviewJournalEntry) -> None:
                     # writer forever. No pid stamp — this flock is on
                     # the DATA file, not a disposable sidecar.
                     if not acquire_flock_bounded(
-                            fd, journal_path, subject="journal shard"):
+                            fd, journal_path, subject="journal shard",
+                            expiry_note=("giving up without writing "
+                                         "(row NOT appended)")):
                         msg = (
                             f"journal shard {journal_path} lock still "
                             "held past the bounded wait — giving up "

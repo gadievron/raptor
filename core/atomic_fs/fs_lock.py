@@ -197,6 +197,7 @@ def acquire_flock_bounded(
     stamp: bool = False,
     deadline_s: float | None = None,
     poll_s: float | None = None,
+    expiry_note: str | None = None,
 ) -> bool:
     """Take ``LOCK_EX`` on *fd* without ever waiting silently or
     unboundedly.
@@ -208,6 +209,14 @@ def acquire_flock_bounded(
     expiry degrades to its unlocked path or raises. With ``stamp``,
     the acquirer's pid is written into the (sidecar) lock file; leave
     it ``False`` for data-file flocks.
+
+    Expiry is LOUD here, not in the caller: a waiter that announced
+    "waiting up to Ns" and then went quiet leaves the operator with a
+    60s-old promise and no outcome, and caller-side raises can be
+    swallowed by broad handlers on best-effort paths. *expiry_note*
+    states the consequence in that warning ("row NOT appended",
+    "proceeding WITHOUT cross-process lock — ..."); the default is a
+    generic give-up note.
 
     ``deadline_s`` / ``poll_s`` default to the module constants at
     call time.
@@ -233,6 +242,11 @@ def acquire_flock_bounded(
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
+            logger.warning(
+                "%s lock %s: still held after %.0fs — %s",
+                subject, lock_path, deadline_s,
+                expiry_note or "giving up (bounded wait expired)",
+            )
             return False
         time.sleep(min(poll_s, remaining))
         if _try_flock_nb(fd):
@@ -292,14 +306,13 @@ def sidecar_flock(
         return
     try:
         if not acquire_flock_bounded(
-                fd, lock_path, subject=subject, stamp=True):
-            logger.warning(
-                "%s lock %s: still held after %.0fs; proceeding WITHOUT "
-                "cross-process lock — concurrent writers may drop each "
-                "other's contributions; investigate a wedged or hostile "
-                "holder of that lock file", subject, lock_path,
-                _ACQUIRE_DEADLINE_S,
-            )
+                fd, lock_path, subject=subject, stamp=True,
+                expiry_note=(
+                    "proceeding WITHOUT cross-process lock — "
+                    "concurrent writers may drop each other's "
+                    "contributions; investigate a wedged or hostile "
+                    "holder of that lock file"
+                )):
             yield
             return
         try:

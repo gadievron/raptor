@@ -203,7 +203,8 @@ class TestBoundedAcquisition:
             assert len(waiting) == 1
             assert "99999" in waiting[0].getMessage()
             assert any(
-                "still held" in r.message and "WITHOUT" in r.message
+                "still held" in r.getMessage()
+                and "WITHOUT" in r.getMessage()
                 for r in caplog.records
             )
         finally:
@@ -384,6 +385,71 @@ class TestHintContainment:
                 f"data-file contention read {delta} bytes of the "
                 f"shard — the hint must be skipped for stamp=False"
             )
+        finally:
+            os.close(holder_fd)
+            os.close(victim_fd)
+
+
+class TestExpiryWarning:
+
+    def test_expiry_warning_comes_from_the_helper(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        """Deadline expiry is announced by acquire_flock_bounded
+        itself — a waiter that said 'waiting up to Ns' and then went
+        quiet leaves no outcome in the log, and caller-side raises can
+        be swallowed by broad best-effort handlers."""
+        monkeypatch.setattr(fs_lock, "_ACQUIRE_DEADLINE_S", 0.3,
+                            raising=False)
+        monkeypatch.setattr(fs_lock, "_ACQUIRE_POLL_S", 0.05,
+                            raising=False)
+        import fcntl
+        lock = tmp_path / "c.json.lock"
+        lock.write_bytes(b"")
+        holder_fd = os.open(str(lock), os.O_WRONLY)
+        victim_fd = os.open(str(lock), os.O_WRONLY)
+        try:
+            fcntl.flock(holder_fd, fcntl.LOCK_EX)
+            with caplog.at_level("WARNING"):
+                got = fs_lock.acquire_flock_bounded(
+                    victim_fd, lock, subject="expiry probe")
+            assert got is False
+            expiry = [
+                r for r in caplog.records
+                if "still held after" in r.getMessage()
+            ]
+            assert len(expiry) == 1, (
+                "expiry must be announced exactly once by the helper"
+            )
+            assert "giving up (bounded wait expired)" in \
+                expiry[0].getMessage()
+        finally:
+            os.close(holder_fd)
+            os.close(victim_fd)
+
+    def test_expiry_note_states_the_consequence(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        monkeypatch.setattr(fs_lock, "_ACQUIRE_DEADLINE_S", 0.3,
+                            raising=False)
+        monkeypatch.setattr(fs_lock, "_ACQUIRE_POLL_S", 0.05,
+                            raising=False)
+        import fcntl
+        lock = tmp_path / "d.json.lock"
+        lock.write_bytes(b"")
+        holder_fd = os.open(str(lock), os.O_WRONLY)
+        victim_fd = os.open(str(lock), os.O_WRONLY)
+        try:
+            fcntl.flock(holder_fd, fcntl.LOCK_EX)
+            with caplog.at_level("WARNING"):
+                got = fs_lock.acquire_flock_bounded(
+                    victim_fd, lock, subject="expiry probe",
+                    expiry_note="row NOT appended")
+            assert got is False
+            assert any("row NOT appended" in r.getMessage()
+                       for r in caplog.records)
         finally:
             os.close(holder_fd)
             os.close(victim_fd)
