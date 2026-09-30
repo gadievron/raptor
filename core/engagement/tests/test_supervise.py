@@ -873,3 +873,141 @@ def test_out_of_band_governor_park_is_adopted(tmp_path, monkeypatch):
     park_id = parks[0]["park_id"]
     rc = sup.supervise(out, resume=True, acknowledge=park_id)
     assert rc == sup.RC_NOTHING
+
+
+# ── per-stage budget derivation (envelope → stage cap) ───────────────
+
+def _fixed_estimate(monkeypatch, usd: float) -> None:
+    """Pin the governor's per-artifact estimate so the reservation
+    figure — and therefore the derived stage budget — is a test
+    decision, not a fixture-shape artifact."""
+    monkeypatch.setattr(
+        gov, "estimate_artifact_usd",
+        lambda row, tier, *, model=None, max_parallel=3:
+        (usd, "fallback"))
+
+
+def test_envelope_launch_derives_stage_budget_from_reservation(
+        tmp_path, monkeypatch, capsys):
+    """An envelope-funded segment must not launch its LLM stage
+    children on their bare flag-less posture: the chain call carries
+    the reservation-derived per-stage budget, and the launch line
+    discloses it."""
+    out, _ = _build(tmp_path)
+    _fixed_estimate(monkeypatch, 150.0)
+    stub = _ChainStub(monkeypatch, default=chain_elf.RC_NOTHING)
+    assert sup.supervise(out, envelope_usd=500.0) == sup.RC_NOTHING
+    assert stub.calls
+    for aid, kwargs in stub.calls:
+        assert kwargs.get("max_cost") == pytest.approx(150.0), (
+            f"stage children of {aid} launched without the "
+            f"reservation-derived budget: "
+            f"max_cost={kwargs.get('max_cost')!r}")
+    assert "per-stage LLM budget" in capsys.readouterr().out
+
+
+def test_derived_stage_budget_floors_at_the_flagless_study_total(
+        tmp_path, monkeypatch):
+    """A small reservation never SHRINKS the study stage below its
+    flag-less posture — which is the per-scan default PER PASS times
+    the study CLI's default pass count (its --max-cost is a TOTAL
+    decremented across passes), not the bare per-pass figure."""
+    out, _ = _build(tmp_path)
+    _fixed_estimate(monkeypatch, 0.05)
+    stub = _ChainStub(monkeypatch, default=chain_elf.RC_NOTHING)
+    assert sup.supervise(out, envelope_usd=500.0) == sup.RC_NOTHING
+    floor = sup._study_floor_usd()
+    assert floor == pytest.approx(
+        sup._DEFAULT_STAGE_CAP_USD * sup._DEFAULT_STUDY_MAX_PASSES)
+    assert stub.calls
+    for _aid, kwargs in stub.calls:
+        assert kwargs.get("max_cost") == pytest.approx(floor)
+
+
+def test_operator_max_cost_wins_over_derivation(tmp_path, monkeypatch):
+    """An explicit --max-cost is the operator's per-stage figure —
+    derivation never replaces it, in either direction."""
+    out, _ = _build(tmp_path)
+    _fixed_estimate(monkeypatch, 150.0)
+    stub = _ChainStub(monkeypatch, default=chain_elf.RC_NOTHING)
+    assert sup.supervise(out, envelope_usd=500.0,
+                         max_cost=3.5) == sup.RC_NOTHING
+    assert stub.calls
+    for _aid, kwargs in stub.calls:
+        assert kwargs.get("max_cost") == pytest.approx(3.5)
+
+
+def test_uncapped_engagement_skips_derivation(
+        tmp_path, monkeypatch, capsys):
+    """--uncapped is the operator saying NO ceiling: derivation is
+    skipped outright. The audit / re-review stages' flag-less posture
+    can itself be uncapped, so a derived finite figure would hand
+    them a cap nobody asked for — the stages launch exactly as a
+    flag-less shell launches them today, cost flag absent."""
+    out, _ = _build(tmp_path)
+    _fixed_estimate(monkeypatch, 150.0)
+    stub = _ChainStub(monkeypatch, default=chain_elf.RC_NOTHING)
+    assert sup.supervise(out, uncapped=True) == sup.RC_NOTHING
+    assert stub.calls
+    for _aid, kwargs in stub.calls:
+        assert kwargs.get("max_cost") is None
+    assert "per-stage LLM budget" not in capsys.readouterr().out
+
+
+def test_bare_resume_derives_from_the_persisted_envelope(
+        tmp_path, monkeypatch):
+    """Budgets persist at launch: a bare --resume re-enters under the
+    persisted envelope, so derivation keeps riding it — a cron
+    re-entry never quietly downgrades the stages to flag-less
+    launches."""
+    out, _ = _build(tmp_path)
+    _fixed_estimate(monkeypatch, 150.0)
+    stub = _ChainStub(monkeypatch, default=chain_elf.RC_NOTHING)
+    assert sup.supervise(out, envelope_usd=500.0) == sup.RC_NOTHING
+    stub.calls.clear()
+    assert sup.supervise(out, resume=True) == sup.RC_NOTHING
+    assert stub.calls
+    for _aid, kwargs in stub.calls:
+        assert kwargs.get("max_cost") == pytest.approx(150.0)
+
+
+def test_no_reservation_figure_launches_exactly_as_before(
+        tmp_path, monkeypatch):
+    """A zero/unusable reservation figure derives nothing — the chain
+    launches with max_cost=None (the pre-derivation behavior), never
+    a guessed cap."""
+    out, _ = _build(tmp_path)
+    _fixed_estimate(monkeypatch, 0.0)
+    stub = _ChainStub(monkeypatch, default=chain_elf.RC_NOTHING)
+    assert sup.supervise(out, envelope_usd=500.0) == sup.RC_NOTHING
+    assert stub.calls
+    for _aid, kwargs in stub.calls:
+        assert kwargs.get("max_cost") is None
+
+
+def test_stage_cap_floor_matches_the_llm_config_default():
+    """Parity pin for the supervisor's own-copy per-pass figure: the
+    doctrine fence bans core.llm imports from the module, so the
+    figure is copied — this test is what keeps the copy honest."""
+    import dataclasses
+
+    from core.llm.config import LLMConfig
+    default = next(f.default for f in dataclasses.fields(LLMConfig)
+                   if f.name == "max_cost_per_scan")
+    assert sup._DEFAULT_STAGE_CAP_USD == pytest.approx(default)
+
+
+def test_study_passes_copy_matches_the_study_cli_default():
+    """Parity pin for the supervisor's own-copy study pass count: the
+    study CLI is a script, not an importable module, so the pin reads
+    its argparse default from source text — this test is what keeps
+    the copy honest."""
+    import re
+
+    cli = (Path(sup.__file__).resolve().parents[2]
+           / "libexec" / "raptor-binary-study")
+    match = re.search(
+        r'add_argument\(\s*"--max-passes",\s*type=int,\s*'
+        r'default=(\d+)', cli.read_text(encoding="utf-8"))
+    assert match is not None, "--max-passes argparse default not found"
+    assert sup._DEFAULT_STUDY_MAX_PASSES == int(match.group(1))

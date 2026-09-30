@@ -31,6 +31,19 @@ Contract (operator-schedulable, cron-safe):
   records the replacement (residual map; policy amendment for the
   envelope). A supervisor that only enforced the launch shell's
   argv would run every cron re-entry uncapped.
+* Per-stage budgets are coordinated with the envelope: under a spend
+  envelope, when no ``--max-cost`` is in force, each funded segment
+  derives its LLM stage children's budget from the reservation the
+  governor just charged (:func:`derive_stage_budget`), disclosed on
+  the segment launch line. The figure is a per-stage TOTAL. For the
+  study stage it never sinks below the stage's flag-less posture —
+  the per-scan default PER PASS times the study CLI's default pass
+  count. For the audit / seed re-review stages the flag-less posture
+  can be UNCAPPED, so a derived figure is a deliberate tightening:
+  an operator who set an envelope asked for bounded spend. An
+  engagement with no envelope in force (``--uncapped``, or a
+  pre-gate ledger) derives nothing — no stage ever gains a cap the
+  operator did not ask for.
 * Spend gate: a fresh LLM-capable launch REFUSES to start unless it
   carries a budget (``--max-cost`` and/or ``--envelope``) or the
   explicit ``--uncapped`` opt-out — silent uncapped spend across a
@@ -582,6 +595,99 @@ def _persisted_envelope(doc: dict[str, Any]) -> float | None:
     return None
 
 
+# ── Per-stage budget derivation (reservation → stage cap) ────────────
+#
+# The chain's LLM stage children each enforce their own --max-cost;
+# launched without the flag they run on their own flag-less posture:
+# the study stage on the LLM config's per-scan default PER PASS (up
+# to its CLI's default pass count — its --max-cost is a TOTAL
+# decremented across passes), the audit / seed re-review stages
+# UNCAPPED unless the LLM tuning config sets a default ceiling.
+# Neither posture is sized for a segment the governor just funded at
+# its pessimistic estimate — without derivation an envelope-scale
+# engagement launches the study stage on the bare default and it
+# budget-trips long before the reservation is spent. Derivation only
+# fills the gap the operator left, and only where the operator asked
+# for bounded spend: an explicit --max-cost (launch or persisted)
+# always wins, and an engagement with no envelope in force derives
+# nothing — a stage whose flag-less posture is uncapped must never
+# GAIN a cap unless an envelope says spend is bounded. Under an
+# envelope, bounding those stages is deliberate; the study stage
+# keeps the never-shrink floor below.
+
+#: Own copy of the LLM config's flag-less per-scan default
+#: (``core.llm.config.LLMConfig.max_cost_per_scan`` — the cap the
+#: study stage enforces PER PASS when launched with no
+#: ``--max-cost``). A copy, not an import: the supervisor doctrine
+#: fence bans every ``core.llm`` import from this module (same
+#: pattern as the chain's artifact-id charset copy); a parity test
+#: pins the two figures equal so they cannot drift. Too LOW and the
+#: floor caps the study stage below what a flag-less launch allows
+#: today (the forbidden fail direction); too HIGH and small
+#: reservations get more headroom than a bare child would — the
+#: harmless direction, bounded by the reconcile ledger.
+_DEFAULT_STAGE_CAP_USD = 10.0
+
+#: Own copy of the study CLI's default outer pass count
+#: (``libexec/raptor-binary-study --max-passes``). The chain launches
+#: the study stage without that flag, so this is the effective pass
+#: count of a chain-launched study: flag-less, the stage may spend up
+#: to per-pass default × this figure in TOTAL. A copy for the same
+#: import-fence reason as above (the CLI is a script, not an
+#: importable module); a parity test pins it to the CLI source. Too
+#: LOW and the floor shrinks the study stage below its flag-less
+#: posture (forbidden); too HIGH and the floor over-grants — the
+#: harmless, reconcile-bounded direction.
+_DEFAULT_STUDY_MAX_PASSES = 3
+
+
+def _study_floor_usd() -> float:
+    """The TOTAL a flag-less chain-launched study stage may spend
+    today: the per-pass default times the study CLI's default pass
+    count (the chain sets neither flag). This is the never-shrink
+    floor for derived budgets — the one stage whose flag-less posture
+    is a real finite figure."""
+    return float(_DEFAULT_STAGE_CAP_USD * _DEFAULT_STUDY_MAX_PASSES)
+
+
+def derive_stage_budget(
+        reservation: dict[str, Any] | None) -> tuple[float, str] | None:
+    """Per-stage LLM budget for a funded segment's chain children,
+    used ONLY under a spend envelope with no operator ``--max-cost``
+    in force (the caller gates both; an uncapped engagement never
+    derives).
+
+    ``max(reserved_usd, flag-less study total)`` — the reservation is
+    the envelope share the governor just funded for this artifact's
+    segment, and the floor pins the study stage's fail direction: a
+    derived budget never caps that stage below the TOTAL a flag-less
+    launch allows today (per-pass default × default pass count). No
+    such floor exists for the audit / seed re-review stages: their
+    flag-less posture can be uncapped, and under an envelope a finite
+    figure for them is the point — bounded spend is what the operator
+    asked for. Money figures ride the governor's read-side clamp —
+    the ledger document is sandbox-writable.
+
+    Returns ``(budget_usd, basis)`` with basis ``reservation`` /
+    ``study_floor``, or ``None`` when there is no usable reservation
+    figure — the chain then launches exactly as before, with no cost
+    flag.
+    """
+    if not isinstance(reservation, dict):
+        return None
+    reserved = reservation.get("reserved_usd")
+    if (isinstance(reserved, bool)
+            or not isinstance(reserved, (int, float))
+            or not math.isfinite(float(reserved))
+            or float(reserved) <= 0.0):
+        return None
+    floor = _study_floor_usd()
+    reserved_f = governor._usd(reserved)
+    if reserved_f >= floor:
+        return reserved_f, "reservation"
+    return floor, "study_floor"
+
+
 # ── Spend measurement (segment reconcile evidence) ───────────────────
 
 def measured_artifact_spend(output_dir: Path | str,
@@ -1008,6 +1114,29 @@ def supervise(output_dir: Path | str, *,
             if reservation is None:
                 refused += 1
                 continue
+            # Per-stage budget for this segment's LLM stage children:
+            # the operator's --max-cost (launch flag or persisted)
+            # always wins; absent one, an engagement under a spend
+            # envelope derives the figure from the reservation the
+            # governor just funded — disclosed on the launch line
+            # (the chain echoes it again per stage child as the
+            # --max-cost it passes). No envelope in force (--uncapped,
+            # or a pre-gate ledger) means NO derivation: stages whose
+            # flag-less posture is uncapped must never gain a cap the
+            # operator did not ask for.
+            stage_budget = max_cost
+            if (stage_budget is None
+                    and (envelope_usd is not None
+                         or _persisted_envelope(doc) is not None)):
+                derived = derive_stage_budget(reservation)
+                if derived is not None:
+                    stage_budget, basis = derived
+                    _say(f"segment {state['segments']} "
+                         f"[{_esc(aid, 100)}]: per-stage LLM budget "
+                         f"${stage_budget:.2f} (derived from "
+                         f"{basis}; reservation "
+                         f"${governor._usd(reservation.get('reserved_usd')):.2f}"
+                         f" — an explicit --max-cost overrides)")
             # Durable dispatch marker: if the SUPERVISOR dies inside
             # run_chain (SIGKILL, OOM) the chain's rc is never
             # observed and no death would be booked — the resume's
@@ -1022,7 +1151,8 @@ def supervise(output_dir: Path | str, *,
             _save_state(out, state)
             rc = chain_elf.run_chain(
                 out, aid, target_root=target_root, model=model,
-                max_cost=max_cost, mechanical_only=mechanical_only)
+                max_cost=stage_budget,
+                mechanical_only=mechanical_only)
             state.pop("in_flight", None)
             _save_state(out, state)
             actual = measured_artifact_spend(out, aid)
