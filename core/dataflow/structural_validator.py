@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from functools import partial
+from functools import lru_cache, partial
 from pathlib import Path
 from typing import Any
 
@@ -219,6 +219,33 @@ def _extract_graph(content: str, language: str) -> FileCallGraph | None:
         return None
 
 
+# Hostile-SARIF work bound on the step walk. Not lower: real SARIF
+# taint paths run a few dozen steps, and parity with
+# MAX_PRESCREEN_STEPS keeps both SARIF-path consumers refusing
+# pathological paths at the same size (a path one accepts is never
+# silently rejected by the other). Not higher: each step can name a
+# DISTINCT file, so the walk stays O(steps × read+parse) even with the
+# per-file caches — an uncapped step count lets a planted SARIF buy
+# unbounded parse work per finding. Over-cap paths degrade to
+# inconclusive; a partial walk must never ground a refutation.
+MAX_STRUCTURAL_STEPS = 64
+
+
+@lru_cache(maxsize=8)
+def _extract_functions_cached(language: str, content: str) -> tuple[Any, ...]:
+    """Memoized function-span extraction for the enclosing-function
+    lookup. The span path runs once per STEP (module-level lines have
+    no caller-attributed calls), and pre-memo each run re-parsed the
+    whole file — O(steps × parse) on attacker-sized inputs. Keyed on
+    the content itself; maxsize bounds retained content to a handful
+    of already-size-capped files. Returns a tuple: lru_cache shares
+    the result across callers, so it must be immutable.
+    """
+    from core.inventory import extractors
+    return tuple(extractors.extract_functions(
+        "<structural-validator>", language, content))
+
+
 def _enclosing_function_state(
     line: int,
     graph: FileCallGraph,
@@ -253,8 +280,7 @@ def _enclosing_function_state(
     span_lo = span_hi = 0
     extraction_ok = True
     try:
-        from core.inventory.extractors import extract_functions
-        funcs = extract_functions("<structural-validator>", language, content)
+        funcs = _extract_functions_cached(language, content)
         for f in funcs:
             if f.line_start <= line and (f.line_end is None or line <= f.line_end):
                 span_name = f.name
@@ -504,6 +530,19 @@ def validate_structurally(
         return StructuralResult(
             verdict="inconclusive",
             reasoning="Dataflow path has fewer than 2 steps",
+            confidence="low",
+        )
+    if len(steps) > MAX_STRUCTURAL_STEPS:
+        # SARIF is untrusted scanner output over an untrusted repo —
+        # decline the walk instead of paying per-step file reads and
+        # parses on a pathological path. Inconclusive, never refuted:
+        # declining is always sound.
+        return StructuralResult(
+            verdict="inconclusive",
+            reasoning=(
+                f"Dataflow path has {len(steps)} steps — exceeds the "
+                f"{MAX_STRUCTURAL_STEPS}-step bound; structural "
+                f"validation declined"),
             confidence="low",
         )
 

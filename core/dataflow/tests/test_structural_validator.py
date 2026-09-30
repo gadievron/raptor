@@ -793,3 +793,81 @@ class TestCappedReads:
 def _read_file_content_missing(tmp_path):
     from core.dataflow.structural_validator import _read_file_content
     return _read_file_content(tmp_path / "does-not-exist.py")
+
+
+# ── step cap + parse memoization (hostile-SARIF work bound) ─────
+
+
+class TestStepCap:
+    def _capped_path(self, nsteps: int) -> dict:
+        steps = [_make_step("big.py", 2 + k) for k in range(nsteps)]
+        return {
+            "source": _make_step("big.py", 2, "source"),
+            "sink": _make_step("big.py", 500, "sink"),
+            "steps": steps,
+        }
+
+    def test_over_cap_degrades_to_inconclusive(self, tmp_path):
+        from core.dataflow.structural_validator import MAX_STRUCTURAL_STEPS
+        _write_py(tmp_path, "big.py",
+                  "def f(x):\n" + "\n".join(
+                      f"    v{i} = x" for i in range(600)) + "\n")
+        res = validate_structurally(
+            self._capped_path(MAX_STRUCTURAL_STEPS + 10), tmp_path,
+            language="python")
+        assert res.verdict == "inconclusive"
+        assert str(MAX_STRUCTURAL_STEPS) in res.reasoning
+        assert "step" in res.reasoning.lower()
+        # No per-step evidence was built — the walk never started.
+        assert res.evidence == []
+
+    def test_at_cap_still_validates(self, tmp_path):
+        from core.dataflow.structural_validator import MAX_STRUCTURAL_STEPS
+        _write_py(tmp_path, "big.py",
+                  "def f(x):\n" + "\n".join(
+                      f"    v{i} = x" for i in range(600)) + "\n")
+        res = validate_structurally(
+            self._capped_path(MAX_STRUCTURAL_STEPS - 2), tmp_path,
+            language="python")
+        assert res.evidence  # the walk ran
+
+    def test_cap_matches_prescreen_convention(self):
+        from core.dataflow.injection_prescreen import MAX_PRESCREEN_STEPS
+        from core.dataflow.structural_validator import MAX_STRUCTURAL_STEPS
+        # Both SARIF-path consumers refuse pathological paths at the
+        # same size, so a path accepted by one is never silently
+        # rejected by the other.
+        assert MAX_STRUCTURAL_STEPS == MAX_PRESCREEN_STEPS
+
+
+class TestEnclosingFunctionMemo:
+    def test_span_extraction_parses_each_file_once(
+            self, tmp_path, monkeypatch):
+        """Module-level steps take the extract_functions span path;
+        pre-memo every step re-parsed the whole file (O(steps × parse)
+        — 256 steps on a 20k-line file cost minutes of wall time)."""
+        import core.dataflow.structural_validator as sv
+        import core.inventory.extractors as ex
+
+        real = ex.extract_functions
+        calls: list[str] = []
+
+        def counting(filepath, language, content):
+            calls.append(filepath)
+            return real(filepath, language, content)
+
+        monkeypatch.setattr(ex, "extract_functions", counting)
+        sv._extract_functions_cached.cache_clear()
+
+        # Module-level calls: the call graph attributes them to no
+        # caller, forcing the span lookup on every step.
+        _write_py(tmp_path, "mod.py",
+                  "\n".join(f"print({i})" for i in range(1, 30)) + "\n")
+        path = {
+            "source": _make_step("mod.py", 1, "source"),
+            "sink": _make_step("mod.py", 29, "sink"),
+            "steps": [_make_step("mod.py", 2 + k) for k in range(10)],
+        }
+        res = validate_structurally(path, tmp_path, language="python")
+        assert res.evidence  # the walk ran and hit the span path
+        assert len(calls) == 1
