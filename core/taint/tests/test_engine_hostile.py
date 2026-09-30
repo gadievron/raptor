@@ -688,6 +688,7 @@ def _rail_verdict(
     return False, ratios
 
 
+@pytest.mark.slow
 def test_growth_ratio_pin_n_vs_2n(packs) -> None:
     # Host-speed invariant: a RATIO of two timings taken the same
     # way on the same host. n=600 functions (50 chains × 12 deep):
