@@ -263,9 +263,10 @@ _SECCOMP_BLOCK_ALWAYS = (
 # _make_seccomp_preexec).
 _SECCOMP_BLOCK_UNLESS_DEBUG = (
     "ptrace",
-    # gdb's read/write of the inferior's memory. Without these gdb
-    # has to fall back to /proc/PID/mem which has tighter Yama-policy
-    # constraints under non-init-userns.
+    # gdb's bulk read/write of the inferior's memory; its other
+    # route, /proc/PID/mem, sits behind the same ATTACH-class ptrace
+    # gate (Yama's scope-1 descendant exception passes for gdb's own
+    # inferior on either path).
     "process_vm_readv",
     "process_vm_writev",
 )
