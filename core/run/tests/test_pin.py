@@ -539,6 +539,30 @@ class PinFreezeCacheTest(_PinCase):
         from core.run.metadata import load_run_metadata
         self.assertEqual(load_run_metadata(d)["project"], "ambient3")
 
+    def test_uncorroborated_disagreement_error_is_inert(self):
+        # The prior name comes from the disk marker — the
+        # planted-marker case by definition, and every catcher
+        # bare-prints str(e) to stderr. A name carrying ESC/OSC
+        # bytes must arrive escaped in BOTH the description and the
+        # --project remedy.
+        from core.json import save_json as _sj
+        from core.run.metadata import start_run
+        from core.run.pin import ProjectArgvError
+        d = self.root / "out" / "reused-esc"
+        d.mkdir(parents=True)
+        _sj(d / RUN_METADATA_FILE, {
+            "status": "completed",
+            "project": "pin\x1b]0;pwned\x07ned",
+            "project_source": "argv",
+        })
+        self.mgr.set_active("pinned")
+        with self.assertRaises(ProjectArgvError) as ctx:
+            start_run(d, "scan", target=str(self.root / "code"))
+        msg = str(ctx.exception)
+        self.assertNotIn("\x1b", msg)
+        self.assertNotIn("\x07", msg)
+        self.assertIn("pwned", msg)  # legible, escaped
+
     def test_uncorroborated_keep_side_override_works(self):
         from core.json import save_json as _sj
         from core.run.metadata import load_run_metadata, start_run

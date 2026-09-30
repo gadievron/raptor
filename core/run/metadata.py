@@ -1253,13 +1253,32 @@ def start_run(output_dir: Path, command: str,
                             prior_pin[0], _fresh_project)
                         prior_pin = (_fresh_project, _fresh_source)
                     else:
-                        _keep = prior_pin[0] if prior_pin[0] else "-"
+                        # The prior name is marker-derived — this
+                        # branch IS the planted/reused-marker case,
+                        # and every catcher bare-prints str(e) to
+                        # stderr — so escape it before interpolating
+                        # (repr on the description already escapes;
+                        # the --project remedy did not). A control-
+                        # char name can never be a real registry
+                        # project (charset-validated), so the escaped
+                        # remedy only changes hostile spellings;
+                        # legitimate names escape to themselves. The
+                        # fresh side is registry-validated already.
+                        from core.security.log_sanitisation import (
+                            sanitise_for_terminal,
+                        )
+                        _keep = (sanitise_for_terminal(
+                            prior_pin[0], max_len=120)
+                            if prior_pin[0] else "-")
                         _fresh = (_fresh_project if _fresh_project
                                   else "-")
+                        _prior_disp = (
+                            f"'{_keep}'" if prior_pin[0]
+                            else "'no project'")
                         msg = (
                             f"the run dir {output_dir} carries an "
                             f"uncorroborated pin to "
-                            f"{prior_pin[0] or 'no project'!r} (no "
+                            f"{_prior_disp} (no "
                             f"ledger witness — reused across a "
                             f"relaunch, or a pre-existing marker), "
                             f"while this start resolves to "
