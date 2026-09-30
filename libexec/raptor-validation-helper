@@ -4229,8 +4229,12 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)
     except Exception as e:
+        from core.project.registry_home import RegistryHomeError as _RHE
         from core.run.pin import ProjectArgvError as _PAE
-        if isinstance(e, _PAE):
+        if isinstance(e, (_PAE, _RHE)):
+            # Operator overrides that could not be honoured (--project
+            # argv, RAPTOR_REGISTRY_HOME env): designed refusal before
+            # any run dir exists, never a raw traceback.
             print(f"ERROR: {_sft(str(e), max_len=300)}", file=sys.stderr)
             sys.exit(1)
         raise

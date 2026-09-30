@@ -45,6 +45,7 @@ from core.security.log_sanitisation import (
 )
 from core.config import RaptorConfig
 from core.json import load_json, save_json
+from core.project.registry_home import RegistryHomeError
 from core.run.metadata import complete_run, fail_run, start_run
 from core.run.output import TargetMismatchError, get_output_dir
 
@@ -302,7 +303,7 @@ def _resolve_target_and_out(args: argparse.Namespace) -> tuple[Path, Path] | Non
             explicit_out=args.out,
             target_path=str(target),
         )
-    except TargetMismatchError as exc:
+    except (TargetMismatchError, RegistryHomeError) as exc:
         print(f"raptor-binary: {exc}", file=sys.stderr)
         return None
     return target, out_dir
@@ -866,7 +867,7 @@ def _run_corpus(args: argparse.Namespace) -> int:
             explicit_out=args.out,
             target_path=str(samples_dir),
         )
-    except TargetMismatchError as exc:
+    except (TargetMismatchError, RegistryHomeError) as exc:
         print(f"raptor-binary: {exc}", file=sys.stderr)
         return 2
 
@@ -944,7 +945,7 @@ def _hunt_run_dir_for_binary(args: argparse.Namespace, target: Path) -> Path | N
             explicit_out=None,
             target_path=str(target),
         )
-    except TargetMismatchError as exc:
+    except (TargetMismatchError, RegistryHomeError) as exc:
         print(f"raptor-binary: {exc}", file=sys.stderr)
         return None
     try:

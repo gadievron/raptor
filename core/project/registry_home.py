@@ -49,20 +49,34 @@ from pathlib import Path
 ENV_REGISTRY_HOME = "RAPTOR_REGISTRY_HOME"
 
 
+class RegistryHomeError(ValueError):
+    """A present-but-invalid ``RAPTOR_REGISTRY_HOME`` override.
+
+    Distinct subtype so resolution corridors that swallow OTHER
+    failures by design (e.g. active-project resolution falling back
+    projectless past a corrupt project JSON) can escalate exactly the
+    operator-override refusal — an explicit instruction that could not
+    be honoured is a hard error, never a fallback — without escalating
+    every ``ValueError`` in reach. Stays a ``ValueError`` so existing
+    catchers keep working.
+    """
+
+
 def registry_home() -> Path | None:
     """The override base from ``RAPTOR_REGISTRY_HOME``, or ``None``.
 
     Unset/empty → ``None`` (callers use the historical defaults).
-    A set-but-non-absolute value raises ``ValueError`` — loud, never
-    a cwd-dependent registry, and byte-for-byte the same rule the
-    bash consumers apply (no ``~`` expansion on either side).
+    A set-but-non-absolute value raises ``RegistryHomeError`` (a
+    ``ValueError``) — loud, never a cwd-dependent registry, and
+    byte-for-byte the same rule the bash consumers apply (no ``~``
+    expansion on either side).
     """
     raw = os.environ.get(ENV_REGISTRY_HOME, "")
     if not raw:
         return None
     base = Path(raw)
     if not base.is_absolute():
-        raise ValueError(
+        raise RegistryHomeError(
             f"{ENV_REGISTRY_HOME} must be an absolute path, got: {raw!r}")
     return base
 

@@ -1989,11 +1989,14 @@ if __name__ == "__main__":
         print("\n\nInterrupted by user", file=sys.stderr)
         sys.exit(130)
     except Exception as e:  # noqa: BLE001
+        from core.project.registry_home import RegistryHomeError
         from core.run.pin import ProjectArgvError
-        if isinstance(e, ProjectArgvError):
-            # The designed clean hard-error, not an internal fault —
-            # it can fire before start_run (get_output_dir resolves
-            # the override), so catch it here too, without traceback.
+        if isinstance(e, (ProjectArgvError, RegistryHomeError)):
+            # The designed clean hard-errors (invalid --project value;
+            # invalid RAPTOR_REGISTRY_HOME override), not internal
+            # faults — both can fire before start_run (get_output_dir
+            # resolves the overrides), so catch them here too, without
+            # traceback.
             print(f"✗ {e}", file=sys.stderr)
             sys.exit(1)
         print(f"\n✗ Fatal error: {e}", file=sys.stderr)

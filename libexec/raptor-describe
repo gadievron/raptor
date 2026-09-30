@@ -58,8 +58,17 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
 
+    from core.project.registry_home import RegistryHomeError
     from packages.describe.cli import describe_main
-    return describe_main(args.target, args.json)
+    try:
+        return describe_main(args.target, args.json)
+    except RegistryHomeError as exc:
+        # Invalid operator override refused by default-target
+        # resolution: the designed one-line refusal, never a raw
+        # traceback. (The ``raptor.py describe`` route prints the
+        # same refusal via its own top-level handler.)
+        print(f"✗ {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

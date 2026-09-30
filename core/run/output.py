@@ -76,7 +76,11 @@ def _resolve_active_project() -> tuple[str, str, str] | None:
     resolves as "no project" — then the ambient chokepoint
     (``ProjectManager.get_active()``: session binding, then the
     ``.active`` symlink). Returns (output_dir, name, target) or None.
-    An invalid override is a hard error, never a fallback.
+    An invalid override is a hard error, never a fallback — the
+    ``--project`` argv value (``ProjectArgvError``) and the
+    ``RAPTOR_REGISTRY_HOME`` env override (``RegistryHomeError``,
+    raised by the ``core.project.registry_home`` seam) both escalate;
+    any other resolution failure warns and proceeds projectless.
     """
     try:
         from core.run.pin import ARGV_NONE, get_process_project
@@ -102,8 +106,12 @@ def _resolve_active_project() -> tuple[str, str, str] | None:
             if project:
                 return project.output_dir, project.name, project.target
     except Exception as exc:  # noqa: BLE001 — fall back to the default out/ dir
+        from core.project.registry_home import RegistryHomeError
         from core.run.pin import ProjectArgvError
-        if isinstance(exc, ProjectArgvError):
+        if isinstance(exc, (ProjectArgvError, RegistryHomeError)):
+            # Operator-supplied overrides that could not be honoured:
+            # proceeding projectless would silently drop the placement
+            # the operator asked for. Hard error, never a fallback.
             raise
         logger.warning("active project resolution failed: %s", exc)
 

@@ -144,11 +144,17 @@ def main():
             from core.run.pin import set_process_project
             set_process_project(args.project)
 
+        from core.project.registry_home import RegistryHomeError
         from core.run.pin import ProjectArgvError
         try:
             out_dir = get_output_dir(args.command, target_path=target_path,
                                      explicit_out=args.explicit_out)
-        except (TargetMismatchError, ProjectArgvError) as e:
+        except (TargetMismatchError, ProjectArgvError,
+                RegistryHomeError) as e:
+            # RegistryHomeError: an invalid RAPTOR_REGISTRY_HOME is a
+            # hard error, never a projectless fallback — same CLI
+            # contract as the other designed refusals (one ERROR line,
+            # exit 1, no OUTPUT_DIR sentinel).
             print(f"ERROR: {e}", file=sys.stderr)
             sys.exit(1)
 
