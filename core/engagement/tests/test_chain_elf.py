@@ -766,6 +766,143 @@ class TestChecklistStage:
         assert state["stages"]["checklist"]["reason"] == (
             "empty_binary_checklist")
 
+    def test_stage_writes_frame_verified_checklists(
+            self, tmp_path: Path, monkeypatch: Any) -> None:
+        # Both handoffs — the audit-dir copy and the ledger slot —
+        # must carry a frame that VERIFIES in place: the audit stage
+        # reads its copy with the frame-authenticating accessor, and
+        # an unstamped in-era document is demoted to legacy tier with
+        # a per-artifact warning.
+        import core.audit.binary_context as bc
+        import core.inventory.binary_builder as bb
+        from core.inventory import checklist_frame_mac as cm
+        from core.inventory import read_checklist
+
+        monkeypatch.setattr(bc, "load_redb", lambda p: object())
+        monkeypatch.setattr(
+            bb, "build_binary_checklist",
+            lambda db, binary_path=None: {
+                "total_items": 2,
+                "files": [{"path": "binary:app", "items": []}],
+            })
+        out, _ = _setup(tmp_path, policy={"tier": "T2"})
+        _wire(monkeypatch, FakeRunner())
+        assert run_chain(out, ART) == RC_OK
+
+        audit_dir = chain_dir_for(out, ART) / "audit"
+        raw = load_json(audit_dir / "checklist.json")
+        assert cm.frame_provenance(
+            raw, cm.frame_binding(audit_dir), cm.FORM_SINGLE,
+        ) == cm.FRAME_VERIFIED
+        # The audit stage's accessor reads it back at full authority.
+        assert read_checklist(audit_dir)["total_items"] == 2
+
+        slot = checklist_slot_path(out, ART)
+        raw_slot = load_json(slot)
+        assert cm.frame_provenance(
+            raw_slot, cm.frame_binding(slot), cm.FORM_SINGLE,
+        ) == cm.FRAME_VERIFIED
+        assert read_artifact_checklist(out, ART)["total_items"] == 2
+
+    def test_sharded_audit_copy_recognised_done(
+            self, tmp_path: Path, monkeypatch: Any) -> None:
+        # An over-budget checklist lands at the audit dir in the
+        # inventory writer's sharded layout — no checklist.json single
+        # file — and the stage completion predicate must still see the
+        # stage as done: a raw is_file check would re-run it forever.
+        import core.audit.binary_context as bc
+        import core.inventory as inv
+        import core.inventory.binary_builder as bb
+        from core.inventory import read_checklist
+
+        monkeypatch.setattr(inv, "_MAX_CHECKLIST_BYTES", 256)
+        monkeypatch.setattr(inv, "_CHECKLIST_SHARD_TARGET_BYTES", 400)
+        monkeypatch.setattr(bc, "load_redb", lambda p: object())
+        monkeypatch.setattr(
+            bb, "build_binary_checklist",
+            lambda db, binary_path=None: {
+                "total_items": 8,
+                "files": [
+                    {"path": f"binary:app{i}", "sloc": 10, "items": [{
+                        "name": f"fn{i}", "kind": "function",
+                        "line_start": 1, "line_end": 5,
+                    }]}
+                    for i in range(8)
+                ],
+            })
+        out, _ = _setup(tmp_path, policy={"tier": "T2"})
+        _wire(monkeypatch, FakeRunner())
+        assert run_chain(out, ART) == RC_OK
+
+        audit_dir = chain_dir_for(out, ART) / "audit"
+        assert not (audit_dir / "checklist.json").is_file()
+        assert read_checklist(audit_dir)["total_items"] == 8
+        rerun = FakeRunner()
+        _wire(monkeypatch, rerun)
+        assert run_chain(out, ART) == RC_NOTHING
+        assert rerun.calls == []
+
+    def test_tampered_slot_rebuilt_on_rerun(
+            self, tmp_path: Path, monkeypatch: Any) -> None:
+        # A tampered slot reads as absent (the frame gate refuses it);
+        # the stage-completion predicate must agree with the reader —
+        # a raw existence check would keep the chain "done" over a
+        # slot no consumer can read, and the refusal log's advertised
+        # remedy (re-run the stage) would never fire.
+        import core.audit.binary_context as bc
+        import core.inventory.binary_builder as bb
+        monkeypatch.setattr(bc, "load_redb", lambda p: object())
+        monkeypatch.setattr(
+            bb, "build_binary_checklist",
+            lambda db, binary_path=None: {
+                "total_items": 2,
+                "files": [{"path": "binary:app", "items": []}],
+            })
+        out, _ = _setup(tmp_path, policy={"tier": "T2"})
+        _wire(monkeypatch, FakeRunner())
+        assert run_chain(out, ART) == RC_OK
+        slot = checklist_slot_path(out, ART)
+        doc = load_json(slot)
+        doc["total_items"] = 9999
+        save_json(slot, doc)
+        assert read_artifact_checklist(out, ART) is None
+        _wire(monkeypatch, FakeRunner())
+        assert run_chain(out, ART) == RC_OK  # re-ran, not nothing-to-do
+        assert read_artifact_checklist(out, ART)["total_items"] == 2
+
+    def test_overbudget_checklist_is_contained_stage_failure(
+            self, tmp_path: Path, monkeypatch: Any) -> None:
+        # The chain's checklist carries ONE binary:<stem> files entry,
+        # which the sharded writer cannot split — once that entry
+        # exceeds the hard per-shard reader budget the chokepoint
+        # raises instead of sharding. That must surface as a named
+        # per-row stage failure (resumable, ledger row failed), never
+        # an uncaught abort of the whole sweep.
+        import core.audit.binary_context as bc
+        import core.inventory as inv
+        import core.inventory.binary_builder as bb
+        monkeypatch.setattr(inv, "_MAX_CHECKLIST_BYTES", 256)
+        monkeypatch.setattr(inv, "_MAX_CHECKLIST_SHARD_BYTES", 256)
+        monkeypatch.setattr(inv, "_CHECKLIST_SHARD_TARGET_BYTES", 400)
+        monkeypatch.setattr(bc, "load_redb", lambda p: object())
+        monkeypatch.setattr(
+            bb, "build_binary_checklist",
+            lambda db, binary_path=None: {
+                "total_items": 40,
+                "files": [{"path": "binary:app", "items": [
+                    {"name": f"fn{i}", "kind": "function",
+                     "line_start": 1, "line_end": 5}
+                    for i in range(40)
+                ]}],
+            })
+        out, _ = _setup(tmp_path, policy={"tier": "T2"})
+        _wire(monkeypatch, FakeRunner())
+        assert run_chain(out, ART) == RC_FAILED  # contained, not raised
+        state = load_chain_state(chain_dir_for(out, ART))
+        rec = state["stages"]["checklist"]
+        assert rec["status"] == "failed"
+        assert "ChecklistBudgetExceededError" in rec["reason"]
+
 
 # ── Seeds → re-review; siblings enrichment failure ──────────────────
 

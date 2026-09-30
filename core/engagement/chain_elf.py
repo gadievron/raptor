@@ -106,7 +106,6 @@ from typing import Any, Callable
 from core.config import RaptorConfig, pin_raptor_dir
 from core.engagement.ledger import (
     STATUS_STATES,
-    checklist_slot_path,
     load_ledger,
     set_artifact_status,
     write_artifact_checklist,
@@ -381,9 +380,19 @@ def _stage_artifact_ok(stage: str, ctx: ChainContext) -> bool:
     if stage == "study":
         return (ctx.study_dir / "domain-model.json").is_file()
     if stage == "checklist":
-        return (checklist_slot_path(ctx.output_dir,
-                                    ctx.artifact_id).is_file()
-                and (ctx.audit_dir / "checklist.json").is_file())
+        # Authenticated presence on BOTH handoffs, not raw file
+        # existence: a tampered document reads as absent (the frame
+        # gate refuses it), and a raw existence check would keep the
+        # stage "done" over a slot no consumer can read — stranding
+        # the refusal forever. Judging by the readers makes re-running
+        # the stage rebuild and re-stamp, which is exactly the remedy
+        # the refusal log advertises. read_checklist also handles the
+        # sharded layout, where no checklist.json single file exists.
+        from core.engagement.ledger import read_artifact_checklist
+        from core.inventory import read_checklist
+        return (read_artifact_checklist(ctx.output_dir,
+                                        ctx.artifact_id) is not None
+                and bool(read_checklist(ctx.audit_dir)))
     if stage == "audit":
         return (ctx.audit_dir / "audit-report.json").is_file()
     if stage == "seed_rereview":
@@ -531,9 +540,27 @@ def _stage_checklist(ctx: ChainContext) -> StageOutcome:
     # slot, and a pre-placed run-local copy the audit stage's landed
     # target-match gate honours (recorded target_path = the resolved
     # binary, exactly what the audit resolves).
-    write_artifact_checklist(ctx.output_dir, ctx.artifact_id, checklist)
-    ctx.audit_dir.mkdir(parents=True, exist_ok=True)
-    save_json(ctx.audit_dir / "checklist.json", checklist)
+    # Through the inventory write chokepoint, not bare save_json: the
+    # audit stage reads this file with the frame-authenticating
+    # accessor, so a bare write hands it a checklist it can only read
+    # at legacy tier (authenticated-tier authority withheld, one
+    # demotion warning per artifact).
+    from core.inventory import ChecklistBudgetExceededError, save_checklist
+    try:
+        write_artifact_checklist(ctx.output_dir, ctx.artifact_id,
+                                 checklist)
+        ctx.audit_dir.mkdir(parents=True, exist_ok=True)
+        save_checklist(ctx.audit_dir, checklist)
+    except (ChecklistBudgetExceededError, OSError) as exc:
+        # A named per-row stage failure, never an uncaught abort of a
+        # sweep: the chain's checklist carries ONE binary:<stem> files
+        # entry, which the sharded writer cannot split — past the hard
+        # per-shard reader budget the chokepoint raises instead of
+        # sharding. ChecklistPathError (a planted symlink) is a
+        # PermissionError and rides the OSError arm.
+        return StageOutcome(
+            "failed",
+            f"checklist write refused: {type(exc).__name__}")
     return StageOutcome("done")
 
 

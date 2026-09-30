@@ -184,11 +184,20 @@ def test_json_store_writes_are_atomic() -> None:
 
 
 def test_ledger_writes_go_through_the_public_api() -> None:
-    """The chain touches the ledger only via its public write verbs —
-    never a private seam, never a direct rewrite of ledger.json."""
+    """The chain touches the ledger only via its public verbs (read
+    and write) — never a private seam, never a direct rewrite of
+    ledger.json."""
     tree = _module_ast()
+    # read_artifact_checklist belongs here: it is the ledger's
+    # frame-authenticated read chokepoint — it verifies the checklist
+    # slot's integrity token, refuses tampered frames, and strips the
+    # token before returning. The bypass (checklist_slot_path + a raw
+    # json load) would skip authentication entirely — the exact defect
+    # class the chain must not reintroduce. Do NOT admit private
+    # "_"-prefixed seams or raw-rewrite verbs.
     allowed = {"STATUS_STATES", "checklist_slot_path", "load_ledger",
-               "set_artifact_status", "write_artifact_checklist"}
+               "read_artifact_checklist", "set_artifact_status",
+               "write_artifact_checklist"}
     for node in ast.walk(tree):
         if (isinstance(node, ast.ImportFrom) and node.module
                 and node.module.startswith("core.engagement")):
