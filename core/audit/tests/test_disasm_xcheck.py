@@ -10,6 +10,7 @@ is not x86-64.
 from __future__ import annotations
 
 import json
+import os
 import platform
 import shutil
 import subprocess
@@ -2678,16 +2679,52 @@ def compiled_fixture(tmp_path_factory):
 def _direct_objdump(monkeypatch):
     """Route the sandbox seam to plain subprocess for the compiled
     fixture (the sandbox layers are exercised by their own suite; the
-    invocation SHAPE is asserted in TestRunSynthetic)."""
+    invocation SHAPE is asserted in TestRunSynthetic).
+
+    The fake forwards the caller's placement kwargs (cwd, env)
+    instead of swallowing them: ``core.sandbox.run`` is patched
+    process-wide, so any spawn from a thread that outlives another
+    test can land here while this patch is live — executing it with
+    the cwd pin dropped writes that tool's artifacts (joern's
+    ``workspace/``) into the process cwd, i.e. the worktree root."""
 
     def fake_run(argv, **kwargs):
         return subprocess.run(
             argv, capture_output=True, text=True, timeout=60,
+            cwd=kwargs.get("cwd"), env=kwargs.get("env"),
         )
 
     import core.sandbox
 
     monkeypatch.setattr(core.sandbox, "run", fake_run)
+
+
+class TestDirectObjdumpFakeForwardsPlacement:
+    """Pin the fake's forwarding contract: a spawn routed through the
+    patched seam keeps its caller's cwd and env. The patch is
+    process-wide, so a background thread's spawn can land here while
+    the fixture is live — a swallowed cwd pin executes that tool at
+    the process cwd (the worktree root) instead of its run-owned
+    directory."""
+
+    def test_cwd_is_forwarded(self, _direct_objdump, tmp_path):
+        import core.sandbox
+        proc = core.sandbox.run(
+            ["python3", "-c", "import os; print(os.getcwd())"],
+            cwd=str(tmp_path),
+        )
+        assert os.path.realpath(proc.stdout.strip()) == os.path.realpath(
+            str(tmp_path))
+
+    def test_env_is_forwarded(self, _direct_objdump):
+        import core.sandbox
+        proc = core.sandbox.run(
+            ["python3", "-c",
+             "import os; print(os.environ.get('RAPTOR_TEST_MARKER', ''))"],
+            env={"RAPTOR_TEST_MARKER": "forwarded",
+                 "PATH": os.environ.get("PATH", "")},
+        )
+        assert proc.stdout.strip() == "forwarded"
 
 
 class TestCompiledFixture:
