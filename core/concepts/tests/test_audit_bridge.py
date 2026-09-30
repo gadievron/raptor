@@ -1315,6 +1315,23 @@ class TestDomainBugPatterns:
             f"bound 24)"
         )
 
+    # WALL-budget override — distinct from the CPU bound asserted at
+    # the bottom, which is untouched: the 3-run min-of-3 schedule
+    # costs ~2.4 s WALL on the authoring host and 6.79 s on a ~2.8x
+    # slower CI runner (observed on a PR-tier shard: PASSED, but past
+    # the global 10 s budget's 5 s half-band warn line), projecting
+    # to ~9.6 s at a 4x runner — one load spike from the 10 s cliff.
+    # Not lower: the guard warns at half the effective budget, so the
+    # budget must be ≥ ~19.2 s for the 4x projection (9.6 s) to clear
+    # the warn band — 20 is the smallest round figure that does, and
+    # it keeps ~2x headroom between the projection and the fail line
+    # (the same headroom philosophy as the CPU bound below). Not
+    # higher: a genuine wall regression must still trip — at the
+    # observed ~2.8x runner, 20 s fails the guard once the schedule's
+    # local wall roughly triples (~7.2 s x 2.8), and a 4x runner trips
+    # it at ~2x; a larger budget would let a tripled schedule ride
+    # the PR tier silently.
+    @pytest.mark.wall_budget(20.0)
     def test_milder_admitted_shapes_cost_bounded(self, tmp_path):
         """Regression net for the milder shapes that stressed the
         superseded ceiling claim: each is refused or admitted WITH a
