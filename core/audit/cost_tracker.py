@@ -252,6 +252,22 @@ class PhaseCostLedger:
     # is matched to a phase by name.
     _OUTCOME_BOOKED_CLASSES = frozenset({"review"})
 
+    # Telemetry call classes registered as FIRST-CLASS phases of this
+    # ledger. Their calls dispatch outside the review-outcome loop, so
+    # no record_call site books them at source; book_unbooked_classes
+    # books each as a phase named after the class, exactly like an
+    # unregistered class. Registration changes DISCLOSURE only: these
+    # are expected, designed spend classes (the dominant ones on
+    # binary-target runs), so they are left out of the unknown-class
+    # report the caller logs — the catch-all disclosure stays for
+    # classes nobody declared. Small curated seed set by design, not
+    # a learned vocabulary: a class belongs here only once it is a
+    # named spend class of the audit pipeline.
+    _REGISTERED_CLASS_PHASES = frozenset({
+        "glance_batch",
+        "concept_discovery",
+    })
+
     def book_unbooked_classes(
         self, class_costs: dict[str, tuple[int, float]],
     ) -> dict[str, float]:
@@ -267,9 +283,15 @@ class PhaseCostLedger:
         (unattributed residual) or vanished from the summary entirely
         (standalone-client spend outside the budget ledger).
 
-        Returns ``{class: cost}`` for the classes booked.
+        Returns ``{class: cost}`` for the booked classes that are NOT
+        registered first-class (``_REGISTERED_CLASS_PHASES``) — the
+        genuinely unknown ones the caller should disclose. Registered
+        classes are booked identically (same phases, same totals) but
+        without a report row: they are expected, and re-disclosing
+        them as ledger anomalies on every run turned the
+        unknown-class report into per-run log noise.
         """
-        booked: dict[str, float] = {}
+        disclosable: dict[str, float] = {}
         # Locked like record_call (see book_prior_segments).
         with self._lock:
             for cls, (calls, cost) in sorted(class_costs.items()):
@@ -281,8 +303,9 @@ class PhaseCostLedger:
                 pc = self._ensure_phase(cls)
                 pc.calls += max(0, int(calls))
                 pc.cost_usd += max(0.0, float(cost))
-                booked[cls] = float(cost)
-        return booked
+                if cls not in self._REGISTERED_CLASS_PHASES:
+                    disclosable[cls] = float(cost)
+        return disclosable
 
     @property
     def total_cost_usd(self) -> float:

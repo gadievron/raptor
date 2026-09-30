@@ -114,12 +114,13 @@ class TestClassBooking:
             "review": (9, 27.28),        # outcome-booked — skipped
             "audit": (3, 1.99),
             "iris": (2, 1.50),
+            # Registered first-class — booked, but not disclosed
+            # (see test_class_phase_registration.py).
             "glance_batch": (1, 0.40),
         })
-        assert booked == {
-            "audit": 1.99, "iris": 1.5, "glance_batch": 0.4,
-        }
+        assert booked == {"audit": 1.99, "iris": 1.5}
         assert ct.phases["iris"].calls == 2
+        assert ct.phases["glance_batch"].calls == 1
         assert abs(ct.total_cost_usd - (27.28 + 1.99 + 1.5 + 0.4)) < 1e-9
 
     def test_skips_classes_matching_existing_phase(self):
