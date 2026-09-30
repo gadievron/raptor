@@ -1130,6 +1130,30 @@ _EXPECTED_FILE = Path(__file__).resolve().parent / "data" / \
 _SUPERLINEAR_EXP = 1.6
 _TRUST_FLOOR_S = 5e-3
 
+# Per-size sampling count for the oracle workers: each ladder size is
+# measured as the MIN of this many CPU-time samples.  Contention,
+# cache eviction and CPU migration only ADD to a process-time sample,
+# so the min converges on the true cost.  Lowered to 1, a single
+# inflated sub-ms sample re-enters the ladder (the noise class the
+# full-ladder fit exists to survive — see LadderExponentPins);
+# raised, every in-budget probe costs proportionally more CPU inside
+# the lane's fixed wall deadline, so genuinely expensive lanes get
+# wall-killed with less of their ladder printed and the nightly
+# oracle tests pay more for no extra de-noising.
+_PROBE_SAMPLES = 3
+
+# Probes below this are timer-resolution noise and are excluded from
+# the ladder fit: process-time deltas at the 1-100us scale quantize
+# and jitter, and any ladder that clears the 5e-3 trust floor at its
+# top keeps the probes that carry its trend well above this (a
+# genuine quadratic's second-to-last probe is ~1/4 of its final).
+# Raised toward the trust floor, the fit degenerates back to the
+# last one or two probes and a single spiked sample decides the
+# verdict again (the spiked-linear pin reds); lowered below timer
+# resolution, near-zero quantized readings join the fit and drag a
+# linear ladder's slope superlinear (the quantized-bottom pin reds).
+_LADDER_NOISE_FLOOR_S = 1e-4
+
 # ── Adjudicated table members ────────────────────────────────────────
 # Table entries are judged at WORST CASE (inline flags, unanchored
 # search) because their real flags/mode are statically unknowable.  A
@@ -1651,12 +1675,64 @@ def _load_expected() -> dict:
         return json.load(fh)
 
 
+def _min_probe_seconds(run: Callable[[], None],
+                       budget_s: float) -> float:
+    """CPU seconds for one ladder size: the min of
+    ``_PROBE_SAMPLES`` process-time samples of ``run``.  Contention
+    only inflates a CPU-time sample, so the min estimates the
+    uncontended cost.  Sampling stops early while the running min
+    exceeds ``budget_s``: an over-budget probe ends the ladder
+    anyway, so re-sampling it would only multiply a multi-second
+    cost inside the lane's wall deadline."""
+    import time
+
+    best = float("inf")
+    for _ in range(_PROBE_SAMPLES):
+        start = time.process_time()
+        run()
+        best = min(best, time.process_time() - start)
+        if best > budget_s:
+            break
+    return best
+
+
+def _ladder_exponent(
+        probes: list[tuple[int, float]]) -> tuple[float, str]:
+    """Growth exponent for a ``(size, seconds)`` probe ladder of at
+    least two strictly increasing sizes.
+
+    The FINAL probe gates trust: below ``_TRUST_FLOOR_S`` the whole
+    ladder is linear-with-noise, not evidence — a genuinely
+    quadratic member clears 20ms by n=32000.  Above it, the exponent
+    is the least-squares slope of log(t) against log(n) over every
+    probe above ``_LADDER_NOISE_FLOOR_S``: a genuinely superlinear
+    ladder shows its trend at every doubling, while one inflated
+    sample cannot carry the slope the way it carried the old
+    last-two log-ratio."""
+    import math
+
+    if probes[-1][1] < _TRUST_FLOOR_S:
+        return (1.0, "fast")
+    fit = [(n, t) for n, t in probes if t >= _LADDER_NOISE_FLOOR_S]
+    if len(fit) < 2:
+        # Fail-open guard: a final probe over the 5e-3 trust floor
+        # with every earlier probe in timer noise is a >=50x jump in
+        # one doubling — no linear member does that.  Price it from
+        # the last two probes rather than refusing to answer.
+        fit = probes[-2:]
+    xs = [math.log(n) for n, _ in fit]
+    ys = [math.log(max(t, 1e-7)) for _, t in fit]
+    x_mean = sum(xs) / len(xs)
+    y_mean = sum(ys) / len(ys)
+    sxx = sum((x - x_mean) ** 2 for x in xs)
+    sxy = sum((x - x_mean) * (y - y_mean) for x, y in zip(xs, ys))
+    return (sxy / sxx, "ok")
+
+
 def _oracle_probe_lines(pattern: str, flags: int, mode: str,
                         kind: str, index: int, unit: str) -> None:
     """Worker body (runs in a hard-killed subprocess): print
     ``n dt`` probe lines for one attack lane at doubling sizes."""
-    import time
-
     if kind == "scan":
         _scan_oracle_probe_lines(pattern, flags, index)
         return
@@ -1705,19 +1781,18 @@ def _oracle_probe_lines(pattern: str, flags: int, mode: str,
         if text is None:
             print("NOATTACK")
             return
-        # CPU time, not wall: regex matching is pure CPU, and the
-        # exponent is a log-ratio of exactly TWO single samples — on a
-        # contended runner (this oracle fans out 8 subprocess lanes,
-        # nightly runners have fewer cores) wall-clock scheduling
-        # noise routinely pushes a linear member's last probe over the
-        # trust floor and then synthesizes exp~2-3 from the noisy
-        # ratio, mass-failing the agrees-with-pins re-checks. The
-        # process CPU clock counts only this child's own execution, so
-        # co-runner load cannot inflate it; the lane's hard-kill
-        # deadline stays wall-based in the parent.
-        start = time.process_time()
-        run(text)
-        elapsed = time.process_time() - start
+        # Min-of-N CPU time, not one wall sample: regex matching is
+        # pure CPU, and on a contended runner (this oracle fans out 8
+        # subprocess lanes, nightly runners have fewer cores)
+        # wall-clock scheduling noise routinely pushes a linear
+        # member's last probe over the trust floor and synthesizes
+        # exp~2-3, mass-failing the agrees-with-pins re-checks.  The
+        # process CPU clock counts only this child's own execution,
+        # and the min discards the residual sub-ms inflation (cache
+        # eviction, migration) that even CPU time picks up under
+        # load; the lane's hard-kill deadline stays wall-based in
+        # the parent.
+        elapsed = _min_probe_seconds(lambda: run(text), 1.0)
         print(n, f"{elapsed:.6f}", flush=True)
         if elapsed > 1.0:
             break
@@ -1729,7 +1804,6 @@ def _oracle_lane(pattern: str, flags: int, mode: str, kind: str,
                  timeout_s: float = 14.0) -> tuple[float | None, str]:
     """One hard-killed oracle lane: (exponent | None, status)."""
     import json
-    import math
     import subprocess
     import sys
 
@@ -1764,12 +1838,7 @@ def _oracle_lane(pattern: str, flags: int, mode: str, kind: str,
         return (99.0, "wall")  # first probe already over the CPU budget
     if len(probes) < 2:
         return (None, "short")
-    (n1, t1), (n2, t2) = probes[-2], probes[-1]
-    if t2 < _TRUST_FLOOR_S:
-        # Too fast to trust a log-ratio exponent: a genuinely
-        # quadratic member clears 20ms by n=32000.
-        return (1.0, "fast")
-    return (math.log(t2 / max(t1, 1e-7)) / math.log(n2 / n1), "ok")
+    return _ladder_exponent(probes)
 
 
 def _oracle_classify(pattern: str, flags: int,
@@ -2403,8 +2472,6 @@ def _scan_oracle_probe_lines(pattern: str, flags: int,
                              index: int) -> None:
     """Worker body (hard-killed subprocess): ``n dt`` probe lines
     for one scan-restart lane at doubling sizes."""
-    import time
-
     try:
         parsed = sre_parse.parse(pattern, flags)
     except (re.error, ValueError):
@@ -2443,12 +2510,10 @@ def _scan_oracle_probe_lines(pattern: str, flags: int,
         if text is None:
             print("NOATTACK")
             return
-        # CPU time, not wall — same contention rationale as
-        # _oracle_probe_lines: two single wall samples on a loaded
-        # runner synthesize false superlinear exponents.
-        start = time.process_time()
-        rx.search(text)
-        elapsed = time.process_time() - start
+        # Min-of-N CPU time, not one wall sample — same contention
+        # rationale as _oracle_probe_lines: single samples on a
+        # loaded runner synthesize false superlinear exponents.
+        elapsed = _min_probe_seconds(lambda: rx.search(text), 1.0)
         if degenerate:
             buffered.append(f"{n} {elapsed:.6f}")
         else:
