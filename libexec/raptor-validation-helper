@@ -1284,6 +1284,22 @@ def _record_stage_receipt(workdir: "str | Path", filename: str,
     save_json(Path(workdir) / STAGE_RECEIPTS_FILENAME, ledger)
 
 
+# Structural stage-file keys the merge itself consumes — never copied
+# onto the container (``stage`` is re-stamped separately below).
+_STAGE_STRUCTURAL_KEYS = frozenset({"stage", "updates", "findings"})
+
+# Container-metadata keys a stage file may set on findings.json, per
+# stage. The container is the pipeline's ground truth: ``target_path``
+# steers every later path resolution and ``summary``/``timestamp`` feed
+# the report, so an update-stage file must not be able to rewrite them.
+# Only keys a downstream consumer actually reads from the container are
+# copyable, and only from the stage that legitimately produces them
+# (report.py reads ``stage_f_review`` — the Stage F review prose).
+CONTAINER_COPY_ALLOWLIST: "dict[str, frozenset[str]]" = {
+    "F": frozenset({"stage_f_review"}),
+}
+
+
 def _apply_stage_file(workdir, stage_letter):
     """Merge stage-X.json into findings.json and record a consumption
     receipt. Stage inputs are immutable: the stage file stays in place
@@ -1434,10 +1450,26 @@ def _apply_stage_file(workdir, stage_letter):
             if finding.get("cvss_vector") == "":
                 finding["cvss_vector"] = None
 
-        # Copy top-level metadata (but NOT findings or updates — those are handled above)
+        # Copy top-level metadata — allowlisted per stage. The stage
+        # file is LLM-authored; letting it set arbitrary container
+        # keys meant it could overwrite target_path (redirecting every
+        # later path resolution) or plant report-facing prose.
+        allowed = CONTAINER_COPY_ALLOWLIST.get(stage_letter.upper(),
+                                               frozenset())
+        refused_keys = []
         for key, value in staged.items():
-            if key not in ("stage", "updates", "findings"):
+            if key in _STAGE_STRUCTURAL_KEYS:
+                continue
+            if key in allowed:
                 container[key] = value
+            else:
+                refused_keys.append(str(key))
+        if refused_keys:
+            print(f"  WARNING: stage-{stage_letter.lower()}.json "
+                  f"container key(s) refused (not copyable from this "
+                  f"stage): "
+                  f"{_sft(', '.join(sorted(refused_keys)), max_len=300)}",
+                  file=sys.stderr)
 
         container["stage"] = staged.get("stage", stage_letter.upper())
         _save_artifact(findings_path, container)
