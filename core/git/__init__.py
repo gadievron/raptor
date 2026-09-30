@@ -40,6 +40,15 @@ Public entry points:
     transport (``protocol.allow=never``) — use it for local-only reads;
     never for network operations.
 
+  - ``probe_worktree_dirt(repo)`` / ``WorktreeDirt``: the one way to
+    ask whether a TARGET repo's working tree is dirty. ``git status``
+    and even worktree-side plumbing (``diff-index HEAD``,
+    ``ls-files -m``) re-hash racily-clean entries through the repo's
+    own clean-filter chain — command execution from a hostile
+    ``.git``. This probe compares index stat data against ``os.lstat``
+    instead and never lets git open a worktree file (see
+    ``core.git.dirty``).
+
 The sandbox routing is the security-load-bearing piece. Pre-#210 this
 module would have been a plain subprocess wrapper; post-#210 every
 clone, fetch, or ls-remote of an untrusted URL passes through
@@ -59,13 +68,16 @@ from core.git.clone import (
     safe_git_command,
     safe_git_readonly_command,
 )
+from core.git.dirty import WorktreeDirt, probe_worktree_dirt
 from core.git.validate import validate_repo_url
 
 __all__ = [
+    "WorktreeDirt",
     "clone_repository",
     "fetch_commit",
     "get_safe_git_env",
     "ls_remote",
+    "probe_worktree_dirt",
     "safe_git_command",
     "safe_git_readonly_command",
     "validate_repo_url",

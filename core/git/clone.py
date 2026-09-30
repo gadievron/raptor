@@ -177,11 +177,17 @@ def get_safe_git_env(*, preserve_proxy: bool = False) -> dict[str, str]:
 # al.) cannot be blanket-neutralised here: the driver names are
 # repo-chosen, so there is no finite `-c` list that covers them. Any
 # git operation that (re)hashes worktree content — `git status`'s
-# index refresh, `git add`, checkout — runs them. Callers probing a
-# target repo must therefore stick to plumbing that never re-hashes
-# worktree files: `rev-parse`, `diff-index` WITHOUT a preceding
-# refresh (stat-cache comparison only), `ls-files`. See
-# core.run.provenance.target_snapshot for the pattern.
+# index refresh, `git add`, checkout, and ALSO the racily-clean
+# re-verification inside worktree-side plumbing (`diff-index HEAD`,
+# `diff-files`, `ls-files -m`; the hostile repo ships its own index,
+# so every entry can be crafted racy) — runs them. Callers probing a
+# target repo must therefore stick to commands that never open
+# worktree files: `rev-parse`, `rev-list`, `log`, `ls-tree`,
+# `diff-index --cached` (index-vs-tree only), `ls-files` index dumps,
+# and the `ls-files --others` directory walk. For working-tree
+# dirtiness use core.git.dirty.probe_worktree_dirt — it compares
+# index stat data against os.lstat in Python instead of letting git
+# do the worktree side.
 #
 # KNOWN LIMIT — the same repo-chosen-key-name problem covers the
 # TRANSPORT class: `url.<base>.insteadOf` (rewrites any fetch URL),
@@ -228,8 +234,8 @@ _SAFE_GIT_OVERRIDES = (
 
 
 # STRICT variant for READ-ONLY operations on target repos (log,
-# rev-parse, rev-list, diff-index, ls-files, ...). Read-only ops never
-# need a remote, so every transport can be refused wholesale:
+# rev-parse, rev-list, diff-index --cached, ls-files, ...). Read-only
+# ops never need a remote, so every transport can be refused wholesale:
 #
 #   - protocol.allow=never: one config kills file://, ext::, ssh://,
 #     git://, http(s):// in a single stroke. Stronger than the
@@ -260,8 +266,9 @@ _SAFE_GIT_OVERRIDES = (
 # variant: filter drivers have repo-chosen names, so no finite `-c`
 # list neutralises them. protocol.allow=never does NOT protect
 # worktree-rehashing operations — strict callers must still stick to
-# plumbing that never re-hashes worktree files (`rev-parse`,
-# `rev-list`, `log`, `diff-index` without a refresh, `ls-files`).
+# commands that never open worktree files (`rev-parse`, `rev-list`,
+# `log`, `ls-tree`, `diff-index --cached`, `ls-files` index dumps /
+# `--others` walks; dirtiness goes through core.git.dirty).
 _STRICT_READONLY_EXTRA_OVERRIDES = (
     "-c", "protocol.allow=never",
     "-c", "protocol.file.allow=never",
@@ -305,8 +312,8 @@ def safe_git_readonly_command(*args: str) -> list:
 
     Use for git commands that READ a target repository (cloned from an
     untrusted source) and never need a remote: ``log``, ``rev-parse``,
-    ``rev-list``, ``diff-index``, ``ls-files``, local ``checkout`` /
-    ``init`` / ``remote add`` steps, etc. On top of the
+    ``rev-list``, ``diff-index --cached``, ``ls-files``, local
+    ``checkout`` / ``init`` / ``remote add`` steps, etc. On top of the
     :func:`safe_git_command` posture this refuses every transport
     (``protocol.allow=never``, with the per-protocol ``file`` pin
     re-closed — see :data:`_STRICT_READONLY_EXTRA_OVERRIDES`) and pins
@@ -324,8 +331,10 @@ def safe_git_readonly_command(*args: str) -> list:
     that consult a different pager config key).
 
     KNOWN LIMIT (same as :data:`_SAFE_GIT_OVERRIDES`): clean/smudge
-    filter drivers cannot be blanket-neutralised — stick to plumbing
-    that never re-hashes worktree content.
+    filter drivers cannot be blanket-neutralised — stick to commands
+    that never open worktree files (racily-clean re-verification makes
+    even ``diff-index HEAD`` / ``ls-files -m`` re-hash content;
+    dirtiness goes through ``core.git.dirty``).
 
     Example::
 
