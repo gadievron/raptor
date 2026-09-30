@@ -25,36 +25,36 @@ from core.audit.orchestrator import (
 class TestFailedAttemptLedger:
     def test_failed_attempts_tracked_per_phase(self):
         ct = PhaseCostLedger()
-        ct.record_call("review", cost_usd=2.82)
-        ct.record_failed_attempt("review", cost_usd=5.26)
+        ct.record_call("review", cost_usd=3.75)
+        ct.record_failed_attempt("review", cost_usd=2.50)
 
         pc = ct.phases["review"]
         assert pc.calls == 1
         assert pc.failed_calls == 1
-        assert abs(pc.cost_usd - 2.82) < 1e-9
-        assert abs(pc.failed_attempts_cost_usd - 5.26) < 1e-9
+        assert abs(pc.cost_usd - 3.75) < 1e-9
+        assert abs(pc.failed_attempts_cost_usd - 2.50) < 1e-9
 
         d = ct.to_dict()
         assert d["phases"]["review"]["failed_calls"] == 1
-        assert d["phases"]["review"]["failed_attempts_cost_usd"] == 5.26
+        assert d["phases"]["review"]["failed_attempts_cost_usd"] == 2.50
 
     def test_reconciliation_arithmetic_closes(self):
         ct = PhaseCostLedger()
-        ct.record_call("review", cost_usd=2.82)
-        ct.record_failed_attempt("review", cost_usd=4.0)
-        ct.set_total_spend(8.08)  # the client ledger
+        ct.record_call("review", cost_usd=3.75)
+        ct.record_failed_attempt("review", cost_usd=1.5)
+        ct.set_total_spend(6.25)  # the client ledger
 
-        assert abs(ct.total_cost_usd - 2.82) < 1e-9
-        assert abs(ct.total_failed_attempts_cost_usd - 4.0) < 1e-9
-        assert abs(ct.total_spend_usd - 8.08) < 1e-9
+        assert abs(ct.total_cost_usd - 3.75) < 1e-9
+        assert abs(ct.total_failed_attempts_cost_usd - 1.5) < 1e-9
+        assert abs(ct.total_spend_usd - 6.25) < 1e-9
         # total_spend = completed + failed + unattributed, always.
         assert abs(
-            ct.unattributed_cost_usd - (8.08 - 2.82 - 4.0)
+            ct.unattributed_cost_usd - (6.25 - 3.75 - 1.5)
         ) < 1e-9
 
         totals = ct.to_dict()["totals"]
-        assert totals["total_spend_usd"] == 8.08
-        assert totals["failed_attempts_cost_usd"] == 4.0
+        assert totals["total_spend_usd"] == 6.25
+        assert totals["failed_attempts_cost_usd"] == 1.5
         assert abs(
             totals["cost_usd"]
             + totals["failed_attempts_cost_usd"]
@@ -81,16 +81,16 @@ class TestFailedAttemptLedger:
 
     def test_summary_line_labels_residual_unattributed(self):
         # Residual spend with NO recorded failed attempts is
-        # unattributed successful spend — a real run printed
-        # "failed/timed-out=$9.57" for four successful calls while
+        # unattributed successful spend — the pre-fix label lumped
+        # exactly this residual under "failed/timed-out" even when
         # telemetry showed zero failures. The label must not lie.
         ct = PhaseCostLedger()
-        ct.record_call("review", cost_usd=2.82)
-        ct.set_total_spend(8.08)
+        ct.record_call("review", cost_usd=3.75)
+        ct.set_total_spend(6.25)
         s = ct.summary()
-        assert "$8.08" in s
+        assert "$6.25" in s
         assert "failed/timed-out" not in s
-        assert "unattributed=$5.26" in s
+        assert "unattributed=$2.50" in s
 
     def test_summary_line_splits_failed_from_unattributed(self):
         ct = PhaseCostLedger()
@@ -109,19 +109,19 @@ class TestClassBooking:
 
     def test_books_unphased_classes(self):
         ct = PhaseCostLedger()
-        ct.record_call("review", cost_usd=27.28)
+        ct.record_call("review", cost_usd=24.00)
         booked = ct.book_unbooked_classes({
-            "review": (9, 27.28),        # outcome-booked — skipped
-            "audit": (3, 1.99),
+            "review": (9, 24.00),        # outcome-booked — skipped
+            "audit": (3, 2.10),
             "iris": (2, 1.50),
             # Registered first-class — booked, but not disclosed
             # (see test_class_phase_registration.py).
             "glance_batch": (1, 0.40),
         })
-        assert booked == {"audit": 1.99, "iris": 1.5}
+        assert booked == {"audit": 2.10, "iris": 1.5}
         assert ct.phases["iris"].calls == 2
         assert ct.phases["glance_batch"].calls == 1
-        assert abs(ct.total_cost_usd - (27.28 + 1.99 + 1.5 + 0.4)) < 1e-9
+        assert abs(ct.total_cost_usd - (24.00 + 2.10 + 1.5 + 0.4)) < 1e-9
 
     def test_skips_classes_matching_existing_phase(self):
         # checker_synthesis / study spend is booked at source into a
@@ -144,18 +144,18 @@ class TestClassBooking:
         assert "idle" not in ct.phases
 
     def test_booked_class_reaches_summary_line_and_total(self):
-        # The observed run: successful support-class spend printed as
-        # "failed/timed-out=$9.57". Booked classes print under their
+        # Pre-fix, successful support-class spend printed under the
+        # "failed/timed-out" label. Booked classes print under their
         # own names and the residual is zero.
         ct = PhaseCostLedger()
-        ct.record_call("review", cost_usd=27.28)
-        ct.book_unbooked_classes({"iris": (4, 9.57)})
-        ct.set_total_spend(36.85)
+        ct.record_call("review", cost_usd=24.00)
+        ct.book_unbooked_classes({"iris": (4, 6.40)})
+        ct.set_total_spend(30.40)
         s = ct.summary()
-        assert "iris=4calls/$9.57" in s
+        assert "iris=4calls/$6.40" in s
         assert "failed/timed-out" not in s
         assert "unattributed" not in s
-        assert abs(ct.total_spend_usd - 36.85) < 1e-9
+        assert abs(ct.total_spend_usd - 30.40) < 1e-9
         assert ct.unattributed_cost_usd < 0.005
 
     def test_standalone_client_spend_raises_total(self):
@@ -163,13 +163,13 @@ class TestClassBooking:
         # LLMClient instances) still count: tracked > injected ledger
         # → total_spend follows the tracked sum.
         ct = PhaseCostLedger()
-        ct.record_call("review", cost_usd=27.28)
+        ct.record_call("review", cost_usd=24.00)
         ct.book_unbooked_classes({
-            "iris": (4, 9.57),
-            "audit": (3, 1.99),
+            "iris": (4, 6.40),
+            "audit": (3, 2.10),
         })
-        ct.set_total_spend(36.85)   # client ledger missed audit's 1.99
-        assert abs(ct.total_spend_usd - 38.84) < 1e-9
+        ct.set_total_spend(30.40)   # client ledger missed audit's 2.10
+        assert abs(ct.total_spend_usd - 32.50) < 1e-9
 
 
 class TestReconcileLedgers:
@@ -199,7 +199,7 @@ class TestReconcileLedgers:
         monkeypatch.setattr(telemetry, "_sink", sink)
 
         result = OrchestratorResult()
-        result.cost_tracker.record_call("review", cost_usd=27.28)
+        result.cost_tracker.record_call("review", cost_usd=24.00)
         client = SimpleNamespace(total_cost=client_total)
         config = SimpleNamespace(llm_budget_client=client, out_dir=None)
         orch._reconcile_cost_ledgers(config, result)
@@ -216,28 +216,28 @@ class TestReconcileLedgers:
         result, warnings = self._reconcile(
             monkeypatch,
             records=[
-                self._rec("review", 27.28),
-                self._rec("iris", 9.57),
-                self._rec("audit", 1.99),
+                self._rec("review", 24.00),
+                self._rec("iris", 6.40),
+                self._rec("audit", 2.10),
             ],
-            client_total=36.85,   # iris on the ledger, audit outside it
+            client_total=30.40,   # iris on the ledger, audit outside it
         )
         # Every class reached the summary ledger: total follows the
-        # tracked sum (38.84), not the smaller client ledger.
-        assert abs(result.llm_spend_usd - 38.84) < 1e-6
-        assert abs(result.cost_tracker.phases["iris"].cost_usd - 9.57) < 1e-9
-        assert abs(result.cost_tracker.phases["audit"].cost_usd - 1.99) < 1e-9
+        # tracked sum (32.50), not the smaller client ledger.
+        assert abs(result.llm_spend_usd - 32.50) < 1e-6
+        assert abs(result.cost_tracker.phases["iris"].cost_usd - 6.40) < 1e-9
+        assert abs(result.cost_tracker.phases["audit"].cost_usd - 2.10) < 1e-9
         assert result.cost_tracker.unattributed_cost_usd < 0.005
         assert not [w for w in warnings if "cost reconciliation" in w]
 
     def test_divergence_over_one_percent_warns(self, monkeypatch):
         # Telemetry saw $10 of review spend the phases never booked
-        # (phases hold $27.28 review but telemetry says $37.28 —
+        # (phases hold $24.00 review but telemetry says $34.00 —
         # review is class-skipped, so booking can't close it).
         result, warnings = self._reconcile(
             monkeypatch,
-            records=[self._rec("review", 37.28)],
-            client_total=27.28,
+            records=[self._rec("review", 34.00)],
+            client_total=24.00,
         )
         del result
         assert [w for w in warnings if "cost reconciliation" in w]
@@ -253,7 +253,7 @@ class TestReconcileLedgers:
         sink = telemetry.TelemetrySink(
             __import__("pathlib").Path("/nonexistent-dir/t.jsonl"),
         )
-        sink.record(self._rec("review", 27.28))
+        sink.record(self._rec("review", 24.00))
 
         warnings: list[str] = []
         real_warning = orch.logger.warning
@@ -266,10 +266,10 @@ class TestReconcileLedgers:
         monkeypatch.setattr(telemetry, "_sink", sink)
 
         result = OrchestratorResult()
-        result.cost_tracker.record_call("review", cost_usd=27.28)
+        result.cost_tracker.record_call("review", cost_usd=24.00)
         result.cost_tracker.record_failed_attempt(
             "review", cost_usd=10.0)
-        client = SimpleNamespace(total_cost=37.28)
+        client = SimpleNamespace(total_cost=34.00)
         config = SimpleNamespace(llm_budget_client=client, out_dir=None)
         orch._reconcile_cost_ledgers(config, result)
         assert not [w for w in warnings if "cost reconciliation" in w]
@@ -277,8 +277,8 @@ class TestReconcileLedgers:
     def test_divergence_under_one_percent_quiet(self, monkeypatch):
         result, warnings = self._reconcile(
             monkeypatch,
-            records=[self._rec("review", 27.30)],  # 0.07% off
-            client_total=27.28,
+            records=[self._rec("review", 24.02)],  # ~0.08% off
+            client_total=24.00,
         )
         del result
         assert not [w for w in warnings if "cost reconciliation" in w]
@@ -296,23 +296,23 @@ class TestFormatCostSummary:
         base.update(kw)
         return SimpleNamespace(**base)
 
-    def test_observed_scenario(self):
-        """The observed shape: total spend split across completed
+    def test_split_spend_scenario(self) -> None:
+        """A representative shape: total spend split across completed
         reviews (15 reviewed, 12 errors) and failed attempts."""
         line = format_cost_summary(self._result(
-            total_cost_usd=2.82, llm_spend_usd=8.08,
-            failed_attempts_cost_usd=5.26, reviewed=15, errors=12,
+            total_cost_usd=3.75, llm_spend_usd=6.25,
+            failed_attempts_cost_usd=2.50, reviewed=15, errors=12,
         ))
         assert line == (
-            "Cost: $8.08 ($2.82 across 3 completed reviews; "
-            "$5.26 on failed/timed-out attempts)"
+            "Cost: $6.25 ($3.75 across 3 completed reviews; "
+            "$2.50 on failed/timed-out attempts)"
         )
 
     def test_no_failed_spend_stays_simple(self):
         line = format_cost_summary(self._result(
-            total_cost_usd=2.82, llm_spend_usd=2.82, reviewed=3,
+            total_cost_usd=3.75, llm_spend_usd=3.75, reviewed=3,
         ))
-        assert line == "Cost: $2.82"
+        assert line == "Cost: $3.75"
 
     def test_no_client_ledger_uses_tracked_split(self):
         line = format_cost_summary(self._result(

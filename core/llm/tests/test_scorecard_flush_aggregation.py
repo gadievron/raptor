@@ -97,7 +97,7 @@ class TestProcessAggregation:
         """The observed failure shape: 16 per-call clients must produce
         ONE aggregate line, not 16."""
         clients = [
-            _make_client("haiku", calls=1, cost=0.505, lat_ms=100)
+            _make_client("haiku", calls=1, cost=0.42, lat_ms=100)
             for _ in range(16)
         ]
         for c in clients:
@@ -111,7 +111,7 @@ class TestProcessAggregation:
         # Accurate aggregate: 16 calls, one model, summed cost.
         assert lines[0].startswith("scorecard: 16 calls across 1 model(s) ")
         assert "[haiku 16c]" in lines[0]
-        assert "$8.0800" in lines[0]
+        assert "$6.7200" in lines[0]
         # Every client's window still reached the scorecard.
         for c in clients:
             assert c._scorecard.register_uses.call_count == 1

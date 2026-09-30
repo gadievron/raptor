@@ -405,17 +405,17 @@ class TestMultiResumeCostContinuity:
         out_dir = tmp_path / "run1"
         out_dir.mkdir(exist_ok=True)
         (out_dir / "cost-breakdown.json").write_text(_json.dumps({
-            "phases": {"re_review": {"calls": 129, "cost_usd": 14.0}},
+            "phases": {"re_review": {"calls": 129, "cost_usd": 12.5}},
             "totals": {
-                "cost_usd": 14.0072,
+                "cost_usd": 12.5034,
                 "calls": 129,
                 "failed_attempts_cost_usd": 0.0,
-                "unattributed_cost_usd": 33.2853,
-                "total_spend_usd": 47.2925,
+                "unattributed_cost_usd": 21.7881,
+                "total_spend_usd": 34.2915,
             },
         }))
         booked, note = resolve_prior_spend(out_dir)
-        assert abs(booked - 47.2925) < 1e-6
+        assert abs(booked - 34.2915) < 1e-6
         assert note == "reconciled ledger"
 
     def test_journal_floor_rescues_legacy_broken_ledger(self, tmp_path):
@@ -432,7 +432,7 @@ class TestMultiResumeCostContinuity:
         out_dir.mkdir(exist_ok=True)
         (out_dir / "cost-breakdown.json").write_text(_json.dumps({
             "phases": {},
-            "totals": {"cost_usd": 47.29, "total_spend_usd": 47.29},
+            "totals": {"cost_usd": 34.29, "total_spend_usd": 34.29},
         }))
         for i, cost in enumerate((150.0, 250.0)):
             append_entry(out_dir, ReviewJournalEntry(

@@ -121,7 +121,7 @@ class TestBudgetExceededError:
     def test_typed_and_string_detection(self):
         assert is_budget_exceeded_error(LLMBudgetExceededError("nope"))
         assert is_budget_exceeded_error(
-            RuntimeError("LLM budget exceeded: $8.08 spent > $8.00 limit"),
+            RuntimeError("LLM budget exceeded: $6.25 spent > $6.00 limit"),
         )
         assert not is_budget_exceeded_error(RuntimeError("api timeout"))
         assert not is_budget_exceeded_error(ValueError("budget exceeded"))
@@ -143,7 +143,7 @@ class TestBudgetStopsReviewLoop:
             calls.append(ctx["function"])
             if len(calls) >= 2:
                 raise LLMBudgetExceededError(
-                    "LLM budget exceeded: $8.08 spent > $8.00 limit",
+                    "LLM budget exceeded: $6.25 spent > $6.00 limit",
                 )
             return ReviewOutcome(
                 file=ctx["file"], function=ctx["function"],
@@ -232,7 +232,7 @@ class TestBudgetStopsReviewLoop:
             client.exhausted = True  # spend lands on the client ledger
             return ReviewOutcome(
                 file=ctx["file"], function=ctx["function"],
-                status="clean", body="ok", cost_usd=8.0,
+                status="clean", body="ok", cost_usd=6.0,
             )
 
         cfg = _config(target, out, llm_budget_client=client)
@@ -253,22 +253,22 @@ class TestCheckBudgetConsultsClient:
         (its dispatch loops poll _check_budget per item)."""
         config = OrchestratorConfig(
             target_path=tmp_path, out_dir=tmp_path,
-            max_cost_usd=8.0,
+            max_cost_usd=6.0,
             llm_budget_client=_FakeBudgetClient(exhausted=True),
         )
         result = OrchestratorResult()
-        result.total_cost_usd = 2.82  # successful outcomes only
+        result.total_cost_usd = 3.75  # successful outcomes only
         assert _check_budget(config, 0.0, result) is True
         assert result.terminated_by == "llm_budget_exceeded"
 
     def test_not_exhausted_gate_stays_open(self, tmp_path: Path):
         config = OrchestratorConfig(
             target_path=tmp_path, out_dir=tmp_path,
-            max_cost_usd=8.0,
+            max_cost_usd=6.0,
             llm_budget_client=_FakeBudgetClient(exhausted=False),
         )
         result = OrchestratorResult()
-        result.total_cost_usd = 2.82
+        result.total_cost_usd = 3.75
         assert _check_budget(config, 0.0, result) is False
         assert result.terminated_by == "complete"
 
@@ -294,7 +294,7 @@ class TestErrorRetryStopsOnBudget:
         def review_fn(ctx, config):
             calls.append(ctx["function"])
             raise LLMBudgetExceededError(
-                "LLM budget exceeded: $8.08 spent > $8.00 limit",
+                "LLM budget exceeded: $6.25 spent > $6.00 limit",
             )
 
         result = _retry_error_outcomes(

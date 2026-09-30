@@ -136,7 +136,10 @@ _BUDGET_RESERVATION = 0.10
 # a class has been observed (locally or in the run's telemetry sink).
 # Sized for the expensive end of real call classes (full-context review
 # calls are the priciest observed class; most classes are far cheaper
-# and their history takes over after the first completion). A too-small
+# and their history takes over after the first completion). When
+# recalibrating, read the band off the scorecard/telemetry call-class
+# history — the living record of per-class costs — rather than any
+# figure quoted here. A too-small
 # default recreates the overshoot this machinery exists to prevent:
 # with N workers, N in-flight calls that each reserved only the flat
 # _BUDGET_RESERVATION while actually costing a large multiple of it

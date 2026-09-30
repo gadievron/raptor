@@ -73,13 +73,13 @@ class TestRegisteredClassPhases:
         # so nothing is dropped from the ledger by declassifying the
         # two classes as expected.
         ct = PhaseCostLedger()
-        ct.record_call("review", cost_usd=27.28)
+        ct.record_call("review", cost_usd=24.00)
         ct.book_unbooked_classes({
-            "audit": (3, 1.99),
+            "audit": (3, 2.10),
             "glance_batch": (21, 96.6),
             "concept_discovery": (3, 2.4),
         })
-        expected_total = 27.28 + 1.99 + 96.6 + 2.4
+        expected_total = 24.00 + 2.10 + 96.6 + 2.4
         assert abs(ct.total_cost_usd - expected_total) < 1e-9
         totals = ct.to_dict()["totals"]
         assert totals["cost_usd"] == round(expected_total, 4)
@@ -144,7 +144,7 @@ class TestReconcileDisclosure:
         monkeypatch.setattr(telemetry, "_sink", sink)
 
         result = orch.OrchestratorResult()
-        result.cost_tracker.record_call("review", cost_usd=27.28)
+        result.cost_tracker.record_call("review", cost_usd=24.00)
         client = SimpleNamespace(total_cost=client_total)
         config = SimpleNamespace(llm_budget_client=client, out_dir=None)
         orch._reconcile_cost_ledgers(config, result)
@@ -156,11 +156,11 @@ class TestReconcileDisclosure:
         result, infos = self._reconcile(
             monkeypatch,
             records=[
-                self._rec("review", 27.28),
+                self._rec("review", 24.00),
                 self._rec("glance_batch", 4.6),
                 self._rec("concept_discovery", 1.2),
             ],
-            client_total=33.08,
+            client_total=29.80,
         )
         assert [m for m in infos if "outside the phase ledger" in m] == []
         # The spend still lands on its named phases and the ledger
@@ -178,11 +178,11 @@ class TestReconcileDisclosure:
         result, infos = self._reconcile(
             monkeypatch,
             records=[
-                self._rec("review", 27.28),
+                self._rec("review", 24.00),
                 self._rec("glance_batch", 4.6),
                 self._rec("mystery_class", 0.7),
             ],
-            client_total=32.58,
+            client_total=29.30,
         )
         ledger_lines = [m for m in infos if "outside the phase ledger" in m]
         assert len(ledger_lines) == 1
