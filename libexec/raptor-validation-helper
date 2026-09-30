@@ -46,6 +46,7 @@ from core.security.log_sanitisation import (  # noqa: E402
     sanitise_excerpt as _excerpt,
     sanitise_for_terminal as _sft,
 )
+from core.status import normalize_status  # noqa: E402
 from core.schema_constants import (  # noqa: E402
     CWE_TO_VULN_TYPE,
     MEMORY_CORRUPTION_TYPES,
@@ -1300,6 +1301,89 @@ CONTAINER_COPY_ALLOWLIST: "dict[str, frozenset[str]]" = {
 }
 
 
+# Identity coordinates of a finding — the exact fields the
+# provenance MAC binds records to (core.witness.provenance
+# _finding_coords). An update payload rewriting them can clone a
+# sibling's identity and borrow its stamped record, or mint duplicate
+# finding identities; refused unless the value is a no-op echo of the
+# existing one (the findings-array update shape carries "id" by
+# construction).
+_UPDATE_IDENTITY_KEYS = frozenset({"id", "file", "function"})
+
+# Mechanically stamped record keys. These are written ONLY by the
+# programmatic stages (orchestrator stamp_feasibility, witness-stage
+# stamp_witness_execution) — never through a stage file — so a
+# payload-supplied copy is always a forgery vehicle. "provenance" is
+# the stamp-token key itself (core.witness.provenance.PROVENANCE_KEY).
+_UPDATE_MECHANICAL_KEYS = frozenset({
+    "witness_execution", "feasibility", "provenance",
+})
+
+# Suppression vocabulary (any spelling — values are normalised before
+# the membership test). Without a mechanical refutation receipt these
+# quarantine as ruled_out_unverified on EVERY status-bearing field.
+_DISPROVEN_FAMILY = frozenset({"ruled_out", "disproven"})
+
+
+def _gate_update_payload(
+    update: dict, existing: dict, workdir,
+) -> "tuple[dict, list[str], int]":
+    """Screen one LLM-authored stage-file update payload before it
+    deep-merges into *existing*. Returns
+    ``(cleaned, refused_keys, quarantined)``: *cleaned* is a shallow
+    copy safe to merge, *refused_keys* names dropped top-level keys,
+    *quarantined* counts suppression statuses rewritten to
+    ``ruled_out_unverified``.
+
+    Scope: stage-file update payloads ONLY. The programmatic writers
+    (orchestrator stamping, witness stage, IRIS Tier-1 gate) mutate
+    findings.json directly and never pass through here.
+    """
+    cleaned: dict = {}
+    refused: "list[str]" = []
+    quarantined = 0
+    for key, value in update.items():
+        if key in _UPDATE_IDENTITY_KEYS:
+            if existing.get(key) != value:
+                refused.append(str(key))
+            continue
+        if key in _UPDATE_MECHANICAL_KEYS:
+            refused.append(str(key))
+            continue
+        cleaned[key] = value
+
+    # The receipt is read from the EXISTING finding: mechanical keys
+    # above never enter through the payload, so an update cannot
+    # self-supply the record that authenticates its own rule-out.
+    receipt: "bool | None" = None  # tri-state: None = not yet checked
+
+    def _screen(value: str) -> str:
+        nonlocal receipt, quarantined
+        norm = normalize_status(value)
+        if not isinstance(norm, str):
+            return value
+        if norm in _DISPROVEN_FAMILY:
+            if receipt is None:
+                receipt = _refutation_receipt(existing, workdir)
+            if not receipt:
+                quarantined += 1
+                return "ruled_out_unverified"
+        # Canonical spelling always: a case/spacing variant dodges
+        # every downstream exact-match consumer while the display
+        # layer still renders it.
+        return norm
+
+    for field in ("status", "final_status"):
+        if isinstance(cleaned.get(field), str):
+            cleaned[field] = _screen(cleaned[field])
+    ruling = cleaned.get("ruling")
+    if isinstance(ruling, dict) and isinstance(ruling.get("status"), str):
+        ruling = dict(ruling)
+        ruling["status"] = _screen(ruling["status"])
+        cleaned["ruling"] = ruling
+    return cleaned, refused, quarantined
+
+
 def _refutation_receipt(finding: dict, workdir) -> bool:
     """True when the finding carries a mechanically verified refutation:
     a ``witness_execution`` record whose verdict is ``refuted`` AND whose
@@ -1398,6 +1482,20 @@ def _apply_stage_file(workdir, stage_letter):
                  if isinstance(f, dict) and f.get("id")}
         applied = 0
         refused = 0
+        payload_quarantined = 0
+
+        def _gated_merge(finding, update_dict):
+            nonlocal payload_quarantined
+            cleaned, refused_keys, quarantined = _gate_update_payload(
+                update_dict, finding, workdir)
+            if refused_keys:
+                print(f"  WARNING: update for "
+                      f"{_sft(str(finding.get('id')), max_len=120)} tried "
+                      f"to set protected key(s) — refused: "
+                      f"{_sft(', '.join(sorted(refused_keys)), max_len=200)}",
+                      file=sys.stderr)
+            payload_quarantined += quarantined
+            _deep_merge(finding, cleaned)
 
         if "updates" in staged and isinstance(staged["updates"], dict):
             # Preferred format: {"updates": {"FIND-001": {fields...}}}
@@ -1406,7 +1504,7 @@ def _apply_stage_file(workdir, stage_letter):
                     continue
                 finding = by_id.get(finding_id)
                 if finding:
-                    _deep_merge(finding, update_dict)
+                    _gated_merge(finding, update_dict)
                     applied += 1
                 else:
                     refused += 1
@@ -1427,7 +1525,7 @@ def _apply_stage_file(workdir, stage_letter):
                     continue
                 existing = by_id.get(fid)
                 if existing:
-                    _deep_merge(existing, staged_finding)
+                    _gated_merge(existing, staged_finding)
                     applied += 1
                 else:
                     refused += 1
@@ -1455,7 +1553,14 @@ def _apply_stage_file(workdir, stage_letter):
                 ruling = finding.get("ruling")
                 if isinstance(ruling, dict):
                     rs = ruling.get("status", "")
-                    if (rs == "ruled_out"
+                    rs = ((normalize_status(rs) or "")
+                          if isinstance(rs, str) else "")
+                    if rs and ruling.get("status") != rs:
+                        # Canonical spelling: a case/spacing variant
+                        # dodges every exact-match consumer downstream
+                        # while the display layer still renders it.
+                        ruling["status"] = rs
+                    if (rs in _DISPROVEN_FAMILY
                             and not _refutation_receipt(finding, workdir)):
                         # An LLM-tier rule-out with no mechanical
                         # refutation receipt is a suppression claim
@@ -1469,7 +1574,8 @@ def _apply_stage_file(workdir, stage_letter):
                         finding["status"] = "ruled_out_unverified"
                         quarantined += 1
                         continue
-                    if rs in ("confirmed", "ruled_out", "exploitable"):
+                    if rs in ("confirmed", "ruled_out", "exploitable",
+                              "ruled_out_unverified"):
                         finding["status"] = rs
                     final = _RULING_TO_FINAL.get(rs)
                     if final:
@@ -1506,6 +1612,10 @@ def _apply_stage_file(workdir, stage_letter):
 
         container["stage"] = staged.get("stage", stage_letter.upper())
         _save_artifact(findings_path, container)
+        if payload_quarantined:
+            print(f"  {payload_quarantined} suppression status(es) "
+                  f"without a verified refutation record quarantined "
+                  f"as ruled_out_unverified")
         summary = f"  Merged stage-{stage_letter.lower()}.json: {applied} findings updated"
         if refused:
             summary += f" ({refused} unknown finding id(s) refused)"
