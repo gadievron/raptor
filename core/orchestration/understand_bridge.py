@@ -404,11 +404,56 @@ def _find_stale_files(
     shared dict collapses repeats to one hash per disk path.
     """
     from core.hash import sha256_file
+    from core.inventory.binary_builder import BINARY_PATH_PREFIX
 
     target = Path(target_path)
     target_resolved = target.resolve()
+    target_is_file = target.is_file()
+    # Lazy once-per-call hash of the target file itself, shared by
+    # every binary-prefixed row below. The `disk_hash_cache` is keyed
+    # by rel_path (cross-candidate reuse in `_rank_candidates` depends
+    # on those entries), so K distinct ``binary:<stem>`` rows would
+    # otherwise hash the same target bytes K times per call.
+    target_hash: str | None = None
+    target_hash_computed = False
     stale: set[str] = set()
     for rel_path, u_hash in understand_hashes.items():
+        if target_is_file and rel_path.startswith(BINARY_PATH_PREFIX):
+            # Binary checklist rows record the real binary's hash under
+            # a ``binary:<stem>`` pseudo-path that never exists on disk
+            # — verify freshness against the operator-declared target
+            # file itself (no join, no containment check: nothing here
+            # is attacker-steerable, we hash only the target).
+            if disk_hash_cache is not None and rel_path in disk_hash_cache:
+                disk_hash = disk_hash_cache[rel_path]
+            else:
+                if not target_hash_computed:
+                    target_hash_computed = True
+                    # Guarded hash: the target can vanish or turn
+                    # unreadable (ENOENT, EACCES, EIO) between the
+                    # entry `is_file()` check and this open — same
+                    # doctrine as `_safe_mtime_ns`'s vanished-mid-
+                    # ranking guard: degrade to "cannot verify →
+                    # stale" rather than letting the OSError escape
+                    # and crash the caller's whole bridge stage.
+                    try:
+                        target_hash = sha256_file(target)
+                    except OSError as exc:
+                        logger.warning(
+                            "understand_bridge: target %s unreadable"
+                            " during staleness check (%s) — binary"
+                            " rows read stale",
+                            target.name, exc,
+                        )
+                        target_hash = None
+                disk_hash = target_hash
+                if disk_hash_cache is not None:
+                    disk_hash_cache[rel_path] = disk_hash
+            # ``disk_hash is None`` (unhashable target) never equals a
+            # checklist sha256 string, so it reads stale here too.
+            if disk_hash != u_hash:
+                stale.add(rel_path)
+            continue
         # Checklist entry paths are external input — require the
         # joined path to stay inside the target before hashing (same
         # containment rule as ``core.staleness.check_batch(root=...)``).
