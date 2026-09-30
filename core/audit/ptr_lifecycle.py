@@ -881,6 +881,15 @@ def run_ptr_lifecycle_check(
     cost discipline).
     """
     del budget_s  # phase-2 cross-file expansion parameter
+    # Binary checklist rows carry no repo source path; gate before the
+    # suffix-based language lookup can leak a meaningless ".0" reason.
+    from .fail_open_lang import is_binary_row
+    if is_binary_row(file_path):
+        return _inconclusive(
+            REASON_LANGUAGE_UNSUPPORTED,
+            "binary checklist row — ptr-lifecycle reads repo source, "
+            "not decompiled output",
+        )
     if not _language_supported(file_path):
         return _inconclusive(
             REASON_LANGUAGE_UNSUPPORTED,

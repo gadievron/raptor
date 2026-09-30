@@ -123,6 +123,13 @@ def language_for_path(file_path: str) -> str | None:
     return LANGUAGE_MAP.get(Path(file_path).suffix.lower())
 
 
+def is_binary_row(file_path: str) -> bool:
+    """True when ``file_path`` is a binary checklist row key
+    (``binary:<stem>``), not a repo source path."""
+    from core.inventory.binary_builder import BINARY_PATH_PREFIX
+    return file_path.startswith(BINARY_PATH_PREFIX)
+
+
 @dataclass
 class HandlerOutcome:
     """One error handler / suppression block, classified."""

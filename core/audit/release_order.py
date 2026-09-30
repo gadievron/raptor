@@ -808,6 +808,15 @@ def run_release_order_check(
     """Adjudicate one release-order hypothesis. See module docstring
     for verdict semantics."""
     del budget_s  # phase-2 callee-expansion parameter
+    # Binary checklist rows carry no repo source path; gate before the
+    # suffix-based language lookup can leak a meaningless ".0" reason.
+    from .fail_open_lang import is_binary_row
+    if is_binary_row(file_path):
+        return _inconclusive(
+            REASON_LANGUAGE_UNSUPPORTED,
+            "binary checklist row — release-order reads repo source, "
+            "not decompiled output",
+        )
     try:
         from .fail_open_lang import language_for_path
         language = language_for_path(file_path)

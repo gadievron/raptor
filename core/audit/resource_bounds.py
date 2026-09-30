@@ -1242,6 +1242,15 @@ def run_resource_bounds_check(
         None if budget_s is None
         else time.monotonic() + max(0.0, float(budget_s))
     )
+    # Binary checklist rows carry no repo source path; gate before the
+    # suffix-based language lookup can leak a meaningless ".0" reason.
+    from .fail_open_lang import is_binary_row
+    if is_binary_row(file_path):
+        return _inconclusive(
+            REASON_LANGUAGE_UNSUPPORTED,
+            "binary checklist row — resource-bounds reads repo source, "
+            "not decompiled output",
+        )
     try:
         from .fail_open_lang import language_for_path
         language = language_for_path(file_path)
