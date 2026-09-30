@@ -12760,6 +12760,24 @@ def _launch_codeql_warmup(config: "OrchestratorConfig") -> None:
     if not work:
         return
 
+    # The warm-up thread outlives this call and, left to itself, its
+    # sandboxed runner would resolve its spawn seam
+    # (``core.sandbox.run``) lazily at each spawn — picking up
+    # whatever is globally live at that instant, including a
+    # transient process-wide patch some OTHER code in this process
+    # has installed by then (test fixtures monkeypatch that seam; a
+    # non-executing fake would feed the memo fabricated verdicts, a
+    # kwarg-swallowing one would drop the confinement). Resolve the
+    # spawn callable NOW, while this caller's context is
+    # authoritative, and pin it for the thread. Resolution failure
+    # keeps the original surface — lazily, inside the thread, at
+    # first spawn.
+    pinned_sandbox_run: Callable[..., Any] | None
+    try:
+        from core.sandbox import run as pinned_sandbox_run
+    except Exception:  # noqa: BLE001 — fail exactly where the lazy seam would
+        pinned_sandbox_run = None
+
     def _warm_all() -> None:
         from .sweep import warm_codeql_memo
 
@@ -12771,7 +12789,9 @@ def _launch_codeql_warmup(config: "OrchestratorConfig") -> None:
                 )
                 return
             try:
-                stats = warm_codeql_memo(db, queries, memo)
+                stats = warm_codeql_memo(
+                    db, queries, memo, sandbox_run=pinned_sandbox_run,
+                )
                 if stats:
                     logger.info(
                         "codeql warm-up: %d/%d memo entries pre-filled "

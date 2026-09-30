@@ -266,6 +266,80 @@ class TestRunnerConfinement:
         assert str(home / ".codeql") not in kwargs["writable_paths"]
 
 
+class TestRunnerSeamPin:
+    """A caller-supplied ``sandbox_run`` pin owns the spawn seam.
+
+    The whole-run warm-up fires the adapter on a daemon thread that
+    outlives its launcher, so the launcher resolves
+    ``core.sandbox.run`` in its own context and passes it down; the
+    adapter must use that pin — not whatever the module attribute
+    holds at spawn time — while omitting the pin must keep the
+    pre-existing call-time resolution for same-thread callers."""
+
+    def _built_runner_call(self, tmp_path: Path, **builder_kwargs: Any):
+        query, _pack = _make_pack_query(tmp_path)
+        db = tmp_path / "db"
+        db.mkdir()
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        runner = _sandboxed_codeql_runner(
+            ["/opt/codeql"],
+            database_dir=db,
+            query_paths=[str(query)],
+            scratch_dir=scratch,
+            **builder_kwargs,
+        )
+        runner(
+            ["codeql", "database", "analyze", str(db)],
+            capture_output=True, text=True, timeout=5, check=False,
+            env={"INJECTED": "1"},
+        )
+
+    def test_pinned_spawn_callable_wins_over_the_live_seam(
+        self, tmp_path: Path, sandbox_recorder: _RecordingSandboxRun,
+    ):
+        pin = _RecordingSandboxRun()
+        self._built_runner_call(tmp_path, sandbox_run=pin)
+        assert sandbox_recorder.calls == []
+        assert len(pin.calls) == 1
+        # The pin changes WHO spawns, never WHAT rides the spawn: the
+        # confinement kwargs and the env scrub are intact.
+        kwargs = pin.calls[0]
+        assert kwargs["block_network"] is True
+        assert kwargs["restrict_reads"] is True
+        assert kwargs["writable_paths"] == [str(tmp_path / "db")]
+        assert "env" not in kwargs
+
+    def test_omitted_pin_keeps_call_time_resolution(
+        self, tmp_path: Path, sandbox_recorder: _RecordingSandboxRun,
+    ):
+        self._built_runner_call(tmp_path)
+        assert len(sandbox_recorder.calls) == 1
+
+    @pytest.mark.usefixtures("hermetic_codeql_cli")
+    def test_warm_codeql_memo_threads_the_pin(
+        self, tmp_path: Path, monkeypatch,
+        sandbox_recorder: _RecordingSandboxRun,
+    ):
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        db = _make_db(tmp_path)
+        query, _pack = _make_pack_query(tmp_path)
+        calls: list[dict[str, Any]] = []
+        import core.dataflow.codeql_augmented_run as car
+        monkeypatch.setattr(car, "analyze", _recording_analyze(calls))
+
+        pin = _RecordingSandboxRun()
+        stats = warm_codeql_memo(
+            str(db), [str(query)], BoundedMemo(8), sandbox_run=pin,
+        )
+
+        assert stats is not None
+        assert len(calls) == 1
+        assert sandbox_recorder.calls == []
+        assert len(pin.calls) == 1
+        assert pin.calls[0]["block_network"] is True
+
+
 def _make_db(tmp_path: Path) -> Path:
     db = tmp_path / "codeql-db"
     db.mkdir(exist_ok=True)

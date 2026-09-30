@@ -1110,3 +1110,176 @@ class TestWarmupSandboxAndGuard:
         orch_mod._launch_codeql_warmup(config)
         assert not done.wait(2)  # second DB never warmed
         assert warmed == [str(dbs[0])]
+
+
+class TestWarmupSeamPinAtLaunch:
+    """The launch pins ``core.sandbox.run`` in the LAUNCHING thread.
+
+    The warm-up thread outlives ``_launch_codeql_warmup``, so a
+    process-wide patch of the spawn seam installed after launch (test
+    fixtures monkeypatch it) must not steer the thread's spawns — a
+    non-executing fake would feed the memo fabricated verdicts and a
+    kwarg-swallowing one would drop the confinement. This drives the
+    REAL launch → warm → runner chain with the analyze gated open
+    across the patch window."""
+
+    @staticmethod
+    def _surface(record: list[dict]):
+        def fake(cmd, **kwargs):
+            record.append({"cmd": list(cmd), **kwargs})
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        return fake
+
+    def test_postlaunch_seam_patch_cannot_steer_the_warmup(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        import core.audit.cwe_dispatch as cwe_dispatch
+        import core.audit.orchestrator as orch_mod
+
+        db = _make_db(tmp_path)
+        (db / "codeql-database.yml").write_text(
+            "primaryLanguage: cpp\nsourceLocationPrefix: /src\n",
+            encoding="utf-8",
+        )
+        qa = _make_id_query(tmp_path, "cpp/overflow-buffer", "a.ql")
+        monkeypatch.setattr(
+            cwe_dispatch, "codeql_query_ids_by_pack",
+            lambda: {"cpp": [str(qa)]},
+        )
+
+        release = threading.Event()
+        done = threading.Event()
+
+        def gated_analyze(db_path, queries, output_path, *,
+                          extension_pack=None, codeql_bin="codeql",
+                          timeout_seconds=0, runner=None, extra_args=()):
+            # Park the warm-up here until the patch window below is
+            # live, then spawn — the exact interleaving the pin exists
+            # to survive.
+            assert release.wait(10)
+            runner(
+                [str(codeql_bin), "database", "analyze", str(db_path)],
+                capture_output=True, text=True,
+                timeout=timeout_seconds, check=False,
+            )
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(json.dumps(
+                {"runs": [{"results": [
+                    _rule_result("cpp/overflow-buffer"),
+                ]}]},
+            ), encoding="utf-8")
+            done.set()
+            return SimpleNamespace(
+                sarif_path=output_path, queries=tuple(queries),
+                extension_pack=extension_pack, elapsed_seconds=0.0,
+            )
+
+        import core.dataflow.codeql_augmented_run as car
+        monkeypatch.setattr(car, "analyze", gated_analyze)
+
+        launch_calls: list[dict] = []
+        patched_calls: list[dict] = []
+        import core.sandbox as sandbox_mod
+        monkeypatch.setattr(sandbox_mod, "run", self._surface(launch_calls))
+
+        config = SimpleNamespace(
+            codeql_db_paths=[str(db)], codeql_memo=BoundedMemo(4),
+        )
+        orch_mod._launch_codeql_warmup(config)
+
+        # Thread launched, analyze parked: swap the process-wide seam
+        # the way an unrelated patch window would, THEN let it spawn.
+        monkeypatch.setattr(sandbox_mod, "run", self._surface(patched_calls))
+        release.set()
+        assert done.wait(10)
+        for t in threading.enumerate():
+            if t.name == "codeql-warmup":
+                t.join(10)
+
+        assert patched_calls == []
+        assert len(launch_calls) == 1
+        assert launch_calls[0]["block_network"] is True
+        assert launch_calls[0]["restrict_reads"] is True
+
+    def test_pin_is_resolved_before_the_thread_starts(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        """Deterministic order fence for WHERE the pin resolves.
+
+        The parked-analyze test above proves the thread's spawns ride
+        the launch-time surface, but it cannot distinguish resolution
+        at launch from resolution at the top of the thread body — the
+        real thread wins that race every run. Here the thread never
+        runs at all: the launch's Thread is captured un-started, the
+        seam is swapped, and the warm-up body is then run
+        synchronously. Only resolution BEFORE the thread exists — in
+        the launching thread, the context that is authoritative for
+        the work it submits — survives; a pin taken inside the body
+        would see the swapped surface."""
+        import core.audit.cwe_dispatch as cwe_dispatch
+        import core.audit.orchestrator as orch_mod
+
+        db = _make_db(tmp_path)
+        (db / "codeql-database.yml").write_text(
+            "primaryLanguage: cpp\nsourceLocationPrefix: /src\n",
+            encoding="utf-8",
+        )
+        qa = _make_id_query(tmp_path, "cpp/overflow-buffer", "a.ql")
+        monkeypatch.setattr(
+            cwe_dispatch, "codeql_query_ids_by_pack",
+            lambda: {"cpp": [str(qa)]},
+        )
+
+        def plain_analyze(db_path, queries, output_path, *,
+                          extension_pack=None, codeql_bin="codeql",
+                          timeout_seconds=0, runner=None, extra_args=()):
+            runner(
+                [str(codeql_bin), "database", "analyze", str(db_path)],
+                capture_output=True, text=True,
+                timeout=timeout_seconds, check=False,
+            )
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(json.dumps(
+                {"runs": [{"results": [
+                    _rule_result("cpp/overflow-buffer"),
+                ]}]},
+            ), encoding="utf-8")
+            return SimpleNamespace(
+                sarif_path=output_path, queries=tuple(queries),
+                extension_pack=extension_pack, elapsed_seconds=0.0,
+            )
+
+        import core.dataflow.codeql_augmented_run as car
+        monkeypatch.setattr(car, "analyze", plain_analyze)
+
+        captured: dict[str, object] = {}
+
+        class _CapturingThread:
+            def __init__(self, *args, **kwargs) -> None:
+                captured["target"] = kwargs["target"]
+
+            def start(self) -> None:
+                pass
+
+        monkeypatch.setattr(
+            orch_mod, "_threading", SimpleNamespace(Thread=_CapturingThread),
+        )
+
+        launch_calls: list[dict] = []
+        patched_calls: list[dict] = []
+        import core.sandbox as sandbox_mod
+        monkeypatch.setattr(sandbox_mod, "run", self._surface(launch_calls))
+
+        config = SimpleNamespace(
+            codeql_db_paths=[str(db)], codeql_memo=BoundedMemo(4),
+        )
+        orch_mod._launch_codeql_warmup(config)
+        assert "target" in captured  # launch DID reach Thread creation
+
+        monkeypatch.setattr(sandbox_mod, "run", self._surface(patched_calls))
+        captured["target"]()  # the warm-up body, post-swap, this thread
+
+        assert patched_calls == []
+        assert len(launch_calls) == 1
+        assert launch_calls[0]["block_network"] is True

@@ -4085,6 +4085,7 @@ def _sandboxed_codeql_runner(
     query_paths: list[str],
     scratch_dir: Path,
     caller_label: str = "codeql-warmup",
+    sandbox_run: Callable[..., Any] | None = None,
 ) -> Callable[..., Any]:
     """Build a subprocess.run-shaped adapter routing a codeql
     invocation through ``core.sandbox`` — network deny, safe env,
@@ -4122,7 +4123,15 @@ def _sandboxed_codeql_runner(
       ``codeql`` argv[0] from a home install resolves in the caller
       environment but NOT inside the sandbox — setup refuses and the
       caller degrades (the query_runner's ``_sandbox_tool_paths``
-      precedent)."""
+      precedent).
+
+    ``sandbox_run`` pins the spawn callable: a caller whose adapter
+    will fire on a thread that outlives it (the whole-run warm-up)
+    resolves ``core.sandbox.run`` in its own context and passes it
+    here, so a process-wide patch of that seam installed later
+    cannot steer the spawn. Omitted, the adapter keeps call-time
+    resolution — right for same-thread callers, where the live
+    surface IS the caller's context."""
     readable = {
         str(_codeql_pack_root(Path(q))) for q in query_paths
     }
@@ -4133,12 +4142,14 @@ def _sandboxed_codeql_runner(
     writable = [str(database_dir)]
 
     def _runner(cmd: list[str], **kwargs: Any):
-        from core.sandbox import run as sandbox_run
+        run_fn = sandbox_run
+        if run_fn is None:
+            from core.sandbox import run as run_fn
 
         # The sandbox applies get_safe_env() itself; forwarding
         # analyze()'s env would fight its sanitisation.
         kwargs.pop("env", None)
-        return sandbox_run(
+        return run_fn(
             cmd, block_network=True, caller_label=caller_label,
             tool_paths=tool_paths,
             output=str(scratch_dir),
@@ -4157,6 +4168,7 @@ def warm_codeql_memo(
     memo: BoundedMemo[list[dict[str, Any]]] | None = None,
     *,
     timeout_seconds: int = 600,
+    sandbox_run: Callable[..., Any] | None = None,
 ) -> dict[str, int] | None:
     """One whole-run ``database analyze`` pre-filling the per-query memo.
 
@@ -4188,6 +4200,13 @@ def warm_codeql_memo(
     None when nothing could be warmed. Best-effort by contract: the
     caller runs this on a background thread and every failure must
     degrade to the pre-existing per-query path.
+
+    ``sandbox_run`` is the launcher's submit-time pin of
+    ``core.sandbox.run``, threaded to the sandboxed runner so the
+    background thread's spawns cannot be steered by a later
+    process-wide patch of that seam (see
+    :func:`_sandboxed_codeql_runner`); omitted, the runner keeps
+    call-time resolution.
     """
     from core.dataflow.codeql_augmented_run import analyze
 
@@ -4257,6 +4276,7 @@ def warm_codeql_memo(
                         database_dir=db,
                         query_paths=[str(q) for q, _key, _rid in entries],
                         scratch_dir=Path(tmp),
+                        sandbox_run=sandbox_run,
                     ),
                     extra_args=_codeql_cache_args(db),
                 )
