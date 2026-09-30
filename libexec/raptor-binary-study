@@ -63,6 +63,11 @@ import re  # noqa: E402
 import subprocess  # noqa: E402
 from typing import TYPE_CHECKING  # noqa: E402
 
+from core.concepts.study_failure import (  # noqa: E402
+    clear_study_failure,
+    load_study_failure,
+    write_study_failure,
+)
 from core.json import load_json, save_json  # noqa: E402
 
 if TYPE_CHECKING:
@@ -712,6 +717,9 @@ def main() -> int:
     # Fresh-run semantics are owned here: a study-list.json from an
     # older run in a reused output dir would short-circuit prep.
     (output_dir / "study-list.json").unlink(missing_ok=True)
+    # Same fresh-run rule for the failure record: a stale one from an
+    # earlier run must never be read as THIS run's diagnosis.
+    clear_study_failure(output_dir)
 
     identifiers = parsed.identifier
     last_pending: "set[str] | None" = None
@@ -723,6 +731,7 @@ def main() -> int:
     # reading) gets ONE consolidated WARNING after the clamp.
     server_loss_reason: "str | None" = None
     server_loss_pending = 0
+    budget_stopped = False
     for pass_no in range(1, max(1, parsed.max_passes) + 1):
         cmd = [sys.executable, str(libexec / "raptor-study-loop"),
                str(tree_root), str(output_dir),
@@ -747,6 +756,7 @@ def main() -> int:
             remaining = _pass_budget(
                 parsed.max_cost, spent_total, output_dir, pass_no)
             if remaining is None:
+                budget_stopped = True
                 break
             cmd.extend(["--max-cost", f"{remaining:.4f}"])
         if parsed.verbose:
@@ -818,20 +828,55 @@ def main() -> int:
     if server_loss_reason is not None:
         _warn_server_loss(server_loss_reason, server_loss_pending,
                           clamped_total)
+    dm = output_dir / "domain-model.json"
     if loop_rc != 0:
+        if not dm.is_file() and load_study_failure(output_dir) is None:
+            # The failing pass died without recording its own cause
+            # (killed mid-run, or an error path outside study-run's
+            # chokepoint) — leave the fallback diagnosis so the
+            # record contract holds on every no-model failure.
+            write_study_failure(
+                output_dir, "study_error",
+                detail=f"study pass {pass_no} failed (exit {loop_rc})",
+            )
         return loop_rc
 
-    dm = output_dir / "domain-model.json"
-    if dm.is_file():
-        data = load_json(dm, max_bytes=_MAX_DB_BYTES)
-        if isinstance(data, dict):
-            print(
-                "binary-study: domain-model.json — "
-                f"{len(data.get('concepts') or [])} concept(s), "
-                f"{len(data.get('invariants') or [])} invariant(s), "
-                f"{len(data.get('contracts') or [])} contract(s)",
-                file=sys.stderr,
+    if not dm.is_file():
+        # Exit contract: rc 0 is reserved for runs that produced a
+        # domain model. Exiting 0 here would defer the failure to
+        # whichever consumer looks for the model next — one stage
+        # late and stripped of its cause.
+        if budget_stopped:
+            detail = (
+                f"LLM budget exhausted (${spent_total:.2f} of "
+                f"${parsed.max_cost:.2f} spent) before any domain "
+                "model was produced"
             )
+            write_study_failure(
+                output_dir, "llm_budget_exhausted", detail=detail)
+            return _fail(detail)
+        write_study_failure(
+            output_dir, "no_domain_model",
+            detail=(
+                "study pass(es) exited 0 without producing "
+                "domain-model.json (no study scope derived, or the "
+                "pass stopped before Phase 2)"
+            ),
+        )
+        return _fail(
+            "study exited without producing domain-model.json")
+
+    # A produced model supersedes any earlier failure record.
+    clear_study_failure(output_dir)
+    data = load_json(dm, max_bytes=_MAX_DB_BYTES)
+    if isinstance(data, dict):
+        print(
+            "binary-study: domain-model.json — "
+            f"{len(data.get('concepts') or [])} concept(s), "
+            f"{len(data.get('invariants') or [])} invariant(s), "
+            f"{len(data.get('contracts') or [])} contract(s)",
+            file=sys.stderr,
+        )
     print(f"binary-study: artefacts in {output_dir}", file=sys.stderr)
     return 0
 

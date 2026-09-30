@@ -489,6 +489,31 @@ def _stage_import(ctx: ChainContext) -> StageOutcome:
     return StageOutcome("done", extra_degradations=tuple(extras))
 
 
+def _study_failure_note(ctx: ChainContext) -> str:
+    """Root-cause suffix from the study side's failure record.
+
+    The study drivers drop ``study-failure.json`` in the study dir
+    when a run ends without a domain model; folding its reason into
+    the stage-failure text puts the actual cause (e.g. the LLM budget
+    exhausting with zero completed batches) on the chain's ledger row
+    instead of a bare rc / no-model symptom. Empty string when the
+    record is absent or unusable — the record is diagnosis, never a
+    dependency. The record's ``detail`` may embed target-derived
+    bytes, so it is escaped HERE: the ledger detail this suffix rides
+    into is machine-authored and written as-is.
+    """
+    try:
+        from core.concepts.study_failure import load_study_failure
+        record = load_study_failure(ctx.study_dir)
+    except ImportError:
+        return ""
+    if record is None:
+        return ""
+    reason = _esc(record["reason"], max_len=64)
+    detail = _esc(record.get("detail", ""), max_len=300)
+    return f" — {reason}: {detail}" if detail else f" — {reason}"
+
+
 def _stage_study(ctx: ChainContext) -> StageOutcome:
     if ctx.mechanical_only:
         return _mechanical_only_skip()
@@ -513,11 +538,16 @@ def _stage_study(ctx: ChainContext) -> StageOutcome:
         cmd.extend(["--max-cost", str(ctx.max_cost)])
     rc = _run_child(cmd, llm=True)
     if rc != 0:
-        return StageOutcome("failed", f"binary-study rc={rc}")
+        return StageOutcome(
+            "failed", f"binary-study rc={rc}{_study_failure_note(ctx)}")
     if not (ctx.study_dir / "domain-model.json").is_file():
-        return StageOutcome("failed",
-                            "study exited 0 but wrote no "
-                            "domain-model.json")
+        # Belt-and-braces: the study side's exit contract makes this
+        # unreachable for current drivers, but an exit code is not
+        # completion evidence — the model file is.
+        return StageOutcome(
+            "failed",
+            "study exited 0 but wrote no domain-model.json"
+            f"{_study_failure_note(ctx)}")
     return StageOutcome("done")
 
 

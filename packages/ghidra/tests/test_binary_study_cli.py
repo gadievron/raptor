@@ -399,8 +399,19 @@ class TestServerLossMainWiring:
         redb = tmp_path / "re-database.json"
         _write_redb(redb)
         out = tmp_path / "out"
-        monkeypatch.setattr(
-            mod, "_run", lambda cmd, verbose, gap_dir=None: 0)
+
+        # The exit contract reserves rc 0 for runs that produced a
+        # domain model, and the loss WARNING is degradation
+        # reporting on an otherwise successful run — so the mocked
+        # study pass is model-producing (in reality the study loop
+        # writes domain-model.json).
+        def _fake_run(cmd, verbose, gap_dir=None):
+            (out / "domain-model.json").write_text(
+                '{"concepts": [], "invariants": [], "contracts": []}',
+                encoding="utf-8")
+            return 0
+
+        monkeypatch.setattr(mod, "_run", _fake_run)
         pend_iter = iter(pendings)
         monkeypatch.setattr(
             mod, "_pending_reading_names", lambda od: next(pend_iter))

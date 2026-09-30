@@ -37,6 +37,10 @@ import core.startup.process_init  # noqa: E402,F401
 from core.logging import configure_cli_logging  # noqa: E402
 
 from core.concepts.study import run_study  # noqa: E402
+from core.concepts.study_failure import (  # noqa: E402
+    clear_study_failure,
+    write_study_failure,
+)
 
 logger = logging.getLogger("raptor-study-run")
 
@@ -186,6 +190,10 @@ def main() -> int:
         if cfg_obj is not None:
             cfg_obj.max_cost_per_scan = parsed.max_cost
 
+    # This run's outcome supersedes any earlier failure record — a
+    # stale one must never be read as THIS run's diagnosis.
+    clear_study_failure(output_dir)
+
     _progress("start", f"Reading {study_list}")
     try:
         model = run_study(
@@ -195,6 +203,37 @@ def main() -> int:
             on_progress=_progress,
             batch_target=parsed.batch_target,
         )
+    except Exception as exc:  # noqa: BLE001 — exit-contract chokepoint
+        # Fail loudly AT the root cause: nonzero exit plus a
+        # machine-readable record naming why no domain model exists,
+        # so downstream consumers (the engagement chain) report the
+        # actual cause instead of "exited 0 but wrote no model" one
+        # stage later. KeyboardInterrupt/SystemExit still propagate.
+        budget = bool(getattr(exc, "budget_exhausted", False))
+        if not budget:
+            try:
+                from core.llm.client import is_budget_exceeded_error
+                budget = is_budget_exceeded_error(exc)
+            except ImportError:
+                pass
+        write_study_failure(
+            output_dir,
+            "llm_budget_exhausted" if budget else "study_error",
+            detail=str(exc),
+        )
+        # The escaping console formatter renders any target-derived
+        # bytes in the message inert (multi-line tracebacks included).
+        if budget:
+            # A budget stop is a chosen limit, not a bug — one line.
+            logger.error("study failed — %s: %s",
+                         type(exc).__name__, exc)
+        else:
+            # A genuine failure keeps its full traceback: the record
+            # bounds its detail to the cause, so this log line is the
+            # only artifact that preserves the crash site.
+            logger.error("study failed — %s: %s",
+                         type(exc).__name__, exc, exc_info=True)
+        return 1
     finally:
         _write_spend_record(client, output_dir)
 

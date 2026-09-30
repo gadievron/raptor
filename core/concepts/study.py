@@ -762,7 +762,16 @@ class _BatchLLMError(Exception):
     structured guards); the batch loops treat those as content-sized,
     not provider-health, failures: split-retried, never counted toward
     the consecutive-failure abort.
+
+    ``budget_exhausted`` (class default ``False``, stamped ``True``
+    post-hoc like ``config_shaped``) marks a zero-yield phase whose
+    failures came from the spend cap tripping — consumers surface
+    "budget exhausted" as the root cause instead of a generic
+    all-batches-failed symptom. Read it with ``getattr`` (the
+    ``config_shaped`` idiom) so foreign exceptions stay compatible.
     """
+
+    budget_exhausted: bool = False
 
     def __init__(self, msg: str, *, truncation: bool = False) -> None:
         super().__init__(msg)
@@ -3589,6 +3598,7 @@ def _run_phase2_serial(
     failures = 0
     successes = 0
     stopped = False
+    budget_stop_msg: str | None = None
 
     def _note_stats() -> None:
         if phase_stats is not None:
@@ -3635,6 +3645,7 @@ def _run_phase2_serial(
             )
         except _PhaseBudgetExhausted as exc:
             failures += 1
+            budget_stop_msg = str(exc)
             # A budget stop is deterministic — every remaining batch
             # would fail identically, so stop dispatching NOW and
             # keep the partial coverage already earned. Distinct from
@@ -3711,10 +3722,22 @@ def _run_phase2_serial(
         # A silently-empty result would synthesise and persist an
         # empty domain model, poisoning the project-canonical model
         # and churning every journal entry's domain_model_hash.
-        err = _BatchLLMError(
-            f"all {failures} attempted Phase 2 batch(es) failed — "
-            "no study output; refusing to synthesise an empty domain "
-            "model")
+        if budget_stop_msg is not None:
+            # Name the root cause: the spend cap stopped the phase
+            # before ANY batch yielded — "budget exhausted", not a
+            # generic all-failed symptom two consumers removed from
+            # the cap that tripped.
+            err = _BatchLLMError(
+                "LLM budget exhausted with 0 completed Phase 2 "
+                "batch(es) — no study output; refusing to "
+                "synthesise an empty domain model "
+                f"({budget_stop_msg})")
+            err.budget_exhausted = True
+        else:
+            err = _BatchLLMError(
+                f"all {failures} attempted Phase 2 batch(es) failed "
+                "— no study output; refusing to synthesise an empty "
+                "domain model")
         if truncation_failures >= _TRUNCATION_FAIL_LIMIT:
             # Deterministic-config marker: the consumer disables the
             # study lane on sight instead of counting strikes — the
@@ -3791,6 +3814,7 @@ def _run_phase2_parallel(
     _failed = [0]
 
     _budget_stopped = [False]
+    _budget_stop_msg: list[str | None] = [None]
 
     def _on_batch_error(item: Any, exc: Exception) -> tuple:
         if isinstance(exc, _PhaseBudgetExhausted):
@@ -3807,6 +3831,8 @@ def _run_phase2_parallel(
                     _successes[0] += 1
                 first = not _budget_stopped[0]
                 _budget_stopped[0] = True
+                if first:
+                    _budget_stop_msg[0] = str(exc)
                 completed = _successes[0]
                 _abort.set()
             if first:
@@ -3890,10 +3916,19 @@ def _run_phase2_parallel(
     if items and _successes[0] == 0 and _failed[0] and not _ext_stop:
         # Zero successful batches with at least one LLM failure — the
         # run never happened; see the sequential path's twin check.
-        err = _BatchLLMError(
-            f"all {_failed[0]} attempted Phase 2 batch(es) failed — "
-            "no study output; refusing to synthesise an empty domain "
-            "model")
+        if _budget_stop_msg[0] is not None:
+            # Name the root cause — see the sequential twin.
+            err = _BatchLLMError(
+                "LLM budget exhausted with 0 completed Phase 2 "
+                "batch(es) — no study output; refusing to "
+                "synthesise an empty domain model "
+                f"({_budget_stop_msg[0]})")
+            err.budget_exhausted = True
+        else:
+            err = _BatchLLMError(
+                f"all {_failed[0]} attempted Phase 2 batch(es) "
+                "failed — no study output; refusing to synthesise "
+                "an empty domain model")
         if _truncation_failures[0] >= _TRUNCATION_FAIL_LIMIT:
             # Deterministic-config marker — see the sequential twin.
             err.config_shaped = True

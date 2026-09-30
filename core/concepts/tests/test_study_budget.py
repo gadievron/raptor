@@ -106,8 +106,6 @@ class TestStudyRunMaxCost:
     def test_spend_record_written_when_run_study_raises(
         self, tmp_path, monkeypatch,
     ):
-        import pytest
-
         mod = _load_script(
             REPO_ROOT / "libexec" / "raptor-study-run",
             "raptor_study_run_budget_fail", monkeypatch,
@@ -129,8 +127,9 @@ class TestStudyRunMaxCost:
         monkeypatch.setattr(mod, "run_study", _boom)
         monkeypatch.setattr(
             sys, "argv", ["raptor-study-run", str(tmp_path)])
-        with pytest.raises(RuntimeError):
-            mod.main()
+        # Exit contract: a study that ends without a model exits
+        # nonzero (never a bare traceback) and records its cause.
+        assert mod.main() == 1
         # A failed leg's spend is still money gone — the multi-pass
         # driver must see it.
         data = json.loads((tmp_path / "study-cost.json").read_text())
