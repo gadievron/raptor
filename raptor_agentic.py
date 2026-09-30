@@ -282,6 +282,31 @@ def _warn_analysis_rc_with_report(rc: int) -> None:
     )
 
 
+def _print_codeql_stderr_tail(codeql_stderr: str) -> None:
+    """Relay the tail of a failed CodeQL run's stderr to the operator.
+
+    CodeQL error lines quote target file paths, and file names may
+    legally carry ESC/C1 bytes — escape each relayed line like every
+    other child-output relay here. The language-detection hint keys
+    off the raw lines (the escape never rewrites plain ASCII, but
+    matching pre-escape keeps the two concerns independent).
+    """
+    stderr_tail = (codeql_stderr or "").rstrip().splitlines()[-15:]
+    if stderr_tail:
+        print("   CodeQL stderr (last 15 lines):")
+        for line in stderr_tail:
+            print(f"     {sanitise_for_terminal(line, max_len=300)}")
+    if any("No CodeQL-supported languages detected" in line
+           for line in stderr_tail):
+        print(
+            "   Hint: language auto-detection rejected every candidate "
+            "(typically because the target has no build files — go.mod, "
+            "package.json, pyproject.toml, CMakeLists.txt, etc.). "
+            "Pass --languages cpp,python,javascript,go (or a subset) "
+            "to bypass auto-detection."
+        )
+
+
 def _collect_child_pass_costs(prepass_result, postpass_result,
                               audit_postpass) -> list[tuple[str, float]]:
     """(label, spend_usd) per opt-in pass subprocess that recorded spend.
@@ -3784,19 +3809,7 @@ def main() -> int:
             # to spelunk through out/codeql_*/ to find the actual reason
             # (often empty on early failure — language detector returns
             # before writing any report).
-            stderr_tail = (codeql_stderr or "").rstrip().splitlines()[-15:]
-            if stderr_tail:
-                print("   CodeQL stderr (last 15 lines):")
-                for line in stderr_tail:
-                    print(f"     {line}")
-            if any("No CodeQL-supported languages detected" in line for line in stderr_tail):
-                print(
-                    "   Hint: language auto-detection rejected every candidate "
-                    "(typically because the target has no build files — go.mod, "
-                    "package.json, pyproject.toml, CMakeLists.txt, etc.). "
-                    "Pass --languages cpp,python,javascript,go (or a subset) "
-                    "to bypass auto-detection."
-                )
+            _print_codeql_stderr_tail(codeql_stderr)
             logger.warning("CodeQL scan failed - rc=%d", rc)
             if args.codeql_only:
                 print("✗ CodeQL-only mode failed", file=sys.stderr)
