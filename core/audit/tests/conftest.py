@@ -13,6 +13,7 @@ runs after this autouse fixture and wins.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -44,6 +45,43 @@ def _isolated_mac_keys(tmp_path_factory, monkeypatch):
     monkeypatch.setenv(
         "XDG_DATA_HOME", str(tmp_path_factory.mktemp("xdg-data")),
     )
+
+
+# ── Repo-root workspace tripwire ────────────────────────────────────
+# A fleet battery once left a `workspace/cpg.bin/` tree at a worktree
+# root FROM THIS SUITE: the audit joern presweep runs in a background
+# thread that outlives its test, and a spawn lane that loses its cwd
+# pin writes Joern's workspace under the process cwd. Same tripwire
+# as packages/joern/tests/conftest.py — deliberately replicated, not
+# hoisted: each suite's tripwire must stand alone so a refactor of
+# one never silently disarms the other. Self-contained addition — it
+# reads and edits nothing else in this file.
+
+def _repo_root() -> Path:
+    """The root the tripwire watches — a seam the meta-test
+    (test_workspace_tripwire_meta.py) retargets at a scratch root so
+    the REAL fixture below is what its nested sessions exercise."""
+    return Path(__file__).resolve().parents[3]
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_repo_root_workspace_debris() -> Iterator[None]:
+    """Fail the session when an audit suite drops `workspace/` at the
+    repo root: some spawn ran with the caller's cwd unpinned. A
+    pre-existing `workspace/` is not this session's debris and is
+    left alone (and unblamed)."""
+    debris = _repo_root() / "workspace"
+    existed_before = debris.exists()
+    yield
+    if debris.exists() and not existed_before:
+        pytest.fail(
+            "audit tests left workspace/ debris at the repo root "
+            f"({debris}) — a spawn lane ran with an unpinned cwd; "
+            "pin cwd to a run-owned directory and keep background "
+            "presweep runners submit-time pinned "
+            "(see core/audit/joern_backend.resolve_joern_evidence)",
+            pytrace=False,
+        )
 
 
 @pytest.fixture(autouse=True)
