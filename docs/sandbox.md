@@ -956,14 +956,26 @@ Two tiers, selected automatically:
   whole scan window. Any mount-table change during the scan --
   including an overmount attached and detached entirely between the
   scan's own reads -- marks the scan occluded instead of trusted;
-  occluded scans are retried on a fresh fd a bounded number of times,
-  then refuse loudly. This NARROWS the `/proc`-masking channel, it
-  does not close it: a hidepid-class superblock flip made from a
-  sibling mount namespace does not fire the mount-event signal (a
-  persisting flip is still declared by the scan's ordinary reads, and
-  the channel is bounded to cross-uid group members), and fully forged
-  `/proc` content served through an undetected mask remains out of
-  scope for a `/proc`-based proof. On kernels without the mounts poll
+  churn-occluded scans are retried on a fresh fd a bounded number of
+  times (declared-state and failed-read occlusion is never retried),
+  after which the calling verification paths refuse loudly. This
+  NARROWS the `/proc`-masking channel, it does not close it: a
+  hidepid-class superblock flip made from a sibling mount namespace
+  does not fire the mount-event signal (a persisting flip is still
+  declared by the scan's ordinary reads, and the channel is bounded
+  to cross-uid group members); fully forged `/proc` content served
+  through an undetected mask remains out of scope for a `/proc`-based
+  proof; and the latch covers only the scan window itself -- the
+  death corroboration's per-member `/proc/<pid>/task` re-reads run
+  after the scan's verdict poll has been consumed and its fd closed,
+  so a mount attached in that (tens-of-microseconds) gap is polled by
+  no one. That last gap is bounded: the member's process-level zombie
+  state was read inside the latched window, so it cannot fabricate
+  death for a live member -- only convert the designed refusal for a
+  zombie leader fronting live worker threads into a false verify --
+  and the next narrowing is to move the task reads inside the latched
+  window (or take the verdict poll only after them). On kernels
+  without the mounts poll
   hook the signal simply never fires and behaviour is unchanged from
   the pre-latch posture. A co-resident able to churn mounts (for
   example via a setuid FUSE helper) can delay or force loud refusal of

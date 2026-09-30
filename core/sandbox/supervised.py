@@ -965,9 +965,14 @@ def _group_scan_attempt(pgid: int) -> tuple[_GroupView | None, bool]:
     PERSISTING flip is still declared by the ordinary reads), and a
     coherently forged /proc mounted before the scan opened was never
     detectable by reads through it — the pidns tier's pidfd witness
-    is the answer to that attacker. On kernels whose mounts file
-    lacks the poll hook the verdict poll never fires and the scan
-    degrades to exactly the two-read behaviour."""
+    is the answer to that attacker. The latch also covers only THIS
+    scan's window: the death corroboration that consumes the returned
+    view re-reads each sighted member's /proc/<pid>/task AFTER the
+    verdict poll has been consumed and the latch fd closed, so those
+    reads sit outside any latched window (the priced post-scan gap —
+    see ``_corroborate_group_dead_locked``). On kernels whose mounts
+    file lacks the poll hook the verdict poll never fires and the
+    scan degrades to exactly the two-read behaviour."""
     latch_fd = _mounts_latch_open()
     try:
         filtered: str | None
@@ -1045,10 +1050,13 @@ def _group_scan_attempt(pgid: int) -> tuple[_GroupView | None, bool]:
                 occlusion = _MOUNTS_UNREADABLE
         if occlusion is None and latch_fd is not None:
             # SINGLE-CONSUMER CONTRACT: the verdict poll runs AFTER
-            # the last evidence read and is this fd's ONLY poll-type
-            # operation, ever. The poll CONSUMES the pending signal
-            # (the kernel latch contract: the open latches, reads
-            # never touch the latch, a poll consumes and re-latches)
+            # the scan's last evidence read (the corroboration's later
+            # /proc/<pid>/task reads sit outside this latch — the
+            # priced gap in _corroborate_group_dead_locked) and is
+            # this fd's ONLY poll-type operation, ever. The poll
+            # CONSUMES the pending signal (the kernel latch contract:
+            # the open latches, reads never touch the latch, a poll
+            # consumes and re-latches)
             # — any earlier poll/select/epoll registration on this fd
             # would eat the signal this verdict depends on and turn
             # real mid-scan churn into a silent clean scan. Never add
@@ -1443,7 +1451,24 @@ class SupervisedHandle:
         show the pid namespace the signals travel in), so keep
         escalating and refuse loudly, never claim death. This seam owns
         a group it has already signalled, so escalation continues
-        throughout; only the VERIFY claim needs the trustworthy view."""
+        throughout; only the VERIFY claim needs the trustworthy view.
+
+        Priced residual — the post-scan task-read gap:
+        ``_member_provably_dead``'s /proc/<pid>/task reads run AFTER
+        ``_group_sighted_members`` returned, i.e. after the scan's
+        churn-verdict poll was consumed and its latch fd closed, so a
+        mount attached over /proc/<pid> in that gap is polled by no
+        one and can serve a forged all-Z (or absent) task tree.
+        Bounded by the in-window gate: the member's process-level
+        state Z was itself read inside the latched window, so the gap
+        cannot fabricate death for a live member — it can only convert
+        the designed refusal for a zombie leader fronting live worker
+        threads into a false verify, and the attacker must land the
+        mount in a tens-of-microseconds window rather than the
+        scan-wide one the latch closed. The next narrowing moves the
+        task reads inside the latched window (or takes the verdict
+        poll only after them — the same single-consumer contract over
+        a wider window)."""
         deadline = time.monotonic() + _KILL_REAP_BUDGET_S
         while True:
             try:
@@ -1509,6 +1534,11 @@ class SupervisedHandle:
         still this tree's. No match, no trustworthy anchor, an occluded
         current view over an absence claim, or a zero-sighted
         contradiction: refuse loudly, unsignalled.
+
+        The ``_member_provably_dead`` task reads here share
+        ``_corroborate_group_dead_locked``'s priced post-scan gap:
+        they run after the scan's latch fd closed, outside any
+        latched window.
         """
         pgid = self.pid  # start_new_session: pgid == leader pid
         refusal = _group_signal_refusal(pgid, os.getpgrp())
