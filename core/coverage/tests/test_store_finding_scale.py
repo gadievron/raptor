@@ -73,7 +73,13 @@ class TestLinkFindingScale:
 
         t1 = _run(10_000)
         t2 = _run(40_000)
-        assert t2 < max(t1, 0.01) * 10, (
+        # Floor 0.05s: the 10k linear baseline measures ~0.01s, so a
+        # 0.01s floor leaves zero headroom — scheduler jitter on a
+        # loaded parallel runner fails a genuinely linear import.
+        # Keep the floor well under a second: the quadratic shape
+        # this guards against measured SECONDS at 40k rows, so a
+        # 0.5s budget still catches it with a wide margin.
+        assert t2 < max(t1, 0.05) * 10, (
             f"4x rows took {t2:.2f}s vs {t1:.2f}s — super-linear import"
         )
 
