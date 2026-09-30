@@ -651,6 +651,16 @@ FEASIBILITY_TIER_STATUSES = frozenset({
     "confirmed_constrained", "confirmed_blocked",
 })
 
+#: Feasibility verdicts whose Stage-F mapping (validation-helper
+#: VERDICT_MAP / orchestrator verdict_to_status) reaches the
+#: exploitable family — the only verdicts that legitimately derive
+#: ``is_exploitable=True``. "likely" is the raw analyzer spelling;
+#: the status normalisers rewrite only the Title-Case variant, so
+#: both spellings appear in stamped records.
+_EXPLOITABLE_VERDICTS = frozenset({
+    "exploitable", "likely", "likely_exploitable",
+})
+
 
 def _strip_witness_claim(finding: dict) -> None:
     """Remove an unverified witness_execution record AND every ruling
@@ -695,16 +705,17 @@ def sanitise_findings_evidence(
 
     Mutates the findings in place. Returns
     ``{"witness_stripped": n, "feasibility_demoted": n,
-    "final_status_demoted": n}`` so callers can log what was refused.
-    Verified records are left untouched (including their ruling /
-    final_status consequences); unverified ones lose the mechanical
-    claim and keep only their LLM-tier content (source-analysis
-    fields survive for re-derivation).
+    "final_status_demoted": n, "exploitable_demoted": n}`` so callers
+    can log what was refused. Verified records are left untouched
+    (including their ruling / final_status consequences); unverified
+    ones lose the mechanical claim and keep only their LLM-tier
+    content (source-analysis fields survive for re-derivation).
     """
     stats = {
         "witness_stripped": 0,
         "feasibility_demoted": 0,
         "final_status_demoted": 0,
+        "exploitable_demoted": 0,
     }
     if not isinstance(findings_data, Mapping):
         return stats
@@ -790,37 +801,58 @@ def sanitise_findings_evidence(
                 finding["final_status"] = "confirmed_unverified"
                 if finding.get("status") in FEASIBILITY_TIER_STATUSES:
                     finding["status"] = "confirmed_unverified"
-                # Demote only a genuine True claim: an abstention is
-                # not a positive claim to overwrite with a fabricated
-                # explicit False. A junk shape is normalised to the
-                # explicit abstention instead — this is a
-                # sanitisation chokepoint, and leaving junk in place
-                # would hand downstream/external truthy readers a
-                # value the tri-state accessor refuses.
-                _claim = read_verdict(finding, "is_exploitable")
-                if _claim is True:
-                    finding["is_exploitable"] = False
-                elif _claim is None:
-                    # Key-presence check, never a value read: the
-                    # verdict already abstained above, so a present
-                    # key holds either the explicit None (re-writing
-                    # None is a no-op) or a junk shape (normalised to
-                    # the explicit abstention); an absent key stays
-                    # absent. Spelled as key membership so no raw
-                    # verdict value is ever bound or compared — the
-                    # tri-state idiom closure needs no exemption here.
-                    if "is_exploitable" in finding:
-                        finding["is_exploitable"] = None
                 stats["final_status_demoted"] += 1
+
+        # Boolean-verdict clamp — runs on EVERY finding, deliberately
+        # NOT nested inside the final_status gate above:
+        # get_display_status gives a truthy ``is_exploitable`` display
+        # priority over every status string, so a forged True beside a
+        # non-feasibility-tier final_status ("confirmed") rendered
+        # Exploitable without ever meeting that gate. The boolean is
+        # only legitimately derived (Stage F) from a verified analyzed
+        # feasibility record whose verdict is in the exploitable
+        # family — any other truthy claim is demoted here.
+        #
+        # Demote only a genuine True claim: an abstention is not a
+        # positive claim to overwrite with a fabricated explicit
+        # False. A junk shape is normalised to the explicit abstention
+        # instead — this is a sanitisation chokepoint, and leaving
+        # junk in place would hand downstream/external truthy readers
+        # a value the tri-state accessor refuses.
+        _claim = read_verdict(finding, "is_exploitable")
+        # Key-presence check, never a value read: on abstention the
+        # key holds either the explicit None (left alone) or a junk
+        # shape (normalised); an absent key stays absent. Spelled as
+        # key membership so no raw verdict value is ever bound or
+        # compared — the tri-state idiom closure needs no exemption.
+        _junk = (
+            _claim is None
+            and "is_exploitable" in finding
+            and finding.get("is_exploitable") is not None
+        )
+        if _claim is True or _junk:
+            feasibility = finding.get("feasibility")
+            supported = (
+                isinstance(feasibility, dict)
+                and feasibility.get("status") == "analyzed"
+                and str(feasibility.get("verdict") or "")
+                in _EXPLOITABLE_VERDICTS
+                and verify_feasibility(finding, run_dir)
+            )
+            if not supported:
+                finding["is_exploitable"] = False if _claim is True else None
+                stats["exploitable_demoted"] += 1
 
     if any(stats.values()):
         logger.warning(
             "witness provenance: demoted unverified evidence claims "
             "(witness_execution stripped: %d, feasibility demoted: %d, "
-            "final_status demoted: %d) — records lacked a valid "
-            "mechanical-provenance stamp for run %r",
+            "final_status demoted: %d, is_exploitable demoted: %d) — "
+            "records lacked a valid mechanical-provenance stamp for "
+            "run %r",
             stats["witness_stripped"], stats["feasibility_demoted"],
-            stats["final_status_demoted"], run_binding(run_dir),
+            stats["final_status_demoted"], stats["exploitable_demoted"],
+            run_binding(run_dir),
         )
     return stats
 

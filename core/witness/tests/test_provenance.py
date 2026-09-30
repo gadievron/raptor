@@ -244,10 +244,100 @@ class TestSanitiseFindingsEvidence:
     def test_non_dict_shapes_tolerated(self, tmp_path):
         assert prov.sanitise_findings_evidence(None, tmp_path) == {
             "witness_stripped": 0, "feasibility_demoted": 0,
-            "final_status_demoted": 0,
+            "final_status_demoted": 0, "exploitable_demoted": 0,
         }
         prov.sanitise_findings_evidence({"findings": "nope"}, tmp_path)
         prov.sanitise_findings_evidence({"findings": [42, None]}, tmp_path)
+
+
+class TestUnconditionalBooleanClamp:
+    """``is_exploitable`` has display priority over every status string
+    (``get_display_status`` returns "Exploitable" for a truthy boolean
+    before it ever reads final_status), so the boolean is a verdict
+    channel of its own: it must demote without a verified
+    exploitable-family feasibility verdict REGARDLESS of what
+    final_status says."""
+
+    def test_forged_boolean_beside_non_tier_final_status_demoted(self, tmp_path):
+        # final_status "confirmed" is not feasibility-tier, so the
+        # final_status clamp has nothing to do — the boolean still
+        # cannot stand without a verified exploitable verdict.
+        f = _finding(status="confirmed", final_status="confirmed",
+                     is_exploitable=True)
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert f["is_exploitable"] is False
+        assert stats["exploitable_demoted"] == 1
+        # The non-tier final_status itself is not a mechanical claim.
+        assert f["final_status"] == "confirmed"
+
+    def test_junk_boolean_beside_non_tier_final_status_normalised(self, tmp_path):
+        # "yes" coerces truthy at display time — junk shapes are
+        # normalised to the explicit abstention, never left in place.
+        f = _finding(status="confirmed", final_status="confirmed",
+                     is_exploitable="yes")
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert f["is_exploitable"] is None
+        assert stats["exploitable_demoted"] == 1
+
+    def test_boolean_without_any_status_demoted(self, tmp_path):
+        f = _finding(is_exploitable=True)
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert f["is_exploitable"] is False
+        assert stats["exploitable_demoted"] == 1
+
+    def test_verified_exploitable_verdict_keeps_boolean(self, tmp_path):
+        f = _finding(final_status="exploitable", is_exploitable=True)
+        feas = {"status": "analyzed", "verdict": "exploitable",
+                "binary_path": "/bin/app"}
+        f["feasibility"] = feas
+        prov.stamp_feasibility(f, feas, tmp_path)
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert f["is_exploitable"] is True
+        assert stats["exploitable_demoted"] == 0
+        assert f["final_status"] == "exploitable"
+
+    def test_verified_likely_verdict_keeps_boolean(self, tmp_path):
+        # "likely" is the raw analyzer spelling of likely_exploitable;
+        # both legitimately derive is_exploitable=True in Stage F.
+        f = _finding(final_status="likely_exploitable", is_exploitable=True)
+        feas = {"status": "analyzed", "verdict": "likely",
+                "binary_path": "/bin/app"}
+        f["feasibility"] = feas
+        prov.stamp_feasibility(f, feas, tmp_path)
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert f["is_exploitable"] is True
+        assert stats["exploitable_demoted"] == 0
+
+    def test_boolean_beside_verified_non_exploitable_verdict_demoted(self, tmp_path):
+        # A genuine stamped record whose verdict is NOT in the
+        # exploitable family cannot support the boolean either — here
+        # the forgery is the boolean grafted beside real evidence.
+        f = _finding(final_status="confirmed_blocked", is_exploitable=True)
+        feas = {"status": "analyzed", "verdict": "unlikely",
+                "binary_path": "/bin/app"}
+        f["feasibility"] = feas
+        prov.stamp_feasibility(f, feas, tmp_path)
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert f["is_exploitable"] is False
+        assert stats["exploitable_demoted"] == 1
+        # The verified record itself survives untouched.
+        assert f["feasibility"]["verdict"] == "unlikely"
+        assert stats["feasibility_demoted"] == 0
+
+    def test_explicit_false_never_touched(self, tmp_path):
+        # False is an abstention-compatible negative, not a claim that
+        # needs mechanical support — rewriting it would fabricate
+        # nothing and demoting it is meaningless.
+        f = _finding(status="confirmed", is_exploitable=False)
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert f["is_exploitable"] is False
+        assert stats["exploitable_demoted"] == 0
+
+    def test_absent_boolean_never_materialised(self, tmp_path):
+        f = _finding(status="confirmed")
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert "is_exploitable" not in f
+        assert stats["exploitable_demoted"] == 0
 
 
 class TestVersionedRunBinding:

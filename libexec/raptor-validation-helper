@@ -3731,7 +3731,8 @@ def prepare_F(workdir, target=None):
             f"  provenance: demoted unverified evidence claims "
             f"(witness {stats['witness_stripped']}, feasibility "
             f"{stats['feasibility_demoted']}, final_status "
-            f"{stats['final_status_demoted']})"
+            f"{stats['final_status_demoted']}, is_exploitable "
+            f"{stats['exploitable_demoted']})"
         )
     for finding in data.get("findings", []):
         feas = finding.get("feasibility")
