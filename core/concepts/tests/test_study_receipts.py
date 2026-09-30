@@ -75,6 +75,80 @@ class TestQuoteOrAbstain:
         assert sink[0]["reason"] == "receipt verification failed"
         assert "parse_config_contract" in sink[0]["names"]
 
+    def test_discard_records_every_failed_attempt(self, src: Path,
+                                                   caplog) -> None:
+        # The discard record must be adjudicable from artifacts: each
+        # failed quote rides along (claimed file, line, per-attempt
+        # failure note, bounded quote) — and the warning names the
+        # attempts' REAL failure classes, not a hardcoded one.
+        sink: list = []
+        raw = {
+            "concepts": [{
+                "id": "parse_config_contract",
+                "description": "parse_config delegates validation",
+                "evidence": [
+                    {"type": "code_path", "file": "pkg/mod.py",
+                     "line": 1, "observation": "fabricated",
+                     "quote": "def parse_config(path, strict=True):"},
+                    {"type": "code_path", "file": "nope/missing.py",
+                     "line": 1, "observation": "wrong file",
+                     "quote": "def parse_config(path):"},
+                ],
+                "confidence": "traced",
+            }],
+        }
+        with caplog.at_level("WARNING", logger="core.concepts.study"):
+            concepts, *_ = _parse_batch_response(
+                raw, source_root=src, discard_sink=sink,
+            )
+        assert concepts == []
+        assert len(sink) == 1
+        attempts = sink[0]["attempts"]
+        assert [a["file"] for a in attempts] == [
+            "pkg/mod.py", "nope/missing.py",
+        ]
+        assert attempts[0]["note"] == "quote not found in file"
+        assert attempts[0]["quote"] == "def parse_config(path, strict=True):"
+        assert attempts[1]["note"] == "file not found inside source root"
+        assert "quote not found in file" in caplog.text
+        assert "file not found inside source root" in caplog.text
+        assert "quote not found in source" not in caplog.text
+
+    def test_discard_attempt_quotes_are_bounded(self, src: Path) -> None:
+        sink: list = []
+        long_quote = "x = validate_schema(cfg)  # " + "y" * 600
+        concepts, *_ = _parse_batch_response(
+            _concept_raw(long_quote), source_root=src,
+            discard_sink=sink,
+        )
+        assert concepts == []
+        (rec,) = sink
+        (attempt,) = rec["attempts"]
+        assert len(attempt["quote"]) == 200
+        assert attempt["quote"] == long_quote[:200]
+
+    def test_invariant_discard_carries_its_attempt(self,
+                                                   src: Path) -> None:
+        sink: list = []
+        raw = {
+            "invariants": [{
+                "id": "inv_bogus", "concept": "c",
+                "statement": "s", "negation": "n",
+                "quote": "if not validated: raise ValueError(path)",
+                "evidence_file": "pkg/mod.py", "evidence_line": 2,
+            }],
+        }
+        _c, invariants, *_ = _parse_batch_response(
+            raw, source_root=src, discard_sink=sink,
+        )
+        assert invariants == []
+        (rec,) = sink
+        (attempt,) = rec["attempts"]
+        assert attempt["file"] == "pkg/mod.py"
+        assert attempt["line"] == 2
+        assert attempt["note"] == "quote not found in file"
+        assert attempt["quote"].startswith("if not validated:")
+
     def test_no_quote_demotes_to_summary(self, src: Path) -> None:
         concepts, *_ = _parse_batch_response(
             _concept_raw(None), source_root=src,

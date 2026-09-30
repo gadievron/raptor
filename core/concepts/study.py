@@ -2435,8 +2435,13 @@ def _apply_receipts(
       ``verbatim`` and carries the verified receipt.
     - An entry whose quotes ALL fail verification is DISCARDED (never
       delivered); the discard is recorded in *discard_sink* with the
-      reason "receipt verification failed" so the consumer can mark
-      the originating reading-list question unresolvable.
+      reason "receipt verification failed" — plus every failed
+      attempt (claimed file, line, per-attempt failure note, bounded
+      quote), so a discard is adjudicable from artifacts: a
+      fabricated quote, an over-normalised rendering, and a
+      wrong-file resolution no longer collapse into one opaque
+      record. The consumer marks the originating reading-list
+      question unresolvable.
     - An entry with no quotes at all is kept but demoted to
       ``llm_summarized`` — tier-gated consumers treat it as an
       unverified hint only.
@@ -2448,14 +2453,21 @@ def _apply_receipts(
     from .receipts import (
         TIER_LLM_SUMMARIZED,
         TIER_VERBATIM,
+        Receipt,
         mechanical_receipt,
         verify_receipt,
     )
 
-    def _discard(kind: str, entry_id: str, names: list[str]) -> None:
+    def _discard(kind: str, entry_id: str, names: list[str],
+                 attempts: list[Receipt]) -> None:
+        # Name the REAL failure class(es) from the attempted receipts
+        # — verify_receipt already discriminates fabricated quote /
+        # file-not-found / unreadable / too-short in Receipt.note, and
+        # a hardcoded "quote not found in source" misreports the rest.
+        classes = sorted({a.note or "unverified" for a in attempts})
         logger.warning(
             "study receipts: discarding %s %r — receipt verification "
-            "failed (quote not found in source)", kind, entry_id,
+            "failed (%s)", kind, entry_id, "; ".join(classes),
         )
         if discard_sink is not None:
             discard_sink.append({
@@ -2463,6 +2475,14 @@ def _apply_receipts(
                 "id": entry_id,
                 "reason": "receipt verification failed",
                 "names": names,
+                # Quotes are bounded: the record is a diagnosis aid,
+                # not a second copy of the study output.
+                "attempts": [{
+                    "file": a.file,
+                    "line": a.line,
+                    "note": a.note,
+                    "quote": (a.quote or "")[:200],
+                } for a in attempts],
             })
 
     kept_concepts: list[Concept] = []
@@ -2473,19 +2493,21 @@ def _apply_receipts(
             kept_concepts.append(c)
             continue
         verified = None
+        attempts: list[Receipt] = []
         for e in quoted:
             r = verify_receipt(source_root, e.file, e.line, e.quote or "")
             if r.verified:
                 r.tier = TIER_VERBATIM
                 verified = r
                 break
+            attempts.append(r)
         if verified is not None:
             c.provenance = TIER_VERBATIM
             c.receipt = verified.to_dict()
             kept_concepts.append(c)
         else:
             names = [e.item for e in c.evidence if e.item]
-            _discard("concept", c.id, [c.id, *names])
+            _discard("concept", c.id, [c.id, *names], attempts)
 
     kept_invariants: list[Invariant] = []
     for inv in invariants:
@@ -2508,7 +2530,7 @@ def _apply_receipts(
             inv.receipt = r.to_dict()
             kept_invariants.append(inv)
         else:
-            _discard("invariant", inv.id, [inv.id, inv.concept])
+            _discard("invariant", inv.id, [inv.id, inv.concept], [r])
 
     item_by_name = {it.name: it for it in focus_items}
     for ct in contracts:
