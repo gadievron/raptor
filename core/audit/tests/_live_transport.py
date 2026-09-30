@@ -47,6 +47,7 @@ from typing import Any
 import pytest
 
 from core.audit.expanded_semgrep import ExpandedRuleResult
+from core.audit.preprocessor_view import ExpandedView, FunctionExpansion
 from core.audit.sweep import SweepResult
 
 # ---------------------------------------------------------------------------
@@ -287,6 +288,138 @@ def run_compiler_analyzer_sweep_guarded(
     result = run_compiler_analyzer_sweep(**kwargs)
     skip_if_compiler_transport_degraded(result, gcc_probed=gcc_probed)
     return result
+
+
+# ---------------------------------------------------------------------------
+# preprocessor channel (core.audit.preprocessor_view — the real-cpp legs)
+# ---------------------------------------------------------------------------
+
+# The reasons expand_translation_unit mints when the runtime failed to
+# carry the preprocessor:
+#   * the sandboxed run hitting the deadline (subprocess.TimeoutExpired);
+#   * an invocation that could not spawn — ONLY the errno'd OSError
+#     subset of the broad "preprocessor invocation failed: {exc}" arm.
+#     That except tuple also catches ValueError/TypeError from product
+#     code building the invocation; those spellings stay hard, as does
+#     the "could not read preprocessor output: [Errno N] ..." arm
+#     (product-code file I/O, a different prefix);
+#   * a SIGKILL'd preprocessor — the empty-stderr "exit code -9"
+#     spelling of the preprocess-failed arm (the resource ceiling's
+#     kill). Every OTHER signal is the preprocessor's own behaviour on
+#     the input (a segfaulting cpp is evidence, not churn) and stays
+#     hard, as does any stderr text (the preprocessor's own verdict on
+#     the source) and every positive exit code.
+# The sandbox refusal ("core.sandbox unavailable — …") is deterministic
+# in this channel (the sandbox seam is monkeypatched by the live
+# fixtures, so the import cannot flip under load) and stays hard.
+CPP_TRANSPORT_RE = re.compile(
+    r"preprocessor timed out \(\d+s\)\Z"
+    r"|preprocessor invocation failed: \[Errno \d+\] "
+    r"|preprocess failed — no fidelity-3 view: exit code -9\Z",
+)
+
+# The pre-toolchain availability arm. test_preprocessor_view's autouse
+# probe-cache reset makes every test re-probe, and the probe itself (a
+# real subprocess on /dev/null) can time out, fail to spawn, or be
+# signal-killed under battery load — on a host that probed the
+# preprocessor healthy at collection time (cpp_probed) this message is
+# a transport statement; anywhere else it is a product-shaped surprise
+# and stays hard. Exact match only.
+_CPP_NOT_INSTALLED = "no C preprocessor available (need gcc, g++ or cpp)"
+
+
+def skip_if_cpp_transport_degraded(
+    result: ExpandedView | FunctionExpansion, *, cpp_probed: bool,
+) -> None:
+    """Skip when a real-cpp live leg degraded instead of carrying the
+    preprocess. Full-identity keying: degraded result, single-error
+    shape, anchored minted reason (the availability arm on cpp-probed
+    hosts only). Product degradations — path escape, non-C TU, missing
+    file, the deterministic sandbox refusal, the output size cap,
+    output-read failures, and every preprocessor verdict on the source
+    (stderr diagnostics, positive exits, non-KILL signals) — pass
+    through for the caller's own hard assertions."""
+    if result.ok:
+        return
+    errors = list(result.errors or [])
+    if len(errors) != 1:
+        return
+    if CPP_TRANSPORT_RE.match(errors[0]):
+        pytest.skip(f"preprocessor transport degraded: {errors[0]}")
+    if cpp_probed and errors[0] == _CPP_NOT_INSTALLED:
+        pytest.skip(f"preprocessor transport degraded: {errors[0]}")
+
+
+def expand_translation_unit_guarded(
+    *, cpp_probed: bool, **kwargs: Any,
+) -> ExpandedView:
+    """``expand_translation_unit`` with the transport guard applied —
+    the drop-in for live call sites. Product degradations (including
+    every deliberate broken-TU rejection) pass through untouched."""
+    from core.audit.preprocessor_view import expand_translation_unit
+
+    view = expand_translation_unit(**kwargs)
+    skip_if_cpp_transport_degraded(view, cpp_probed=cpp_probed)
+    return view
+
+
+def expand_function_guarded(
+    *, cpp_probed: bool, **kwargs: Any,
+) -> FunctionExpansion:
+    """``expand_function`` with the transport guard applied — a
+    degraded expansion carries the underlying view's errors, so the
+    same identity keying holds."""
+    from core.audit.preprocessor_view import expand_function
+
+    fx = expand_function(**kwargs)
+    skip_if_cpp_transport_degraded(fx, cpp_probed=cpp_probed)
+    return fx
+
+
+# A trivially expandable probe TU for call sites whose product surface
+# collapses transport identity entirely (recover_macro_defined_functions
+# returns [] for a degraded view AND for a genuinely macro-free TU;
+# augment_checklist_with_macro_functions additionally swallows per-file
+# failures behind a broad except). The probe runs the same executed
+# path (expand_translation_unit -> sandboxed preprocessor) so a dead or
+# overloaded toolchain is caught by the transport guard, and a healthy
+# toolchain that cannot carry even this TU skips with the probe's
+# identity instead of letting the caller adjudicate on a vacuous
+# result.
+_CPP_PROBE_SOURCE = "int main(void) { return 0; }\n"
+
+
+def skip_unless_cpp_carries_probe(
+    tmp_path: Path,
+    *,
+    cpp_probed: bool,
+    context: str,
+    spy_calls: list | None = None,
+) -> None:
+    """Skip unless the preprocessor carries a trivial known-good TU
+    RIGHT NOW. Returns silently on a healthy toolchain so the caller's
+    hard assertions stand; use only where the product surface has
+    already collapsed the failure identity. ``spy_calls`` is the live
+    legs' sandbox-spy list: entries the probe adds are removed again so
+    call-counting and cmd-shape assertions see only the caller's own
+    runs."""
+    probe_dir = tmp_path / "live-cpp-probe"
+    probe_dir.mkdir(exist_ok=True)
+    (probe_dir / "probe.c").write_text(_CPP_PROBE_SOURCE, encoding="utf-8")
+    n_calls = len(spy_calls) if spy_calls is not None else 0
+    view = expand_translation_unit_guarded(
+        cpp_probed=cpp_probed,
+        target_path=probe_dir,
+        file_path="probe.c",
+        out_dir=probe_dir / "out",
+    )
+    if spy_calls is not None:
+        del spy_calls[n_calls:]
+    if not view.ok:
+        pytest.skip(
+            f"preprocessor cannot carry a trivial known-good TU "
+            f"({context}): {view.errors}",
+        )
 
 
 # ---------------------------------------------------------------------------

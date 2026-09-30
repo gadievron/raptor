@@ -9,6 +9,15 @@ unavailable, and must never require network.
 Real gcc / cpp are used where present; every preprocessing test is
 guarded by a skipif so the suite degrades gracefully on hosts without
 a C preprocessor.
+
+The live legs additionally route through the transport/product
+partition in ``core.audit.tests._live_transport`` (cpp channel):
+runtime degradation under battery load — deadline, spawn OSError, a
+SIGKILL'd preprocessor, the per-test probe flipping — skips with the
+transport's reason, while everything the preprocessor DID (diagnostics,
+positive exits, non-KILL signals such as a segfault) stays a hard
+failure. Directions, minted-identity pins and structural fences live in
+``test_live_transport_guards.py``.
 """
 
 from __future__ import annotations
@@ -16,12 +25,14 @@ from __future__ import annotations
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from core.audit import preprocessor_view as pv
 from core.audit.preprocessor_view import (
     ExpandedView,
+    FunctionExpansion,
     MacroDefinedFunction,
     _macro_flags,
     _parse_linemarked_output,
@@ -29,6 +40,11 @@ from core.audit.preprocessor_view import (
     expand_function,
     expand_translation_unit,
     recover_macro_defined_functions,
+)
+from core.audit.tests._live_transport import (
+    expand_function_guarded,
+    expand_translation_unit_guarded,
+    skip_unless_cpp_carries_probe,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures" / "preprocessor_view"
@@ -39,6 +55,34 @@ HAVE_CPP = pv._preprocessor_for(False) is not None
 needs_cpp = pytest.mark.skipif(
     not HAVE_CPP, reason="no C preprocessor (gcc/cpp) installed",
 )
+
+
+def _expand_tu_guarded(**kwargs: Any) -> ExpandedView:
+    """Live preprocessor runs route through the transport guard:
+    runtime degradation (deadline, spawn OSError, a SIGKILL'd
+    preprocessor, the per-test probe lost under load) skips with the
+    transport's reason; every product degradation — including a
+    segfaulting preprocessor, a rejected TU, and every diagnostic —
+    passes through untouched for the caller's own hard assertions."""
+    return expand_translation_unit_guarded(cpp_probed=HAVE_CPP, **kwargs)
+
+
+def _expand_function_guarded(**kwargs: Any) -> FunctionExpansion:
+    """``expand_function`` live legs, same transport guard (a degraded
+    expansion carries the underlying view's errors)."""
+    return expand_function_guarded(cpp_probed=HAVE_CPP, **kwargs)
+
+
+def _probe_cpp(tmp_path: Path, spy_calls: list, *, context: str) -> None:
+    """Transport probe for the identity-collapsed surfaces (macro
+    recovery returns [] for a degraded view and for a genuinely
+    macro-free TU; checklist augmentation swallows per-file failures):
+    skip unless the preprocessor carries a trivial TU right now. Probe
+    sandbox calls are scrubbed from ``spy_calls`` so call-counting
+    assertions see only the test's own runs."""
+    skip_unless_cpp_carries_probe(
+        tmp_path, cpp_probed=HAVE_CPP, context=context, spy_calls=spy_calls,
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -88,7 +132,7 @@ def _target_with(tmp_path: Path, *fixture_names: str) -> Path:
 class TestExpandedView:
     def test_tu_lines_map_to_original_coordinates(self, tmp_path, sandbox_spy):
         target = _target_with(tmp_path, "simple.c")
-        view = expand_translation_unit(
+        view = _expand_tu_guarded(
             target_path=target, file_path="simple.c", out_dir=tmp_path / "out",
         )
         assert view.ok
@@ -101,7 +145,7 @@ class TestExpandedView:
 
     def test_macro_expanded_line_keeps_original_line(self, tmp_path, sandbox_spy):
         target = _target_with(tmp_path, "simple.c")
-        view = expand_translation_unit(
+        view = _expand_tu_guarded(
             target_path=target, file_path="simple.c", out_dir=tmp_path / "out",
         )
         assert view.ok
@@ -115,7 +159,7 @@ class TestExpandedView:
 
     def test_system_header_expansion_is_unattributable(self, tmp_path, sandbox_spy):
         target = _target_with(tmp_path, "simple.c")
-        view = expand_translation_unit(
+        view = _expand_tu_guarded(
             target_path=target, file_path="simple.c", out_dir=tmp_path / "out",
         )
         assert view.ok
@@ -128,7 +172,7 @@ class TestExpandedView:
 
     def test_linemarkers_are_removed_from_view(self, tmp_path, sandbox_spy):
         target = _target_with(tmp_path, "simple.c")
-        view = expand_translation_unit(
+        view = _expand_tu_guarded(
             target_path=target, file_path="simple.c", out_dir=tmp_path / "out",
         )
         assert view.ok
@@ -141,7 +185,7 @@ class TestExpandedView:
         from core.build.macro_config import MacroConfig
 
         target = _target_with(tmp_path, "cfg.c")
-        view = expand_translation_unit(
+        view = _expand_tu_guarded(
             target_path=target, file_path="cfg.c",
             macro_config=MacroConfig(defined={"ENABLE_FEATURE": "1"}),
             out_dir=tmp_path / "out",
@@ -152,7 +196,7 @@ class TestExpandedView:
 
     def test_macro_config_list_form(self, tmp_path, sandbox_spy):
         target = _target_with(tmp_path, "cfg.c")
-        view = expand_translation_unit(
+        view = _expand_tu_guarded(
             target_path=target, file_path="cfg.c",
             macro_config=["-DENABLE_FEATURE"],
             out_dir=tmp_path / "out",
@@ -163,7 +207,7 @@ class TestExpandedView:
 
     def test_no_macro_config_takes_else_arm(self, tmp_path, sandbox_spy):
         target = _target_with(tmp_path, "cfg.c")
-        view = expand_translation_unit(
+        view = _expand_tu_guarded(
             target_path=target, file_path="cfg.c", out_dir=tmp_path / "out",
         )
         assert view.ok
@@ -181,7 +225,7 @@ class TestExpandFunction:
         self, tmp_path, sandbox_spy,
     ):
         target = _target_with(tmp_path, "simple.c")
-        fx = expand_function(
+        fx = _expand_function_guarded(
             target_path=target, file_path="simple.c",
             line_start=5, line_end=7, out_dir=tmp_path / "out",
         )
@@ -192,7 +236,7 @@ class TestExpandFunction:
 
     def test_function_range_shows_expanded_macros(self, tmp_path, sandbox_spy):
         target = _target_with(tmp_path, "simple.c")
-        fx = expand_function(
+        fx = _expand_function_guarded(
             target_path=target, file_path="simple.c",
             line_start=9, line_end=14, out_dir=tmp_path / "out",
         )
@@ -202,7 +246,7 @@ class TestExpandFunction:
 
     def test_degraded_view_degrades_function_expansion(self, tmp_path, sandbox_spy):
         target = _target_with(tmp_path, "broken.c")
-        fx = expand_function(
+        fx = _expand_function_guarded(
             target_path=target, file_path="broken.c",
             line_start=3, line_end=5, out_dir=tmp_path / "out",
         )
@@ -212,9 +256,12 @@ class TestExpandFunction:
 
     def test_reuses_prebuilt_view(self, tmp_path, sandbox_spy):
         target = _target_with(tmp_path, "simple.c")
-        view = expand_translation_unit(
+        view = _expand_tu_guarded(
             target_path=target, file_path="simple.c", out_dir=tmp_path / "out",
         )
+        # Raw runner is deliberate: with a prebuilt healthy view no
+        # subprocess runs, so there is no transport surface (and the
+        # no-re-preprocess count below proves exactly that).
         n_calls = len(sandbox_spy)
         fx = expand_function(
             target_path=target, file_path="simple.c",
@@ -234,6 +281,7 @@ class TestMacroRecovery:
     def test_macro_defined_functions_recovered_with_attribution(
         self, tmp_path, sandbox_spy,
     ):
+        _probe_cpp(tmp_path, sandbox_spy, context="macro recovery")
         target = _target_with(tmp_path, "macro_funcs.c", "handlers.h")
         recovered = recover_macro_defined_functions(
             target_path=target, file_path="macro_funcs.c",
@@ -248,6 +296,7 @@ class TestMacroRecovery:
         assert by_name["handler_beta"].line == 9
 
     def test_pre_expansion_definitions_not_reported(self, tmp_path, sandbox_spy):
+        _probe_cpp(tmp_path, sandbox_spy, context="pre-expansion filter")
         target = _target_with(tmp_path, "macro_funcs.c", "handlers.h")
         recovered = recover_macro_defined_functions(
             target_path=target, file_path="macro_funcs.c",
@@ -256,12 +305,18 @@ class TestMacroRecovery:
         assert "plain_function" not in {r.name for r in recovered}
 
     def test_plain_tu_recovers_nothing(self, tmp_path, sandbox_spy):
+        # [] must mean "expanded fine, nothing macro-defined" — a dead
+        # transport also yields [] and would pass vacuously.
+        _probe_cpp(tmp_path, sandbox_spy, context="plain-TU negative")
         target = _target_with(tmp_path, "simple.c")
         assert recover_macro_defined_functions(
             target_path=target, file_path="simple.c", out_dir=tmp_path / "out",
         ) == []
 
     def test_degraded_view_recovers_nothing(self, tmp_path, sandbox_spy):
+        # The probe proves the toolchain is alive, so [] here is the
+        # product's verdict on broken.c, not a transport artefact.
+        _probe_cpp(tmp_path, sandbox_spy, context="degraded-view negative")
         target = _target_with(tmp_path, "broken.c")
         assert recover_macro_defined_functions(
             target_path=target, file_path="broken.c", out_dir=tmp_path / "out",
@@ -308,6 +363,7 @@ class TestChecklistAugmentation:
         }
 
     def test_macro_functions_added_to_checklist(self, tmp_path, sandbox_spy):
+        _probe_cpp(tmp_path, sandbox_spy, context="checklist augmentation")
         target = _target_with(tmp_path, "macro_funcs.c", "handlers.h", "simple.c")
         checklist = self._checklist()
         added = augment_checklist_with_macro_functions(
@@ -324,7 +380,9 @@ class TestChecklistAugmentation:
         self, tmp_path, sandbox_spy,
     ):
         # simple.c has no ALL_CAPS invocation at column 0 — it must not
-        # even reach the preprocessor.
+        # even reach the preprocessor. The probe's own sandbox call is
+        # scrubbed from the spy before the assertion below reads it.
+        _probe_cpp(tmp_path, sandbox_spy, context="prefilter")
         target = _target_with(tmp_path, "macro_funcs.c", "handlers.h", "simple.c")
         augment_checklist_with_macro_functions(
             self._checklist(), target, out_dir=tmp_path / "out",
@@ -333,6 +391,7 @@ class TestChecklistAugmentation:
         assert all("macro_funcs.c" in p for p in preprocessed)
 
     def test_idempotent(self, tmp_path, sandbox_spy):
+        _probe_cpp(tmp_path, sandbox_spy, context="idempotence")
         target = _target_with(tmp_path, "macro_funcs.c", "handlers.h", "simple.c")
         checklist = self._checklist()
         assert augment_checklist_with_macro_functions(
@@ -343,6 +402,9 @@ class TestChecklistAugmentation:
         ) == 0
 
     def test_max_files_budget(self, tmp_path, sandbox_spy):
+        # No probe: with max_files=0 the preprocessor is never spawned
+        # (the empty-spy assertion proves it), so there is no transport
+        # surface on this leg.
         target = _target_with(tmp_path, "macro_funcs.c", "handlers.h")
         checklist = self._checklist()
         added = augment_checklist_with_macro_functions(
@@ -361,7 +423,7 @@ class TestDegradation:
     @needs_cpp
     def test_missing_generated_header_degrades(self, tmp_path, sandbox_spy):
         target = _target_with(tmp_path, "broken.c")
-        view = expand_translation_unit(
+        view = _expand_tu_guarded(
             target_path=target, file_path="broken.c", out_dir=tmp_path / "out",
         )
         assert not view.ok
@@ -397,6 +459,9 @@ class TestDegradation:
         assert not view.ok
 
     def test_no_preprocessor_degrades(self, tmp_path, monkeypatch):
+        # Deliberately MINTS the availability shape (the guard's
+        # transport arm on cpp-probed hosts), so it must bypass the
+        # guard — the sole reason this leg calls the raw runner.
         monkeypatch.setattr(shutil, "which", lambda *a, **k: None)
         target = _target_with(tmp_path, "simple.c")
         view = expand_translation_unit(
@@ -419,7 +484,7 @@ class TestDegradation:
 
         monkeypatch.setattr(builtins, "__import__", blocked)
         target = _target_with(tmp_path, "simple.c")
-        view = expand_translation_unit(
+        view = _expand_tu_guarded(
             target_path=target, file_path="simple.c", out_dir=tmp_path / "out",
         )
         assert not view.ok
@@ -436,7 +501,7 @@ class TestSandboxInvocation:
     def test_sandbox_used_with_network_deny(self, tmp_path, sandbox_spy):
         target = _target_with(tmp_path, "simple.c")
         out_dir = tmp_path / "out"
-        view = expand_translation_unit(
+        view = _expand_tu_guarded(
             target_path=target, file_path="simple.c", out_dir=out_dir,
         )
         assert view.ok
@@ -451,7 +516,7 @@ class TestSandboxInvocation:
 
     def test_single_tu_only_no_build_system(self, tmp_path, sandbox_spy):
         target = _target_with(tmp_path, "simple.c")
-        expand_translation_unit(
+        _expand_tu_guarded(
             target_path=target, file_path="simple.c", out_dir=tmp_path / "out",
         )
         cmd = sandbox_spy[0]["cmd"]

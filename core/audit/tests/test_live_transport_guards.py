@@ -32,14 +32,18 @@ from core.audit.expanded_semgrep import ExpandedRuleResult
 from core.audit.sweep import SweepResult
 from core.audit.tests._live_transport import (
     COMPILER_TRANSPORT_RE,
+    CPP_TRANSPORT_RE,
     EXPANDED_VIEW_TRANSPORT_RE,
     SEMGREP_TRANSPORT_RE,
+    expand_translation_unit_guarded,
     run_compiler_analyzer_sweep_guarded,
     run_pinned_subprocess,
     run_semgrep_sweep_guarded,
     skip_if_compiler_transport_degraded,
+    skip_if_cpp_transport_degraded,
     skip_if_expanded_view_transport_degraded,
     skip_if_semgrep_transport_degraded,
+    skip_unless_cpp_carries_probe,
 )
 
 _TESTS_DIR = Path(__file__).resolve().parent
@@ -934,6 +938,468 @@ class TestExpandedViewGuardDirections:
 
 
 # ---------------------------------------------------------------------
+# preprocessor (cpp) channel — guard directions
+# ---------------------------------------------------------------------
+
+
+_CPP_NOT_INSTALLED_REASON = "no C preprocessor available (need gcc, g++ or cpp)"
+
+
+def _cpp_view(reason: str, *, tool: str = "gcc") -> pv.ExpandedView:
+    return pv.ExpandedView(
+        ok=False, file_path="app.c", tool=tool, errors=[reason],
+    )
+
+
+def _cpp_expansion(reason: str) -> pv.FunctionExpansion:
+    return pv.FunctionExpansion(
+        ok=False, file_path="app.c", line_start=3, line_end=9,
+        errors=[reason],
+    )
+
+
+class TestCppGuardDirections:
+    @pytest.mark.parametrize("reason", [
+        "preprocessor timed out (60s)",
+        "preprocessor timed out (5s)",
+        "preprocessor invocation failed: [Errno 11] Resource "
+        "temporarily unavailable",
+        "preprocessor invocation failed: [Errno 12] Cannot allocate "
+        "memory",
+        "preprocess failed — no fidelity-3 view: exit code -9",
+    ])
+    def test_transport_reasons_skip(self, reason: str) -> None:
+        with pytest.raises(
+            pytest.skip.Exception, match="transport degraded",
+        ):
+            skip_if_cpp_transport_degraded(
+                _cpp_view(reason), cpp_probed=True,
+            )
+
+    def test_availability_arm_skips_on_cpp_probed_hosts(self) -> None:
+        # The per-test probe (fresh cache each test) can itself time
+        # out / fail to spawn / be killed under load: on a host that
+        # probed the preprocessor healthy at collection this message
+        # is a transport statement.
+        with pytest.raises(
+            pytest.skip.Exception, match="transport degraded",
+        ):
+            skip_if_cpp_transport_degraded(
+                _cpp_view(_CPP_NOT_INSTALLED_REASON, tool=""),
+                cpp_probed=True,
+            )
+
+    def test_cpp_availability_arm_stays_hard_on_unprobed_hosts(self) -> None:
+        # Without a healthy collection-time probe there is nothing for
+        # load to flip — the same message is a product-shaped surprise.
+        _fail_on_skip(
+            lambda: skip_if_cpp_transport_degraded(
+                _cpp_view(_CPP_NOT_INSTALLED_REASON, tool=""),
+                cpp_probed=False,
+            ),
+        )
+
+    def test_cpp_availability_arm_is_exact_match_only(self) -> None:
+        # Exact match: a prefix-extended spelling is not the arm the
+        # product mints and must stay a hard failure.
+        _fail_on_skip(
+            lambda: skip_if_cpp_transport_degraded(
+                _cpp_view(
+                    "no C preprocessor available (need gcc, g++ or cpp)"
+                    " — probe flaked", tool="",
+                ),
+                cpp_probed=True,
+            ),
+        )
+
+    def test_cpp_errno_shape_is_exact_only(self) -> None:
+        # The spawn arm keys on the "[Errno N] " spelling, never on a
+        # bare bracket.
+        _fail_on_skip(
+            lambda: skip_if_cpp_transport_degraded(
+                _cpp_view("preprocessor invocation failed: [cpp] "
+                          "driver crashed"),
+                cpp_probed=True,
+            ),
+        )
+
+    @pytest.mark.parametrize("reason", [
+        # The pipeline's own verdicts on the input — product territory.
+        "path escapes target: ../evil.c",
+        "file not found: /repo/ghost.c",
+        "not a C/C++ translation unit: .py",
+        # Deterministic in this channel (the live fixtures monkeypatch
+        # the sandbox seam, so the import cannot flip under load).
+        "core.sandbox unavailable — refusing to run the preprocessor "
+        "on untrusted source without isolation",
+        # The preprocessor's own verdict on the source: diagnostics
+        # and positive exit codes.
+        "preprocess failed — no fidelity-3 view: main.c:3:10: fatal "
+        "error: gen.h: No such file or directory",
+        "preprocess failed — no fidelity-3 view: exit code 1",
+        # Non-KILL signals are the preprocessor's behaviour on the
+        # input — a segfaulting cpp is evidence, not churn.
+        "preprocess failed — no fidelity-3 view: exit code -11",
+        "preprocess failed — no fidelity-3 view: exit code -15",
+        "preprocess failed — no fidelity-3 view: exit code -6",
+        "preprocess failed — no fidelity-3 view: exit code -7",
+        "preprocess failed — no fidelity-3 view: exit code -99",
+        # Product-code file I/O and the size cap.
+        "expanded output exceeds 16777216 bytes",
+        "could not read preprocessor output: [Errno 28] No space left "
+        "on device",
+        # The broad except-tuple also wraps ValueError/TypeError from
+        # product code — only the errno'd OSError subset is transport.
+        "preprocessor invocation failed: expected str, bytes or "
+        "os.PathLike object, not NoneType",
+        "preprocessor invocation failed: embedded null byte",
+        # Anchoring look-alikes.
+        "preprocessor timed out (60s) again",
+        "preprocessor timed out (60s)\n",
+        "preprocess failed — no fidelity-3 view: exit code -9; retried",
+        "preprocess failed — no fidelity-3 view: exit code -9\n",
+    ])
+    def test_cpp_product_reasons_do_not_skip(self, reason: str) -> None:
+        _fail_on_skip(
+            lambda: skip_if_cpp_transport_degraded(
+                _cpp_view(reason), cpp_probed=True,
+            ),
+        )
+
+    def test_cpp_ok_results_never_skip(self) -> None:
+        view = pv.ExpandedView(
+            ok=True, file_path="app.c", text="int x;",
+            line_map=(("app.c", 1),), tool="gcc",
+        )
+        _fail_on_skip(
+            lambda: skip_if_cpp_transport_degraded(view, cpp_probed=True),
+        )
+
+    def test_cpp_multi_error_results_do_not_skip(self) -> None:
+        view = _cpp_view("preprocessor timed out (60s)")
+        view.errors.append("preprocess failed — no fidelity-3 view: x")
+        _fail_on_skip(
+            lambda: skip_if_cpp_transport_degraded(view, cpp_probed=True),
+        )
+
+    def test_function_expansion_transport_skips(self) -> None:
+        # expand_function copies a degraded view's errors verbatim —
+        # the same identity keying holds on the FunctionExpansion leg.
+        with pytest.raises(
+            pytest.skip.Exception, match="transport degraded",
+        ):
+            skip_if_cpp_transport_degraded(
+                _cpp_expansion("preprocessor timed out (60s)"),
+                cpp_probed=True,
+            )
+
+    def test_cpp_function_expansion_product_stays_hard(self) -> None:
+        _fail_on_skip(
+            lambda: skip_if_cpp_transport_degraded(
+                _cpp_expansion(
+                    "preprocess failed — no fidelity-3 view: exit code -11",
+                ),
+                cpp_probed=True,
+            ),
+        )
+
+
+# ---------------------------------------------------------------------
+# preprocessor (cpp) channel — minted-identity pins (real
+# expand_translation_unit, only the toolchain probe and the sandbox
+# seam injected)
+# ---------------------------------------------------------------------
+
+
+class TestCppMintedIdentities:
+    """The regex arms match what expand_translation_unit ACTUALLY
+    mints — pinned by running the real product code with the
+    preprocessor probe and the sandbox-run seam injected (no
+    toolchain, no sandbox)."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh_cpp_probe_cache(self):
+        pv._reset_probe_cache()
+        yield
+        pv._reset_probe_cache()
+
+    def _run_real_expand(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        *,
+        sandbox_run,
+        pre: list | None,
+    ) -> pv.ExpandedView:
+        target = tmp_path / "repo"
+        target.mkdir(exist_ok=True)
+        (target / "main.c").write_text("int f(void) { return 0; }\n")
+        # The probe seam: a fake argv whose path never spawns (the
+        # sandbox seam is stubbed), or None for the availability arm.
+        monkeypatch.setattr(pv, "_preprocessor_for", lambda is_cxx: pre)
+        if sandbox_run is not None:
+            monkeypatch.setattr("core.sandbox.context.run", sandbox_run)
+        return pv.expand_translation_unit(
+            target_path=target, file_path="main.c",
+            out_dir=tmp_path / "out",
+        )
+
+    @staticmethod
+    def _fake_pre() -> list:
+        return ["/usr/bin/gcc", "-E", "-x", "c"]
+
+    def _minted_error(
+        self, monkeypatch, tmp_path, sandbox_run,
+    ) -> pv.ExpandedView:
+        view = self._run_real_expand(
+            monkeypatch, tmp_path, sandbox_run=sandbox_run,
+            pre=self._fake_pre(),
+        )
+        assert view.ok is False
+        assert len(view.errors) == 1
+        return view
+
+    def test_timeout_identity(self, monkeypatch, tmp_path) -> None:
+        view = self._minted_error(
+            monkeypatch, tmp_path,
+            _raising_runner(subprocess.TimeoutExpired(["gcc"], 60)),
+        )
+        assert CPP_TRANSPORT_RE.match(view.errors[0]), view.errors
+
+    def test_spawn_oserror_identity(self, monkeypatch, tmp_path) -> None:
+        view = self._minted_error(
+            monkeypatch, tmp_path,
+            _raising_runner(
+                OSError(errno.EAGAIN, "Resource temporarily unavailable"),
+            ),
+        )
+        assert CPP_TRANSPORT_RE.match(view.errors[0]), view.errors
+
+    def test_sigkill_identity(self, monkeypatch, tmp_path) -> None:
+        # SIGKILL with empty stderr — the resource ceiling's kill.
+        view = self._minted_error(monkeypatch, tmp_path, _rc_runner(-9))
+        assert view.errors == [
+            "preprocess failed — no fidelity-3 view: exit code -9",
+        ]
+        assert CPP_TRANSPORT_RE.match(view.errors[0]), view.errors
+
+    def test_cpp_sigsegv_minted_stays_product(
+        self, monkeypatch, tmp_path,
+    ) -> None:
+        # Every non-KILL signal is evidence about the preprocessor on
+        # this input, never transport.
+        view = self._minted_error(monkeypatch, tmp_path, _rc_runner(-11))
+        assert view.errors == [
+            "preprocess failed — no fidelity-3 view: exit code -11",
+        ]
+        assert not CPP_TRANSPORT_RE.match(view.errors[0]), view.errors
+
+    def test_positive_exit_stays_product(self, monkeypatch, tmp_path) -> None:
+        def _diag_runner(cmd, **kwargs):  # noqa: ANN001, ANN003 — subprocess.run signature
+            return subprocess.CompletedProcess(
+                cmd, 1, "", "main.c:1:1: error: unknown type name",
+            )
+
+        view = self._minted_error(monkeypatch, tmp_path, _diag_runner)
+        assert not CPP_TRANSPORT_RE.match(view.errors[0]), view.errors
+
+    def test_product_typeerror_stays_hard(self, monkeypatch, tmp_path) -> None:
+        view = self._minted_error(
+            monkeypatch, tmp_path,
+            _raising_runner(TypeError(
+                "expected str, bytes or os.PathLike object, not NoneType",
+            )),
+        )
+        assert not CPP_TRANSPORT_RE.match(view.errors[0]), view.errors
+
+    def test_output_read_failure_stays_product(
+        self, monkeypatch, tmp_path,
+    ) -> None:
+        # rc=0 but the output file was never written: product-code
+        # file I/O mints "could not read preprocessor output: [Errno
+        # N] ..." — errno-shaped under a DIFFERENT prefix, never the
+        # spawn arm.
+        view = self._minted_error(monkeypatch, tmp_path, _rc_runner(0))
+        assert view.errors[0].startswith(
+            "could not read preprocessor output: [Errno ",
+        ), view.errors
+        assert not CPP_TRANSPORT_RE.match(view.errors[0]), view.errors
+
+    def test_not_installed_identity_and_guard_chain(
+        self, monkeypatch, tmp_path,
+    ) -> None:
+        view = self._run_real_expand(
+            monkeypatch, tmp_path, sandbox_run=None, pre=None,
+        )
+        assert view.ok is False
+        assert view.errors == [_CPP_NOT_INSTALLED_REASON]
+        with pytest.raises(
+            pytest.skip.Exception, match="transport degraded",
+        ):
+            skip_if_cpp_transport_degraded(view, cpp_probed=True)
+
+    def test_timeout_constant_pins_the_arm(self) -> None:
+        assert CPP_TRANSPORT_RE.match(
+            f"preprocessor timed out ({pv._PREPROCESS_TIMEOUT_S}s)",
+        )
+
+    def test_guard_chain_timeout_skips(self, monkeypatch, tmp_path) -> None:
+        # Full chain: real expand + injected deadline through the
+        # guarded runner.
+        target = tmp_path / "repo"
+        target.mkdir()
+        (target / "main.c").write_text("int f(void) { return 0; }\n")
+        monkeypatch.setattr(
+            pv, "_preprocessor_for", lambda is_cxx: self._fake_pre(),
+        )
+        monkeypatch.setattr(
+            "core.sandbox.context.run",
+            _raising_runner(subprocess.TimeoutExpired(["gcc"], 60)),
+        )
+        with pytest.raises(
+            pytest.skip.Exception, match="transport degraded",
+        ):
+            expand_translation_unit_guarded(
+                cpp_probed=True, target_path=target, file_path="main.c",
+                out_dir=tmp_path / "out",
+            )
+
+
+class TestCppDirectionsThroughLiveBody:
+    """A REAL live test body (test_preprocessor_view's whole-TU
+    line-map leg, called directly so the module-level needs_cpp mark
+    stays out of the way) routed through an injected sandbox seam —
+    hermetic on every host."""
+
+    def _run_live_body(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, sandbox_run,
+    ) -> None:
+        from core.audit.tests.test_preprocessor_view import TestExpandedView
+
+        monkeypatch.setattr(
+            pv, "_preprocessor_for",
+            lambda is_cxx: ["/usr/bin/gcc", "-E", "-x", "c"],
+        )
+        monkeypatch.setattr("core.sandbox.context.run", sandbox_run)
+        TestExpandedView().test_tu_lines_map_to_original_coordinates(
+            tmp_path, [],
+        )
+
+    def test_degraded_transport_skips_the_live_assertions(
+        self, monkeypatch, tmp_path,
+    ) -> None:
+        with pytest.raises(
+            pytest.skip.Exception, match="transport degraded",
+        ):
+            self._run_live_body(
+                monkeypatch, tmp_path,
+                _raising_runner(subprocess.TimeoutExpired(["gcc"], 60)),
+            )
+
+    def test_cpp_segfaulting_preprocessor_still_fails(
+        self, monkeypatch, tmp_path,
+    ) -> None:
+        # The core direction: a segfaulting preprocessor is evidence
+        # about the toolchain on this input — the product assertion
+        # must fail hard, never skip.
+        def body() -> None:
+            with pytest.raises(AssertionError):
+                self._run_live_body(monkeypatch, tmp_path, _rc_runner(-11))
+
+        _fail_on_skip(body)
+
+    def test_cpp_product_degradation_still_fails(
+        self, monkeypatch, tmp_path,
+    ) -> None:
+        # rc=0 with no output written — a product-shaped degradation
+        # ("could not read preprocessor output: ...") reaches the
+        # assertion as a hard failure.
+        def body() -> None:
+            with pytest.raises(AssertionError):
+                self._run_live_body(monkeypatch, tmp_path, _rc_runner(0))
+
+        _fail_on_skip(body)
+
+
+class TestCppCarryProbe:
+    """The trivially expandable probe for the identity-collapsed
+    surfaces: healthy toolchain returns silently and scrubs its spy
+    entries; a degraded or incapable toolchain skips."""
+
+    @staticmethod
+    def _writing_runner(cmd, **kwargs):  # noqa: ANN001, ANN003, ANN205 — subprocess.run signature
+        out = Path(cmd[cmd.index("-o") + 1])
+        src = Path(cmd[cmd.index("-o") - 1])
+        out.write_text(
+            f'# 1 "{src}"\n' + src.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def test_healthy_probe_returns_and_scrubs_spy(
+        self, monkeypatch, tmp_path,
+    ) -> None:
+        monkeypatch.setattr(
+            pv, "_preprocessor_for",
+            lambda is_cxx: ["/usr/bin/gcc", "-E", "-x", "c"],
+        )
+        spy: list = [{"cmd": ["sentinel"]}]
+
+        def recording(cmd, **kwargs):  # noqa: ANN001, ANN003 — subprocess.run signature
+            spy.append({"cmd": cmd, **kwargs})
+            return self._writing_runner(cmd, **kwargs)
+
+        monkeypatch.setattr("core.sandbox.context.run", recording)
+        _fail_on_skip(
+            lambda: skip_unless_cpp_carries_probe(
+                tmp_path, cpp_probed=True, context="probe test",
+                spy_calls=spy,
+            ),
+        )
+        # Pre-existing entries survive; the probe's own are scrubbed.
+        assert spy == [{"cmd": ["sentinel"]}]
+
+    def test_transport_degraded_probe_skips(
+        self, monkeypatch, tmp_path,
+    ) -> None:
+        monkeypatch.setattr(
+            pv, "_preprocessor_for",
+            lambda is_cxx: ["/usr/bin/gcc", "-E", "-x", "c"],
+        )
+        monkeypatch.setattr("core.sandbox.context.run", _rc_runner(-9))
+        with pytest.raises(
+            pytest.skip.Exception, match="transport degraded",
+        ):
+            skip_unless_cpp_carries_probe(
+                tmp_path, cpp_probed=True, context="probe test",
+            )
+
+    def test_incapable_toolchain_skips_with_probe_identity(
+        self, monkeypatch, tmp_path,
+    ) -> None:
+        # A toolchain that REJECTS the trivial TU (product shape, not
+        # transport) cannot license adjudication on the collapsed
+        # surface either — the probe skips with its own identity.
+        def _diag_runner(cmd, **kwargs):  # noqa: ANN001, ANN003 — subprocess.run signature
+            return subprocess.CompletedProcess(
+                cmd, 1, "", "probe.c:1:1: error: unsupported dialect",
+            )
+
+        monkeypatch.setattr(
+            pv, "_preprocessor_for",
+            lambda is_cxx: ["/usr/bin/gcc", "-E", "-x", "c"],
+        )
+        monkeypatch.setattr("core.sandbox.context.run", _diag_runner)
+        with pytest.raises(
+            pytest.skip.Exception,
+            match="cannot carry a trivial known-good TU",
+        ):
+            skip_unless_cpp_carries_probe(
+                tmp_path, cpp_probed=True, context="probe test",
+            )
+
+
+# ---------------------------------------------------------------------
 # raw engine pins
 # ---------------------------------------------------------------------
 
@@ -1212,3 +1678,126 @@ class TestPhpSurfaceFences:
             "test_lua_roundtrips_as_data",
             "test_perl_backtick_block_interpolation_stays_data",
         }
+
+
+class TestCppSurfaceFences:
+    """Every real-cpp live call site routes through the guarded
+    runners (via the file-local wrappers), enumerated exactly; the
+    identity-collapsed surfaces carry the probe, probe-before-run. A
+    new live test calling the raw runner — or a guard silently
+    dropped — flips these."""
+
+    def test_preprocessor_view(self) -> None:
+        calls = _function_call_map("test_preprocessor_view.py")
+        # The raw callers: three pre-toolchain product legs (path
+        # escape / missing file / non-C — degraded before any spawn)
+        # and the deliberate availability mint (it manufactures the
+        # guard's transport arm on purpose, so it must bypass the
+        # guard).
+        assert _callers_of(calls, "expand_translation_unit") == {
+            "test_non_c_file_degrades",
+            "test_path_escape_degrades",
+            "test_missing_file_degrades",
+            "test_no_preprocessor_degrades",
+        }
+        assert _callers_of(calls, "expand_translation_unit_guarded") == {
+            "_expand_tu_guarded",
+        }
+        assert _callers_of(calls, "_expand_tu_guarded") == {
+            "test_tu_lines_map_to_original_coordinates",
+            "test_macro_expanded_line_keeps_original_line",
+            "test_system_header_expansion_is_unattributable",
+            "test_linemarkers_are_removed_from_view",
+            "test_macro_config_object_selects_ifdef_arm",
+            "test_macro_config_list_form",
+            "test_no_macro_config_takes_else_arm",
+            "test_reuses_prebuilt_view",
+            "test_missing_generated_header_degrades",
+            "test_no_sandbox_no_preprocess",
+            "test_sandbox_used_with_network_deny",
+            "test_single_tu_only_no_build_system",
+        }
+        # The one raw expand_function caller runs on a prebuilt view —
+        # no subprocess, no transport surface.
+        assert _callers_of(calls, "expand_function") == {
+            "test_reuses_prebuilt_view",
+        }
+        assert _callers_of(calls, "expand_function_guarded") == {
+            "_expand_function_guarded",
+        }
+        assert _callers_of(calls, "_expand_function_guarded") == {
+            "test_function_range_selected_with_original_lines",
+            "test_function_range_shows_expanded_macros",
+            "test_degraded_view_degrades_function_expansion",
+        }
+        # Identity-collapsed surfaces carry the probe
+        # (test_max_files_budget is deliberately probe-free: with
+        # max_files=0 nothing spawns and its empty-spy assertion
+        # proves it).
+        assert _callers_of(calls, "skip_unless_cpp_carries_probe") == {
+            "_probe_cpp",
+        }
+        assert _callers_of(calls, "_probe_cpp") == {
+            "test_macro_defined_functions_recovered_with_attribution",
+            "test_pre_expansion_definitions_not_reported",
+            "test_plain_tu_recovers_nothing",
+            "test_degraded_view_recovers_nothing",
+            "test_macro_functions_added_to_checklist",
+            "test_prefilter_skips_files_without_macro_invocations",
+            "test_idempotent",
+        }
+        # Placement: the probe runs BEFORE the collapsed-surface
+        # adjudication it licenses.
+        for test_name, adjudicator in (
+            (
+                "test_macro_defined_functions_recovered_with_attribution",
+                "recover_macro_defined_functions",
+            ),
+            (
+                "test_pre_expansion_definitions_not_reported",
+                "recover_macro_defined_functions",
+            ),
+            (
+                "test_plain_tu_recovers_nothing",
+                "recover_macro_defined_functions",
+            ),
+            (
+                "test_degraded_view_recovers_nothing",
+                "recover_macro_defined_functions",
+            ),
+            (
+                "test_macro_functions_added_to_checklist",
+                "augment_checklist_with_macro_functions",
+            ),
+            (
+                "test_prefilter_skips_files_without_macro_invocations",
+                "augment_checklist_with_macro_functions",
+            ),
+            (
+                "test_idempotent",
+                "augment_checklist_with_macro_functions",
+            ),
+        ):
+            order = _stmt_order("test_preprocessor_view.py", test_name)
+            probe_at = order["_probe_cpp"]
+            run_at = order[adjudicator]
+            assert max(probe_at) < min(run_at), test_name
+
+    def test_cpp_no_skip_directions_are_fenced(self) -> None:
+        # The cpp no-skip direction tests in THIS file must route
+        # through _fail_on_skip: pytest.raises does not intercept
+        # Skipped, so without the fence an over-matching guard would
+        # turn these product directions into silent skips.
+        calls = _function_call_map("test_live_transport_guards.py")
+        fenced = _callers_of(calls, "_fail_on_skip")
+        assert {
+            "test_cpp_availability_arm_stays_hard_on_unprobed_hosts",
+            "test_cpp_availability_arm_is_exact_match_only",
+            "test_cpp_errno_shape_is_exact_only",
+            "test_cpp_product_reasons_do_not_skip",
+            "test_cpp_ok_results_never_skip",
+            "test_cpp_multi_error_results_do_not_skip",
+            "test_cpp_function_expansion_product_stays_hard",
+            "test_cpp_segfaulting_preprocessor_still_fails",
+            "test_cpp_product_degradation_still_fails",
+        } <= fenced
