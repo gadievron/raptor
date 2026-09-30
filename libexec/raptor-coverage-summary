@@ -123,14 +123,22 @@ from core.security.log_sanitisation import escape_nonprintable  # noqa: E402
 logger = logging.getLogger(__name__)
 
 
-def _tprint(text: object, **kwargs) -> None:
+def _tprint(text: object, *, preserve_newlines: bool = True,
+            **kwargs) -> None:
     """print() with control/bidi escaping for target-derived text.
 
     File and function names come from the SCANNED target's
     checklist/coverage records — a hostile repo controls those bytes
     (incl. raw ESC/OSC), and this script prints straight to the
-    operator's terminal."""
-    print(escape_nonprintable(str(text), preserve_newlines=True), **kwargs)
+    operator's terminal.
+
+    ``preserve_newlines`` defaults to True for the multi-line report
+    blocks; one-record-per-line call sites pass False so an embedded
+    newline in a name cannot forge extra records (it prints as
+    ``\\x0a`` instead)."""
+    print(escape_nonprintable(str(text),
+                              preserve_newlines=preserve_newlines),
+          **kwargs)
 
 
 def _is_project_dir(d: Path) -> bool:
@@ -292,7 +300,9 @@ def _cmd_gaps(view):
         return
     print(f"{len(gaps)} item{'s' if len(gaps) != 1 else ''} with no LLM review:")
     for g in gaps:
-        _tprint(f"  {g['file']}:{g['function']}")
+        # One gap per line: a newline embedded in a hostile name must
+        # not mint fake gap records (or fake "all examined" lines).
+        _tprint(f"  {g['file']}:{g['function']}", preserve_newlines=False)
 
 
 def _mark_model() -> str:
@@ -577,7 +587,7 @@ def _cmd_mark(mark_targets: list, run_dir: Path | None,
             else:
                 if ":" not in target:
                     _tprint(f"WARNING: skipping '{target}' (expected file:function)",
-                            file=sys.stderr)
+                            preserve_newlines=False, file=sys.stderr)
                     continue
                 file_path, func_name = target.rsplit(":", 1)
             if normalise_path is not None:
@@ -629,7 +639,8 @@ def _cmd_mark(mark_targets: list, run_dir: Path | None,
                     added += 1
         for file_path, func_name in unmatched:
             _tprint(f"WARNING: no checklist item matches "
-                    f"{file_path}:{func_name} — not marked", file=sys.stderr)
+                    f"{file_path}:{func_name} — not marked",
+                    preserve_newlines=False, file=sys.stderr)
         # Marking a function records function-level review only — it must NOT add
         # the file to files_examined (which is the whole-file "tool scanned this
         # file" signal; the store would otherwise mark the entire file reviewed).
@@ -689,7 +700,8 @@ def _cmd_unmark(unmark_targets, run_dir, map_grade: bool = False):
         to_remove = set()
         for target in unmark_targets:
             if ":" not in target:
-                _tprint(f"WARNING: skipping '{target}' (expected file:function)", file=sys.stderr)
+                _tprint(f"WARNING: skipping '{target}' (expected file:function)",
+                        preserve_newlines=False, file=sys.stderr)
                 continue
             file_path, func_name = target.rsplit(":", 1)
             to_remove.add((file_path, func_name))

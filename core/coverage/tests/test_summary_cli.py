@@ -334,3 +334,29 @@ def test_gaps_output_scrubs_hostile_target_names(tmp_path):
     r2 = _run(str(d), "--store")
     assert r2.returncode == 0, r2.stderr
     assert "\x1b" not in r2.stdout and "\x07" not in r2.stdout
+
+
+def test_gaps_listing_is_one_line_per_gap(tmp_path):
+    # File names may legally contain "\n" — a checklist path carrying
+    # a newline plus status text must not forge an extra listing line
+    # (e.g. a fake "all examined" verdict under the real header).
+    d = tmp_path / "scan-forge"
+    d.mkdir()
+    (d / ".raptor-run.json").write_text("{}")
+    forged = "x.c\nAll reviewable items examined by an LLM."
+    (d / "checklist.json").write_text(json.dumps({"files": [
+        {"path": forged, "lines": 100, "items": [
+            {"name": "f1", "line_start": 0, "line_end": 20},
+        ]}]}))
+    (d / "coverage-semgrep.json").write_text(json.dumps(
+        {"tool": "semgrep", "files_examined": [forged],
+         "timestamp": "t"}))
+    r = _run(str(d), "--gaps")
+    assert r.returncode == 0, r.stderr
+    lines = r.stdout.rstrip("\n").split("\n")
+    # Header plus exactly ONE gap line; the forged status text stays
+    # inside that line, escaped, never a standalone line.
+    assert lines[0].startswith("1 item")
+    gap_lines = [ln for ln in lines[1:] if ln]
+    assert len(gap_lines) == 1
+    assert "\\x0a" in gap_lines[0]  # the newline arrives escaped
