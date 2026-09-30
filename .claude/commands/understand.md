@@ -222,7 +222,7 @@ after `--resume`.
 ```bash
 libexec/raptor-run-lifecycle start understand --target <resolved_target>
 ```
-The last line of output is `OUTPUT_DIR=<path>` — use that for all subsequent steps.
+Use the first `OUTPUT_DIR=<path>` line printed by the lifecycle stub for all subsequent steps.
 
 ```bash
 libexec/raptor-build-checklist <resolved_target> "$OUTPUT_DIR"

@@ -87,7 +87,7 @@ If the operator passed `--out`, use that directory. Otherwise, start a lifecycle
 libexec/raptor-run-lifecycle start audit --target "$TARGET_PATH"
 ```
 
-Parse `OUTPUT_DIR=<path>` from the last line.
+Parse the first `OUTPUT_DIR=<path>` line printed by the lifecycle stub.
 
 ### Step 2: Context map
 

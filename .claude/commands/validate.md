@@ -112,7 +112,7 @@ claude-code-only installs the ranking runs through the session
 transport inline in stage 0 — expect extra minutes on large lists;
 any failure keeps the bridge order.
 
-This starts the run lifecycle, builds the checklist, and imports any /understand output. The last line of output is `OUTPUT_DIR=<path>` — use that path for all subsequent stages.
+This starts the run lifecycle, builds the checklist, and imports any /understand output. Use the first `OUTPUT_DIR=<path>` line printed by the lifecycle stub for all subsequent stages.
 
 `--findings <file>` imports pre-existing findings. Two import-time behaviours to know:
 
