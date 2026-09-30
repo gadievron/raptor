@@ -47,7 +47,8 @@ def display_rule_id(rule_id: str | None) -> str:
 #: strings (test_code / dead_code / validated) are deliberately absent
 #: — see _stage_ruling_status.
 _SECURITY_RULING_STATUSES = frozenset({
-    "ruled_out", "disproven", "confirmed", "exploitable",
+    "ruled_out", "ruled_out_unverified", "disproven", "confirmed",
+    "exploitable",
 })
 
 
@@ -162,6 +163,11 @@ def get_display_status(finding: dict[str, Any]) -> str:
         # meaning.
         "confirmed_unverified": "Confirmed (Unverified)",
         "ruled_out": "Ruled Out",
+        # Explicit entry for the same reason as confirmed_unverified:
+        # the title-case fallback would render "Ruled Out Unverified"
+        # and the counting code's exact-match buckets would file it
+        # under "other" instead of its own bucket.
+        "ruled_out_unverified": "Ruled Out (Unverified)",
         "false_positive": "False Positive",
         "poc_success": "Exploitable",
         "not_disproven": "Unconfirmed",

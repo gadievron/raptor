@@ -1300,6 +1300,20 @@ CONTAINER_COPY_ALLOWLIST: "dict[str, frozenset[str]]" = {
 }
 
 
+def _refutation_receipt(finding: dict, workdir) -> bool:
+    """True when the finding carries a mechanically verified refutation:
+    a ``witness_execution`` record whose verdict is ``refuted`` AND whose
+    provenance stamp authenticates (the record was minted by the witness
+    machinery for THIS finding in THIS run). The record shape alone is
+    forgeable prose — only the verifying stamp makes it a receipt.
+    """
+    record = finding.get("witness_execution")
+    if not isinstance(record, dict) or record.get("verdict") != "refuted":
+        return False
+    from core.witness.provenance import verify_witness_execution
+    return verify_witness_execution(finding, workdir)
+
+
 def _apply_stage_file(workdir, stage_letter):
     """Merge stage-X.json into findings.json and record a consumption
     receipt. Stage inputs are immutable: the stage file stays in place
@@ -1436,15 +1450,34 @@ def _apply_stage_file(workdir, stage_letter):
                 "confirmed": "confirmed",
                 "exploitable": "exploitable",
             }
+            quarantined = 0
             for finding in container.get("findings", []):
                 ruling = finding.get("ruling")
                 if isinstance(ruling, dict):
                     rs = ruling.get("status", "")
+                    if (rs == "ruled_out"
+                            and not _refutation_receipt(finding, workdir)):
+                        # An LLM-tier rule-out with no mechanical
+                        # refutation receipt is a suppression claim
+                        # nothing vouches for — quarantine it instead
+                        # of propagating: ruled_out_unverified carries
+                        # no suppression authority downstream and
+                        # stays witness-eligible (a witness run is
+                        # exactly what could upgrade it to a receipted
+                        # rule-out).
+                        ruling["status"] = "ruled_out_unverified"
+                        finding["status"] = "ruled_out_unverified"
+                        quarantined += 1
+                        continue
                     if rs in ("confirmed", "ruled_out", "exploitable"):
                         finding["status"] = rs
                     final = _RULING_TO_FINAL.get(rs)
                     if final:
                         finding["final_status"] = final
+            if quarantined:
+                print(f"  {quarantined} rule-out(s) without a verified "
+                      f"refutation record quarantined as "
+                      f"ruled_out_unverified")
         for finding in container.get("findings", []):
             # Empty cvss_vector fails schema pattern; normalise to None
             if finding.get("cvss_vector") == "":

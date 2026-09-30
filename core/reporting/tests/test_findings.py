@@ -490,6 +490,33 @@ class TerminalStatusBucketsTest(unittest.TestCase):
         self.assertIn("1 Confirmed (Unverified)", line)
 
 
+class RuledOutUnverifiedBucketTest(unittest.TestCase):
+    """An unverified rule-out is a quarantined claim, not a verified
+    negative: it must not add to the ruled_out bucket (which grants
+    the count suppression weight in summaries) and must not trip the
+    'other'/pipeline-bug warning either — same doctrine as
+    confirmed_unverified on the confirm side."""
+
+    def test_not_counted_as_ruled_out(self):
+        counts = build_findings_summary(
+            [{"final_status": "ruled_out_unverified"}])
+        self.assertEqual(counts["ruled_out_unverified"], 1)
+        self.assertEqual(counts["ruled_out"], 0)
+        self.assertEqual(counts["other"], 0)
+
+    def test_summary_line_names_the_bucket(self):
+        from core.reporting.findings import findings_summary_line
+        counts = build_findings_summary([
+            {"final_status": "ruled_out_unverified"},
+            {"final_status": "ruled_out"},
+        ])
+        line = findings_summary_line(counts)
+        parts = [p.strip("* .") for p in
+                 line.split(" out of ")[0].split(", ")]
+        self.assertIn("1 Ruled Out (Unverified)", parts)
+        self.assertIn("1 Ruled Out", parts)
+
+
 class TestChainBreaksShapes(unittest.TestCase):
     """feasibility.chain_breaks is finding-supplied JSON — only a
     list renders as blockers; dict shapes crashed the slice and

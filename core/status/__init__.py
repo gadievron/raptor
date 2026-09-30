@@ -33,11 +33,15 @@ _STATUS_ALIASES = {
     "CONFIRMED_BLOCKED": "confirmed_blocked",
     "CONFIRMED_UNVERIFIED": "confirmed_unverified",
     "RULED_OUT": "ruled_out",
+    "RULED_OUT_UNVERIFIED": "ruled_out_unverified",
     "NOT_EXPLOITABLE": "unlikely",
     # Title-case legacy (old feasibility verdicts, LLM output)
     "Exploitable": "exploitable",
     "Confirmed": "confirmed",
     "Ruled Out": "ruled_out",
+    # The parenthesised display form would fall through to the
+    # transform as "ruled_out_(unverified)" — map it explicitly.
+    "Ruled Out (Unverified)": "ruled_out_unverified",
     "Disproven": "disproven",
     "Not disproven": "not_disproven",
     "Likely exploitable": "likely_exploitable",
@@ -52,6 +56,7 @@ _STATUS_ALIASES = {
     "confirmed_blocked": "confirmed_blocked",
     "confirmed_unverified": "confirmed_unverified",
     "ruled_out": "ruled_out",
+    "ruled_out_unverified": "ruled_out_unverified",
     "likely_exploitable": "likely_exploitable",
     "difficult": "difficult",
     "unlikely": "unlikely",

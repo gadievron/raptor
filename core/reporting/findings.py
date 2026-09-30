@@ -120,7 +120,8 @@ def build_findings_summary(findings: list[dict[str, Any]]) -> dict[str, int]:
               "confirmed_unverified": 0,
               "not_disproven": 0,
               "false_positive": 0,
-              "ruled_out": 0, "error": 0, "other": 0}
+              "ruled_out": 0, "ruled_out_unverified": 0,
+              "error": 0, "other": 0}
     for f in findings:
         status = get_display_status(f)
         if status == "Exploitable":
@@ -148,6 +149,12 @@ def build_findings_summary(findings: list[dict[str, Any]]) -> dict[str, int]:
             counts["false_positive"] += 1
         elif status == "Ruled Out":
             counts["ruled_out"] += 1
+        elif status == "Ruled Out (Unverified)":
+            # NOT summed into ruled_out: an unverified rule-out is a
+            # quarantined claim with no mechanical refutation behind
+            # it — counting it as a verified rule-out would grant it
+            # the suppression weight the quarantine exists to withhold.
+            counts["ruled_out_unverified"] += 1
         elif status.startswith("Error"):
             counts["error"] += 1
         else:
@@ -185,6 +192,8 @@ def findings_summary_line(counts: dict[str, int], vuln_count: int | None = None)
         parts.append(f"{counts['false_positive']} False Positive")
     if counts["ruled_out"]:
         parts.append(f"{counts['ruled_out']} Ruled Out")
+    if counts.get("ruled_out_unverified"):
+        parts.append(f"{counts['ruled_out_unverified']} Ruled Out (Unverified)")
     if counts["error"]:
         parts.append(f"{counts['error']} Error")
     if counts.get("other"):

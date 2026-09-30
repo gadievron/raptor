@@ -193,6 +193,37 @@ class TestGetDisplayStatus(unittest.TestCase):
         }), "Ruled Out")
 
 
+class TestRuledOutUnverifiedDisplay(unittest.TestCase):
+    """ruled_out_unverified is the quarantine tier for rule-outs that
+    carry no mechanical refutation receipt. The title-case fallback
+    would render it "Ruled Out Unverified", which the counting code's
+    exact "Ruled Out" match misses — it needs the same explicit
+    parenthesised treatment as confirmed_unverified."""
+
+    def test_ruling_status_renders_parenthesised(self):
+        self.assertEqual(get_display_status({
+            "ruling": {"status": "ruled_out_unverified",
+                       "disqualifier": "D-2"},
+        }), "Ruled Out (Unverified)")
+
+    def test_top_level_status_renders_parenthesised(self):
+        self.assertEqual(get_display_status(
+            {"status": "ruled_out_unverified"}), "Ruled Out (Unverified)")
+
+    def test_final_status_renders_parenthesised(self):
+        self.assertEqual(get_display_status(
+            {"final_status": "ruled_out_unverified"}), "Ruled Out (Unverified)")
+
+    def test_outranks_bare_true_positive_boolean(self):
+        # Same doctrine as ruled_out: a security ruling (even the
+        # unverified tier) decides display over the bare
+        # is_true_positive stand-in.
+        self.assertEqual(get_display_status({
+            "is_true_positive": True,
+            "ruling": {"status": "ruled_out_unverified"},
+        }), "Ruled Out (Unverified)")
+
+
 class TestTitleCaseType(unittest.TestCase):
 
     def test_buffer_overflow(self):
