@@ -909,6 +909,49 @@ class TestArrayItemValidation:
         assert result.fields["tags"].status == "ok"
 
 
+_ARRAY_OF_ARRAYS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "tag_groups": {
+            "type": "array",
+            "items": {
+                "type": "array",
+                "items": {"type": "string",
+                          "enum": ["taint", "memory", "web"]},
+            },
+        },
+    },
+}
+
+
+class TestNestedArrayValidation:
+    """Array-of-arrays: the scalar item branch must recurse into
+    array-typed items rather than waving the inner lists through with
+    their enum unenforced."""
+
+    def test_inner_enum_enforced(self):
+        result = validate_structured_response(
+            {"tag_groups": [["taint", "ZZZ"], ["memory"]]},
+            _ARRAY_OF_ARRAYS_SCHEMA)
+        assert result.data["tag_groups"] == [["taint"], ["memory"]]
+        # The loss is visible to the corrective retry.
+        assert "tag_groups" in result.incomplete
+
+    def test_non_list_inner_item_dropped(self):
+        result = validate_structured_response(
+            {"tag_groups": [["web"], "notalist", [1, 2]]},
+            _ARRAY_OF_ARRAYS_SCHEMA)
+        assert result.data["tag_groups"] == [["web"]]
+        assert "tag_groups" in result.incomplete
+
+    def test_clean_nested_arrays_untouched(self):
+        result = validate_structured_response(
+            {"tag_groups": [["taint", "web"], ["memory"]]},
+            _ARRAY_OF_ARRAYS_SCHEMA)
+        assert result.data["tag_groups"] == [["taint", "web"], ["memory"]]
+        assert result.incomplete == []
+
+
 # ---------------------------------------------------------------------------
 # quality_retry_prompt
 # ---------------------------------------------------------------------------

@@ -511,11 +511,24 @@ def _validate_array_items(
             cleaned.append(new_item)
     else:
         enum_values = items_spec.get("enum")
+        nested_spec = items_spec.get("items")
         for item in values:
             item, item_coerced = _coerce_value(item, item_type)
             if item is None:
                 lossy = True
                 continue
+            # Array-typed items recurse — without this, an
+            # array-of-arrays passed its inner elements through with
+            # their type/enum constraints unenforced.
+            if (item_type == "array" and isinstance(item, list)
+                    and isinstance(nested_spec, dict)):
+                item, sub_coerced, sub_lossy = _validate_array_items(
+                    item, nested_spec)
+                item_coerced = item_coerced or sub_coerced
+                lossy = lossy or sub_lossy
+                if item is None:
+                    lossy = True
+                    continue
             if isinstance(enum_values, list) and enum_values:
                 item, enum_ok, enum_coerced = _enforce_enum(item, enum_values)
                 item_coerced = item_coerced or enum_coerced
