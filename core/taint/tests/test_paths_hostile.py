@@ -671,6 +671,7 @@ def _timed_leg(
     return elapsed
 
 
+@pytest.mark.slow
 def test_growth_ratio_pin_n_vs_2n_with_alternatives(packs) -> None:
     # Host-speed invariant: a RATIO of two CPU timings on the same
     # host.

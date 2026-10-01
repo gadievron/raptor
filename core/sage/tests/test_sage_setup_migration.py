@@ -168,7 +168,7 @@ class TestSageSetupMigration(unittest.TestCase):
             "comparison": "collision comparison failed",
             "merge": "missing-file merge failed",
             "validation": "post-migration validation failed",
-            "marker": "could not write the migration completion marker",
+            "marker": "could not fix ownership / write the migration completion marker",
         }
         for stage, expected_error in cases.items():
             with self.subTest(stage=stage):

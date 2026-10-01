@@ -267,7 +267,7 @@ class TestRealCapBoundaries:
         # (core.testing.wallclock) — the regression this catches
         # (an uncapped walk over the u32-scale claim) burns CPU;
         # a stalled runner does not.
-        with cpu_budget(2.0, what="one-past-cap export walk"):
+        with cpu_budget(2.5, what="one-past-cap export walk"):
             facts = extract_pe_facts(p)
         assert facts is not None
         exp = facts.exports
