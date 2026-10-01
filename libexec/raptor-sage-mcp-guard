@@ -210,6 +210,11 @@ _SURFACE_TOOLS_DENIED = "tools.list.denied"
 # forward-with-notice lane.
 _STAMP_UNUSABLE: dict = {}
 
+# Server-chosen identity fields that vary across parallel instances
+# and agent reconnections.  Closed set: any field outside it triggers
+# drift detection (fail closed).
+_EPHEMERAL_KEYS = frozenset({"agent_id", "agent_name", "registered_name"})
+
 
 def _stamp_lines(body: str) -> list[str]:
     """Split stamp/section text into lines on ``\\n`` ONLY.
@@ -255,6 +260,38 @@ def _variant_objects(surfaces, name: str) -> list:
         except ValueError:
             continue
     return out
+
+
+def _normalise_inception_block(block):
+    """Copy of one content block with ephemeral identity keys removed.
+
+    Returns the block unchanged when it carries no parseable JSON dict
+    text or when no ephemeral keys are present.  When ephemeral keys
+    ARE present, they are stripped and the remaining dict re-serialised
+    with sorted keys for canonical comparison.
+    """
+    if not isinstance(block, dict):
+        return block
+    text = block.get("text")
+    if not isinstance(text, str):
+        return block
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        return block
+    if not isinstance(payload, dict):
+        return block
+    if not any(k in payload for k in _EPHEMERAL_KEYS):
+        return block
+    stripped = {k: v for k, v in payload.items() if k not in _EPHEMERAL_KEYS}
+    return {**block, "text": json.dumps(stripped, sort_keys=True)}
+
+
+def _normalise_inception_content(content):
+    """Copy of an inception content list with ephemeral keys removed."""
+    if not isinstance(content, list):
+        return content
+    return [_normalise_inception_block(b) for b in content]
 
 
 def _sha(text: str) -> str:
@@ -445,9 +482,15 @@ def _check_inception(msg: dict, surfaces) -> bool:
     denied_variants = _variant_objects(surfaces, _SURFACE_INCEPTION_DENIED)
     content_variants = _variant_objects(surfaces, _SURFACE_INCEPTION_CONTENT)
     if content_variants:
-        if any(content == v for v in content_variants):
+        norm_content = _normalise_inception_content(content)
+        if any(norm_content == _normalise_inception_content(v)
+               for v in content_variants):
+            if norm_content != content:
+                result["content"] = norm_content
+                return True
             return stripped_siblings
-        if any(content == v for v in denied_variants):
+        if any(norm_content == _normalise_inception_content(v)
+               for v in denied_variants):
             result["content"] = [{"type": "text", "text": json.dumps(
                 {"message": _NOTE_REJECTED})}]
             _note_rejected(_SURFACE_INCEPTION_CONTENT)
@@ -531,8 +574,11 @@ def _scrub_first_tool(msg: dict, surfaces) -> bool:
     for variant in _variant_objects(surfaces, _SURFACE_INCEPTION_DENIED):
         if isinstance(variant, list):
             denied_blocks.extend(variant)
+    norm_auth = [_normalise_inception_block(ab) for ab in authorized_blocks]
+    norm_denied = [_normalise_inception_block(db) for db in denied_blocks]
     warned = False
     noted = False
+    scrubbed = False
     for block in content:
         if not isinstance(block, dict) or not isinstance(
                 block.get("text"), str):
@@ -543,9 +589,13 @@ def _scrub_first_tool(msg: dict, surfaces) -> bool:
             continue
         if not isinstance(payload, dict) or "instructions" not in payload:
             continue
-        if any(block == ab for ab in authorized_blocks):
+        norm_block = _normalise_inception_block(block)
+        if any(norm_block == nab for nab in norm_auth):
+            if norm_block is not block:
+                block["text"] = norm_block["text"]
+                scrubbed = True
             continue
-        if any(block == db for db in denied_blocks):
+        if any(norm_block == ndb for ndb in norm_denied):
             block["text"] = json.dumps({"message": _NOTE_REJECTED})
             noted = True
             continue
@@ -556,7 +606,7 @@ def _scrub_first_tool(msg: dict, surfaces) -> bool:
               "<recorded variants>")
     if noted:
         _note_rejected("first-tool-result preamble")
-    return warned or noted
+    return warned or noted or scrubbed
 
 
 def _stub_tool(name: str, text: str) -> dict:

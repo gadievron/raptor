@@ -350,6 +350,7 @@ def compare(guard, auth: dict | None, live: dict) -> dict:
             rows.append((v, NEW))
     report[SURFACE_INIT] = rows
 
+    _norm = guard._normalise_inception_content
     auth_content = list(
         guard._variant_objects(auth, SURFACE_INCEPTION_CONTENT))
     denied_content = list(
@@ -357,14 +358,17 @@ def compare(guard, auth: dict | None, live: dict) -> dict:
     auth_msg = (auth or {}).get(SURFACE_INCEPTION) or ""
     rows = []
     for v in _json_lines((live or {}).get(SURFACE_INCEPTION_CONTENT)):
+        norm_v = _norm(v) if isinstance(v, list) else v
         if auth_content:
-            ok = any(v == a for a in auth_content)
+            ok = any(norm_v == (_norm(a) if isinstance(a, list) else a)
+                     for a in auth_content)
         else:
             msg = _inception_message(v)
             ok = bool(auth_msg.strip()) and msg.strip() == auth_msg.strip()
         if ok:
             rows.append((v, AUTHORIZED))
-        elif any(v == d for d in denied_content):
+        elif any(norm_v == (_norm(d) if isinstance(d, list) else d)
+                 for d in denied_content):
             rows.append((v, DENIED))
         else:
             rows.append((v, NEW))
@@ -968,12 +972,19 @@ def merge(guard, auth: dict | None, live: dict) -> str:
         if not any(v.strip() == a.strip() for a in init_variants):
             init_variants.append(v)
 
+    _norm = guard._normalise_inception_content
     content_variants = list(auth_content)
+    norm_auth = [_norm(a) if isinstance(a, list) else a
+                 for a in content_variants]
+    norm_denied = [_norm(d) if isinstance(d, list) else d
+                   for d in denied_content]
     for v in live_content:
-        if any(v == d for d in denied_content):
+        norm_v = _norm(v) if isinstance(v, list) else v
+        if any(norm_v == nd for nd in norm_denied):
             continue  # rejected stays rejected — decided, not pending
-        if not any(v == a for a in content_variants):
-            content_variants.append(v)
+        if not any(norm_v == na for na in norm_auth):
+            content_variants.append(norm_v)
+            norm_auth.append(norm_v)
 
     tools_variants = list(auth_tools)
     for v in live_tools:
@@ -1007,16 +1018,23 @@ def deny(guard, auth: dict | None, live: dict) -> str:
         if not any(v.strip() == d.strip() for d in new_denied_init):
             new_denied_init.append(v)
 
+    _norm = guard._normalise_inception_content
     new_denied_content = list(denied_content)
+    norm_auth_c = [_norm(a) if isinstance(a, list) else a
+                   for a in auth_content]
+    norm_denied_c = [_norm(d) if isinstance(d, list) else d
+                     for d in new_denied_content]
     for v in live_content:
+        norm_v = _norm(v) if isinstance(v, list) else v
         if auth_content:
-            if any(v == a for a in auth_content):
+            if any(norm_v == na for na in norm_auth_c):
                 continue
         elif (auth_msg.strip()
                 and _inception_message(v).strip() == auth_msg.strip()):
             continue
-        if not any(v == d for d in new_denied_content):
-            new_denied_content.append(v)
+        if not any(norm_v == nd for nd in norm_denied_c):
+            new_denied_content.append(norm_v)
+            norm_denied_c.append(norm_v)
 
     new_denied_tools = list(denied_tools)
     for v in live_tools:
