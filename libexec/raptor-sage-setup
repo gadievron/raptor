@@ -646,13 +646,15 @@ migrate_sage_home_if_needed() {
         echo "Post-migration check:"
         echo "  $validation_result"
 
+        # docker cp writes files as the host UID; cp -a preserves that.
+        # The container runs as root, so fix ownership before it starts.
         if ! docker run --rm \
             -v "$volume_name:/dest" \
             --entrypoint /bin/sh \
             "$sage_image" \
-            -c 'date -u > /dest/.migration-complete'; then
+            -c 'chown -R 0:0 /dest && date -u > /dest/.migration-complete'; then
             abort_sage_home_migration "$backup" "$volume_name" \
-                "could not write the migration completion marker."
+                "could not fix ownership / write the migration completion marker."
             return 1
         fi
     fi
