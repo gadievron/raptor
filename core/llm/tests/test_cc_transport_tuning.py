@@ -236,6 +236,125 @@ class TestUnknownRpmWorkerFloor:
         assert derive_max_workers("session-default") == 6
 
 
+class TestLocalWorkerCap:
+    """derive_max_workers for a single local inference server (Ollama, or
+    a vLLM/LM Studio endpoint on a loopback host). A local model carries
+    no RPM, so it lands in the rpm=0 floor — the cap must be the small
+    local ceiling, not the serial-by-accident 1, and not an unbounded
+    manual worker count."""
+
+    def _mock_primary(self, monkeypatch, provider, model_name, api_base=None):
+        class _MC:
+            pass
+        mc = _MC()
+        mc.provider = provider
+        mc.model_name = model_name
+        mc.api_base = api_base
+        monkeypatch.setattr(
+            "core.llm.config._get_default_primary_model",
+            lambda prefer=None: mc,
+        )
+
+    def _mock_rpm(self, monkeypatch, rpm):
+        monkeypatch.setattr(
+            "core.llm.model_data.rpm_for", lambda model, **kw: rpm,
+        )
+
+    def _no_tuning(self, monkeypatch):
+        monkeypatch.setattr(
+            "core.llm.concurrency.read_tuning_max_llm_workers",
+            lambda: None,
+        )
+
+    @pytest.fixture(autouse=True)
+    def _clear_env(self, monkeypatch):
+        monkeypatch.delenv("RAPTOR_LOCAL_MAX_WORKERS", raising=False)
+
+    def test_ollama_primary_unknown_rpm_caps_at_local_default(
+        self, monkeypatch,
+    ):
+        from core.llm.concurrency import (
+            LOCAL_MAX_WORKERS_DEFAULT,
+            derive_max_workers,
+        )
+
+        self._mock_primary(monkeypatch, "ollama", "qwen3-27b")
+        self._mock_rpm(monkeypatch, 0)
+        self._no_tuning(monkeypatch)
+        assert (
+            derive_max_workers("qwen3-27b") == LOCAL_MAX_WORKERS_DEFAULT
+        )
+
+    def test_local_env_override_applies(self, monkeypatch):
+        from core.llm.concurrency import derive_max_workers
+
+        self._mock_primary(monkeypatch, "ollama", "qwen3-27b")
+        self._mock_rpm(monkeypatch, 0)
+        self._no_tuning(monkeypatch)
+        monkeypatch.setenv("RAPTOR_LOCAL_MAX_WORKERS", "4")
+        assert derive_max_workers("qwen3-27b") == 4
+
+    def test_loopback_openai_endpoint_is_capped(self, monkeypatch):
+        """A vLLM/LM Studio server configured as provider=openai with a
+        loopback api_base is a single local server too."""
+        from core.llm.concurrency import (
+            LOCAL_MAX_WORKERS_DEFAULT,
+            derive_max_workers,
+        )
+
+        self._mock_primary(
+            monkeypatch, "openai", "qwen3-vllm",
+            api_base="http://localhost:8000/v1",
+        )
+        self._mock_rpm(monkeypatch, 0)
+        self._no_tuning(monkeypatch)
+        assert (
+            derive_max_workers("qwen3-vllm") == LOCAL_MAX_WORKERS_DEFAULT
+        )
+
+    def test_cloud_openai_endpoint_not_capped_stays_serial(self, monkeypatch):
+        """Two-direction guard: a cloud provider at rpm=0 (no api_base, or
+        a non-loopback one) is NOT a local server and keeps the serial
+        fallback."""
+        from core.llm.concurrency import derive_max_workers
+
+        self._mock_primary(
+            monkeypatch, "openai", "gpt-mystery",
+            api_base="https://api.openai.com/v1",
+        )
+        self._mock_rpm(monkeypatch, 0)
+        self._no_tuning(monkeypatch)
+        assert derive_max_workers("gpt-mystery") == 1
+
+    def test_known_rpm_local_model_clamped_to_local_cap(self, monkeypatch):
+        """Rare: a local model with a known RPM still clamps to the local
+        cap rather than rpm//2."""
+        from core.llm.concurrency import (
+            LOCAL_MAX_WORKERS_DEFAULT,
+            derive_max_workers,
+        )
+
+        self._mock_primary(monkeypatch, "ollama", "qwen3-27b")
+        self._mock_rpm(monkeypatch, 120)  # would be 60 workers uncapped
+        self._no_tuning(monkeypatch)
+        assert (
+            derive_max_workers("qwen3-27b") == LOCAL_MAX_WORKERS_DEFAULT
+        )
+
+    def test_tuning_override_still_wins(self, monkeypatch):
+        """tuning.json max_llm_workers remains authoritative — the operator
+        can raise concurrency deliberately."""
+        from core.llm.concurrency import derive_max_workers
+
+        self._mock_primary(monkeypatch, "ollama", "qwen3-27b")
+        self._mock_rpm(monkeypatch, 0)
+        monkeypatch.setattr(
+            "core.llm.concurrency.read_tuning_max_llm_workers",
+            lambda: 8,
+        )
+        assert derive_max_workers("qwen3-27b") == 8
+
+
 class TestWarmClaudecodeProbe:
     def _mock_primary(self, monkeypatch, provider):
         class _MC:
