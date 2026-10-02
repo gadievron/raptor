@@ -1452,15 +1452,22 @@ def _validate_model_roles(models: list['ModelConfig']) -> None:
 
     analysis_count = roles.count("analysis")
     code_count = roles.count("code")
-    has_analysis = analysis_count > 0
+    # A role-less entry is an implicit analysis model: the resolution in
+    # ``resolve_model_roles`` seats ``all_models[0]`` as the
+    # analysis_model when no entry carries an explicit "analysis" role.
+    # So "has an analysis model" is satisfied by EITHER an explicit
+    # analysis role OR any role-less entry — the auxiliary-role guards
+    # below (judge/consensus/aggregate/code "without an analysis model")
+    # must honour that, otherwise a role-less primary plus a judge/
+    # consensus/etc. entry is wrongly rejected even though it resolves
+    # to a perfectly valid lineup.
+    has_roleless = any(not m.role for m in models)
+    has_analysis = analysis_count > 0 or has_roleless
     has_consensus = "consensus" in roles
     has_code = code_count > 0
-    # A role-less entry is an implicit analysis model (the resolution
-    # below seats it as analysis_model and the loader defaults role-less
-    # extras to fallback), so its presence defeats the all-fallback
-    # refusal: a role-less primary plus one role:fallback entry is a
-    # working configuration, not "all models are fallback".
-    has_roleless = any(not m.role for m in models)
+    # ``only_fallback`` likewise defers to a role-less entry: a role-less
+    # primary plus one role:fallback entry is a working configuration,
+    # not "all models are fallback".
     only_fallback = (
         bool(roles)
         and all(r == "fallback" for r in roles)

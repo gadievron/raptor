@@ -109,6 +109,45 @@ class TestRoleValidation:
         with pytest.raises(ConfigError, match="All models are configured as fallback"):
             resolve_model_roles(m1, [m2])
 
+    def test_roleless_primary_with_judge_allowed(self):
+        """A role-less primary is an implicit analysis model, so pairing it
+        with a judge must not trip 'Judge models configured without an
+        analysis model'. This is the common local lineup: a role-less
+        primary plus a bigger model held back as judge."""
+        primary = ModelConfig(provider="ollama", model_name="local-primary")
+        judge = ModelConfig(provider="ollama", model_name="local-big", role="judge")
+        r = resolve_model_roles(primary, [judge])
+        assert r["analysis_model"] is primary
+        assert judge in r["judge_models"]
+
+    def test_roleless_primary_with_consensus_allowed(self):
+        primary = ModelConfig(provider="ollama", model_name="local-primary")
+        cons = ModelConfig(provider="ollama", model_name="local-peer", role="consensus")
+        r = resolve_model_roles(primary, [cons])
+        assert r["analysis_model"] is primary
+        assert cons in r["consensus_models"]
+
+    def test_roleless_primary_with_aggregate_allowed(self):
+        primary = ModelConfig(provider="ollama", model_name="local-primary")
+        agg = ModelConfig(provider="ollama", model_name="local-agg", role="aggregate")
+        r = resolve_model_roles(primary, [agg])
+        assert r["analysis_model"] is primary
+        assert agg in r["aggregate_models"]
+
+    def test_roleless_primary_with_code_allowed(self):
+        primary = ModelConfig(provider="ollama", model_name="local-primary")
+        code = ModelConfig(provider="ollama", model_name="local-coder", role="code")
+        r = resolve_model_roles(primary, [code])
+        assert r["analysis_model"] is primary
+        assert r["code_model"] is code
+
+    def test_judge_without_any_analysis_still_raises(self):
+        # Two-direction guard: with NO role-less entry and NO explicit
+        # analysis role, a judge-only configuration keeps refusing.
+        judge = ModelConfig(provider="ollama", model_name="local-big", role="judge")
+        with pytest.raises(ConfigError, match="Judge models configured without an analysis model"):
+            resolve_model_roles(None, [judge])
+
     def test_multiple_code_raises(self):
         m1 = ModelConfig(provider="anthropic", model_name="opus", role="analysis")
         m2 = ModelConfig(provider="ollama", model_name="deepseek", role="code")
