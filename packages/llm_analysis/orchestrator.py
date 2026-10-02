@@ -313,6 +313,35 @@ def _count_panel_stamps(
     return counts
 
 
+# Cost-prudent default when the primary is a metered cloud model and the
+# operator did not specify --max-findings. Local primaries bypass this
+# (free inference → analyse everything). Mirrors raptor_agentic.py's
+# documented agentic default.
+_CLOUD_DEFAULT_MAX_FINDINGS = 10
+
+
+def _is_local_primary(llm_config: Any | None) -> bool:
+    """True when the configured primary runs on a local inference server
+    (ollama, or any provider whose api_base is a loopback/local host —
+    vLLM / LM Studio / llama.cpp). Local inference is free, so the
+    finding cap defaults to unlimited. Best-effort: any resolution
+    failure returns False (keep the cost-prudent cloud default)."""
+    primary = getattr(llm_config, "primary_model", None)
+    if primary is None:
+        return False
+    provider = (getattr(primary, "provider", "") or "").lower()
+    if provider == "ollama":
+        return True
+    api_base = getattr(primary, "api_base", None)
+    if api_base:
+        try:
+            from core.llm.egress import url_is_loopback
+            return url_is_loopback(api_base)
+        except Exception:  # noqa: BLE001 — detection is best-effort
+            return False
+    return False
+
+
 def _cap_findings(findings: list, max_findings: int) -> list:
     """Apply the max_findings cap, stamping the dropped tail with
     ``skipped_over_budget`` at skip time. The dicts are the prep
@@ -678,7 +707,7 @@ def orchestrate(
     repo_path: Path,
     out_dir: Path,
     max_parallel: int = 0,
-    max_findings: int = 0,
+    max_findings: int | None = None,
     no_exploits: bool = False,
     no_patches: bool = False,
     llm_config: Any | None = None,
@@ -710,9 +739,12 @@ def orchestrate(
         repo_path: Target repository path.
         out_dir: Output directory for orchestration results.
         max_parallel: Maximum concurrent agents (0 = auto from model RPM).
-        max_findings: Cap on findings dispatched — when > 0 and the
-            report carries more, only the first max_findings are
-            analysed. 0 (default) = no cap.
+        max_findings: Cap on findings dispatched. An explicit int is
+            honoured verbatim (> 0 caps; <= 0 = no cap). ``None`` (the
+            default = "operator did not specify") resolves provider-aware:
+            a LOCAL primary (ollama / loopback endpoint — free inference)
+            gets NO cap (analyse everything, bound by the resource
+            governor), a cloud primary keeps the cost-prudent default of 10.
         no_exploits: Skip exploit generation.
         no_patches: Skip patch generation.
         llm_config: LLMConfig for external LLM dispatch (None = CC only).
@@ -868,6 +900,21 @@ def orchestrate(
         findings, rank_cost, rank_model = rank_findings_for_analysis(
             findings, llm_config,
         )
+
+    # Resolve the effective cap. An explicit operator value (int) is
+    # honoured verbatim. ``None`` means "unspecified" → provider-aware:
+    # local inference is free, so there's no reason to sample — analyse
+    # everything (bound by the resource governor: --max-seconds /
+    # --max-calls). A cloud primary keeps the cost-prudent default of 10.
+    if max_findings is None:
+        if _is_local_primary(llm_config):
+            max_findings = 0  # no cap
+            logger.info(
+                "local primary: analysing all %d findings (no cap; bound by "
+                "--max-seconds / --max-calls)", len(findings),
+            )
+        else:
+            max_findings = _CLOUD_DEFAULT_MAX_FINDINGS
 
     if max_findings > 0 and len(findings) > max_findings:
         logger.info("Capping at %d findings (of %d)", max_findings, len(findings))
