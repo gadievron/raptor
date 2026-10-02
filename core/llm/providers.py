@@ -1666,9 +1666,14 @@ class OpenAICompatibleProvider(LLMProvider):
                     create_kwargs["timeout"] = float(_timeout_s)
                 except (TypeError, ValueError):
                     pass
-            # Native constrained decoding (e.g. Ollama ``format=<schema>``) is
-            # passed through as ``extra_body`` by generate_structured(); the
-            # OpenAI SDK forwards it verbatim into the request body.
+            # Native constrained decoding: generate_structured() passes the
+            # standard OpenAI ``response_format`` (json_schema) for schema
+            # enforcement, plus ``extra_body`` for provider-specific flags
+            # (e.g. Ollama ``think: false``). Both are forwarded verbatim by
+            # the OpenAI SDK.
+            _response_format = kwargs.get("response_format")
+            if _response_format:
+                create_kwargs["response_format"] = _response_format
             _extra_body = kwargs.get("extra_body")
             if _extra_body:
                 create_kwargs["extra_body"] = _extra_body
@@ -1782,18 +1787,37 @@ class OpenAICompatibleProvider(LLMProvider):
         temperature = kwargs.get("temperature", self.config.temperature)
 
         # Native constrained decoding fast path (Ollama). Ollama's
-        # /v1/chat/completions honours ``extra_body={"format": <json-schema>}``
-        # and the server then CANNOT emit anything but schema-valid output —
-        # no tool-calling round-trip (which weak local models are slow at and
-        # bad at), no prompt-and-pray. Tried BEFORE instructor; any failure
-        # falls through to the existing instructor → JSON-fallback chain, so a
-        # model/build that mishandles ``format`` still degrades gracefully.
+        # /v1/chat/completions honours the standard OpenAI
+        # ``response_format={"type":"json_schema", ...}`` and the server then
+        # CANNOT emit anything but schema-valid output — no tool-calling
+        # round-trip (which weak local models are slow at and bad at), no
+        # prompt-and-pray.
+        #
+        # ``think: false`` is CRITICAL here and passed via ``extra_body``:
+        # Qwen3/DeepSeek-R1-style reasoning models otherwise spend the whole
+        # generation budget thinking and return EMPTY ``content`` (the
+        # observed "Expecting value: line 1 column 1" failure). With thinking
+        # off, reasoning is minimal and lands in a separate ``reasoning``
+        # field while ``content`` carries the JSON. Verified against a live
+        # Ollama build: /v1 + response_format + think:false returns clean,
+        # schema-conformant JSON (enum + array fields) first try.
+        #
+        # Tried BEFORE instructor; any failure falls through to the existing
+        # instructor → JSON-fallback chain, so a model/build that mishandles
+        # these params still degrades gracefully.
         if self.config.provider.lower() == "ollama":
             try:
                 fmt_schema = pydantic_model.model_json_schema()
                 native = self.generate(
                     prompt, system_prompt,
-                    extra_body={"format": fmt_schema},
+                    response_format={
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "structured_response",
+                            "schema": fmt_schema,
+                        },
+                    },
+                    extra_body={"think": False},
                     timeout_s=kwargs.get("timeout_s"),
                     **{k: kwargs[k] for k in ("max_tokens", "temperature")
                        if k in kwargs},
