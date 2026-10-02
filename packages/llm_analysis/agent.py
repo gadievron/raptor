@@ -2611,7 +2611,7 @@ class AutonomousSecurityAgentV2:
     def process_findings(
         self, sarif_paths: list[str] | None = None,
         findings_path: str | None = None,
-        max_findings: int = 10,
+        max_findings: int | None = None,
         checklist: dict[str, Any] | None = None,
         emit_journal: bool = True,
         prefer_globs: list[str] | None = None,
@@ -2717,8 +2717,26 @@ class AutonomousSecurityAgentV2:
                 )
 
         if not is_prep_only:
-            # Cap in sequential mode — in prep mode, Phase 4 enforces the cap
-            prioritized_findings = prioritized_findings[:max_findings]
+            # Cap in sequential mode — in prep mode, Phase 4 (orchestrate)
+            # enforces the cap with its own identical provider-aware
+            # resolution, so leave max_findings untouched (None) for it.
+            #
+            # Resolve a provider-aware cap when the operator didn't specify
+            # one (max_findings is None): local inference is free → analyse
+            # all; cloud → the cost-prudent default of 10. An explicit int
+            # is kept. max_findings <= 0 means "no cap".
+            seq_cap = max_findings
+            if seq_cap is None:
+                from packages.llm_analysis.orchestrator import (
+                    _CLOUD_DEFAULT_MAX_FINDINGS,
+                    _is_local_primary,
+                )
+                seq_cap = (
+                    0 if _is_local_primary(getattr(self, "llm_config", None))
+                    else _CLOUD_DEFAULT_MAX_FINDINGS
+                )
+            if seq_cap > 0:
+                prioritized_findings = prioritized_findings[:seq_cap]
 
         if is_prep_only:
             logger.debug(
@@ -2730,10 +2748,15 @@ class AutonomousSecurityAgentV2:
             logger.info("After deduplication: %d unique findings", len(unique_findings))
             logger.info("  With dataflow: %d", len(findings_with_dataflow))
             logger.info("  Without dataflow: %d", len(findings_without_dataflow))
-            logger.info(
-                "Processing top %d findings "
-                "(dataflow prioritized)", max_findings,
-            )
+            if seq_cap > 0:
+                logger.info(
+                    "Processing top %d findings (dataflow prioritized)", seq_cap,
+                )
+            else:
+                logger.info(
+                    "Processing all %d findings — no cap (dataflow prioritized)",
+                    len(prioritized_findings),
+                )
             logger.info("=" * 70)
 
         unique_findings = prioritized_findings
@@ -3773,8 +3796,10 @@ def main() -> None:
     )
     ap.add_argument("--out", help="Output directory")
     ap.add_argument(
-        "--max-findings", type=int, default=10,
-        help="Max findings to process",
+        "--max-findings", type=int, default=None,
+        help="Max findings to process. Unset = provider-aware: a local "
+             "primary (ollama / loopback — free) processes ALL findings, a "
+             "cloud primary defaults to 10. Explicit value overrides; 0 = no cap.",
     )
     ap.add_argument(
         "--prefer", action="append", default=None, metavar="GLOB",
