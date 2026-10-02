@@ -72,6 +72,10 @@ class AuditPipelineOpts:
     models: list[str] | None = None
     max_cost_usd: float | None = None
     max_seconds: float | None = None
+    # Non-dollar resource governor (client-level; bounds free/local runs
+    # where the USD cap is inert). Off unless set.
+    max_calls: int | None = None
+    max_tokens: int | None = None
     budget: int | None = None
     strategy_filter: str | None = None
     review_passes: int = 1
@@ -275,6 +279,15 @@ def _make_llm_client(opts: AuditPipelineOpts):
     else:
         llm_cfg = LLMConfig(max_cost_per_scan=max_cost)
         client = LLMClient(config=llm_cfg)
+    # Non-dollar governor caps (off unless set). ``max_seconds`` is also
+    # consumed by the orchestrator loop gate; setting it on the client
+    # additionally bounds the generate()/generate_structured() path.
+    if opts.max_seconds is not None:
+        client.config.max_seconds_per_scan = opts.max_seconds
+    if opts.max_calls is not None:
+        client.config.max_calls_per_scan = opts.max_calls
+    if opts.max_tokens is not None:
+        client.config.max_tokens_per_scan = opts.max_tokens
     _ensure_dispatcher_route(client, models, run_dir=opts.out_dir)
     return client, models, primary_model
 
