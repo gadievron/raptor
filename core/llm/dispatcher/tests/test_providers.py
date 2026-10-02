@@ -36,6 +36,7 @@ def all_providers_creds():
         "together":    "together-real-NOT-LEAKED",
         "openrouter":  "sk-or-real-NOT-LEAKED",
         "orcarouter":  "sk-orca-real-NOT-LEAKED",
+        "cheaperinference": "ci-cheaperinference-real-NOT-LEAKED",
         "fireworks":   "fw-fireworks-real-NOT-LEAKED",
         "deepinfra":   "deepinfra-real-NOT-LEAKED",
         "perplexity":  "pplx-perplexity-real-NOT-LEAKED",
@@ -289,6 +290,7 @@ _BEARER_PROVIDERS = [
     ("together",   "v1/chat/completions",    "together-real-NOT-LEAKED"),
     ("openrouter", "api/v1/chat/completions", "sk-or-real-NOT-LEAKED"),
     ("orcarouter", "v1/chat/completions", "sk-orca-real-NOT-LEAKED"),
+    ("cheaperinference", "v1/chat/completions", "ci-cheaperinference-real-NOT-LEAKED"),
     ("fireworks",  "inference/v1/chat/completions", "fw-fireworks-real-NOT-LEAKED"),
     ("deepinfra",  "v1/openai/chat/completions", "deepinfra-real-NOT-LEAKED"),
     ("perplexity", "chat/completions",       "pplx-perplexity-real-NOT-LEAKED"),
@@ -496,6 +498,7 @@ class TestCredentialStoreReadsAggregatorEnvs:
             "TOGETHER_API_KEY":   "together-test",
             "OPENROUTER_API_KEY": "openrouter-test",
             "ORCAROUTER_API_KEY": "orcarouter-test",
+            "CHEAPER_INFERENCE_API_KEY": "cheaperinference-test",
             "FIREWORKS_API_KEY":  "fireworks-test",
             "DEEPINFRA_API_KEY":  "deepinfra-test",
             "PERPLEXITY_API_KEY": "perplexity-test",
@@ -513,6 +516,7 @@ class TestCredentialStoreReadsAggregatorEnvs:
         assert creds.get("together") == "together-test"
         assert creds.get("openrouter") == "openrouter-test"
         assert creds.get("orcarouter") == "orcarouter-test"
+        assert creds.get("cheaperinference") == "cheaperinference-test"
         assert creds.get("fireworks") == "fireworks-test"
         assert creds.get("deepinfra") == "deepinfra-test"
         assert creds.get("perplexity") == "perplexity-test"
