@@ -412,6 +412,16 @@ def start_lifecycle(command: str, target: Path) -> Path | None:
     """
     from core.config import RaptorConfig
     safe_env = RaptorConfig.get_safe_env()
+    # The libexec trust guard requires _RAPTOR_TRUSTED or CLAUDECODE in the
+    # child env. get_safe_env() only COPIES those if already in os.environ —
+    # under bin/raptor (or a Claude Code session) they are, but on the direct
+    # `python3 raptor.py agentic` path they are not, so the /understand
+    # pre-pass's lifecycle call hit the guard and exited 2 ("Pre-pass
+    # skipped"). This is RAPTOR dispatching its OWN lifecycle helper, so
+    # asserting the trust marker is correct. setdefault so a real parent
+    # value (bin/raptor / CC) is never overwritten; _RAPTOR_TRUSTED (not a
+    # fabricated CLAUDECODE) is the honest marker for a non-CC transport.
+    safe_env.setdefault("_RAPTOR_TRUSTED", "1")
     argv = [str(_LIFECYCLE), "start", command, "--target", str(target)]
     # Thread the parent's project explicitly: a sibling lifecycle run
     # (the /understand pre-pass, the /validate post-pass, the gap-audit

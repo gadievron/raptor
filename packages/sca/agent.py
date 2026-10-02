@@ -168,6 +168,17 @@ def run_sca_subprocess(
             writable_paths=[str(log_dir)],
             env=env if env is not None else RaptorConfig.get_safe_env(),
             env_caller_filtered=True,
+            # ``cmd`` runs RAPTOR's OWN sca agent (sys.executable
+            # packages/sca/agent.py) — a trusted in-tree dispatch that
+            # re-imports the RAPTOR tree, NOT untrusted target code. Without
+            # this, the sandbox's TARGET_ENV_STRIP_SET strips RAPTOR_DIR
+            # (correct for untrusted targets) and the child's
+            # `sys.path.insert(0, os.environ["RAPTOR_DIR"])` (CLAUDE.md
+            # path-safety, no fallback) KeyErrors at import. This is the
+            # sanctioned opt-out for RAPTOR's own dispatch children — it
+            # keeps RAPTOR_DIR + the trust markers; the untrusted-workload
+            # arm is unaffected.
+            keep_trust_markers_for_dispatch=True,
             capture_output=True,
             text=True,
             timeout=timeout,
