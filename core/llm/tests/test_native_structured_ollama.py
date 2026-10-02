@@ -70,7 +70,7 @@ def _wire_recording_generate(
 
 
 class TestOllamaNativeFormat:
-    def test_ollama_emits_format_extra_body_and_skips_instructor(self):
+    def test_ollama_emits_response_format_and_think_false_and_skips_instructor(self):
         provider = _provider("ollama")
         # instructor_client must stay untouched — a mock that explodes if called.
         class _Boom:
@@ -83,20 +83,24 @@ class TestOllamaNativeFormat:
 
         assert out.result["verdict"] == "needs_analysis"
         assert out.result["prerequisites"] == ["a", "b"]
-        # Native format schema was passed through extra_body.
-        assert "extra_body" in calls[0]
-        assert "format" in calls[0]["extra_body"]
-        assert calls[0]["extra_body"]["format"]["type"] == "object"
+        # Native path passes the OpenAI json_schema response_format...
+        rf = calls[0]["response_format"]
+        assert rf["type"] == "json_schema"
+        assert rf["json_schema"]["schema"]["type"] == "object"
+        # ...AND think:false (critical for reasoning models — otherwise they
+        # think the budget away and return empty content).
+        assert calls[0]["extra_body"] == {"think": False}
 
     def test_non_ollama_does_not_use_native_format(self):
         # Two-direction guard: an openai-compat provider keeps the
-        # instructor-first path and never emits format.
+        # instructor-first path and never emits response_format/think.
         provider = _provider("openai")
         calls = _wire_recording_generate(provider)  # instructor_client=None → fallback
 
         out = provider.generate_structured("p", _SCHEMA)
 
         assert out.result["verdict"] == "needs_analysis"
+        assert all("response_format" not in c for c in calls)
         assert all("extra_body" not in c for c in calls)
 
     def test_native_path_falls_through_on_bad_json(self):
@@ -120,10 +124,10 @@ class TestOllamaNativeFormat:
         out = provider.generate_structured("p", _SCHEMA)
 
         assert out.result["verdict"] == "clear_fp"
-        # First call was the native attempt (extra_body set), second the
-        # fallback (no extra_body).
-        assert "extra_body" in calls[0]
-        assert "extra_body" not in calls[1]
+        # First call was the native attempt (response_format set), second the
+        # fallback (no response_format).
+        assert "response_format" in calls[0]
+        assert "response_format" not in calls[1]
 
 
 class TestStripThinkBlocks:
@@ -180,8 +184,13 @@ class TestGenerateTimeoutForwarding:
             chat = _Chat()
 
         provider.client = _Client()
-        provider.generate("p", None, timeout_s=42.0,
-                          extra_body={"format": {"type": "object"}})
+        provider.generate(
+            "p", None, timeout_s=42.0,
+            response_format={"type": "json_schema",
+                             "json_schema": {"name": "v", "schema": {"type": "object"}}},
+            extra_body={"think": False},
+        )
 
         assert recorded.get("timeout") == 42.0
-        assert recorded.get("extra_body") == {"format": {"type": "object"}}
+        assert recorded.get("extra_body") == {"think": False}
+        assert recorded.get("response_format")["type"] == "json_schema"
