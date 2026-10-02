@@ -432,14 +432,18 @@ if [[ "${1:-}" == "sage-setup" ]]; then
     exec "$RAPTOR_DIR/libexec/raptor-sage-setup" "$@"
 fi
 
-# Claude required for the interactive session. But the analysis
-# commands run on local models / deterministic tools and need no Claude
-# login — so when claude is ABSENT, fall back to the direct Python path
-# for those rather than hard-exiting. When claude IS present, behaviour
-# is unchanged: the main path below launches the Claude Code session
+# Analysis commands run on local models / deterministic tools and need
+# no Claude login. Dispatch them to the direct Python path when EITHER:
+#   - the operator forces it with RAPTOR_NO_CLAUDE=1 (local-only box —
+#     claude may be installed but unauthenticated, which otherwise drops
+#     into the interactive login prompt), OR
+#   - claude is simply absent.
+# When claude is present AND RAPTOR_NO_CLAUDE is unset, behaviour is
+# unchanged: the main path below launches the Claude Code session
 # (prefer-claude). Command list mirrors raptor.py's mode_handlers; do
 # not add modes raptor.py doesn't dispatch.
-if ! command -v claude >/dev/null 2>&1; then
+_raptor_local_route() {
+    # $1 is the subcommand. execs on match; returns 1 (no match) otherwise.
     case "${1:-}" in
         agentic|scan|codeql|analyze|fuzz|web|sca|binary|openant)
             _cmd="$1"; shift
@@ -452,6 +456,25 @@ if ! command -v claude >/dev/null 2>&1; then
             exec python3 "$RAPTOR_DIR/raptor.py" "$_cmd" "$@"
             ;;
     esac
+    return 1
+}
+
+if [[ -n "${RAPTOR_NO_CLAUDE:-}" ]]; then
+    # `|| true`: _raptor_local_route execs on a match (never returns); a
+    # non-match returns 1, which under `set -e` would abort before the
+    # guidance below — tolerate it so the error message prints.
+    _raptor_local_route "$@" || true
+    # RAPTOR_NO_CLAUDE set but the subcommand isn't local-capable (or is
+    # the bare interactive session, which has no local equivalent).
+    echo "raptor: RAPTOR_NO_CLAUDE is set but '${1:-<none>}' needs the" >&2
+    echo "  Claude Code session. Unset RAPTOR_NO_CLAUDE, or use a local" >&2
+    echo "  analysis command (agentic/scan/codeql/analyze/fuzz/web/sca/binary/openant)." >&2
+    exit 1
+fi
+
+# Claude required for the interactive session.
+if ! command -v claude >/dev/null 2>&1; then
+    _raptor_local_route "$@" || true
     echo "raptor: claude not found. Install Claude Code:" >&2
     echo "  https://docs.anthropic.com/en/docs/claude-code/overview" >&2
     exit 1
