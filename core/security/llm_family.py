@@ -27,7 +27,15 @@ from typing import Literal, TYPE_CHECKING
 
 Family = Literal[
     "anthropic", "openai", "google", "meta", "mistral",
-    "ollama", "cohere", "unknown",
+    "ollama", "cohere",
+    # Open-weight lineages. Distinct families so the cross-family
+    # independence guarantee (a checker from a different training
+    # lineage) actually holds on an all-open-weight roster — before
+    # these were added every such model resolved to "unknown" (bare
+    # name) or collapsed to "ollama" (provider-prefixed), silently
+    # defeating the control.
+    "qwen", "deepseek", "yi", "phi",
+    "unknown",
 ]
 
 
@@ -53,15 +61,26 @@ _PROVIDER_STEMS: tuple[tuple[str, Family], ...] = (
 
 _MODEL_STEMS: tuple[tuple[str, Family], ...] = (
     ("claude", "anthropic"),
+    # ``gpt-oss`` is OpenAI's open-weight line, a DIFFERENT lineage from
+    # the hosted ``gpt-*`` API models — it must be matched BEFORE the
+    # ``gpt`` stem, since the loop returns the first match and
+    # ``gpt-oss-20b`` would otherwise resolve to openai.
+    ("gpt-oss", "openai"),
     ("gpt", "openai"),
     ("o1", "openai"),
     ("o3", "openai"),
     ("o4", "openai"),
     ("gemini", "google"),
+    ("gemma", "google"),   # Google's open-weight line — same vendor lineage
     ("llama", "meta"),
     ("mistral", "mistral"),
     ("mixtral", "mistral"),
     ("command", "cohere"),  # cohere's `command-r-plus`, `command-light`
+    # Open-weight lineages (served locally via Ollama/vLLM/etc.).
+    ("qwen", "qwen"),
+    ("deepseek", "deepseek"),
+    ("yi", "yi"),
+    ("phi", "phi"),
 )
 
 
@@ -141,6 +160,11 @@ _FAMILY_TO_PROVIDER: dict[Family, str] = {
     "mistral": "mistral",
     "ollama": "ollama",
     "cohere": "cohere",
+    # Open-weight lineages are served locally; route them via Ollama.
+    "qwen": "ollama",
+    "deepseek": "ollama",
+    "yi": "ollama",
+    "phi": "ollama",
 }
 
 # Heads that :func:`bare_model_id` strips as a ``<provider>/`` prefix.
@@ -378,8 +402,16 @@ def family_of(model_id: str) -> Family:
 
     Matching is by prefix on the lowered identifier (so ``claude-opus-4-7``
     and ``anthropic/claude-haiku-4-5`` both resolve to ``"anthropic"``).
-    Provider routing prefixes (``provider/model``) are checked first so
-    that e.g. ``ollama/llama-3`` resolves to ``ollama`` not ``meta``.
+
+    A provider routing prefix (``provider/model``) is PEELED and the
+    remainder re-resolved, so the *underlying model's* lineage wins over
+    the transport: ``ollama/qwen3`` → ``qwen``, ``ollama/deepseek-coder``
+    → ``deepseek``. Only when the remainder is itself unrecognised does
+    the provider's own family stand (``ollama/some-local-finetune`` →
+    ``ollama``). This is what lets an all-open-weight roster served
+    through one transport still be told apart by lineage — previously
+    every ``ollama/*`` collapsed to ``ollama`` and the cross-family
+    safety check silently no-op'd.
 
     Aggregator-host prefixes (``together/``, ``groq/``, ``openrouter/``,
     etc.) are STRIPPED first before family resolution — they re-host
@@ -415,10 +447,27 @@ def family_of(model_id: str) -> Family:
             break
     for stem, family in _PROVIDER_STEMS:
         if needle.startswith(stem + "/"):
+            # Peel the provider prefix and resolve the UNDERLYING model.
+            # ``ollama/qwen3`` → ``qwen``; the transport family (``ollama``)
+            # only stands when the remainder is itself unrecognised. This
+            # keeps genuinely distinct lineages (Qwen vs DeepSeek vs Llama)
+            # cross-family even when all are served through one provider.
+            remainder_family = family_of(needle[len(stem) + 1:])
+            if remainder_family != "unknown":
+                return remainder_family
             return family
     for stem, family in _MODEL_STEMS:
-        if needle == stem or needle.startswith(stem + "-"):
+        # Match the stem when it stands alone, is followed by a separator
+        # (``llama-3.1``, ``gpt-4o``), OR is followed immediately by a
+        # version digit/dot (``qwen3``, ``qwen2.5``, ``phi4``) — open
+        # model names frequently glue the version onto the family name
+        # with no separator, which the ``stem + "-"`` rule alone misses.
+        if needle == stem:
             return family
+        if needle.startswith(stem):
+            nxt = needle[len(stem):len(stem) + 1]
+            if nxt in "-_." or nxt.isdigit():
+                return family
     return "unknown"
 
 
@@ -457,9 +506,24 @@ def select_cross_family_checker(
     Caller composes this with ``llm_response_schema.validate_response``:
     the chosen candidate becomes the model used inside the retry callback.
     """
+    import logging
+    _log = logging.getLogger("raptor.llm_family")
     if family_of(producer_model_id) == "unknown":
+        _log.warning(
+            "cross-family validation skipped: producer model %r has an "
+            "unrecognised lineage, so no checker can be proven independent. "
+            "The 'Attacker Moves Second' control is INACTIVE for this call.",
+            producer_model_id,
+        )
         return None
     for candidate in candidates:
         if not same_family(producer_model_id, candidate) and family_of(candidate) != "unknown":
             return candidate
+    _log.warning(
+        "cross-family validation skipped: no candidate from a different "
+        "lineage than %r was available (candidates all same-family or "
+        "unrecognised). The cross-family independence check is INACTIVE "
+        "for this call.",
+        producer_model_id,
+    )
     return None
