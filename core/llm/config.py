@@ -748,6 +748,42 @@ def _config_bedrock_primary() -> Optional['ModelConfig']:
     return None
 
 
+def _config_ollama_primary() -> Optional['ModelConfig']:
+    """First config-file Ollama entry eligible to serve as the default
+    (primary) model.
+
+    Ollama is in the same blind spot as Bedrock: the thinking-model
+    scorer's pattern table (``_get_best_thinking_model``) is keyed to
+    direct cloud providers and never matches a local model, and the
+    env builder (``_build_ollama_config``) ignores the config file —
+    it probes ``/api/tags`` and returns the first available model.
+    Without this hook a role-less Ollama entry in ``models.json`` could
+    never become the auto-selected primary; the run silently fell
+    through to raw autodetect, ignoring the operator's declared choice.
+    Scoped to Ollama deliberately, mirroring ``_config_bedrock_primary``
+    so no other provider's selection semantics change.
+
+    Eligible = provider "ollama", carries no role (the "default" convention)
+    or an analysis/code role.  Entries with an auxiliary role (fallback /
+    consensus / judge / aggregate) are auxiliaries by declaration and never
+    become primary here.  Built via ``_model_config_from_entry`` so the
+    entry's ``api_base`` (from ``OLLAMA_HOST``), ``max_context`` and
+    ``max_output`` are preserved — unlike ``_build_ollama_config``'s
+    autodetect defaults.
+    """
+    for entry in _get_configured_models():
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("provider", "") != "ollama":
+            continue
+        if (entry.get("role") or None) not in (None, "analysis", "code"):
+            continue
+        mc = _model_config_from_entry(entry)
+        if _entry_auth_resolvable(mc):
+            return mc
+    return None
+
+
 def _get_default_primary_model(
     prefer: list[str] | None = None,
     *,
@@ -853,6 +889,24 @@ def _get_default_primary_model(
             )
             _get_default_primary_model._bedrock_logged = True
         return bedrock_primary
+
+    # Step 2c: a config-file Ollama entry with no auxiliary role.
+    # Mirrors Step 2b (Bedrock): the thinking-model scorer in Step 2
+    # only knows cloud models, so a configured local model could never
+    # become primary and the run silently fell through to raw
+    # /api/tags autodetect (Step 3), ignoring the operator's file.
+    # ``offline`` skips this just like Steps 1/3 skip Ollama (it is the
+    # sole member of _NETWORK_PROBING_PROVIDERS).
+    if not (offline and "ollama" in _NETWORK_PROBING_PROVIDERS):
+        ollama_primary = _config_ollama_primary()
+        if (ollama_primary is not None
+                and (prefer_set is None or "ollama" in prefer_set)):
+            if not getattr(_get_default_primary_model, "_ollama_logged", False):
+                logger.info(
+                    "Using configured Ollama model: %s", ollama_primary.model_name
+                )
+                _get_default_primary_model._ollama_logged = True
+            return ollama_primary
 
     # Step 3: default-order autodetect via env vars. Skip providers
     # already tried in step 1.
@@ -1140,6 +1194,16 @@ def _entry_auth_resolvable(mc: 'ModelConfig') -> bool:
         # ({"provider": "claudecode", "role": "fallback"}).
         import shutil
         return shutil.which("claude") is not None
+    if mc.provider == "ollama":
+        # Local loopback / self-hosted inference server — no credential
+        # to carry.  The endpoint itself (``OLLAMA_HOST``) is the only
+        # thing needed and it always resolves (localhost default or an
+        # operator-configured host), so a configured Ollama entry is
+        # always auth-resolvable.  Without this, a role-less Ollama
+        # primary entry was dropped by ``_config_ollama_primary`` and
+        # every configured Ollama fallback was filtered out of
+        # ``_get_default_fallback_models`` (both gate on this helper).
+        return True
     return False
 
 
