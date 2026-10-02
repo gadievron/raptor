@@ -1002,6 +1002,42 @@ class LLMProvider(ABC):
                 "instructor failure usage booking skipped: %s", book_exc,
             )
 
+    def _build_structured_response(
+        self, response, schema: dict[str, Any], pydantic_model,
+    ) -> StructuredResponse:
+        """Parse + coerce + validate a raw completion into a
+        StructuredResponse. Shared by the native-``format`` Ollama path and
+        the JSON-in-prompt fallback so the coercion logic lives in one place.
+
+        Strips markdown fences (LAST block — defeats prepend-prefix echo
+        injection) AND reasoning ``<think>`` blocks before parsing, then
+        coerces to the schema and validates with Pydantic. Raises on parse
+        or validation failure (the caller logs + decides whether to fall
+        through). Carries the per-call usage from ``response`` so attribution
+        is correct with no double counting.
+        """
+        content = strip_json_fences(response.content.strip()).strip()
+        content = _strip_think_blocks(content)
+        # A think block may have wrapped a fenced block; re-strip fences in
+        # case the closer sat between the fence and the JSON.
+        content = strip_json_fences(content).strip()
+        parsed = json.loads(content)
+        parsed = _coerce_to_schema(parsed, _normalize_schema(schema))
+        validated = pydantic_model.model_validate(parsed)
+        result_dict = validated.model_dump()
+        return StructuredResponse(
+            result=result_dict,
+            raw=json.dumps(result_dict, indent=2),
+            cost=response.cost,
+            tokens_used=response.tokens_used,
+            duration=response.duration,
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            cache_read_tokens=response.cache_read_tokens,
+            cache_write_tokens=response.cache_write_tokens,
+            resolved_model=response.resolved_model,
+        )
+
     def _structured_fallback(self, prompt: str, schema: dict[str, Any],
                              pydantic_model, system_prompt: str | None = None,
                              timeout_s: float | None = None,
@@ -1066,35 +1102,8 @@ class LLMProvider(ABC):
             )
             raise err
         try:
-            # Strip markdown fences via the shared hardened helper.
-            # It prefers the LAST fenced JSON block, defeating
-            # prepend-prefix injection where attacker-influenced
-            # prompt content coaxes the model into echoing a fake
-            # fenced block before its real answer — the inline copy
-            # this replaces kept the weaker first-block behaviour
-            # (see strip_json_fences' docstring).
-            content = strip_json_fences(response.content.strip()).strip()
-            parsed = json.loads(content)
-            parsed = _coerce_to_schema(parsed, _normalize_schema(schema))
-            validated = pydantic_model.model_validate(parsed)
-            result_dict = validated.model_dump()
-            # Carry the resolved model AND the per-call usage from the
-            # underlying generate() call so the JSON-fallback path
-            # attributes correctly too (usage was tracked by
-            # self.generate() — surfacing it here adds no double
-            # counting; the client stops diffing shared aggregate
-            # counters when per-call figures are present).
-            return StructuredResponse(
-                result=result_dict,
-                raw=json.dumps(result_dict, indent=2),
-                cost=response.cost,
-                tokens_used=response.tokens_used,
-                duration=response.duration,
-                input_tokens=response.input_tokens,
-                output_tokens=response.output_tokens,
-                cache_read_tokens=response.cache_read_tokens,
-                cache_write_tokens=response.cache_write_tokens,
-                resolved_model=response.resolved_model,
+            return self._build_structured_response(
+                response, schema, pydantic_model,
             )
         except Exception as e:
             # Pre-fix the logger interpolated `e` directly into the
@@ -1262,6 +1271,32 @@ class LLMProvider(ABC):
         import uuid as _uuid
         call_id = f"call_{_uuid.uuid4().hex[:12]}"
         return ToolCall(id=call_id, name=name, input=inp), StopReason.NEEDS_TOOL_CALL
+
+
+_THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think\s*>", re.DOTALL | re.IGNORECASE)
+
+
+def _strip_think_blocks(text: str) -> str:
+    """Remove reasoning-model ``<think>…</think>`` blocks from a response.
+
+    Reasoning open-weight models (deepseek-r1, qwen3-thinking, …) emit their
+    chain-of-thought inline before the answer. Left in place it corrupts the
+    JSON parse in structured output. Strip whole blocks; also tolerate a lone
+    trailing ``</think>`` with no opener (some builds emit only the closer and
+    put the reasoning before it), by dropping everything up to and including
+    that closer when no opener is present.
+    """
+    if not text:
+        return text
+    stripped = _THINK_BLOCK_RE.sub("", text)
+    if "<think" not in stripped.lower():
+        # Lone closer case: no opener survives, but a ``</think>`` remains —
+        # the reasoning ran before it. Keep only what follows the last closer.
+        lower = stripped.lower()
+        idx = lower.rfind("</think>")
+        if idx != -1:
+            stripped = stripped[idx + len("</think>"):]
+    return stripped.strip()
 
 
 def _coerce_to_schema(data: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:
@@ -1759,15 +1794,33 @@ class OpenAICompatibleProvider(LLMProvider):
 
         try:
             t_start = time.monotonic()
-            response = self.client.chat.completions.create(
-                model=self.config.model_name,
-                messages=messages,
+            create_kwargs: dict[str, Any] = {
+                "model": self.config.model_name,
+                "messages": messages,
                 **_openai_sampling_kwargs(
                     self.config.model_name,
                     kwargs.get("max_tokens", self.config.max_tokens),
                     kwargs.get("temperature", self.config.temperature),
                 ),
-            )
+            }
+            # Per-call timeout ceiling. Previously dropped on this provider
+            # (unlike Anthropic/ClaudeCode), so structured calls only hit the
+            # client-construction timeout and two retries stacked into the
+            # ~240s hangs seen on slow local models. Mirror the Anthropic
+            # pattern: truthy-guard + float().
+            _timeout_s = kwargs.get("timeout_s")
+            if _timeout_s:
+                try:
+                    create_kwargs["timeout"] = float(_timeout_s)
+                except (TypeError, ValueError):
+                    pass
+            # Native constrained decoding (e.g. Ollama ``format=<schema>``) is
+            # passed through as ``extra_body`` by generate_structured(); the
+            # OpenAI SDK forwards it verbatim into the request body.
+            _extra_body = kwargs.get("extra_body")
+            if _extra_body:
+                create_kwargs["extra_body"] = _extra_body
+            response = self.client.chat.completions.create(**create_kwargs)
             duration = time.monotonic() - t_start
 
             if not response.choices:
@@ -1875,6 +1928,34 @@ class OpenAICompatibleProvider(LLMProvider):
         # `temperature = 0.2` (analysis), `0.3` (consensus), etc.
         # actually reach the API. Falls back to configured default.
         temperature = kwargs.get("temperature", self.config.temperature)
+
+        # Native constrained decoding fast path (Ollama). Ollama's
+        # /v1/chat/completions honours ``extra_body={"format": <json-schema>}``
+        # and the server then CANNOT emit anything but schema-valid output —
+        # no tool-calling round-trip (which weak local models are slow at and
+        # bad at), no prompt-and-pray. Tried BEFORE instructor; any failure
+        # falls through to the existing instructor → JSON-fallback chain, so a
+        # model/build that mishandles ``format`` still degrades gracefully.
+        if self.config.provider.lower() == "ollama":
+            try:
+                fmt_schema = pydantic_model.model_json_schema()
+                native = self.generate(
+                    prompt, system_prompt,
+                    extra_body={"format": fmt_schema},
+                    timeout_s=kwargs.get("timeout_s"),
+                    **{k: kwargs[k] for k in ("max_tokens", "temperature")
+                       if k in kwargs},
+                )
+                return self._build_structured_response(
+                    native, schema, pydantic_model,
+                )
+            except Exception as e:  # noqa: BLE001 — fall through on any failure
+                from core.security.prompt_output_sanitise import escape_nonprintable
+                logger.warning(
+                    "Ollama native structured decoding failed for %s — falling "
+                    "back to instructor/JSON: %s",
+                    self.config.model_name, escape_nonprintable(str(e))[:256],
+                )
 
         # Try Instructor first (skip for Anthropic via OpenAI-compat — response_format is ignored)
         is_anthropic_compat = self.config.provider.lower() == "anthropic"
