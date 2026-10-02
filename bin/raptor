@@ -432,8 +432,26 @@ if [[ "${1:-}" == "sage-setup" ]]; then
     exec "$RAPTOR_DIR/libexec/raptor-sage-setup" "$@"
 fi
 
-# Claude required for everything else
+# Claude required for the interactive session. But the analysis
+# commands run on local models / deterministic tools and need no Claude
+# login — so when claude is ABSENT, fall back to the direct Python path
+# for those rather than hard-exiting. When claude IS present, behaviour
+# is unchanged: the main path below launches the Claude Code session
+# (prefer-claude). Command list mirrors raptor.py's mode_handlers; do
+# not add modes raptor.py doesn't dispatch.
 if ! command -v claude >/dev/null 2>&1; then
+    case "${1:-}" in
+        agentic|scan|codeql|analyze|fuzz|web|sca|binary|openant)
+            _cmd="$1"; shift
+            # No cd: a relative --repo/--target/--binary/--url must resolve
+            # against the operator's shell cwd (RAPTOR_CALLER_DIR exported
+            # above). Export the markers so the whole process tree — and the
+            # lifecycle/SCA sub-steps — are trusted.
+            export RAPTOR_DIR
+            export _RAPTOR_TRUSTED=1
+            exec python3 "$RAPTOR_DIR/raptor.py" "$_cmd" "$@"
+            ;;
+    esac
     echo "raptor: claude not found. Install Claude Code:" >&2
     echo "  https://docs.anthropic.com/en/docs/claude-code/overview" >&2
     exit 1
