@@ -173,9 +173,6 @@ class RaptorConfig:
     # added one directory level.
     REPO_ROOT = Path(__file__).resolve().parents[2]
     ENGINE_DIR = REPO_ROOT / "engine"
-    MCP_DIR = REPO_ROOT / "mcp"
-    AGENTS_DIR = MCP_DIR / "agents"
-    TOOLS_DIR = MCP_DIR / "tools"
     BASE_OUT_DIR = REPO_ROOT / "out"
     SEMGREP_RULES_DIR = ENGINE_DIR / "semgrep" / "rules"
     SEMGREP_REGISTRY_CACHE_DIR = SEMGREP_RULES_DIR / "registry-cache"
@@ -304,7 +301,6 @@ class RaptorConfig:
     CODEQL_ANALYZE_TIMEOUT = 2400    # 40 minutes (query execution)
     GIT_CLONE_TIMEOUT = 600          # 10 minutes
     LLM_TIMEOUT = 120                # 2 minutes per LLM call
-    SUBPROCESS_POLL_INTERVAL = 1     # 1 second
 
     # Resource Limits
     RESOURCE_READ_LIMIT = 5 * 1024 * 1024   # 5 MiB
