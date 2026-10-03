@@ -320,6 +320,26 @@ def _count_panel_stamps(
 _CLOUD_DEFAULT_MAX_FINDINGS = 10
 
 
+def _is_local_primary(llm_config: Any | None) -> bool:
+    """True when the configured primary runs on a local inference server.
+
+    Delegates to ``core.llm.egress.is_local_inference`` for the actual
+    detection. Best-effort: any resolution failure returns False (keep
+    the cost-prudent cloud default).
+    """
+    primary = getattr(llm_config, "primary_model", None)
+    if primary is None:
+        return False
+    try:
+        from core.llm.egress import is_local_inference
+        return is_local_inference(
+            getattr(primary, "provider", "") or "",
+            getattr(primary, "api_base", None),
+        )
+    except Exception:  # noqa: BLE001 — detection is best-effort
+        return False
+
+
 def resolve_max_findings(
     max_findings: int | None, llm_config: Any | None,
 ) -> int:
@@ -335,28 +355,6 @@ def resolve_max_findings(
     if _is_local_primary(llm_config):
         return 0
     return _CLOUD_DEFAULT_MAX_FINDINGS
-
-
-def _is_local_primary(llm_config: Any | None) -> bool:
-    """True when the configured primary runs on a local inference server
-    (ollama, or any provider whose api_base is a loopback/local host —
-    vLLM / LM Studio / llama.cpp). Local inference is free, so the
-    finding cap defaults to unlimited. Best-effort: any resolution
-    failure returns False (keep the cost-prudent cloud default)."""
-    primary = getattr(llm_config, "primary_model", None)
-    if primary is None:
-        return False
-    provider = (getattr(primary, "provider", "") or "").lower()
-    if provider == "ollama":
-        return True
-    api_base = getattr(primary, "api_base", None)
-    if api_base:
-        try:
-            from core.llm.egress import url_is_loopback
-            return url_is_loopback(api_base)
-        except Exception:  # noqa: BLE001 — detection is best-effort
-            return False
-    return False
 
 
 def _cap_findings(findings: list, max_findings: int) -> list:
