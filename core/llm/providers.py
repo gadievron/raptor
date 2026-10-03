@@ -1291,11 +1291,15 @@ def _strip_think_blocks(text: str) -> str:
     stripped = _THINK_BLOCK_RE.sub("", text)
     if "<think" not in stripped.lower():
         # Lone closer case: no opener survives, but a ``</think>`` remains —
-        # the reasoning ran before it. Keep only what follows the last closer.
+        # the reasoning ran before it. Keep only what follows the last closer,
+        # but ONLY when JSON ({/[) immediately follows — otherwise the closer
+        # may be inside a JSON string value and stripping would corrupt it.
         lower = stripped.lower()
         idx = lower.rfind("</think>")
         if idx != -1:
-            stripped = stripped[idx + len("</think>"):]
+            after = stripped[idx + len("</think>"):].lstrip()
+            if after and after[0] in ("{", "["):
+                stripped = after
     return stripped.strip()
 
 
@@ -1809,7 +1813,7 @@ class OpenAICompatibleProvider(LLMProvider):
             # ~240s hangs seen on slow local models. Mirror the Anthropic
             # pattern: truthy-guard + float().
             _timeout_s = kwargs.get("timeout_s")
-            if _timeout_s:
+            if _timeout_s is not None:
                 try:
                     create_kwargs["timeout"] = float(_timeout_s)
                 except (TypeError, ValueError):

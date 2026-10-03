@@ -103,6 +103,30 @@ class TestOllamaNativeFormat:
         assert all("response_format" not in c for c in calls)
         assert all("extra_body" not in c for c in calls)
 
+    def test_native_path_falls_through_on_validation_failure(self):
+        # Native call returns valid JSON that doesn't match the schema →
+        # Pydantic raises → falls through to JSON fallback.
+        provider = _provider("ollama")
+        bodies = iter([
+            '{"wrong_field": true}',  # native: valid JSON, bad schema
+            '{"verdict": "clear_fp", "prerequisites": []}',  # fallback
+        ])
+        calls: list[dict[str, Any]] = []
+
+        def generate(prompt, system_prompt=None, **kwargs):
+            calls.append(dict(kwargs))
+            return LLMResponse(
+                content=next(bodies), model="test-model", provider="ollama",
+                tokens_used=5, cost=0.0, finish_reason="complete",
+            )
+
+        provider.generate = generate  # type: ignore[method-assign]
+        out = provider.generate_structured("p", _SCHEMA)
+
+        assert out.result["verdict"] == "clear_fp"
+        assert "response_format" in calls[0]
+        assert "response_format" not in calls[1]
+
     def test_native_path_falls_through_on_bad_json(self):
         # Native call returns junk → native parse raises → falls through to
         # the JSON fallback, which re-sends via generate() and succeeds.
@@ -138,6 +162,31 @@ class TestStripThinkBlocks:
     def test_removes_lone_trailing_closer(self):
         text = 'the model reasoned about it</think>{"x": 1}'
         assert _strip_think_blocks(text) == '{"x": 1}'
+
+    def test_removes_multiple_paired_blocks(self):
+        text = '<think>a</think>middle<think>b</think>{"x": 1}'
+        assert _strip_think_blocks(text) == 'middle{"x": 1}'
+
+    def test_closer_inside_json_string_not_corrupted(self):
+        text = '{"reasoning": "checked </think> and found it"}'
+        assert _strip_think_blocks(text) == text
+
+    def test_paired_block_inside_json_string_survives_via_build(self):
+        # A JSON value containing <think>…</think> must not be corrupted.
+        # _build_structured_response tries json.loads first; valid JSON
+        # skips _strip_think_blocks entirely.
+        provider = _provider("ollama")
+        pyd = _dict_schema_to_pydantic(_SCHEMA)
+        resp = LLMResponse(
+            content='{"verdict": "needs_analysis", '
+                    '"prerequisites": ["saw <think>x</think> in output"]}',
+            model="test-model", provider="ollama", tokens_used=5,
+            cost=0.0, finish_reason="complete",
+        )
+        out = provider._build_structured_response(resp, _SCHEMA, pyd)
+        assert out.result["prerequisites"] == [
+            "saw <think>x</think> in output",
+        ]
 
     def test_leaves_clean_text_untouched(self):
         assert _strip_think_blocks('{"x": 1}') == '{"x": 1}'
