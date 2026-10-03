@@ -507,15 +507,19 @@ class TestUnknownFamilyAdjudicationBelt:
         """The same-family fallback guard is void when both families
         are unknown (same_family returns False for any unknown), so a
         rebadged same-lineage checker adjudicated pre-fix. Unprovable
-        is not cross-family — record the check, skip adjudication."""
+        is not cross-family — record the check, skip adjudication.
+
+        Uses genuinely-unrecognised model names: known open lineages
+        (qwen/deepseek/…) now resolve to real families, so the "unknown"
+        invariant must be exercised with a model family_of() cannot place."""
         prior = {"F-001": _result("F-001", exploitable=False, quality=0.5,
-                                  analysed_by="deepseek-r1")}
+                                  analysed_by="acme-llm-7b")}
         checker_results = [
             {"finding_id": "F-001", "is_exploitable": True,
              "ruling": "validated",
-             "analysed_by": "deepseek-r1-checker"},
+             "analysed_by": "acme-llm-7b-checker"},
         ]
-        checker = _model("ollama", "deepseek-r1-checker")
+        checker = _model("ollama", "acme-llm-7b-checker")
         task = CrossFamilyCheckTask(checker, results_by_id=prior)
         task.finalize(checker_results, prior)
 
@@ -531,9 +535,9 @@ class TestUnknownFamilyAdjudicationBelt:
         checker_results = [
             {"finding_id": "F-001", "is_exploitable": True,
              "ruling": "validated",
-             "analysed_by": "qwen3-coder"},
+             "analysed_by": "acme-llm-7b"},
         ]
-        checker = _model("ollama", "qwen3-coder")
+        checker = _model("ollama", "acme-llm-7b")
         task = CrossFamilyCheckTask(checker, results_by_id=prior)
         task.finalize(checker_results, prior)
 
@@ -701,11 +705,14 @@ class TestResolveCrossFamilyChecker:
         # cross-family: refuse rather than hand conservative-override
         # authority to a possibly identical model. Pre-fix the resolver
         # returned the FIRST candidate unconditionally.
+        # Uses a genuinely-unrecognised lineage: known open families
+        # (qwen/deepseek) now resolve, so the unknown-producer invariant
+        # must be exercised with a name family_of() cannot place.
         from packages.llm_analysis.orchestrator import (
             _resolve_cross_family_checker,
         )
-        unknown_primary = _model("ollama", "deepseek-r1", role="analysis")
-        rebadged_sibling = _model("ollama", "deepseek-r1-checker")
+        unknown_primary = _model("ollama", "acme-llm-7b", role="analysis")
+        rebadged_sibling = _model("ollama", "acme-llm-7b-checker")
         role_res = {
             "analysis_model": unknown_primary,
             "consensus_models": [rebadged_sibling, ANTHROPIC_CHECKER],
@@ -722,11 +729,12 @@ class TestResolveCrossFamilyChecker:
     def test_unknown_candidate_skipped(self):
         # A known-family primary must never receive an unknown-family
         # candidate as its checker (cannot be proven cross-family);
-        # the next provable candidate wins.
+        # the next provable candidate wins. Uses a genuinely-unknown
+        # candidate name (qwen3-coder now resolves to a real family).
         from packages.llm_analysis.orchestrator import (
             _resolve_cross_family_checker,
         )
-        unknown_candidate = _model("ollama", "qwen3-coder")
+        unknown_candidate = _model("ollama", "acme-llm-7b")
         role_res = {
             "analysis_model": GEMINI_PRIMARY,
             "consensus_models": [unknown_candidate, ANTHROPIC_CHECKER],

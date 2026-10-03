@@ -78,10 +78,61 @@ def test_meta_models_resolve_to_meta():
     assert family_of("meta-llama/Llama-3.1-8B") == "meta"
 
 
-def test_ollama_resolves_to_ollama():
-    assert family_of("ollama/llama3-8b") == "ollama"
-    assert family_of("ollama/qwen2.5-7b") == "ollama"
-    assert family_of("ollama/llama-3.1-8b") == "ollama"  # not meta
+def test_ollama_prefix_resolves_underlying_lineage():
+    # The provider prefix is peeled and the UNDERLYING model's lineage
+    # wins — so two models served through the same Ollama transport are
+    # still told apart by family (the cross-family guarantee depends on
+    # this). Previously every ``ollama/*`` collapsed to ``ollama``.
+    assert family_of("ollama/llama-3.1-8b") == "meta"
+    assert family_of("ollama/qwen3-27b") == "qwen"
+    assert family_of("ollama/deepseek-coder-v3") == "deepseek"
+
+
+def test_ollama_prefix_falls_back_to_transport_when_unknown():
+    # Only when the underlying model is itself unrecognised does the
+    # transport family stand.
+    assert family_of("ollama/some-local-finetune") == "ollama"
+
+
+def test_open_weight_lineages_resolve_distinctly():
+    assert family_of("qwen3-27b") == "qwen"
+    assert family_of("qwen2.5-coder") == "qwen"
+    assert family_of("deepseek-r1") == "deepseek"
+    assert family_of("deepseek-coder-v3") == "deepseek"
+    assert family_of("gemma-3-27b") == "google"   # Google's open line
+    assert family_of("yi-34b") == "yi"
+    assert family_of("phi-4") == "phi"
+    assert family_of("phi4") == "phi"  # digit-glued, no separator
+
+
+def test_aggregator_plus_provider_double_prefix():
+    """Aggregator strip + provider peel compose: together/ollama/qwen3
+    peels both layers and resolves the underlying lineage."""
+    assert family_of("together/ollama/qwen3-27b") == "qwen"
+    assert family_of("groq/ollama/deepseek-r1") == "deepseek"
+    assert family_of("openrouter/ollama/llama-3.1-8b") == "meta"
+
+
+def test_short_stems_require_separator():
+    """Short stems (o1/o3/o4) only match with a separator, not a
+    digit — ``o100`` is not an OpenAI model."""
+    assert family_of("o1-preview") == "openai"
+    assert family_of("o3-mini") == "openai"
+    assert family_of("o4-mini") == "openai"
+    assert family_of("o1") == "openai"
+    # Digit-glued short stems must NOT match.
+    assert family_of("o100-model") == "unknown"
+    assert family_of("o3000") == "unknown"
+
+
+def test_gpt_oss_is_openai_not_matched_as_bare_gpt():
+    # gpt-oss must resolve via its own stem (ordered before ``gpt``) —
+    # the point is it doesn't fall through to something else; it is
+    # OpenAI's open-weight line.
+    assert family_of("gpt-oss-20b") == "openai"
+    assert family_of("gpt-oss-120b") == "openai"
+    # the hosted API line still resolves too
+    assert family_of("gpt-5") == "openai"
 
 
 def test_mistral_family():
@@ -153,6 +204,33 @@ def test_select_skips_unknown_family_candidates():
         ["custom-model-xyz", "gemini-2.5-pro"],
     )
     assert pick == "gemini-2.5-pro"
+
+
+def test_select_open_weight_cross_family_by_lineage():
+    """Two distinct open lineages served through the same transport ARE
+    cross-family — a Qwen producer gets a DeepSeek/Llama checker. This is
+    the core of #969: previously everything collapsed to 'ollama' and no
+    checker could be chosen."""
+    pick = select_cross_family_checker(
+        "ollama/qwen3-27b",
+        ["ollama/qwen3-coder", "ollama/deepseek-coder-v3"],
+    )
+    assert pick == "ollama/deepseek-coder-v3"
+
+
+def test_select_open_weight_same_lineage_is_not_cross_family():
+    """A Qwen producer with only other Qwen candidates has no cross-family
+    option — returns None (and warns)."""
+    assert select_cross_family_checker(
+        "ollama/qwen3-27b",
+        ["ollama/qwen3-coder", "qwen2.5-7b"],
+    ) is None
+
+
+def test_open_weight_models_are_same_family_within_lineage():
+    assert same_family("ollama/qwen3-27b", "qwen2.5-coder") is True
+    assert same_family("ollama/qwen3-27b", "ollama/deepseek-coder") is False
+    assert same_family("deepseek-r1", "ollama/deepseek-coder-v3") is True
 
 
 def test_select_returns_none_when_no_cross_family_candidate():

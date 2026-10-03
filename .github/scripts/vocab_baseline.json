@@ -1888,6 +1888,16 @@
     "kind": "literal",
     "note": "closed security taxonomy: underscore-segment grammar for credential-shaped env names (TOKEN/KEY/SECRET/... variants backing is_credential_shaped) \u2014 a fixed shape grammar, not a learned name vocabulary"
   },
+  "core/security/llm_family.py::Family": {
+    "count": 12,
+    "kind": "literal",
+    "note": "closed model-family taxonomy for the cross-family (\u201cAttacker Moves Second\u201d) independence control: the deployment-vendor / training-lineage labels family_of() resolves to (anthropic/openai/google/meta/mistral/cohere/ollama + the open lineages qwen/deepseek/yi/phi + unknown). A fixed security-control taxonomy, not a learnable target-API name vocabulary; crossed the 9-name seed threshold when the open-weight lineages were added so distinct local models are no longer collapsed to one family"
+  },
+  "core/security/llm_family.py::_FAMILY_TO_PROVIDER": {
+    "count": 11,
+    "kind": "literal",
+    "note": "family\u2192provider routing map paired 1:1 with the Family taxonomy above (each family's ModelConfig provider string); same closed security-control taxonomy, not a learned name vocabulary"
+  },
   "core/security/prompt_envelope_audit.py::_NON_LLM_CALLS": {
     "count": 18,
     "kind": "literal"

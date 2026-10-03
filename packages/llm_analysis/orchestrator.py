@@ -1437,6 +1437,18 @@ def orchestrate(
                 findings, dispatch_fn, role_resolution,
                 results_by_id, cost_tracker, max_parallel,
             )
+        else:
+            # No cross-family checker could be resolved — commonly an
+            # all-same-lineage roster (e.g. every model served through
+            # one local provider). Say so rather than skipping silently:
+            # the cross-family re-check is simply not running this pass.
+            logger.warning(
+                "Cross-family re-check skipped for primary %s — no "
+                "different-lineage checker available among configured "
+                "models or auto-detect. Suspicious responses will not get "
+                "an independent-lineage second opinion this run.",
+                analysis_model.model_name,
+            )
 
     # Snapshot verdicts before Stage F so the self-contradiction
     # producer can detect flips (RetryTask overwrites in place).
