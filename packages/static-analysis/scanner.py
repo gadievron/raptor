@@ -1050,6 +1050,17 @@ def run_single_semgrep(
     # below — packages/semgrep/ is pure invocation logic.
     # Resolve binary explicitly to avoid broken-venv installations.
     semgrep_cmd = shutil.which("semgrep") or "/opt/homebrew/bin/semgrep"
+    scope_ok = semgrep_pkg.scope_isolation_available()
+    if not scope_ok:
+        from packages.semgrep.runner import _SCOPE_ISOLATION_MIN_VERSION
+        v = semgrep_pkg.version() or "unknown"
+        floor = ".".join(str(p) for p in _SCOPE_ISOLATION_MIN_VERSION)
+        logger.warning(
+            "semgrep %s < %s: --x-ignore-semgrepignore-files unavailable "
+            "— .semgrepignore files in the scanned repo can hide findings "
+            "(upgrade: pip install --upgrade semgrep)",
+            v, floor,
+        )
     cmd = semgrep_pkg.build_cmd(
         repo_path,
         config,
@@ -1061,7 +1072,7 @@ def run_single_semgrep(
             + (["--max-memory", str(max_memory_mb)] if max_memory_mb else [])
             or None
         ),
-        scope_isolation=semgrep_pkg.scope_isolation_available(),
+        scope_isolation=scope_ok,
     )
 
     # Create clean environment without venv contamination or dangerous vars.
