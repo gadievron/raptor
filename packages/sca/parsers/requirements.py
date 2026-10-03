@@ -63,6 +63,8 @@ ECOSYSTEM = "PyPI"
 # almost certainly accidental or hostile.
 _MAX_INCLUDE_DEPTH = 8
 
+_MAX_SPEC_LEN = 4096
+
 # pip option flags we silently skip (no dep semantics).
 _PIP_OPTION_PREFIXES = (
     "--index-url",
@@ -421,12 +423,15 @@ def _parse_requirement_line(
             d.commented_out = commented
         return d
 
+    if len(line) > _MAX_SPEC_LEN:
+        logger.debug(
+            "sca.parsers.requirements: spec too long (%d bytes) in %s, skipping",
+            len(line), declared_in,
+        )
+        return None
     try:
         req = Requirement(line)
     except (InvalidRequirement, ValueError) as e:
-        # Bare ValueError: CPython's int digit limit fires inside
-        # packaging's version normalisation on a crafted 100k-digit
-        # version — not wrapped in InvalidRequirement.
         logger.debug(
             "sca.parsers.requirements: invalid requirement %r in %s: %s",
             line, declared_in, e,

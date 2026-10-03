@@ -67,6 +67,11 @@ except ImportError:                       # pragma: no cover — env-dependent
 
 ECOSYSTEM = "PyPI"
 
+# No legitimate PEP 508 spec exceeds a few hundred bytes; a 100k-byte
+# version string is hostile input regardless of whether packaging
+# chokes on it.
+_MAX_SPEC_LEN = 4096
+
 # Poetry caret/tilde grammar that PEP 508 doesn't accept directly.
 _POETRY_PREFIX_OPS = ("^", "~")
 
@@ -234,17 +239,17 @@ def _from_pep508(
 ) -> Dependency | None:
     if not isinstance(spec, str) or not spec.strip():
         return None
+    if len(spec) > _MAX_SPEC_LEN:
+        logger.debug(
+            "sca.parsers.pyproject: spec too long (%d bytes) in %s, skipping",
+            len(spec), path,
+        )
+        return None
     if not _HAS_PACKAGING:
-        # Without `packaging`, PEP 508 lines are skipped — the operator
-        # was warned at import time. Poetry tool-table dict rows are
-        # still parsed.
         return None
     try:
         req = Requirement(spec)
     except (InvalidRequirement, ValueError) as e:
-        # Bare ValueError: CPython's int digit limit fires inside
-        # packaging's version normalisation on a crafted 100k-digit
-        # version — not wrapped in InvalidRequirement.
         logger.debug(
             "sca.parsers.pyproject: invalid PEP 508 %r in %s: %s",
             spec, path, e,
