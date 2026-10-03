@@ -25,6 +25,20 @@ from core.llm.providers import ModelConfig
 
 
 @pytest.fixture(autouse=True)
+def _raptor_logger_propagates():
+    """Let caplog see records from the 'raptor' logger.
+
+    RaptorLogger sets propagate=False on logging.getLogger('raptor'),
+    so records never reach root where pytest's caplog handler lives.
+    """
+    raptor = logging.getLogger("raptor")
+    orig = raptor.propagate
+    raptor.propagate = True
+    yield
+    raptor.propagate = orig
+
+
+@pytest.fixture(autouse=True)
 def _clean_attempt_state():
     dispatcher_client._attempt_state.response_started = False
     yield
@@ -109,7 +123,7 @@ class TestAnthropicTurnConsumedGate:
         provider = _anthropic_provider()
         calls = {"n": 0}
         provider.client = _stub_anthropic_client(calls, mark_started=True)
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.WARNING, logger="raptor"):
             resp = provider.turn(messages=_turn_messages(), tools=[])
         assert calls["n"] == 1
         assert resp.error_message is not None
@@ -133,7 +147,7 @@ class TestAnthropicTurnConsumedGate:
         provider = _anthropic_provider()
         calls = {"n": 0}
         provider.client = _stub_anthropic_client(calls, mark_started=True)
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.WARNING, logger="raptor"):
             resp = provider.turn(messages=_turn_messages(), tools=[])
         assert calls["n"] == 4
         assert resp.error_message is not None
@@ -175,7 +189,7 @@ class TestOpenAITurnConsumedGate:
         provider = _openai_provider()
         calls = {"n": 0}
         provider.client = _stub_openai_client(calls, mark_started=True)
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.WARNING, logger="raptor"):
             resp = provider.turn(messages=_turn_messages(), tools=[])
         assert calls["n"] == 1
         assert resp.error_message is not None

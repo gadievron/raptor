@@ -14,6 +14,7 @@ Covers:
 from __future__ import annotations
 
 import json
+import logging
 import multiprocessing
 import time
 from datetime import datetime, timezone, timedelta
@@ -33,6 +34,20 @@ from core.llm.scorecard.scorecard import (
     MAX_DISAGREEMENT_SAMPLES,
     _wilson_upper_bound,
 )
+
+
+@pytest.fixture(autouse=True)
+def _raptor_logger_propagates():
+    """Let caplog see records from the 'raptor' logger.
+
+    RaptorLogger sets propagate=False on logging.getLogger('raptor'),
+    so records never reach root where pytest's caplog handler lives.
+    """
+    raptor = logging.getLogger("raptor")
+    orig = raptor.propagate
+    raptor.propagate = True
+    yield
+    raptor.propagate = orig
 
 
 # ---------------------------------------------------------------------------
@@ -1452,7 +1467,7 @@ class TestFlockWarningOnce:
 
         monkeypatch.setattr(sc_mod.fcntl, "flock", broken_flock)
         sc = ModelScorecard(tmp_path / "sc.json")
-        with caplog.at_level(_logging.WARNING):
+        with caplog.at_level(_logging.WARNING, logger="raptor"):
             sc.get_stats()
             sc.get_stats()
             sc.record_event("dc", "m", "cheap_short_circuit", "correct")

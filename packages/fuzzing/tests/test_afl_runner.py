@@ -1,5 +1,6 @@
 """Tests for packages/fuzzing/afl_runner.py."""
 
+import logging
 import os
 import tempfile
 import unittest
@@ -8,6 +9,20 @@ from pathlib import Path
 import pytest
 
 from packages.fuzzing.afl_runner import AFLRunner
+
+
+@pytest.fixture(autouse=True)
+def _raptor_logger_propagates():
+    """Let caplog see records from the 'raptor' logger.
+
+    RaptorLogger sets propagate=False on logging.getLogger('raptor'),
+    so records never reach root where pytest's caplog handler lives.
+    """
+    raptor = logging.getLogger("raptor")
+    orig = raptor.propagate
+    raptor.propagate = True
+    yield
+    raptor.propagate = orig
 
 
 class TestAFLRunnerStatsParsing(unittest.TestCase):
@@ -327,7 +342,7 @@ class TestMergeCrashFiles:
             secret)
 
         runner = self._make_runner(tmp_path)
-        with caplog.at_level("WARNING"):
+        with caplog.at_level("WARNING", logger="raptor"):
             crash_files = runner._collect_all_crash_files()
 
         assert [f.name.split(",")[0] for f in crash_files] == ["id:000000"]
@@ -368,7 +383,7 @@ class TestMergeCrashFiles:
         link.symlink_to(secret)
 
         runner = self._make_runner(tmp_path)
-        with caplog.at_level("WARNING"):
+        with caplog.at_level("WARNING", logger="raptor"):
             # Simulates the post-enumeration swap by handing the merge
             # the symlink directly.
             merged = runner._merge_crash_files([real, link])
@@ -1477,7 +1492,7 @@ class TestMemoryCap:
             lambda tool, args, binary, **kw: InspectResult(
                 returncode=returncode, stdout=stdout))
         runner = self._runner(tmp_path)
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.WARNING, logger="raptor"):
             assert runner._detect_target_asan() is False
         assert any("-m none" in rec.getMessage()
                    for rec in caplog.records)

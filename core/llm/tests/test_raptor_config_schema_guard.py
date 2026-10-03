@@ -34,6 +34,20 @@ _MODELS_CONFIG = {
 
 
 @pytest.fixture(autouse=True)
+def _raptor_logger_propagates():
+    """Let caplog see records from the 'raptor' logger.
+
+    RaptorLogger sets propagate=False on logging.getLogger('raptor'),
+    so records never reach root where pytest's caplog handler lives.
+    """
+    raptor = logging.getLogger("raptor")
+    orig = raptor.propagate
+    raptor.propagate = True
+    yield
+    raptor.propagate = orig
+
+
+@pytest.fixture(autouse=True)
 def _fresh_warn_latch():
     saved = set(detection._schema_mismatch_warned)
     detection._schema_mismatch_warned.clear()
@@ -61,7 +75,7 @@ class TestDetectionReader:
         path = tmp_path / "config.json"
         path.write_text(json.dumps(_ANALYSIS_SETTINGS))
         monkeypatch.setenv("RAPTOR_CONFIG", str(path))
-        with caplog.at_level(logging.ERROR):
+        with caplog.at_level(logging.ERROR, logger="raptor"):
             assert _read_config_models() == []
         msgs = [r.getMessage() for r in caplog.records
                 if r.levelno >= logging.ERROR]
@@ -72,7 +86,7 @@ class TestDetectionReader:
         path = tmp_path / "config.json"
         path.write_text(json.dumps(_ANALYSIS_SETTINGS))
         monkeypatch.setenv("RAPTOR_CONFIG", str(path))
-        with caplog.at_level(logging.ERROR):
+        with caplog.at_level(logging.ERROR, logger="raptor"):
             _read_config_models()
             _read_config_models()
         errors = [r for r in caplog.records
@@ -85,7 +99,7 @@ class TestDetectionReader:
         path = tmp_path / "models.json"
         path.write_text(json.dumps(_MODELS_CONFIG))
         monkeypatch.setenv("RAPTOR_CONFIG", str(path))
-        with caplog.at_level(logging.ERROR):
+        with caplog.at_level(logging.ERROR, logger="raptor"):
             models = _read_config_models()
         assert models and models[0]["provider"] == "openai"
         assert not [r for r in caplog.records
@@ -105,7 +119,7 @@ class TestCredentialSeeder:
         monkeypatch.setenv("RAPTOR_CONFIG", str(path))
         creds = CredentialStore.__new__(CredentialStore)
         creds._keys = {"anthropic": None}
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.WARNING, logger="raptor"):
             seed_from_config(creds)
         assert creds.get("anthropic") is None
         assert any("exploit_feasibility" in r.getMessage()

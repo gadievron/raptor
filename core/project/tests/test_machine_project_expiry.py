@@ -14,11 +14,27 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from core.project.project import (
     Project,
     ProjectManager,
     is_machine_project_name,
 )
+
+
+@pytest.fixture(autouse=True)
+def _raptor_logger_propagates():
+    """Let caplog see records from the 'raptor' logger.
+
+    RaptorLogger sets propagate=False on logging.getLogger('raptor'),
+    so records never reach root where pytest's caplog handler lives.
+    """
+    raptor = logging.getLogger("raptor")
+    orig = raptor.propagate
+    raptor.propagate = True
+    yield
+    raptor.propagate = orig
 
 
 def _mgr(tmp_path):
@@ -85,7 +101,7 @@ class TestActiveResolutionConsumesExpiry:
         mgr._save(proj)
         mgr.set_active("corpus-99")
 
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.WARNING, logger="raptor"):
             assert mgr.get_active() is None
         # Symlink consumed — subsequent resolutions are clean.
         assert mgr.get_active() is None

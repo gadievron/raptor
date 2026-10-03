@@ -2,6 +2,7 @@
 
 import copy
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,20 @@ from core.orchestration.frida_validation_bridge import (
     annotate_attack_paths,
     PROXIMITY_FLOOR,
 )
+
+
+@pytest.fixture(autouse=True)
+def _raptor_logger_propagates():
+    """Let caplog see records from the 'raptor' logger.
+
+    RaptorLogger sets propagate=False on logging.getLogger('raptor'),
+    so records never reach root where pytest's caplog handler lives.
+    """
+    raptor = logging.getLogger("raptor")
+    orig = raptor.propagate
+    raptor.propagate = True
+    yield
+    raptor.propagate = orig
 
 
 # ---------------------------------------------------------------------------
@@ -582,7 +597,7 @@ class TestBacktraceAttribution:
             },
         }])
         _write_metadata(run, target_binary=str(tmp_path / "srv"))
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.WARNING, logger="raptor"):
             assert collect_runtime_evidence([tmp_path]) == {}
         # Attribution loss must never look like "no sink calls
         # occurred".
@@ -687,7 +702,7 @@ class TestDropDiagnosticLevel:
         # run; warning each time would train operators to ignore it.
         import logging
         self._events(tmp_path, [_sink_event("memcpy", caller_module="srv")])
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.WARNING, logger="raptor"):
             evidence = collect_runtime_evidence([tmp_path])
         assert "memcpy" in evidence
         assert not any("failed target attribution" in r.message
@@ -696,7 +711,7 @@ class TestDropDiagnosticLevel:
     def test_zero_evidence_run_warns(self, tmp_path, caplog):
         import logging
         self._events(tmp_path, [])
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.WARNING, logger="raptor"):
             assert collect_runtime_evidence([tmp_path]) == {}
         assert any("NO evidence was collected" in r.message
                    for r in caplog.records)

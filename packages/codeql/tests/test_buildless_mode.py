@@ -7,11 +7,27 @@ traced-build mode. These tests are fully mocked — no codeql CLI, no
 network — plus version-probe tests that only need the probe seam.
 """
 
+import logging
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _raptor_logger_propagates():
+    """Let caplog see records from the 'raptor' logger.
+
+    RaptorLogger sets propagate=False on logging.getLogger('raptor'),
+    so records never reach root where pytest's caplog handler lives.
+    """
+    raptor = logging.getLogger("raptor")
+    orig = raptor.propagate
+    raptor.propagate = True
+    yield
+    raptor.propagate = orig
+
 
 # packages/codeql/tests/test_buildless_mode.py -> repo root
 sys.path.insert(0, str(Path(__file__).parents[3]))
@@ -197,7 +213,7 @@ class TestBuildlessDefault:
         pre-existing traced behaviour — but loudly disclosed, never
         silently."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.WARNING, logger="raptor"):
             result, cmd = _run_create(
                 db_manager, tmp_path, language="java",
                 build_system=_build_system(tmp_path, "mvn"),
@@ -215,7 +231,7 @@ class TestBuildlessDefault:
         """Languages with no buildless mode (go) keep autobuild but
         the untrusted-build banner must fire."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.WARNING, logger="raptor"):
             result, _cmd = _run_create(db_manager, tmp_path, language="go")
         assert result.success
         joined = " ".join(r.getMessage() for r in caplog.records)
@@ -225,7 +241,7 @@ class TestBuildlessDefault:
         self, db_manager, tmp_path, caplog,
     ):
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.WARNING, logger="raptor"):
             result, _cmd = _run_create(
                 db_manager, tmp_path, language="go", traced_build=True,
             )
@@ -779,7 +795,7 @@ class TestBuildModeCacheContract:
         True) — must rebuild, never serve the buildless entry."""
         _plant_cached_db(db_manager, repo, "cpp", "buildless")
         import logging
-        with caplog.at_level(logging.INFO):
+        with caplog.at_level(logging.INFO, logger="raptor"):
             result = self._create(db_manager, repo, traced_build=True)
         assert result.success is True
         assert result.cached is False
@@ -798,7 +814,7 @@ class TestBuildModeCacheContract:
         serve it, but say so."""
         planted = _plant_cached_db(db_manager, repo, "cpp", "make")
         import logging
-        with caplog.at_level(logging.INFO):
+        with caplog.at_level(logging.INFO, logger="raptor"):
             result = self._create(
                 db_manager, repo, traced_build=False, expect_build=False,
             )

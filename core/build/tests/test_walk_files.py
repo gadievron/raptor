@@ -13,10 +13,27 @@ wall time.
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
+import pytest
+
 from core.build.build_detector import BuildDetector, _walk_files
+
+
+@pytest.fixture(autouse=True)
+def _raptor_logger_propagates():
+    """Let caplog see records from the 'raptor' logger.
+
+    RaptorLogger sets propagate=False on logging.getLogger('raptor'),
+    so records never reach root where pytest's caplog handler lives.
+    """
+    raptor = logging.getLogger("raptor")
+    orig = raptor.propagate
+    raptor.propagate = True
+    yield
+    raptor.propagate = orig
 
 
 def _tree(root: Path) -> None:
@@ -106,7 +123,7 @@ def test_directory_cap_bounds_empty_dir_farms(tmp_path, monkeypatch, caplog):
         # (os.walk order is arbitrary, so assert on the COUNT).
         (d / "x.c").write_text("")
     monkeypatch.setattr(bd, "_MAX_WALK_DIRS", 5)
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.WARNING, logger="raptor"):
         out = bd._walk_files(farm, (".c",))
     assert len(out) < 12
     assert any("dir cap" in r.message for r in caplog.records)

@@ -1,7 +1,10 @@
 """Tests for the SARIF import normalizer."""
 
 import json
+import logging
 from pathlib import Path
+
+import pytest
 
 from core.sarif.import_normalizer import (
     _MAX_DEPTH_CACHE,
@@ -16,6 +19,20 @@ from core.sarif.import_normalizer import (
     format_import_summary,
     import_provenance_block,
 )
+
+
+@pytest.fixture(autouse=True)
+def _raptor_logger_propagates():
+    """Let caplog see records from the 'raptor' logger.
+
+    RaptorLogger sets propagate=False on logging.getLogger('raptor'),
+    so records never reach root where pytest's caplog handler lives.
+    """
+    raptor = logging.getLogger("raptor")
+    orig = raptor.propagate
+    raptor.propagate = True
+    yield
+    raptor.propagate = orig
 
 
 # ---------------------------------------------------------------------------
@@ -1424,7 +1441,7 @@ def test_oversized_snippet_warning_escapes_hostile_path(
     victim = tmp_path / evil
     victim.write_text("x")
     monkeypatch.setattr(mod, "_SNIPPET_SOURCE_MAX_BYTES", 0)
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.WARNING, logger="raptor"):
         assert mod._synthesize_snippet(root, evil, 1, 1) == ""
     joined = " ".join(r.getMessage() for r in caplog.records)
     assert "big.c" in joined

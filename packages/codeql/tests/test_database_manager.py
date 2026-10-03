@@ -1,6 +1,7 @@
 """Tests for CodeQL database manager build command handling."""
 
 import json
+import logging
 import os
 import stat
 import subprocess as sp
@@ -12,6 +13,20 @@ import pytest
 
 from core.build.build_detector import BuildSystem
 from packages.codeql.database_manager import DatabaseManager
+
+
+@pytest.fixture(autouse=True)
+def _raptor_logger_propagates():
+    """Let caplog see records from the 'raptor' logger.
+
+    RaptorLogger sets propagate=False on logging.getLogger('raptor'),
+    so records never reach root where pytest's caplog handler lives.
+    """
+    raptor = logging.getLogger("raptor")
+    orig = raptor.propagate
+    raptor.propagate = True
+    yield
+    raptor.propagate = orig
 
 
 @pytest.fixture
@@ -1097,7 +1112,7 @@ class TestDetectCodeqlCli:
         check accepted CODEQL_CLI=/some/dir and later exploded at
         subprocess.run."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.WARNING, logger="raptor"):
             got = self._detect(db_manager, monkeypatch, str(tmp_path),
                                which="/opt/codeql/codeql")
         assert got == "/opt/codeql/codeql"
@@ -1112,7 +1127,7 @@ class TestDetectCodeqlCli:
         plain = tmp_path / "notes.txt"
         plain.write_text("not a binary")
         plain.chmod(0o644)
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.WARNING, logger="raptor"):
             got = self._detect(db_manager, monkeypatch, str(plain), which=None)
         assert got is None
         assert any("CODEQL_CLI" in r.getMessage() for r in caplog.records)
@@ -1121,7 +1136,7 @@ class TestDetectCodeqlCli:
         self, db_manager, monkeypatch, caplog,
     ):
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.WARNING, logger="raptor"):
             got = self._detect(db_manager, monkeypatch, None,
                                which="/usr/local/bin/codeql")
         assert got == "/usr/local/bin/codeql"

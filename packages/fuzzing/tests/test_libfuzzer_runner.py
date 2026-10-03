@@ -1,12 +1,29 @@
 """Tests for the libFuzzer runner process contract."""
 
+import logging
 import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from packages.fuzzing.libfuzzer_runner import LibFuzzerRunner
+
+
+@pytest.fixture(autouse=True)
+def _raptor_logger_propagates():
+    """Let caplog see records from the 'raptor' logger.
+
+    RaptorLogger sets propagate=False on logging.getLogger('raptor'),
+    so records never reach root where pytest's caplog handler lives.
+    """
+    raptor = logging.getLogger("raptor")
+    orig = raptor.propagate
+    raptor.propagate = True
+    yield
+    raptor.propagate = orig
 
 
 class TestLibFuzzerRunner(unittest.TestCase):
@@ -361,7 +378,7 @@ class TestSeedCopyBounded:
         (source / "huge").write_bytes(b"B" * 4096)
         dest = tmp_path / "work"
         dest.mkdir()
-        with caplog.at_level("WARNING"):
+        with caplog.at_level("WARNING", logger="raptor"):
             lf.LibFuzzerRunner._seed_working_corpus(source, dest)
         assert (dest / "ok").read_bytes() == b"A" * 100
         assert not (dest / "huge").exists()

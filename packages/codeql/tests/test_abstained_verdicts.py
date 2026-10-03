@@ -15,6 +15,7 @@ consumers read that abstention as a verdict:
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -26,6 +27,20 @@ from packages.codeql.autonomous_analyzer import (
     CodeQLFinding,
     VulnerabilityAnalysis,
 )
+
+
+@pytest.fixture(autouse=True)
+def _raptor_logger_propagates():
+    """Let caplog see records from the 'raptor' logger.
+
+    RaptorLogger sets propagate=False on logging.getLogger('raptor'),
+    so records never reach root where pytest's caplog handler lives.
+    """
+    raptor = logging.getLogger("raptor")
+    orig = raptor.propagate
+    raptor.propagate = True
+    yield
+    raptor.propagate = orig
 
 
 def _finding(file_path: str = "src/vuln.py", line: int = 2) -> CodeQLFinding:
@@ -91,7 +106,7 @@ class TestPipelineAbstainedExploitability:
         monkeypatch.setattr(a, "generate_exploit", _no_exploit)
 
         import logging
-        with caplog.at_level(logging.INFO):
+        with caplog.at_level(logging.INFO, logger="raptor"):
             result = a.analyze_finding_autonomous(
                 sarif_result={}, sarif_run={},
                 repo_path=tmp_path, out_dir=tmp_path / "out",
@@ -328,7 +343,7 @@ class TestPipelineErroredAnalysis:
         monkeypatch.setattr(a, "generate_exploit", _no_exploit)
 
         import logging
-        with caplog.at_level(logging.INFO):
+        with caplog.at_level(logging.INFO, logger="raptor"):
             result = a.analyze_finding_autonomous(
                 sarif_result={}, sarif_run={},
                 repo_path=tmp_path, out_dir=tmp_path / "out",

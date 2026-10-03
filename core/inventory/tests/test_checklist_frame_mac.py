@@ -18,6 +18,7 @@ Two directions, per the frame contract
 
 import hashlib
 import json
+import logging
 import os
 import shutil
 from pathlib import Path
@@ -35,6 +36,20 @@ from core.inventory import (
     update_checklist,
 )
 from core.inventory import checklist_frame_mac as cm
+
+
+@pytest.fixture(autouse=True)
+def _raptor_logger_propagates():
+    """Let caplog see records from the 'raptor' logger.
+
+    RaptorLogger sets propagate=False on logging.getLogger('raptor'),
+    so records never reach root where pytest's caplog handler lives.
+    """
+    raptor = logging.getLogger("raptor")
+    orig = raptor.propagate
+    raptor.propagate = True
+    yield
+    raptor.propagate = orig
 
 
 @pytest.fixture(autouse=True)
@@ -443,7 +458,7 @@ def test_deleted_key_demotes_to_legacy_tier(
     save_checklist(out, _doc(2))
     cm._key_path().unlink()
 
-    with caplog.at_level("INFO"):
+    with caplog.at_level("INFO", logger="raptor"):
         data = read_checklist(out)
     assert len(data["files"]) == 2  # served at legacy tier, never refused
     assert "deleted or rotated" in caplog.text

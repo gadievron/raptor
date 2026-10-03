@@ -18,6 +18,21 @@ import pytest
 
 from core.llm.providers import ModelConfig
 
+
+@pytest.fixture(autouse=True)
+def _raptor_logger_propagates():
+    """Let caplog see records from the 'raptor' logger.
+
+    RaptorLogger sets propagate=False on logging.getLogger('raptor'),
+    so records never reach root where pytest's caplog handler lives.
+    """
+    raptor = logging.getLogger("raptor")
+    orig = raptor.propagate
+    raptor.propagate = True
+    yield
+    raptor.propagate = orig
+
+
 pytest.importorskip("anthropic")
 
 
@@ -58,7 +73,7 @@ def test_transient_retry_logs_warning_with_elapsed(caplog, monkeypatch):
     provider.client = _Client()  # type: ignore[assignment]
     monkeypatch.setattr(time, "sleep", lambda _s: None)  # skip backoff
 
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.WARNING, logger="raptor"):
         resp = provider.turn(
             messages=[Message(role="user", content=[TextBlock(text="x")])],
             tools=[],

@@ -11,6 +11,7 @@ now stat the file first and skip (with a warning) anything over
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,20 @@ from core.project.findings_utils import (
 
 _FINDING = {"id": "f1", "file": "a.c", "function": "p", "line": 1,
             "status": "confirmed"}
+
+
+@pytest.fixture(autouse=True)
+def _raptor_logger_propagates():
+    """Let caplog see records from the 'raptor' logger.
+
+    RaptorLogger sets propagate=False on logging.getLogger('raptor'),
+    so records never reach root where pytest's caplog handler lives.
+    """
+    raptor = logging.getLogger("raptor")
+    orig = raptor.propagate
+    raptor.propagate = True
+    yield
+    raptor.propagate = orig
 
 
 def _write_findings(path: Path, pad: int = 0) -> None:
@@ -47,7 +62,7 @@ def test_over_gate_skipped_before_parse(tmp_path: Path, monkeypatch,
     _write_findings(tmp_path / "findings.json", pad=4096)
     monkeypatch.setattr(findings_utils, "MAX_FINDINGS_JSON_BYTES", 1024,
                         raising=False)
-    with caplog.at_level("WARNING"):
+    with caplog.at_level("WARNING", logger="raptor"):
         assert load_findings_from_dir(tmp_path) == []
     assert any("gate" in r.message for r in caplog.records)
 
@@ -58,7 +73,7 @@ def test_sca_loader_shares_the_gate(tmp_path: Path, monkeypatch, caplog):
     sca.write_text(json.dumps([_FINDING]) + " " * 4096)
     monkeypatch.setattr(findings_utils, "MAX_FINDINGS_JSON_BYTES", 1024,
                         raising=False)
-    with caplog.at_level("WARNING"):
+    with caplog.at_level("WARNING", logger="raptor"):
         assert load_sca_findings_from_dir(tmp_path) == []
     assert any("gate" in r.message for r in caplog.records)
 
@@ -70,7 +85,7 @@ def test_real_gate_bound_via_sparse_file(tmp_path: Path, caplog):
     with p.open("wb") as fh:
         fh.seek(MAX_FINDINGS_JSON_BYTES)
         fh.write(b"x")
-    with caplog.at_level("WARNING"):
+    with caplog.at_level("WARNING", logger="raptor"):
         assert load_findings_from_dir(tmp_path) == []
     assert any("gate" in r.message for r in caplog.records), (
         "the skip must cite the byte gate, not a parse failure")
@@ -95,7 +110,7 @@ def test_skip_warning_names_file_consequence_and_remedy(
     _write_findings(tmp_path / "findings.json", pad=4096)
     monkeypatch.setattr(findings_utils, "MAX_FINDINGS_JSON_BYTES", 1024,
                         raising=False)
-    with caplog.at_level("WARNING"):
+    with caplog.at_level("WARNING", logger="raptor"):
         load_findings_from_dir(tmp_path)
     msg = "\n".join(r.getMessage() for r in caplog.records)
     assert str(tmp_path / "findings.json") in msg

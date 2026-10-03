@@ -10,6 +10,23 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _raptor_logger_propagates():
+    """Let caplog see records from the 'raptor' logger.
+
+    RaptorLogger sets propagate=False on logging.getLogger('raptor'),
+    so records never reach root where pytest's caplog handler lives.
+    """
+    raptor = logging.getLogger("raptor")
+    orig = raptor.propagate
+    raptor.propagate = True
+    yield
+    raptor.propagate = orig
+
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from packages.llm_analysis.agent import (  # noqa: E402
@@ -90,7 +107,7 @@ def test_validate_dataflow_sanitizer_details_scrubbed(tmp_path, caplog):
     bound = AutonomousSecurityAgentV2.validate_dataflow.__get__(
         agent, type(agent),
     )
-    with caplog.at_level(logging.INFO):
+    with caplog.at_level(logging.INFO, logger="raptor"):
         result = bound(_vuln(tmp_path))
 
     assert result  # validation dict came back

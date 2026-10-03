@@ -1,6 +1,9 @@
 """Tests for the store-backed coverage view (category/depth + gaps)."""
 
 from __future__ import annotations
+import logging
+
+import pytest
 
 from core.coverage.store import CoverageStore
 from core.coverage.store_summary import format_store_view, store_view
@@ -16,6 +19,20 @@ _CHECKLIST = {
         ]},
     ],
 }
+
+
+@pytest.fixture(autouse=True)
+def _raptor_logger_propagates():
+    """Let caplog see records from the 'raptor' logger.
+
+    RaptorLogger sets propagate=False on logging.getLogger('raptor'),
+    so records never reach root where pytest's caplog handler lives.
+    """
+    raptor = logging.getLogger("raptor")
+    orig = raptor.propagate
+    raptor.propagate = True
+    yield
+    raptor.propagate = orig
 
 
 def _store(tmp_path):
@@ -603,6 +620,6 @@ def test_zero_reviewable_units_notice_and_gate_warning(tmp_path, caplog):
     v = store_view(s, checklist)
     assert store_llm_coverage_percent(v) == 100.0
     assert "0 reviewable units" in format_store_view(v)
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.WARNING, logger="raptor"):
         assert store_coverage_threshold_met(v, 95.0)
     assert any("vacuously" in r.getMessage() for r in caplog.records)

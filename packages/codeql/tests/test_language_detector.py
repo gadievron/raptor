@@ -16,6 +16,7 @@ files ending in ``.lock`` (``poetry.lock``, ``yarn.lock``,
 ``Gemfile.lock``) are not swallowed by IGNORE_SUFFIXES.
 """
 
+import logging
 import os
 import shutil
 import subprocess
@@ -26,6 +27,20 @@ import pytest
 
 from packages.codeql import language_detector as ld_mod
 from packages.codeql.language_detector import LanguageDetector
+
+
+@pytest.fixture(autouse=True)
+def _raptor_logger_propagates():
+    """Let caplog see records from the 'raptor' logger.
+
+    RaptorLogger sets propagate=False on logging.getLogger('raptor'),
+    so records never reach root where pytest's caplog handler lives.
+    """
+    raptor = logging.getLogger("raptor")
+    orig = raptor.propagate
+    raptor.propagate = True
+    yield
+    raptor.propagate = orig
 
 
 def _write(repo: Path, rel: str, content: str = "") -> None:
@@ -1241,7 +1256,7 @@ class TestScanCapDerivation:
         for i in range(12):
             (tmp_path / f"f{i}.c").write_text("int x;\n")
         det = LanguageDetector(tmp_path, max_files=5)
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.WARNING, logger="raptor"):
             stats = det._scan_repository()
         assert stats["scanned_files"] == 5
         assert "walk-order sample" in caplog.text

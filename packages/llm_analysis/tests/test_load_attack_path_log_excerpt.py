@@ -10,8 +10,25 @@ honest short printable refs pass through byte-identical.
 import logging
 from pathlib import Path
 
+import pytest
+
 from packages.llm_analysis import agent as agent_mod
 from packages.llm_analysis.agent import AutonomousSecurityAgentV2
+
+
+@pytest.fixture(autouse=True)
+def _raptor_logger_propagates():
+    """Let caplog see records from the 'raptor' logger.
+
+    RaptorLogger sets propagate=False on logging.getLogger('raptor'),
+    so records never reach root where pytest's caplog handler lives.
+    """
+    raptor = logging.getLogger("raptor")
+    orig = raptor.propagate
+    raptor.propagate = True
+    yield
+    raptor.propagate = orig
+
 
 HOSTILE = "\x1b]0;pwn\x07\x9b2J‮evil"
 RAW_BYTES = ("\x1b", "\x07", "\x9b", "‮")
@@ -37,7 +54,7 @@ def test_hostile_ref_escaped_and_bounded(
     # containment check (it rejects only separators / NUL / dot-dot),
     # so this ref reaches the load attempt and the failure log.
     ref = "attack-paths" + HOSTILE + ".json#PATH-001"
-    with caplog.at_level(logging.DEBUG):
+    with caplog.at_level(logging.DEBUG, logger="raptor"):
         result = _agent(tmp_path)._load_attack_path(ref)
     assert result is None
     msg = _messages(caplog)
@@ -56,7 +73,7 @@ def test_honest_ref_identity(tmp_path, caplog, monkeypatch) -> None:
         raise OSError("boom")
 
     monkeypatch.setattr(agent_mod, "load_json", _boom)
-    with caplog.at_level(logging.DEBUG):
+    with caplog.at_level(logging.DEBUG, logger="raptor"):
         result = _agent(tmp_path)._load_attack_path(
             "attack-paths.json#PATH-001")
     assert result is None

@@ -8,12 +8,27 @@ lives outside afl-fuzz's own directory.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
 
 from packages.fuzzing import capability
 from packages.fuzzing.afl_runner import AFLRunner
+
+
+@pytest.fixture(autouse=True)
+def _raptor_logger_propagates():
+    """Let caplog see records from the 'raptor' logger.
+
+    RaptorLogger sets propagate=False on logging.getLogger('raptor'),
+    so records never reach root where pytest's caplog handler lives.
+    """
+    raptor = logging.getLogger("raptor")
+    orig = raptor.propagate
+    raptor.propagate = True
+    yield
+    raptor.propagate = orig
 
 
 def _make_runner(
@@ -206,7 +221,7 @@ class TestProbeHardening:
         monkeypatch.setattr(capability, "find_afl_support_file", explode)
         runner = _make_runner(binary_only_mode="frida",
                               sandbox_rootfs=Path("/nonexistent-rootfs"))
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.WARNING, logger="raptor"):
             assert runner._resolve_binary_only_mode() == "qemu"
         assert any("rootfs" in r.message for r in caplog.records)
 

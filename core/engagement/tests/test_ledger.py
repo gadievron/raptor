@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import os
 import struct
 import tarfile
@@ -53,6 +54,20 @@ from core.engagement.ledger import (
     set_artifact_status,
     write_artifact_checklist,
 )
+
+
+@pytest.fixture(autouse=True)
+def _raptor_logger_propagates():
+    """Let caplog see records from the 'raptor' logger.
+
+    RaptorLogger sets propagate=False on logging.getLogger('raptor'),
+    so records never reach root where pytest's caplog handler lives.
+    """
+    raptor = logging.getLogger("raptor")
+    orig = raptor.propagate
+    raptor.propagate = True
+    yield
+    raptor.propagate = orig
 
 
 @pytest.fixture(autouse=True)
@@ -997,7 +1012,7 @@ class TestChecklistSlots:
         slot.parent.mkdir(parents=True, exist_ok=True)
         save_json(slot, {"artifact_id": aid, "total_items": 5,
                          "files": []})
-        with caplog.at_level("INFO"):
+        with caplog.at_level("INFO", logger="raptor"):
             loaded = read_artifact_checklist(out, aid)
         assert loaded["total_items"] == 5
         assert any(
@@ -1018,7 +1033,7 @@ class TestChecklistSlots:
         src = write_artifact_checklist(
             out, src_id, {"total_items": 4, "files": []})
         shutil.copy2(src, checklist_slot_path(out, dst_id))
-        with caplog.at_level("WARNING"):
+        with caplog.at_level("WARNING", logger="raptor"):
             loaded = read_artifact_checklist(out, dst_id)
         assert loaded is not None
         assert loaded["total_items"] == 4
