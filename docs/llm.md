@@ -383,8 +383,18 @@ primary — resolvable whenever the `claude` binary is installed.
    A Bedrock entry without an auxiliary role gets its own step here —
    the tier table can't score Bedrock ids, so the entry itself is the
    declared default for API work.
-3. Provider auto-detect: first configured provider in the default order wins.
-4. Shorthand resolution: bare tokens like `haiku`, `opus`, `sonnet` match against
+3. The same goes for Ollama. The tier table only knows the closed
+   cloud models, so a local entry would never score — a role-less (or
+   `analysis`/`code`-role) Ollama entry therefore gets its own step,
+   and the first such entry in the file is the declared default. This
+   is what lets `models.json` pin *which* local model is primary rather
+   than leaving it to the `/api/tags` probe order below. Give it an
+   auxiliary role (`fallback`, `judge`, etc.) to keep it out of primary
+   selection.
+4. Provider auto-detect: first configured provider in the default order
+   wins. For Ollama with no primary-eligible entry, this falls through
+   to the probe's own preference order (see [Ollama](#ollama-offline--airgapped)).
+5. Shorthand resolution: bare tokens like `haiku`, `opus`, `sonnet` match against
    configured model names. Ambiguous matches raise an error.
 
 ### Fast-Tier Models
@@ -649,6 +659,50 @@ deepseek-coder > deepseek.
 
 Models that reject tool/function calling are auto-detected at runtime and silently
 fall back to JSON-in-prompt synthesis.
+
+### Pinning which local model is primary
+
+Auto-detection is a convenience, not a choice — on a box with several
+models pulled it picks the first one matching the preference order
+above, which is rarely the one you want driving a run. To decide
+explicitly, name the models in `models.json`. The first role-less (or
+`analysis`/`code`-role) Ollama entry becomes the primary; everything
+else is an auxiliary:
+
+```json
+{
+  "models": [
+    { "provider": "ollama", "model": "qwen3-27b", "max_context": 60000, "max_output": 8192 },
+    { "provider": "ollama", "model": "qwen3-coder", "role": "code",     "max_context": 60000, "max_output": 8192 },
+    { "provider": "ollama", "model": "qwen3-122b",  "role": "judge",    "max_context": 30000, "max_output": 8192 }
+  ]
+}
+```
+
+Here `qwen3-27b` is the primary, the coder model is seated as the
+`code` specialist, and the big model is held back as a `judge` for
+multi-model review rather than becoming the everyday default. Confirm
+what a run will actually resolve to with:
+
+```bash
+libexec/raptor-llm-ask --show-primary
+```
+
+Two things worth knowing, both of which bite on a multi-model box:
+
+- **Context sizing is yours to declare.** An Ollama model absent from
+  the built-in catalogue defaults to a conservative 32k context. If the
+  model serves more, set `max_context`/`max_output` on the entry — and
+  make sure the server actually grants it. Ollama caps the window at
+  `num_ctx` (default 2048, or whatever `OLLAMA_CONTEXT_LENGTH` is set
+  to), independent of what the model was trained for; a prompt that
+  exceeds the served window comes back empty. Keep `max_context` at or
+  below the server's `num_ctx`, raising `num_ctx` (a per-model
+  Modelfile `PARAMETER`, or the server env var) to match.
+- **Reference the model by the exact name in the entry.** `--model`
+  matches against your configured names, so `--model qwen3-27b` works;
+  a `provider/model`-prefixed form (`ollama/qwen3-27b`) is not needed
+  and currently routes less reliably — prefer the bare name.
 
 ### Quality Tradeoffs
 
