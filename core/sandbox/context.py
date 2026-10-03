@@ -380,7 +380,13 @@ def _run_teardown_first_timeout(
                 _TEARDOWN_SWEEP_GRACE_S,
             )
             proc.kill()
-            out, err = proc.communicate()
+            try:
+                out, err = proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                out, err = b"", b""
+                for pipe in (proc.stdout, proc.stderr, proc.stdin):
+                    if pipe is not None and not pipe.closed:
+                        pipe.close()
         raise subprocess.TimeoutExpired(
             cmd, timeout, output=out, stderr=err,
         )
