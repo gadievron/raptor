@@ -3444,21 +3444,12 @@ class AutonomousSecurityAgentV2:
         # Resolve the provider-aware cap ONCE, up front, so every
         # downstream consumer (the producer fair-share interleave, the
         # sequential-path slice, log lines) sees a concrete int rather
-        # than the ``None`` sentinel. ``None`` = operator didn't specify:
-        # local inference is free → no cap (0); a cloud primary keeps the
-        # cost-prudent default. An explicit int passes through untouched.
-        # Prep-only mode leaves the cap to orchestrate() (Phase 4), which
-        # runs its own identical resolution — but a concrete int here is
-        # still correct for it (0/N both resolve the same downstream).
-        if max_findings is None:
-            from packages.llm_analysis.orchestrator import (
-                _CLOUD_DEFAULT_MAX_FINDINGS,
-                _is_local_primary,
-            )
-            max_findings = (
-                0 if _is_local_primary(getattr(self, "llm_config", None))
-                else _CLOUD_DEFAULT_MAX_FINDINGS
-            )
+        # than the ``None`` sentinel. Prep-only mode leaves the cap to
+        # orchestrate() (Phase 4), which calls the same resolver.
+        from packages.llm_analysis.orchestrator import resolve_max_findings
+        max_findings = resolve_max_findings(
+            max_findings, getattr(self, "llm_config", None),
+        )
 
         # Parse findings
         is_prep_only = isinstance(self.llm, ClaudeCodeProvider)

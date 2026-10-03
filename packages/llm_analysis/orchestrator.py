@@ -320,6 +320,23 @@ def _count_panel_stamps(
 _CLOUD_DEFAULT_MAX_FINDINGS = 10
 
 
+def resolve_max_findings(
+    max_findings: int | None, llm_config: Any | None,
+) -> int:
+    """Turn the ``None`` / explicit-int from the CLI into a concrete cap.
+
+    ``None`` (operator didn't specify) → provider-aware: local primary
+    gets 0 (no cap, bound by the resource governor), cloud primary gets
+    ``_CLOUD_DEFAULT_MAX_FINDINGS``. An explicit int passes through
+    untouched.
+    """
+    if max_findings is not None:
+        return max_findings
+    if _is_local_primary(llm_config):
+        return 0
+    return _CLOUD_DEFAULT_MAX_FINDINGS
+
+
 def _is_local_primary(llm_config: Any | None) -> bool:
     """True when the configured primary runs on a local inference server
     (ollama, or any provider whose api_base is a loopback/local host —
@@ -901,20 +918,13 @@ def orchestrate(
             findings, llm_config,
         )
 
-    # Resolve the effective cap. An explicit operator value (int) is
-    # honoured verbatim. ``None`` means "unspecified" → provider-aware:
-    # local inference is free, so there's no reason to sample — analyse
-    # everything (bound by the resource governor: --max-seconds /
-    # --max-calls). A cloud primary keeps the cost-prudent default of 10.
-    if max_findings is None:
-        if _is_local_primary(llm_config):
-            max_findings = 0  # no cap
-            logger.info(
-                "local primary: analysing all %d findings (no cap; bound by "
-                "--max-seconds / --max-calls)", len(findings),
-            )
-        else:
-            max_findings = _CLOUD_DEFAULT_MAX_FINDINGS
+    was_unspecified = max_findings is None
+    max_findings = resolve_max_findings(max_findings, llm_config)
+    if max_findings == 0 and was_unspecified:
+        logger.info(
+            "local primary: analysing all %d findings (no cap; bound by "
+            "--max-seconds / --max-calls)", len(findings),
+        )
 
     if max_findings > 0 and len(findings) > max_findings:
         logger.info("Capping at %d findings (of %d)", max_findings, len(findings))

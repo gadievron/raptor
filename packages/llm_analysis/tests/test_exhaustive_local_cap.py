@@ -13,6 +13,7 @@ from packages.llm_analysis.orchestrator import (
     _CLOUD_DEFAULT_MAX_FINDINGS,
     _cap_findings,
     _is_local_primary,
+    resolve_max_findings,
 )
 
 
@@ -57,6 +58,32 @@ class TestIsLocalPrimary:
     def test_none_config_is_not_local(self):
         assert _is_local_primary(None) is False
         assert _is_local_primary(_Cfg(None)) is False
+
+
+class TestResolveMaxFindings:
+    def test_none_local_resolves_to_zero(self):
+        cfg = _Cfg(_Primary(provider="ollama"))
+        assert resolve_max_findings(None, cfg) == 0
+
+    def test_none_cloud_resolves_to_default(self):
+        cfg = _Cfg(_Primary(provider="anthropic"))
+        assert resolve_max_findings(None, cfg) == _CLOUD_DEFAULT_MAX_FINDINGS
+
+    def test_explicit_int_passes_through_on_local(self):
+        cfg = _Cfg(_Primary(provider="ollama"))
+        assert resolve_max_findings(5, cfg) == 5
+
+    def test_explicit_zero_passes_through_on_cloud(self):
+        cfg = _Cfg(_Primary(provider="anthropic"))
+        assert resolve_max_findings(0, cfg) == 0
+
+    def test_none_config_resolves_to_cloud_default(self):
+        assert resolve_max_findings(None, None) == _CLOUD_DEFAULT_MAX_FINDINGS
+
+    def test_loopback_resolves_to_zero(self):
+        cfg = _Cfg(_Primary(provider="openai",
+                            api_base="http://127.0.0.1:8000/v1"))
+        assert resolve_max_findings(None, cfg) == 0
 
 
 class TestCapFindingsNoCap:
