@@ -184,7 +184,8 @@ def _safe_path(target_path: Path, file_path: str) -> Path | None:
     """
     full = confine(target_path, file_path)
     if full is None:
-        logger.warning("path traversal blocked: %s", file_path)
+        logger.warning("path traversal blocked: %s",
+                       escape_nonprintable(file_path))
     return full
 
 
@@ -608,8 +609,8 @@ def defend_repo_text(ctx: dict[str, Any], text: str, *,
             ctx.setdefault("injection_warnings", []).extend(warnings)
         return sanitised
     except Exception:
-        logger.warning("prompt defence failed for %s", location,
-                       exc_info=True)
+        logger.warning("prompt defence failed for %s",
+                       escape_nonprintable(location), exc_info=True)
         return text
 
 
