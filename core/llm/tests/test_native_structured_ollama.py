@@ -243,3 +243,31 @@ class TestGenerateTimeoutForwarding:
         assert recorded.get("timeout") == 42.0
         assert recorded.get("extra_body") == {"think": False}
         assert recorded.get("response_format")["type"] == "json_schema"
+
+    def test_none_timeout_not_forwarded(self):
+        provider = _provider("ollama")
+        recorded: dict[str, Any] = {}
+
+        class _Msg:
+            content = '{"x": 1}'
+            reasoning_content = ""
+            refusal = None
+        class _Choice:
+            message = _Msg()
+            finish_reason = "stop"
+        class _Resp:
+            choices = [_Choice()]
+            usage = None
+        class _Completions:
+            def create(self, **kwargs):
+                recorded.update(kwargs)
+                return _Resp()
+        class _Chat:
+            completions = _Completions()
+        class _Client:
+            chat = _Chat()
+
+        provider.client = _Client()
+        provider.generate("p", None, timeout_s=None)
+
+        assert "timeout" not in recorded
