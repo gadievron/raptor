@@ -2064,6 +2064,24 @@ Examples:
         help="Per-run USD budget cap; overrides LLMConfig.max_cost_per_scan "
              "so CostTracker enforces the cap during LLM calls",
     )
+    # Non-dollar resource governor — the backstop for free/local runs,
+    # where the USD cap is inert ($0 cost). Each is off by default.
+    parser.add_argument(
+        "--max-seconds", dest="max_seconds", type=float, default=None,
+        help="Per-run wall-clock cap (seconds). Stops dispatching LLM "
+             "calls once reached. Works regardless of model cost — the "
+             "backstop for free/local runs the USD cap can't bound.",
+    )
+    parser.add_argument(
+        "--max-calls", dest="max_calls", type=int, default=None,
+        help="Per-run cap on total LLM provider calls. Off by default; "
+             "bounds a runaway/looping local run.",
+    )
+    parser.add_argument(
+        "--max-tokens", dest="max_tokens", type=int, default=None,
+        help="Per-run cap on aggregate LLM tokens (input+output). Off by "
+             "default.",
+    )
     parser.add_argument("--out", help="Output directory")
     parser.add_argument(
         "--project", default=None, metavar="NAME",
@@ -4676,6 +4694,14 @@ def main() -> int:
             )
             if llm_config and getattr(args, "max_cost_usd", None) is not None:
                 llm_config.max_cost_per_scan = args.max_cost_usd
+            # Non-dollar governor caps (off unless set). Independent of
+            # the USD cap so they bound free/local runs too.
+            if llm_config and getattr(args, "max_seconds", None) is not None:
+                llm_config.max_seconds_per_scan = args.max_seconds
+            if llm_config and getattr(args, "max_calls", None) is not None:
+                llm_config.max_calls_per_scan = args.max_calls
+            if llm_config and getattr(args, "max_tokens", None) is not None:
+                llm_config.max_tokens_per_scan = args.max_tokens
             # Dataflow validation is on by default when CodeQL ran;
             # `--no-validate-dataflow` opts out entirely. `--deep-validate`
             # opts into LLM-backed Tier 2/3 on top of the always-free Tier 1.

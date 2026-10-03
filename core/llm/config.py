@@ -1651,6 +1651,17 @@ class LLMConfig:
     cache_max_entries: int | None = 10_000
     enable_cost_tracking: bool = True
     max_cost_per_scan: float = 10.0  # USD
+    # Non-dollar resource governor. The dollar cap above is inert for
+    # local/free models (cost reconciles to $0) and for audit runs that
+    # default max_cost_per_scan to inf — so a looping or runaway local
+    # run has no backstop. These caps gate at the same provider
+    # chokepoint as the dollar budget but independently of
+    # ``enable_cost_tracking`` (a free run may turn cost tracking off).
+    # ``None`` means that dimension is unlimited (the default, so
+    # existing behaviour is unchanged until an operator opts in).
+    max_seconds_per_scan: float | None = None   # wall-clock deadline
+    max_calls_per_scan: int | None = None       # total provider calls
+    max_tokens_per_scan: int | None = None      # aggregate tokens
     # Model scorecard (core/llm/scorecard) — track per-model
     # reliability across decision classes and use measured miss-rate
     # to gate fast-tier short-circuit decisions. None or False
