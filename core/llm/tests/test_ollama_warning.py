@@ -24,19 +24,6 @@ from core.llm.providers import LLMResponse
 
 
 @pytest.fixture(autouse=True)
-def _attach_caplog_to_raptor_logger(caplog):
-    """RaptorLogger sets propagate=False, so caplog (attached to root) misses
-    its records. Attach caplog's handler directly to the 'raptor' logger for
-    the duration of each test in this module."""
-    raptor_logger = logging.getLogger("raptor")
-    raptor_logger.addHandler(caplog.handler)
-    try:
-        yield
-    finally:
-        raptor_logger.removeHandler(caplog.handler)
-
-
-@pytest.fixture(autouse=True)
 def _pin_llm_availability(monkeypatch):
     """Pin the constructor's availability health-check to "external LLM
     present". On hosts with no keys, no config file, no Ollama server

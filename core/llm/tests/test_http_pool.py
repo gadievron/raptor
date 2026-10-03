@@ -249,6 +249,8 @@ class TestGeminiHttpOptions:
 
     def test_none_when_sdk_absent(self, monkeypatch):
         monkeypatch.setitem(sys.modules, "google", None)
+        monkeypatch.setitem(sys.modules, "google.genai", None)
+        monkeypatch.setitem(sys.modules, "google.genai.types", None)
         from core.llm.providers import _pooled_gemini_http_options
         assert _pooled_gemini_http_options(30) is None
 

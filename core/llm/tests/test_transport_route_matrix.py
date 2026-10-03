@@ -50,6 +50,7 @@ def _hermetic_resolution(monkeypatch, tmp_path):
     cfg._cached_thinking_model = None
     cfg._thinking_model_checked = False
     monkeypatch.setattr(cfg, "_operator_primary_override", None)
+    monkeypatch.setattr(cfg, "_get_available_ollama_models", lambda: [])
     yield
     det._cached_llm_availability = None
     cfg._cached_thinking_model = None

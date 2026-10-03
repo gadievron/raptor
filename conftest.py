@@ -410,6 +410,16 @@ def _binary_cache_in_tmp(tmp_path_factory):
     os.environ.pop("RAPTOR_BINARY_CACHE_DIR", None)
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _raptor_logger_propagates():
+    """Let caplog capture records from RaptorLogger-using modules."""
+    import logging
+    raptor = logging.getLogger("raptor")
+    raptor.propagate = True
+    yield
+    raptor.propagate = False
+
+
 # The session registry (~/.local/share/raptor/sessions.d) is REAL user
 # state: start_run appends run-ledger records for the owning claude
 # session, /project use|create write binding entries, and a battery

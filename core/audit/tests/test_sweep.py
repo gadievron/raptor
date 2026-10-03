@@ -732,7 +732,7 @@ class TestRunCodeqlSweep:
             )
 
         monkeypatch.setattr(car, "analyze", fake_oversize)
-        with caplog.at_level(logging.ERROR, logger="core.sarif.parser"):
+        with caplog.at_level(logging.ERROR, logger="raptor"):
             result = run_codeql_sweep(
                 target_path=tmp_path,
                 file_path="a.c",
