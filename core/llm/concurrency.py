@@ -108,6 +108,64 @@ def _is_bedrock_primary(model: str) -> bool:
     return model in ("default", mc.model_name)
 
 
+# Concurrency ceiling when the primary model is served by a single local
+# inference server (Ollama, or any OpenAI-compatible endpoint on a
+# loopback host such as vLLM / LM Studio / llama.cpp). Unlike a cloud
+# API, one local server shares a single GPU/weight/KV-cache pool — N
+# concurrent requests contend for it and either queue, thrash, or OOM the
+# box. The adaptive 429 throttle can't help (local servers don't emit
+# 429s under load), so the cap must be set a priori. Conservative default
+# of 2; ``RAPTOR_LOCAL_MAX_WORKERS`` overrides. Unlike the CC/Bedrock
+# caps, the local cap also clamps the ``tuning.json`` override — a stale
+# ``max_llm_workers`` left over from a cloud run must not flood a single
+# GPU (cloud providers have backpressure via 429s; a local server OOMs).
+LOCAL_MAX_WORKERS_DEFAULT = 2
+
+
+def _local_worker_cap() -> int:
+    import os
+    raw = os.environ.get("RAPTOR_LOCAL_MAX_WORKERS", "")
+    try:
+        cap = int(raw) if raw else LOCAL_MAX_WORKERS_DEFAULT
+    except ValueError:
+        logger.warning(
+            "RAPTOR_LOCAL_MAX_WORKERS=%r is not an integer — using %d",
+            raw, LOCAL_MAX_WORKERS_DEFAULT,
+        )
+        cap = LOCAL_MAX_WORKERS_DEFAULT
+    return max(1, min(cap, MAX_WORKERS_CAP))
+
+
+def _is_local_primary(model: str) -> bool:
+    """True when *model* is served by a single local inference server.
+
+    Covers the Ollama provider (local or a remote GPU box named via
+    ``OLLAMA_HOST``) AND any other provider whose ``api_base`` resolves to
+    a loopback/local host — the vLLM / LM Studio / llama.cpp case, usually
+    configured as ``provider: openai`` with a custom ``api_base``. The
+    overload risk is the same for all of them: one server, one GPU pool.
+    """
+    try:
+        from core.llm.config import _get_default_primary_model
+        mc = _get_default_primary_model()
+    except Exception:  # noqa: BLE001 — config probing is best-effort
+        return False
+    if mc is None:
+        return False
+    if mc.provider == "ollama":
+        return model in ("default", mc.model_name)
+    # Non-ollama provider pointed at a local endpoint (vLLM/LM Studio/…).
+    api_base = getattr(mc, "api_base", None)
+    if api_base:
+        try:
+            from core.llm.egress import url_is_loopback
+            if url_is_loopback(api_base):
+                return model in ("default", mc.model_name)
+        except Exception:  # noqa: BLE001 — detection is best-effort
+            return False
+    return False
+
+
 def _is_claudecode_primary(model: str) -> bool:
     """True when *model* is served by the claudecode transport.
 
@@ -148,7 +206,21 @@ def derive_max_workers(model: str) -> int:
     """
     override = read_tuning_max_llm_workers()
     if override is not None:
-        return max(1, min(override, MAX_WORKERS_CAP))
+        cap = max(1, min(override, MAX_WORKERS_CAP))
+        # Local-only clamp: a stale max_llm_workers from a cloud run
+        # must not flood a single GPU. CC/Bedrock can absorb the
+        # excess (429s / subprocess cost); a local server just OOMs.
+        if _is_local_primary(model):
+            local = _local_worker_cap()
+            if cap > local:
+                logger.warning(
+                    "max_llm_workers=%d clamped to local cap %d for "
+                    "single-GPU server — raise with "
+                    "RAPTOR_LOCAL_MAX_WORKERS",
+                    cap, local,
+                )
+                cap = local
+        return cap
 
     from core.llm.model_data import rpm_for
 
@@ -164,6 +236,12 @@ def derive_max_workers(model: str) -> int:
         # serial fallback.
         if _is_claudecode_primary(model):
             return _claudecode_worker_cap()
+        # A local inference server lands here too (local models carry no
+        # RPM). Serial-by-accident was the only thing protecting it; make
+        # the small cap intentional so a single GPU box isn't flooded —
+        # and so raising it is a deliberate, documented env override.
+        if _is_local_primary(model):
+            return _local_worker_cap()
         return 1
     workers = max(1, min(rpm // 2, MAX_WORKERS_CAP))
     if _is_claudecode_primary(model):
@@ -178,6 +256,10 @@ def derive_max_workers(model: str) -> int:
             workers,
             _bedrock_worker_cap(read_tuning_llm_account_posture()),
         )
+    if _is_local_primary(model):
+        # Rare: a local model with a known RPM. One server, one GPU
+        # pool — clamp to the local cap regardless of RPM headroom.
+        workers = min(workers, _local_worker_cap())
     return workers
 
 
