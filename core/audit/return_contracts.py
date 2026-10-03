@@ -259,18 +259,20 @@ def _annotation_entries(base: Path) -> list[Any]:
         return []
     fingerprint = tuple(sorted(fp_items))
     key = str(base)
-    cached = _ANNOTATION_SCAN_CACHE.get(key)
-    if cached is not None and cached[0] == fingerprint:
-        return cached[1]
+    with _CONTRACT_CACHE_LOCK:
+        cached = _ANNOTATION_SCAN_CACHE.get(key)
+        if cached is not None and cached[0] == fingerprint:
+            return cached[1]
     from core.annotations.storage import iter_all_annotations
     entries: list[Any] = []
     for ann in iter_all_annotations(base):
         if len(entries) >= _MAX_ANNOTATION_SCAN:
             break
         entries.append(ann)
-    if len(_ANNOTATION_SCAN_CACHE) >= _CONTRACT_CACHE_MAX:
-        _ANNOTATION_SCAN_CACHE.clear()
-    _ANNOTATION_SCAN_CACHE[key] = (fingerprint, entries)
+    with _CONTRACT_CACHE_LOCK:
+        if len(_ANNOTATION_SCAN_CACHE) >= _CONTRACT_CACHE_MAX:
+            _ANNOTATION_SCAN_CACHE.clear()
+        _ANNOTATION_SCAN_CACHE[key] = (fingerprint, entries)
     return entries
 
 
@@ -428,6 +430,7 @@ _IRIS_SPEC_CACHE: dict[str, tuple[tuple[int, int], list[Any]]] = {}
 _ANNOTATION_SCAN_CACHE: dict[
     str, tuple[tuple[tuple[str, int, int], ...], list[Any]],
 ] = {}
+_CONTRACT_CACHE_LOCK = __import__("threading").Lock()
 _CONTRACT_CACHE_MAX = 8
 
 
@@ -439,9 +442,10 @@ def _iris_specs_cached(spec_path: Path) -> list[Any] | None:
         return None
     stamp = (st.st_mtime_ns, st.st_size)
     key = str(spec_path)
-    cached = _IRIS_SPEC_CACHE.get(key)
-    if cached is not None and cached[0] == stamp:
-        return cached[1]
+    with _CONTRACT_CACHE_LOCK:
+        cached = _IRIS_SPEC_CACHE.get(key)
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
     try:
         from core.audit.iris_specs import specs_from_json
         specs = list(
@@ -451,9 +455,10 @@ def _iris_specs_cached(spec_path: Path) -> list[Any] | None:
         logger.debug("return contract: iris spec load failed",
                      exc_info=True)
         return None
-    if len(_IRIS_SPEC_CACHE) >= _CONTRACT_CACHE_MAX:
-        _IRIS_SPEC_CACHE.clear()
-    _IRIS_SPEC_CACHE[key] = (stamp, specs)
+    with _CONTRACT_CACHE_LOCK:
+        if len(_IRIS_SPEC_CACHE) >= _CONTRACT_CACHE_MAX:
+            _IRIS_SPEC_CACHE.clear()
+        _IRIS_SPEC_CACHE[key] = (stamp, specs)
     return specs
 
 

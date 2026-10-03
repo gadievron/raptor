@@ -491,6 +491,7 @@ def _build_macro_table(target_path: str | Path, rel_file: str) -> MacroTable:
 
 
 _TABLE_CACHE: dict[tuple[str, str], MacroTable] = {}
+_TABLE_CACHE_LOCK = __import__("threading").Lock()
 
 
 def _macro_table_for(
@@ -499,13 +500,15 @@ def _macro_table_for(
     if not target_path or not rel_file:
         return MacroTable()
     key = (str(target_path), rel_file)
-    cached = _TABLE_CACHE.get(key)
-    if cached is not None:
-        return cached
+    with _TABLE_CACHE_LOCK:
+        cached = _TABLE_CACHE.get(key)
+        if cached is not None:
+            return cached
     table = _build_macro_table(target_path, rel_file)
-    if len(_TABLE_CACHE) >= _TABLE_CACHE_MAX:
-        _TABLE_CACHE.pop(next(iter(_TABLE_CACHE)))
-    _TABLE_CACHE[key] = table
+    with _TABLE_CACHE_LOCK:
+        if len(_TABLE_CACHE) >= _TABLE_CACHE_MAX:
+            _TABLE_CACHE.pop(next(iter(_TABLE_CACHE)))
+        _TABLE_CACHE[key] = table
     return table
 
 

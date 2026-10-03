@@ -615,8 +615,9 @@ def _constants_for_root(
     partial table must not poison later full-budget callers).
     """
     cache_key = str(root)
-    if cache_key in _CONSTANTS_CACHE:
-        return _CONSTANTS_CACHE[cache_key]
+    with _DOMAIN_CACHE_LOCK:
+        if cache_key in _CONSTANTS_CACHE:
+            return _CONSTANTS_CACHE[cache_key]
     try:
         from core.inventory.macro_resolve import (
             _ENUMERATOR_NAME_RE,
@@ -631,7 +632,8 @@ def _constants_for_root(
             _try_evaluate,
         )
     except ImportError:
-        _CONSTANTS_CACHE[cache_key] = {}
+        with _DOMAIN_CACHE_LOCK:
+            _CONSTANTS_CACHE[cache_key] = {}
         return {}
     defs: dict[str, list[int]] = {}
     if budget is None:
@@ -675,9 +677,10 @@ def _constants_for_root(
         name: vals[0] for name, vals in defs.items() if len(vals) == 1
     }
     if not budget.truncated:
-        while len(_CONSTANTS_CACHE) >= _MAX_CONSTANTS_CACHE:
-            _CONSTANTS_CACHE.pop(next(iter(_CONSTANTS_CACHE)))
-        _CONSTANTS_CACHE[cache_key] = table
+        with _DOMAIN_CACHE_LOCK:
+            while len(_CONSTANTS_CACHE) >= _MAX_CONSTANTS_CACHE:
+                _CONSTANTS_CACHE.pop(next(iter(_CONSTANTS_CACHE)))
+            _CONSTANTS_CACHE[cache_key] = table
     return table
 
 
@@ -948,6 +951,7 @@ def _guarded_jump_of_condition_assign(assign_node, src: bytes, var: str):
 
 
 _DOMAIN_CACHE: dict[tuple[str, tuple[str, ...]], ReturnDomain | None] = {}
+_DOMAIN_CACHE_LOCK = __import__("threading").RLock()
 
 # Caps: caches are content-unstamped (keys are names/paths, cleared at
 # each sweep entry), so bounding is the backstop against a pathological
@@ -958,16 +962,18 @@ _MAX_CONSTANTS_CACHE = 32
 
 
 def clear_cache() -> None:
-    _DOMAIN_CACHE.clear()
-    _CONSTANTS_CACHE.clear()
+    with _DOMAIN_CACHE_LOCK:
+        _DOMAIN_CACHE.clear()
+        _CONSTANTS_CACHE.clear()
 
 
 def _cache_domain(
     key: tuple[str, tuple[str, ...]], value: ReturnDomain | None,
 ) -> None:
-    while len(_DOMAIN_CACHE) >= _MAX_DOMAIN_CACHE:
-        _DOMAIN_CACHE.pop(next(iter(_DOMAIN_CACHE)))
-    _DOMAIN_CACHE[key] = value
+    with _DOMAIN_CACHE_LOCK:
+        while len(_DOMAIN_CACHE) >= _MAX_DOMAIN_CACHE:
+            _DOMAIN_CACHE.pop(next(iter(_DOMAIN_CACHE)))
+        _DOMAIN_CACHE[key] = value
 
 
 def derive_return_domain(
@@ -985,8 +991,9 @@ def derive_return_domain(
     witness).
     """
     key = (callee, tuple(str(r) for r in roots))
-    if key in _DOMAIN_CACHE:
-        return _DOMAIN_CACHE[key]
+    with _DOMAIN_CACHE_LOCK:
+        if key in _DOMAIN_CACHE:
+            return _DOMAIN_CACHE[key]
     budget = _Budget(budget_s)
     result = _derive(callee, roots, budget, _MAX_HOPS, set())
     if not budget.truncated:

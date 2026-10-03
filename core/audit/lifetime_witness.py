@@ -618,6 +618,7 @@ _NAMED_VA_PARAMS_RE = re.compile(
 )
 
 _LT_TABLE_CACHE: dict[tuple[str, str], MacroTable] = {}
+_LT_TABLE_CACHE_LOCK = __import__("threading").Lock()
 _LT_TABLE_CACHE_MAX = 8
 
 
@@ -664,9 +665,10 @@ def _lifetime_macro_table(
     table's closure-visible function-name set is reused.
     """
     key = (str(target_path), rel_file)
-    cached = _LT_TABLE_CACHE.get(key)
-    if cached is not None:
-        return cached
+    with _LT_TABLE_CACHE_LOCK:
+        cached = _LT_TABLE_CACHE.get(key)
+        if cached is not None:
+            return cached
     base = _macro_table_for(target_path, rel_file)
     from .defassign import (
         _DIRECTIVE_RE,
@@ -709,9 +711,10 @@ def _lifetime_macro_table(
         unresolved_includes=tuple(unresolved),
         files_scanned=scanned,
     )
-    if len(_LT_TABLE_CACHE) >= _LT_TABLE_CACHE_MAX:
-        _LT_TABLE_CACHE.pop(next(iter(_LT_TABLE_CACHE)))
-    _LT_TABLE_CACHE[key] = table
+    with _LT_TABLE_CACHE_LOCK:
+        if len(_LT_TABLE_CACHE) >= _LT_TABLE_CACHE_MAX:
+            _LT_TABLE_CACHE.pop(next(iter(_LT_TABLE_CACHE)))
+        _LT_TABLE_CACHE[key] = table
     return table
 
 

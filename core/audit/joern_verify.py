@@ -317,6 +317,7 @@ _SANITIZER_NAME_SEEDS: dict[str, tuple[str, ...]] = {
 # refreshed spec file re-reads (the specs are written once per run
 # but the checks run for hours).
 _IRIS_SANITIZER_MEMO: dict[str, tuple[int, tuple[str, ...]]] = {}
+_IRIS_SANITIZER_MEMO_LOCK = __import__("threading").Lock()
 
 
 def _iris_sanitizer_names(out_dir: Path | None) -> tuple[str, ...]:
@@ -336,9 +337,10 @@ def _iris_sanitizer_names(out_dir: Path | None) -> tuple[str, ...]:
     except OSError:
         return ()
     key = str(path)
-    memo = _IRIS_SANITIZER_MEMO.get(key)
-    if memo is not None and memo[0] == mtime:
-        return memo[1]
+    with _IRIS_SANITIZER_MEMO_LOCK:
+        memo = _IRIS_SANITIZER_MEMO.get(key)
+        if memo is not None and memo[0] == mtime:
+            return memo[1]
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))  # raw-open: RAPTOR-written joern verdict artifact in the run dir
     except Exception:  # noqa: BLE001 — degrade per the docstring contract
@@ -362,7 +364,8 @@ def _iris_sanitizer_names(out_dir: Path | None) -> tuple[str, ...]:
         if isinstance(fn, str) and is_valid_identifier(fn):
             found.add(fn)
     names = tuple(sorted(found))
-    _IRIS_SANITIZER_MEMO[key] = (mtime, names)
+    with _IRIS_SANITIZER_MEMO_LOCK:
+        _IRIS_SANITIZER_MEMO[key] = (mtime, names)
     return names
 
 
