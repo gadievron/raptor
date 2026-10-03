@@ -317,6 +317,7 @@ def _default_tu_cache() -> "BoundedMemo":
 # entry suffices; keyed on the checklist's identity fields so a
 # rebuilt inventory refreshes it.
 _call_graphs_cache: dict[tuple[str, Any, Any], dict[str, Any]] = {}
+_call_graphs_lock = _threading.Lock()
 
 
 def _load_call_graphs_cached(
@@ -329,12 +330,14 @@ def _load_call_graphs_cached(
         (checklist or {}).get("generated_at"),
         (checklist or {}).get("total_files"),
     )
-    hit = _call_graphs_cache.get(key)
-    if hit is not None:
-        return hit
+    with _call_graphs_lock:
+        hit = _call_graphs_cache.get(key)
+        if hit is not None:
+            return hit
     graphs = load_call_graphs(target_path, checklist)
-    _call_graphs_cache.clear()
-    _call_graphs_cache[key] = graphs
+    with _call_graphs_lock:
+        _call_graphs_cache.clear()
+        _call_graphs_cache[key] = graphs
     return graphs
 
 # Byte budgets for the orchestrator's own artifact reads: 8 MiB for
@@ -16331,6 +16334,9 @@ def _run_study_prep(
                 cmd, proc.returncode, stdout=stdout, stderr=stderr,
             )
     finally:
+        for pipe in (proc.stdout, proc.stderr):
+            if pipe is not None and not pipe.closed:
+                pipe.close()
         if study_queue is not None:
             study_queue.clear_inflight()
 
