@@ -1061,6 +1061,7 @@ def run_single_semgrep(
             + (["--max-memory", str(max_memory_mb)] if max_memory_mb else [])
             or None
         ),
+        scope_isolation=semgrep_pkg.scope_isolation_available(),
     )
 
     # Create clean environment without venv contamination or dangerous vars.

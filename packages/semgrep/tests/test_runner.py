@@ -12,13 +12,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from packages.semgrep.models import SemgrepResult
 from packages.semgrep.runner import (
+    _SCOPE_ISOLATION_MIN_VERSION,
     _config_to_name,
     build_cmd,
     is_available,
     run_rule,
     run_rules,
+    scope_isolation_available,
     version,
 )
+
+
+@pytest.fixture(autouse=True)
+def _scope_isolation_ok():
+    """Most tests don't care about the version gate — default to available."""
+    with patch("packages.semgrep.runner.scope_isolation_available",
+               return_value=True):
+        yield
+
 
 # Helpers ----------------------------------------------------------------------
 
@@ -81,6 +92,29 @@ class TestAvailability:
             assert version() is None
 
 
+class TestScopeIsolationAvailable:
+    def test_true_at_floor(self):
+        ver = ".".join(str(p) for p in _SCOPE_ISOLATION_MIN_VERSION)
+        with patch("shutil.which", return_value="/usr/bin/semgrep"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout=f"{ver}\n", stderr="", returncode=0,
+            )
+            assert scope_isolation_available()
+
+    def test_false_below_floor(self):
+        with patch("shutil.which", return_value="/usr/bin/semgrep"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout="1.79.0\n", stderr="", returncode=0,
+            )
+            assert not scope_isolation_available()
+
+    def test_false_when_missing(self):
+        with patch("shutil.which", return_value=None):
+            assert not scope_isolation_available()
+
+
 # build_cmd --------------------------------------------------------------------
 
 class TestBuildCmd:
@@ -106,6 +140,14 @@ class TestBuildCmd:
         cmd = build_cmd(Path("/src"), "p/x", semgrep_bin="semgrep")
         assert "--no-git-ignore" in cmd
         assert "--x-ignore-semgrepignore-files" in cmd
+
+    def test_scope_isolation_false_omits_flag(self):
+        """Below-floor semgrep: the flag is omitted so the scan can run,
+        but --no-git-ignore (always available) stays."""
+        cmd = build_cmd(Path("/src"), "p/x", semgrep_bin="semgrep",
+                        scope_isolation=False)
+        assert "--no-git-ignore" in cmd
+        assert "--x-ignore-semgrepignore-files" not in cmd
 
     def test_scope_exclude_baseline_pinned(self):
         """The RAPTOR-owned exclude baseline is a curated security
@@ -228,6 +270,28 @@ class TestRunRuleMocked:
         assert "not installed" in result.errors[0]
         assert result.findings == []
         assert not result.ok
+
+    def test_below_floor_warns_and_omits_scope_flag(self, tmp_path, caplog):
+        import logging
+        target = tmp_path / "src"
+        target.mkdir()
+        json_output = _make_json_output(scanned=["src/a.py"])
+        with patch("packages.semgrep.runner.is_available", return_value=True), \
+             patch("packages.semgrep.runner.scope_isolation_available",
+                   return_value=False), \
+             patch("packages.semgrep.runner.version", return_value="1.79.0"), \
+             patch("subprocess.run") as mock_run:
+            def side_effect(cmd, **kwargs):
+                assert "--x-ignore-semgrepignore-files" not in cmd
+                if "--json-output" in cmd:
+                    idx = cmd.index("--json-output")
+                    Path(cmd[idx + 1]).write_text(json_output)
+                return MagicMock(stdout=_make_sarif(count=0), stderr="",
+                                returncode=0)
+            mock_run.side_effect = side_effect
+            with caplog.at_level(logging.WARNING, logger="raptor"):
+                run_rule(target, "p/x", unsandboxed=True)
+        assert any("semgrepignore" in r.message for r in caplog.records)
 
     def test_run_basic(self, tmp_path):
         target = tmp_path / "src"
@@ -671,6 +735,11 @@ class TestErrorTruthLive:
     verified silence. Runs the real binary (trusted local fixtures,
     hence unsandboxed=True)."""
 
+    @pytest.fixture(autouse=True)
+    def _scope_isolation_ok(self):
+        """Override the module-level fixture — live tests need the real check."""
+        yield
+
     def test_invalid_rule_reports_error_not_silence(self, tmp_path):
         rule = tmp_path / "invalid.yaml"
         rule.write_text(
@@ -692,12 +761,21 @@ class TestErrorTruthLive:
 
 
 @pytest.mark.skipif(not is_available(), reason="semgrep not installed")
+@pytest.mark.skipif(
+    is_available() and not scope_isolation_available(),
+    reason="semgrep below scope-isolation floor",
+)
 class TestScanScopeLive:
     """Real-semgrep regression for target-steered scan scope: semgrep
     honours the SCANNED repo's ``.semgrepignore`` by default, so a
     hostile target shipping one line of config could silently exempt
     its own subtrees (clean exit, empty findings). Runs the real
     binary (trusted local fixtures, hence unsandboxed=True)."""
+
+    @pytest.fixture(autouse=True)
+    def _scope_isolation_ok(self):
+        """Override the module-level fixture — live tests need the real check."""
+        yield
 
     @staticmethod
     def _eval_rule(tmp_path):

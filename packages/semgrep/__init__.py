@@ -12,7 +12,10 @@ HOME redirect, registry-pack proxy hosts, and parallel orchestration belong to
 the caller (e.g. packages/static-analysis/scanner.py).
 """
 
-from .runner import build_cmd, is_available, run_rule, run_rules, version
+from .runner import (
+    build_cmd, is_available, run_rule, run_rules,
+    scope_isolation_available, version,
+)
 from .models import SemgrepFinding, SemgrepResult
 from .findings import to_findings
 from .coverage import to_coverage_record
@@ -27,6 +30,7 @@ __all__ = [
     "is_available",
     "run_rule",
     "run_rules",
+    "scope_isolation_available",
     "to_coverage_record",
     "to_findings",
     "version",

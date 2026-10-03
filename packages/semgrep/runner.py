@@ -49,6 +49,11 @@ _SEMGREP_BIN = "semgrep"
 _DEFAULT_TIMEOUT = 900
 _DEFAULT_RULE_TIMEOUT = 60
 
+# --x-ignore-semgrepignore-files shipped in the osemgrep Pro sync around
+# semgrep 1.95 (Nov 2024).  Older CLIs reject it as unknown (rc=2).
+# Version-gated: below-floor scans omit the flag and log a warning.
+_SCOPE_ISOLATION_MIN_VERSION = (1, 95, 0)
+
 # RAPTOR-owned scan-scope baseline, passed as repeated ``--exclude``
 # args by build_cmd (gitignore-style patterns; trailing ``/`` = match
 # directories only — verified honoured on semgrep 1.172.0, skips
@@ -125,6 +130,22 @@ def version() -> str | None:
     return info.first_line if info is not None else None
 
 
+def scope_isolation_available() -> bool:
+    """True when semgrep supports ``--x-ignore-semgrepignore-files``.
+
+    Below-floor versions let hostile targets steer scan scope via
+    ``.semgrepignore`` files.  Callers should log a warning and pass
+    ``scope_isolation=False`` to :func:`build_cmd`.
+    """
+    info = probe(_SEMGREP_BIN)
+    if info is None:
+        return False
+    vt = info.version_tuple()
+    if vt is None:
+        return False
+    return vt >= _SCOPE_ISOLATION_MIN_VERSION
+
+
 def build_cmd(
     target: Path,
     config: str,
@@ -134,6 +155,7 @@ def build_cmd(
     semgrep_bin: str | None = None,
     extra_args: list[str] | None = None,
     extra_targets: "Sequence[Path]" = (),
+    scope_isolation: bool = True,
 ) -> list[str]:
     """Build the semgrep command argv.
 
@@ -152,6 +174,10 @@ def build_cmd(
         extra_targets: Additional scan targets appended after ``target``.
             Findings carry per-file artifact URIs, so callers can split
             results back per target.
+        scope_isolation: Include ``--x-ignore-semgrepignore-files``.
+            Set to ``False`` on semgrep versions below
+            :data:`_SCOPE_ISOLATION_MIN_VERSION` — the flag is unknown
+            and would cause rc=2.
 
     Returns:
         argv list ready for subprocess.run.
@@ -202,11 +228,15 @@ def build_cmd(
         # [INTERNAL] upstream: if a future semgrep removes it, every
         # scan fails LOUDLY (unknown option, rc=2 — surfaced as an
         # engine error by run_rule and the scanner) rather than
-        # silently reverting to target-steered scope.
+        # silently reverting to target-steered scope. Version-gated
+        # via scope_isolation (see _SCOPE_ISOLATION_MIN_VERSION):
+        # below-floor CLIs don't know the flag; callers log a warning.
         "--no-git-ignore",
-        "--x-ignore-semgrepignore-files",
         "--timeout", str(rule_timeout),
     ]
+    if scope_isolation:
+        cmd.insert(cmd.index("--no-git-ignore") + 1,
+                   "--x-ignore-semgrepignore-files")
     for pattern in SCOPE_EXCLUDE_BASELINE:
         cmd.extend(["--exclude", pattern])
     if json_output_path is not None:
@@ -392,6 +422,17 @@ def run_rule(
             returncode=-1,
         )
 
+    scope_ok = scope_isolation_available()
+    if not scope_ok:
+        v = version() or "unknown"
+        floor = ".".join(str(p) for p in _SCOPE_ISOLATION_MIN_VERSION)
+        logger.warning(
+            "semgrep %s < %s: --x-ignore-semgrepignore-files unavailable "
+            "— .semgrepignore files in the scanned repo can hide findings "
+            "(upgrade: pip install --upgrade semgrep)",
+            v, floor,
+        )
+
     cleanup_json = False
     json_path = json_output_path
     if json_path is None:
@@ -413,6 +454,7 @@ def run_rule(
             semgrep_bin=semgrep_bin,
             extra_args=extra_args,
             extra_targets=extra_targets,
+            scope_isolation=scope_ok,
         )
 
         if env is None:
