@@ -1017,11 +1017,12 @@ class LLMProvider(ABC):
         is correct with no double counting.
         """
         content = strip_json_fences(response.content.strip()).strip()
-        content = _strip_think_blocks(content)
-        # A think block may have wrapped a fenced block; re-strip fences in
-        # case the closer sat between the fence and the JSON.
-        content = strip_json_fences(content).strip()
-        parsed = json.loads(content)
+        try:
+            parsed = json.loads(content)
+        except (json.JSONDecodeError, ValueError):
+            content = _strip_think_blocks(content)
+            content = strip_json_fences(content).strip()
+            parsed = json.loads(content)
         parsed = _coerce_to_schema(parsed, _normalize_schema(schema))
         validated = pydantic_model.model_validate(parsed)
         result_dict = validated.model_dump()
