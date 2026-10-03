@@ -49,6 +49,7 @@ def _make_empty_store() -> CredentialStore:
         "together": None,
         "openrouter": None,
         "orcarouter": None,
+        "cheaperinference": None,
         "fireworks": None,
         "deepinfra": None,
         "perplexity": None,

@@ -1306,6 +1306,7 @@ class RaptorConfig:
         "TOGETHER_API_KEY",     # aggregator
         "OPENROUTER_API_KEY",   # aggregator
         "ORCAROUTER_API_KEY",   # aggregator
+        "CHEAPER_INFERENCE_API_KEY",  # aggregator
         "FIREWORKS_API_KEY",    # aggregator
         "DEEPINFRA_API_KEY",    # aggregator
         "PERPLEXITY_API_KEY",   # aggregator

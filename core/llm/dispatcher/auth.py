@@ -288,6 +288,7 @@ class CredentialStore:
             "together":   _read_env_keep("TOGETHER_API_KEY"),
             "openrouter": _read_env_keep("OPENROUTER_API_KEY"),
             "orcarouter": _read_env_keep("ORCAROUTER_API_KEY"),
+            "cheaperinference": _read_env_keep("CHEAPER_INFERENCE_API_KEY"),
             "fireworks":  _read_env_keep("FIREWORKS_API_KEY"),
             "deepinfra":  _read_env_keep("DEEPINFRA_API_KEY"),
             "perplexity": _read_env_keep("PERPLEXITY_API_KEY"),
@@ -1303,6 +1304,15 @@ def build_rules(creds: CredentialStore) -> dict[str, ProviderRule]:
             # bare host is the correct upstream — same shape as OpenRouter.
             upstream_base_url="https://api.orcarouter.ai",
             inject_headers=_bearer_headers("orcarouter"),
+        ),
+        "cheaperinference": ProviderRule(
+            name="cheaperinference",
+            # Cheaper Inference's API is rooted at ``/v1`` (OpenAI-compatible
+            # gateway). The SDK's path component (``/v1/chat/completions``
+            # etc.) is preserved end-to-end through the dispatcher, so the
+            # bare host is the correct upstream — same shape as OrcaRouter.
+            upstream_base_url="https://api.cheaperinference.com",
+            inject_headers=_bearer_headers("cheaperinference"),
         ),
         "fireworks": ProviderRule(
             name="fireworks",

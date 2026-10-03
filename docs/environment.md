@@ -630,6 +630,7 @@ socket), and `AWS_BEARER_TOKEN_BEDROCK` is popped out of the parent's
 | `TOGETHER_API_KEY` | Together |
 | `OPENROUTER_API_KEY` | OpenRouter |
 | `ORCAROUTER_API_KEY` | OrcaRouter |
+| `CHEAPER_INFERENCE_API_KEY` | Cheaper Inference |
 | `FIREWORKS_API_KEY` | Fireworks |
 | `DEEPINFRA_API_KEY` | DeepInfra |
 | `PERPLEXITY_API_KEY` | Perplexity |

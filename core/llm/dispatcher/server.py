@@ -2636,6 +2636,7 @@ _PROVIDER_FROM_PATH_PREFIX = {
     "/together/":     "together",
     "/openrouter/":   "openrouter",
     "/orcarouter/":   "orcarouter",
+    "/cheaperinference/": "cheaperinference",
     "/fireworks/":    "fireworks",
     "/deepinfra/":    "deepinfra",
     "/perplexity/":   "perplexity",
