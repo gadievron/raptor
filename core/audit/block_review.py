@@ -604,8 +604,15 @@ def try_build_cfg(
         try:
             from core.analysis.cfg_builder_cpp import build_cpp_intraproc_cfg
             lang = "cpp" if ext in (".cpp", ".cc", ".cxx", ".hpp") else "c"
+            src = source or read_contained(target_path, file_path)
+            if src is None:
+                logger.debug(
+                    "try_build_cfg: unreadable or non-regular file %r",
+                    file_path,
+                )
+                return None
             return build_cpp_intraproc_cfg(
-                full_path, function_name, language=lang,
+                src, function_name, language=lang,
             )
         except Exception:
             logger.debug(
