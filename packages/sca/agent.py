@@ -168,6 +168,11 @@ def run_sca_subprocess(
             writable_paths=[str(log_dir)],
             env=env if env is not None else RaptorConfig.get_safe_env(),
             env_caller_filtered=True,
+            # ``cmd`` runs RAPTOR's OWN SCA agent — a trusted in-tree
+            # dispatch, NOT untrusted target code.  Without this the
+            # sandbox's TARGET_ENV_STRIP_SET strips RAPTOR_DIR and the
+            # child KeyErrors at import.
+            keep_trust_markers_for_dispatch=True,
             capture_output=True,
             text=True,
             timeout=timeout,

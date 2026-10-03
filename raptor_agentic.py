@@ -3879,8 +3879,6 @@ def main() -> int:
                 )
             if rc == 0:
                 sca_sarif = sca_out / "findings.sarif"
-                if sca_sarif.exists():
-                    all_sarif_files.append(sca_sarif)
                 # Parse the one-line JSON summary from stdout
                 import json as _json
                 for line in reversed(sca_stdout.strip().splitlines()):
@@ -3893,6 +3891,11 @@ def main() -> int:
                         break
                 sca_findings_count = sca_metrics.get("vuln_findings", 0) + \
                                      sca_metrics.get("supply_chain_findings", 0)
+                # Only register the SARIF when it carries findings —
+                # an empty SARIF must not suppress the sole-scanner
+                # hard-failure gate downstream.
+                if sca_sarif.exists() and sca_findings_count:
+                    all_sarif_files.append(sca_sarif)
                 print("\n✓ SCA complete:")
                 print(f"  - Dependencies: {sca_metrics.get('deps_analysed', 0)}")
                 print(f"  - Vulnerability findings: {sca_metrics.get('vuln_findings', 0)}")
