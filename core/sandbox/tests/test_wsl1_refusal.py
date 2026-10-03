@@ -30,6 +30,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from core.sandbox.errors import SandboxSetupError
+from core.sandbox.tests.capability import requires_network_block_backend
 from core.startup import wsl as startup_wsl
 
 pytestmark = [
@@ -49,6 +50,7 @@ def _mock_flavour(monkeypatch, *, wsl: bool, wsl2: bool) -> None:
 
 
 class TestWsl1Refusal:
+    @requires_network_block_backend
     def test_plain_run_refuses_on_wsl1(self, monkeypatch, tmp_path):
         from core.sandbox import run
         _mock_flavour(monkeypatch, wsl=True, wsl2=False)
@@ -91,12 +93,14 @@ class TestWsl1Refusal:
         assert r.returncode == 0, getattr(r, "stderr", "")
         assert marker.exists()
 
+    @requires_network_block_backend
     def test_wsl2_does_not_refuse(self, monkeypatch):
         from core.sandbox import run
         _mock_flavour(monkeypatch, wsl=True, wsl2=True)
         r = run([_TRUE], capture_output=True, text=True, timeout=30)
         assert r.returncode == 0, getattr(r, "stderr", "")
 
+    @requires_network_block_backend
     def test_plain_linux_does_not_refuse(self, monkeypatch):
         # The inertness pin: off-WSL the chokepoint behaves exactly
         # as before (two cached boolean probes, no refusal).

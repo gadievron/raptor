@@ -42,7 +42,10 @@ pytestmark = pytest.mark.skipif(
 
 from core.sandbox import context as ctx                   # noqa: E402
 from core.sandbox import proxy as proxy_mod               # noqa: E402
-from core.sandbox.tests.capability import requires_landlock
+from core.sandbox.tests.capability import (
+    requires_landlock,
+    requires_network_block_backend,
+)
 
 
 class TestPersistProxyEventsHelper(unittest.TestCase):
@@ -383,6 +386,7 @@ class TestBlockDrainDedupIdentity(unittest.TestCase):
             )
 
 
+@requires_network_block_backend
 class TestProxyEventSeqStamp(unittest.TestCase):
     """The real proxy stamps a unique ``proxy_seq`` on every
     recorded event, and the SAME event fanned into several buffers

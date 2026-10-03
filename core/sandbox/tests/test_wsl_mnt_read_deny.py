@@ -40,6 +40,10 @@ if str(REPO) not in sys.path:
 
 from core.sandbox import context as sandbox_context
 from core.sandbox import state
+from core.sandbox.tests.capability import (
+    requires_landlock,
+    requires_network_block_backend,
+)
 from core.startup import wsl as startup_wsl
 
 pytestmark = [
@@ -184,6 +188,7 @@ class TestSymlinkSpellings:
         assert dropped == [str(evil)]
 
 
+@requires_network_block_backend
 class TestFunctionalMountNs:
     def _run(self, tmp_path, monkeypatch, *, wsl: bool,
              readable=("/mnt",), cli_readable=None):
@@ -287,6 +292,7 @@ class TestFunctionalMountNs:
                    and str(link) in rec.getMessage()
                    for rec in caplog.records), "no drop warning"
 
+    @requires_landlock
     @pytest.mark.linux_native
     def test_cli_readable_path_is_exempt(self, monkeypatch, tmp_path):
         # --sandbox-readable-path is the operator override: the same

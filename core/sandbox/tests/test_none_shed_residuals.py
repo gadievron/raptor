@@ -14,6 +14,8 @@ import sys
 
 import pytest
 
+from core.sandbox.tests.capability import requires_network_block_backend
+
 pytestmark = pytest.mark.skipif(
     sys.platform == "darwin", reason="linux lane under test",
 )
@@ -43,6 +45,7 @@ def test_branded_tmpdir_survives_operator_disable(tmp_path, monkeypatch):
     )
 
 
+@requires_network_block_backend
 def test_discard_warning_names_tool_paths(tmp_path, caplog):
     import logging
 

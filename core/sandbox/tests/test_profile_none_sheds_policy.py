@@ -20,7 +20,10 @@ import sys
 import pytest
 
 from core.sandbox import context as _ctx
-from core.sandbox.tests.capability import requires_landlock
+from core.sandbox.tests.capability import (
+    requires_landlock,
+    requires_network_block_backend,
+)
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux", reason="Linux sandbox lanes")
@@ -97,6 +100,7 @@ def test_disabled_sheds_fake_home_before_materialisation(
     assert "fake_home" not in caplog.text
 
 
+@requires_network_block_backend
 def test_network_only_warns_fake_home_discard(tmp_path, caplog):
     """The non-disabled Landlock-off profile tells the caller the
     fake HOME was shed."""
@@ -110,6 +114,7 @@ def test_network_only_warns_fake_home_discard(tmp_path, caplog):
     assert "fake_home" in caplog.text
 
 
+@requires_network_block_backend
 def test_network_only_profile_warns_about_discards(
         tmp_path, monkeypatch, caplog):
     """The non-disabled Landlock-off profile keeps warning about each

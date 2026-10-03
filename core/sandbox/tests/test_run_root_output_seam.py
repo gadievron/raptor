@@ -19,6 +19,7 @@ import sys
 import pytest
 
 from core.sandbox import context as _ctx
+from core.sandbox.tests.capability import requires_network_block_backend
 from core.sandbox.work_dir import hostile_work_subdir, is_run_root
 
 pytestmark = pytest.mark.skipif(
@@ -39,6 +40,7 @@ def _run_root(tmp_path, name: str = "run") -> str:
 
 
 class TestSeamWarning:
+    @requires_network_block_backend
     def test_run_root_output_warns(self, tmp_path, caplog):
         out = _run_root(tmp_path)
         with caplog.at_level("WARNING"):
@@ -48,6 +50,7 @@ class TestSeamWarning:
         assert "output_run_root_ok" in caplog.text
         assert "hostile_work_subdir" in caplog.text
 
+    @requires_network_block_backend
     def test_ack_suppresses_warning(self, tmp_path, caplog):
         out = _run_root(tmp_path)
         with caplog.at_level("WARNING"):
@@ -55,6 +58,7 @@ class TestSeamWarning:
                 pass
         assert "run-directory root" not in caplog.text
 
+    @requires_network_block_backend
     def test_non_run_root_output_is_silent(self, tmp_path, caplog):
         out = tmp_path / "scratch"
         out.mkdir()
@@ -63,6 +67,7 @@ class TestSeamWarning:
                 pass
         assert "run-directory root" not in caplog.text
 
+    @requires_network_block_backend
     def test_work_subdir_output_is_silent(self, tmp_path, caplog):
         run_dir = _run_root(tmp_path)
         work = hostile_work_subdir(run_dir, "target")
@@ -80,6 +85,7 @@ class TestSeamWarning:
                 pass
         assert "run-directory root" not in caplog.text
 
+    @requires_network_block_backend
     def test_warns_once_per_path(self, tmp_path, caplog):
         out = _run_root(tmp_path)
         with caplog.at_level("WARNING"):
@@ -89,6 +95,7 @@ class TestSeamWarning:
                 pass
         assert caplog.text.count("run-directory root") == 1
 
+    @requires_network_block_backend
     def test_nonprintable_path_is_escaped(self, tmp_path, caplog):
         # Run dirs can embed target-derived name segments; a control
         # char in the path must reach the log as an escape sequence,
