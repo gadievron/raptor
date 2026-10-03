@@ -1999,7 +1999,7 @@ Examples:
         ),
     )
     parser.add_argument("--policy-groups", default="all", help="Comma-separated policy groups (default: all)")
-    parser.add_argument("--max-findings", type=int, default=10, help="Maximum findings to process (default: 10; codeql-only default is 20, agentic is lower because each finding runs the full multi-pass LLM analysis chain at ~3-5x the per-finding cost)")
+    parser.add_argument("--max-findings", type=int, default=None, help="Maximum findings to process. Unset = provider-aware default: a LOCAL primary (ollama / loopback endpoint — free inference) analyses ALL findings (bound by --max-seconds / --max-calls), a cloud primary defaults to 10 (each finding runs the full multi-pass LLM chain at ~3-5x per-finding cost). Pass an explicit value to override either way; 0 = no cap.")
     parser.add_argument(
         "--prefer", action="append", default=None, metavar="GLOB",
         help=(
@@ -2063,6 +2063,24 @@ Examples:
         "--max-cost-usd", dest="max_cost_usd", type=float, default=None,
         help="Per-run USD budget cap; overrides LLMConfig.max_cost_per_scan "
              "so CostTracker enforces the cap during LLM calls",
+    )
+    # Non-dollar resource governor — the backstop for free/local runs,
+    # where the USD cap is inert ($0 cost). Each is off by default.
+    parser.add_argument(
+        "--max-seconds", dest="max_seconds", type=float, default=None,
+        help="Per-run wall-clock cap (seconds). Stops dispatching LLM "
+             "calls once reached. Works regardless of model cost — the "
+             "backstop for free/local runs the USD cap can't bound.",
+    )
+    parser.add_argument(
+        "--max-calls", dest="max_calls", type=int, default=None,
+        help="Per-run cap on total LLM provider calls. Off by default; "
+             "bounds a runaway/looping local run.",
+    )
+    parser.add_argument(
+        "--max-tokens", dest="max_tokens", type=int, default=None,
+        help="Per-run cap on aggregate LLM tokens (input+output). Off by "
+             "default.",
     )
     parser.add_argument("--out", help="Output directory")
     parser.add_argument(
@@ -3100,7 +3118,11 @@ def main() -> int:
     logger.info("Full path: %s", original_repo_path)
     logger.info("Output: %s", out_dir)
     logger.info("Policy groups: %s", args.policy_groups)
-    logger.info("Max findings: %s", args.max_findings)
+    logger.info(
+        "Max findings: %s",
+        args.max_findings if args.max_findings is not None
+        else "provider default (local=all, cloud=10)",
+    )
     if args.binary:
         logger.info("Target binary(s): %s", args.binary)
     # All ``--binary`` / ``--binary-auto`` / ``--binary-edges`` plumbing
@@ -4482,6 +4504,13 @@ def main() -> int:
 
         # Check if validation produced enriched findings
         validated_findings_path = out_dir / "validation" / "findings.json"
+        # Only forward --max-findings when the operator set it; otherwise
+        # let the child resolve its own provider-aware default (local →
+        # unlimited, cloud → 10). str(None) would be a bug.
+        _mf_flag = (
+            ["--max-findings", str(args.max_findings)]
+            if args.max_findings is not None else []
+        )
         if validated_findings_path.exists():
             logger.info("Using findings from Phase 2 for analysis")
             analysis_cmd = [
@@ -4490,8 +4519,7 @@ def main() -> int:
                 "--repo", str(repo_path),
                 "--findings", str(validated_findings_path),
                 "--out", str(autonomous_out),
-                "--max-findings", str(args.max_findings)
-            ]
+            ] + _mf_flag
         else:
             analysis_cmd = [
                 "python3",
@@ -4500,8 +4528,7 @@ def main() -> int:
                 "--sarif"
             ] + [str(f) for f in sarif_files] + [
                 "--out", str(autonomous_out),
-                "--max-findings", str(args.max_findings)
-            ]
+            ] + _mf_flag
 
         # Forward --prefer GLOB(s) so the agent re-orders findings
         # before applying --max-findings. Each --prefer becomes a
@@ -4679,6 +4706,14 @@ def main() -> int:
             )
             if llm_config and getattr(args, "max_cost_usd", None) is not None:
                 llm_config.max_cost_per_scan = args.max_cost_usd
+            # Non-dollar governor caps (off unless set). Independent of
+            # the USD cap so they bound free/local runs too.
+            if llm_config and getattr(args, "max_seconds", None) is not None:
+                llm_config.max_seconds_per_scan = args.max_seconds
+            if llm_config and getattr(args, "max_calls", None) is not None:
+                llm_config.max_calls_per_scan = args.max_calls
+            if llm_config and getattr(args, "max_tokens", None) is not None:
+                llm_config.max_tokens_per_scan = args.max_tokens
             # Dataflow validation is on by default when CodeQL ran;
             # `--no-validate-dataflow` opts out entirely. `--deep-validate`
             # opts into LLM-backed Tier 2/3 on top of the always-free Tier 1.
@@ -5019,7 +5054,9 @@ def main() -> int:
                                 binary_path=Path(args.binary[0]),
                                 fuzzing_result=fuzzing_result,
                                 fuzz_out=fuzz_out,
-                                limit=args.max_findings,
+                                # None (unspecified) → unlimited crash triage;
+                                # an explicit --max-findings still caps.
+                                limit=args.max_findings if args.max_findings is not None else 0,
                             )
                             final_report["outputs"]["fuzzing_crash_analysis"] = str(
                                 crash_outputs["contexts"]
@@ -5152,7 +5189,12 @@ def main() -> int:
     if analysed_count > 0 and analysed_count < validated_findings:
         skipped = validated_findings - analysed_count
         print(f"   Analysed: {analysed_count} of {validated_findings}")
-        print(f"   ⚠️  {skipped} finding{'s' if skipped != 1 else ''} skipped (--max-findings {args.max_findings})")
+        _cap_note = (
+            f"--max-findings {args.max_findings}"
+            if args.max_findings is not None
+            else "provider default cap; pass --max-findings 0 for all, or set a higher value"
+        )
+        print(f"   ⚠️  {skipped} finding{'s' if skipped != 1 else ''} skipped ({_cap_note})")
     elif analysed_count > 0:
         print(f"   Analysed: {analysed_count}")
     if failed_count > 0 or blocked_count > 0:

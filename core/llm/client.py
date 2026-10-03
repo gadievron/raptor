@@ -191,6 +191,22 @@ class LLMDegradedModeError(LLMBudgetExceededError):
     """
 
 
+class LLMGovernorExceededError(LLMBudgetExceededError):
+    """Raised when a call would breach a NON-dollar resource cap
+    (wall-clock deadline, total call count, or aggregate tokens).
+
+    Subclasses :class:`LLMBudgetExceededError` deliberately: resource
+    exhaustion is just as terminal as dollar exhaustion, and every
+    existing catch site (``isinstance(LLMBudgetExceededError)`` /
+    :func:`is_budget_exceeded_error`) must handle it identically — stop
+    dispatching, drain, report. The distinct type only lets callers that
+    care tell a time/call/token stop from a dollar stop. The message
+    deliberately avoids the "budget exceeded" phrase so the legacy
+    string-match path doesn't mislabel a resource stop as a cost stop;
+    the isinstance check (tried first above) catches it regardless.
+    """
+
+
 def is_budget_exceeded_error(exc: BaseException) -> bool:
     """True when *exc* signals LLM budget exhaustion.
 
@@ -1587,6 +1603,15 @@ class LLMClient:
         self.total_cost = 0.0
         self.request_count = 0
         self.cache_hits = 0
+        # Non-dollar resource governor state (see LLMConfig
+        # max_seconds/max_calls/max_tokens_per_scan). ``request_count``
+        # is bumped only on SUCCESS, so it can't gate a PRE-call count
+        # cap — track a dedicated pre-call counter and token tally,
+        # plus a run-start timestamp for the wall-clock deadline. All
+        # guarded by _stats_lock.
+        self._run_start: float | None = None
+        self._governed_calls = 0
+        self._governed_tokens = 0
         # Entries whose provenance token was PRESENT but invalid — a
         # genuine tamper signal (only editing a stamped entry produces
         # it; legacy/unstamped entries miss silently). Surfaced in
@@ -2906,6 +2931,78 @@ class LLMClient:
         with self._stats_lock:
             self.total_cost -= reservation
 
+    def _check_governor(self) -> None:
+        """Enforce the non-dollar resource caps (wall-clock deadline,
+        total call count, aggregate tokens) just before a provider call.
+
+        Deliberately NOT gated on ``enable_cost_tracking``: the whole
+        point is to bound a free/local run, which commonly turns the
+        dollar path off or leaves ``max_cost_per_scan`` at infinity.
+        Bumps the pre-call counter under the lock so concurrent callers
+        can't slip past the count cap. Raises
+        :class:`LLMGovernorExceededError` (terminal, handled by every
+        existing budget catch site) when any set limit is breached.
+        Unset limits (``None``) never fire, so default runs are
+        unaffected.
+
+        **Call counting**: every provider *attempt* (including retries
+        and fallback-walk attempts) increments the counter, so
+        ``max_calls_per_scan`` bounds total provider round-trips, not
+        logical caller-visible calls. The wall-clock deadline is the
+        first line of defence against runaway retries on a flaky model;
+        the call cap catches the rest.
+        """
+        cfg = self.config
+        max_seconds = getattr(cfg, "max_seconds_per_scan", None)
+        max_calls = getattr(cfg, "max_calls_per_scan", None)
+        max_tokens = getattr(cfg, "max_tokens_per_scan", None)
+        if max_seconds is None and max_calls is None and max_tokens is None:
+            return  # governor off — no overhead on the common path
+
+        # getattr defaults: clients built via ``LLMClient.__new__`` (the
+        # test harness make_test_client, and any future factory that
+        # skips __init__) never ran the counter init. The governor must
+        # not crash on them — it stays inert until a real run sets limits.
+        with self._stats_lock:
+            if max_seconds is not None:
+                run_start = getattr(self, "_run_start", None)
+                if run_start is None:
+                    run_start = self._run_start = time.monotonic()
+                elapsed = time.monotonic() - run_start
+                if elapsed >= max_seconds:
+                    raise LLMGovernorExceededError(
+                        f"resource governor: wall-clock limit reached "
+                        f"({elapsed:.0f}s >= {max_seconds:.0f}s "
+                        f"max_seconds_per_scan). Raise it with "
+                        f"--max-seconds or LLMConfig(max_seconds_per_scan=…)."
+                    )
+            if (max_tokens is not None
+                    and getattr(self, "_governed_tokens", 0) >= max_tokens):
+                raise LLMGovernorExceededError(
+                    f"resource governor: token limit reached "
+                    f"({getattr(self, '_governed_tokens', 0)} >= {max_tokens} "
+                    f"max_tokens_per_scan). Raise it with --max-tokens."
+                )
+            if (max_calls is not None
+                    and getattr(self, "_governed_calls", 0) >= max_calls):
+                raise LLMGovernorExceededError(
+                    f"resource governor: call limit reached "
+                    f"({getattr(self, '_governed_calls', 0)} >= {max_calls} "
+                    f"max_calls_per_scan). Raise it with --max-calls."
+                )
+            # Count this call pre-dispatch (gates the NEXT call's cap).
+            self._governed_calls = getattr(self, "_governed_calls", 0) + 1
+
+    def _record_governed_tokens(self, tokens: int) -> None:
+        """Add to the aggregate token tally the governor gates on.
+        Called post-call with the response's total tokens. Defensive
+        getattr: tolerates clients built via ``__new__`` that skipped
+        the counter init (test harness, factories)."""
+        if tokens <= 0:
+            return
+        with self._stats_lock:
+            self._governed_tokens = getattr(self, "_governed_tokens", 0) + tokens
+
     def generate(self, prompt: str, system_prompt: str | None = None,
                  task_type: str | None = None, **kwargs) -> LLMResponse:
         """
@@ -3145,6 +3242,11 @@ class LLMClient:
                         # one call's estimate error, not workers × call
                         # cost. Reconciled to actual cost below;
                         # released on exception.
+                        # Non-dollar governor first — bounds time/calls/
+                        # tokens even when the dollar path is off ($0 local
+                        # models, max_cost=inf audit runs). Terminal, like
+                        # the dollar budget; raised before any reservation.
+                        self._check_governor()
                         reservation = self._estimate_call_cost(call_class)
                         if not self._acquire_budget(reservation):
                             msg = (
@@ -3163,6 +3265,7 @@ class LLMClient:
                             self._release_budget(reservation)
                             raise
                         duration = time.monotonic() - t_start
+                        self._record_governed_tokens(response.tokens_used)
 
                         # Reconcile: cancel the reservation pre-debit and
                         # add the actual cost. Net effect on total_cost
@@ -3734,6 +3837,8 @@ class LLMClient:
                         # same race shape applies to structured calls.
                         # History-sized reservation: overshoot bounded
                         # by one call's estimate error.
+                        # Non-dollar governor first (see generate()).
+                        self._check_governor()
                         reservation = self._estimate_call_cost(call_class)
                         if not self._acquire_budget(reservation):
                             msg = (
@@ -3794,6 +3899,7 @@ class LLMClient:
                         # Calculate cost delta
                         cost_delta = provider.total_cost - cost_before
                         tokens_delta = provider.total_tokens - tokens_before
+                        self._record_governed_tokens(tokens_delta)
                         in_delta = max(
                             0, _safe_counter(
                                 provider, "total_input_tokens",

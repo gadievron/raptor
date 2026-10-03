@@ -338,6 +338,21 @@ def url_is_loopback(url: str) -> bool:
     return _is_loopback(host)
 
 
+def is_local_inference(provider: str, api_base: str | None = None) -> bool:
+    """True when (provider, api_base) points at a local inference server.
+
+    Covers ollama (always local — even a remote GPU box via OLLAMA_HOST
+    shares a single server) and any provider whose api_base resolves to a
+    loopback address (vLLM, LM Studio, llama.cpp — typically provider
+    ``openai`` with a custom api_base).
+    """
+    if (provider or "").lower() == "ollama":
+        return True
+    if api_base:
+        return url_is_loopback(api_base)
+    return False
+
+
 def loopback_safe_get(url: str, timeout: float):
     """``requests.get`` that bypasses proxy env for loopback targets.
 
