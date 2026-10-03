@@ -377,7 +377,7 @@ def _read_finding_source(
     file: str,
     target_root: str | Path | None = None,
 ) -> str | ResolutionFailure:
-    """Containment-checked read of the source file named by a finding.
+    """Containment-checked, size-capped read of a finding's source file.
 
     The path comes verbatim from externally-produced analyser output
     (SARIF ``artifactLocation.uri``, Semgrep ``path``, native
@@ -415,9 +415,33 @@ def _read_finding_source(
                 ),
             )
         read_path = confined
+    # Size gate: the file lives inside the scanned repo and its size
+    # is attacker-controlled.  An unbounded read OOMs the process.
+    # Stat pre-check + capped binary read closes the stat/read
+    # growth race (house pattern, core/audit/context).
+    _MAX = 64 * 1024 * 1024
     try:
-        return read_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError, ValueError) as e:
+        size = read_path.stat().st_size
+    except (OSError, ValueError) as e:
+        return ResolutionFailure(reason=f"cannot read {file}: {e}")
+    if size > _MAX:
+        return ResolutionFailure(
+            reason=f"refusing oversize source file {file!r} "
+                   f"({size} bytes > {_MAX})",
+        )
+    try:
+        with read_path.open("rb") as fh:
+            raw = fh.read(_MAX + 1)
+    except OSError as e:
+        return ResolutionFailure(reason=f"cannot read {file}: {e}")
+    if len(raw) > _MAX:
+        return ResolutionFailure(
+            reason=f"source file {file!r} grew past "
+                   f"{_MAX} bytes during read",
+        )
+    try:
+        return raw.decode("utf-8")
+    except (UnicodeDecodeError, ValueError) as e:
         return ResolutionFailure(reason=f"cannot read {file}: {e}")
 
 
