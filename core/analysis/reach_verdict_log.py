@@ -137,7 +137,7 @@ def _held_lock(lock_path: Path):
     acquiring, re-stat the path and verify it is still THIS inode;
     otherwise reopen and retry. Bounded retries; on exhaustion the
     lock is held best-effort (telemetry must never block a run)."""
-    for _ in range(5):
+    for attempt in range(5):
         fh = Path(lock_path).open("a+", encoding="utf-8")
         fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
         try:
@@ -145,8 +145,9 @@ def _held_lock(lock_path: Path):
                 break
         except OSError:
             pass  # path vanished — retry with a fresh file
-        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
-        fh.close()
+        if attempt < 4:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            fh.close()
     try:
         yield fh
     finally:
