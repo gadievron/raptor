@@ -365,7 +365,12 @@ def observe_paired(
                 os.killpg(os.getpgid(proc.pid), 9)
             except (OSError, ProcessLookupError):
                 proc.kill()
-            proc.communicate()
+            try:
+                proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                for pipe in (proc.stdout, proc.stderr, proc.stdin):
+                    if pipe is not None and not pipe.closed:
+                        pipe.close()
         log.error("paired observation timed out")
         return None
     except OSError as exc:
