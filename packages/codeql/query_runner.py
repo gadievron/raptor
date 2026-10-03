@@ -510,6 +510,7 @@ class QueryRunner:
             # packs without threat-model support.
             *self._threat_model_args(),
             *self._model_pack_args(language),
+            f"--max-paths={RaptorConfig.CODEQL_MAX_PATHS}",
         ]
         # Central CodeQL resource tunables (-j / -M, tuning.json-backed).
         # ``include_disk_cache=False`` because ``database analyze``

@@ -11,12 +11,28 @@ logger emission.
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 HOSTILE = "\x1b]0;pwned\x07\x1b[31mred‮evil"
+
+
+@pytest.fixture(autouse=True)
+def _raptor_logger_propagates():
+    """Let caplog see records from the 'raptor' logger.
+
+    RaptorLogger sets propagate=False on logging.getLogger('raptor'),
+    so records never reach root where pytest's caplog handler lives.
+    Temporarily re-enable propagation for tests that assert on caplog.
+    """
+    raptor = logging.getLogger("raptor")
+    orig = raptor.propagate
+    raptor.propagate = True
+    yield
+    raptor.propagate = orig
 
 
 def _assert_inert(text: str) -> None:
@@ -99,7 +115,7 @@ class TestAnalyzeStderrEcho:
 
         import core.sandbox
         monkeypatch.setattr(core.sandbox, "run", _fail)
-        with caplog.at_level("ERROR"):
+        with caplog.at_level("ERROR", logger="raptor"):
             result = runner.run_suite(
                 tmp_path / "db", "python", tmp_path / "out",
             )
@@ -135,7 +151,7 @@ class TestLocalPackStderrEchoes:
         monkeypatch.setattr(core.sandbox, "run", _fail)
         pack = tmp_path / "pack"
         pack.mkdir()
-        with caplog.at_level("WARNING"):
+        with caplog.at_level("WARNING", logger="raptor"):
             result = runner._run_local_pack(
                 "python", tmp_path / "db", pack, tmp_path / "out",
                 suite_name="raptor-iris-local",
@@ -164,7 +180,7 @@ class TestLocalPackStderrEchoes:
         monkeypatch.setattr(core.sandbox, "run", _fake)
         pack = tmp_path / "pack"
         pack.mkdir()
-        with caplog.at_level("WARNING"):
+        with caplog.at_level("WARNING", logger="raptor"):
             result = runner._run_local_pack(
                 "python", tmp_path / "db", pack, tmp_path / "out",
                 suite_name="raptor-iris-local",
@@ -219,7 +235,7 @@ class TestDatabaseCreationStderrEcho:
              patch.object(
                  mgr, "_salvage_creation_log", return_value=HOSTILE,
              ), \
-             caplog.at_level("ERROR"):
+             caplog.at_level("ERROR", logger="raptor"):
             result = mgr.create_database(tmp_path, "javascript", bs)
 
         assert result.success is False
