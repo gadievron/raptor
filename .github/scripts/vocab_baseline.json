@@ -1213,10 +1213,10 @@
     "count": 72,
     "kind": "literal"
   },
-  "core/config/__init__.py::LLM_API_KEY_VARS": {
-    "count": 21,
+  "core/config/__init__.py::_LLM_AGGREGATOR_KEYS": {
+    "count": 10,
     "kind": "literal",
-    "note": "LLM credential env vars layered by get_llm_env (provider API keys - infrastructure constants, not a learnable name vocabulary); grew to 21 when AWS_BEARER_TOKEN_BEDROCK joined as a Bedrock selection signal + credential"
+    "note": "aggregator/routing provider API-key env vars splatted into LLM_API_KEY_VARS (infrastructure constants, not a learnable name vocabulary)"
   },
   "core/config/__init__.py::LLM_ROUTING_ENV_VARS": {
     "count": 12,
