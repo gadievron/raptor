@@ -30,10 +30,12 @@ a Landlock denial is EACCES on the exec, never a SIGKILL.
 
 from __future__ import annotations
 
+import atexit
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import textwrap
 from pathlib import Path
 
@@ -50,7 +52,44 @@ pytestmark = [
     requires_landlock,
 ]
 
-_ECHO = "/bin/echo"
+
+def _build_standalone_echo() -> str:
+    """Build a minimal echo binary immune to multi-call argv[0] checks.
+
+    Ubuntu 26.04 ships coreutils as a single multi-call binary; copying
+    or renaming it triggers "Security violation: Requested utility `X`
+    does not match executable name".  A standalone binary avoids this.
+    """
+    d = tempfile.mkdtemp(prefix="raptor_test_echo_")
+    atexit.register(shutil.rmtree, d, True)
+    src = os.path.join(d, "e.c")
+    with open(src, "w") as f:
+        f.write(
+            "#include <unistd.h>\n"
+            "#include <string.h>\n"
+            "int main(int c, char **v) {\n"
+            "    int i;\n"
+            "    for (i = 1; i < c; i++) {\n"
+            "        if (i > 1) write(1, \" \", 1);\n"
+            "        write(1, v[i], strlen(v[i]));\n"
+            "    }\n"
+            "    write(1, \"\\n\", 1);\n"
+            "    return 0;\n"
+            "}\n"
+        )
+    out = os.path.join(d, "echo")
+    for extra in (["-static"], []):
+        r = subprocess.run(
+            ["cc", *extra, "-o", out, src],
+            capture_output=True, text=True,
+        )
+        if r.returncode == 0:
+            os.chmod(out, 0o755)
+            return out
+    return "/bin/echo"
+
+
+_ECHO = _build_standalone_echo()
 
 # System read set mirroring the context.py restricted default, plus
 # the running interpreter's runtime dirs (venv/pyenv layouts).
@@ -249,10 +288,12 @@ class TestMemfdLandlockExemptionPinned:
     def test_memfd_exec_not_denied_by_landlock(self, tmp_path):
         wdir = tmp_path / "w"
         wdir.mkdir()
+        echo_copy = wdir / "echo"
+        shutil.copy2(_ECHO, echo_copy)
         probe = textwrap.dedent("""
             import os, sys
             fd = os.memfd_create("x", 0)
-            with open("/bin/echo", "rb") as f:
+            with open(os.environ["ECHO_BIN"], "rb") as f:
                 os.write(fd, f.read())
             r2 = os.open("/proc/self/fd/%d" % fd, os.O_RDONLY)
             os.close(fd)
@@ -266,7 +307,8 @@ class TestMemfdLandlockExemptionPinned:
             [sys.executable, "-S", "-c", probe],
             preexec_fn=_preexec([str(wdir)], _system_readable()),
             capture_output=True, text=True, timeout=60,
-            env={"PATH": "/usr/bin:/bin"}, cwd="/",
+            env={"PATH": "/usr/bin:/bin", "ECHO_BIN": str(echo_copy)},
+            cwd="/",
         )
         if r.returncode < 0:
             pytest.skip(
