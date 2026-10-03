@@ -78,12 +78,14 @@ class TestReviewRoutePin(unittest.TestCase):
 
     def test_route_resolves_before_the_claude_requirement(self):
         # The ceremony must not depend on a Claude install: the route
-        # sits before the "Claude required for everything else" gate,
-        # like the other operator-terminal ceremonies.
+        # sits before the claude-presence gate, like the other
+        # operator-terminal ceremonies. Anchored on the gate itself
+        # (`if ! command -v claude`) rather than a comment, so it is
+        # robust to comment rewording.
         text = _LAUNCHER.read_text(encoding="utf-8")
         self.assertLess(
             text.index('if [[ "${1:-}" == "review" ]]; then'),
-            text.index("# Claude required for everything else"))
+            text.index("if ! command -v claude >/dev/null 2>&1; then"))
 
 
 class TestReviewRouteBehaviour(unittest.TestCase):

@@ -112,7 +112,7 @@ def _lifecycle_dispatcher(start_dir):
     return dispatcher
 
 
-def _run(tmp, run_dir, *, sandbox=None, **overrides):
+def _run(tmp, run_dir, *, sandbox=None, probe_result="fake-model", **overrides):
     dispatcher = _lifecycle_dispatcher(run_dir)
     kwargs = {
         "command": "validate",
@@ -130,6 +130,8 @@ def _run(tmp, run_dir, *, sandbox=None, **overrides):
                side_effect=dispatcher), \
          patch("core.orchestration.skill_dispatch.run_untrusted_networked",
                side_effect=sandbox or dispatcher), \
+         patch("core.llm.cc_probe.probe_cc_session_model",
+               return_value=probe_result), \
          patch.dict("os.environ", _FIRST_PARTY_PROVIDER_ENV):
         return run_skill_dispatch(**kwargs)
 
@@ -247,7 +249,9 @@ class DispatchFlowTests(unittest.TestCase):
             with patch("core.orchestration.skill_dispatch.subprocess.run",
                        side_effect=_tracking), \
                  patch("core.orchestration.skill_dispatch."
-                       "run_untrusted_networked", side_effect=dispatcher):
+                       "run_untrusted_networked", side_effect=dispatcher), \
+                 patch("core.llm.cc_probe.probe_cc_session_model",
+                       return_value="fake-model"):
                 result = run_skill_dispatch(
                     command="validate", target=Path(tmp), tools="Read",
                     budget_usd="1.00", timeout_s=60,
@@ -298,6 +302,61 @@ class DispatchFlowTests(unittest.TestCase):
             result = _run(tmp, run_dir, sandbox=_sandbox)
         self.assertFalse(result.ran)
         self.assertEqual(result.skipped_reason, "subprocess returned 3")
+
+    def test_unauthenticated_claude_skips_cleanly(self):
+        # claude on PATH but NOT logged in: the child exits non-zero with
+        # a "Not logged in" message. That must become a clean SKIP (login
+        # guidance) — NOT a noisy "subprocess returned N" failure — so a
+        # login-free box isn't spammed with false failures. Detection is a
+        # substring match on the child's own output (no extra probe).
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            dispatcher = _lifecycle_dispatcher(run_dir)
+
+            def _sandbox(cmd, *args, **kwargs):
+                dispatcher(cmd, *args, **kwargs)
+                return _ok(returncode=1,
+                           stderr="Not logged in · Please run /login")
+
+            result = _run(tmp, run_dir, sandbox=_sandbox)
+        self.assertFalse(result.ran)
+        self.assertIn("not logged in", result.skipped_reason.lower())
+        self.assertNotIn("subprocess returned", result.skipped_reason)
+
+    def test_other_nonzero_still_reports_as_failure(self):
+        # Two-direction guard: a non-zero exit WITHOUT the login signature
+        # keeps the "subprocess returned N" failure shape.
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            dispatcher = _lifecycle_dispatcher(run_dir)
+
+            def _sandbox(cmd, *args, **kwargs):
+                dispatcher(cmd, *args, **kwargs)
+                return _ok(returncode=2, stderr="some other crash")
+
+            result = _run(tmp, run_dir, sandbox=_sandbox)
+        self.assertFalse(result.ran)
+        self.assertEqual(result.skipped_reason, "subprocess returned 2")
+
+    def test_raptor_no_claude_skips_cleanly(self):
+        # Operator-forced local-only posture: skip the claude-bound pass
+        # up front with a clear reason (not an error).
+        import os
+        with TemporaryDirectory() as tmp, \
+                patch.dict(os.environ, {"RAPTOR_NO_CLAUDE": "1"}):
+            result = _run(tmp, Path(tmp) / "run")
+        self.assertFalse(result.ran)
+        self.assertIn("RAPTOR_NO_CLAUDE", result.skipped_reason)
+        self.assertIsNone(result.run_dir)
+
+    def test_cc_probe_unusable_skips_before_lifecycle(self):
+        # cc-probe returns None → skip cleanly BEFORE start_lifecycle
+        # creates a run dir. No lifecycle calls, no wasted work.
+        with TemporaryDirectory() as tmp:
+            result = _run(tmp, Path(tmp) / "run", probe_result=None)
+        self.assertFalse(result.ran)
+        self.assertIn("not usable", result.skipped_reason)
+        self.assertIsNone(result.run_dir)
 
     def test_sandbox_setup_error_reason_is_classifiable(self):
         """A SandboxSetupError skip must classify via
@@ -382,6 +441,8 @@ class DispatchFlowTests(unittest.TestCase):
                        side_effect=_tracking), \
                  patch("core.orchestration.skill_dispatch."
                        "run_untrusted_networked", side_effect=_sandbox), \
+                 patch("core.llm.cc_probe.probe_cc_session_model",
+                       return_value="fake-model"), \
                  self.assertRaises(KeyboardInterrupt):
                 run_skill_dispatch(
                     command="validate", target=Path(tmp), tools="Read",
@@ -1671,6 +1732,8 @@ class StartLifecycleFailureDetailTests(unittest.TestCase):
                  patch("core.orchestration.skill_dispatch."
                        "run_untrusted_networked",
                        side_effect=dispatcher), \
+                 patch("core.llm.cc_probe.probe_cc_session_model",
+                       return_value="fake-model"), \
                  patch("core.run.pin._process_project", None), \
                  patch("core.run.pin._process_project_set", False), \
                  patch.dict("os.environ", _FIRST_PARTY_PROVIDER_ENV), \

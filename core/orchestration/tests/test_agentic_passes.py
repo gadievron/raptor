@@ -84,7 +84,9 @@ def _patch_passes(dispatcher):
     with patch("core.orchestration.skill_dispatch.subprocess.run",
                side_effect=_subprocess_side_effect), \
          patch("core.orchestration.skill_dispatch.run_untrusted_networked",
-               side_effect=_sandbox_side_effect):
+               side_effect=_sandbox_side_effect), \
+         patch("core.llm.cc_probe.probe_cc_session_model",
+               return_value="fake-model"):
         yield combined
 
 
@@ -386,6 +388,8 @@ class UnderstandPrepassTests(unittest.TestCase):
                        side_effect=dispatcher), \
                  patch("core.orchestration.skill_dispatch.run_untrusted_networked",
                        side_effect=_sandbox_capture), \
+                 patch("core.llm.cc_probe.probe_cc_session_model",
+                       return_value="fake-model"), \
                  patch.dict("os.environ", _FIRST_PARTY_PROVIDER_ENV):
                 run_understand_prepass(
                     target=tmp, agentic_out_dir=tmp,
@@ -651,6 +655,8 @@ class ValidatePostpassTests(unittest.TestCase):
                        side_effect=dispatcher), \
                  patch("core.orchestration.skill_dispatch.run_untrusted_networked",
                        side_effect=_sandbox_capture), \
+                 patch("core.llm.cc_probe.probe_cc_session_model",
+                       return_value="fake-model"), \
                  patch.dict("os.environ", _FIRST_PARTY_PROVIDER_ENV):
                 run_validate_postpass(
                     target=tmp, agentic_out_dir=tmp, analysis_report=report,
