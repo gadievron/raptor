@@ -89,6 +89,7 @@ def test_prep_graph_boost_degrades_on_permission_error(
                for rec in caplog.records)
 
 
+@pytest.mark.slow
 def test_prep_graph_boost_degrades_on_bind_overflow(
         prep_run_dir: tuple[Path, Path], monkeypatch, caplog):
     """OverflowError (sqlite bind of an oversize artifact int) lands in

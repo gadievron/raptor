@@ -2727,6 +2727,7 @@ class TestDirectObjdumpFakeForwardsPlacement:
         assert proc.stdout.strip() == "forwarded"
 
 
+@pytest.mark.slow
 class TestCompiledFixture:
     def _run(self, compiled_fixture, name: str, hypothesis: str,
              db=None):
