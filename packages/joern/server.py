@@ -2590,7 +2590,12 @@ class JoernServer:
                                    **self._auth_headers()},
                           method="POST")
             with _NO_PROXY_OPENER.open(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
+                raw = resp.read(_MAX_RESPONSE_BYTES + 1)
+                if len(raw) > _MAX_RESPONSE_BYTES:
+                    logger.debug("async submit response over %d-byte "
+                                 "ceiling — refused", _MAX_RESPONSE_BYTES)
+                    return None
+                data = json.loads(raw.decode("utf-8"))
             return data.get("uuid") or data.get("id")
         except Exception as e:  # noqa: BLE001 — submit is best-effort
             logger.debug("async query submit failed: %s", e)
@@ -2610,7 +2615,13 @@ class JoernServer:
             req = Request(url, method="GET",
                           headers=self._auth_headers())
             with _NO_PROXY_OPENER.open(req, timeout=5) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
+                raw = resp.read(_MAX_RESPONSE_BYTES + 1)
+                if len(raw) > _MAX_RESPONSE_BYTES:
+                    logger.warning("async result response over the "
+                                   "%d-byte ceiling — refused",
+                                   _MAX_RESPONSE_BYTES)
+                    return None
+                data = json.loads(raw.decode("utf-8"))
             if data.get("success") is not None:
                 return data
             return None
