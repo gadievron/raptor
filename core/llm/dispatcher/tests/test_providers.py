@@ -27,21 +27,21 @@ def all_providers_creds():
         "anthropic": "anthropic-real-NOT-LEAKED",
         "openai":    "sk-openai-real-NOT-LEAKED",
         "gemini":    "AIza-gemini-real-NOT-LEAKED",
-        # Phase C-β aggregators + ecosystem providers. Distinct
-        # values so a header-injection bug that swaps providers
-        # (e.g. mistral key landing on groq path) shows up
-        # immediately in the upstream-captured headers.
+        # Direct — distinct values so a header-injection bug that swaps
+        # providers shows up immediately in the upstream-captured headers.
         "mistral":     "mistral-real-NOT-LEAKED",
+        # Aggregators
+        "cheaperinference": "ci-cheaperinference-real-NOT-LEAKED",
+        "cohere":      "cohere-real-NOT-LEAKED",
+        "deepinfra":   "deepinfra-real-NOT-LEAKED",
+        "fireworks":   "fw-fireworks-real-NOT-LEAKED",
         "groq":        "gsk-groq-real-NOT-LEAKED",
-        "together":    "together-real-NOT-LEAKED",
         "openrouter":  "sk-or-real-NOT-LEAKED",
         "orcarouter":  "sk-orca-real-NOT-LEAKED",
-        "cheaperinference": "ci-cheaperinference-real-NOT-LEAKED",
-        "fireworks":   "fw-fireworks-real-NOT-LEAKED",
-        "deepinfra":   "deepinfra-real-NOT-LEAKED",
         "perplexity":  "pplx-perplexity-real-NOT-LEAKED",
-        "cohere":      "cohere-real-NOT-LEAKED",
         "replicate":   "r8-replicate-real-NOT-LEAKED",
+        "together":    "together-real-NOT-LEAKED",
+        # Cloud gateways
         "azure_openai":          "azure-real-NOT-LEAKED",
         "azure_openai_endpoint": "https://example-azure.invalid",
     }
@@ -285,16 +285,18 @@ class TestUnknownProviderPath:
 # with the same shape adds one row, not a whole new class.
 _BEARER_PROVIDERS = [
     # (provider name, path tail, expected creds key, dummy header)
+    # Direct
     ("mistral",    "v1/chat/completions",    "mistral-real-NOT-LEAKED"),
+    # Aggregators
+    ("cheaperinference", "v1/chat/completions", "ci-cheaperinference-real-NOT-LEAKED"),
+    ("cohere",     "v1/chat",                "cohere-real-NOT-LEAKED"),
+    ("deepinfra",  "v1/openai/chat/completions", "deepinfra-real-NOT-LEAKED"),
+    ("fireworks",  "inference/v1/chat/completions", "fw-fireworks-real-NOT-LEAKED"),
     ("groq",       "openai/v1/chat/completions", "gsk-groq-real-NOT-LEAKED"),
-    ("together",   "v1/chat/completions",    "together-real-NOT-LEAKED"),
     ("openrouter", "api/v1/chat/completions", "sk-or-real-NOT-LEAKED"),
     ("orcarouter", "v1/chat/completions", "sk-orca-real-NOT-LEAKED"),
-    ("cheaperinference", "v1/chat/completions", "ci-cheaperinference-real-NOT-LEAKED"),
-    ("fireworks",  "inference/v1/chat/completions", "fw-fireworks-real-NOT-LEAKED"),
-    ("deepinfra",  "v1/openai/chat/completions", "deepinfra-real-NOT-LEAKED"),
     ("perplexity", "chat/completions",       "pplx-perplexity-real-NOT-LEAKED"),
-    ("cohere",     "v1/chat",                "cohere-real-NOT-LEAKED"),
+    ("together",   "v1/chat/completions",    "together-real-NOT-LEAKED"),
 ]
 
 
@@ -494,16 +496,16 @@ class TestCredentialStoreReadsAggregatorEnvs:
     def test_all_new_keys_read_and_kept_in_env(self, monkeypatch):
         env_to_set = {
             "MISTRAL_API_KEY":    "mistral-test",
+            "CHEAPER_INFERENCE_API_KEY": "cheaperinference-test",
+            "COHERE_API_KEY":     "cohere-test",
+            "DEEPINFRA_API_KEY":  "deepinfra-test",
+            "FIREWORKS_API_KEY":  "fireworks-test",
             "GROQ_API_KEY":       "groq-test",
-            "TOGETHER_API_KEY":   "together-test",
             "OPENROUTER_API_KEY": "openrouter-test",
             "ORCAROUTER_API_KEY": "orcarouter-test",
-            "CHEAPER_INFERENCE_API_KEY": "cheaperinference-test",
-            "FIREWORKS_API_KEY":  "fireworks-test",
-            "DEEPINFRA_API_KEY":  "deepinfra-test",
             "PERPLEXITY_API_KEY": "perplexity-test",
-            "COHERE_API_KEY":     "cohere-test",
             "REPLICATE_API_TOKEN": "replicate-test",
+            "TOGETHER_API_KEY":   "together-test",
             "AZURE_OPENAI_API_KEY": "azure-test",
             "AZURE_OPENAI_ENDPOINT": "https://example-azure.invalid",
         }
@@ -512,16 +514,16 @@ class TestCredentialStoreReadsAggregatorEnvs:
         creds = CredentialStore()
         # Each key landed in the store under the expected name.
         assert creds.get("mistral") == "mistral-test"
+        assert creds.get("cheaperinference") == "cheaperinference-test"
+        assert creds.get("cohere") == "cohere-test"
+        assert creds.get("deepinfra") == "deepinfra-test"
+        assert creds.get("fireworks") == "fireworks-test"
         assert creds.get("groq") == "groq-test"
-        assert creds.get("together") == "together-test"
         assert creds.get("openrouter") == "openrouter-test"
         assert creds.get("orcarouter") == "orcarouter-test"
-        assert creds.get("cheaperinference") == "cheaperinference-test"
-        assert creds.get("fireworks") == "fireworks-test"
-        assert creds.get("deepinfra") == "deepinfra-test"
         assert creds.get("perplexity") == "perplexity-test"
-        assert creds.get("cohere") == "cohere-test"
         assert creds.get("replicate") == "replicate-test"
+        assert creds.get("together") == "together-test"
         assert creds.get("azure_openai") == "azure-test"
         assert creds.get("azure_openai_endpoint") == "https://example-azure.invalid"
         # Each env var STAYS in os.environ — workers reach these

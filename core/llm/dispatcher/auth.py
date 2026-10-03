@@ -275,47 +275,36 @@ class CredentialStore:
             return val
 
         self._keys: dict[str, str | None] = {
+            # --- direct providers (read-and-erase) ---
             "anthropic":  _read_env("ANTHROPIC_API_KEY"),
-            "openai":     _read_env("OPENAI_API_KEY"),
             "gemini":     _read_env("GEMINI_API_KEY") or _google_api_key,
-            # OpenAI-compatible aggregators + ecosystem providers.
-            # Same Bearer-auth shape; different upstream URLs. Read
-            # WITHOUT erasure — workers reach these env-direct (no
-            # worker-side dispatcher factory routes them), see the
-            # comment above the class.
+            "openai":     _read_env("OPENAI_API_KEY"),
+            # --- direct providers (read-and-keep, env-direct) ---
+            # Workers reach these env-direct (no worker-side dispatcher
+            # factory routes them); see the comment above the class.
             "mistral":    _read_env_keep("MISTRAL_API_KEY"),
+            # --- aggregator / routing providers (read-and-keep) ---
+            "cheaperinference": _read_env_keep("CHEAPER_INFERENCE_API_KEY"),
+            "cohere":     _read_env_keep("COHERE_API_KEY"),
+            "deepinfra":  _read_env_keep("DEEPINFRA_API_KEY"),
+            "fireworks":  _read_env_keep("FIREWORKS_API_KEY"),
             "groq":       _read_env_keep("GROQ_API_KEY"),
-            "together":   _read_env_keep("TOGETHER_API_KEY"),
             "openrouter": _read_env_keep("OPENROUTER_API_KEY"),
             "orcarouter": _read_env_keep("ORCAROUTER_API_KEY"),
-            "cheaperinference": _read_env_keep("CHEAPER_INFERENCE_API_KEY"),
-            "fireworks":  _read_env_keep("FIREWORKS_API_KEY"),
-            "deepinfra":  _read_env_keep("DEEPINFRA_API_KEY"),
             "perplexity": _read_env_keep("PERPLEXITY_API_KEY"),
-            "cohere":     _read_env_keep("COHERE_API_KEY"),
             # Replicate — uses ``Token <key>`` prefix, not ``Bearer``.
             "replicate":  _read_env_keep("REPLICATE_API_TOKEN"),
-            # Azure OpenAI — operator-configured endpoint URL +
-            # api-key header, both env-direct like the aggregators
-            # (workers need endpoint AND key). If the endpoint is
-            # absent the rule's upstream is a sentinel that produces
-            # 503 at request time (consistent with other unconfigured
-            # providers).
+            "together":   _read_env_keep("TOGETHER_API_KEY"),
+            # --- cloud gateways ---
+            # Azure OpenAI — endpoint absent → sentinel producing 503.
             "azure_openai":           _read_env_keep("AZURE_OPENAI_API_KEY"),
             "azure_openai_endpoint":  _read_env_keep("AZURE_OPENAI_ENDPOINT"),
-            # AWS Bedrock — the *secret* parts are read-and-erased like
-            # every other provider key so they never reach a spawned
-            # worker's env. Static creds set this way; SSO/IMDS/profile
-            # creds (no env keys) are resolved by botocore at signing
-            # time. Region + endpoint are NOT secrets, so they're read
-            # without popping (workers may legitimately need the region).
+            # AWS Bedrock — secret parts read-and-erased; SSO/IMDS/
+            # profile creds resolved by botocore at signing time.
             "aws_access_key_id":      _read_env("AWS_ACCESS_KEY_ID"),
             "aws_secret_access_key":  _read_env("AWS_SECRET_ACCESS_KEY"),
             "aws_session_token":      _read_env("AWS_SESSION_TOKEN"),
-            # Bedrock API key (newer bearer-token auth). When present it
-            # takes precedence over SigV4 (matching the AWS SDKs) and the
-            # request is authed with a static ``Authorization: Bearer``
-            # header — no botocore, no signing. Secret → read-and-erased.
+            # Bedrock bearer — takes precedence over SigV4. Secret.
             "aws_bearer_token":       _read_env("AWS_BEARER_TOKEN_BEDROCK"),
         }
         self._aws_region: str | None = (
@@ -1261,11 +1250,7 @@ def build_rules(creds: CredentialStore) -> dict[str, ProviderRule]:
             upstream_base_url="https://api.anthropic.com",
             inject_headers=_anthropic_headers,
         ),
-        "openai": ProviderRule(
-            name="openai",
-            upstream_base_url="https://api.openai.com",
-            inject_headers=_openai_headers,
-        ),
+        # --- direct providers ---
         "gemini": ProviderRule(
             name="gemini",
             upstream_base_url="https://generativelanguage.googleapis.com",
@@ -1276,69 +1261,68 @@ def build_rules(creds: CredentialStore) -> dict[str, ProviderRule]:
             upstream_base_url="https://api.mistral.ai",
             inject_headers=_bearer_headers("mistral"),
         ),
-        "groq": ProviderRule(
-            name="groq",
-            upstream_base_url="https://api.groq.com",
-            inject_headers=_bearer_headers("groq"),
+        "openai": ProviderRule(
+            name="openai",
+            upstream_base_url="https://api.openai.com",
+            inject_headers=_openai_headers,
         ),
-        "together": ProviderRule(
-            name="together",
-            upstream_base_url="https://api.together.xyz",
-            inject_headers=_bearer_headers("together"),
-        ),
-        "openrouter": ProviderRule(
-            name="openrouter",
-            # OpenRouter's API is rooted at ``/api/v1`` rather than the
-            # bare host; SDKs typically configure ``base_url=https://
-            # openrouter.ai/api/v1``. Forward to the bare host — the
-            # SDK's path component (``/api/v1/chat/completions`` etc.)
-            # is preserved end-to-end through the dispatcher.
-            upstream_base_url="https://openrouter.ai",
-            inject_headers=_bearer_headers("openrouter"),
-        ),
-        "orcarouter": ProviderRule(
-            name="orcarouter",
-            # OrcaRouter's API is rooted at ``/v1`` (OpenAI-compatible
-            # gateway). The SDK's path component (``/v1/chat/completions``
-            # etc.) is preserved end-to-end through the dispatcher, so the
-            # bare host is the correct upstream — same shape as OpenRouter.
-            upstream_base_url="https://api.orcarouter.ai",
-            inject_headers=_bearer_headers("orcarouter"),
-        ),
+        # --- aggregator / routing providers ---
         "cheaperinference": ProviderRule(
             name="cheaperinference",
-            # Cheaper Inference's API is rooted at ``/v1`` (OpenAI-compatible
-            # gateway). The SDK's path component (``/v1/chat/completions``
-            # etc.) is preserved end-to-end through the dispatcher, so the
-            # bare host is the correct upstream — same shape as OrcaRouter.
+            # /v1 root (OpenAI-compatible); bare host is the correct
+            # upstream — SDK path preserved end-to-end.
             upstream_base_url="https://api.cheaperinference.com",
             inject_headers=_bearer_headers("cheaperinference"),
-        ),
-        "fireworks": ProviderRule(
-            name="fireworks",
-            upstream_base_url="https://api.fireworks.ai",
-            inject_headers=_bearer_headers("fireworks"),
-        ),
-        "deepinfra": ProviderRule(
-            name="deepinfra",
-            upstream_base_url="https://api.deepinfra.com",
-            inject_headers=_bearer_headers("deepinfra"),
-        ),
-        "perplexity": ProviderRule(
-            name="perplexity",
-            upstream_base_url="https://api.perplexity.ai",
-            inject_headers=_bearer_headers("perplexity"),
         ),
         "cohere": ProviderRule(
             name="cohere",
             upstream_base_url="https://api.cohere.ai",
             inject_headers=_bearer_headers("cohere"),
         ),
+        "deepinfra": ProviderRule(
+            name="deepinfra",
+            upstream_base_url="https://api.deepinfra.com",
+            inject_headers=_bearer_headers("deepinfra"),
+        ),
+        "fireworks": ProviderRule(
+            name="fireworks",
+            upstream_base_url="https://api.fireworks.ai",
+            inject_headers=_bearer_headers("fireworks"),
+        ),
+        "groq": ProviderRule(
+            name="groq",
+            upstream_base_url="https://api.groq.com",
+            inject_headers=_bearer_headers("groq"),
+        ),
+        "openrouter": ProviderRule(
+            name="openrouter",
+            # API rooted at /api/v1; bare host is the correct upstream.
+            upstream_base_url="https://openrouter.ai",
+            inject_headers=_bearer_headers("openrouter"),
+        ),
+        "orcarouter": ProviderRule(
+            name="orcarouter",
+            # /v1 root (OpenAI-compatible); bare host — same shape as
+            # OpenRouter.
+            upstream_base_url="https://api.orcarouter.ai",
+            inject_headers=_bearer_headers("orcarouter"),
+        ),
+        "perplexity": ProviderRule(
+            name="perplexity",
+            upstream_base_url="https://api.perplexity.ai",
+            inject_headers=_bearer_headers("perplexity"),
+        ),
         "replicate": ProviderRule(
             name="replicate",
             upstream_base_url="https://api.replicate.com",
             inject_headers=_replicate_headers,
         ),
+        "together": ProviderRule(
+            name="together",
+            upstream_base_url="https://api.together.xyz",
+            inject_headers=_bearer_headers("together"),
+        ),
+        # --- cloud gateways ---
         "azure_openai": ProviderRule(
             name="azure_openai",
             upstream_base_url=azure_endpoint,

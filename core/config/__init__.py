@@ -1273,16 +1273,40 @@ class RaptorConfig:
     # SAFE_ENV_ALLOWLIST — untrusted-code subprocesses (CodeQL builds,
     # fuzz harnesses) must never see credentials.  get_llm_env() layers
     # them on top of get_safe_env() for our own LLM-calling scripts.
+    # Aggregator / routing provider keys — RAPTOR doesn't call these
+    # directly today, but they need to flow through when the operator
+    # wires up a custom dispatcher or aggregator route.
+    _LLM_AGGREGATOR_KEYS = (
+        "CHEAPER_INFERENCE_API_KEY",
+        "COHERE_API_KEY",
+        "DEEPINFRA_API_KEY",
+        "FIREWORKS_API_KEY",
+        "GROQ_API_KEY",
+        "OPENROUTER_API_KEY",
+        "ORCAROUTER_API_KEY",
+        "PERPLEXITY_API_KEY",
+        "REPLICATE_API_TOKEN",  # uses _TOKEN suffix
+        "TOGETHER_API_KEY",
+    )
+
+    # Cloud gateway keys (Bedrock, Vertex AI, Azure OpenAI).
+    _LLM_CLOUD_KEYS = (
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        # Bedrock bearer — a selection signal AND a secret: children
+        # that resolve models locally starve on Bedrock entry
+        # resolution without it.
+        "AWS_BEARER_TOKEN_BEDROCK",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_OPENAI_ENDPOINT",
+        "GOOGLE_APPLICATION_CREDENTIALS",  # GCP service account JSON path
+    )
+
     LLM_API_KEY_VARS = (
         # First-party Claude/Anthropic auth — DERIVED from the
         # canonical vocabulary, never hand-typed: the trio must reach
-        # LLM children as a unit. The child is where the claudecode
-        # transport and the Anthropic SDK run (cc_subprocess_env
-        # overlays ANTHROPIC_*/CLAUDE_CODE_* from the CHILD's own
-        # environ), so a member missing here auth-starves every LLM
-        # child on env-token installs (ANTHROPIC_AUTH_TOKEN gateway
-        # auth; CLAUDE_CODE_OAUTH_TOKEN headless setup-token) while
-        # keychain/~/.claude installs mask the gap. The strip twin
+        # LLM children as a unit. The strip twin
         # (strip_llm_env_vars) already derives from
         # CREDENTIAL_BEARING_ENV_VARS; this is the symmetric
         # carry-side treatment, pinned both directions in
@@ -1292,41 +1316,13 @@ class RaptorConfig:
         # Authorization overrides, so it is credential posture, and
         # the SDK reads it in the child.
         "ANTHROPIC_CUSTOM_HEADERS",
-        "OPENAI_API_KEY",
+        # Direct providers
         "GEMINI_API_KEY",
-        "MISTRAL_API_KEY",
-        # Below: providers RAPTOR doesn't call directly today, but
-        # whose keys legitimately need to flow through if the
-        # operator wires up a custom dispatcher / aggregator. Pre-fix
-        # the missing entries meant `get_llm_env()` stripped these
-        # for our analysis scripts even when they were the only
-        # configured provider.
         "GOOGLE_API_KEY",       # alternate Gemini env name
-        "GROQ_API_KEY",         # aggregator + family stem (batch 067)
-        "TOGETHER_API_KEY",     # aggregator
-        "OPENROUTER_API_KEY",   # aggregator
-        "ORCAROUTER_API_KEY",   # aggregator
-        "CHEAPER_INFERENCE_API_KEY",  # aggregator
-        "FIREWORKS_API_KEY",    # aggregator
-        "DEEPINFRA_API_KEY",    # aggregator
-        "PERPLEXITY_API_KEY",   # aggregator
-        "REPLICATE_API_TOKEN",  # aggregator (uses _TOKEN suffix)
-        "COHERE_API_KEY",       # cohere family (batch 067)
-        # AWS / GCP / Azure cloud providers when used as LLM gateways
-        # (Bedrock, Vertex AI, Azure OpenAI). Operators routing
-        # through these need credentials to flow through.
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-        "AWS_SESSION_TOKEN",
-        "AZURE_OPENAI_API_KEY",
-        "AZURE_OPENAI_ENDPOINT",
-        "GOOGLE_APPLICATION_CREDENTIALS",  # GCP service account JSON path
-        # Bedrock's AWS-recommended bearer credential. A selection
-        # signal AND a secret: children that resolve models locally
-        # (mode scripts, the audit pipeline) starve on Bedrock entry
-        # resolution without it. Same posture as the AWS access keys
-        # above — LLM children only, never untrusted subprocesses.
-        "AWS_BEARER_TOKEN_BEDROCK",
+        "MISTRAL_API_KEY",
+        "OPENAI_API_KEY",
+        *_LLM_AGGREGATOR_KEYS,
+        *_LLM_CLOUD_KEYS,
     )
 
     # LLM transport/backend ROUTING env vars — selection flags and

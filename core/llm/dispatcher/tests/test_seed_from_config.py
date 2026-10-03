@@ -41,20 +41,23 @@ def _make_empty_store() -> CredentialStore:
     """
     creds = CredentialStore.__new__(CredentialStore)
     creds._keys = {
+        # Direct
         "anthropic": None,
-        "openai": None,
         "gemini": None,
         "mistral": None,
+        "openai": None,
+        # Aggregators
+        "cheaperinference": None,
+        "cohere": None,
+        "deepinfra": None,
+        "fireworks": None,
         "groq": None,
-        "together": None,
         "openrouter": None,
         "orcarouter": None,
-        "cheaperinference": None,
-        "fireworks": None,
-        "deepinfra": None,
         "perplexity": None,
-        "cohere": None,
         "replicate": None,
+        "together": None,
+        # Cloud gateways
         "azure_openai": None,
         "azure_openai_endpoint": None,
     }

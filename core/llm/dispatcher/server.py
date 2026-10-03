@@ -2624,29 +2624,35 @@ def _short(token: str) -> str:
 # worker's placeholders.
 _CALLER_WINS_INJECT_HEADERS = frozenset({"anthropic-version"})
 
-_PROVIDER_FROM_PATH_PREFIX = {
+_DIRECT_PATH_PREFIXES = {
     "/anthropic/":    "anthropic",
-    "/openai/":       "openai",
     "/gemini/":       "gemini",
-    # OpenAI-compatible aggregators + ecosystem providers added in
-    # Phase C-β. Each routes by the same prefix shape; the rule's
-    # ``upstream_base_url`` decides where the request actually goes.
     "/mistral/":      "mistral",
+    "/openai/":       "openai",
+}
+
+_AGGREGATOR_PATH_PREFIXES = {
+    "/cheaperinference/": "cheaperinference",
+    "/cohere/":       "cohere",
+    "/deepinfra/":    "deepinfra",
+    "/fireworks/":    "fireworks",
     "/groq/":         "groq",
-    "/together/":     "together",
     "/openrouter/":   "openrouter",
     "/orcarouter/":   "orcarouter",
-    "/cheaperinference/": "cheaperinference",
-    "/fireworks/":    "fireworks",
-    "/deepinfra/":    "deepinfra",
     "/perplexity/":   "perplexity",
-    "/cohere/":       "cohere",
     "/replicate/":    "replicate",
+    "/together/":     "together",
+}
+
+_CLOUD_PATH_PREFIXES = {
     "/azure_openai/": "azure_openai",
-    # AWS Bedrock — routed by prefix like the others, but the rule
-    # carries a ``prepare_request`` hook that rewrites + SigV4-signs the
-    # request rather than injecting a static header.
     "/bedrock/":      "bedrock",
+}
+
+_PROVIDER_FROM_PATH_PREFIX = {
+    **_DIRECT_PATH_PREFIXES,
+    **_AGGREGATOR_PATH_PREFIXES,
+    **_CLOUD_PATH_PREFIXES,
 }
 
 

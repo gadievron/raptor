@@ -619,23 +619,40 @@ keys at all (secrets are injected per request over the dispatcher
 socket), and `AWS_BEARER_TOKEN_BEDROCK` is popped out of the parent's
 `os.environ` into the in-memory store at dispatcher start.
 
+**Direct providers** — first-party API keys for providers RAPTOR
+calls natively.
+
 | Variable | Serves |
 |----------|--------|
 | `ANTHROPIC_API_KEY` | Anthropic direct API |
-| `OPENAI_API_KEY` | OpenAI |
 | `GEMINI_API_KEY` | Google Gemini |
 | `GOOGLE_API_KEY` | Gemini (alternate name) |
 | `MISTRAL_API_KEY` | Mistral |
+| `OPENAI_API_KEY` | OpenAI |
+
+**Aggregator / routing providers** — OpenAI-compatible gateways that
+front other models.  RAPTOR doesn't call these directly today, but
+their keys need to flow through when the operator wires up a custom
+dispatcher or aggregator route.
+
+| Variable | Serves |
+|----------|--------|
+| `CHEAPER_INFERENCE_API_KEY` | Cheaper Inference |
+| `COHERE_API_KEY` | Cohere |
+| `DEEPINFRA_API_KEY` | DeepInfra |
+| `FIREWORKS_API_KEY` | Fireworks |
 | `GROQ_API_KEY` | Groq |
-| `TOGETHER_API_KEY` | Together |
 | `OPENROUTER_API_KEY` | OpenRouter |
 | `ORCAROUTER_API_KEY` | OrcaRouter |
-| `CHEAPER_INFERENCE_API_KEY` | Cheaper Inference |
-| `FIREWORKS_API_KEY` | Fireworks |
-| `DEEPINFRA_API_KEY` | DeepInfra |
 | `PERPLEXITY_API_KEY` | Perplexity |
 | `REPLICATE_API_TOKEN` | Replicate (note the `_TOKEN` suffix) |
-| `COHERE_API_KEY` | Cohere |
+| `TOGETHER_API_KEY` | Together |
+
+**Cloud gateways** — AWS Bedrock, Azure OpenAI, and GCP Vertex when
+used as LLM backends.
+
+| Variable | Serves |
+|----------|--------|
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | Bedrock SigV4 static keys |
 | `AWS_BEARER_TOKEN_BEDROCK` | Bedrock bearer auth — also an explicit Bedrock opt-in signal |
 | `AZURE_OPENAI_API_KEY` | Azure OpenAI |
