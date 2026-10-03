@@ -408,6 +408,11 @@ class TestProxyEventSeqStamp(unittest.TestCase):
             ev_b = proxy.unregister_sandbox(tok_b)
         finally:
             proxy.stop()
+        # Filter to the test's synthetic events — infrastructure events
+        # (parser_jail_degraded when Landlock is absent) are unrelated
+        # to proxy_seq stamping.
+        ev_a = [e for e in ev_a if e.get("host") == "h"]
+        ev_b = [e for e in ev_b if e.get("host") == "h"]
         seqs_a = [e["proxy_seq"] for e in ev_a]
         seqs_b = [e["proxy_seq"] for e in ev_b]
         self.assertEqual(len(set(seqs_a)), 2,
