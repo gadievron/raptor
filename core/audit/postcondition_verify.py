@@ -736,7 +736,7 @@ def _lookup_summary(
 
     if tail_index is None:
         tail_index = _build_tail_index(summaries)
-    key = tail_index.get(function_name)
+    key = tail_index.get(function_name)  # type: ignore[assignment]
     if key is not None:
         return summaries[key]
 

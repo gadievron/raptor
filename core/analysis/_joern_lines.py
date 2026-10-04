@@ -424,7 +424,7 @@ class MarkerChunkAssembler:
         idx, total = int(head.group(1)), int(head.group(2))
         declared_len = int(head.group(3))
         fragment = segment[head.end():]
-        pending: str | None = None
+        pending = None
         if idx == 1 and total >= 1:
             pending = self._abort()
             self._poison = None

@@ -1033,8 +1033,8 @@ def _render_slots(slots: dict[str, TaintedString], profile: ModelDefenseProfile)
                 val = escape_nonprintable(val)
                 parts.append(f"{safe_name} (untrusted): {val}")
         return '\n'.join(parts)
-    parts = '\n'.join(_render_slot(k, v, profile) for k, v in slots.items())
-    return f'<slots>\n{parts}\n</slots>'
+    rendered = '\n'.join(_render_slot(k, v, profile) for k, v in slots.items())
+    return f'<slots>\n{rendered}\n</slots>'
 
 
 def system_with_priming(system: str, profile: ModelDefenseProfile) -> str:

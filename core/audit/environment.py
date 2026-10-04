@@ -953,7 +953,7 @@ class EnvironmentGuard:
             # waits (hysteresis inverted at the seam).
             pressure = "joined an active pause"
         else:
-            pressure = self._pressure(resume=False)
+            pressure = self._pressure(resume=False)  # type: ignore[assignment]
             if pressure is None:
                 return
             with self._lock:

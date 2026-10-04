@@ -173,7 +173,7 @@ def _analyze_result_is_error(res: Any) -> bool:
     has_finding = isinstance(finding, str) and finding.strip() != ""
     if not (has_verdict or has_finding):
         return True
-    if has_verdict and verdict.strip().upper() not in _PINNED_STAGE1_VERDICTS:
+    if isinstance(verdict, str) and verdict.strip().upper() not in _PINNED_STAGE1_VERDICTS:
         return True
     return False
 

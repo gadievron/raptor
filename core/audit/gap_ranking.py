@@ -85,7 +85,7 @@ def _restamp_scores(ranked_items: list[dict[str, Any]]) -> None:
     ]
     if not scores:
         return
-    ordered = sorted((float(s) for s in scores), reverse=True)
+    ordered = sorted((float(s) for s in scores if s is not None), reverse=True)
     it = iter(ordered)
     for gap in ranked_items:
         if isinstance(gap, dict) and gap.get("priority_score") is not None:

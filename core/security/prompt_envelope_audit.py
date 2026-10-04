@@ -659,7 +659,7 @@ def audit_file(path: Path) -> list[Violation]:
                 src = f"<{attr}>"
             violations.append(Violation(
                 file=rel,
-                line=node.lineno,
+                line=node.lineno,  # type: ignore[attr-defined]
                 attr=attr,
                 expr_text=src[:80],
                 func_name=self._qualified_func_name(),

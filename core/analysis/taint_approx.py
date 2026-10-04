@@ -273,7 +273,7 @@ def _extract_params(fn_node) -> list[str]:
         decl = inner
 
     params: list[str] = []
-    for c in decl.children:
+    for c in decl.children:  # type: ignore[union-attr]
         if c.type == _PARAMETER_LIST:
             for pc in c.children:
                 if pc.type == _PARAMETER_DECLARATION:

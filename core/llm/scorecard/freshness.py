@@ -101,7 +101,7 @@ def _coerce_count(value: object) -> float:
     entry (``None``, ``"abc"``, a JSON list) is treated as zero rather
     than aborting the read."""
     try:
-        return float(value) if value is not None else 0.0
+        return float(value) if value is not None else 0.0  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return 0.0
 

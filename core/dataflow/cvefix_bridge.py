@@ -71,7 +71,7 @@ try:
     _TIER0_AVAILABLE = True
 except ImportError:                                  # pragma: no cover
     _TIER0_AVAILABLE = False
-    Tier0Status = None                                # type: ignore[assignment]
+    Tier0Status = None                                # type: ignore[misc,assignment]
     try_tier0 = None                                  # type: ignore[assignment]
 
 # Tier 1B (LLM-assisted) is the middle backend — cheap-model extraction +

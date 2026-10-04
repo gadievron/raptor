@@ -1291,7 +1291,7 @@ def _json_default(obj: Any) -> Any:
     if isinstance(obj, datetime):
         return obj.isoformat()
     if is_dataclass(obj):
-        return asdict(obj)
+        return asdict(obj)  # type: ignore[arg-type]
     msg = f"Cannot serialise {type(obj).__name__}: {obj!r}"
     raise TypeError(msg)
 

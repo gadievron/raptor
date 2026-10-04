@@ -367,7 +367,7 @@ def make_batch_review_fn(
         for _i, ctx in enumerate(contexts):
             pair = f"{ctx['file']}:{ctx['function']}"
             ckey = f"{pair}:{ctx.get('line_start', 0)}"
-            r = results_by_key.get(ckey)
+            r = results_by_key.get(ckey)  # type: ignore[assignment]
             if r is None and ctx_pair_counts.get(pair, 0) == 1:
                 r = results_by_pair.get(pair)
             if r is not None:

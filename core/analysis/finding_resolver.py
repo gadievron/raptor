@@ -1109,7 +1109,7 @@ def _resolve_from_parsed_java(
     if parsed.source_lineno == fn_start:
         source_node, source_symbols = cfg.entry_node, frozenset(cfg.params)
     else:
-        source_node = node_at_or_statement_start(parsed.source_lineno)
+        source_node = node_at_or_statement_start(parsed.source_lineno)  # type: ignore[assignment]
         if source_node is None:
             return ResolutionFailure(
                 reason=(

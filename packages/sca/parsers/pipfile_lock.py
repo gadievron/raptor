@@ -60,7 +60,7 @@ def parse(path: Path) -> list[Dependency]:
 
     try:
         data = _json.loads(text)
-    except (_json.JSONDecodeError, *PARSE_ESCAPE_ERRORS) as e:  # hostile-input escape classes
+    except (_json.JSONDecodeError, *PARSE_ESCAPE_ERRORS) as e:  # type: ignore[misc]  # hostile-input escape classes
         logger.warning(
             "sca.parsers.pipfile_lock: JSON parse failed for %s: %s", path, e
         )

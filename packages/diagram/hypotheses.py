@@ -160,16 +160,16 @@ def generate(hypotheses: list[dict[str, Any]]) -> str:
     testing_nodes: list[str] = []
 
     for hyp in hypotheses:
-        nid = hyp_node_ids.get(id(hyp))
-        if not nid:
+        node_id = hyp_node_ids.get(id(hyp))
+        if not node_id:
             continue
         status = _sanitize(hyp.get("status", "testing"))
         if status == "confirmed":
-            confirmed_nodes.append(nid)
+            confirmed_nodes.append(node_id)
         elif status == "disproven":
-            disproven_nodes.append(nid)
+            disproven_nodes.append(node_id)
         else:
-            testing_nodes.append(nid)
+            testing_nodes.append(node_id)
 
     lines.append("")
     lines.append("    classDef confirmed fill:#dcfce7,stroke:#16a34a,color:#14532d")

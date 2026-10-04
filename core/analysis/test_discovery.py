@@ -308,7 +308,7 @@ def discover_tests_cached(
                     TestCase(
                         test_file=tc.get("test_file", ""),
                         test_function=tc.get("test_function", ""),
-                        target_function=tc.get("target_function", fn),
+                        target_function=str(tc.get("target_function") or fn),
                         assertions=list(tc.get("assertions") or []),
                         # Deliberately strict: a cache written before
                         # provenance existed carries no location trust

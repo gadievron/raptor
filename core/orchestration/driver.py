@@ -209,7 +209,7 @@ def run(
         result.candidate = cycle_candidate
         result.verdict = cycle_verdict
 
-        if cycle_verdict.passed:
+        if cycle_verdict.passed:  # type: ignore[union-attr]
             return result
 
         if result.refine_cycles >= cfg.max_refine_cycles:

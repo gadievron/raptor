@@ -366,7 +366,7 @@ def _build_dep(
         direct=True,
         purl=purl,
         parser_confidence=Confidence(
-            confidence_level, reason=confidence_reason,
+            confidence_level, reason=confidence_reason,  # type: ignore[arg-type]
         ),
         source_kind="manifest",
         source_extra=source_extra,

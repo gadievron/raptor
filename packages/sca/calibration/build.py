@@ -904,7 +904,7 @@ def _build_vulnrichment(out_dir: Path, http: Any) -> BuildResult:
     files_scanned = 0
     with gzip.GzipFile(fileobj=io.BytesIO(raw)) as gz:
         capped = _CappedReader(gz, max_decompressed)
-        with tarfile.open(fileobj=capped, mode="r|") as tar:
+        with tarfile.open(fileobj=capped, mode="r|") as tar:  # type: ignore[call-overload]
             for member in tar:
                 if not member.isfile():
                     continue

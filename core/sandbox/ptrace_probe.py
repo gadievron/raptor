@@ -139,7 +139,7 @@ def check_ptrace_available() -> bool:
                          exc_info=True)
             result = False
 
-        state._ptrace_available_cache = result
+        state._ptrace_available_cache = result  # type: ignore[assignment]
 
         if not result and state.warn_once("_ptrace_unavailable_warned"):
             logger.warning(

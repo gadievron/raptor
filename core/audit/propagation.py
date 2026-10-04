@@ -605,7 +605,7 @@ def try_coccinelle_resolve(
         defines = {"func": constraint.function} if constraint.function else {}
         sr = run_rule(
             config.target_path,
-            str(rp),
+            rp,
             defines=defines,
             timeout=300,
             # In-repo engine/coccinelle rules (code trust).

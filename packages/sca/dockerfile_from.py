@@ -625,7 +625,7 @@ def fetch_image_sbom(
             target_digest, image,
         )
     sbom_key = (
-        _sbom_cache_key(ref.registry, target_digest)
+        _sbom_cache_key(ref.registry, target_digest)  # type: ignore[arg-type]
         if digest_cacheable else None
     )
 

@@ -706,7 +706,7 @@ class OsvClient:
                 for dep, candidate in chunk
             ]
             results = self._inner.query_batch(queries)
-            for (dep, candidate), ids in zip(chunk, results, strict=True):
+            for (dep, candidate), ids in zip(chunk, results, strict=True):  # type: ignore[assignment]
                 if ids is None:
                     # Transient failure — same policy as the primary
                     # batch: no cache entry, record the degradation.

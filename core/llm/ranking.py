@@ -430,7 +430,7 @@ class _Ranker:
             )
             if primary is not None:
                 model_name = getattr(primary, "model_name", "") or ""
-            results = run_parallel(
+            results: list = run_parallel(
                 batches, self._call_batch,
                 max_workers=self.max_workers, model=model_name,
                 label="ranking",

@@ -249,7 +249,7 @@ def _check_one(dep: Dependency) -> TyposquatFinding | None:
         nearest_popular=nearest,
         distance=distance,
         severity=severity,
-        confidence=Confidence(confidence_level, reason=confidence_reason),
+        confidence=Confidence(confidence_level, reason=confidence_reason),  # type: ignore[arg-type]
     )
 
 

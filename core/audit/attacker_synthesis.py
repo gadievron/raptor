@@ -505,7 +505,7 @@ def _build_multi_step_chains(
 
                 # Build the chain.
                 chain_counter += 1
-                chain = _assemble_multi_step_chain(
+                chain = _assemble_multi_step_chain(  # type: ignore[assignment]
                     extended, outcomes, primitives_cache, chain_counter,
                 )
                 if chain is not None:

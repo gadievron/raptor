@@ -537,7 +537,7 @@ def compile_invariant(
             rule_id=result.rule_id or "sweep",
             body=result.rule_body,
         )
-        matches, errors = _run_engine(rule, result.rule_path, repo_root)
+        matches, errors = _run_engine(rule, result.rule_path, repo_root)  # type: ignore[arg-type]
         result.errors.extend(errors)
         for m in matches[:max_sweep_matches]:
             result.matches.append({

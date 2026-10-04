@@ -814,7 +814,7 @@ class _PythonCFGBuilder:
         if isinstance(stmt, _TRY_STMTS):
             # ``except*`` groups converge like ``except`` for
             # reachability-under-deletion (see _TRY_STMTS).
-            return self._build_try(stmt, incoming)
+            return self._build_try(stmt, incoming)  # type: ignore[arg-type]
         if isinstance(stmt, (ast.With, ast.AsyncWith)):
             return self._build_with(stmt, incoming)
         if isinstance(stmt, ast.Return):

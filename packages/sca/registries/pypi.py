@@ -215,7 +215,7 @@ class PyPIClient:
             return None
         # Strip security-irrelevant fields before caching. See
         # ``_strip_pypi_metadata`` for the rationale.
-        data = _strip_pypi_metadata(data)
+        data = _strip_pypi_metadata(data)  # type: ignore[assignment]
         if self._cache is not None:
             self._cache.put(cache_key, data, ttl_seconds=self._ttl)
         return data

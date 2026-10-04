@@ -306,6 +306,8 @@ class _StallMonitor:
     def run(self) -> None:
         """Read stderr line by line, track file processing times."""
         try:
+            if self._proc.stderr is None:
+                return
             for raw_line in self._proc.stderr:
                 line = raw_line.strip()
                 if not line:

@@ -643,7 +643,7 @@ def _supervisor_main(
             os._exit(84)
         os.close(rep_r)
         os.close(xstat_r)
-        for fd in (out_fd, err_fd):
+        for fd in (out_fd, err_fd):  # type: ignore[assignment]
             if fd is not None:
                 with contextlib.suppress(OSError):
                     os.close(fd)

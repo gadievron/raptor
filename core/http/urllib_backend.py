@@ -1541,7 +1541,7 @@ class UrllibClient:
                         if len(out) > _decomp_cap:
                             # Decompression bomb. Keep raw,
                             # don't materialise the bomb output.
-                            out = None
+                            out = None  # type: ignore[assignment]
                             break
                     if out is not None:
                         raw = bytes(out)

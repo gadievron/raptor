@@ -410,7 +410,7 @@ def joern_acquire(tunables: JoernTunables | None = None) -> JoernServer | None:
 
         new_state = {
             "pid": srv.pid,
-            "comm": _read_comm(srv.pid),
+            "comm": _read_comm(srv.pid),  # type: ignore[arg-type]
             "port": srv.port,
             "heap_mb": tunables.heap_mb,
             "query_timeout_s": tunables.query_timeout_s,

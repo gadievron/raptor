@@ -265,7 +265,7 @@ def _read_workspaces_field(pkg_json: Path) -> list | None:
         return None
     try:
         data = _json.loads(text)
-    except (_json.JSONDecodeError, *PARSE_ESCAPE_ERRORS):  # hostile-input escape classes
+    except (_json.JSONDecodeError, *PARSE_ESCAPE_ERRORS):  # type: ignore[misc]  # hostile-input escape classes
         return None
     if not isinstance(data, dict):
         return None

@@ -453,7 +453,7 @@ def find_engine_rules_base(
             project_name = pin.project
         if project_name and project_name != "-":
             proj = ProjectManager().load(project_name)
-            if proj is not None and getattr(proj, "output_dir", ""):
+            if proj is not None and getattr(proj, "output_dir", ""):  # type: ignore[arg-type]
                 candidates.append(Path(proj.output_dir) / "engine-rules")
         # Target-keyed standalone locations — the corpus fixture trees
         # are the "targets" here.

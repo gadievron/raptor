@@ -242,7 +242,7 @@ def extract_parser_boundaries(
                 runtime_flows = runtime_parser_by_function.get(function_id, [])
                 tier = EvidenceTier.OBSERVED_RUNTIME if runtime_flows else EvidenceTier.XREF_BACKED
                 confidence = "confirmed" if runtime_flows else "candidate"
-                function = functions.get(function_id)
+                function = functions.get(function_id)  # type: ignore[assignment]
                 parser_surface = surfaces.get(target_surface_id)
                 if function is None or parser_surface is None:
                     continue

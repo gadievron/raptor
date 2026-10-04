@@ -207,7 +207,7 @@ def identify_summary_candidates(
     for key in connected:
         if key in existing:
             continue
-        gap = queue_by_key.get(key)
+        gap = queue_by_key.get(key)  # type: ignore[assignment]
         if gap is None:
             continue
         candidates.append(gap)

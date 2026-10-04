@@ -608,7 +608,7 @@ def _detect_cross_function_collapse(
 
             callee_name = chain[-1] if chain else ""
             callee_key_same = f"{caller_file}:{callee_name}"
-            sem = ambiguous_funcs.get(callee_key_same)
+            sem = ambiguous_funcs.get(callee_key_same)  # type: ignore[assignment]
             if not sem:
                 for key, s in ambiguous_funcs.items():
                     if key.endswith(f":{callee_name}"):

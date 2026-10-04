@@ -605,7 +605,7 @@ def _render_review_markdown(
                     ),
                 )
                 for f in ordered:
-                    primary = f.advisories[0] if f.advisories else None
+                    primary = f.advisories[0] if f.advisories else None  # type: ignore[assignment]
                     if primary is None:
                         continue
                     tags = [f.severity.title()]

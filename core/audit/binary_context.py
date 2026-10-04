@@ -224,7 +224,7 @@ def find_redb(
 
     def _target_sha() -> str | None:
         if not sha_cell:
-            sha_cell.append(_target_content_sha(Path(target_path)))
+            sha_cell.append(_target_content_sha(Path(target_path)))  # type: ignore[arg-type]
         return sha_cell[0]
 
     for cand, kind in candidates:

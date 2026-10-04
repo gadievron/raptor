@@ -1031,4 +1031,4 @@ def import_runtime(
     if not fmt:
         return 0
     tool = tool or default_tool(fmt)
-    return mark_runtime(store, parse(path, fmt), checklist, tool)
+    return mark_runtime(store, parse(path, fmt), checklist, tool)  # type: ignore[arg-type]

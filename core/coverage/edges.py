@@ -216,7 +216,7 @@ def collect_touched_edges(
                 )
                 if callee_file and callee:
                     _add(caller_file, caller, callee_file, callee,
-                         cs[1], tf.name)
+                         cs[1], tf.name)  # type: ignore[index]
             # Body-level evidence for the stepped-into function.
             av = step.get("ast_view")
             if not (isinstance(av, dict) and df):

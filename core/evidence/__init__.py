@@ -695,7 +695,7 @@ def format_evidence_structured(
 
     if record.context_map_sink is not None:
         cms = record.context_map_sink
-        entry: dict[str, Any] = {
+        entry = {
             "tier": "context_map_sink",
             # LLM-derived, not mechanical — see _TOOL_TIER_MAP note.
             "evidence_tier": _TOOL_TIER_MAP["context_map_sink"],

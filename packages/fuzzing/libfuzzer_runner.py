@@ -485,7 +485,7 @@ class LibFuzzerRunner:
         # without these the run reports 0 executions to the audit's
         # iteration derating.
         for line in stderr.splitlines():
-            match = self._FINAL_STATS_RE.match(line)
+            match = self._FINAL_STATS_RE.match(line)  # type: ignore[assignment]
             if not match:
                 continue
             name, value = match.group(1), int(match.group(2))

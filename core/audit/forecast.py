@@ -252,7 +252,7 @@ def predicted_suspicious_density(
             covered += 1
             total += 1.0 if priors[key] in _SUSPICIOUS_VERDICTS else 0.0
             continue
-        file = gap.get("file")
+        file = gap.get("file")  # type: ignore[assignment]
         n = per_file_n.get(file, 0) if isinstance(file, str) else 0
         if n:
             covered += 1

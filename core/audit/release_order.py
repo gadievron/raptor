@@ -728,7 +728,7 @@ def _adjudicate_function(
         engine, disagreement = _joern_cross_check(
             joern_server, target_path or Path("."), file_path,
             function_name,
-            fin_receipt["status_binding"].split(",")[0].strip(),
+            str(fin_receipt["status_binding"]).split(",")[0].strip(),
             site["callee"], cfg_dominated,
         )
         if disagreement:

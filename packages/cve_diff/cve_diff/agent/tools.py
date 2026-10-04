@@ -201,7 +201,7 @@ class Tool:
             name=self.name,
             description=self.description,
             input_schema=self.parameters,
-            handler=lambda args, _fn=fn: _fn(**args),
+            handler=lambda args, _fn=fn: _fn(**args),  # type: ignore[misc]
         )
 
 

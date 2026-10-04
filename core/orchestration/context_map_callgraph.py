@@ -285,7 +285,7 @@ def enrich_with_call_edges(
             from core.understand_graph.ingest import ingest_call_edges
 
             stored = ingest_call_edges(
-                run_dir, target_path,
+                run_dir, target_path,  # type: ignore[arg-type]
                 _iter_checklist_call_edges(checklist, func_to_file),
                 graph_path=graph_store,
             )

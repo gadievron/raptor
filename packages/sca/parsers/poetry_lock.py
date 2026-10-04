@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 
 _tomllib = None
 if sys.version_info >= (3, 11):
-    import tomllib as _tomllib            # type: ignore[no-redef]
+    import tomllib as _tomllib            # type: ignore[no-redef,assignment]
 else:                                     # pragma: no cover — env-dependent
     try:
         import tomli as _tomllib          # type: ignore[no-redef]

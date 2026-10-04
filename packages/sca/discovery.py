@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 from .file_shapes import is_compose_file
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -324,8 +324,9 @@ def find_manifests(
     # Test-path filtering is deferred until after classification so a
     # rejected path doesn't pay the parse-classification cost twice.
     # Imported lazily to avoid a circular dep at module-import time.
+    is_test_path: Callable[[Path, Path], bool] | None
     if not include_test_paths:
-        from ._test_paths import is_test_path
+        from ._test_paths import is_test_path as is_test_path
     else:
         is_test_path = None
 

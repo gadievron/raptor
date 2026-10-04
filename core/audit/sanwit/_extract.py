@@ -413,7 +413,7 @@ class _Parser:
                 self.expect_sym("]")
             node = {"kind": "var", "name": lex,
                     "tok_start": start, "tok_end": self.i}
-            self.var_seen.append((node["tok_start"], node["tok_end"]))
+            self.var_seen.append((node["tok_start"], node["tok_end"]))  # type: ignore[arg-type]
             return node
         if kind in ("sq", "dq", "num"):
             self.take()

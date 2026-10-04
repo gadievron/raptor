@@ -210,7 +210,7 @@ def _declared_build_value(manifest_path: Path) -> object:
         return None
     try:
         data = tomllib.loads(text)
-    except (tomllib.TOMLDecodeError, *PARSE_ESCAPE_ERRORS):  # hostile-input escape classes
+    except (tomllib.TOMLDecodeError, *PARSE_ESCAPE_ERRORS):  # type: ignore[misc]  # hostile-input escape classes
         return None
     package = data.get("package")
     if not isinstance(package, dict):

@@ -282,7 +282,7 @@ def merge_findings(run_dirs: list[Path]) -> list[dict[str, Any]]:
                     acc_key = ("stamp", run_id,
                                r["manifest_path"], r.get("ts"))
                 else:
-                    acc_key = ("ref", run_id)
+                    acc_key = ("ref", run_id)  # type: ignore[assignment]
                 if acc_key not in ref_acc:
                     ref_acc[acc_key] = r
             candidate_rank = (origin_rank, _status_rank(finding))

@@ -127,7 +127,7 @@ def parse_cyclonedx(path: Path) -> tuple[list[Dependency], list[str]]:
 
     try:
         data = json.loads(text)
-    except (json.JSONDecodeError, *PARSE_ESCAPE_ERRORS) as e:  # hostile-input escape classes
+    except (json.JSONDecodeError, *PARSE_ESCAPE_ERRORS) as e:  # type: ignore[misc]  # hostile-input escape classes
         msg = f"invalid JSON in SBOM {path}: {e}"
         raise ValueError(msg) from e
 

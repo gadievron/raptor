@@ -496,7 +496,7 @@ def _scan_codeql_config(path: Path) -> FileScan:
     queries = doc.get("queries")
     if queries:
         entries = queries if isinstance(queries, list) else [queries]
-        for e in entries:
+        for e in entries:  # type: ignore[misc]
             raw_uses = e.get("uses", "") if isinstance(e, dict) else e
             uses = _scalar_or_shape_finding(fs, "queries entry", raw_uses)
             if uses is None:

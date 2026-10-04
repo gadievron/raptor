@@ -1386,7 +1386,7 @@ def run_protocol_state_prepass(
     try:
         from .invariant_smt import extract_invariants
     except ImportError:
-        extract_invariants = None
+        extract_invariants = None  # type: ignore[assignment]
     if extract_invariants is not None:
         for entry in (domain_model or {}).get("invariants") or []:
             if telemetry["budget_exceeded"]:

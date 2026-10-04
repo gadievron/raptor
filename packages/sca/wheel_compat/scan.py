@@ -156,7 +156,7 @@ def _make_finding(
         kind="platform_compat",
         dependency=dep,
         detail=detail,
-        severity=sev,
+        severity=sev,  # type: ignore[arg-type]
         confidence=Confidence(
             "high",
             reason="wheel platform tags compared against project matrix",

@@ -265,7 +265,7 @@ def append_journal_for_outcome(
                     (gap.get("line_start", 0), gap.get("line_end")
                      or gap.get("line_start", 0)),
                     gap["edge_callee_file"],
-                    (callee_span[0], callee_span[1]),
+                    (callee_span[0], callee_span[1]),  # type: ignore[misc]
                 )
         else:
             from core.inventory.binary_builder import BINARY_PATH_PREFIX

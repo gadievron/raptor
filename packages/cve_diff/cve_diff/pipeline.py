@@ -754,7 +754,7 @@ class Pipeline:
                     target = ancestor.parent if ancestor.is_file() else ancestor
                     break
             if target is None:
-                target = "/"
+                target = Path("/")
         else:
             target = "/"
         disk_budget.assert_ok(target, self.disk_limit_pct)

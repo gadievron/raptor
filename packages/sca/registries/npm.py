@@ -221,7 +221,7 @@ class NpmClient:
         # ``_strip_npm_metadata`` for the rationale. Returns the
         # stripped envelope so subsequent in-process callers don't
         # see a different shape than the cache.
-        data = _strip_npm_metadata(data)
+        data = _strip_npm_metadata(data)  # type: ignore[assignment]
         if self._cache is not None:
             self._cache.put(cache_key, data, ttl_seconds=self._ttl)
         return data

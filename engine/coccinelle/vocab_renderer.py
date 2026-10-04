@@ -78,7 +78,7 @@ def _get_bucket(vocab: Any, bucket_name: str) -> frozenset[str]:
             "this marker", bucket_name,
         )
         return frozenset()
-    names = getattr(vocab, bucket_attr, frozenset())
+    names: frozenset[str] = getattr(vocab, bucket_attr, frozenset())
     safe = frozenset(
         n for n in names if isinstance(n, str) and _IDENT_RE.fullmatch(n)
     )

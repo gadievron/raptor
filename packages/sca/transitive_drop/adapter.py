@@ -102,7 +102,7 @@ def _make_finding(d: DropOnBumpFinding) -> SupplyChainFinding:
             "extra_name": d.extra_name,
             "underlying_severity": d.transitive_finding_severity,
         },
-        severity=severity,
+        severity=severity,  # type: ignore[arg-type]
         confidence=Confidence(
             "high",
             reason=(

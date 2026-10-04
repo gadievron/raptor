@@ -214,7 +214,7 @@ def _extract_graph(content: str, language: str) -> FileCallGraph | None:
         if not _TS_AVAILABLE or _ts_language(language) is None:
             return None
     try:
-        return extractor(content)
+        return extractor(content)  # type: ignore[operator]
     except Exception:  # noqa: BLE001 — hostile source: any parse failure degrades to no-graph
         return None
 

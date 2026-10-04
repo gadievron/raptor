@@ -497,7 +497,7 @@ def _infer_from_caller_usage(
     considered = getattr(entry, "considered", 0) if entry else 0
     if considered >= 3:
         caller_count = considered
-        callers_that_check_return = entry.count("tested")
+        callers_that_check_return = entry.count("tested")  # type: ignore[union-attr]
     elif checklist:
         items = checklist.get("items", [])
         for item in items:

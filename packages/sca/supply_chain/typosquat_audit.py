@@ -450,7 +450,7 @@ def run_reaudit(reviewed_legit_path: Path, *, use_llm: bool = False) -> str:
             cand = Candidate(name=name, near_twin=twin, rank=0, twin_rank=0,
                              distance=1)
             ev = collect_evidence_rich(cand, _eco, http,
-                                       _client.get_metadata if _client else None)
+                                       _client.get_metadata if _client else None)  # type: ignore[arg-type]
             verdict = _vfn(cand, ev)
             return (name, reason, verdict,
                     reaudit_recommendation(reason, verdict))

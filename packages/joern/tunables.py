@@ -119,7 +119,7 @@ class JoernTunables:
         return cls(
             heap_mb=heap_mb,
             cpg_timeout_s=cpg_timeout_s,
-            import_timeout_s=import_timeout_s,
+            import_timeout_s=import_timeout_s,  # type: ignore[arg-type]
             query_timeout_s=query_timeout_s,
             cpg_timeout_auto=cpg_timeout_auto,
             import_timeout_auto=import_timeout_auto,

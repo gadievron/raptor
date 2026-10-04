@@ -141,7 +141,7 @@ def _semver_key(v: str):
     """Best-effort semver tuple for ordering."""
     bare = v.lstrip("v")
     parts = bare.split(".")
-    out = []
+    out: list[tuple[int, int | str]] = []
     for p in parts:
         core = p.split("+")[0]
         try:

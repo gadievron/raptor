@@ -351,7 +351,7 @@ def verify_guard_relevance_cpg(
                     guard_idents_cpg = _run_query(joern_server, guard_q)
                     sink_idents_cpg = _run_query(joern_server, sink_q)
                     if guard_idents_cpg and sink_idents_cpg:
-                        overlap = set(guard_idents_cpg) & set(sink_idents_cpg)
+                        overlap: set[str] = set(guard_idents_cpg) & set(sink_idents_cpg)
                         result.data_dep_bound = bool(overlap)
                         result.tainted_vars_in_guard = sorted(overlap)
                     elif guard_idents_cpg is None or sink_idents_cpg is None:

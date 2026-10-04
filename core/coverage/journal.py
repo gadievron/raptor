@@ -4275,7 +4275,7 @@ def load_domain_model(
         if not path.is_file():
             return None
     else:
-        path = _find_domain_model_file(out_dir)
+        path = _find_domain_model_file(out_dir)  # type: ignore[assignment]
     if path is None:
         return None
     return load_json(path, max_bytes=_MAX_DOMAIN_MODEL_BYTES)

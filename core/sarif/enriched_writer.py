@@ -274,7 +274,7 @@ def build_enriched_sarif(
         # Same containment for the rule registry: a non-string
         # rule_id is junk (and unhashable shapes crashed the dict
         # membership test); the row itself already exported above.
-        rid = f.get("rule_id")
+        rid = f.get("rule_id")  # type: ignore[assignment]
         if not isinstance(rid, str) or not rid:
             rid = "unknown"
         if rid not in rules_by_tool[tool]:

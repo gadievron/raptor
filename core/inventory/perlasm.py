@@ -580,7 +580,7 @@ def enrich_inventory_with_perlasm(inventory: dict, target_path: str | Path,
             it.get("name", "") for it in record.get("items", [])
         }
         try:
-            pl_text = (Path(target_path) / gen_rel).read_text(
+            pl_text = (Path(target_path) / gen_rel).read_text(  # type: ignore[operator]
                 errors="replace",
             )
         except OSError:

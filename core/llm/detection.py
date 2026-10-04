@@ -184,7 +184,7 @@ def _get_available_ollama_models() -> list[str]:
         if response.status_code == 200:
             data = response.json()
             _cached_ollama_models = [
-                model.get('name') for model in data.get('models', [])
+                str(model['name']) for model in data.get('models', [])
                 if isinstance(model, dict) and model.get('name')
             ]
             _ollama_checked = True

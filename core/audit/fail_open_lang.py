@@ -2504,7 +2504,7 @@ def _classify_rust_let(cur: Node, _node, src: bytes, site, line: int,
         )
         return site
     if ptype == "identifier":
-        var = _ts_node_text(pattern, src)
+        var = _ts_node_text(pattern, src)  # type: ignore[arg-type]
         if var.startswith("_"):
             site.verdict = "unguarded"
             site.shape = "let-underscore-discard"

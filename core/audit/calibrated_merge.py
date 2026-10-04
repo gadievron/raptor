@@ -330,7 +330,7 @@ def calibrated_decision(
     try:
         from .evidence_grade import is_tool_evidence
     except ImportError:  # pragma: no cover
-        is_tool_evidence = lambda _ev: False
+        is_tool_evidence = lambda _ev: False  # type: ignore[assignment]
     tool_backed = [
         e for e in losing_positive
         if is_tool_evidence(e[0].get("evidence_tool", "") or "")

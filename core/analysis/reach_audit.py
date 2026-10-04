@@ -476,7 +476,7 @@ def audit_corpus(
     # last-seen variant's line scored a duplicated name at an
     # arbitrary variant.
     lines_of: dict[tuple[str, str], list[int]] = {}
-    for f in inventory.get("files", []):
+    for f in inventory.get("files", []):  # type: ignore[union-attr]
         if not isinstance(f, dict):
             continue
         rel = f.get("path") or ""

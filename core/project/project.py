@@ -1414,7 +1414,7 @@ class ProjectManager:
             # is logged, never masks the original error.
             if moved:
                 try:
-                    os.rename(new_output, old_output)
+                    os.rename(new_output, old_output)  # type: ignore[arg-type]
                 except OSError:
                     logger.error(
                         "rename: registry write failed AND the output "

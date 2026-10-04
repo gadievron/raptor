@@ -82,7 +82,7 @@ def record_build_outcome(
         decision_class = (DECISION_CLASS_DESCRIBED
                           if cve_id.startswith("DESC-")
                           else DECISION_CLASS)
-        sc.record_event(decision_class, model_id, EventType.TOOL_EVIDENCE, outcome)
+        sc.record_event(decision_class, model_id, EventType.TOOL_EVIDENCE, outcome)  # type: ignore[arg-type]
         return True
     except Exception:  # noqa: BLE001 — telemetry must never break the run
         logger.debug(

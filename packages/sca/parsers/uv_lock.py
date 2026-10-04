@@ -76,7 +76,7 @@ def parse(path: Path) -> list[Dependency]:
         return []
     try:
         data = tomllib.loads(text)
-    except (tomllib.TOMLDecodeError, *PARSE_ESCAPE_ERRORS) as e:  # hostile-input escape classes
+    except (tomllib.TOMLDecodeError, *PARSE_ESCAPE_ERRORS) as e:  # type: ignore[misc]  # hostile-input escape classes
         logger.warning(
             "sca.parsers.uv_lock: TOML parse failed for %s: %s",
             path, e,

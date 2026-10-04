@@ -375,7 +375,7 @@ def _spearman_rho(
     return num / (den_x * den_y)
 
 
-def _ranks(values: list[float]) -> list[float]:
+def _ranks(values: list[int] | list[float]) -> list[float]:
     """Average-rank ranking (handles ties)."""
     indexed = sorted(range(len(values)), key=lambda i: values[i])
     ranks = [0.0] * len(values)

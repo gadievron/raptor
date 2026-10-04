@@ -182,7 +182,7 @@ def _extract_versions(data: dict) -> list[str]:
 def _semver_key(v: str):
     """Best-effort semver tuple. Non-numeric segments sort last."""
     parts = v.split(".")
-    out = []
+    out: list[tuple[int, int | str]] = []
     for p in parts:
         try:
             out.append((0, int(p)))

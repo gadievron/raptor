@@ -77,7 +77,7 @@ def load_sunset_map(
         # RecursionError rides PARSE_ESCAPE_ERRORS, unreadable files
         # raise OSError.
         data = load_json_bounded(p, max_bytes=8 * 1024 * 1024)
-    except (OSError, *PARSE_ESCAPE_ERRORS) as e:  # hostile-input escape classes
+    except (OSError, *PARSE_ESCAPE_ERRORS) as e:  # type: ignore[misc]  # hostile-input escape classes
         logger.warning(
             "sca.supply_chain.gha_sunset: cannot load %s: %s", p, e,
         )

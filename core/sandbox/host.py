@@ -356,7 +356,7 @@ class SandboxHost:
         if getattr(self, "_owned_output", None):
             # Default-output scratch dir this host created; removed
             # after the worker released the sandbox that bound it.
-            shutil.rmtree(self._owned_output, ignore_errors=True)
+            shutil.rmtree(self._owned_output, ignore_errors=True)  # type: ignore[arg-type]
             self._owned_output = None
 
     # ------------------------------------------------------------------

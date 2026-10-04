@@ -444,6 +444,7 @@ class ConfigResolver:
         if refusal:
             return self._refuse(refusal)
 
+        assert basename is not None
         matches, capped = self._index.locate(basename)
         if capped:
             return self._refuse("candidate_cap")

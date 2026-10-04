@@ -969,7 +969,7 @@ def _caller_guard_walk(
                         continue
                     visited.add(key)
                     searched.append(caller.name)
-                    body = by_key.get(key)
+                    body = by_key.get(key)  # type: ignore[assignment]
                     if body is None and caller.name not in ambiguous_names:
                         # Same path-drift rationale as the seed
                         # fallback: a unique name is trustworthy, an

@@ -299,4 +299,4 @@ def detect_language(target_path: str) -> str:
 
     if not counts:
         return "python"
-    return max(counts, key=counts.get)
+    return max(counts, key=counts.__getitem__)

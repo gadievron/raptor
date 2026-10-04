@@ -909,7 +909,7 @@ def parse_sarif_findings(
             code_flows = result.get("codeFlows") or []
             dataflow_path = extract_dataflow_path(code_flows) if code_flows else None
 
-            rule_meta = rules_by_id.get(rule_id, {})
+            rule_meta = rules_by_id.get(rule_id or "", {})
 
             file_uri = _resolve_uri(artifact)
             # Containment gate at the parse boundary (opt-in via

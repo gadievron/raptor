@@ -1338,7 +1338,7 @@ def main(argv: list | None = None) -> int:
     if args.work_dir is not None:
         work_ctx = contextlib.nullcontext(args.work_dir)
     else:
-        work_ctx = scratch_dir("trust-synth-work-")
+        work_ctx = scratch_dir("trust-synth-work-")  # type: ignore[assignment]
     with work_ctx as work_dir:
         proposal = BarrierProposal(
             sink_class=args.sink_class, finding_id=args.finding_id, language=args.language,

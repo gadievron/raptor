@@ -99,7 +99,7 @@ def _scan_one(
         return []
     try:
         data = _json.loads(text)
-    except (_json.JSONDecodeError, *PARSE_ESCAPE_ERRORS):  # hostile-input escape classes
+    except (_json.JSONDecodeError, *PARSE_ESCAPE_ERRORS):  # type: ignore[misc]  # hostile-input escape classes
         return []
     if not isinstance(data, dict):
         return []

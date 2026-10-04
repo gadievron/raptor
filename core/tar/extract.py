@@ -278,7 +278,7 @@ def extract_files_from_tar(
         open_kwargs["tarinfo"] = _budgeted_tarinfo(
             max_total_bytes, consumed)
     try:
-        tf = tarfile.open(fileobj=fileobj, mode=mode, **open_kwargs)
+        tf = tarfile.open(fileobj=fileobj, mode=mode, **open_kwargs)  # type: ignore[call-overload]
     except _TAR_CORRUPTION_ERRORS as e:
         # ``TarError`` covers ReadError + CompressionError + other
         # malformed-archive cases. ``OSError`` covers truncated

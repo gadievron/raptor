@@ -308,7 +308,7 @@ class DefenseTelemetry:
                     "level": "warning",
                     "type": "weakened_defenses",
                     "models": sorted(self._weakened_overrides.keys()),
-                    "reasons": dict(sorted(self._weakened_overrides.items())),
+                    "reasons": dict(sorted(self._weakened_overrides.items())),  # type: ignore[dict-item]
                     "action": "Model-dependent defenses disabled via --accept-weakened-defenses",
                 })
 

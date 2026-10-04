@@ -276,7 +276,7 @@ def run_cli(
             result_q.put({
                 "result": subprocess.CompletedProcess(
                     cmd,
-                    getattr(result, "returncode", None),
+                    getattr(result, "returncode", None),  # type: ignore[arg-type]
                     stdout=(stdout if stdout is not None
                             else _decode(sink.get("stdout"))),
                     stderr=(stderr if stderr is not None

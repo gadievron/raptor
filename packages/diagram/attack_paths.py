@@ -165,7 +165,7 @@ def generate_single(path_data: dict[str, Any], path_index: int) -> str:
         for j, blocker in enumerate(blockers):
             bid = f"BLK{path_index}_{j+1}"
             blocker_text = _sanitize(str(blocker) if not isinstance(blocker, dict) else
-                                     blocker.get("description", blocker.get("reason", str(blocker))))
+                                     str(blocker.get("description") or blocker.get("reason") or blocker))
             lines.append(f'    {bid}[/"Blocker: {blocker_text}"\\]')
             lines.append(f"    style {bid} fill:#fee2e2,stroke:#dc2626,color:#7f1d1d")
             # Attach to last step

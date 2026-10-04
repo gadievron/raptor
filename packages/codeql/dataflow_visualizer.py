@@ -162,7 +162,7 @@ class DataflowVisualizer:
         for node in nodes:
             try:
                 # Validate file path to prevent directory traversal
-                file_path = (repo_path / node['file']).resolve()
+                file_path = (repo_path / str(node['file'])).resolve()
                 repo_resolved = repo_path.resolve()
                 try:
                     file_path.relative_to(repo_resolved)

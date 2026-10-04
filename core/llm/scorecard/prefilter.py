@@ -168,7 +168,7 @@ def record_prefilter_outcome(
         decision_class=decision_class,
         model=model,
         event_type=EventType.CHEAP_SHORT_CIRCUIT,
-        outcome=outcome,
+        outcome=outcome,  # type: ignore[arg-type]
         model_version=model_version,
         sample=sample,
         repo=repo,

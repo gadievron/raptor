@@ -498,7 +498,7 @@ def proxy_events_count_fields(
     if isinstance(flags, str):
         flag_list = [flags] if flags else []
     else:
-        flag_list = [str(f) for f in (flags or [])]
+        flag_list = [str(f) for f in (flags or [])]  # type: ignore[attr-defined]
     return {
         "kind": "proxy-events-count",
         "run": run,

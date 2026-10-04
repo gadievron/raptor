@@ -141,7 +141,7 @@ def _check_yanked(
 
     Per-ecosystem dispatch."""
     if dep.ecosystem == "PyPI" and pypi_client is not None:
-        return _yanked_pypi(pypi_client, dep.name, dep.version)
+        return _yanked_pypi(pypi_client, dep.name, dep.version)  # type: ignore[arg-type]
     if dep.ecosystem == "npm" and npm_client is not None:
         return _yanked_npm(npm_client, dep.name, dep.version)
     if dep.ecosystem == "Cargo" and cargo_client is not None:

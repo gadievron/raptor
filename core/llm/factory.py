@@ -61,7 +61,9 @@ def get_client(
     try:
         if config is None:
             from core.llm.config import _get_default_primary_model
-            primary = _get_default_primary_model(prefer=prefer)
+            primary = _get_default_primary_model(
+                prefer=([prefer] if isinstance(prefer, str) else prefer),
+            )
             if primary is None and not replay:
                 return None
             cfg = LLMConfig(primary_model=primary)

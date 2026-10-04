@@ -867,7 +867,7 @@ def _run_detector(
             return lines, []
         if spec.engine == "coccinelle":
             from packages.coccinelle.runner import run_rule as cocci_run
-            res = cocci_run(
+            res = cocci_run(  # type: ignore[assignment]
                 target_file,
                 spec.config,
                 no_includes=True,

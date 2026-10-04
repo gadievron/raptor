@@ -195,7 +195,7 @@ def _parse_assessments(text: str, report: dict) -> tuple:
         if judgement not in _JUDGEMENTS:
             judgement = JUDGEMENT_UNCLEAR
         try:
-            confidence = min(1.0, max(0.0, float(item.get("confidence"))))
+            confidence = min(1.0, max(0.0, float(item.get("confidence"))))  # type: ignore[arg-type]
         except (TypeError, ValueError):
             confidence = 0.0
         rationale = item.get("rationale")

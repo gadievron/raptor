@@ -247,7 +247,7 @@ def _run_bridges(bridges, death_r, ready_cb=None) -> None:
                 if fd not in pairs:
                     continue
 
-                partner = pairs.get(fd)
+                partner = pairs.get(fd)  # type: ignore[assignment]
                 if partner is None:
                     _close_pair(fd)
                     continue

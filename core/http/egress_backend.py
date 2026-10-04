@@ -75,7 +75,7 @@ class EgressClient(UrllibClient):
     a confusing late one.
     """
 
-    _ALLOWED_SCHEMES = ("https",)
+    _ALLOWED_SCHEMES = ("https",)  # type: ignore[assignment]
 
     def __init__(
         self,

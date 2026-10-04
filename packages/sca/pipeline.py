@@ -402,7 +402,7 @@ def run_sca(
                 manifests = [
                     m for m in manifests if m.ecosystem != "Inline"
                 ]
-            raw_deps: list[Dependency] = []
+            raw_deps = []
             # scan_root_context: lets bounded parser reads accept
             # symlinked manifests whose resolved target stays inside
             # the target tree (monorepo shared-manifest layouts)

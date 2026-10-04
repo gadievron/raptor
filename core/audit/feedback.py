@@ -651,7 +651,7 @@ def _deduplicate_findings(
         if fid:
             key = ("id", str(fid))
         else:
-            key = (
+            key = (  # type: ignore[assignment]
                 finding.get("file", ""),
                 finding.get("function", ""),
                 _finding_cwe(finding),

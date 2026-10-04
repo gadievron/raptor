@@ -713,7 +713,7 @@ def verify(
     }
     return _core_verify_plan(
         plan=plan,
-        executors=executors,
+        executors=executors,  # type: ignore[arg-type]
         endpoint=(host_ip, host_port),
         allowed_tcp_ports=published,
         version_literal=cve_version,

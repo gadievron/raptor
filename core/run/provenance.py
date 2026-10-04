@@ -163,7 +163,7 @@ def source_control_snapshot(repo_dir: Path | None = None) -> dict[str, Any]:
         # Dirt accounting (see the docstring's contract): composition +
         # reproducible fingerprint, so dirty=True is a verifiable claim.
         lines = sorted(
-            ln.strip() for ln in porcelain.splitlines() if ln.strip()
+            ln.strip() for ln in porcelain.splitlines() if ln.strip()  # type: ignore[union-attr]
         )
         untracked_dirt = any(ln.startswith("??") for ln in lines)
         tracked_dirt = any(not ln.startswith("??") for ln in lines)

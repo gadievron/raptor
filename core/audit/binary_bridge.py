@@ -410,7 +410,7 @@ def _merge_from_build_cache(
 
     for build_id, binary_path in current_build_ids.items():
         try:
-            envelope = import_layer0_findings(cache, build_id, binary_path)
+            envelope = import_layer0_findings(cache, build_id, binary_path)  # type: ignore[arg-type]
         except TypeError:
             # Older injected cache object without the binding kwarg:
             # read at build-id scope, then enforce the SAME

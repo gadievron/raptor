@@ -209,7 +209,7 @@ def _families_per_dep(
     findings: list[SupplyChainFinding],
 ) -> dict[tuple[str, str, str | None], frozenset[str]]:
     """Bucket findings by per-version dep key, project to family set."""
-    by_dep: dict[tuple[str, str, str], set] = defaultdict(set)
+    by_dep: dict[tuple[str, str, str | None], set[str]] = defaultdict(set)
     for f in findings:
         family = _FAMILY.get(f.kind)
         if family is None:

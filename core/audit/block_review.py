@@ -125,7 +125,7 @@ def _get_sanitizer_callables(cwe: str, language: str) -> frozenset[str]:
     """Import the sanitizer catalog for a CWE class."""
     try:
         from core.analysis.sanitizer_cut import sanitizer_callables_for_cwe
-        return sanitizer_callables_for_cwe(cwe, language)
+        return frozenset(sanitizer_callables_for_cwe(cwe, language))
     except ImportError:
         return frozenset()
     except Exception:
