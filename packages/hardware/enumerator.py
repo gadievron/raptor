@@ -295,7 +295,7 @@ class HardwareEnumerator:
 
         report_path = self.out_dir / "hardware-report.json"
         with open(report_path, "w") as f:
-            json.dump(report, f, indent=2)
+            json.dump(report, f, indent=2, ensure_ascii=False)
 
         # Summary
         print("\n" + "=" * 70)

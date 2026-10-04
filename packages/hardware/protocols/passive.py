@@ -137,7 +137,7 @@ def run_noise_baseline(
 
     # Save to JSON for reuse with --noise-floor on subsequent runs
     with open(json_path, "w") as f:
-        json.dump({str(k): v for k, v in noise_counts.items()}, f, indent=2)
+        json.dump({str(k): v for k, v in noise_counts.items()}, f, indent=2, ensure_ascii=False)
 
     if noise_counts:
         print(f"  Noise floor: { {p: c for p, c in sorted(noise_counts.items())} }")
