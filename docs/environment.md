@@ -639,6 +639,7 @@ dispatcher or aggregator route.
 
 | Variable | Serves |
 |----------|--------|
+| `API_ROUTE_API_KEY` | [API Route](https://www.api-route.com) |
 | `CHEAPER_INFERENCE_API_KEY` | Cheaper Inference |
 | `COHERE_API_KEY` | Cohere |
 | `DEEPINFRA_API_KEY` | DeepInfra |
@@ -649,6 +650,12 @@ dispatcher or aggregator route.
 | `PERPLEXITY_API_KEY` | Perplexity |
 | `REPLICATE_API_TOKEN` | Replicate (note the `_TOKEN` suffix) |
 | `TOGETHER_API_KEY` | Together |
+
+For API Route, set `API_ROUTE_API_KEY` to your own key. Dispatcher requests to
+`/apiroute/v1/chat/completions` are forwarded to
+`https://global.api-route.com/v1/chat/completions` with Bearer authentication.
+Use a model ID from API Route's `/v1/models` catalog. This route is opt-in and
+does not change the default provider or model selection.
 
 **Cloud gateways** — AWS Bedrock, Azure OpenAI, and GCP Vertex when
 used as LLM backends.

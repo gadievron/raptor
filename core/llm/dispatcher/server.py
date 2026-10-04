@@ -2632,6 +2632,7 @@ _DIRECT_PATH_PREFIXES = {
 }
 
 _AGGREGATOR_PATH_PREFIXES = {
+    "/apiroute/": "apiroute",
     "/cheaperinference/": "cheaperinference",
     "/cohere/":       "cohere",
     "/deepinfra/":    "deepinfra",

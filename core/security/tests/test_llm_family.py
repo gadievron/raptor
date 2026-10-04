@@ -28,6 +28,8 @@ def test_bare_model_id_peels_provider_prefix():
 def test_bare_model_id_peels_aggregator_then_provider():
     # ``together/anthropic/claude-haiku-4-5`` — aggregator + provider
     # both peel; the lookup in models.json sees just ``claude-haiku-4-5``.
+    assert bare_model_id("apiroute/deepseek-v4.1-flash") == "deepseek-v4.1-flash"
+    assert bare_model_id("apiroute/anthropic/claude-haiku-4-5") == "claude-haiku-4-5"
     assert bare_model_id("cheaperinference/gpt-5.4-mini") == "gpt-5.4-mini"
     assert bare_model_id("openrouter/openai/gpt-5") == "gpt-5"
     assert bare_model_id("orcarouter/openai/gpt-5") == "gpt-5"

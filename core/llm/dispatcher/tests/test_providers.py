@@ -31,6 +31,7 @@ def all_providers_creds():
         # providers shows up immediately in the upstream-captured headers.
         "mistral":     "mistral-real-NOT-LEAKED",
         # Aggregators
+        "apiroute": "apiroute-real-NOT-LEAKED",
         "cheaperinference": "ci-cheaperinference-real-NOT-LEAKED",
         "cohere":      "cohere-real-NOT-LEAKED",
         "deepinfra":   "deepinfra-real-NOT-LEAKED",
@@ -288,6 +289,7 @@ _BEARER_PROVIDERS = [
     # Direct
     ("mistral",    "v1/chat/completions",    "mistral-real-NOT-LEAKED"),
     # Aggregators
+    ("apiroute", "v1/chat/completions", "apiroute-real-NOT-LEAKED"),
     ("cheaperinference", "v1/chat/completions", "ci-cheaperinference-real-NOT-LEAKED"),
     ("cohere",     "v1/chat",                "cohere-real-NOT-LEAKED"),
     ("deepinfra",  "v1/openai/chat/completions", "deepinfra-real-NOT-LEAKED"),
@@ -495,6 +497,7 @@ class TestCredentialStoreReadsAggregatorEnvs:
 
     def test_all_new_keys_read_and_kept_in_env(self, monkeypatch):
         env_to_set = {
+            "API_ROUTE_API_KEY": "apiroute-test",
             "MISTRAL_API_KEY":    "mistral-test",
             "CHEAPER_INFERENCE_API_KEY": "cheaperinference-test",
             "COHERE_API_KEY":     "cohere-test",
@@ -513,6 +516,7 @@ class TestCredentialStoreReadsAggregatorEnvs:
             monkeypatch.setenv(k, v)
         creds = CredentialStore()
         # Each key landed in the store under the expected name.
+        assert creds.get("apiroute") == "apiroute-test"
         assert creds.get("mistral") == "mistral-test"
         assert creds.get("cheaperinference") == "cheaperinference-test"
         assert creds.get("cohere") == "cohere-test"

@@ -47,6 +47,7 @@ def _make_empty_store() -> CredentialStore:
         "mistral": None,
         "openai": None,
         # Aggregators
+        "apiroute": None,
         "cheaperinference": None,
         "cohere": None,
         "deepinfra": None,

@@ -284,6 +284,7 @@ class CredentialStore:
             # factory routes them); see the comment above the class.
             "mistral":    _read_env_keep("MISTRAL_API_KEY"),
             # --- aggregator / routing providers (read-and-keep) ---
+            "apiroute": _read_env_keep("API_ROUTE_API_KEY"),
             "cheaperinference": _read_env_keep("CHEAPER_INFERENCE_API_KEY"),
             "cohere":     _read_env_keep("COHERE_API_KEY"),
             "deepinfra":  _read_env_keep("DEEPINFRA_API_KEY"),
@@ -1267,6 +1268,12 @@ def build_rules(creds: CredentialStore) -> dict[str, ProviderRule]:
             inject_headers=_openai_headers,
         ),
         # --- aggregator / routing providers ---
+        "apiroute": ProviderRule(
+            name="apiroute",
+            # Preserve the SDK's /v1 path, as with other compatible gateways.
+            upstream_base_url="https://global.api-route.com",
+            inject_headers=_bearer_headers("apiroute"),
+        ),
         "cheaperinference": ProviderRule(
             name="cheaperinference",
             # /v1 root (OpenAI-compatible); bare host is the correct
