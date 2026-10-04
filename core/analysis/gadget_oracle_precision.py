@@ -1875,9 +1875,18 @@ LIBRARY_ROSTER: tuple[LibrarySpec, ...] = (
 
 def _git(args: list[str], cwd: Path | None = None) -> str:
     """Run one git command (list-args only; never a shell string)."""
+    from core.git.clone import (
+        get_safe_git_env,
+        safe_git_command,
+        safe_git_readonly_command,
+    )
+    if args and args[0] == "clone":
+        cmd = safe_git_command(*args)
+    else:
+        cmd = safe_git_readonly_command(*args)
     result = subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True,
-        timeout=600, check=True,
+        cmd, cwd=cwd, capture_output=True, text=True,
+        timeout=600, check=True, env=get_safe_git_env(),
     )
     return result.stdout.strip()
 

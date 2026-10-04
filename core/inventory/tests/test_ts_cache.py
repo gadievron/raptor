@@ -102,12 +102,18 @@ def test_call_graph_loader_shares_the_same_cache(
     )
 
 
+def test_import_grammar_rejects_non_tree_sitter_module(fresh_caches):
+    """import_grammar must refuse modules outside the tree_sitter_ prefix."""
+    with pytest.raises(ValueError, match="unexpected module"):
+        _ts_cache.import_grammar("os")
+
+
 def test_success_is_cached_and_absence_is_not_sticky(fresh_caches):
     """Success caches the module; a monkeypatched loader seam takes
     effect immediately because parser-cache misses are re-probed."""
-    mod = _ts_cache.import_grammar("json")  # any importable module
+    mod = _ts_cache.import_grammar("tree_sitter_python")
     assert mod is not None
-    assert _ts_cache.import_grammar("json") is mod
+    assert _ts_cache.import_grammar("tree_sitter_python") is mod
 
     probes: list[int] = []
 

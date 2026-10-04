@@ -249,10 +249,23 @@ def test_private_dir_cleanup_still_restores_real_subdir_perms(
             (private / "a").chmod(0o700)
 
 
+def test_run_isolated_rejects_non_symbolic_module():
+    """run_isolated must refuse modules outside core.symbolic.*."""
+    from core.symbolic._isolate import run_isolated
+    with pytest.raises(ValueError, match="outside allowed prefix"):
+        run_isolated("os", "getcwd", {}, timeout=5.0)
+
+
 def _hang_forever() -> None:
     """Child payload for the budget-kill direction test."""
     import time as _time
     _time.sleep(300)
+
+
+def _abort_child() -> None:
+    """Child payload for the crash-reporting direction test."""
+    import os
+    os.abort()
 
 
 def test_child_crash_reported_as_crash_not_budget_kill():
@@ -260,7 +273,10 @@ def test_child_crash_reported_as_crash_not_budget_kill():
     closes the pipe long before the budget elapses — the report must
     say crash, not blame a budget overrun the wall clock contradicts."""
     from core.symbolic._isolate import run_isolated
-    r = run_isolated("posix", "abort", {}, timeout=60.0)
+    r = run_isolated(
+        "core.symbolic.tests.test_isolate", "_abort_child", {},
+        timeout=60.0,
+    )
     assert r.succeeded is False
     assert r.metadata.get("crashed") is True
     assert r.metadata.get("killed") is False

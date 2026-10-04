@@ -170,9 +170,11 @@ def _tool_version(cmd: List[str]) -> str:
 
 def _compile(cc: str, src: Path, out: Path,
              extra: List[str]) -> None:
+    from core.security.env_sanitisation import safe_subprocess_env
     subprocess.run(
         [cc, "-o", str(out), str(src), *extra],
         check=True, capture_output=True, timeout=120,
+        env=safe_subprocess_env(),
     )
 
 

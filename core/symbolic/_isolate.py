@@ -361,14 +361,23 @@ def _remove_private_tmp(path: str) -> None:
     rmtree_hardened(path)
 
 
+_SYMBOLIC_MODULE_PREFIX: str = "core.symbolic."
+
+
 def _child_entry(
-    conn,
+    conn: mp.connection.Connection,
     module_name: str,
     func_name: str,
-    kwargs: dict,
+    kwargs: dict[str, Any],
     private_tmp: str | None = None,
 ) -> None:
     """Child-side runner. Everything heavyweight imports here."""
+    if not module_name.startswith(_SYMBOLIC_MODULE_PREFIX):
+        raise SystemExit(
+            f"_child_entry: module {module_name!r} outside "
+            f"allowed prefix {_SYMBOLIC_MODULE_PREFIX!r}"
+        )
+
     import logging
 
     _apply_symex_sandbox(private_tmp)
@@ -409,6 +418,11 @@ def run_isolated(
 ) -> SymbolicResult:
     """Run ``module_name.func_name(**kwargs)`` in a spawned child with
     a hard kill at ``timeout + GRACE_SECONDS``."""
+    if not module_name.startswith(_SYMBOLIC_MODULE_PREFIX):
+        raise ValueError(
+            f"run_isolated: module {module_name!r} outside "
+            f"allowed prefix {_SYMBOLIC_MODULE_PREFIX!r}"
+        )
     t0 = time.monotonic()
     # The child's entire writable world (see _apply_symex_sandbox).
     # Created here so the parent can remove it after the child exits

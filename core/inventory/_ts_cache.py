@@ -57,6 +57,10 @@ def import_grammar(module_name: str) -> Any:
     failure. Returns the module or ``None`` when not installed."""
     if module_name in _GRAMMAR_CACHE:
         return _GRAMMAR_CACHE[module_name]
+    if not module_name.startswith("tree_sitter_"):
+        raise ValueError(
+            f"import_grammar: unexpected module {module_name!r}"
+        )
     try:
         mod = importlib.import_module(module_name)
     except ImportError:

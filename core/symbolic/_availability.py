@@ -36,12 +36,23 @@ log = logging.getLogger(__name__)
 
 _cache: dict[str, bool] = {}
 
+#: Modules the probe child is willing to attempt.  Every production
+#: caller passes one of these constants; the child refuses anything
+#: else so a rogue argv[1] cannot import arbitrary code.
+_ALLOWED_PROBE_MODULES: frozenset[str] = frozenset({
+    "angr", "z3", "claripy",
+})
+
 #: Fixed program text for the probe child. The probed module name
 #: rides as argv data (``sys.argv[1]``) — it is never interpolated
-#: into program text, and every production caller passes one of this
-#: file's own string constants ("angr", "z3", "claripy").
+#: into program text.  The allowlist is embedded in the child source
+#: so the check runs in the child process, not just the parent.
 _CHILD_PROBE_SOURCE: str = (
-    "import importlib, sys; importlib.import_module(sys.argv[1])"
+    "import importlib, sys; "
+    "a = {'angr', 'z3', 'claripy'}; "
+    "m = sys.argv[1]; "
+    "m in a or sys.exit(f'probe: {m!r} not in allowlist'); "
+    "importlib.import_module(m)"
 )
 
 #: Probe-child deadline, seconds. Lower risks a false "unavailable":
@@ -66,6 +77,10 @@ def _import_probe_child(name: str, module: str) -> bool:
     SIGABRT), a hung import (timeout), or a spawn failure all read
     as unavailable; none of them can take the calling process down.
     """
+    if module not in _ALLOWED_PROBE_MODULES:
+        raise ValueError(
+            f"_import_probe_child: module {module!r} not in allowlist"
+        )
     env: dict[str, str] = dict(os.environ)
     # Propagate this process's EFFECTIVE temp dir: under the symex
     # sandbox (core.symbolic._isolate) the parent pins

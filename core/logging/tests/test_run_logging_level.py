@@ -45,3 +45,33 @@ def test_colliding_module_attribute_is_refused(level_spy: list) -> None:
 def test_verbose_flag_still_selects_debug(level_spy: list) -> None:
     clog.configure_run_logging(None, verbose=True)
     assert level_spy == [logging.DEBUG]
+
+
+# -- _file_log_level regression pins ------------------------------------------
+
+def test_file_log_level_returns_int_for_valid_level(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RAPTOR_LOG_FILE_LEVEL", "DEBUG")
+    assert clog._file_log_level() == logging.DEBUG
+
+
+def test_file_log_level_falls_back_on_unknown_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RAPTOR_LOG_FILE_LEVEL", "NOSUCH")
+    assert clog._file_log_level() == logging.INFO
+
+
+def test_file_log_level_rejects_callable_attribute(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RAPTOR_LOG_FILE_LEVEL", "basicConfig")
+    assert clog._file_log_level() == logging.INFO
+
+
+def test_file_log_level_defaults_without_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("RAPTOR_LOG_FILE_LEVEL", raising=False)
+    assert clog._file_log_level() == logging.INFO

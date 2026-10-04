@@ -13,6 +13,13 @@ from unittest.mock import patch
 
 
 
+def test_probe_allowlist_rejects_unknown_module():
+    """_import_probe_child must refuse modules outside the allowlist."""
+    from core.symbolic._availability import _import_probe_child
+    with pytest.raises(ValueError, match="not in allowlist"):
+        _import_probe_child("evil", "os")
+
+
 def test_angr_available_true_here():
     """Sanity — where angr is installed, the guard reads True."""
     pytest.importorskip("angr")
