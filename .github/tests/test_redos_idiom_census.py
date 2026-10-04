@@ -3156,6 +3156,7 @@ class RedosIdiomCensus(unittest.TestCase):
         self.assertEqual([flat(s) for s in roundtripped],
                          [flat(s) for s in serial])
 
+    @pytest.mark.slow
     def test_runtime_source_has_no_members(self) -> None:
         files = _iter_python_files()
         self.assertGreater(len(files), 100, "scan roots missing?")
