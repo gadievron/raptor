@@ -68,19 +68,11 @@ def sidecar_lock(path: Path) -> Iterator[None]:
     deliberately never unlinked (unlink-after-unlock races split
     lockers across two inodes — same doctrine as the core sidecar
     locks). Hosts without ``fcntl`` fall back to unlocked."""
+    from core.atomic_fs.fs_lock import sidecar_flock
+
     lock_path = path.with_name(path.name + ".lock")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        import fcntl
-    except ImportError:  # pragma: no cover — non-POSIX fallback
+    with sidecar_flock(lock_path, subject="SCA parser"):
         yield
-        return
-    fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o600)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        yield
-    finally:
-        os.close(fd)
 
 
 @contextlib.contextmanager
