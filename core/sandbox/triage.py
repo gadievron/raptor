@@ -21,14 +21,14 @@ re-runs it by hand (stranded runs, post-hoc re-classification after
 editing telemetry). This is the cheap deterministic pre-filter a future
 LLM-based deeper-reasoning pass would consume, not a replacement for one.
 
-Known limitation: socket()/ioctl() denials collapse to a generic
-syscall="socket"/"ioctl" under audit tracing (see
-core/sandbox/tracer.py:_NAME_TO_TYPE) — the AF_UNIX/AF_NETLINK/AF_PACKET
-family and TIOCSTI/TIOCCONS/TIOCSCTTY ioctl-cmd detail isn't captured by the
-current tracer record shape, so escape_primitive_denied can't distinguish a
-docker.sock-escape attempt from an ordinary blocked AF_UNIX call. Fixing
-this means enriching tracer.py's record with decoded syscall arguments — a
-separate, larger change.
+Syscall argument enrichment: tracer.py:_write_record calls
+escalation_signatures.decode_syscall_args on every denial, decorating
+records with socket_family/socket_type (socket) and ioctl_cmd (ioctl).
+_check_hostile_syscall_args consumes these via hostile_arg_label to
+distinguish AF_PACKET/SOCK_RAW/TIOCSTI escape attempts from ordinary
+AF_UNIX/AF_NETLINK noise. Residual: the target AF_UNIX *path* (e.g.
+docker.sock) is not captured because seccomp blocks the socket() call
+before connect() runs — inherent to the enforcement model.
 """
 
 from __future__ import annotations
