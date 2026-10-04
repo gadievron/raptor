@@ -74,6 +74,7 @@
       "Bash(libexec/raptor-validate-schema *)",
       "Bash(libexec/raptor-validation-helper *)",
       "Bash(libexec/raptor-verified-outcomes *)",
+      "Bash(libexec/raptor-zkpox *)",
       "Edit(/out/**)"
     ]
   },
