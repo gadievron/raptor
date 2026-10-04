@@ -29,9 +29,18 @@ import os
 import sys
 
 
+_ALLOWED_ENTRIES = frozenset({
+    "core.audit.condition_smt:_z3_dispatch_json",
+    "core.audit.sweep:_run_smt_verb_inner_json",
+})
+
+
 def main() -> None:
+    entry = sys.argv[1]
+    if entry not in _ALLOWED_ENTRIES:
+        raise SystemExit(f"_json_child: entry {entry!r} not in allowlist")
     sys.path[:1] = [os.environ["RAPTOR_DIR"]]
-    mod, _, func = sys.argv[1].rpartition(":")
+    mod, _, func = entry.rpartition(":")
     fn = getattr(importlib.import_module(mod), func)
     result = fn(json.loads(sys.stdin.buffer.read().decode("utf-8")))
     sys.stdout.write(json.dumps(result, default=str))
