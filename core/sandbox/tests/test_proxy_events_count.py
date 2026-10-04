@@ -345,7 +345,7 @@ class TestAnchoredOverflow:
         n_batches, per_batch = 4, 1_400
         pad = "pad" * 5_330  # ~16 KiB of host, line well under 64 KiB
         batch_hosts = [
-            f"host-{i:06d}.{pad}.example" for i in range(per_batch)
+            f"{pad}.host-{i:06d}.example" for i in range(per_batch)
         ]
         for b in range(n_batches):
             if b == n_batches - 1:
