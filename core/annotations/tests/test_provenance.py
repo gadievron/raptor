@@ -262,6 +262,13 @@ class TestDetectCorroborationFacts:
         ctx = detect_invocation_context()
         assert "claudecode" in ctx[ENV_MARKERS_KEY].split(",")
 
+    def test_codex_env_marker_recorded(self):
+        """CODEX env var stamps the codex marker."""
+        env = self._base_env()
+        env["CODEX"] = "1"
+        p = self._build(env=env)
+        self.assertIn("codex", p.envm.split(","))
+
     def test_no_markers_records_none(self, monkeypatch):
         for var in ("CLAUDECODE", "_RAPTOR_TRUSTED", "SSH_TTY",
                     "SSH_CONNECTION"):
