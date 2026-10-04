@@ -79,7 +79,7 @@ def test_active_codex_docs_do_not_point_at_retired_skill_paths() -> None:
         *sorted((ROOT / ".agents" / "skills").glob("source-command-*/SKILL.md")),
         ROOT / ".agents" / "skills" / "code-understanding" / "SKILL.md",
         ROOT / ".agents" / "skills" / "exploitability-validation" / "SKILL.md",
-        ROOT / ".agents" / "skills" / "coverage" / "SKILL.md",
+        ROOT / ".agents" / "skills" / "coverage.md",
     ]
 
     forbidden = [".Codex/skills", "CLAUDE_PROJECT_DIR"]
