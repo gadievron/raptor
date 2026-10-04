@@ -1070,13 +1070,24 @@ def _ledger_lock(pid: int) -> Iterator[None]:
             yield
             return
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            from core.atomic_fs.fs_lock import acquire_flock_bounded
+            acquired = acquire_flock_bounded(
+                fd, lock_path, subject="session ledger",
+                expiry_note=(
+                    "proceeding WITHOUT lock — ledger is "
+                    "best-effort data, never critical"
+                ),
+            )
         except OSError:
             os.close(fd)
             logger.warning(
                 "sessions: ledger lock acquisition failed for pid %d "
                 "— proceeding UNLOCKED (best-effort data)", pid,
                 exc_info=True)
+            yield
+            return
+        if not acquired:
+            os.close(fd)
             yield
             return
         try:
