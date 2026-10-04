@@ -8183,6 +8183,10 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                         used_spawn and _spawn_without_mount),
                     containment_tier=_tiers.tier_label(_delivered_tier),
                     containment_floor=_tiers.tier_label(_floor),
+                    block_network=bool(block_network),
+                    udp_block_engaged=bool(
+                        result.sandbox_info.get("udp_block_engaged",
+                                                False)),
                 )
             except Exception:  # noqa: BLE001 — best-effort telemetry posture
                 logger.debug("run posture record failed",

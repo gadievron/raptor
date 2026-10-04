@@ -7,6 +7,12 @@ signature pattern resembling an escape/recon/credential-theft attempt fired,
 as distinct from ordinary "tool needed something the profile didn't allow"
 denial noise.
 
+Signals: escape_primitive_denied, escape_burst (temporal clustering),
+hostile_syscall_argument, seccomp_denied_unattributed, resolved_ip_screened,
+host_recon_pattern, host_retry_pattern, credential_path_touch,
+volume_anomaly, udp_posture_gap, dns_exfil_indicator, telemetry_tampering,
+provenance_unavailable.
+
 Pure, rules-based, offline: no LLM call, no network, no cost — cheap
 enough that core/run/metadata.py runs it unconditionally on every
 terminal-state transition (complete/fail/cancel/interrupt), right after
@@ -93,6 +99,30 @@ _VOLUME_ANOMALY_CAP_FRACTION = 0.9
 # masquerades as complete.
 _MAX_EVIDENCE_ITEMS = 32
 _MAX_EVIDENCE_ITEM_LEN = 512
+
+# Escape-burst detection: N escape-primitive denials within a T-second
+# window signals a scripted sweep rather than one-off tool probing.
+_ESCAPE_BURST_COUNT = 5
+_ESCAPE_BURST_WINDOW_SECS = 10.0
+
+# Repeated-host retry: same denied host hit this many times is
+# persistence probing (distinct from breadth scanning).
+_HOST_RETRY_THRESHOLD = 10
+
+# DNS exfil: minimum distinct subdomains of one parent domain.
+_DNS_EXFIL_SUBDOMAIN_THRESHOLD = 20
+
+
+def _parse_ts(ts) -> float:
+    """Parse a denial timestamp to a comparable float.
+
+    Records use ISO 8601 strings (datetime.now(tz).isoformat()); accept
+    numeric values too for test convenience."""
+    if isinstance(ts, (int, float)):
+        return float(ts)
+    from datetime import datetime, timezone
+    return datetime.fromisoformat(str(ts)).replace(
+        tzinfo=timezone.utc).timestamp()
 
 
 # Verification outcomes for a triage input artifact. "verified" =
@@ -600,6 +630,10 @@ def triage_run(run_dir: Path, *,
     signals += _check_host_recon(proxy_events, host_recon_threshold)
     signals += _check_credential_path_touch(enforcement_denials)
     signals += _check_volume_anomaly(summary, budget_markers)
+    signals += _check_escape_burst(enforcement_denials)
+    signals += _check_host_retry(proxy_events)
+    signals += _check_dns_exfil_indicator(proxy_events)
+    signals += _check_udp_posture_gap(posture)
 
     # Destruction detection: an artifact that exists but yields no
     # usable content (garbage bytes, oversized blob, FIFO, symlink)
@@ -857,6 +891,123 @@ def _check_volume_anomaly(summary: dict | None,
         "severity": SEVERITY_MEDIUM,
         "count": total,
         "evidence": evidence,
+    }]
+
+
+def _check_udp_posture_gap(posture: dict | None) -> list[dict]:
+    """Fire when block_network was True but UDP was not blocked."""
+    if posture is None:
+        return []
+    if not posture.get("block_network"):
+        return []
+    if posture.get("udp_block_engaged", True):
+        return []
+    return [{
+        "type": "udp_posture_gap",
+        "severity": SEVERITY_HIGH,
+        "count": 1,
+        "evidence": [
+            "block_network=True but udp_block_engaged=False — "
+            "the child had an unmonitored UDP egress path "
+            "(DNS exfiltration possible)"
+        ],
+    }]
+
+
+def _check_escape_burst(denials: list[dict]) -> list[dict]:
+    """Detect bursts of escape-primitive denials within a short window."""
+    hits = [d for d in denials
+            if d.get("syscall") in ESCAPE_PRIMITIVE_SYSCALLS
+            and d.get("ts") is not None]
+    if len(hits) < _ESCAPE_BURST_COUNT:
+        return []
+    try:
+        timestamps = sorted(_parse_ts(h["ts"]) for h in hits)
+    except (TypeError, ValueError):
+        return []
+    for i in range(len(timestamps) - _ESCAPE_BURST_COUNT + 1):
+        window = timestamps[i + _ESCAPE_BURST_COUNT - 1] - timestamps[i]
+        if window <= _ESCAPE_BURST_WINDOW_SECS:
+            return [{
+                "type": "escape_burst",
+                "severity": SEVERITY_HIGH,
+                "count": len(hits),
+                "evidence": [
+                    f"{_ESCAPE_BURST_COUNT}+ escape-primitive denials "
+                    f"within {window:.1f}s window — scripted sweep"
+                ],
+            }]
+    return []
+
+
+def _check_host_retry(proxy_events: list[dict]) -> list[dict]:
+    """Detect repeated attempts to reach the same denied host."""
+    from collections import Counter
+    host_counts: Counter[str] = Counter()
+    for e in proxy_events:
+        if e.get("result") in ("denied_host", "would_deny_host"):
+            host = e.get("host")
+            if host:
+                host_counts[host] += 1
+    retried = {h: c for h, c in host_counts.items()
+               if c >= _HOST_RETRY_THRESHOLD}
+    if not retried:
+        return []
+    return [{
+        "type": "host_retry_pattern",
+        "severity": SEVERITY_MEDIUM,
+        "count": sum(retried.values()),
+        "evidence": _cap_evidence([
+            f"{host} ({count}x)" for host, count
+            in sorted(retried.items(), key=lambda x: -x[1])
+        ]),
+    }]
+
+
+_KNOWN_2LD_TLDS = frozenset({
+    "co.uk", "co.jp", "co.kr", "co.nz", "co.za", "co.in",
+    "com.au", "com.br", "com.cn", "com.hk", "com.mx", "com.sg",
+    "com.tw", "net.au", "org.uk", "org.au", "ac.uk", "gov.uk",
+})
+
+
+def _effective_parent(host: str) -> str | None:
+    """Extract the registrable parent domain, handling common 2LD TLDs."""
+    parts = host.lower().split(".")
+    if len(parts) < 3:
+        return None
+    tail2 = ".".join(parts[-2:])
+    if tail2 in _KNOWN_2LD_TLDS:
+        if len(parts) < 4:
+            return None
+        return ".".join(parts[-3:])
+    return tail2
+
+
+def _check_dns_exfil_indicator(proxy_events: list[dict]) -> list[dict]:
+    """Detect subdomain-encoding exfiltration through allowed hosts."""
+    from collections import defaultdict
+    allowed = [e for e in proxy_events
+               if e.get("result") in ("allowed", "proxied")
+               and e.get("host")]
+    parent_map: dict[str, set[str]] = defaultdict(set)
+    for e in allowed:
+        parent = _effective_parent(e["host"])
+        if parent:
+            parent_map[parent].add(e["host"])
+    suspects = {parent: subs for parent, subs in parent_map.items()
+                if len(subs) >= _DNS_EXFIL_SUBDOMAIN_THRESHOLD}
+    if not suspects:
+        return []
+    return [{
+        "type": "dns_exfil_indicator",
+        "severity": SEVERITY_HIGH,
+        "count": sum(len(s) for s in suspects.values()),
+        "evidence": _cap_evidence([
+            f"{parent}: {len(subs)} distinct subdomain(s)"
+            for parent, subs
+            in sorted(suspects.items(), key=lambda x: -len(x[1]))
+        ]),
     }]
 
 

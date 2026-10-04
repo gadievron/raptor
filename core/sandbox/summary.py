@@ -452,7 +452,9 @@ def record_run_posture(run_dir: Path, *, mount_ns_active: bool,
                        restrict_reads: bool,
                        mountless_backend: bool = False,
                        containment_tier: "str | None" = None,
-                       containment_floor: "str | None" = None) -> None:
+                       containment_floor: "str | None" = None,
+                       block_network: bool = False,
+                       udp_block_engaged: bool = False) -> None:
     """Record whether a sandbox invocation's posture could hide the
     telemetry-MAC key from the sandboxed child.
 
@@ -504,6 +506,8 @@ def record_run_posture(run_dir: Path, *, mount_ns_active: bool,
                 "mount_ns_active": bool(mount_ns_active),
                 "restrict_reads": bool(restrict_reads),
                 "mac_key_hidden": hidden,
+                "block_network": bool(block_network),
+                "udp_block_engaged": bool(udp_block_engaged),
             }
             if mountless_backend:
                 _run_postures[run_key]["mountless_backend"] = True
@@ -519,6 +523,10 @@ def record_run_posture(run_dir: Path, *, mount_ns_active: bool,
             cur["restrict_reads"] = (cur["restrict_reads"]
                                      and bool(restrict_reads))
             cur["mac_key_hidden"] = cur["mac_key_hidden"] and hidden
+            cur["block_network"] = (cur.get("block_network", False)
+                                    or bool(block_network))
+            cur["udp_block_engaged"] = (cur.get("udp_block_engaged", True)
+                                        and bool(udp_block_engaged))
             if mountless_backend:
                 cur["mountless_backend"] = True
             _merged_tier = _weakest_tier(

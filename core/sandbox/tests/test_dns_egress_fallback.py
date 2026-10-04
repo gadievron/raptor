@@ -153,3 +153,40 @@ else:
     )
     assert result.returncode == 0, result.stderr
     assert result.sandbox_info["degraded_net_deny"] is True
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux kernel enforcement")
+def test_live_runtime_demotion_denies_dns(monkeypatch):
+    """Kernel enforcement of UDP block after a runtime namespace failure."""
+    from core.sandbox.landlock import check_landlock_available, _get_landlock_abi
+    from core.sandbox.seccomp import check_seccomp_available
+
+    if not (check_landlock_available() and _get_landlock_abi() >= 4
+            and check_seccomp_available()):
+        pytest.skip("requires Landlock TCP policy and seccomp")
+    monkeypatch.setattr(context, "check_net_available", lambda: True)
+    monkeypatch.setattr(context, "check_mount_available", lambda: True)
+
+    from core.sandbox import _spawn
+    real_run = _spawn.run_sandboxed
+
+    def fail_first(*args, **kwargs):
+        monkeypatch.setattr(_spawn, "run_sandboxed", real_run)
+        raise OSError("forced namespace setup failure for demotion test")
+
+    monkeypatch.setattr(_spawn, "run_sandboxed", fail_first)
+    payload = f"""
+import errno, socket
+try:
+    socket.socket({int(socket.AF_INET)}, {int(socket.SOCK_DGRAM)})
+except OSError as exc:
+    assert exc.errno == {errno.EPERM}, exc
+else:
+    raise AssertionError('UDP DNS channel remains open after runtime demotion')
+"""
+    result = context.run(
+        [sys.executable, "-c", payload], block_network=True,
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.sandbox_info.get("degraded_net_deny") is True
