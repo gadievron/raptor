@@ -16,6 +16,7 @@ sys.path.insert(0, str(REPO))
 from core.labeled_attempts import (  # noqa: E402
     FailureMode,
     LabeledAttempt,
+    Outcome,
     SandboxEvidence,
     compute_finding_signature,
     recent_failure_summary,
@@ -32,7 +33,7 @@ from core.labeled_attempts import (  # noqa: E402
 def _attempt(
     *, finding_id: str = "FND-X",
     cwe: str = "CWE-787",
-    outcome: str = "reasoned_failure",
+    outcome: Outcome = "reasoned_failure",
     failure_mode: FailureMode | None = FailureMode.MODEL_REASONING_CEILING,
     days_old: int = 0,
     function: str = "f",

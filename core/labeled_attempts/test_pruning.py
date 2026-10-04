@@ -14,6 +14,7 @@ sys.path.insert(0, str(REPO))
 from core.labeled_attempts import (  # noqa: E402
     CodeQLEvidence,
     LabeledAttempt,
+    Outcome,
     PruneReport,
     SandboxEvidence,
     compute_finding_signature,
@@ -30,7 +31,7 @@ def _attempt(
     days_old: int = 0,
     cwe: str = "CWE-787",
     function: str = "f",
-    outcome: str = "success",
+    outcome: Outcome = "success",
 ) -> LabeledAttempt:
     now = datetime(2026, 6, 5, tzinfo=timezone.utc)
     ts = (now - timedelta(days=days_old)).isoformat()

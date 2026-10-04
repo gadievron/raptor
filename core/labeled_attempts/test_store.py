@@ -13,6 +13,7 @@ sys.path.insert(0, str(REPO))
 
 from core.labeled_attempts import (
     LabeledAttempt,
+    Outcome,
     SandboxEvidence,
     bundled_corpus_path,
     find_by_cwe,
@@ -36,7 +37,7 @@ def _make_attempt(
     finding_id: str = "FND-001",
     finding_signature: str = "deadbeef" * 4,
     cwe: str = "CWE-787",
-    outcome: str = "success",
+    outcome: Outcome = "success",
     timestamp: str = "2026-06-03T14:05:32+00:00",
     failure_mode: FailureMode | None = None,
 ) -> LabeledAttempt:

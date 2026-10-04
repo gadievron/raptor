@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from typing import Any
 from pathlib import Path
 
 import pytest
@@ -61,7 +62,7 @@ def _web_evidence() -> WebEvidence:
 
 
 def _attempt(**overrides) -> LabeledAttempt:
-    base = dict(
+    base: dict[str, Any] = dict(
         finding_id="FND-001",
         finding_signature="abcd" * 8,
         cwe="CWE-787",
