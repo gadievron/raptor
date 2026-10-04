@@ -1708,7 +1708,7 @@ def show_mode_help(mode: str, preamble: bool = True) -> None:
     mode_scripts = _mode_help_scripts()
 
     if mode not in mode_scripts:
-        all_modes = set(mode_scripts.keys()) | {'describe', 'doctor', 'sca', 'frida'}
+        all_modes = set(mode_scripts.keys()) | {'describe', 'doctor', 'sca', 'frida', 'zkpox'}
         if mode not in all_modes:
             print(f"✗ Unknown mode: {mode}", file=sys.stderr)
             print(f"Available modes: {', '.join(sorted(all_modes))}", file=sys.stderr)
@@ -1952,6 +1952,7 @@ def main():
         'describe': mode_describe,
         'frida': mode_frida,
         'openant': mode_openant,
+        'zkpox': mode_zkpox,
     }
     
     if mode not in mode_handlers:
