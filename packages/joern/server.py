@@ -3269,4 +3269,7 @@ class JoernServer:
         self.stop()
 
     def __del__(self) -> None:
-        self.stop()
+        try:
+            self.stop()
+        except Exception:  # noqa: BLE001, S110 — __del__ may run during interpreter teardown where module globals (logger, signal, subprocess, os, shutil) are unreliable; a raise here only spams stderr
+            pass
