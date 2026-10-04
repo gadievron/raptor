@@ -186,13 +186,13 @@ class OsvClient:
                 for i, token in pending
             ]
             try:
-                data = self._http.post_json(
+                cont_data = self._http.post_json(
                     f"{OSV_BASE_URL}/querybatch", {"queries": cont_queries},
                 )
             except HttpError as exc:
                 log.warning("osv: querybatch continuation failed: %s", exc)
-                data = None
-            cont_results = data.get("results") if isinstance(data, dict) else None
+                cont_data = None
+            cont_results = cont_data.get("results") if isinstance(cont_data, dict) else None
             if not isinstance(cont_results, list) or len(cont_results) != len(pending):
                 for i, _token in pending:
                     out[i] = None

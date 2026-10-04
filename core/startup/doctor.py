@@ -448,7 +448,7 @@ def _render(
       * Anything in a ``*_warnings`` list is a warning.
     """
     failures: list[str] = []
-    warnings: list[str] = []
+    warnings: list[str | tuple[str, str]] = []
     passes: list[str] = []
 
     # Tools — single line summary of present/missing, then individual
@@ -539,17 +539,17 @@ def _render(
     if warnings:
         out.append("")
         out.append("WARNINGS:")
-        for w in warnings:
+        for entry in warnings:
             # Tuple-marked continuation lines (currently just
             # install hints) get a continuation prefix instead of
             # the warning bullet, so the operator reads them as a
             # follow-up to the prior warning.
-            if isinstance(w, tuple) and len(w) == 2 and w[0] == "hint":
+            if isinstance(entry, tuple):
                 out.append(
-                    f"      hint: {escape_nonprintable(w[1])}"
+                    f"      hint: {escape_nonprintable(entry[1])}"
                 )
             else:
-                out.append(f"  ! {escape_nonprintable(w)}")
+                out.append(f"  ! {escape_nonprintable(entry)}")
 
     advisory_lines = [a for a in advisories if a]
     if advisory_lines:
@@ -572,8 +572,8 @@ def _render(
     # Continuation entries (install-hint tuples) don't count as
     # warnings — only the real warning bullets do.
     real_warnings = sum(
-        1 for w in warnings
-        if not (isinstance(w, tuple) and w and w[0] == "hint")
+        1 for ww in warnings
+        if not (isinstance(ww, tuple) and ww and ww[0] == "hint")
     )
     out.append(
         f"Summary: {len(failures)} failure(s), "

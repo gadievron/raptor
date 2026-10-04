@@ -9,6 +9,7 @@ import json
 import logging
 import math
 import os
+import types
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ from core.source.gated import read_text_gated as _read_text_gated_impl
 
 logger = logging.getLogger(__name__)
 
+_orjson: types.ModuleType | None
 try:
     import orjson as _orjson
 except ImportError:

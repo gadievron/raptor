@@ -438,13 +438,13 @@ def format_text(report: DescribeReport) -> str:
         for eng in census.engines:
             head = f"  {eng.engine}: {eng.count}"
             if eng.examples:
-                names = ", ".join(
+                eng_names = ", ".join(
                     sanitise_for_terminal(n, max_len=64)
                     for n in eng.examples
                 )
                 more = eng.count - len(eng.examples)
                 suffix = f", +{more} more" if more > 0 else ""
-                head += f" ({names}{suffix})"
+                head += f" ({eng_names}{suffix})"
             lines.append(head)
             lines.append(
                 "      "

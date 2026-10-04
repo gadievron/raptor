@@ -47,6 +47,7 @@ inputs).
 from __future__ import annotations
 
 import logging
+import os
 import struct
 from pathlib import Path
 from typing import NamedTuple
@@ -146,7 +147,7 @@ _EOCD_SEARCH_BYTES = 65557
 
 
 def peek_eocd(
-    source: Path | str | bytes,
+    source: "Path | str | bytes | os.PathLike[str]",
 ) -> EocdSummary | None:
     """Read the EOCD pre-flight from ``source`` and return the zip's
     declared totals (entry count + central-directory size), or

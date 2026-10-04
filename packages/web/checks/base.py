@@ -44,7 +44,7 @@ def note_transport_error(client: object, count: int = 1) -> None:
         return
     counter = getattr(client, "transport_errors", None)
     if isinstance(counter, int) and not isinstance(counter, bool):
-        client.transport_errors = counter + count
+        setattr(client, "transport_errors", counter + count)
 
 
 class CheckCategory(str, Enum):

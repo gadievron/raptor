@@ -71,6 +71,7 @@ def recommend_next(shape: TargetShape) -> list[Recommendation]:
         shape.primary_language,
     ))
     if has_build:
+        assert shape.primary_language is not None
         bs = shape.build_systems[shape.primary_language]
         out.append(Recommendation(
             command="/codeql",

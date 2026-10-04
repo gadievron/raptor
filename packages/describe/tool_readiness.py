@@ -153,11 +153,12 @@ def _format_build_deps_hint(missing_deps: list[str]) -> str:
         # automake share no package, but autoreconf is from
         # ``autoconf`` and any future dep mapping the same way
         # wouldn't double-print).
-        seen = set()
-        dedup_pkgs = [
-            p for p in distro_pkgs
-            if not (p in seen or seen.add(p))
-        ]
+        seen: set[str] = set()
+        dedup_pkgs: list[str] = []
+        for p in distro_pkgs:
+            if p not in seen:
+                seen.add(p)
+                dedup_pkgs.append(p)
         parts.append(format_install_hint(dedup_pkgs))
     parts.extend(other_hints)
     return "; ".join(parts)

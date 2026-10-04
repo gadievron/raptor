@@ -203,7 +203,7 @@ def _run_batches(
         return on_error(batch, exc) if on_error else None
 
     mw = getattr(llm_client, "recommended_max_workers", 1)
-    results = run_parallel(
+    results: list[Any] = run_parallel(
         batches, _fn,
         max_workers=mw,
         label=label,
@@ -685,11 +685,10 @@ def _parse_assumption_response(response: str) -> list[SafetyAssumption]:
         logger.debug("iris.synthesise: assumption response not valid JSON")
         return []
 
-    if not isinstance(data, list):
-        data = [data]
+    items = data if isinstance(data, list) else [data]
 
     result: list[SafetyAssumption] = []
-    for item in data:
+    for item in items:
         if not isinstance(item, dict):
             continue
         if not item.get("target") or not item.get("assumption"):

@@ -33,6 +33,7 @@ if not __package__:
 
 # Import errors are deferred to main() so the module stays import-safe
 # (test collection must never die on a missing optional dependency).
+_SAGE_SDK_IMPORT_ERROR: ImportError | None = None
 try:
     import httpx
     from sage_sdk.async_client import AsyncSageClient
@@ -41,9 +42,7 @@ try:
     from sage_sdk.models import MemoryType
 except ImportError as _exc:
     _SAGE_SDK_IMPORT_ERROR = _exc
-    httpx = AsyncSageClient = AgentIdentity = SageError = MemoryType = None
-else:
-    _SAGE_SDK_IMPORT_ERROR = None
+    httpx = AsyncSageClient = AgentIdentity = SageError = MemoryType = None  # type: ignore[assignment]
 
 from core.sage.scripts._common import async_memory_exists
 

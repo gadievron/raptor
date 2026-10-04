@@ -824,9 +824,13 @@ def sanitise_findings_evidence(
                 and feasibility.get("status") == "analyzed"
                 and verify_feasibility(finding, run_dir)
             )
-            verdict_tier = _VERDICT_TIER_STATUS.get(
-                str(feasibility.get("verdict") or "").strip().lower()
-            ) if verified else None
+            if verified:
+                assert isinstance(feasibility, dict)
+                verdict_tier = _VERDICT_TIER_STATUS.get(
+                    str(feasibility.get("verdict") or "").strip().lower()
+                )
+            else:
+                verdict_tier = None
             demoted = False
             if claimed_final in FEASIBILITY_TIER_STATUSES:
                 if verdict_tier == claimed_final:

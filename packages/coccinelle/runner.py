@@ -1478,6 +1478,7 @@ def _inject_harness(rule_text: str, rule_name: str) -> str:
         return rule_text
 
     pos_match = re.search(r"position\s+(\w+)", rule_text, re.ASCII)
+    assert pos_match is not None
     pos_var = pos_match.group(1)
 
     # ASCII-restricted via re.ASCII above, but the captured name

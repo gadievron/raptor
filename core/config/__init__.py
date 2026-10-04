@@ -758,7 +758,7 @@ class RaptorConfig:
     # rule_of_two so the lists cannot drift. (Deferred import: keeps
     # the class body free of a module-level core.security dependency
     # while still evaluating exactly once at class-definition time.)
-    from core.security.rule_of_two import ci_env_vars as _ci_env_vars
+    from core.security.rule_of_two import ci_env_vars as _ci_env_vars  # type: ignore[misc]
     SAFE_ENV_ALLOWLIST = SAFE_ENV_ALLOWLIST | frozenset(_ci_env_vars())
     del _ci_env_vars
 

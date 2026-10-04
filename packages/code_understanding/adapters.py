@@ -75,13 +75,12 @@ class VariantAdapter(BaseSetAdapter):
         function = (item.get("function") or "").strip()
 
         line_raw = item.get("line")
+        line: Any
         if isinstance(line_raw, str):
             stripped = line_raw.strip()
             try:
                 line = int(stripped)
             except ValueError:
-                # Non-numeric string: keep stripped form so trailing-whitespace
-                # variants don't bucket separately ("junk" and "junk " unify).
                 line = stripped
         else:
             line = line_raw

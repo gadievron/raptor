@@ -33,7 +33,7 @@ def _md_heading(value: object, *, max_chars: int = 300) -> str:
     """Single-line defang for headings / labels — newline-flattening,
     autofetch stripping, and control-byte escaping without eating
     legitimate label text (see sanitise_inline)."""
-    return sanitise_inline(value, max_chars=max_chars)
+    return sanitise_inline(str(value), max_chars=max_chars)
 
 
 def _md_table_cell(value: object, *, max_chars: int = 300) -> str:

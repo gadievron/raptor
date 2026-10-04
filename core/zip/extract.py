@@ -177,7 +177,7 @@ def extract_files_from_zip(
     # streams can't be peeked without consuming them (the caller can
     # buffer + re-pass if they want the gate).
     if isinstance(source, (bytes, bytearray, str, os.PathLike)):
-        summary = peek_eocd(source)
+        summary = peek_eocd(source)  # type: ignore[arg-type]
         reason = (
             bomb_shaped_reason(summary, max_entries=max_entry_count)
             if summary is not None else None

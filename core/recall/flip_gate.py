@@ -53,7 +53,7 @@ feed it to FP-suppression or scorecard learning stores.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
 from core.json import load_json
 from core.recall.manifest import PROFILES
@@ -131,7 +131,7 @@ def _missed_ids(report: dict[str, Any]) -> set[str]:
     return {str(m.get("id")) for m in report.get("missed", [])}
 
 
-def _is_count(v: Any) -> bool:
+def _is_count(v: Any) -> TypeGuard[int]:
     return isinstance(v, int) and not isinstance(v, bool) and v >= 0
 
 
@@ -327,7 +327,7 @@ def evaluate_flip_gate(
     # so a margin equal to the true uplift stays strict instead of
     # flipping on float noise (0.8 - 0.6 > 0.2 is True in binary64).
     uplift_ok = (c_found - b_found) > min_uplift * b_expected
-    checks = {
+    checks: dict[str, dict[str, Any]] = {
         "recall_uplift": {
             "passed": uplift_ok,
             "min_uplift": min_uplift,

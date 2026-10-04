@@ -1446,17 +1446,17 @@ class BuildDetector:
             # of operator-stated scan scope.
             for parent_inc in self._discover_ancestor_includes():
                 include_flags.add(f"-I{parent_inc}")
-            include_flags = sorted(include_flags)
+            flag_list = sorted(include_flags)
         elif language == "java":
             source_files = _walk_files(self.repo_path, (".java",))
             compiler = "javac"
-            include_flags = ["-sourcepath", str(self.repo_path)]
+            flag_list = ["-sourcepath", str(self.repo_path)]
         else:
             return [], "", [], []
 
         # Validate all auto-detected flags
-        include_flags = self._validate_flags(include_flags)
-        return source_files, compiler, include_flags, []
+        flag_list = self._validate_flags(flag_list)
+        return source_files, compiler, flag_list, []
 
     def _java_synthesised_classpath(self) -> list[str]:
         """When we fall through to raw javac (no pom.xml/build.gradle/

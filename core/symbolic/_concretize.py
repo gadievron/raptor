@@ -89,7 +89,7 @@ def install_adversarial_size_hooks(
         # *args wrapper would zero it — pass the base arity through.
         base_arity = len(inspect.getfullargspec(base.run).args) - 1
 
-        class _Pinned(base):  # noqa: B903
+        class _Pinned(base):  # type: ignore[misc,valid-type]  # noqa: B903
             _pin_indices = size_indices
 
             def run(self, *args, **kwargs):

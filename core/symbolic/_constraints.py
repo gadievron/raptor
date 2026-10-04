@@ -245,7 +245,7 @@ def _promote_unconstrained_to_target(
     """
     if want <= 0:
         return []
-    out = []
+    out: list[Any] = []
     for state in simgr.unconstrained:
         if len(out) >= want:
             break
@@ -339,7 +339,7 @@ def _collect_stdin_byte_indices(ast, out: set) -> None:
             inner = ast.args[2]
         except Exception:  # noqa: BLE001
             return
-        inner_vars = getattr(inner, "variables", frozenset())
+        inner_vars: frozenset[str] = getattr(inner, "variables", frozenset())
         stdin_vars = [v for v in inner_vars if _STDIN_VAR_RE.match(v)]
         if stdin_vars:
             total_bits = getattr(inner, "size", lambda: None)()

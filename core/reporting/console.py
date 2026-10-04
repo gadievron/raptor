@@ -1,13 +1,13 @@
 """Console table renderer — box-drawing terminal output."""
 
+from collections.abc import Callable
 
 from core.security.log_sanitisation import escape_nonprintable
 
+_wcswidth: Callable[[str], int] | None
 try:
     from wcwidth import wcswidth as _wcswidth
 except ImportError:  # pragma: no cover
-    # Fall back to len() — under-reports CJK / emoji widths but
-    # never raises. Acceptable degradation.
     _wcswidth = None
 
 

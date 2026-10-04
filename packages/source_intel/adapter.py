@@ -1803,7 +1803,7 @@ def _path_is_gated(
     result: SourceIntelResult,
     *,
     remaining_depth: int,
-    visited: frozenset[str],
+    visited: frozenset[str] | set[str],
     fn_file: str | None = None,
 ) -> bool:
     """Multi-hop helper: True iff every call path reaching ``fn_name``
@@ -2018,6 +2018,7 @@ def _function_body_via_inventory(
     inv, target_dir = _lookup_cached_inventory(file_path)
     if inv is None:
         return None
+    assert target_dir is not None
     try:
         from pathlib import Path
         rel = str(Path(file_path).resolve().relative_to(target_dir))

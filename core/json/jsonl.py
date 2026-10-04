@@ -281,7 +281,7 @@ def load_jsonl(
         except OSError:
             pass
         logger.debug("load_jsonl: cannot read %s", path, exc_info=True)
-        return list(records) if max_records is not None else records
+        return records if isinstance(records, list) else list(records)
     with f:
         try:
             oversize_lines = 0
@@ -348,4 +348,4 @@ def load_jsonl(
                 "are NOT loaded",
                 len(records), appended_total, path,
             )
-    return list(records) if max_records is not None else records
+    return records if isinstance(records, list) else list(records)

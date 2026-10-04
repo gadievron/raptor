@@ -237,6 +237,7 @@ def score_finding(finding: dict) -> None:
         score, label = compute_score_safe(vec)
         if score is not None:
             finding["cvss_score_estimate"] = score
+            assert label is not None
             finding["severity_assessment"] = label.lower()
 
 

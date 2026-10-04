@@ -9,6 +9,7 @@ import bz2
 import gzip
 import lzma
 from pathlib import Path
+from typing import Any
 
 from .errors import ArchiveError, DecompressionLimitExceeded, UnsupportedArchive
 
@@ -31,7 +32,7 @@ def _zstd_open(path, mode="rb"):
         return zstandard.open(path, mode)
 
 
-_OPENERS = {
+_OPENERS: dict[str, Any] = {
     "gz": gzip.open,
     "bz2": bz2.open,
     "xz": lzma.open,

@@ -159,9 +159,9 @@ def graph_path_for_run(run_dir: Path, target_path: Optional[str] = None) -> Path
         try:
             from core.project.project import ProjectManager
 
-            project = ProjectManager().find_project_for_target(str(target_path))
-            if project is not None:
-                return Path(project.output_dir) / "graph" / GRAPH_FILENAME
+            matched = ProjectManager().find_project_for_target(str(target_path))
+            if matched is not None:
+                return Path(matched.output_dir) / "graph" / GRAPH_FILENAME
         except Exception:
             pass
 

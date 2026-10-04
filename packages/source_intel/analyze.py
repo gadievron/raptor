@@ -2131,6 +2131,7 @@ def _enclosing_function_via_inventory(
     except ImportError:
         return None
     # Inventory keys files by the relative path from the target dir.
+    assert target_dir is not None
     try:
         rel = str(Path(file_path).resolve().relative_to(target_dir))
     except (ValueError, OSError):
