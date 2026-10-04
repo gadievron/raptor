@@ -925,7 +925,16 @@ class LogStreamer:
                     self._proc.wait(timeout=5)
                 except Exception:  # noqa: BLE001 — any wait failure (timeout, interpreter shutdown) must escalate to kill
                     self._proc.kill()
-                    self._proc.wait()
+                    try:
+                        self._proc.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        if self._proc.stdout:
+                            self._proc.stdout.close()
+                        logger.debug(
+                            "seatbelt audit: killed log-stream "
+                            "process did not exit within 10s; "
+                            "abandoning reap",
+                        )
             except OSError:
                 # KEEP-SILENT (F070 per-site triage W21): terminate()
                 # on an already-dead process is the only realistic
