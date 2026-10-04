@@ -31,7 +31,8 @@ def _frontmatter(text: str) -> dict[str, str]:
 
 def test_codex_repo_guidance_files_exist() -> None:
     assert (ROOT / "AGENTS.md").is_file()
-    assert (ROOT / ".agents" / "skills").is_dir()
+    assert (ROOT / ".agents" / "skills").is_symlink(), ".agents/skills should be a symlink"
+    assert (ROOT / ".agents" / "skills").is_dir(), ".agents/skills symlink target should exist"
     assert (ROOT / ".codex" / "config.toml").is_file()
     assert (ROOT / ".codex" / "hooks.json").is_file()
 
@@ -81,7 +82,7 @@ def test_active_codex_docs_do_not_point_at_retired_skill_paths() -> None:
         ROOT / ".agents" / "skills" / "coverage" / "SKILL.md",
     ]
 
-    forbidden = [".Codex/skills", ".claude/skills", "CLAUDE_PROJECT_DIR"]
+    forbidden = [".Codex/skills", "CLAUDE_PROJECT_DIR"]
     for path in paths:
         text = _read(path)
         for marker in forbidden:
