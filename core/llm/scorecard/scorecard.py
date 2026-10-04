@@ -1702,17 +1702,55 @@ class ModelScorecard:
                 self.lock_fh = None
                 raise
 
-        def _enter_under_lock(self, path, lock_path):
+        _ACQUIRE_DEADLINE_S = 60.0
+        _ACQUIRE_POLL_S = 0.1
+
+        def _acquire_bounded(self, mode: int, lock_path) -> None:
+            """LOCK_NB first, then poll until the deadline.
+
+            Raises OSError for non-contention errors (NFS refusal)
+            so the caller degrades to lock-free on those. On deadline
+            expiry, proceeds without the lock.
+            """
+            import errno as _errno
+
+            contention = (_errno.EACCES, _errno.EAGAIN, _errno.EWOULDBLOCK)
+            fd = self.lock_fh.fileno()
             try:
-                fcntl.flock(
-                    self.lock_fh.fileno(),
-                    fcntl.LOCK_EX if self.write else fcntl.LOCK_SH,
-                )
+                fcntl.flock(fd, mode | fcntl.LOCK_NB)
+                return
+            except OSError as exc:
+                if exc.errno not in contention:
+                    raise
+            logger.warning(
+                "scorecard lock %s: held by another process; "
+                "waiting up to %.0fs",
+                lock_path, self._ACQUIRE_DEADLINE_S,
+            )
+            deadline = time.monotonic() + self._ACQUIRE_DEADLINE_S
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    logger.warning(
+                        "scorecard lock %s: still held after %.0fs "
+                        "— proceeding WITHOUT lock; concurrent "
+                        "updates may race",
+                        lock_path, self._ACQUIRE_DEADLINE_S,
+                    )
+                    return
+                time.sleep(min(self._ACQUIRE_POLL_S, remaining))
+                try:
+                    fcntl.flock(fd, mode | fcntl.LOCK_NB)
+                    return
+                except OSError as exc:
+                    if exc.errno not in contention:
+                        raise
+
+        def _enter_under_lock(self, path, lock_path):
+            mode = fcntl.LOCK_EX if self.write else fcntl.LOCK_SH
+            try:
+                self._acquire_bounded(mode, lock_path)
             except OSError as e:
-                # NFS / unusual filesystems may not support flock.
-                # Log once per path and proceed lock-free; correctness
-                # in that environment depends on operator running
-                # serially.
                 if str(lock_path) not in _flock_warned_paths:
                     _flock_warned_paths.add(str(lock_path))
                     logger.warning(
