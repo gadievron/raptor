@@ -35,7 +35,6 @@ Or as a context manager::
 from __future__ import annotations
 
 import contextlib
-import fcntl
 import json
 import logging
 import os
@@ -224,14 +223,10 @@ def _remove_state(_lock_fd: int) -> None:
 
 @contextlib.contextmanager
 def _locked():
-    _state_dir().mkdir(parents=True, exist_ok=True)
-    fd = os.open(str(_lock_file()), os.O_RDWR | os.O_CREAT, 0o600)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        yield fd
-    finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
-        os.close(fd)
+    from core.atomic_fs.fs_lock import sidecar_flock
+
+    with sidecar_flock(_lock_file(), subject="Joern lifecycle"):
+        yield -1
 
 
 def _health_check(
