@@ -71,30 +71,40 @@ class TestMainThreadGuard:
         agentic = _import_agentic()
         assert callable(agentic._parent_death_preexec())
 
-    def test_worker_thread_refuses_with_loud_warning(self, caplog):
+    def test_worker_thread_refuses_with_loud_warning(self):
+        import logging
         import threading
         agentic = _import_agentic()
         result: list = []
-        with caplog.at_level("WARNING"):
+        records: list = []
+        handler = logging.Handler()
+        handler.emit = lambda r: records.append(r)
+        raptor_logger = logging.getLogger("raptor")
+        raptor_logger.addHandler(handler)
+        try:
             t = threading.Thread(
                 target=lambda: result.append(
                     agentic._parent_death_preexec()),
             )
             t.start()
             t.join(timeout=10)
+        finally:
+            raptor_logger.removeHandler(handler)
         assert result == [None]
-        assert "non-main thread" in caplog.text
+        assert any("non-main thread" in r.getMessage() for r in records)
 
     @pytest.mark.linux_native
-    def test_worker_thread_spawn_falls_back_to_no_pdeathsig(self, caplog):
-        # Behavioural direction through the real chokepoint: a
-        # worker-thread spawn produces a child WITHOUT pdeathsig
-        # (probe exits 0) instead of one armed against the worker
-        # thread's lifetime.
+    def test_worker_thread_spawn_falls_back_to_no_pdeathsig(self):
+        import logging
         import threading
         agentic = _import_agentic()
         out: list = []
-        with caplog.at_level("WARNING"):
+        records: list = []
+        handler = logging.Handler()
+        handler.emit = lambda r: records.append(r)
+        raptor_logger = logging.getLogger("raptor")
+        raptor_logger.addHandler(handler)
+        try:
             t = threading.Thread(
                 target=lambda: out.append(agentic.run_command_streaming(
                     [sys.executable, "-c", _PDEATHSIG_PROBE],
@@ -103,8 +113,10 @@ class TestMainThreadGuard:
             )
             t.start()
             t.join(timeout=60)
+        finally:
+            raptor_logger.removeHandler(handler)
         assert out and out[0][0] == 0
-        assert "non-main thread" in caplog.text
+        assert any("non-main thread" in r.getMessage() for r in records)
 
 
 class TestSpawnSiteWiring:
