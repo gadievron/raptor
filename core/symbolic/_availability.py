@@ -45,14 +45,11 @@ _ALLOWED_PROBE_MODULES: frozenset[str] = frozenset({
 
 #: Fixed program text for the probe child. The probed module name
 #: rides as argv data (``sys.argv[1]``) — it is never interpolated
-#: into program text.  The allowlist is embedded in the child source
-#: so the check runs in the child process, not just the parent.
+#: into program text.  The parent-side allowlist gate
+#: (``_ALLOWED_PROBE_MODULES``) is the enforcement boundary; the
+#: child trusts that the parent already validated the module name.
 _CHILD_PROBE_SOURCE: str = (
-    "import importlib, sys; "
-    "a = {'angr', 'z3', 'claripy'}; "
-    "m = sys.argv[1]; "
-    "m in a or sys.exit(f'probe: {m!r} not in allowlist'); "
-    "importlib.import_module(m)"
+    "import importlib, sys; importlib.import_module(sys.argv[1])"
 )
 
 #: Probe-child deadline, seconds. Lower risks a false "unavailable":

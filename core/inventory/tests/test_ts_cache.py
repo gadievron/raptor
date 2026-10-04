@@ -108,12 +108,21 @@ def test_import_grammar_rejects_non_tree_sitter_module(fresh_caches):
         _ts_cache.import_grammar("os")
 
 
-def test_success_is_cached_and_absence_is_not_sticky(fresh_caches):
+def test_success_is_cached_and_absence_is_not_sticky(fresh_caches, monkeypatch):
     """Success caches the module; a monkeypatched loader seam takes
     effect immediately because parser-cache misses are re-probed."""
-    mod = _ts_cache.import_grammar("tree_sitter_python")
-    assert mod is not None
-    assert _ts_cache.import_grammar("tree_sitter_python") is mod
+    sentinel = type("FakeGrammar", (), {})()
+    real_import = importlib.import_module
+
+    def _fake_import(name, *a, **kw):
+        if name == "tree_sitter_fakesuccess":
+            return sentinel
+        return real_import(name, *a, **kw)
+
+    monkeypatch.setattr(importlib, "import_module", _fake_import)
+    mod = _ts_cache.import_grammar("tree_sitter_fakesuccess")
+    assert mod is sentinel
+    assert _ts_cache.import_grammar("tree_sitter_fakesuccess") is mod
 
     probes: list[int] = []
 

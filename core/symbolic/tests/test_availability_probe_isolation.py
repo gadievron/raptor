@@ -24,8 +24,22 @@ from core.symbolic._availability import _probe, clear_probe_cache
 
 
 @pytest.fixture(autouse=True)
-def _fresh_cache():
-    """Probe results are memoized per process — isolate every test."""
+def _fresh_cache(monkeypatch: pytest.MonkeyPatch):
+    """Probe results are memoized per process — isolate every test.
+
+    Widens the probe allowlist so the synthetic module names these
+    tests exercise (``json``, ``raptor_scratch_*``) pass the
+    parent-side gate.
+    """
+    monkeypatch.setattr(
+        _availability, "_ALLOWED_PROBE_MODULES",
+        _availability._ALLOWED_PROBE_MODULES | {
+            "json",
+            "raptor_scratch_no_such_module",
+            "raptor_scratch_abort_on_import",
+            "raptor_scratch_sleep_on_import",
+        },
+    )
     clear_probe_cache()
     yield
     clear_probe_cache()
