@@ -18,7 +18,7 @@ authors = [
 
 dependencies = [
     "requests==2.34.2",
-    "urllib3==2.7.0",
+    "urllib3==2.8.0",
     "pydantic==2.13.4",
     "typer==0.25.1",
     "instructor==1.15.4",
