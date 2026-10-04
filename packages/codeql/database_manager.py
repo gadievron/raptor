@@ -382,7 +382,7 @@ class DatabaseManager:
         """Mount-ns bind dirs needed for codeql to run. See QueryRunner
         equivalent — same rationale (codeql install root rarely lives
         in /usr/bin)."""
-        return [str(Path(self.codeql_cli).resolve().parent)]
+        return [str(Path(self.codeql_cli).resolve().parent)]  # type: ignore[arg-type]
 
     def _detect_codeql_cli(self) -> str | None:
         """Detect CodeQL CLI path.
@@ -442,7 +442,7 @@ class DatabaseManager:
             # env-hygiene posture as the database-creation Popen
             # below.
             result = subprocess.run(
-                [self.codeql_cli, "version"],
+                [self.codeql_cli, "version"],  # type: ignore[list-item]
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -481,9 +481,10 @@ class DatabaseManager:
         Cached per manager instance and language (the CLI doesn't
         change mid-run).
         """
-        cache = getattr(self, "_buildless_probes", None)
+        cache: dict[str, tuple[bool, str]] = getattr(self, "_buildless_probes", None)  # type: ignore[assignment]
         if cache is None:
-            cache = self._buildless_probes = {}
+            self._buildless_probes: dict[str, tuple[bool, str]] = {}
+            cache = self._buildless_probes
         if language in cache:
             return cache[language]
         min_version = BUILDLESS_MIN_VERSIONS.get(language)
@@ -1638,7 +1639,7 @@ class DatabaseManager:
         else:
             logger.info("No build command (interpreted language or no-build mode)")
 
-        logger.info("Executing: %s", ' '.join(cmd))
+        logger.info("Executing: %s", ' '.join(cmd))  # type: ignore[arg-type]
         logger.info("Timeout: %ss", RaptorConfig.CODEQL_TIMEOUT)
 
         # Toolchain binds for the mount namespace. The build wrapper's
@@ -1660,7 +1661,7 @@ class DatabaseManager:
             from core.sandbox import run as sandbox_run
             from core.sandbox.fingerprint import HOST_CPU_COUNT
             result = sandbox_run(
-                cmd,
+                cmd,  # type: ignore[arg-type]
                 block_network=True,
                 cwd=working_dir,
                 env=env,

@@ -1620,7 +1620,7 @@ class LLMDispatcher:
                 return True
 
         handler_cls = _make_request_handler(dispatcher)
-        self._server = _UnixThreadingHTTPServer(str(self.socket_path), handler_cls)
+        self._server = _UnixThreadingHTTPServer(str(self.socket_path), handler_cls)  # type: ignore[arg-type]
 
         self._thread = threading.Thread(
             target=self._server.serve_forever,
@@ -1639,7 +1639,7 @@ class LLMDispatcher:
             dispatcher, plane="child_uds",
         )
         self._child_server = _UnixThreadingHTTPServer(
-            str(self.child_socket_path), child_handler_cls,
+            str(self.child_socket_path), child_handler_cls,  # type: ignore[arg-type]
         )
         self._child_thread = threading.Thread(
             target=self._child_server.serve_forever,
@@ -2243,16 +2243,16 @@ class LLMDispatcher:
                         self._conn_slots.release()
 
             handler_cls = _make_request_handler(dispatcher, plane="tcp")
-            self._tcp_server = _LoopbackHTTPServer(
+            self._tcp_server = _LoopbackHTTPServer(  # type: ignore[assignment]
                 ("127.0.0.1", 0), handler_cls,
             )
-            self._tcp_port = self._tcp_server.server_address[1]
-            self._tcp_thread = threading.Thread(
-                target=self._tcp_server.serve_forever,
+            self._tcp_port = self._tcp_server.server_address[1]  # type: ignore[attr-defined]
+            self._tcp_thread = threading.Thread(  # type: ignore[assignment]
+                target=self._tcp_server.serve_forever,  # type: ignore[attr-defined]
                 name=f"raptor-llm-dispatcher-tcp-{self.run_id}",
                 daemon=True,
             )
-            self._tcp_thread.start()
+            self._tcp_thread.start()  # type: ignore[attr-defined]
             self._audit(AuditEvent(
                 ts=time.time(), event="server.loopback_start",
                 peer_pid=None, peer_uid=None,
@@ -2700,7 +2700,7 @@ def _make_request_handler(
             # the relay's abort path handles exactly like
             # RelayLimitExceeded: aborted usage is booked and the
             # caller's ``finally`` releases the reservation.
-            self.timeout = float(_preauth_header_deadline_s())
+            self.timeout = float(_preauth_header_deadline_s())  # type: ignore[misc]
             super().setup()
 
         def handle_one_request(self) -> None:
@@ -3001,7 +3001,7 @@ def _make_request_handler(
 
             try:
                 self._forward_upstream(
-                    rec, rule, provider_name, method, upstream_path,
+                    rec, rule, provider_name, method, upstream_path,  # type: ignore[arg-type]
                     body,
                 )
             finally:
@@ -3031,7 +3031,7 @@ def _make_request_handler(
                 # any edit would invalidate the signature.
                 try:
                     prepared = rule.prepare_request(
-                        method, upstream_path, self.headers, body,
+                        method, upstream_path, self.headers, body,  # type: ignore[arg-type]
                     )
                 except BedrockTransformError as exc:
                     dispatcher._audit(AuditEvent(

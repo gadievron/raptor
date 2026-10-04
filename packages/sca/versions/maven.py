@@ -124,15 +124,15 @@ def _compare_tokens(ta: tuple[str, int | str],
     if ka == "int" and kb == "int":
         if va == vb:
             return 0
-        return -1 if va < vb else 1
+        return -1 if va < vb else 1  # type: ignore[operator]
     if ka == "int" and kb == "str":
         # Numeric segment > qualifier (e.g., 1.0.1 > 1.0-SNAPSHOT)
         return 1
     if ka == "str" and kb == "int":
         return -1
     # both str: qualifier order
-    oa = _QUALIFIER_ORDER.get(va)
-    ob = _QUALIFIER_ORDER.get(vb)
+    oa = _QUALIFIER_ORDER.get(va)  # type: ignore[arg-type]
+    ob = _QUALIFIER_ORDER.get(vb)  # type: ignore[arg-type]
     if oa is not None and ob is not None:
         if oa == ob:
             return 0
@@ -147,7 +147,7 @@ def _compare_tokens(ta: tuple[str, int | str],
         return 1
     if va == vb:
         return 0
-    return -1 if va < vb else 1
+    return -1 if va < vb else 1  # type: ignore[operator]
 
 
 def _compare_extra(extras: list[tuple[str, int | str]]) -> int:
@@ -158,10 +158,10 @@ def _compare_extra(extras: list[tuple[str, int | str]]) -> int:
     for kind, val in extras:
         if kind == "int":
             if val != 0:
-                return 1 if val > 0 else -1
+                return 1 if val > 0 else -1  # type: ignore[operator]
             # int 0 is trivial; continue
         elif kind == "str":
-            order = _QUALIFIER_ORDER.get(val)
+            order = _QUALIFIER_ORDER.get(val)  # type: ignore[arg-type]
             if order is None:
                 # Unknown qualifier — convention: sort longer side higher
                 return 1
@@ -185,7 +185,7 @@ def _strip_trivial_tail(items: list[tuple[str, int | str]]
         if kind == "int" and val == 0:
             out.pop()
             continue
-        if kind == "str" and _QUALIFIER_ORDER.get(val) == 0:
+        if kind == "str" and _QUALIFIER_ORDER.get(val) == 0:  # type: ignore[arg-type]
             # ga / final / release: trivial
             out.pop()
             continue

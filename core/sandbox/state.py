@@ -19,6 +19,7 @@ What lives here:
 """
 
 import threading
+from typing import Any
 
 # RLock because check_mount_available() calls check_net_available() while
 # holding it; Lock would deadlock on that nested path.
@@ -46,7 +47,7 @@ _landlock_cache = None
 # _unix_scope_cache: True when the AF_UNIX connect-scoping supervisor
 # can run on this host (seccomp user-notify + pidfd_getfd + openat2 —
 # see core/sandbox/_unix_scope.py). None = not probed.
-_unix_scope_cache = None
+_unix_scope_cache: bool | None = None
 # _pidns_fresh_proc_cache: True when a fresh procfs can be mounted
 # inside a nested user+mount+pid namespace on this host (kernel policy
 # — refused e.g. under containers with a masked host /proc). None =
@@ -65,7 +66,7 @@ _pidns_fresh_proc_cache: bool | None = None
 # evidence is authoritative over an earlier probe.
 _pidns_supervision_cache: tuple[bool, str] | None = None
 # Seccomp cache: None = unchecked, 0 = unavailable, CDLL handle = available.
-_libseccomp_cache = None
+_libseccomp_cache: Any = None
 # ptrace cache: None = unchecked, True/False = probed result. Used by
 # `--audit` to decide whether b2 (syscall audit via SCMP_ACT_TRACE)
 # and b3 (filesystem audit) can engage. Probed by core.sandbox.ptrace_probe.

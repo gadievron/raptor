@@ -1557,7 +1557,7 @@ def _run_audit_on_target(
             # would get. Recorded in results.json meta and the run-
             # history header. Deployed = all channels on.
             profile=profile,
-            **(COLD_PROFILE_GATES if profile == "cold" else {}),
+            **(COLD_PROFILE_GATES if profile == "cold" else {}),  # type: ignore[arg-type]
             models=[model] if model else None,
             # Group budget scales with label weight (see the
             # GROUP_BUDGET_* constants); a slice is reserved for the
@@ -1799,7 +1799,7 @@ def _build_probe_context(
             rpr = check_race_protection(source)
             if rpr.protected:
                 ctx["race_protected"] = rpr.reasoning
-        except (ValueError, IndexError, RecursionError, OSError, *Z3_ERRORS):
+        except (ValueError, IndexError, RecursionError, OSError, *Z3_ERRORS):  # type: ignore[misc]
             # Optional enrichment over hostile C source: extraction
             # quirks and Z3 errors degrade to "no race annotation".
             pass
@@ -1857,12 +1857,12 @@ def _run_probe(
     probe_schema = {
         "type": "object",
         "properties": {
-            "hypothesis": REVIEW_SCHEMA["properties"]["hypothesis"],
-            "hypotheses": REVIEW_SCHEMA["properties"]["hypotheses"],
-            "counter_hypothesis": REVIEW_SCHEMA["properties"]["counter_hypothesis"],
-            "cwe": REVIEW_SCHEMA["properties"].get("cwe", {"type": "string"}),
-            "body": REVIEW_SCHEMA["properties"].get("body", {"type": "string"}),
-            "status": REVIEW_SCHEMA["properties"]["status"],
+            "hypothesis": REVIEW_SCHEMA["properties"]["hypothesis"],  # type: ignore[index]
+            "hypotheses": REVIEW_SCHEMA["properties"]["hypotheses"],  # type: ignore[index]
+            "counter_hypothesis": REVIEW_SCHEMA["properties"]["counter_hypothesis"],  # type: ignore[index]
+            "cwe": REVIEW_SCHEMA["properties"].get("cwe", {"type": "string"}),  # type: ignore[attr-defined]
+            "body": REVIEW_SCHEMA["properties"].get("body", {"type": "string"}),  # type: ignore[attr-defined]
+            "status": REVIEW_SCHEMA["properties"]["status"],  # type: ignore[index]
         },
         "required": ["status"],
     }
@@ -2270,7 +2270,7 @@ def _record_scorecard(
                 decision_class=decision_class,
                 model=model,
                 event_type=EventType.CORPUS_GROUND_TRUTH,
-                outcome=outcome,
+                outcome=outcome,  # type: ignore[arg-type]
                 sample=sample,
             )
     except Exception:
@@ -2312,7 +2312,7 @@ def _print_cross_model_summary(
 
         statuses = []
         for ml in model_labels:
-            r = verdicts.get(ml)
+            r = verdicts.get(ml)  # type: ignore[assignment]
             if r is None:
                 line += f" {'—':<13}"
             else:
@@ -2938,7 +2938,7 @@ def _run_ensemble_audit(
         bf_by_id = {r["function_id"]: r for r in bf_results}
         all_ids = set(sec_by_id) | set(bf_by_id)
 
-        merged_results: list[dict[str, Any]] = []
+        merged_results: list[dict[str, Any]] = []  # type: ignore[no-redef]
         sec_only_wins = 0
         bf_only_wins = 0
         agree_count = 0
@@ -3043,7 +3043,7 @@ def _run_ensemble_audit(
             elif sec_r:
                 merged_results.append(dict(sec_r))
             else:
-                merged_results.append(dict(bf_r))
+                merged_results.append(dict(bf_r))  # type: ignore[arg-type]
 
         sec_cost = sum(r.get("cost_usd", 0) for r in sec_results)
         bf_cost = sum(r.get("cost_usd", 0) for r in bf_results)

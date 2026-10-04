@@ -4375,8 +4375,8 @@ def review_one_function(
                 with result._lock:
                     result.total_cost_usd += synth.cost_usd
             if synth and synth.hits:
-                for hit in synth.hits:
-                    hit.setdefault("priority_score", 0.8)
+                for hit in synth.hits:  # type: ignore[assignment]
+                    hit.setdefault("priority_score", 0.8)  # type: ignore[attr-defined]
                     shared.synthesis_queue.append(hit)
                 with result._lock:
                     result.synthesis_amplified += len(synth.hits)
@@ -4637,7 +4637,7 @@ def _binary_absent_gap_keys(
     absent_fn = None
     if inventory is not None:
         try:
-            from core.analysis.reachability import (
+            from core.analysis.reachability import (  # type: ignore[assignment]
                 binary_oracle_absent as absent_fn,
             )
         except ImportError:
@@ -7833,7 +7833,7 @@ def _attach_bypass_evidence(
         disc = finding.get("discovery", {})
         if disc.get("discovered_by") != "iris_bypass":
             continue
-        plf = by_key.get((finding.get("file", ""), finding.get("function", "")))
+        plf = by_key.get((finding.get("file", ""), finding.get("function", "")))  # type: ignore[assignment]
         if not plf:
             continue
         chain = finding.setdefault("evidence_chain", [])
@@ -8245,7 +8245,7 @@ def _iris_refine_and_bypass(
                     "IRIS prior-spec load failed", exc_info=True,
                 )
             refined_specs, history, assumptions, bypass_findings = iris_refine_loop(
-                iris_candidates,
+                iris_candidates,  # type: ignore[arg-type]
                 llm_client=iris_llm,
                 tool_runner=iris_tool_runner,
                 prior_specs=prior_specs,
@@ -8266,7 +8266,7 @@ def _iris_refine_and_bypass(
                     # Atomic write — same planted-symlink rationale
                     # as the initial spec emission.
                     write_text_atomically(
-                        spec_path, specs_to_json(refined_specs))
+                        spec_path, specs_to_json(refined_specs))  # type: ignore[arg-type]
                     # Caller-persist step: merge the refined specs
                     # into the persistent project store (evidence
                     # tiers carried through; envelope metadata —
@@ -9855,7 +9855,7 @@ def _run_audit_body(
                                     f.cancel()
                                 break
 
-                for idx, outcome, exc in sorted(ls_raw, key=lambda r: r[0]):
+                for idx, outcome, exc in sorted(ls_raw, key=lambda r: r[0]):  # type: ignore[misc]
                     _, target_gap, prior, _ctx = ls_prepared[idx]
                     if outcome is None and exc is None:
                         continue  # gate-skipped — never dispatched
@@ -11666,7 +11666,7 @@ class _InjectModeResolver:
 
         if self._check_lock_domain is not None and (is_c or is_go):
             try:
-                ldr = self._check_lock_domain(src, self._vocab)
+                ldr = self._check_lock_domain(src, self._vocab)  # type: ignore[arg-type]
                 if ldr.mismatch_found:
                     findings.append({
                         "file": file,
@@ -11861,20 +11861,20 @@ def _run_mechanical_detectors(
     _cpg_verify = None
 
     try:
-        from .condition_adequacy import assess_file_guards as _assess_guards
-        from .condition_binding import check_all_bindings as _check_bindings
-        from .condition_extraction import extract_sink_guards as _extract_sg
+        from .condition_adequacy import assess_file_guards as _assess_guards  # type: ignore[assignment]
+        from .condition_binding import check_all_bindings as _check_bindings  # type: ignore[assignment]
+        from .condition_extraction import extract_sink_guards as _extract_sg  # type: ignore[assignment]
     except Exception:
         logger.debug("mechanical: condition chain import failed", exc_info=True)
 
     try:
-        from .condition_smt import (
+        from .condition_smt import (  # type: ignore[assignment]
             check_all_sufficiency as _check_sufficiency,
         )
-        from .condition_smt import (
+        from .condition_smt import (  # type: ignore[assignment]
             check_path_feasibility as _check_pf,
         )
-        from .condition_smt import (
+        from .condition_smt import (  # type: ignore[assignment]
             check_signed_mismatch as _check_sm,
         )
     except Exception:
@@ -11882,7 +11882,7 @@ def _run_mechanical_detectors(
 
     if joern_server is not None:
         try:
-            from .condition_cpg import verify_guard_relevance_cpg as _cpg_verify
+            from .condition_cpg import verify_guard_relevance_cpg as _cpg_verify  # type: ignore[assignment]
         except Exception:
             logger.debug("mechanical: condition_cpg import failed", exc_info=True)
 
@@ -12239,7 +12239,7 @@ def _run_mechanical_detectors(
 
         _rd_roots = [config.target_path]
         if getattr(config, "study_root", None):
-            _rd_roots.append(Path(config.study_root))
+            _rd_roots.append(Path(config.study_root))  # type: ignore[arg-type]
         return [
             (
                 rdm.file,
@@ -13621,7 +13621,7 @@ def _multi_pass_review(
                 refute_fn=refute_fn,
                 cost_gate=cost_gate,
                 scorecard=scorecard,
-                priors_by_class=priors_by_class,
+                priors_by_class=priors_by_class,  # type: ignore[arg-type]
             )
 
             if not mr_result.items:
@@ -14363,7 +14363,7 @@ def _persist_spend_floor(
             last = getattr(result, "_spend_floor_written_at", 0.0)
             if not force and now - last < _SPEND_FLOOR_INTERVAL_S:
                 return
-            result._spend_floor_written_at = now
+            result._spend_floor_written_at = now  # type: ignore[attr-defined]
             spend = float(result.total_cost_usd or 0.0)
         client = getattr(config, "llm_budget_client", None)
         if client is not None:
@@ -15877,7 +15877,7 @@ def _mark_batch_reading_list(
                 )
                 _record_study_scorecard(
                     scorecard_model, False,
-                    agreement.get("reason") or "",
+                    str(agreement.get("reason") or ""),
                 )
                 ledger.append(StudyAnswer(
                     question=req.question,
@@ -15888,7 +15888,7 @@ def _mark_batch_reading_list(
                     tier="mechanical",
                     receipt=spot.receipt.to_dict(),
                     status="inconclusive",
-                    reason=agreement.get("reason") or "",
+                    reason=str(agreement.get("reason") or ""),
                     spot_check_override=overrode,
                     agreement=agreement,
                 ))
@@ -15993,7 +15993,7 @@ def _mark_batch_reading_list(
             _record_study_scorecard(
                 scorecard_model,
                 bool(agreement.get("agreed")),
-                agreement.get("reason") or "",
+                str(agreement.get("reason") or ""),
             )
         if not agreement.get("agreed"):
             logger.info(
@@ -16009,7 +16009,7 @@ def _mark_batch_reading_list(
                 tier=provenance,
                 receipt=receipt,
                 status="inconclusive",
-                reason=agreement.get("reason") or "",
+                reason=str(agreement.get("reason") or ""),
                 agreement=agreement,
                 probe_note=probe_note,
             ))
@@ -16871,7 +16871,7 @@ def _study_consumer_loop(
                     # enrichment must not starve the main loop.
                     with throttle.acquire_sync(low_priority=True):
                         run_study(
-                            study_list_path,
+                            study_list_path,  # type: ignore[arg-type]
                             config.out_dir,
                             study_client,
                             should_stop=_phase_stop,
@@ -16879,7 +16879,7 @@ def _study_consumer_loop(
                         )
                 else:
                     run_study(
-                        study_list_path,
+                        study_list_path,  # type: ignore[arg-type]
                         config.out_dir,
                         study_client,
                         should_stop=_phase_stop,
@@ -20923,7 +20923,7 @@ def _run_tool_chain(
 
                 _fo_roots: tuple = (Path(effective_target),)
                 if getattr(config, "study_root", None):
-                    _fo_roots += (Path(config.study_root),)
+                    _fo_roots += (Path(config.study_root),)  # type: ignore[arg-type]
                 fo_ctx = RoleContext(
                     out_dir=config.out_dir,
                     annotations_dir=getattr(
@@ -24088,7 +24088,7 @@ def _run_critique(
                     _psw_detail,
                 )
         if presweep is not None:
-            config._presweep_loss_warned = True
+            config._presweep_loss_warned = True  # type: ignore[attr-defined]
 
     recent_findings = [
         o for o in result.outcomes[-config.critique_interval :] if o.status == "finding"
@@ -24967,7 +24967,7 @@ def _re_review_disagreements(
     outcome_by_key = {f"{o.file}:{o.function}": o for o in result.outcomes}
     gap_by_key = _gap_index(checklist)
 
-    prepared = []
+    prepared: list[Any] = []
     for d in disagreements:
         key = f"{d.file}:{d.function}"
         prior = outcome_by_key.get(key)
@@ -25265,7 +25265,7 @@ def _iterative_re_review(
         )
 
         # --- Build all contexts up-front for this iteration ---
-        prepared = []
+        prepared: list[Any] = []
         for target in re_review_targets:
             gap = target["gap"]
             callee_findings = target["callee_findings"]
@@ -25943,8 +25943,8 @@ def _check_sink_guarded_cached(function_name: str, joern_server) -> str:
         return _sink_guard_cache[function_name]
     verdict = check_sink_guarded(function_name, joern_server)
     if verdict != GUARD_UNAVAILABLE:
-        _sink_guard_cache[function_name] = verdict
-    return verdict
+        _sink_guard_cache[function_name] = verdict  # type: ignore[assignment]
+    return verdict  # type: ignore[return-value]
 
 
 def _guard_blocks_promotion(
@@ -27523,7 +27523,7 @@ def _is_detection_only(tool_id: str) -> bool:
         # (The ptr_lifecycle field-parity leg emits under this
         # namespace by construction — the same rule applies to it
         # with zero extra code.)
-        from core.audit.peer_evidence import is_detection_rule_id
+        from core.audit.peer_evidence import is_detection_rule_id  # type: ignore[assignment]
         return is_detection_rule_id(tool_id)
 
     if tool_id.startswith("ptr_lifecycle:"):
@@ -29176,8 +29176,8 @@ def _pre_loop_smt_screen(
     _extract_sg = None
     _check_pf = None
     with contextlib.suppress(ImportError):
-        from .condition_extraction import extract_sink_guards as _extract_sg
-        from .condition_smt import check_path_feasibility as _check_pf
+        from .condition_extraction import extract_sink_guards as _extract_sg  # type: ignore[assignment]
+        from .condition_smt import check_path_feasibility as _check_pf  # type: ignore[assignment]
 
     dm = None
     if getattr(config, "out_dir", None):
@@ -29208,7 +29208,7 @@ def _pre_loop_smt_screen(
             continue
 
         tool_hit = ""
-        with contextlib.suppress(*_SMT_SCREEN_ERRORS):
+        with contextlib.suppress(*_SMT_SCREEN_ERRORS):  # type: ignore[arg-type]
             abr = check_auth_bypass(source, vocab)
             if abr.bypass_found:
                 tool_hit = "smt:check-auth-bypass"
@@ -29216,7 +29216,7 @@ def _pre_loop_smt_screen(
                     tool_hit += ":witness"
 
         if not tool_hit and is_c:
-            with contextlib.suppress(*_SMT_SCREEN_ERRORS):
+            with contextlib.suppress(*_SMT_SCREEN_ERRORS):  # type: ignore[arg-type]
                 ldr = check_lock_discipline(source, vocab)
                 if ldr.violation_found:
                     tool_hit = "smt:check-lock-discipline"
@@ -29224,7 +29224,7 @@ def _pre_loop_smt_screen(
                         tool_hit += ":witness"
 
         if not tool_hit and is_c:
-            with contextlib.suppress(*_SMT_SCREEN_ERRORS):
+            with contextlib.suppress(*_SMT_SCREEN_ERRORS):  # type: ignore[arg-type]
                 rlr = check_resource_leak(source, vocab)
                 if rlr.leak_found:
                     tool_hit = "smt:check-resource-leak"
@@ -29232,13 +29232,13 @@ def _pre_loop_smt_screen(
                         tool_hit += ":witness"
 
         if not tool_hit and is_c:
-            with contextlib.suppress(*_SMT_SCREEN_ERRORS):
+            with contextlib.suppress(*_SMT_SCREEN_ERRORS):  # type: ignore[arg-type]
                 npr = check_null_propagation(source, vocab)
                 if npr.null_deref_found:
                     tool_hit = "smt:check-null-propagation"
 
         if not tool_hit and is_c_or_go:
-            with contextlib.suppress(*_SMT_SCREEN_ERRORS):
+            with contextlib.suppress(*_SMT_SCREEN_ERRORS):  # type: ignore[arg-type]
                 inr = check_integer_narrowing(source)
                 if inr.narrowing_found:
                     tool_hit = "smt:check-integer-narrowing"
@@ -29246,7 +29246,7 @@ def _pre_loop_smt_screen(
                         tool_hit += ":witness"
 
         if not tool_hit and is_c_or_go:
-            with contextlib.suppress(*_SMT_SCREEN_ERRORS):
+            with contextlib.suppress(*_SMT_SCREEN_ERRORS):  # type: ignore[arg-type]
                 # Same-file parse wrappers (the stdlib idiom puts the
                 # strconv call one helper away from the consumer):
                 # derived once per file, mechanically, from the file
@@ -29268,13 +29268,13 @@ def _pre_loop_smt_screen(
                     tool_hit = "smt:check-parsed-int-contract"
 
         if not tool_hit and is_c_or_go:
-            with contextlib.suppress(*_SMT_SCREEN_ERRORS):
+            with contextlib.suppress(*_SMT_SCREEN_ERRORS):  # type: ignore[arg-type]
                 err = check_early_release(source, vocab)
                 if err.early_release_found:
                     tool_hit = "smt:check-early-release"
 
         if not tool_hit and is_c:
-            with contextlib.suppress(*_SMT_SCREEN_ERRORS):
+            with contextlib.suppress(*_SMT_SCREEN_ERRORS):  # type: ignore[arg-type]
                 from .callback_lifetime import check_callback_lifetime_local
                 clr = check_callback_lifetime_local(source, vocab)
                 if clr.violation_found:
@@ -29285,7 +29285,7 @@ def _pre_loop_smt_screen(
         # instead — results go to the LLM as context, not as verdicts.
 
         if not tool_hit and is_c:
-            with contextlib.suppress(*_SMT_SCREEN_ERRORS):
+            with contextlib.suppress(*_SMT_SCREEN_ERRORS):  # type: ignore[arg-type]
                 ttr = check_toctou(source)
                 if ttr.toctou_found:
                     tool_hit = "smt:check-toctou"
@@ -29334,7 +29334,7 @@ def _pre_loop_smt_screen(
                         continue
 
         if is_c and not tool_hit:
-            with contextlib.suppress(*_SMT_SCREEN_ERRORS):
+            with contextlib.suppress(*_SMT_SCREEN_ERRORS):  # type: ignore[arg-type]
                 from .condition_smt import check_race_protection
                 rpr = check_race_protection(source, vocab)
                 if rpr.protected:
@@ -31865,7 +31865,7 @@ def _extract_and_propagate(
 
     while pending and rounds < _MAX_PROPAGATION_ROUNDS:
         rounds += 1
-        next_pending = []
+        next_pending: list[Any] = []
 
         for c in pending:
             try:
@@ -32011,7 +32011,7 @@ def _re_review_joern_enriched(
     )
 
     # --- Build all contexts up-front ---
-    prepared = []
+    prepared: list[Any] = []
     for gap, prior_outcome in candidates:
         ctx = _build_context(
             config,
@@ -32220,7 +32220,7 @@ def _callee_contract_requeue(
     )
 
     effective_workers = max(1, max_workers)
-    prepared = []
+    prepared: list[Any] = []
     cl = checklist if isinstance(checklist, dict) else {}
     cl_index = _checklist_item_index(cl) if cl else {}
     for caller_outcome, callee_name, assumption, callee_outcome in candidates:
@@ -32427,7 +32427,7 @@ def _re_review_study_enriched(
     )
 
     # --- Build all contexts up-front ---
-    prepared = []
+    prepared: list[Any] = []
     for gap, prior_outcome in candidates:
         ctx = _build_context(
             config,
@@ -32863,10 +32863,10 @@ def _run_dark_verification(
     try:
         from .cwe_dispatch import dark_verify_applicable, dark_verify_statuses
     except ImportError:
-        def dark_verify_applicable(_cwe) -> bool:
+        def dark_verify_applicable(_cwe) -> bool:  # type: ignore[misc]
             return False
 
-        def dark_verify_statuses(_cwe) -> None:
+        def dark_verify_statuses(_cwe) -> None:  # type: ignore[misc]
             return None
 
     def _eligible(o: ReviewOutcome) -> bool:

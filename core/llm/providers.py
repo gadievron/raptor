@@ -1418,17 +1418,17 @@ def _normalize_schema(schema: dict[str, Any]) -> dict[str, Any]:
             actual = type_aliases.get(actual, actual)
             prop = {"type": [actual, "null"]}
         else:
-            prop = {"type": field_type}
+            prop = {"type": field_type}  # type: ignore[dict-item]
 
         # Arrays need an items definition for Gemini
         if field_type == "array":
-            prop["items"] = {"type": "string"}
+            prop["items"] = {"type": "string"}  # type: ignore[assignment]
 
         # Extract description
         if " - " in field_desc_str:
-            prop["description"] = field_desc_str.split(" - ", 1)[1].strip()
+            prop["description"] = field_desc_str.split(" - ", 1)[1].strip()  # type: ignore[assignment]
         elif "(" in field_desc_str:
-            prop["description"] = field_desc_str[field_desc_str.find("("):].strip()
+            prop["description"] = field_desc_str[field_desc_str.find("("):].strip()  # type: ignore[assignment]
 
         properties[field_name] = prop
 
@@ -1480,7 +1480,7 @@ def _schema_to_gemini(schema: dict[str, Any]) -> dict[str, Any]:
 
     result = {"type": "OBJECT"}
     if "properties" in schema:
-        result["properties"] = {k: convert_property(v) for k, v in schema["properties"].items()}
+        result["properties"] = {k: convert_property(v) for k, v in schema["properties"].items()}  # type: ignore[assignment]
     if "required" in schema:
         result["required"] = schema["required"]
     return result
@@ -1558,7 +1558,7 @@ def _dict_schema_to_pydantic(schema: dict[str, Any] | type['BaseModel'], _model_
         enum_values = field_spec.get("enum")
         if enum_values:
             from typing import Literal
-            python_type = Literal[tuple(enum_values)]
+            python_type = Literal[tuple(enum_values)]  # type: ignore[valid-type]
         elif field_type == "object" and "properties" in field_spec:
             nested_name = f"{_model_name}_{field_name.title().replace('_', '')}"
             python_type = _dict_schema_to_pydantic(field_spec, _model_name=nested_name)
@@ -1572,9 +1572,9 @@ def _dict_schema_to_pydantic(schema: dict[str, Any] | type['BaseModel'], _model_
                 item_type = Literal[tuple(items_spec["enum"])]
             else:
                 item_type = type_map.get(items_spec.get("type", "string"), str)
-            python_type = list[item_type]
+            python_type = list[item_type]  # type: ignore[valid-type, assignment]
         else:
-            python_type = type_map.get(field_type, str)
+            python_type = type_map.get(field_type, str)  # type: ignore[assignment]
 
         if nullable:
             python_type = python_type | None
@@ -1611,7 +1611,7 @@ def _dict_schema_to_pydantic(schema: dict[str, Any] | type['BaseModel'], _model_
             field_definitions[field_name] = (python_type, default_value)
 
     # Create and return Pydantic model
-    return create_model(_model_name, **field_definitions)
+    return create_model(_model_name, **field_definitions)  # type: ignore[call-overload]
 
 
 # OpenAI reasoning-tier detection. Gated on the version *number*, not a
@@ -1643,7 +1643,7 @@ def _is_openai_reasoning_model(model_name: str) -> bool:
     if _OPENAI_OSERIES_RE.match(m):
         return True
     gm = _OPENAI_GPT_VERSION_RE.match(m)
-    return bool(gm) and int(gm.group(1)) >= _OPENAI_REASONING_GPT_FROM
+    return bool(gm) and int(gm.group(1)) >= _OPENAI_REASONING_GPT_FROM  # type: ignore[union-attr]
 
 
 def _openai_sampling_kwargs(
@@ -3054,7 +3054,7 @@ class AnthropicProvider(LLMProvider):
                     # identical full-price failure for hours.
                     _raise_paid(_llm_truncation_error(msg))
                 _raise_paid(RuntimeError(msg))
-            content = text_block.text
+            content = text_block.text  # type: ignore[union-attr]
             finish_reason = response.stop_reason or "complete"
 
             self.track_usage(
@@ -4058,8 +4058,8 @@ class GeminiProvider(LLMProvider):
         from google.genai.types import SafetySetting
         self._safety_settings = [
             SafetySetting(
-                category="HARM_CATEGORY_DANGEROUS_CONTENT",
-                threshold="BLOCK_NONE",
+                category="HARM_CATEGORY_DANGEROUS_CONTENT",  # type: ignore[arg-type]
+                threshold="BLOCK_NONE",  # type: ignore[arg-type]
             ),
         ]
 
@@ -4143,7 +4143,7 @@ class GeminiProvider(LLMProvider):
             "config": config_kwargs,
         }
         if system_prompt:
-            generate_kwargs["config"]["system_instruction"] = system_prompt
+            generate_kwargs["config"]["system_instruction"] = system_prompt  # type: ignore[index]
 
         try:
             t_start = time.monotonic()
@@ -4244,7 +4244,7 @@ class GeminiProvider(LLMProvider):
                     budget = min(raw_budget, 32768)
                 budget = max(budget, 128)
                 config_kwargs["thinking_config"] = ThinkingConfig(
-                    thinkingBudget=budget,
+                    thinkingBudget=budget,  # type: ignore[call-arg]
                 )
             except (ImportError, TypeError):
                 pass
@@ -4257,7 +4257,7 @@ class GeminiProvider(LLMProvider):
             "config": config_kwargs,
         }
         if system_prompt:
-            generate_kwargs["config"]["system_instruction"] = system_prompt
+            generate_kwargs["config"]["system_instruction"] = system_prompt  # type: ignore[index]
 
         try:
             t_start = time.monotonic()
@@ -4617,7 +4617,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
             # us via _tool_use_fallback's JSON-protocol synthesis.
             tools="",
             budget_usd=self._budget_usd,
-            timeout_s=call_timeout,
+            timeout_s=call_timeout,  # type: ignore[arg-type]
             capture_json_envelope=False,
             stream_json=True,
             system_prompt=system_prompt,
@@ -4754,7 +4754,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
             claude_bin=self._claude_bin,
             tools="",                                # see generate() comment
             budget_usd=self._budget_usd,
-            timeout_s=call_timeout,
+            timeout_s=call_timeout,  # type: ignore[arg-type]
             json_schema=schema,
             capture_json_envelope=False,
             stream_json=True,
@@ -5054,7 +5054,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
             claude_bin=self._claude_bin,
             tools="",
             budget_usd=self._budget_usd,
-            timeout_s=self._timeout_s,
+            timeout_s=self._timeout_s,  # type: ignore[arg-type]
             json_schema=schema,
             capture_json_envelope=False,
             stream_json=True,

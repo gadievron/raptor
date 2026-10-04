@@ -889,7 +889,7 @@ class AutonomousSecurityAgentV2:
         self.out_dir.mkdir(parents=True, exist_ok=True)
         try:
             from core.understand_graph import graph_path_for_run
-            self.graph_db_path = graph_path_for_run(self.out_dir, str(self.repo_path))
+            self.graph_db_path: Path | None = graph_path_for_run(self.out_dir, str(self.repo_path))
         except Exception:
             self.graph_db_path = None
         # KNighter follow-up: synthesise a checker rule for every
@@ -1032,8 +1032,8 @@ class AutonomousSecurityAgentV2:
             # active; in replay it substitutes an inert placeholder
             # primary when none is configured, so the banner below
             # keeps working.
-            self.llm = build_llm_client(llm_config or LLMConfig())
-            self.llm_config = self.llm.config
+            self.llm = build_llm_client(llm_config or LLMConfig())  # type: ignore[assignment]
+            self.llm_config = self.llm.config  # type: ignore[attr-defined]
 
             logger.info("RAPTOR Autonomous Security Agent initialised")
             logger.info("Repository: %s", repo_path)
@@ -1208,8 +1208,8 @@ class AutonomousSecurityAgentV2:
         )
 
         bundle = build_dataflow_validation_bundle(
-            rule_id=vuln.rule_id,
-            message=vuln.message,
+            rule_id=vuln.rule_id,  # type: ignore[arg-type]
+            message=vuln.message,  # type: ignore[arg-type]
             dataflow_source=vuln.dataflow_source,
             dataflow_sink=vuln.dataflow_sink,
             dataflow_steps=vuln.dataflow_steps,
@@ -1317,7 +1317,7 @@ class AutonomousSecurityAgentV2:
                             _sft(str(validation.get('attack_payload_concept')), max_len=200))
 
             # Save validation details
-            val_name = f"{_safe_id(vuln.finding_id)}_validation.json"
+            val_name = f"{_safe_id(vuln.finding_id)}_validation.json"  # type: ignore[arg-type]
             validation_file = (
                 self.out_dir / "validation" / val_name
             )
@@ -1371,13 +1371,13 @@ class AutonomousSecurityAgentV2:
             return False
 
         if not is_prep:
-            logger.info("✓ Read vulnerable code (%d chars)", len(vuln.full_code))
-            logger.info("✓ Read context (%d chars)", len(vuln.surrounding_context))
+            logger.info("✓ Read vulnerable code (%d chars)", len(vuln.full_code))  # type: ignore[arg-type]
+            logger.info("✓ Read context (%d chars)", len(vuln.surrounding_context))  # type: ignore[arg-type]
 
         # Extract dataflow path if available
         if vuln.has_dataflow:
             if vuln.extract_dataflow():
-                total = vuln.dataflow_path.get(
+                total = vuln.dataflow_path.get(  # type: ignore[union-attr]
                     "total_steps", 0,
                 )
                 logger.info(
@@ -1458,14 +1458,14 @@ class AutonomousSecurityAgentV2:
         # A/B attribution can join exemplars to outcomes.
         exemplar_usage: dict = {}
         bundle = build_analysis_prompt_bundle(
-            rule_id=vuln.rule_id,
+            rule_id=vuln.rule_id,  # type: ignore[arg-type]
             level=vuln.level,
-            file_path=vuln.file_path,
-            start_line=vuln.start_line,
-            end_line=vuln.end_line,
-            message=vuln.message,
-            code=vuln.full_code,
-            surrounding_context=vuln.surrounding_context,
+            file_path=vuln.file_path,  # type: ignore[arg-type]
+            start_line=vuln.start_line,  # type: ignore[arg-type]
+            end_line=vuln.end_line,  # type: ignore[arg-type]
+            message=vuln.message,  # type: ignore[arg-type]
+            code=vuln.full_code,  # type: ignore[arg-type]
+            surrounding_context=vuln.surrounding_context,  # type: ignore[arg-type]
             has_dataflow=vuln.has_dataflow,
             dataflow_source=vuln.dataflow_source,
             dataflow_sink=vuln.dataflow_sink,
@@ -1476,7 +1476,7 @@ class AutonomousSecurityAgentV2:
             function_name=function_name,
             file_includes=file_includes,
             function_calls_made=function_calls_made,
-            extra_blocks=extra_blocks,
+            extra_blocks=extra_blocks,  # type: ignore[arg-type]
             verified_outcomes=(
                 self._get_verified_outcomes()
                 if self.use_verified_exemplars else ()
@@ -1775,7 +1775,7 @@ class AutonomousSecurityAgentV2:
                         analysis['dataflow_validation'] = validation
 
             # Save detailed analysis
-            analysis_file = self.out_dir / "analysis" / f"{_safe_id(vuln.finding_id)}.json"
+            analysis_file = self.out_dir / "analysis" / f"{_safe_id(vuln.finding_id)}.json"  # type: ignore[arg-type]
             save_json(analysis_file, {
                 "finding_id": vuln.finding_id,
                 "rule_id": vuln.rule_id,
@@ -1911,14 +1911,14 @@ class AutonomousSecurityAgentV2:
             # analysis (the re-run's exemplar usage is not
             # re-persisted).
             bundle = build_analysis_prompt_bundle(
-                rule_id=vuln.rule_id,
+                rule_id=vuln.rule_id,  # type: ignore[arg-type]
                 level=vuln.level,
-                file_path=vuln.file_path,
-                start_line=vuln.start_line,
-                end_line=vuln.end_line,
-                message=vuln.message,
-                code=vuln.full_code,
-                surrounding_context=vuln.surrounding_context,
+                file_path=vuln.file_path,  # type: ignore[arg-type]
+                start_line=vuln.start_line,  # type: ignore[arg-type]
+                end_line=vuln.end_line,  # type: ignore[arg-type]
+                message=vuln.message,  # type: ignore[arg-type]
+                code=vuln.full_code,  # type: ignore[arg-type]
+                surrounding_context=vuln.surrounding_context,  # type: ignore[arg-type]
                 has_dataflow=vuln.has_dataflow,
                 dataflow_source=vuln.dataflow_source,
                 dataflow_sink=vuln.dataflow_sink,
@@ -2176,14 +2176,14 @@ class AutonomousSecurityAgentV2:
                 # bounded — file splits are cached on the loop state,
                 # and the appended blocks are byte-capped.
                 bundle = build_analysis_prompt_bundle(
-                    rule_id=vuln.rule_id,
+                    rule_id=vuln.rule_id,  # type: ignore[arg-type]
                     level=vuln.level,
-                    file_path=vuln.file_path,
-                    start_line=vuln.start_line,
-                    end_line=vuln.end_line,
-                    message=vuln.message,
-                    code=vuln.full_code,
-                    surrounding_context=vuln.surrounding_context,
+                    file_path=vuln.file_path,  # type: ignore[arg-type]
+                    start_line=vuln.start_line,  # type: ignore[arg-type]
+                    end_line=vuln.end_line,  # type: ignore[arg-type]
+                    message=vuln.message,  # type: ignore[arg-type]
+                    code=vuln.full_code,  # type: ignore[arg-type]
+                    surrounding_context=vuln.surrounding_context,  # type: ignore[arg-type]
                     has_dataflow=vuln.has_dataflow,
                     dataflow_source=vuln.dataflow_source,
                     dataflow_sink=vuln.dataflow_sink,
@@ -2533,13 +2533,13 @@ class AutonomousSecurityAgentV2:
         })
 
         bundle = build_exploit_prompt_bundle(
-            rule_id=vuln.rule_id,
-            file_path=vuln.file_path,
-            start_line=vuln.start_line,
+            rule_id=vuln.rule_id,  # type: ignore[arg-type]
+            file_path=vuln.file_path,  # type: ignore[arg-type]
+            start_line=vuln.start_line,  # type: ignore[arg-type]
             level=vuln.level,
-            analysis=vuln.analysis,
-            code=vuln.full_code,
-            surrounding_context=vuln.surrounding_context,
+            analysis=vuln.analysis,  # type: ignore[arg-type]
+            code=vuln.full_code,  # type: ignore[arg-type]
+            surrounding_context=vuln.surrounding_context,  # type: ignore[arg-type]
             feasibility=vuln.feasibility if hasattr(vuln, 'feasibility') else None,
             extra_blocks=si_blocks,
         )
@@ -2570,7 +2570,7 @@ class AutonomousSecurityAgentV2:
                 vuln.exploit_code = exploit_code
 
                 # Save exploit
-                exploit_name = f"{_safe_id(vuln.finding_id)}_exploit.cpp"
+                exploit_name = f"{_safe_id(vuln.finding_id)}_exploit.cpp"  # type: ignore[arg-type]
                 exploit_file = (
                     self.out_dir / "exploits" / exploit_name
                 )
@@ -2665,7 +2665,7 @@ class AutonomousSecurityAgentV2:
         compiled, errors = compile_verify(
             exploit_code,
             vuln.file_path,
-            vuln.finding_id,
+            vuln.finding_id,  # type: ignore[arg-type]
             logger,
         )
         vuln.exploit_compiled = compiled
@@ -2704,7 +2704,7 @@ class AutonomousSecurityAgentV2:
             compiled, errors, outcome, detail = compile_and_execute(
                 exploit_code,
                 vuln.file_path,
-                vuln.finding_id,
+                vuln.finding_id,  # type: ignore[arg-type]
                 target_binary_path=None,
                 timeout=self.execute_timeout,
                 logger=logger,
@@ -2857,7 +2857,7 @@ class AutonomousSecurityAgentV2:
             # JoernServer.stop() can leak OSError from signalling and
             # subprocess.TimeoutExpired from the post-SIGKILL wait.
             with contextlib.suppress(OSError, subprocess.SubprocessError):
-                self._gd_server.stop()
+                self._gd_server.stop()  # type: ignore[attr-defined]
         self._gd_server = None
         self._gd_server_probed = False
 
@@ -2965,7 +2965,7 @@ class AutonomousSecurityAgentV2:
         try:
             if self._witness_store is None:
                 from core.witness import WitnessStore
-                self._witness_store = WitnessStore(
+                self._witness_store = WitnessStore(  # type: ignore[assignment]
                     self.out_dir / "witnesses"
                 )
             from packages.llm_analysis.witness_adapter import (
@@ -2981,7 +2981,7 @@ class AutonomousSecurityAgentV2:
                 )
             witness, data = witness_from_exploit(
                 exploit_code,
-                finding_id=vuln.finding_id,
+                finding_id=vuln.finding_id,  # type: ignore[arg-type]
                 cwe_id=vuln.cwe_id,
                 rule_id=vuln.rule_id,
                 file_path=vuln.file_path,
@@ -3005,7 +3005,7 @@ class AutonomousSecurityAgentV2:
                 ),
                 executed_detail=getattr(vuln, "execute_detail", None) or None,
             )
-            self._witness_store.put(witness, data)
+            self._witness_store.put(witness, data)  # type: ignore[attr-defined]
             logger.debug(
                 "   · Recorded witness %s (%sB)", witness.bytes_hash[:12], witness.bytes_len
             )
@@ -3059,13 +3059,13 @@ class AutonomousSecurityAgentV2:
         })
 
         bundle = build_patch_prompt_bundle(
-            rule_id=vuln.rule_id,
-            file_path=vuln.file_path,
-            start_line=vuln.start_line,
-            end_line=vuln.end_line,
-            message=vuln.message,
-            analysis=vuln.analysis,
-            code=vuln.full_code,
+            rule_id=vuln.rule_id,  # type: ignore[arg-type]
+            file_path=vuln.file_path,  # type: ignore[arg-type]
+            start_line=vuln.start_line,  # type: ignore[arg-type]
+            end_line=vuln.end_line,  # type: ignore[arg-type]
+            message=vuln.message,  # type: ignore[arg-type]
+            analysis=vuln.analysis,  # type: ignore[arg-type]
+            code=vuln.full_code,  # type: ignore[arg-type]
             full_file_content=full_file_content,
             feasibility=vuln.feasibility,
             attack_path=attack_path,
@@ -3125,7 +3125,7 @@ class AutonomousSecurityAgentV2:
                 logger.warning("   · Patch gate skipped: %s", e)
 
             # Save patch
-            patch_file = self.out_dir / "patches" / f"{_safe_id(vuln.finding_id)}_patch.md"
+            patch_file = self.out_dir / "patches" / f"{_safe_id(vuln.finding_id)}_patch.md"  # type: ignore[arg-type]
             patch_file.parent.mkdir(exist_ok=True, parents=True)
 
             from core.reporting.formatting import display_rule_id
@@ -3848,7 +3848,7 @@ class AutonomousSecurityAgentV2:
                             manual_override=finding.get("manual_override"),
                         )
                         if decision is not None:
-                            verdict, reason = decision
+                            verdict, reason = decision  # type: ignore[assignment]
                             vuln.analysis = {
                                 "is_true_positive": False,
                                 "is_exploitable": False,
@@ -3870,7 +3870,7 @@ class AutonomousSecurityAgentV2:
                                 record_suppression(
                                     self.out_dir,
                                     finding=finding,
-                                    verdict=verdict, reason=reason,
+                                    verdict=verdict, reason=reason,  # type: ignore[arg-type]
                                 )
                     except Exception as e:  # noqa: BLE001
                         logger.debug(
@@ -4137,7 +4137,7 @@ class AutonomousSecurityAgentV2:
                     )
                     if has_dv:
                         dataflow_validated += 1
-                        validation = vuln.analysis['dataflow_validation']
+                        validation = vuln.analysis['dataflow_validation']  # type: ignore[index]
                         if validation.get('false_positive'):
                             false_positives_found += 1
 

@@ -273,7 +273,7 @@ class QueryRunner:
         in /usr/bin.
         """
         from pathlib import Path
-        return [str(Path(self.codeql_cli).resolve().parent)]
+        return [str(Path(self.codeql_cli).resolve().parent)]  # type: ignore[arg-type]
 
     def _codeql_version(self) -> str | None:
         """CLI version string (e.g. ``"2.26.3"``), cached per instance.
@@ -290,7 +290,7 @@ class QueryRunner:
         version = None
         try:
             result = subprocess.run(
-                [self.codeql_cli, "version"],
+                [self.codeql_cli, "version"],  # type: ignore[list-item]
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -418,7 +418,7 @@ class QueryRunner:
         else:
             # Use standard or extended suite
             suites = self.SECURITY_EXTENDED_SUITES if use_extended else self.SECURITY_SUITES
-            suite_name = suites.get(language)
+            suite_name = suites.get(language)  # type: ignore[assignment]
 
             if not suite_name:
                 error = f"No default suite for language: {language}"
@@ -551,7 +551,7 @@ class QueryRunner:
 
             # Auto-download missing query packs (needs network) and retry in sandbox
             if not success and "cannot be found" in (result.stderr or "").lower():
-                pack_name = _extract_missing_pack(result.stderr)
+                pack_name = _extract_missing_pack(result.stderr)  # type: ignore[assignment]
                 if pack_name:
                     logger.info("Query pack '%s' not found — downloading...", pack_name)
                     # Route codeql through the RAPTOR egress proxy.
@@ -816,7 +816,7 @@ class QueryRunner:
         try:
             from core.sandbox import run as sandbox_run
             result = sandbox_run(
-                cmd,
+                cmd,  # type: ignore[arg-type]
                 block_network=True,
                 tool_paths=self._sandbox_tool_paths(),
                 audit_run_dir=str(out_dir),
@@ -1211,7 +1211,7 @@ class QueryRunner:
                 # first-run dep fetch (00015 requires the netns tier
                 # only for repo-influenced egress).
                 install_proc = sandbox_run(
-                    [self.codeql_cli, "pack", "install", str(pack_dir)],
+                    [self.codeql_cli, "pack", "install", str(pack_dir)],  # type: ignore[list-item]
                     use_egress_proxy=True,
                     proxy_hosts=proxy_hosts_for_codeql(self.codeql_cli),
                     caller_label="codeql-pack-install",
@@ -1261,7 +1261,7 @@ class QueryRunner:
         analysis_start = time.time()
         try:
             proc = sandbox_run(
-                cmd, block_network=True,
+                cmd, block_network=True,  # type: ignore[arg-type]
                 tool_paths=self._sandbox_tool_paths(),
                 audit_run_dir=str(out_dir),
                 capture_output=True, text=True,
@@ -1441,7 +1441,7 @@ class QueryRunner:
             for run in sarif_data.get("runs", []):
                 # Count findings by severity
                 for result in run.get("results", []):
-                    summary["total_findings"] += 1
+                    summary["total_findings"] += 1  # type: ignore[operator]
 
                     # Coerce to str — SARIF spec says `level` is a
                     # string enum, but malformed emitters
@@ -1454,11 +1454,11 @@ class QueryRunner:
                     # later report consumers. Coerce defensively.
                     raw_level = result.get("level", "warning")
                     level = str(raw_level) if raw_level is not None else "warning"
-                    summary["by_severity"][level] = summary["by_severity"].get(level, 0) + 1
+                    summary["by_severity"][level] = summary["by_severity"].get(level, 0) + 1  # type: ignore[index, attr-defined]
 
                     # Count by rule
                     rule_id = result.get("ruleId", "unknown")
-                    summary["by_rule"][rule_id] = summary["by_rule"].get(rule_id, 0) + 1
+                    summary["by_rule"][rule_id] = summary["by_rule"].get(rule_id, 0) + 1  # type: ignore[index, attr-defined]
 
                     # Count dataflow paths. Pre-fix `+= 1` per
                     # result conflated "findings WITH dataflow"
@@ -1473,17 +1473,17 @@ class QueryRunner:
                     # 30+ paths between them. Count one per
                     # codeFlow so the metric matches the name.
                     code_flows = result.get("codeFlows", [])
-                    summary["dataflow_paths"] += len(code_flows)
+                    summary["dataflow_paths"] += len(code_flows)  # type: ignore[operator]
                     for flow in code_flows:
                         for thread_flow in flow.get("threadFlows", []):
                             locations = thread_flow.get("locations", [])
-                            summary["total_dataflow_steps"] += len(locations)
+                            summary["total_dataflow_steps"] += len(locations)  # type: ignore[operator]
 
                 # Count queries
                 tool = run.get("tool", {})
                 driver = tool.get("driver", {})
                 rules = driver.get("rules", [])
-                summary["queries_executed"] += len(rules)
+                summary["queries_executed"] += len(rules)  # type: ignore[operator]
 
             return summary
 

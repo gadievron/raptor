@@ -992,8 +992,8 @@ def _classify_scope(
     if target_rel == ".":
         return items, []
 
-    in_scope: list[StudyItem] = []
-    deps: list[StudyItem] = []
+    in_scope: list[StudyItem] = []  # type: ignore[no-redef]
+    deps: list[StudyItem] = []  # type: ignore[no-redef]
     for item in items:
         if item.file.startswith(target_rel + "/") or item.file == target_rel:
             in_scope.append(item)
@@ -2615,7 +2615,7 @@ def _stamp_evidence_hashes(
         if full_path is None:
             continue
         spans = [(ev.line, ev.line) for ev in file_evs]  # type: ignore[arg-type]
-        hashes = hash_spans(full_path, spans)
+        hashes = hash_spans(full_path, spans)  # type: ignore[arg-type]
         for ev, h in zip(file_evs, hashes):
             if h:
                 ev.hash = h
@@ -2640,7 +2640,7 @@ def _stamp_contract_hashes(
 
     by_file: dict[Path, list[tuple[Contract, str, int, int]]] = {}
     for ct in contracts:
-        item = item_by_name.get(ct.function)
+        item = item_by_name.get(ct.function)  # type: ignore[assignment]
         if item is None or item.line is None:
             continue
         defn_lines = len(item.definition.splitlines()) if item.definition else 1
@@ -3105,7 +3105,7 @@ def _assemble_vocabulary(
     }
     for entry in entries:
         vclass = entry.get("class")
-        bucket = by_class.get(vclass)
+        bucket = by_class.get(vclass)  # type: ignore[arg-type]
         if bucket is None:
             continue
         entry = {k: v for k, v in entry.items() if k != "class"}
@@ -3492,7 +3492,7 @@ def _run_batch_splitting_on_truncation(
             # sees it.
             raise
         succeeded = True
-        for acc, part in zip(combined, parts):
+        for acc, part in zip(combined, parts):  # type: ignore[assignment]
             acc.extend(part)
     if not succeeded and last_trunc is not None:
         raise last_trunc
@@ -3703,7 +3703,7 @@ def _run_phase2_serial(
                      all_bug_patterns, all_struct_annots),
                     exc.partial,
                 ):
-                    acc.extend(part)
+                    acc.extend(part)  # type: ignore[attr-defined]
                 successes += 1
             logger.error(
                 "Phase 2: LLM budget exhausted at batch %d/%d — "
@@ -3785,7 +3785,7 @@ def _run_phase2_serial(
             # study lane on sight instead of counting strikes — the
             # same configuration re-buys the same failure on every
             # future invocation.
-            err.config_shaped = True
+            err.config_shaped = True  # type: ignore[attr-defined]
         raise err
 
     return (all_concepts, all_invariants, all_contracts,
@@ -3925,7 +3925,7 @@ def _run_phase2_parallel(
             )
         return ([], [], [], [], [])
 
-    results = run_parallel(
+    results: list = run_parallel(
         items, _do_batch,
         max_workers=max_workers,
         label="study-p2",
@@ -3973,7 +3973,7 @@ def _run_phase2_parallel(
                 "an empty domain model")
         if _truncation_failures[0] >= _TRUNCATION_FAIL_LIMIT:
             # Deterministic-config marker — see the sequential twin.
-            err.config_shaped = True
+            err.config_shaped = True  # type: ignore[attr-defined]
         raise err
 
     all_concepts: list[Concept] = []
@@ -5685,7 +5685,7 @@ def _apply_sage_prior(
                     # hashes.
                     if _local_prior_is_fresh(
                         concept, attached_invs, attached_cts,
-                        Path(source_root),
+                        Path(source_root),  # type: ignore[arg-type]
                     ):
                         skipped_concepts.append(concept)
                         skipped_invariants.extend(attached_invs)

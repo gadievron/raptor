@@ -625,7 +625,7 @@ class CodeQLAgent:
             try:
                 db_results = self.database_manager.create_databases_parallel(
                     self.repo_path,
-                    language_build_map,
+                    language_build_map,  # type: ignore[arg-type]
                     force=force_db_creation,
                     audit_run_dir=self.out_dir,
                     traced_languages=traced_languages,
@@ -759,35 +759,35 @@ class CodeQLAgent:
             sarif_files = []
             total_findings = 0
 
-            for lang, result in analysis_results.items():
-                if result.success and result.sarif_path:
-                    sarif_files.append(str(result.sarif_path))
-                    total_findings += result.findings_count
-                    logger.info("  - %s: %s findings", lang, result.findings_count)
+            for lang, result in analysis_results.items():  # type: ignore[assignment]
+                if result.success and result.sarif_path:  # type: ignore[attr-defined]
+                    sarif_files.append(str(result.sarif_path))  # type: ignore[attr-defined]
+                    total_findings += result.findings_count  # type: ignore[attr-defined]
+                    logger.info("  - %s: %s findings", lang, result.findings_count)  # type: ignore[attr-defined]
                 else:
                     logger.error("  - %s: Analysis failed", lang)
                     errors.extend(result.errors)
 
-            for lang, result in iris_results.items():
-                if result.success and result.sarif_path:
-                    sarif_files.append(str(result.sarif_path))
-                    total_findings += result.findings_count
-                    if result.findings_count:
+            for lang, result in iris_results.items():  # type: ignore[assignment]
+                if result.success and result.sarif_path:  # type: ignore[attr-defined]
+                    sarif_files.append(str(result.sarif_path))  # type: ignore[attr-defined]
+                    total_findings += result.findings_count  # type: ignore[attr-defined]
+                    if result.findings_count:  # type: ignore[attr-defined]
                         logger.info(
                             "  - %s IRIS LocalFlowSource: %s extra findings",
                             lang,
-                            result.findings_count
+                            result.findings_count  # type: ignore[attr-defined]
                         )
 
-            for lang, result in curated_results.items():
-                if result.success and result.sarif_path:
-                    sarif_files.append(str(result.sarif_path))
-                    total_findings += result.findings_count
-                    if result.findings_count:
+            for lang, result in curated_results.items():  # type: ignore[assignment]
+                if result.success and result.sarif_path:  # type: ignore[attr-defined]
+                    sarif_files.append(str(result.sarif_path))  # type: ignore[attr-defined]
+                    total_findings += result.findings_count  # type: ignore[attr-defined]
+                    if result.findings_count:  # type: ignore[attr-defined]
                         logger.info(
                             "  - %s curated queries: %s extra findings",
                             lang,
-                            result.findings_count
+                            result.findings_count  # type: ignore[attr-defined]
                         )
 
             # Standard-vs-IRIS overlap: when the standard suite ran
@@ -975,7 +975,7 @@ class CodeQLAgent:
             logger.debug("taint-mad pass unavailable", exc_info=True)
             return None
 
-        specs = []
+        specs: list = []
         try:
             from core.iris.api import load_project_specs
             specs = load_project_specs(

@@ -496,15 +496,15 @@ def _validate_writable_path(p: Path, *, role: str) -> None:
     #
     # Either form being root → reject. Caught by core/sandbox/tests/
     # — first surfaced when the sandbox suite ran on macOS.
-    for label, candidate in (("resolved", resolved), ("literal", p)):
-        if candidate.parent == candidate:
+    for label, candidate in (("resolved", resolved), ("literal", p)):  # type: ignore[assignment]
+        if candidate.parent == candidate:  # type: ignore[attr-defined]
             msg = (
                 f"{role}={str(p)!r} {label}-form is the filesystem "
                 f"root; refusing to grant the sandbox write access "
                 f"to the entire filesystem"
             )
             raise ValueError(msg)
-        if candidate.parent == Path(candidate.anchor):
+        if candidate.parent == Path(candidate.anchor):  # type: ignore[attr-defined]
             msg = (
                 f"{role}={str(p)!r} {label}-form has filesystem root "
                 f"as its parent. Sandbox writable scope "
@@ -877,8 +877,8 @@ def fetch_commit(
         }
         if network:
             return run_untrusted_networked(
-                cmd, proxy_hosts=proxy_hosts, fake_home=True, **kwargs)
-        return run_untrusted(cmd, **kwargs)
+                cmd, proxy_hosts=proxy_hosts, fake_home=True, **kwargs)  # type: ignore[arg-type]
+        return run_untrusted(cmd, **kwargs)  # type: ignore[arg-type]
 
     is_repo = (repo_dir / ".git").exists()
     if is_repo:

@@ -799,17 +799,17 @@ REVIEW_SCHEMA = {
 REVIEW_SCHEMA_BLIND = {
     "type": "object",
     "properties": {
-        "hypothesis": REVIEW_SCHEMA["properties"]["hypothesis"],
-        "hypotheses": REVIEW_SCHEMA["properties"]["hypotheses"],
+        "hypothesis": REVIEW_SCHEMA["properties"]["hypothesis"],  # type: ignore[index]
+        "hypotheses": REVIEW_SCHEMA["properties"]["hypotheses"],  # type: ignore[index]
         "body": {"type": "string"},
-        "cwe": REVIEW_SCHEMA["properties"]["cwe"],
-        "counter_hypothesis": REVIEW_SCHEMA["properties"]["counter_hypothesis"],
-        "counter_direction": REVIEW_SCHEMA["properties"]["counter_direction"],
-        "observations": REVIEW_SCHEMA["properties"]["observations"],
-        "constraints": REVIEW_SCHEMA["properties"]["constraints"],
-        "reading_list": REVIEW_SCHEMA["properties"]["reading_list"],
-        "intent_trace": REVIEW_SCHEMA["properties"]["intent_trace"],
-        "verdict_rationale": REVIEW_SCHEMA["properties"]["verdict_rationale"],
+        "cwe": REVIEW_SCHEMA["properties"]["cwe"],  # type: ignore[index]
+        "counter_hypothesis": REVIEW_SCHEMA["properties"]["counter_hypothesis"],  # type: ignore[index]
+        "counter_direction": REVIEW_SCHEMA["properties"]["counter_direction"],  # type: ignore[index]
+        "observations": REVIEW_SCHEMA["properties"]["observations"],  # type: ignore[index]
+        "constraints": REVIEW_SCHEMA["properties"]["constraints"],  # type: ignore[index]
+        "reading_list": REVIEW_SCHEMA["properties"]["reading_list"],  # type: ignore[index]
+        "intent_trace": REVIEW_SCHEMA["properties"]["intent_trace"],  # type: ignore[index]
+        "verdict_rationale": REVIEW_SCHEMA["properties"]["verdict_rationale"],  # type: ignore[index]
         "status": _STATUS_NO_DORMANT,
     },
     "required": [
@@ -1017,18 +1017,18 @@ def _schema_for_mode(mode: ReviewMode) -> dict:
     import copy
     base = copy.deepcopy(REVIEW_SCHEMA)
     if mode.is_defect_oriented:
-        base["properties"]["status"] = copy.deepcopy(_status_for_mode(mode))
-        base["properties"]["hypothesis"]["description"] = (
+        base["properties"]["status"] = copy.deepcopy(_status_for_mode(mode))  # type: ignore[index]
+        base["properties"]["hypothesis"]["description"] = (  # type: ignore[index]
             "Your single strongest hypothesis for HOW this function "
             "is defective. Name the specific mechanism: off-by-one, "
             "resource leak, missing error check, use-after-free, "
             "integer overflow, TOCTOU race, etc. One sentence, "
             "mechanism first."
         )
-        base["properties"]["bug_class"] = copy.deepcopy(_BUG_CLASS_FIELD)
+        base["properties"]["bug_class"] = copy.deepcopy(_BUG_CLASS_FIELD)  # type: ignore[index]
         if mode == ReviewMode.QUALITY:
-            base["properties"].pop("impact", None)
-            base["properties"].pop("preconditions", None)
+            base["properties"].pop("impact", None)  # type: ignore[attr-defined]
+            base["properties"].pop("preconditions", None)  # type: ignore[attr-defined]
     return base
 
 

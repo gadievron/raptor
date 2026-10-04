@@ -472,7 +472,7 @@ def _not_executable(
     return SanwitResult(
         outcome="skipped", verdict="not-executable",
         rule_id="sanwit:not-executable",
-        reason=reason, **_base(file_path, function_name), **extra,
+        reason=reason, **_base(file_path, function_name), **extra,  # type: ignore[arg-type]
     )
 
 
@@ -758,7 +758,7 @@ def run_sanwit_check(
             outcome="error", verdict="error",
             rule_id="sanwit:error", reason=exec_outcome.reason,
             errors=[exec_outcome.reason],
-            **_base(file_path, function_name), **common,
+            **_base(file_path, function_name), **common,  # type: ignore[arg-type]
         )
 
     run = parse_probe_output(exec_outcome.stdout, token)
@@ -768,7 +768,7 @@ def run_sanwit_check(
             rule_id="sanwit:error",
             reason=f"unauthenticated/unparseable probe output: {run}",
             errors=[run],
-            **_base(file_path, function_name), **common,
+            **_base(file_path, function_name), **common,  # type: ignore[arg-type]
         )
     if run.php_version:
         common["interpreter"] = {
@@ -829,7 +829,7 @@ def _adjudicate(
             ),
             exhibits=exhibits[:4],
             errors=indeterminate,
-            **_base(file_path, function_name), **common,
+            **_base(file_path, function_name), **common,  # type: ignore[arg-type]
         )
     if indeterminate:
         return SanwitResult(
@@ -841,7 +841,7 @@ def _adjudicate(
                 "sufficiency cannot be adjudicated"
             ),
             errors=indeterminate,
-            **_base(file_path, function_name), **common,
+            **_base(file_path, function_name), **common,  # type: ignore[arg-type]
         )
     version = common.get("interpreter", {}).get("version", "?")
     return SanwitResult(
@@ -854,5 +854,5 @@ def _adjudicate(
             "context-scoped; says nothing about other contexts and "
             "is not a clean verdict"
         ),
-        **_base(file_path, function_name), **common,
+        **_base(file_path, function_name), **common,  # type: ignore[arg-type]
     )

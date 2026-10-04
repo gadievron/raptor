@@ -134,7 +134,7 @@ def _first_external_caller() -> str:
             abspath = os.path.abspath(path)
             if not abspath.startswith(pkg_dir) and abspath != ctx_file:
                 return f"{path}:{frame.f_lineno}"
-            frame = frame.f_back
+            frame = frame.f_back  # type: ignore[assignment]
     except Exception:  # noqa: BLE001 — attribution must never break the warning
         pass
     return "<unattributable>"
@@ -1862,7 +1862,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
     elif disabled or state._cli_sandbox_disabled:
         _profile_for_defaults = "none"
     else:
-        _profile_for_defaults = profile
+        _profile_for_defaults = profile  # type: ignore[assignment]
     _profile_defaults: Mapping[str, object] = (
         PROFILES.get(_profile_for_defaults)
         if _profile_for_defaults else None
@@ -2637,7 +2637,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                      and seccomp_profile != "none"
                                      and check_seccomp_available())
             else:
-                _require_degraded_udp_filter(seccomp_profile)
+                _require_degraded_udp_filter(seccomp_profile)  # type: ignore[arg-type]
                 seccomp_block_udp = (bool(seccomp_profile)
                                      and seccomp_profile != "none")
         if _ll_net_capable and not allowed_tcp_ports:
@@ -5753,7 +5753,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                         if allowed_tcp_ports else None,
                     # Linux-only kwargs accepted for signature parity
                     # with _spawn.run_sandboxed; ignored by SBPL backend.
-                    seccomp_profile=seccomp_profile,
+                    seccomp_profile=seccomp_profile,  # type: ignore[arg-type]
                     # profile NAME so seatbelt can layer the
                     # macos-strict extras (strict and full share
                     # seccomp_profile="full").
@@ -5974,7 +5974,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
 
                         def _register_lane_peer(pid: int) -> None:
                             if _use_proxy_netns and _proxy_unix_path:
-                                if proxy_instance.add_lane_peer_root(
+                                if proxy_instance.add_lane_peer_root(  # type: ignore[union-attr]
                                         _proxy_unix_path, pid):
                                     _lane_peer_pids.append(pid)
 
@@ -6049,7 +6049,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                 readable_paths=_spawn_readable,
                                 allowed_tcp_ports=list(allowed_tcp_ports)
                                 if allowed_tcp_ports else None,
-                                seccomp_profile=seccomp_profile,
+                                seccomp_profile=seccomp_profile,  # type: ignore[arg-type]
                                 seccomp_block_udp=seccomp_block_udp,
                                 env=_call_env,
                                 cwd=kwargs.get("cwd"),
@@ -6306,8 +6306,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                             )
                         finally:
                             for _pp in _lane_peer_pids:
-                                proxy_instance.discard_lane_peer_root(
-                                    _proxy_unix_path, _pp)
+                                proxy_instance.discard_lane_peer_root(  # type: ignore[union-attr]
+                                    _proxy_unix_path, _pp)  # type: ignore[arg-type]
                         used_spawn = True
                         # Authoritative setup-failure signal from the exec-
                         # status pipe (core/sandbox/_spawn.py) — unspoofable
@@ -7384,7 +7384,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                         and degraded_net_deny):
                     if (landlock_available and _get_landlock_abi() >= 4
                             and not allowed_tcp_ports):
-                        _require_degraded_udp_filter(seccomp_profile)
+                        _require_degraded_udp_filter(seccomp_profile)  # type: ignore[arg-type]
                         _demoted_net_deny = True
                         if state.warn_once("_demoted_tcp_deny_warned"):
                             logger.warning(
@@ -7471,7 +7471,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                             if _demoted_call_writable is not None
                             else writable_paths),
                         allowed_tcp_ports=allowed_tcp_ports,
-                        seccomp_profile=seccomp_profile,
+                        seccomp_profile=seccomp_profile,  # type: ignore[arg-type]
                         seccomp_block_udp=(seccomp_block_udp
                                            or _demoted_net_deny),
                         readable_paths=_preexec_readable,
@@ -7646,7 +7646,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                         or _demoted_net_deny),
                                 )
                             _sc_preexec = _la_make_seccomp(
-                                seccomp_profile,
+                                seccomp_profile,  # type: ignore[arg-type]
                                 block_udp=(seccomp_block_udp
                                            or _demoted_net_deny),
                                 audit_mode=True,
@@ -7993,7 +7993,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                     pass
             _grant_pin_fds.clear()
             events = (
-                proxy_instance.unregister_sandbox(proxy_token)
+                proxy_instance.unregister_sandbox(proxy_token)  # type: ignore[union-attr]
                 if proxy_token is not None else []
             )
         # Accumulate into the sandbox()-scoped cumulative view so callers
@@ -8035,7 +8035,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         # attached by _interpret_result above, so the handler parks
         # the stamp on the result object.
         if getattr(result, "_synthetic_ebadf", False):
-            result.sandbox_info["synthetic_result"] = (
+            result.sandbox_info["synthetic_result"] = (  # type: ignore[attr-defined]
                 "ebadf-teardown-race")
 
         # Record whether mount-ns engaged on this run so per-run
@@ -8047,7 +8047,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         # no bind tree even on a mount-capable host — reporting True
         # would tell forensic readers the child had fs isolation it
         # didn't have.
-        result.sandbox_info["mount_ns_active"] = bool(
+        result.sandbox_info["mount_ns_active"] = bool(  # type: ignore[attr-defined]
             used_spawn and use_mount
             and not _spawn_without_mount
         )
@@ -8057,14 +8057,14 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             # policy layer engaged (the historical mountless posture),
             # "pidns-nomount" when the floor-consented Landlock-absent
             # mode ran without it (the ported ns-only lane).
-            result.sandbox_info["backend"] = (
+            result.sandbox_info["backend"] = (  # type: ignore[attr-defined]
                 "landlock-pidns" if landlock_available
                 else "pidns-nomount")
             if _require_fresh_procfs or _ported_hard_fresh:
                 # Stamped when the fresh procfs mount was ENFORCED
                 # ('F' fail-closed): the caller's contract flag, or
                 # the ported ns-only lane's own tier promise.
-                result.sandbox_info["fresh_procfs"] = True
+                result.sandbox_info["fresh_procfs"] = True  # type: ignore[attr-defined]
         # Containment-tier posture: the tier this call actually
         # DELIVERED, the floor in force, and where the floor came
         # from. Always stamped — the canonical answer to "what
@@ -8166,7 +8166,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             sys.platform == "linux" and restrict_reads
             and not effectively_disabled
             and not landlock_available
-            and not result.sandbox_info["mount_ns_active"])
+            and not result.sandbox_info["mount_ns_active"])  # type: ignore[attr-defined]
         _reads_enforced = bool(
             restrict_reads and not _seatbelt_audit_observe_only
             and not _reads_unenforced_no_landlock)
@@ -8177,7 +8177,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                 _summary_posture.record_run_posture(
                     Path(_posture_dir),
                     mount_ns_active=bool(
-                        result.sandbox_info["mount_ns_active"]),
+                        result.sandbox_info["mount_ns_active"]),  # type: ignore[attr-defined]
                     restrict_reads=_reads_enforced,
                     mountless_backend=bool(
                         used_spawn and _spawn_without_mount),
@@ -8204,7 +8204,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                 logger.debug("cli-disable record failed",
                              exc_info=True)
         if _mount_ns_degraded:
-            result.sandbox_info["mount_ns_degraded"] = _mount_ns_degraded
+            result.sandbox_info["mount_ns_degraded"] = _mount_ns_degraded  # type: ignore[attr-defined]
         # restrict_reads is enforced on every engaged path — mount-ns
         # via the bind tree + Landlock, skip_mount_ns and Landlock-only
         # via the Landlock read allowlist alone — EXCEPT the seatbelt
@@ -8212,7 +8212,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         # posture note above): stamp the enforced truth plus an
         # explicit marker so forensic readers can tell "no read wall"
         # from "read wall demoted by audit mode".
-        result.sandbox_info["restrict_reads"] = _reads_enforced
+        result.sandbox_info["restrict_reads"] = _reads_enforced  # type: ignore[attr-defined]
         if _seatbelt_audit_observe_only:
             result.sandbox_info[  # type: ignore[attr-defined]
                 "read_enforcement"] = "observe-only"
@@ -8227,7 +8227,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             # Restricted host-visible posture: the host-shared /tmp and
             # /dev/shm grants were replaced by a 0700 TMPDIR-steered scratch
             # directory, whether namespaces remain active or not.
-            result.sandbox_info["private_scratch"] = True
+            result.sandbox_info["private_scratch"] = True  # type: ignore[attr-defined]
         if (_reaper_cell is not None and not used_spawn
                 and not _audit_landlock_engaged):
             # No-namespace posture: teardown containment came from the
@@ -8242,7 +8242,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             # cell became unconditional: a spawn-lane run's teardown
             # is the pid-ns cascade, and its preexec (where the
             # sweeper forks) never runs.
-            _sweep_info = result.sandbox_info
+            _sweep_info = result.sandbox_info  # type: ignore[attr-defined]
             _sweep_info["teardown_sweep"] = True
             # Sweeper-killability gap (kernel limitation, stamped
             # honestly like the Landlock metadata/TRUNCATE gaps
@@ -8271,9 +8271,9 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         # forensic readers know metadata trust does not hold for this
         # run. See docs/sandbox.md "Known limitations".
         if (sys.platform == "linux"
-                and not result.sandbox_info["mount_ns_active"]
+                and not result.sandbox_info["mount_ns_active"]  # type: ignore[attr-defined]
                 and writable_paths and check_landlock_available()):
-            result.sandbox_info["landlock_metadata_ops_unrestricted"] = True
+            result.sandbox_info["landlock_metadata_ops_unrestricted"] = True  # type: ignore[attr-defined]
             # Landlock TRUNCATE gap (ABI < 3, kernel < 6.2, stamped
             # honestly like the metadata gap above): the TRUNCATE
             # access right doesn't exist before ABI 3, so truncate(2)
@@ -8284,14 +8284,14 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             # build time; the stamp lets forensic readers see the
             # posture per run.
             if _get_landlock_abi() < 3:
-                result.sandbox_info["landlock_truncate_unrestricted"] = True
+                result.sandbox_info["landlock_truncate_unrestricted"] = True  # type: ignore[attr-defined]
         if _degraded_tcp_deny or _demoted_net_deny:
             # Both arms of the deny-all fallback stamp: the
             # construction-time degrade AND the per-call demotion
             # recheck — pre-fix a demoted call's engaged deny read as
             # None here while the prose mount_ns_degraded reason was
             # the only honest signal.
-            result.sandbox_info["degraded_net_deny"] = True
+            result.sandbox_info["degraded_net_deny"] = True  # type: ignore[attr-defined]
         if (_use_proxy_netns and not effectively_disabled
                 and used_spawn):
             # Stamp the DELIVERED lane, not the construction-time
@@ -8304,7 +8304,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             # tried to egress" instead of "the enforcing tier never
             # ran"). Demoted calls fall through to the enforcement-
             # honest labels below.
-            result.sandbox_info["proxy_enforcement"] = "netns"
+            result.sandbox_info["proxy_enforcement"] = "netns"  # type: ignore[attr-defined]
         elif use_egress_proxy:
             # Stamp what actually ENFORCES the chokepoint for THIS
             # run, not what was requested. Pre-fix every non-netns
@@ -8320,9 +8320,9 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             # through seatbelt SBPL, not Landlock; label it as such.
             if effectively_disabled or (
                     not use_seatbelt and _proxy_abi < 4):
-                result.sandbox_info["proxy_enforcement"] = "advisory"
+                result.sandbox_info["proxy_enforcement"] = "advisory"  # type: ignore[attr-defined]
             else:
-                result.sandbox_info["proxy_enforcement"] = (
+                result.sandbox_info["proxy_enforcement"] = (  # type: ignore[attr-defined]
                     "seatbelt_tcp" if use_seatbelt else "landlock_tcp")
                 # Record the tier-2 weakening in the per-run evidence
                 # so forensic readers of sandbox_info see the reduced
@@ -8339,8 +8339,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                     "the proxy port is reachable without the hostname "
                     "allowlist"
                 )
-                _t2_existing = result.sandbox_info.get("evidence", "")
-                result.sandbox_info["evidence"] = (
+                _t2_existing = result.sandbox_info.get("evidence", "")  # type: ignore[attr-defined]
+                result.sandbox_info["evidence"] = (  # type: ignore[attr-defined]
                     f"{_t2_existing} — {_t2_note}" if _t2_existing
                     else _t2_note
                 )
@@ -8378,13 +8378,13 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         # per-call signal instead of parsing warnings out of stderr.
         # Absent when audit was not requested/engaged for the call.
         if nonlocal_audit_mode:
-            result.sandbox_info["audit_engaged"] = bool(
+            result.sandbox_info["audit_engaged"] = bool(  # type: ignore[attr-defined]
                 _audit_engaged_anywhere
             )
         if (nonlocal_observe_nonce is not None
                 and nonlocal_audit_mode
                 and _audit_engaged_anywhere):
-            result.sandbox_info["observe_nonce"] = nonlocal_observe_nonce
+            result.sandbox_info["observe_nonce"] = nonlocal_observe_nonce  # type: ignore[attr-defined]
             # Record HOW the nonce reached the tracer so
             # parse_observe_log's backstop can refuse nonce-based
             # trust if a future regression re-introduces a delivery
@@ -8394,13 +8394,13 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             # Linux spawn paths (mount-ns _spawn AND the Landlock-
             # only _landlock_audit helper): anonymous fd — memfd
             # passed as /proc/self/fd/N, no filesystem name.
-            result.sandbox_info["nonce_delivery"] = (
+            result.sandbox_info["nonce_delivery"] = (  # type: ignore[attr-defined]
                 "in_process"
                 if (spawn_eligible and use_seatbelt)
                 else "anonymous_fd"
             )
         else:
-            result.sandbox_info["observe_nonce"] = None
+            result.sandbox_info["observe_nonce"] = None  # type: ignore[attr-defined]
 
         # Attach proxy events (allow + deny + dns_fail + bytes) to
         # sandbox_info. Available to callers as
@@ -8410,7 +8410,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         # caller_label has already been stamped by the proxy at
         # unregister time (one copy, authoritative).
         if events:
-            result.sandbox_info["proxy_events"] = events
+            result.sandbox_info["proxy_events"] = events  # type: ignore[attr-defined]
             # Surface a concise summary in the top-level evidence for
             # quick-triage readers of sandbox_info.
             allowed = sum(1 for e in events if e["result"] == "allowed")
@@ -8420,8 +8420,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                 f"egress: {allowed} allowed, {denied} denied "
                 f"({len(events)} total)"
             )
-            existing = result.sandbox_info.get("evidence", "")
-            result.sandbox_info["evidence"] = (
+            existing = result.sandbox_info.get("evidence", "")  # type: ignore[attr-defined]
+            result.sandbox_info["evidence"] = (  # type: ignore[attr-defined]
                 f"{existing} — {summary}" if existing else summary
             )
 
@@ -8481,12 +8481,12 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         )
         if stderr_text and (network_engaged or landlock_engaged or seccomp_engaged):
             _check_blocked(stderr_text, cmd_display, result.returncode,
-                          result.sandbox_info,
+                          result.sandbox_info,  # type: ignore[attr-defined]
                           network_engaged=network_engaged,
                           landlock_engaged=landlock_engaged,
                           writable_paths=writable_paths,
                           seccomp_engaged=seccomp_engaged,
-                          seccomp_profile=seccomp_profile,
+                          seccomp_profile=seccomp_profile,  # type: ignore[arg-type]
                           degraded_net_deny=_degraded_tcp_deny,
                           # Linux: the SOCK_DGRAM block rides the
                           # seccomp filter, so it is only live when
@@ -8588,7 +8588,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             _proxy_unix_path if _use_proxy_netns
             else _proxy_tcp_lane_port
         )
-        if _lane_key is not None and proxy_instance.set_lane_audit(
+        if _lane_key is not None and proxy_instance.set_lane_audit(  # type: ignore[union-attr]
                 _lane_key, True):
             _engaging_audit = True
         else:
@@ -8652,7 +8652,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                     else _proxy_tcp_lane_port
                 )
                 if _lane_key is not None:
-                    proxy_instance.set_lane_audit(_lane_key, False)
+                    proxy_instance.set_lane_audit(_lane_key, False)  # type: ignore[union-attr]
             except Exception:
                 # WARNING-level (not debug): a failed clear leaves
                 # connections in flight on this context's lane in

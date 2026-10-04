@@ -154,7 +154,7 @@ def _collect_sink_vocabulary(
                         continue
                     sinks[ann.function] = {
                         "source": "annotation",
-                        "cwe": _sink_cwe(meta),
+                        "cwe": _sink_cwe(meta),  # type: ignore[arg-type]
                         "registry": is_human_grade(
                             meta, note_mtime=ann_mtime,
                         ),
@@ -455,7 +455,7 @@ def run_consistency_prepass(
         )
 
     def _over_budget() -> bool:
-        if time.monotonic() - t0 > budget_s:
+        if time.monotonic() - t0 > budget_s:  # type: ignore[operator]
             telemetry["budget_exceeded"] = True
             return True
         return False
@@ -510,8 +510,8 @@ def run_consistency_prepass(
             # budgets bound the whole prepass deliberately.
             census = build_return_census(
                 source_texts, joern_server=joern_server,
-                **({} if _derived_prepass
-                   else {"budget_s": budget_s / 2}),
+                **({} if _derived_prepass  # type: ignore[arg-type]
+                   else {"budget_s": budget_s / 2}),  # type: ignore[operator]
             )
             if out_dir is not None and census:
                 _write_census_cache(Path(out_dir), _census_fp, census)
@@ -755,7 +755,7 @@ def run_consistency_prepass(
             shape_devs = []
         if shape_devs:
             counts = _dim(DIMENSION_ARGUMENT_SHAPE)
-            for dev in shape_devs:
+            for dev in shape_devs:  # type: ignore[assignment]
                 try:
                     res = argument_shape_verdict(
                         dev, context=ctx, inventory=inventory,
@@ -777,7 +777,7 @@ def run_consistency_prepass(
                     "rule_id": res.rule_id,
                     "cwe": dev.cwe,
                 })
-                if dev.type_witness and res.outcome == "confirmed":
+                if dev.type_witness and res.outcome == "confirmed":  # type: ignore[attr-defined]
                     pe = res.peer_evidence
                     source_key = pe.contract_source if pe else "none"
                     telemetry["contract_sources"][source_key] = (
@@ -814,7 +814,7 @@ def run_consistency_prepass(
                     file=dev.file,
                     function=dev.enclosing_function,
                     line=dev.line,
-                    security_relevant=dev.type_witness,
+                    security_relevant=dev.type_witness,  # type: ignore[attr-defined]
                 ))
 
     # ── learned pairs (shared by cleanup §3.2 and ordering §3.5) ────
@@ -854,7 +854,7 @@ def run_consistency_prepass(
                          exc_info=True)
             cleanup_devs = []
         counts = _dim(DIMENSION_CLEANUP)
-        for dev in cleanup_devs:
+        for dev in cleanup_devs:  # type: ignore[assignment]
             try:
                 res = cleanup_verdict(
                     dev, context=ctx, inventory=inventory,
@@ -872,9 +872,9 @@ def run_consistency_prepass(
                 "detector": "cleanup_deviation",
                 "line": dev.line,
                 "description": dev.description,
-                "callee": dev.pair.acquire,
+                "callee": dev.pair.acquire,  # type: ignore[attr-defined]
                 "rule_id": res.rule_id,
-                "cwe": _cleanup_cwe(dev.pair.kind),
+                "cwe": _cleanup_cwe(dev.pair.kind),  # type: ignore[attr-defined]
             })
             if res.outcome == "inconclusive":
                 reason_key = res.reason.split(":", 1)[0]
@@ -905,18 +905,18 @@ def run_consistency_prepass(
                     "file": dev.file,
                     "function": dev.enclosing_function,
                     "line": dev.line,
-                    "callee": dev.pair.acquire,
+                    "callee": dev.pair.acquire,  # type: ignore[attr-defined]
                     "dimension": DIMENSION_CLEANUP,
                     "rule_id": res.rule_id,
                     "evidence_tool": res.rule_id,
                     "status": status,
                     "detection_grade": False,
-                    "cwe": _cleanup_cwe(dev.pair.kind),
+                    "cwe": _cleanup_cwe(dev.pair.kind),  # type: ignore[attr-defined]
                     "hypothesis": (
                         f"{dev.conforming}/{dev.n} "
-                        f"{'error paths' if dev.leg == 'intra_path' else 'sibling callers'} "
-                        f"release {dev.pair.acquire}()'s resource via "
-                        f"{dev.pair.release}(); "
+                        f"{'error paths' if dev.leg == 'intra_path' else 'sibling callers'} "  # type: ignore[attr-defined]
+                        f"release {dev.pair.acquire}()'s resource via "  # type: ignore[attr-defined]
+                        f"{dev.pair.release}(); "  # type: ignore[attr-defined]
                         f"{dev.enclosing_function} does not"
                     ),
                     "description": res.reason,
@@ -947,8 +947,8 @@ def run_consistency_prepass(
                          exc_info=True)
             order_devs = []
         counts = _dim(DIMENSION_ORDERING)
-        for dev in order_devs:
-            if dev.data_dependent:
+        for dev in order_devs:  # type: ignore[assignment]
+            if dev.data_dependent:  # type: ignore[attr-defined]
                 # The deviant's earlier call feeds the later call —
                 # the order is forced; enumerated inconclusive, no lead.
                 counts["inconclusive"] += 1
@@ -965,7 +965,7 @@ def run_consistency_prepass(
                 "detector": "ordering_deviation",
                 "line": dev.line,
                 "description": dev.description,
-                "callee": dev.second_op,
+                "callee": dev.second_op,  # type: ignore[attr-defined]
                 "rule_id": (
                     dev.peer_evidence.rule_id
                     if dev.peer_evidence else ""
@@ -974,7 +974,7 @@ def run_consistency_prepass(
             })
             leads.append({
                 "dimension": DIMENSION_ORDERING,
-                "callee": f"{dev.first_op}/{dev.second_op}",
+                "callee": f"{dev.first_op}/{dev.second_op}",  # type: ignore[attr-defined]
                 "file": dev.file,
                 "function": dev.enclosing_function,
                 "line": dev.line,
@@ -983,7 +983,7 @@ def run_consistency_prepass(
                     if dev.peer_evidence else ""
                 ),
                 "description": dev.description[:300],
-                "security_relevant": dev.flavor != "sequence",
+                "security_relevant": dev.flavor != "sequence",  # type: ignore[attr-defined]
                 "n": dev.n,
                 "conforming": dev.conforming,
                 "ratio": dev.ratio,
@@ -1023,7 +1023,7 @@ def run_consistency_prepass(
             iface_devs = []
         if iface_devs:
             counts = _dim(DIMENSION_INTERFACE)
-            for dev in iface_devs:
+            for dev in iface_devs:  # type: ignore[assignment]
                 counts["confirmed"] += 1
                 mechanical.append({
                     "file": dev.file,
@@ -1031,7 +1031,7 @@ def run_consistency_prepass(
                     "detector": "interface_deviation",
                     "line": dev.line,
                     "description": dev.description,
-                    "callee": dev.property_name,
+                    "callee": dev.property_name,  # type: ignore[attr-defined]
                     "rule_id": (
                         dev.peer_evidence.rule_id
                         if dev.peer_evidence else ""
@@ -1040,7 +1040,7 @@ def run_consistency_prepass(
                 })
                 leads.append(_attach_family({
                     "dimension": DIMENSION_INTERFACE,
-                    "callee": dev.property_name,
+                    "callee": dev.property_name,  # type: ignore[attr-defined]
                     "file": dev.file,
                     "function": dev.enclosing_function,
                     "line": dev.line,
@@ -1098,7 +1098,7 @@ def run_consistency_prepass(
             telemetry["enum_switch_caps_hit"] = True
         if es_devs:
             counts = _dim(DIMENSION_ENUM_SWITCH)
-            for dev in es_devs:
+            for dev in es_devs:  # type: ignore[assignment]
                 counts["confirmed"] += 1
                 mechanical.append({
                     "file": dev.file,
@@ -1106,7 +1106,7 @@ def run_consistency_prepass(
                     "detector": "enum_switch_deviation",
                     "line": dev.line,
                     "description": dev.description,
-                    "callee": dev.missing_member,
+                    "callee": dev.missing_member,  # type: ignore[attr-defined]
                     "rule_id": (
                         dev.peer_evidence.rule_id
                         if dev.peer_evidence else ""
@@ -1115,7 +1115,7 @@ def run_consistency_prepass(
                 })
                 leads.append({
                     "dimension": DIMENSION_ENUM_SWITCH,
-                    "callee": dev.missing_member,
+                    "callee": dev.missing_member,  # type: ignore[attr-defined]
                     "file": dev.file,
                     "function": dev.enclosing_function,
                     "line": dev.line,
@@ -1167,7 +1167,7 @@ def run_consistency_prepass(
             logger.debug("consistency prepass: fix-anchored clone "
                          "drift failed", exc_info=True)
             anchored = []
-        for dev in anchored:
+        for dev in anchored:  # type: ignore[assignment]
             try:
                 res = clone_drift_verdict(
                     dev, context=ctx, inventory=inventory,
@@ -1185,7 +1185,7 @@ def run_consistency_prepass(
                 "detector": "clone_drift",
                 "line": dev.line,
                 "description": dev.description,
-                "callee": dev.token,
+                "callee": dev.token,  # type: ignore[attr-defined]
                 "rule_id": res.rule_id,
                 "cwe": dev.cwe,
             })
@@ -1204,7 +1204,7 @@ def run_consistency_prepass(
                     "file": dev.file,
                     "function": dev.enclosing_function,
                     "line": dev.line,
-                    "callee": dev.token,
+                    "callee": dev.token,  # type: ignore[attr-defined]
                     "dimension": DIMENSION_CLONE_DRIFT,
                     "rule_id": res.rule_id,
                     "evidence_tool": res.rule_id,
@@ -1213,8 +1213,8 @@ def run_consistency_prepass(
                     "cwe": dev.cwe,
                     "hypothesis": (
                         f"{dev.enclosing_function} reproduces the "
-                        f"region fix {dev.fix_sha[:12]} patched but "
-                        f"lacks the added guard {dev.token}()"
+                        f"region fix {dev.fix_sha[:12]} patched but "  # type: ignore[attr-defined]
+                        f"lacks the added guard {dev.token}()"  # type: ignore[attr-defined]
                     ),
                     "description": res.reason,
                     "receipts": res.to_dict(),
@@ -1236,7 +1236,7 @@ def run_consistency_prepass(
             logger.debug("consistency prepass: clone winnowing "
                          "failed", exc_info=True)
             generic = []
-        for dev in generic:
+        for dev in generic:  # type: ignore[assignment]
             counts["confirmed"] = counts.get("confirmed", 0) + 1
             mechanical.append({
                 "file": dev.file,
@@ -1244,7 +1244,7 @@ def run_consistency_prepass(
                 "detector": "clone_drift",
                 "line": dev.line,
                 "description": dev.description,
-                "callee": dev.token,
+                "callee": dev.token,  # type: ignore[attr-defined]
                 "rule_id": (
                     dev.peer_evidence.rule_id
                     if dev.peer_evidence else ""
@@ -1253,7 +1253,7 @@ def run_consistency_prepass(
             })
             leads.append({
                 "dimension": DIMENSION_CLONE_DRIFT,
-                "callee": dev.token,
+                "callee": dev.token,  # type: ignore[attr-defined]
                 "file": dev.file,
                 "function": dev.enclosing_function,
                 "line": dev.line,
@@ -1265,7 +1265,7 @@ def run_consistency_prepass(
                 "security_relevant": dev.kind in ("guard", "bound"),
                 "n": 2,
                 "conforming": 1,
-                "ratio": dev.similarity,
+                "ratio": dev.similarity,  # type: ignore[attr-defined]
                 "score": round(lead_strength_score(1, 2), 4),
                 "formation": (
                     dev.peer_evidence.formation
@@ -1313,7 +1313,7 @@ def run_consistency_prepass(
             sanitize_devs = []
         if sanitize_devs:
             counts = _dim(DIMENSION_SANITIZE_SINK)
-            for dev in sanitize_devs:
+            for dev in sanitize_devs:  # type: ignore[assignment]
                 try:
                     res = sanitize_sink_verdict(
                         dev, context=ctx, inventory=inventory,
@@ -1331,11 +1331,11 @@ def run_consistency_prepass(
                     "detector": "sanitize_sink_deviation",
                     "line": dev.line,
                     "description": dev.description,
-                    "callee": dev.sink,
+                    "callee": dev.sink,  # type: ignore[attr-defined]
                     "rule_id": res.rule_id,
                     "cwe": dev.cwe,
                 })
-                if dev.registry_grade and res.outcome == "confirmed":
+                if dev.registry_grade and res.outcome == "confirmed":  # type: ignore[attr-defined]
                     pe = res.peer_evidence
                     source_key = pe.contract_source if pe else "none"
                     telemetry["contract_sources"][source_key] = (
@@ -1350,7 +1350,7 @@ def run_consistency_prepass(
                             "file": dev.file,
                             "function": dev.enclosing_function,
                             "line": dev.line,
-                            "callee": dev.sink,
+                            "callee": dev.sink,  # type: ignore[attr-defined]
                             "dimension": DIMENSION_SANITIZE_SINK,
                             "rule_id": res.rule_id,
                             "evidence_tool": res.rule_id,
@@ -1360,7 +1360,7 @@ def run_consistency_prepass(
                             "hypothesis": (
                                 f"{dev.conforming}/{dev.n} call sites "
                                 f"of the operator-annotated sink "
-                                f"{dev.sink}() sanitize the argument "
+                                f"{dev.sink}() sanitize the argument "  # type: ignore[attr-defined]
                                 f"first; {dev.enclosing_function} "
                                 f"passes it unsanitized at "
                                 f"{dev.file}:{dev.line}"
@@ -1391,7 +1391,7 @@ def run_consistency_prepass(
                 ),
                 ratio=float(floors.value("guard-presence.ratio")),
                 budget_s=max(
-                    0.0, budget_s - (time.monotonic() - t0),
+                    0.0, budget_s - (time.monotonic() - t0),  # type: ignore[operator]
                 ),
             )
         except Exception:
@@ -1401,7 +1401,7 @@ def run_consistency_prepass(
             guard_devs = []
         if guard_devs:
             counts = _dim(DIMENSION_GUARD_PRESENCE)
-            for dev in guard_devs:
+            for dev in guard_devs:  # type: ignore[assignment]
                 try:
                     res = guard_presence_verdict(
                         dev, context=ctx, inventory=inventory,
@@ -1441,7 +1441,7 @@ def run_consistency_prepass(
                     ),
                     "line": dev.line,
                     "description": res.reason[:400],
-                    "callee": dev.group_key,
+                    "callee": dev.group_key,  # type: ignore[attr-defined]
                     "rule_id": res.rule_id,
                     "cwe": dev.cwe,
                 })
@@ -1468,7 +1468,7 @@ def run_consistency_prepass(
                             "file": dev.file,
                             "function": dev.enclosing_function,
                             "line": dev.line,
-                            "callee": dev.group_key,
+                            "callee": dev.group_key,  # type: ignore[attr-defined]
                             "dimension": DIMENSION_GUARD_PRESENCE,
                             "rule_id": res.rule_id,
                             "evidence_tool": res.rule_id,
@@ -1477,10 +1477,10 @@ def run_consistency_prepass(
                             "cwe": dev.cwe,
                             "hypothesis": (
                                 f"{dev.conforming}/{dev.n} access "
-                                f"sites of {dev.group_key} apply the "
+                                f"sites of {dev.group_key} apply the "  # type: ignore[attr-defined]
                                 f"{dev.kind} guard; "
                                 f"{dev.enclosing_function} accesses "
-                                f"{dev.guard_target!r} unguarded at "
+                                f"{dev.guard_target!r} unguarded at "  # type: ignore[attr-defined]
                                 f"{dev.file}:{dev.line} on an "
                                 f"SMT-feasible path"
                             ),
@@ -1527,7 +1527,7 @@ def run_consistency_prepass(
             telemetry["guard_predicate_caps_hit"] = True
         if gp_devs:
             counts = _dim(DIMENSION_GUARD_PREDICATE)
-            for dev in gp_devs:
+            for dev in gp_devs:  # type: ignore[assignment]
                 try:
                     res = guard_predicate_verdict(
                         dev, context=ctx, inventory=inventory,
@@ -1568,7 +1568,7 @@ def run_consistency_prepass(
                     ),
                     "line": dev.line,
                     "description": res.reason[:400],
-                    "callee": dev.group_key,
+                    "callee": dev.group_key,  # type: ignore[attr-defined]
                     "rule_id": res.rule_id,
                     "cwe": dev.cwe,
                 })
@@ -1595,7 +1595,7 @@ def run_consistency_prepass(
                             "file": dev.file,
                             "function": dev.enclosing_function,
                             "line": dev.line,
-                            "callee": dev.group_key,
+                            "callee": dev.group_key,  # type: ignore[attr-defined]
                             "dimension": DIMENSION_GUARD_PREDICATE,
                             "rule_id": res.rule_id,
                             "evidence_tool": res.rule_id,
@@ -1604,7 +1604,7 @@ def run_consistency_prepass(
                             "cwe": dev.cwe,
                             "hypothesis": (
                                 f"{dev.conforming}/{dev.n} sites "
-                                f"guard {dev.group_key} with "
+                                f"guard {dev.group_key} with "  # type: ignore[attr-defined]
                                 f"`{dev.majority_repr}`; "
                                 f"{dev.enclosing_function} uses "
                                 f"`{dev.deviant_repr}` at "
@@ -1654,7 +1654,7 @@ def run_consistency_prepass(
             telemetry["path_symmetry_caps_hit"] = True
         if ps_devs:
             counts = _dim(DIMENSION_PATH_SYMMETRY)
-            for dev in ps_devs:
+            for dev in ps_devs:  # type: ignore[assignment]
                 counts["confirmed"] += 1
                 mechanical.append({
                     "file": dev.file,
@@ -1662,7 +1662,7 @@ def run_consistency_prepass(
                     "detector": "path_symmetry_deviation",
                     "line": dev.line,
                     "description": dev.description,
-                    "callee": dev.counterpart,
+                    "callee": dev.counterpart,  # type: ignore[attr-defined]
                     "rule_id": (
                         dev.peer_evidence.rule_id
                         if dev.peer_evidence else ""
@@ -1671,7 +1671,7 @@ def run_consistency_prepass(
                 })
                 leads.append({
                     "dimension": DIMENSION_PATH_SYMMETRY,
-                    "callee": dev.counterpart,
+                    "callee": dev.counterpart,  # type: ignore[attr-defined]
                     "file": dev.file,
                     "function": dev.enclosing_function,
                     "line": dev.line,
@@ -1732,7 +1732,7 @@ def run_consistency_prepass(
             telemetry["boundary_unit_caps_hit"] = True
         if bu_devs:
             counts = _dim(DIMENSION_BOUNDARY_UNIT)
-            for dev in bu_devs:
+            for dev in bu_devs:  # type: ignore[assignment]
                 counts["confirmed"] += 1
                 mechanical.append({
                     "file": dev.file,
@@ -1740,7 +1740,7 @@ def run_consistency_prepass(
                     "detector": "boundary_unit_deviation",
                     "line": dev.line,
                     "description": dev.description,
-                    "callee": dev.group_key,
+                    "callee": dev.group_key,  # type: ignore[attr-defined]
                     "rule_id": (
                         dev.peer_evidence.rule_id
                         if dev.peer_evidence else ""
@@ -1749,7 +1749,7 @@ def run_consistency_prepass(
                 })
                 leads.append(_attach_family({
                     "dimension": DIMENSION_BOUNDARY_UNIT,
-                    "callee": dev.group_key,
+                    "callee": dev.group_key,  # type: ignore[attr-defined]
                     "file": dev.file,
                     "function": dev.enclosing_function,
                     "line": dev.line,

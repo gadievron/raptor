@@ -1386,7 +1386,7 @@ def _joern_co_callee_groups(
         ]
         groups.append(SiblingGroup(
             group_id=f"joern_co_callee:{caller}",
-            sibling_type=_CO_CALLEE,
+            sibling_type=_CO_CALLEE,  # type: ignore[arg-type]
             description=f"Co-callees of {caller} (Joern CPG)",
             siblings=siblings,
             shared_context=f"Called from {caller} ({caller_file})",
@@ -1440,7 +1440,7 @@ def _binary_co_callee_groups(
         ]
         groups.append(SiblingGroup(
             group_id=f"binary_co_callee:{caller}",
-            sibling_type=_CO_CALLEE,
+            sibling_type=_CO_CALLEE,  # type: ignore[arg-type]
             description=f"Co-callees of {caller} (binary edges)",
             siblings=siblings,
             shared_context=f"Called from {caller} (binary)",
@@ -1568,7 +1568,7 @@ def _anchor_family_groups(
             )
         groups.append(SiblingGroup(
             group_id=f"binary_anchor:{family_id or siblings[0].function}",
-            sibling_type=_ANCHOR_FAMILY,
+            sibling_type=_ANCHOR_FAMILY,  # type: ignore[arg-type]
             description=(
                 f"Anchor family {family_id or '(unnamed)'} "
                 f"(string-xref co-occurrence)"
@@ -1712,7 +1712,7 @@ def _shared_callee_signature_groups(
             )
         groups.append(SiblingGroup(
             group_id=f"binary_callee_sig:{kept[0]}",
-            sibling_type=_CALLEE_SIGNATURE,
+            sibling_type=_CALLEE_SIGNATURE,  # type: ignore[arg-type]
             description=(
                 f"Functions sharing ≥{MIN_SHARED_DISTINCTIVE_CALLEES} "
                 f"distinctive callees"
@@ -1927,7 +1927,7 @@ def _decomp_similarity_groups(
         ]
         groups.append(SiblingGroup(
             group_id=f"binary_decomp:{kept[0]}",
-            sibling_type=_DECOMP_SIMILARITY,
+            sibling_type=_DECOMP_SIMILARITY,  # type: ignore[arg-type]
             description=f"Similar decompilations ({_DECOMP_TIER_NOTE})",
             siblings=siblings,
             shared_context=_DECOMP_TIER_NOTE,
@@ -2026,7 +2026,7 @@ def _dispatch_site_groups(
         ]
         groups.append(SiblingGroup(
             group_id=f"dispatch:{table_file}:{table_fn}",
-            sibling_type=_DISPATCH_SITE,
+            sibling_type=_DISPATCH_SITE,  # type: ignore[arg-type]
             description=f"Dispatch handlers in {table_fn}",
             siblings=siblings,
             shared_context=f"Dispatch table in {table_fn} ({table_file})",
@@ -2122,7 +2122,7 @@ def _type_cohort_groups(
         ]
         groups.append(SiblingGroup(
             group_id=f"type_cohort:{type_name}",
-            sibling_type=_TYPE_COHORT,
+            sibling_type=_TYPE_COHORT,  # type: ignore[arg-type]
             description=f"Functions operating on {type_name}",
             siblings=siblings,
             shared_context=f"Shared type: {type_name}",
@@ -2404,9 +2404,9 @@ def _verb_prefix_groups(
             name = f.get("name", "")
             if (f.get("file", ""), name) in decorator_claimed:
                 continue
-            m = _VERB_PREFIX_RE.match(name)
-            if m:
-                prefix_buckets[m.group(1).lower()].append(f)
+            m_verb = _VERB_PREFIX_RE.match(name)
+            if m_verb:
+                prefix_buckets[m_verb.group(1).lower()].append(f)
 
         for verb, candidates in prefix_buckets.items():
             if len(candidates) < 2:
@@ -2594,7 +2594,7 @@ def _filter_co_callees(
     anchor_name, anchor = resolved[0]
     result = [anchor_name]
     for name, func in resolved[1:]:
-        if _signatures_compatible(anchor, func, max_arity_diff=max_arity_diff):
+        if _signatures_compatible(anchor, func, max_arity_diff=max_arity_diff):  # type: ignore[arg-type]
             result.append(name)
 
     if len(result) < 2:

@@ -140,9 +140,9 @@ def _load_user_limits() -> dict:
             return state._user_limits_cache
 
         if not _CONFIG_PATH.exists():
-            state._user_limits_cache = {}
+            state._user_limits_cache = {}  # type: ignore[assignment]
             state._user_limits_cache_decided_at = time.time()
-            return state._user_limits_cache
+            return state._user_limits_cache  # type: ignore[return-value]
         try:
             # `is_file()` check before read_text. Pre-fix
             # `_CONFIG_PATH.exists()` returned True for FIFO,
@@ -154,9 +154,9 @@ def _load_user_limits() -> dict:
             # `mkfifo` would cause every RAPTOR process to hang
             # at startup. Treat non-regular files as missing.
             if not _CONFIG_PATH.is_file():
-                state._user_limits_cache = {}
+                state._user_limits_cache = {}  # type: ignore[assignment]
                 state._user_limits_cache_decided_at = time.time()
-                return state._user_limits_cache
+                return state._user_limits_cache  # type: ignore[return-value]
             # Size cap before read — config is JSON metadata (key/int
             # pairs); 64 KiB is generous and catches a hostile or
             # mis-edited file ballooning to multi-MiB at module-load
@@ -164,13 +164,13 @@ def _load_user_limits() -> dict:
             _CONFIG_MAX_BYTES = 64 * 1024
             try:
                 if _CONFIG_PATH.stat().st_size > _CONFIG_MAX_BYTES:
-                    state._user_limits_cache = {}
+                    state._user_limits_cache = {}  # type: ignore[assignment]
                     state._user_limits_cache_decided_at = time.time()
-                    return state._user_limits_cache
+                    return state._user_limits_cache  # type: ignore[return-value]
             except OSError:
-                state._user_limits_cache = {}
+                state._user_limits_cache = {}  # type: ignore[assignment]
                 state._user_limits_cache_decided_at = time.time()
-                return state._user_limits_cache
+                return state._user_limits_cache  # type: ignore[return-value]
             # UnicodeDecodeError is possible if config isn't valid UTF-8 —
             # catching it alongside JSON/OS errors keeps module import safe
             # against a malformed config file.
@@ -195,19 +195,19 @@ def _load_user_limits() -> dict:
                         )
                         continue
                     cleaned[k] = v
-                state._user_limits_cache = cleaned
+                state._user_limits_cache = cleaned  # type: ignore[assignment]
                 # +inf: successful parses never expire (session
                 # cache), including a valid config that yields no
                 # recognised keys — cleaned == {} must not be
                 # mistaken for the failure sentinel above.
                 state._user_limits_cache_decided_at = float("inf")
-                return state._user_limits_cache
+                return state._user_limits_cache  # type: ignore[return-value]
         except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
             logger.warning(
                 "Sandbox: could not parse %s: %s — using default limits.", _CONFIG_PATH, e.__class__.__name__)
-        state._user_limits_cache = {}
+        state._user_limits_cache = {}  # type: ignore[assignment]
         state._user_limits_cache_decided_at = time.time()
-        return state._user_limits_cache
+        return state._user_limits_cache  # type: ignore[return-value]
 
 
 def standing_cpu_seconds() -> int:

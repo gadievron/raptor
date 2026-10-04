@@ -485,16 +485,16 @@ def _do_read_span(
             state, "read_span", REFUSED_MALFORMED,
             "start/end must be positive integer line numbers",
         )
-    if start > end:
+    if start > end:  # type: ignore[operator]
         return _refuse(
             state, "read_span", REFUSED_INVALID_RANGE, "start must be <= end",
         )
-    if end - start + 1 > READ_SPAN_MAX_LINES:
+    if end - start + 1 > READ_SPAN_MAX_LINES:  # type: ignore[operator]
         return _refuse(
             state, "read_span", REFUSED_SPAN_TOO_LARGE,
             f"at most {READ_SPAN_MAX_LINES} lines per request",
         )
-    confined = _confined(state, file_arg)
+    confined = _confined(state, file_arg)  # type: ignore[arg-type]
     if confined is None:
         return _refuse(
             state, "read_span", REFUSED_PATH_ESCAPE,
@@ -523,15 +523,15 @@ def _do_read_span(
             state, "read_span", REFUSED_FILE_UNREADABLE,
             "file could not be read",
         )
-    if start > len(lines):
+    if start > len(lines):  # type: ignore[operator]
         return _refuse(
             state, "read_span", REFUSED_BEYOND_EOF,
             f"file has {len(lines)} line(s)",
         )
     state._seen.add(key)
     rendered = "\n".join(
-        f"{start + i}: {_clip_source_line(line)}"
-        for i, line in enumerate(lines[start - 1:end])
+        f"{start + i}: {_clip_source_line(line)}"  # type: ignore[operator]
+        for i, line in enumerate(lines[start - 1:end])  # type: ignore[operator]
     )
     return _serve(state, "read_span", f"{rel}:{start}-{end}", rendered)
 
@@ -612,7 +612,7 @@ def _do_call_graph(
                 caller_call_sites_block,
             )
             block = caller_call_sites_block(
-                state.checklist, rel, function, state.repo_root,
+                state.checklist, rel, function, state.repo_root,  # type: ignore[arg-type]
                 context_map=state.context_map,
                 max_callers=MAX_CALL_SITE_CALLERS,
             )
@@ -624,7 +624,7 @@ def _do_call_graph(
                 _build_callee_block,
             )
             block = _build_callee_block(
-                state.checklist, rel, function, state.repo_root,
+                state.checklist, rel, function, state.repo_root,  # type: ignore[arg-type]
                 context_map=state.context_map,
             )
     except Exception:
@@ -636,4 +636,4 @@ def _do_call_graph(
         block.content if block is not None
         else f"(no {relation} found for {function})"
     )
-    return _serve(state, tool, function, text)
+    return _serve(state, tool, function, text)  # type: ignore[arg-type]

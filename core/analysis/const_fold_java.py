@@ -341,7 +341,7 @@ class JavaConstIndex:
     def _note_unindexed_definer(self, construct: Node, name_node: Node) -> None:
         """Record every line the binding construct or its name node
         starts on — reaching-defs definer nodes may carry either."""
-        nm = name_node.text.decode()
+        nm = name_node.text.decode()  # type: ignore[union-attr]
         self._unindexed_definers.add((construct.start_point[0] + 1, nm))
         self._unindexed_definers.add((name_node.start_point[0] + 1, nm))
 
@@ -368,7 +368,7 @@ class JavaConstIndex:
         class. Any other definition shape poisons the name."""
         if value.type == "object_creation_expression":
             ty = value.child_by_field_name("type")
-            cls = (ty.text.decode("utf-8", "replace").split("<", 1)[0]
+            cls = (ty.text.decode("utf-8", "replace").split("<", 1)[0]  # type: ignore[union-attr]
                    if ty is not None else None)
         else:
             cls = None
@@ -438,15 +438,15 @@ def _receiver_chain(node: Node) -> str | None:
     if node is None:
         return None
     if node.type == "identifier":
-        return node.text.decode("utf-8", "replace")
+        return node.text.decode("utf-8", "replace")  # type: ignore[union-attr]
     if node.type == "field_access":
-        obj = _receiver_chain(node.child_by_field_name("object"))
+        obj = _receiver_chain(node.child_by_field_name("object"))  # type: ignore[arg-type]
         fld = node.child_by_field_name("field")
         if obj is not None and fld is not None \
                 and fld.type == "identifier":
-            return obj + "." + fld.text.decode("utf-8", "replace")
+            return obj + "." + fld.text.decode("utf-8", "replace")  # type: ignore[union-attr]
     if node.type == "scoped_identifier":
-        return node.text.decode("utf-8", "replace")
+        return node.text.decode("utf-8", "replace")  # type: ignore[union-attr]
     return None
 
 
@@ -479,7 +479,7 @@ def _fold_field_access(node: Node, ext) -> Any:
     fld = node.child_by_field_name("field")
     if obj is None or fld is None or fld.type != "identifier":
         return _REFUSE
-    field = fld.text.decode("utf-8", "replace")
+    field = fld.text.decode("utf-8", "replace")  # type: ignore[union-attr]
     chain = _receiver_chain(obj)
     if chain is None:
         return _REFUSE
@@ -514,7 +514,7 @@ def _fold_tf_system_read(node: Node, resolve_name, depth, array_resolver,
     obj = node.child_by_field_name("object")
     if name_node is None or obj is None:
         return _REFUSE
-    if name_node.text.decode() not in _TF_SYSTEM_READS:
+    if name_node.text.decode() not in _TF_SYSTEM_READS:  # type: ignore[union-attr]
         return _REFUSE
     chain = _receiver_chain(obj)
     if chain is None or chain.rsplit(".", 1)[-1] != "System":
@@ -533,7 +533,7 @@ def _fold_tf_system_read(node: Node, resolve_name, depth, array_resolver,
                      config_resolver, conduit_resolver, ext)
         if dflt is _REFUSE or dflt is None:
             return _REFUSE
-    if name_node.text.decode() == "getProperty":
+    if name_node.text.decode() == "getProperty":  # type: ignore[union-attr]
         # System properties are runtime-writable (System.setProperty
         # from ANY code — including copying request data into one), so
         # a property read is taint-free only under the cross-file
@@ -567,7 +567,7 @@ def _fold(node: Node, resolve_name, depth: int, array_resolver=None,
         val = node.child_by_field_name("value")
         if ty is None or val is None:
             return _REFUSE
-        ty_text = ty.text.decode().split("<", 1)[0].strip()
+        ty_text = ty.text.decode().split("<", 1)[0].strip()  # type: ignore[union-attr]
         if ty_text.split(".")[-1] != "String":
             return _REFUSE
         v = _fold(val, resolve_name, depth + 1, array_resolver,
@@ -579,7 +579,7 @@ def _fold(node: Node, resolve_name, depth: int, array_resolver=None,
         return array_resolver(node, resolve_name, depth + 1)
     if t == "decimal_integer_literal":
         try:
-            v = int(node.text.decode())
+            v = int(node.text.decode())  # type: ignore[union-attr]
         except ValueError:
             return _REFUSE
         return v if _INT_MIN <= v <= _INT_MAX else _REFUSE
@@ -589,7 +589,7 @@ def _fold(node: Node, resolve_name, depth: int, array_resolver=None,
         # folded "ab" — a wrong False in exactly the branch-selection
         # position where it could pick the wrong ternary/switch arm.
         # Escapes refuse rather than risk a mis-decode.
-        raw = node.text.decode()
+        raw = node.text.decode()  # type: ignore[union-attr]
         if len(raw) < 2 or "\\" in raw:
             return _REFUSE
         if raw.startswith('"""'):
@@ -610,7 +610,7 @@ def _fold(node: Node, resolve_name, depth: int, array_resolver=None,
         # Java char, represented as a 1-char str: switch labels and
         # charAt results then compare under one convention. Escaped
         # chars refuse.
-        raw = node.text.decode()
+        raw = node.text.decode()  # type: ignore[union-attr]
         if len(raw) != 3 or "\\" in raw:
             return _REFUSE
         return raw[1:-1]
@@ -654,11 +654,11 @@ def _fold(node: Node, resolve_name, depth: int, array_resolver=None,
         return _fold_pure_call(node, resolve_name, depth, array_resolver,
                                config_resolver, conduit_resolver, ext)
     if t == "identifier":
-        return resolve_name(node.text.decode(), depth + 1)
+        return resolve_name(node.text.decode(), depth + 1)  # type: ignore[union-attr]
     if t == "unary_expression":
         operand = node.child_by_field_name("operand")
         op = node.child_by_field_name("operator")
-        val = _fold(operand, resolve_name, depth + 1, array_resolver, config_resolver, conduit_resolver, ext)
+        val = _fold(operand, resolve_name, depth + 1, array_resolver, config_resolver, conduit_resolver, ext)  # type: ignore[arg-type]
         if val is _REFUSE or val is TAINT_FREE or op is None:
             return _REFUSE
         text = op.type
@@ -671,18 +671,18 @@ def _fold(node: Node, resolve_name, depth: int, array_resolver=None,
     if t == "binary_expression":
         left_node = node.child_by_field_name("left")
         right_node = node.child_by_field_name("right")
-        left = _fold(left_node, resolve_name, depth + 1, array_resolver, config_resolver, conduit_resolver, ext)
+        left = _fold(left_node, resolve_name, depth + 1, array_resolver, config_resolver, conduit_resolver, ext)  # type: ignore[arg-type]
         if left is _REFUSE:
             return _REFUSE
         op_node = node.child_by_field_name("operator")
-        op = op_node.type if op_node is not None else ""
+        op = op_node.type if op_node is not None else ""  # type: ignore[assignment]
         # Short-circuit forms fold on the left operand alone when it
         # decides the result — mirrors Java evaluation order.
         if op == "&&" and left is False:
             return False
         if op == "||" and left is True:
             return True
-        right = _fold(node.child_by_field_name("right"), resolve_name, depth + 1, array_resolver, config_resolver, conduit_resolver, ext)
+        right = _fold(node.child_by_field_name("right"), resolve_name, depth + 1, array_resolver, config_resolver, conduit_resolver, ext)  # type: ignore[arg-type]
         if right is _REFUSE:
             return _REFUSE
         if left is TAINT_FREE or right is TAINT_FREE:
@@ -702,24 +702,24 @@ def _fold(node: Node, resolve_name, depth: int, array_resolver=None,
         if op in ("==", "!=") and not _eq_semantics_are_value(
                 left_node, right_node, left, right):
             return _REFUSE
-        return _fold_binop(op, left, right)
+        return _fold_binop(op, left, right)  # type: ignore[arg-type]
     if t == "ternary_expression":
-        cond = _fold(node.child_by_field_name("condition"), resolve_name, depth + 1, array_resolver, config_resolver, conduit_resolver, ext)
+        cond = _fold(node.child_by_field_name("condition"), resolve_name, depth + 1, array_resolver, config_resolver, conduit_resolver, ext)  # type: ignore[arg-type]
         if not isinstance(cond, bool):
             if ext is not None and ext.allow_taint_free:
                 # Unknown selection over two attacker-free branches is
                 # attacker-free — taint-freedom, never a usable value.
                 # Each concrete string branch is a member of the
                 # result and must clear the danger predicate (b40).
-                cons = _fold(node.child_by_field_name("consequence"), resolve_name, depth + 1, array_resolver, config_resolver, conduit_resolver, ext)
-                alt = _fold(node.child_by_field_name("alternative"), resolve_name, depth + 1, array_resolver, config_resolver, conduit_resolver, ext)
+                cons = _fold(node.child_by_field_name("consequence"), resolve_name, depth + 1, array_resolver, config_resolver, conduit_resolver, ext)  # type: ignore[arg-type]
+                alt = _fold(node.child_by_field_name("alternative"), resolve_name, depth + 1, array_resolver, config_resolver, conduit_resolver, ext)  # type: ignore[arg-type]
                 if cons is not _REFUSE and alt is not _REFUSE:
                     if not _tf_string_members_clear(ext, (cons, alt)):
                         return _REFUSE
                     return TAINT_FREE
             return _REFUSE
         branch = "consequence" if cond else "alternative"
-        return _fold(node.child_by_field_name(branch), resolve_name, depth + 1, array_resolver, config_resolver, conduit_resolver, ext)
+        return _fold(node.child_by_field_name(branch), resolve_name, depth + 1, array_resolver, config_resolver, conduit_resolver, ext)  # type: ignore[arg-type]
     return _REFUSE
 
 
@@ -737,14 +737,14 @@ def _fold_xfile_call(node: Node, ext) -> Any:
     args_node = node.child_by_field_name("arguments")
     argc = len([c for c in (args_node.children if args_node else ())
                 if c.is_named])
-    method = name_node.text.decode("utf-8", "replace")
+    method = name_node.text.decode("utf-8", "replace")  # type: ignore[union-attr]
     cls: str | None = None
     if obj.type == "object_creation_expression":
         ty = obj.child_by_field_name("type")
         if ty is not None:
-            cls = ty.text.decode("utf-8", "replace").split("<", 1)[0]
+            cls = ty.text.decode("utf-8", "replace").split("<", 1)[0]  # type: ignore[union-attr]
     elif obj.type == "identifier":
-        recv = obj.text.decode("utf-8", "replace")
+        recv = obj.text.decode("utf-8", "replace")  # type: ignore[union-attr]
         typed = ext.receiver_type(recv) if ext.receiver_type else None
         cls = typed or recv
     else:
@@ -780,12 +780,12 @@ def _fold_pure_call(node: Node, resolve_name, depth: int,
     obj = node.child_by_field_name("object")
     if name_node is None or obj is None:
         return _REFUSE
-    method = name_node.text.decode()
+    method = name_node.text.decode()  # type: ignore[union-attr]
     args_node = node.child_by_field_name("arguments")
     args = [c for c in (args_node.children if args_node else ())
             if c.is_named]
     if method == "valueOf" and obj.type == "identifier" \
-            and obj.text.decode() == "String" and len(args) == 1:
+            and obj.text.decode() == "String" and len(args) == 1:  # type: ignore[union-attr]
         v = _fold(args[0], resolve_name, depth + 1, array_resolver,
                   config_resolver, conduit_resolver, ext)
         if v is TAINT_FREE:

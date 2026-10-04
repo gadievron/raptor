@@ -181,7 +181,7 @@ class _SandboxedAFLInstance:
                     # (matches the afl-showmap call; smoke-verified in
                     # image-rootfs mode).
                     sanitise_host_fingerprint=True,
-                    **extra,
+                    **extra,  # type: ignore[arg-type]
                 )
         except BaseException as exc:  # noqa: BLE001 — surfaced by the monitor loop
             self.error = exc
@@ -482,7 +482,7 @@ class AFLRunner:
             # the instance stderr logs.
         else:
             # Check AFL++ availability
-            self.afl_fuzz = shutil.which("afl-fuzz")
+            self.afl_fuzz = shutil.which("afl-fuzz")  # type: ignore[assignment]
             if not self.afl_fuzz:
                 msg = "AFL++ not found. Install with: sudo apt install afl++ (Ubuntu) or brew install afl++ (macOS)"
                 raise RuntimeError(msg)
@@ -845,12 +845,12 @@ class AFLRunner:
             )
             weak_only = ("__asan_region_is_poisoned",)
         elif sanitizer == "ubsan":
-            strong_markers = (
+            strong_markers = (  # type: ignore[assignment]
                 "__ubsan_handle_",
                 "undefinedbehaviorsanitizer",
                 "ubsan_options",
             )
-            weak_only = ()
+            weak_only = ()  # type: ignore[assignment]
         else:
             return False
 
@@ -1167,7 +1167,7 @@ class AFLRunner:
                     else:
                         logger.info("Status: %.0fs elapsed (no stats available yet)", elapsed)
 
-                    last_status_time = current_time
+                    last_status_time = current_time  # type: ignore[assignment]
 
                 # Check if all instances are still running
                 running_instances = []
@@ -1851,7 +1851,7 @@ class AFLRunner:
                     env=env,
                     timeout=300,
                     sanitise_host_fingerprint=True,
-                    **extra,
+                    **extra,  # type: ignore[arg-type]
                 )
 
             console = self._tail_file(

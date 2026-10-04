@@ -404,7 +404,7 @@ def _build_fmtstr_write(spec: dict, bindings: dict) -> bytes:
     offset = spec.get("offset")
     if isinstance(offset, str):
         offset = _safe_eval(offset, bindings)
-    offset = int(offset)
+    offset = int(offset)  # type: ignore[arg-type]
     numbwritten = spec.get("numbwritten", 0)
     if isinstance(numbwritten, str):
         numbwritten = _safe_eval(numbwritten, bindings)
@@ -603,8 +603,8 @@ def _communicate_capped(
         exc = subprocess.TimeoutExpired(
             proc.args, timeout, output=_got(out_fd), stderr=_got(err_fd),
         )
-        exc.stdout_truncated = _truncated(out_fd)
-        exc.stderr_truncated = _truncated(err_fd)
+        exc.stdout_truncated = _truncated(out_fd)  # type: ignore[attr-defined]
+        exc.stderr_truncated = _truncated(err_fd)  # type: ignore[attr-defined]
         return exc
 
     in_file = proc.stdin if (
@@ -649,7 +649,7 @@ def _communicate_capped(
                 trunc[fd] = True
         if w:
             try:
-                n = os.write(in_file.fileno(), view[:65536])
+                n = os.write(in_file.fileno(), view[:65536])  # type: ignore[union-attr]
                 view = view[n:]
             except BlockingIOError:
                 pass
@@ -743,7 +743,7 @@ def _send_capped(
         if not r and not w:
             break
         if r:
-            chunk = os.read(out_fd, 65536)
+            chunk = os.read(out_fd, 65536)  # type: ignore[arg-type]
             if not chunk:
                 # stdout EOF — stop watching it so a closed pipe
                 # doesn't spin the select loop.
@@ -1044,7 +1044,7 @@ def _handle_probe(payload: dict) -> dict:
             steps_completed += 1
 
         try:
-            proc.stdin.close()
+            proc.stdin.close()  # type: ignore[union-attr]
         except (BrokenPipeError, OSError):
             pass
         # Pushback the steps didn't consume: chronologically it
@@ -1223,7 +1223,7 @@ def _handle_conversation(payload: dict) -> dict:
             stdout_buf += got
         if close_after:
             try:
-                proc.stdin.close()
+                proc.stdin.close()  # type: ignore[union-attr]
             except (BrokenPipeError, OSError):
                 pass
         # Pushback the steps didn't consume: chronologically it
@@ -1360,7 +1360,7 @@ def _run_one_shot() -> int:
         _write_frame(out_fd, {"ok": False, "error": "empty stdin"})
         return 1
     cmd = frame.get("cmd")
-    handler = DISPATCH.get(cmd)
+    handler = DISPATCH.get(cmd)  # type: ignore[arg-type]
     if handler is None:
         _write_frame(out_fd, _echo_rid(frame, {
             "ok": False, "error": f"unknown cmd {cmd!r}"}))
@@ -1439,7 +1439,7 @@ def main() -> int:
                 _write_frame(out_fd, _echo_rid(frame, {"ok": True,
                                                        "closed": True}))
                 return 0
-            handler = DISPATCH.get(cmd)
+            handler = DISPATCH.get(cmd)  # type: ignore[arg-type]
             if handler is None:
                 _write_frame(out_fd, _echo_rid(frame, {
                     "ok": False, "error": f"unknown cmd {cmd!r}"}))

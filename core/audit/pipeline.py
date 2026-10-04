@@ -420,7 +420,7 @@ def _build_orchestrator_config(
         max_seconds=opts.max_seconds,
         review_passes=opts.review_passes,
         subsystem_depth=opts.subsystem_depth,
-        **({"batch_sloc_threshold": opts.batch_sloc_threshold}
+        **({"batch_sloc_threshold": opts.batch_sloc_threshold}  # type: ignore[arg-type]
            if opts.batch_sloc_threshold is not None else {}),
         include_kinds=opts.include_kinds,
         max_propagation_depth=opts.max_propagation_depth,
@@ -462,9 +462,9 @@ def _build_orchestrator_config(
         schedule=opts.schedule,
         on_demand_synthesis=opts.on_demand_synthesis,
         probe_determine_value=opts.probe_determine_value,
-        **({"deepen_reserve_fraction": opts.deepen_reserve_fraction}
+        **({"deepen_reserve_fraction": opts.deepen_reserve_fraction}  # type: ignore[arg-type]
            if opts.deepen_reserve_fraction is not None else {}),
-        **({"review_reserve_fraction": opts.review_reserve_fraction}
+        **({"review_reserve_fraction": opts.review_reserve_fraction}  # type: ignore[arg-type]
            if opts.review_reserve_fraction is not None else {}),
         same_run_reuse=opts.same_run_reuse,
         prior_cost_breakdown=opts.prior_cost_breakdown,

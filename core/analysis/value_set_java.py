@@ -85,7 +85,7 @@ def _field_table_scope_ok(declarator: Node) -> bool:
     if mods is None:
         return False
     return any(
-        c.text.decode("utf-8", "replace") == "private"
+        c.text.decode("utf-8", "replace") == "private"  # type: ignore[union-attr]
         for c in mods.children
     )
 
@@ -168,7 +168,7 @@ class ArrayTableIndex:
                 name = n.text.decode()
                 if name in self._elements and name not in self._refused:
                     if not self._appearance_allowed(
-                            n, parent, grandparent,
+                            n, parent, grandparent,  # type: ignore[arg-type]
                             declarator_name_spans):
                         self._refused.add(name)
             stack2.extend((c, n, parent) for c in n.children)
@@ -191,11 +191,11 @@ class ArrayTableIndex:
             return True
         # (b) the base of an array_access READ
         if parent.type == _ARRAY_ACCESS and self._spans_match(
-                parent.child_by_field_name("array"), ident):
+                parent.child_by_field_name("array"), ident):  # type: ignore[arg-type]
             if grandparent is not None \
                     and grandparent.type == _ASSIGNMENT \
                     and self._spans_match(
-                        grandparent.child_by_field_name("left"), parent):
+                        grandparent.child_by_field_name("left"), parent):  # type: ignore[arg-type]
                 return False  # element store (plain or compound)
             if grandparent is not None and grandparent.type == _UPDATE:
                 return False  # values[i]++
@@ -227,20 +227,20 @@ def make_array_resolver(table_index: ArrayTableIndex, fold):
     def resolve(node: Node, resolve_name, depth: int) -> Any:
         if table_index is None or not table_index.ok:
             return REFUSE
-        if resolve.active >= _MAX_NESTING:
+        if resolve.active >= _MAX_NESTING:  # type: ignore[attr-defined]
             return REFUSE
         base = node.child_by_field_name("array")
         idx = node.child_by_field_name("index")
         if base is None or idx is None or base.type != _IDENT:
             return REFUSE
-        elements = table_index.elements(base.text.decode())
+        elements = table_index.elements(base.text.decode())  # type: ignore[union-attr]
         if elements is None:
             return REFUSE
-        resolve.active += 1
+        resolve.active += 1  # type: ignore[attr-defined]
         try:
             index_val = fold(idx, resolve_name, depth)
         finally:
-            resolve.active -= 1
+            resolve.active -= 1  # type: ignore[attr-defined]
         if index_val is REFUSE or isinstance(index_val, bool) \
                 or not isinstance(index_val, int):
             return REFUSE
@@ -252,11 +252,11 @@ def make_array_resolver(table_index: ArrayTableIndex, fold):
         value = fold_expr(elements[index_val], lambda _n, _d: REFUSE)
         if value is REFUSE:
             return REFUSE
-        resolve.hits += 1
+        resolve.hits += 1  # type: ignore[attr-defined]
         return value
 
-    resolve.hits = 0
-    resolve.active = 0
+    resolve.hits = 0  # type: ignore[attr-defined]
+    resolve.active = 0  # type: ignore[attr-defined]
     return resolve
 
 

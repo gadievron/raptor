@@ -1888,7 +1888,7 @@ class _JsCallGraph:
         body = None
         for c in cls_node.children:
             if c.type == self._CLASS_HERITAGE:
-                bases.extend(hc.text.decode() for hc in c.children if hc.type == self._IDENT_NODE)
+                bases.extend(hc.text.decode() for hc in c.children if hc.type == self._IDENT_NODE)  # type: ignore[union-attr]
             elif c.type == self._CLASS_BODY:
                 body = c
         methods: list[tuple[str, int]] = []
@@ -2939,7 +2939,7 @@ class _JavaCallGraph:
                             text = (
                                 self._scoped_identifier_text(sub)
                                 if sub.type == self._SCOPED_IDENT
-                                else sub.text.decode(
+                                else sub.text.decode(  # type: ignore[union-attr]
                                     "utf-8", errors="replace",
                                 )
                             )
@@ -2958,7 +2958,7 @@ class _JavaCallGraph:
                                 text = (
                                     self._scoped_identifier_text(sub)
                                     if sub.type == self._SCOPED_IDENT
-                                    else sub.text.decode(
+                                    else sub.text.decode(  # type: ignore[union-attr]
                                         "utf-8", errors="replace",
                                     )
                                 )
@@ -3498,7 +3498,7 @@ class _RustCallGraph:
             target_names: list[str] = []
             for c in node.children:
                 if c.type == self._TYPE_IDENT:
-                    target_names.append(c.text.decode())
+                    target_names.append(c.text.decode())  # type: ignore[union-attr]
                 elif c.type == "generic_type":
                     ti = self._first_child_of_type(c, (self._TYPE_IDENT,))
                     if ti is not None:
@@ -4414,7 +4414,7 @@ class _CSharpCallGraph:
             return None
         t = type_node.type
         if t == self._IDENT:
-            return type_node.text.decode("utf-8", errors="replace") or None
+            return type_node.text.decode("utf-8", errors="replace") or None  # type: ignore[union-attr]
         if t == self._QUALIFIED:
             parts = self._qualified_parts(type_node)
             return parts[-1] if parts else None
@@ -4424,7 +4424,7 @@ class _CSharpCallGraph:
         if t in (self._NULLABLE_TYPE, self._ARRAY_TYPE):
             inner = type_node.child_by_field_name("type") or (
                 type_node.children[0] if type_node.children else None)
-            return self._type_name(inner)
+            return self._type_name(inner)  # type: ignore[arg-type]
         return None  # predefined_type / pointer / tuple / etc.
 
     def _collect_param_types(self, params_node) -> dict[str, str]:
@@ -4447,7 +4447,7 @@ class _CSharpCallGraph:
         out: dict[str, str] = {}
         if var_decl_node is None:
             return out
-        tn = self._type_name(var_decl_node.child_by_field_name("type"))
+        tn = self._type_name(var_decl_node.child_by_field_name("type"))  # type: ignore[arg-type]
         if not tn:
             return out
         for c in var_decl_node.children:
@@ -4456,7 +4456,7 @@ class _CSharpCallGraph:
             name = c.child_by_field_name("name") or self._first_child_of_type(
                 c, (self._IDENT,))
             if name is not None:
-                out[name.text.decode("utf-8", errors="replace")] = tn
+                out[name.text.decode("utf-8", errors="replace")] = tn  # type: ignore[union-attr]
         return out
 
     def _resolve_receiver_type(self, chain: list[str]) -> str | None:
@@ -5182,7 +5182,7 @@ class _PhpCallGraph:
                 raw_value = raw_value[:self._MAX_RAW_LEN] + "…"
         elif len(value) > 512:
             # Same planted-material rule as edge tails.
-            value, raw_value = None, value[:self._MAX_RAW_LEN] + "…"
+            value, raw_value = None, value[:self._MAX_RAW_LEN] + "…"  # type: ignore[index]
         # ``fallback`` is EXACT-SHAPE-ONLY: precisely one enclosing
         # conditional and it is ``!defined('<same name>')``. Any
         # extra outer conditional (a request-controlled branch around
@@ -5685,7 +5685,7 @@ class _PhpCallGraph:
         if node.type == self._NAME:
             return [node.text.decode()]
         if node.type == self._MEMBER_ACCESS:
-            parts: list[str] = [self._object_chain(c) or [] for c in node.children if c.is_named]
+            parts: list[list[str]] = [self._object_chain(c) or [] for c in node.children if c.is_named]
             flat: list[str] = []
             for p in parts:
                 flat.extend(p)
@@ -6861,7 +6861,7 @@ class _CppCallGraph(_CCallGraph):
                     break
         if name_node is None:
             return
-        name = name_node.text.decode("utf-8", errors="replace")
+        name = name_node.text.decode("utf-8", errors="replace")  # type: ignore[union-attr]
         caller = self._enclosing[-1] if self._enclosing else None
         # No receiver_class tag — initialiser-list entries dispatch
         # on the literal name (base class or member), not on the
@@ -7183,7 +7183,7 @@ class _ScalaCallGraph:
             pkg = next((c for c in node.children
                         if c.type == "package_identifier"), None)
             if pkg is not None:
-                name = pkg.text.decode("utf-8", errors="replace").strip()
+                name = pkg.text.decode("utf-8", errors="replace").strip()  # type: ignore[union-attr]
                 if name:
                     self.graph.package_name = name
             return
@@ -7205,16 +7205,16 @@ class _ScalaCallGraph:
             if ext is not None:
                 for sub in ext.children:
                     if sub.type == self._TYPE_IDENT:
-                        bases.append(sub.text.decode("utf-8",
+                        bases.append(sub.text.decode("utf-8",  # type: ignore[union-attr]
                                                      errors="replace"))
                     elif sub.type == "generic_type":
                         ti = next((g for g in sub.children
                                    if g.type == self._TYPE_IDENT), None)
                         if ti is not None:
-                            bases.append(ti.text.decode("utf-8",
+                            bases.append(ti.text.decode("utf-8",  # type: ignore[union-attr]
                                                         errors="replace"))
             cdef = ClassDef(
-                name=name_node.text.decode("utf-8", errors="replace"),
+                name=name_node.text.decode("utf-8", errors="replace"),  # type: ignore[union-attr]
                 line=node.start_point[0] + 1,
                 bases=bases,
                 nested=bool(self._class_stack) or bool(self._enclosing),
@@ -7231,7 +7231,7 @@ class _ScalaCallGraph:
         if t == self._FUNC_NODE:
             name_node = next((c for c in node.children
                               if c.type == self._IDENT), None)
-            fn_name = (name_node.text.decode("utf-8", errors="replace")
+            fn_name = (name_node.text.decode("utf-8", errors="replace")  # type: ignore[union-attr]
                        if name_node is not None else "<anon>")
             if self._class_stack and not self._enclosing:
                 self._class_stack[-1].methods.append(
@@ -7324,7 +7324,7 @@ class _ScalaCallGraph:
         args = next((c for c in node.children if c.type == self._ARGS),
                     None)
         arg_idents = (
-            [a.text.decode("utf-8", errors="replace")
+            [a.text.decode("utf-8", errors="replace")  # type: ignore[union-attr]
              for a in args.children if a.type == self._IDENT]
             if args is not None else []
         )
@@ -7446,7 +7446,7 @@ class _KotlinCallGraph:
             qi = next((c for c in node.children
                        if c.type == "qualified_identifier"), None)
             if qi is not None:
-                pkg = qi.text.decode("utf-8", errors="replace").strip()
+                pkg = qi.text.decode("utf-8", errors="replace").strip()  # type: ignore[union-attr]
                 if pkg:
                     self.graph.package_name = pkg
             return
@@ -7462,7 +7462,7 @@ class _KotlinCallGraph:
                 yield from node.children
                 return
             cdef = ClassDef(
-                name=name_node.text.decode("utf-8", errors="replace"),
+                name=name_node.text.decode("utf-8", errors="replace"),  # type: ignore[union-attr]
                 line=node.start_point[0] + 1,
                 bases=self._delegation_bases(node),
                 nested=bool(self._class_stack) or bool(self._enclosing),
@@ -7482,7 +7482,7 @@ class _KotlinCallGraph:
                 name_node = next((c for c in node.children
                                   if c.type == self._IDENT), None)
                 fn_name = (
-                    name_node.text.decode("utf-8", errors="replace")
+                    name_node.text.decode("utf-8", errors="replace")  # type: ignore[union-attr]
                     if name_node is not None else "<anon>"
                 )
             if self._class_stack and not self._enclosing:
@@ -7577,7 +7577,7 @@ class _KotlinCallGraph:
                     named = [g for g in a.children if g.is_named]
                     if len(named) == 1 and named[0].type == self._IDENT:
                         arg_idents.append(
-                            named[0].text.decode("utf-8", errors="replace"),
+                            named[0].text.decode("utf-8", errors="replace"),  # type: ignore[union-attr]
                         )
         self.graph.calls.append(CallSite(
             line=node.start_point[0] + 1,
@@ -7656,7 +7656,7 @@ class _SwiftCallGraph:
             ident = next((c for c in node.children
                           if c.type == "identifier"), None)
             if ident is not None:
-                name = ident.text.decode("utf-8", errors="replace").strip()
+                name = ident.text.decode("utf-8", errors="replace").strip()  # type: ignore[union-attr]
                 if name:
                     self.graph.imports[name.split(".")[-1]] = name
             return
@@ -7674,7 +7674,7 @@ class _SwiftCallGraph:
                 name_node = next((c for c in node.children
                                   if c.type == self._IDENT), None)
                 fn_name = (
-                    name_node.text.decode("utf-8", errors="replace")
+                    name_node.text.decode("utf-8", errors="replace")  # type: ignore[union-attr]
                     if name_node is not None else "<anon>"
                 )
             if self._class_stack and not self._enclosing:
@@ -7696,7 +7696,7 @@ class _SwiftCallGraph:
                               if c.type == self._IDENT), None)
             if name_node is not None and self._class_stack:
                 self._class_stack[-1].methods.append(
-                    (name_node.text.decode("utf-8", errors="replace"),
+                    (name_node.text.decode("utf-8", errors="replace"),  # type: ignore[union-attr]
                      node.start_point[0] + 1),
                 )
             return
@@ -7716,7 +7716,7 @@ class _SwiftCallGraph:
         ti = next((c for c in node.children
                    if c.type == self._TYPE_IDENT), None)
         if ti is not None:
-            name = ti.text.decode("utf-8", errors="replace")
+            name = ti.text.decode("utf-8", errors="replace")  # type: ignore[union-attr]
         else:
             # ``extension C`` wraps the target in user_type.
             ut = next((c for c in node.children
@@ -7725,7 +7725,7 @@ class _SwiftCallGraph:
                 inner = next((g for g in ut.children
                               if g.type == self._TYPE_IDENT), None)
                 if inner is not None:
-                    name = inner.text.decode("utf-8", errors="replace")
+                    name = inner.text.decode("utf-8", errors="replace")  # type: ignore[union-attr]
         if name is None:
             yield from node.children
             return
@@ -7740,7 +7740,7 @@ class _SwiftCallGraph:
                                   if g.type == self._TYPE_IDENT), None)
                     if inner is not None:
                         bases.append(
-                            inner.text.decode("utf-8", errors="replace"),
+                            inner.text.decode("utf-8", errors="replace"),  # type: ignore[union-attr]
                         )
 
         cdef: ClassDef | None = None
@@ -7803,7 +7803,7 @@ class _SwiftCallGraph:
                         if (len(named) == 1
                                 and named[0].type == self._IDENT):
                             arg_idents.append(
-                                named[0].text.decode(
+                                named[0].text.decode(  # type: ignore[union-attr]
                                     "utf-8", errors="replace",
                                 ),
                             )
@@ -8235,7 +8235,7 @@ def load_call_graphs(
     oversize_example: str | None = None
     top_offender: tuple[str, int] | None = None
     for rel, path, decl_language in candidates:
-        if len(graphs) >= max_files:
+        if len(graphs) >= max_files:  # type: ignore[operator]
             skipped += 1
             continue
         if budget_exhausted:

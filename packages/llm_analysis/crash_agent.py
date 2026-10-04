@@ -472,7 +472,7 @@ class CrashAnalysisAgent:
     """LLM-powered crash analysis agent."""
 
     def __init__(self, binary_path: Path, out_dir: Path,
-                 llm_config: LLMConfig = None,
+                 llm_config: LLMConfig | None = None,
                  verify_exploits: bool = True,
                  judge_intent: bool = True,
                  record_witnesses: bool = True,
@@ -543,15 +543,15 @@ class CrashAnalysisAgent:
             logger.info("RAPTOR Crash Analysis Agent initialized")
             logger.info("Binary: %s", binary_path)
             logger.info("Output: %s", out_dir)
-            logger.info("LLM: %s/%s", self.llm_config.primary_model.provider, self.llm_config.primary_model.model_name)
+            logger.info("LLM: %s/%s", self.llm_config.primary_model.provider, self.llm_config.primary_model.model_name)  # type: ignore[union-attr]
 
-            print(f"\n Using LLM: {self.llm_config.primary_model.provider}/{self.llm_config.primary_model.model_name}")
-            if self.llm_config.primary_model.cost_per_1k_tokens > 0:
-                print(f"Cost: ${self.llm_config.primary_model.cost_per_1k_tokens:.4f} per 1K tokens")
+            print(f"\n Using LLM: {self.llm_config.primary_model.provider}/{self.llm_config.primary_model.model_name}")  # type: ignore[union-attr]
+            if self.llm_config.primary_model.cost_per_1k_tokens > 0:  # type: ignore[union-attr]
+                print(f"Cost: ${self.llm_config.primary_model.cost_per_1k_tokens:.4f} per 1K tokens")  # type: ignore[union-attr]
             else:
                 print("Cost: FREE (self-hosted model)")
 
-            if "ollama" in self.llm_config.primary_model.provider.lower():
+            if "ollama" in self.llm_config.primary_model.provider.lower():  # type: ignore[union-attr]
                 print()
                 print("IMPORTANT: You are using an Ollama model.")
                 print("   • Crash analysis and triage: Works well with Ollama models")
@@ -563,8 +563,8 @@ class CrashAnalysisAgent:
                 print("     export OPENAI_API_KEY=your_key")
             print()
         else:
-            self.llm_config = None
-            self.llm = ClaudeCodeProvider()
+            self.llm_config = None  # type: ignore[assignment]
+            self.llm = ClaudeCodeProvider()  # type: ignore[assignment]
 
             logger.info("RAPTOR Crash Analysis Agent initialized (prep-only mode)")
             logger.info("Binary: %s", binary_path)
@@ -764,7 +764,7 @@ class CrashAnalysisAgent:
                 # Include ASCII representation for readability
                 input_info["input_content_ascii"] = input_data[:500].decode('ascii', errors='replace')
                 if len(input_data) > 500:
-                    input_info["input_content_ascii"] += "... (truncated)"
+                    input_info["input_content_ascii"] += "... (truncated)"  # type: ignore[operator]
             except Exception as e:  # noqa: BLE001
                 input_info["input_content_error"] = str(e)
             
@@ -1155,7 +1155,7 @@ FULL LLM RESPONSE:
         try:
             if self._witness_store is None:
                 from core.witness import WitnessStore
-                self._witness_store = WitnessStore(
+                self._witness_store = WitnessStore(  # type: ignore[assignment]
                     self.out_dir / "witnesses"
                 )
             from packages.llm_analysis.witness_adapter import (
@@ -1214,7 +1214,7 @@ FULL LLM RESPONSE:
                 ),
                 produced_by="crash-agent",
             )
-            self._witness_store.put(witness, data)
+            self._witness_store.put(witness, data)  # type: ignore[attr-defined]
             logger.debug(
                 "   · Recorded witness %s (%sB)", witness.bytes_hash[:12], witness.bytes_len
             )

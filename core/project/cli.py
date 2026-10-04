@@ -920,7 +920,7 @@ def main() -> None:
                           "Use: raptor project binary <action> [args] "
                           "<name>, or set an active project first."))
                 return
-            p = mgr.load(name)
+            p = mgr.load(name)  # type: ignore[assignment]
             if not p:
                 print(_red(f"Project '{name}' not found."))
                 return
@@ -980,7 +980,7 @@ def main() -> None:
                     with open_regular_gated(
                             resolved_path,
                             follow_symlinks=False) as pin:
-                        digest = sha256_fileobj(pin)
+                        digest = sha256_fileobj(pin)  # type: ignore[arg-type]
                 except (FileNotFoundError, NotADirectoryError,
                         ValueError):
                     # Reject at add-time so the operator sees the typo
@@ -1004,7 +1004,7 @@ def main() -> None:
                 # so a concurrent mutator's write isn't dropped.
                 from .project import project_file_lock
                 with project_file_lock(project_file):
-                    p = mgr.load(name)
+                    p = mgr.load(name)  # type: ignore[assignment]
                     if not p:
                         print(_red(f"Project '{name}' not found."))
                         return
@@ -1033,7 +1033,7 @@ def main() -> None:
                 resolved = str(Path(args.path).resolve())
                 from .project import project_file_lock
                 with project_file_lock(project_file):
-                    p = mgr.load(name)
+                    p = mgr.load(name)  # type: ignore[assignment]
                     if not p:
                         print(_red(f"Project '{name}' not found."))
                         return
@@ -1047,7 +1047,7 @@ def main() -> None:
             elif args.action == "clear":
                 from .project import project_file_lock
                 with project_file_lock(project_file):
-                    p = mgr.load(name)
+                    p = mgr.load(name)  # type: ignore[assignment]
                     if not p:
                         print(_red(f"Project '{name}' not found."))
                         return
@@ -1239,7 +1239,7 @@ def main() -> None:
             if not name:
                 print("No project specified. Use: raptor project status <name>")
                 return
-            p = mgr.load(name)
+            p = mgr.load(name)  # type: ignore[assignment]
             if not p:
                 print(f"Project '{name}' not found.")
                 return
@@ -1251,7 +1251,7 @@ def main() -> None:
             if not name:
                 print("No project specified.")
                 return
-            p = mgr.load(name)
+            p = mgr.load(name)  # type: ignore[assignment]
             if not p:
                 print(f"Project '{name}' not found.")
                 return
@@ -1264,7 +1264,7 @@ def main() -> None:
             if not name:
                 print("No project specified.")
                 return
-            p = mgr.load(name)
+            p = mgr.load(name)  # type: ignore[assignment]
             if not p:
                 print(f"Project '{name}' not found.")
                 return
@@ -1275,7 +1275,7 @@ def main() -> None:
             if not name:
                 print("No project specified.")
                 return
-            p = mgr.load(name)
+            p = mgr.load(name)  # type: ignore[assignment]
             if not p:
                 print(f"Project '{name}' not found.")
                 return
@@ -1286,7 +1286,7 @@ def main() -> None:
             if not name:
                 print("No project specified.")
                 return
-            p = mgr.load(name)
+            p = mgr.load(name)  # type: ignore[assignment]
             if not p:
                 print(f"Project '{name}' not found.")
                 return
@@ -1297,7 +1297,7 @@ def main() -> None:
             if not name:
                 print("No project specified.")
                 return
-            p = mgr.load(name)
+            p = mgr.load(name)  # type: ignore[assignment]
             if not p:
                 print(f"Project '{name}' not found.")
                 return
@@ -1319,7 +1319,7 @@ def main() -> None:
                 binding, state = session_binding()
                 bookmark = _read_bookmark(mgr)
                 if state == "bound":
-                    if mgr.load(binding) is None:
+                    if mgr.load(binding) is None:  # type: ignore[arg-type]
                         # Same existence vet get_active applies: the
                         # bound project was deleted from elsewhere.
                         print(f"Session project: none (bound project "
@@ -1367,7 +1367,7 @@ def main() -> None:
                     else:
                         print("No last-activated default was set.")
                 return
-            p = mgr.load(args.name)
+            p = mgr.load(args.name)  # type: ignore[assignment]
             if not p:
                 print(f"Project '{args.name}' not found.")
                 return
@@ -1437,7 +1437,7 @@ def main() -> None:
                 print(f"  note: {_line}")
 
         elif args.subcommand == "delete":
-            p = mgr.load(args.name)
+            p = mgr.load(args.name)  # type: ignore[assignment]
             if not p:
                 print(f"Project '{args.name}' not found.")
                 return
@@ -1484,7 +1484,7 @@ def main() -> None:
                 print("Specify only one of: text, --file, --edit")
                 return
             if args.file:
-                p = mgr.load(args.name)
+                p = mgr.load(args.name)  # type: ignore[assignment]
                 if not p:
                     print(f"Project '{args.name}' not found.")
                     return
@@ -1522,7 +1522,7 @@ def main() -> None:
                 import shlex
                 import subprocess
                 import tempfile
-                p = mgr.load(args.name)
+                p = mgr.load(args.name)  # type: ignore[assignment]
                 if not p:
                     print(f"Project '{args.name}' not found.")
                     return
@@ -1614,7 +1614,7 @@ def main() -> None:
                 mgr.update_notes(args.name, args.text)
                 print("Notes updated.")
             else:
-                p = mgr.load(args.name)
+                p = mgr.load(args.name)  # type: ignore[assignment]
                 if p:
                     # Notes are free text set via /project set —
                     # escape control bytes, keep line structure.
@@ -1628,7 +1628,7 @@ def main() -> None:
 
         elif args.subcommand == "add":
             added = mgr.add_directory(args.name,
-                                       _caller_relative(args.directory),
+                                       _caller_relative(args.directory),  # type: ignore[arg-type]
                                        target=_caller_relative(args.target),
                                        output_dir=args.output_dir)
             if added:
@@ -1694,7 +1694,7 @@ def main() -> None:
             if not name:
                 print("No project specified.")
                 return
-            p = mgr.load(name)
+            p = mgr.load(name)  # type: ignore[assignment]
             if not p:
                 print(f"Project '{name}' not found.")
                 return
@@ -1702,7 +1702,7 @@ def main() -> None:
 
         elif args.subcommand == "diff":
             from .diff import diff_runs
-            p = mgr.load(args.name)
+            p = mgr.load(args.name)  # type: ignore[assignment]
             if not p:
                 print(f"Project '{args.name}' not found.")
                 return
@@ -1724,7 +1724,7 @@ def main() -> None:
             if not name:
                 print("No project specified.")
                 return
-            p = mgr.load(name)
+            p = mgr.load(name)  # type: ignore[assignment]
             if not p:
                 print(f"Project '{name}' not found.")
                 return
@@ -1744,7 +1744,7 @@ def main() -> None:
             if not name:
                 print("No project specified.")
                 return
-            p = mgr.load(name)
+            p = mgr.load(name)  # type: ignore[assignment]
             if not p:
                 print(f"Project '{name}' not found.")
                 return
@@ -1761,7 +1761,7 @@ def main() -> None:
 
         elif args.subcommand == "export":
             from .export import export_project
-            p = mgr.load(args.name)
+            p = mgr.load(args.name)  # type: ignore[assignment]
             if not p:
                 print(f"Project '{args.name}' not found.")
                 return
@@ -1795,7 +1795,7 @@ def main() -> None:
             if not name:
                 print("No project specified.")
                 return
-            p = mgr.load(name)
+            p = mgr.load(name)  # type: ignore[assignment]
             if not p:
                 print(f"Project '{name}' not found.")
                 return
@@ -1806,7 +1806,7 @@ def main() -> None:
             if not name:
                 print("No project specified.")
                 return
-            p = mgr.load(name)
+            p = mgr.load(name)  # type: ignore[assignment]
             if not p:
                 print(f"Project '{name}' not found.")
                 return
@@ -2458,7 +2458,7 @@ def _handle_threat_model(mgr, args: argparse.Namespace) -> None:
             print(f"  focus areas: {len(model.focus_areas)}")
         return
 
-    model = load_model(json_path)
+    model = load_model(json_path)  # type: ignore[assignment]
     if not model:
         print(_yellow(f"Project '{name}' has no threat model yet."))
         print(f"Run: raptor project threat-model init {name}")
@@ -2600,7 +2600,7 @@ def _handle_threat_model(mgr, args: argparse.Namespace) -> None:
                 print(_red(f"Not a context-map JSON object: {args.context_map}"))
                 return
         lint = lint_model(model)
-        drift = diff_context_map(model, context_map) if context_map else None
+        drift = diff_context_map(model, context_map) if context_map else None  # type: ignore[assignment]
         if args.json_out:
             _emit_json_payload({
                 "report": str(report_path),

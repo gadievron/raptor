@@ -81,6 +81,7 @@ from __future__ import annotations
 import contextlib
 import ctypes
 import errno
+from typing import Any
 import fcntl
 import logging
 import os
@@ -184,7 +185,7 @@ def _get_libc():
 
 def _sc(nr: int, *args) -> tuple[int, int]:
     libc = _get_libc()
-    cargs = []
+    cargs: list[Any] = []
     for a in args:
         if isinstance(a, bytes):
             cargs.append(ctypes.c_char_p(a))

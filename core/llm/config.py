@@ -251,7 +251,7 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
                                 api_base = PROVIDER_ENDPOINTS.get(entry_provider)
 
                             # Optional overrides from config
-                            api_base = model_entry.get('api_base') or api_base
+                            api_base = model_entry.get('api_base') or api_base  # type: ignore[assignment]
                             timeout = model_entry.get('timeout', 120)
 
                             best_model = ModelConfig(
@@ -306,7 +306,7 @@ def _build_anthropic_config() -> Optional['ModelConfig']:
         max_tokens=limits.get("max_output", _DEFAULT_MAX_OUTPUT_FRONTIER),
         max_context=limits.get("max_context", _DEFAULT_MAX_CONTEXT_FRONTIER),
         temperature=0.7,
-        cost_per_1k_tokens=(costs.get("input", 0.015) + costs.get("output", 0.075)) / 2,
+        cost_per_1k_tokens=(costs.get("input", 0.015) + costs.get("output", 0.075)) / 2,  # type: ignore[attr-defined]
     )
 
 
@@ -332,7 +332,7 @@ def _build_openai_compat_config(provider_name: str) -> Optional['ModelConfig']:
     default_model = PROVIDER_DEFAULT_MODELS[provider_name]
     limits = MODEL_LIMITS.get(default_model, {})
     costs = MODEL_COSTS.get(default_model, {})
-    avg_cost = (costs.get("input", 0.005) + costs.get("output", 0.005)) / 2 if costs else 0.002
+    avg_cost = (costs.get("input", 0.005) + costs.get("output", 0.005)) / 2 if costs else 0.002  # type: ignore[attr-defined]
     return ModelConfig(
         provider=provider_name,
         model_name=default_model,
@@ -621,7 +621,7 @@ def _build_bedrock_config() -> Optional['ModelConfig']:
     limits = MODEL_LIMITS.get(bare_default, {})
     costs = MODEL_COSTS.get(bare_default, {})
     avg_cost_per_1k = (
-        (costs.get("input", 0.005) + costs.get("output", 0.025)) / 2
+        (costs.get("input", 0.005) + costs.get("output", 0.025)) / 2  # type: ignore[attr-defined]
     )
     return ModelConfig(
         provider="bedrock",
@@ -885,7 +885,7 @@ def _get_default_primary_model(
             logger.info(
                 "Using automatic thinking model: %s/%s", thinking_model.provider, thinking_model.model_name
             )
-            _get_default_primary_model._logged = True
+            _get_default_primary_model._logged = True  # type: ignore[attr-defined]
         return thinking_model
 
     # Step 2b: a config-file Bedrock entry with no auxiliary role is
@@ -898,7 +898,7 @@ def _get_default_primary_model(
             logger.info(
                 "Using configured Bedrock model: %s (%s)", bedrock_primary.model_name, bedrock_primary.bedrock_api
             )
-            _get_default_primary_model._bedrock_logged = True
+            _get_default_primary_model._bedrock_logged = True  # type: ignore[attr-defined]
         return bedrock_primary
 
     # Step 2c: a config-file Ollama entry with no auxiliary role.
@@ -916,7 +916,7 @@ def _get_default_primary_model(
                 logger.info(
                     "Using configured Ollama model: %s", ollama_primary.model_name
                 )
-                _get_default_primary_model._ollama_logged = True
+                _get_default_primary_model._ollama_logged = True  # type: ignore[attr-defined]
             return ollama_primary
 
     # Step 3: default-order autodetect via env vars. Skip providers
@@ -1151,7 +1151,7 @@ def _build_fast_model_for(primary: 'ModelConfig') -> Optional['ModelConfig']:
 
     limits = MODEL_LIMITS.get(fast_name, {})
     costs = MODEL_COSTS.get(fast_name, {})
-    cost_per_1k = (costs.get("input", 0.0) + costs.get("output", 0.0)) / 2
+    cost_per_1k = (costs.get("input", 0.0) + costs.get("output", 0.0)) / 2  # type: ignore[attr-defined]
 
     # Same Ollama-host fix as the cold-start + user-config paths —
     # inherit ``primary.api_base`` for Ollama since the primary was
@@ -1280,7 +1280,7 @@ def _get_default_fallback_models() -> list['ModelConfig']:
                 max_tokens=limits.get("max_output", 32000),
                 max_context=limits.get("max_context", 1000000),
                 temperature=0.7,
-                cost_per_1k_tokens=(costs.get("input", 0.003) + costs.get("output", 0.015)) / 2,
+                cost_per_1k_tokens=(costs.get("input", 0.003) + costs.get("output", 0.015)) / 2,  # type: ignore[attr-defined]
             ))
 
     if "openai" not in config_providers and os.getenv("OPENAI_API_KEY"):
@@ -1297,7 +1297,7 @@ def _get_default_fallback_models() -> list['ModelConfig']:
                 max_tokens=limits.get("max_output", 16384),
                 max_context=limits.get("max_context", 128000),
                 temperature=0.7,
-                cost_per_1k_tokens=(costs.get("input", 0.006) + costs.get("output", 0.030)) / 2,
+                cost_per_1k_tokens=(costs.get("input", 0.006) + costs.get("output", 0.030)) / 2,  # type: ignore[attr-defined]
             ))
 
     if "gemini" not in config_providers and os.getenv("GEMINI_API_KEY"):
@@ -1314,7 +1314,7 @@ def _get_default_fallback_models() -> list['ModelConfig']:
                 max_tokens=limits.get("max_output", 8192),
                 max_context=limits.get("max_context", 1000000),
                 temperature=0.7,
-                cost_per_1k_tokens=(costs.get("input", 0.002) + costs.get("output", 0.010)) / 2,
+                cost_per_1k_tokens=(costs.get("input", 0.002) + costs.get("output", 0.010)) / 2,  # type: ignore[attr-defined]
             ))
 
     if (
@@ -1877,7 +1877,7 @@ class LLMConfig:
                     return mc
 
         if model_id in _PROVIDER_BUILDERS:
-            mc = _PROVIDER_BUILDERS[model_id]()
+            mc = _PROVIDER_BUILDERS[model_id]()  # type: ignore[assignment]
             if mc is not None:
                 return mc
 

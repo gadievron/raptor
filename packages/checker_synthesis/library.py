@@ -515,6 +515,7 @@ class RuleLibrary:
     ) -> LibraryEntry | None:
         self._ensure_dirs()
         rule = result.rule
+        assert rule is not None
         bh = _body_hash(rule.body)
 
         existing = self.get_by_body_hash(bh)
@@ -712,7 +713,7 @@ class RuleLibrary:
         # recorded feedback.
         rated = [t for t in entry.targets if t.tp_rate is not None]
         weight = sum(t.classified for t in rated)
-        weighted_tp = sum(t.tp_rate * t.classified for t in rated)
+        weighted_tp = sum(t.tp_rate * t.classified for t in rated)  # type: ignore[operator, misc]
         denominator = weight + entry.feedback_classified
         if denominator <= 0:
             return

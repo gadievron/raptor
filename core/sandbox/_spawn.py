@@ -577,8 +577,8 @@ def _gidmap_allow_available() -> str | None:
             # (unreadable path, missing/hung getcap) means "helper
             # unavailable", cached as False.
             pass
-        state._gidmap_allow_cache = result
-        return result or None
+        state._gidmap_allow_cache = result  # type: ignore[assignment]
+        return result or None  # type: ignore[return-value]
 
 
 def mount_ns_available() -> bool:
@@ -609,7 +609,7 @@ def mount_ns_available() -> bool:
         newuidmap = _find_sandbox_binary("newuidmap")
         newgidmap = _find_sandbox_binary("newgidmap")
         if not newuidmap or not newgidmap:
-            state._mount_ns_available_cache = False
+            state._mount_ns_available_cache = False  # type: ignore[assignment]
             return False
         try:
             import subprocess as _sp
@@ -630,9 +630,9 @@ def mount_ns_available() -> bool:
             )
             _ = r.returncode  # binary is callable
         except Exception:  # noqa: BLE001
-            state._mount_ns_available_cache = False
+            state._mount_ns_available_cache = False  # type: ignore[assignment]
             return False
-        state._mount_ns_available_cache = True
+        state._mount_ns_available_cache = True  # type: ignore[assignment]
         return True
 
 
@@ -1993,7 +1993,7 @@ def run_sandboxed(
             out_r, out_w, err_r, err_w = _open_capture_pipes()
             _parent_fds.update({out_r, out_w, err_r, err_w})
         else:
-            out_r = err_r = out_w = err_w = None
+            out_r = err_r = out_w = err_w = None  # type: ignore[assignment]
 
         # Death pipe: orphan-teardown signal. Parent holds death_w for
         # the duration of the sandbox call; intermediate child watches
@@ -2055,7 +2055,7 @@ def run_sandboxed(
         # tree is granted wholesale). In those cases the mount flag
         # must fail CLOSED instead of warning.
         _target_under_writable = bool(target) and any(
-            target == _w or target.startswith(_w.rstrip("/") + "/")
+            target == _w or target.startswith(_w.rstrip("/") + "/")  # type: ignore[union-attr]
             for _w in (writable_paths or []) if _w
         )
         _require_target_ro = bool(
@@ -2432,7 +2432,7 @@ def run_sandboxed(
                 (int(port), str(path)) for port, path in extra_unix_bridges
             )
         if _bridge_pairs:
-            from core.sandbox._proxy_bridge import (
+            from core.sandbox._proxy_bridge import (  # type: ignore[assignment]
                 _run_bridges as _proxy_forwarder_fn,
             )
 
@@ -2636,15 +2636,15 @@ def run_sandboxed(
             # parent reads the other. Close both inherited ends so the pipe
             # doesn't keep references to the target child's fd table.
             if _audit_engaged:
-                os.close(t_ready_r)
-                os.close(t_ready_w)
+                os.close(t_ready_r)  # type: ignore[arg-type]
+                os.close(t_ready_w)  # type: ignore[arg-type]
             if capture_output:
-                os.close(out_r)
-                os.close(err_r)
-                os.dup2(out_w, 1)
-                os.dup2(err_w, 2)
-                os.close(out_w)
-                os.close(err_w)
+                os.close(out_r)  # type: ignore[arg-type]
+                os.close(err_r)  # type: ignore[arg-type]
+                os.dup2(out_w, 1)  # type: ignore[arg-type]
+                os.dup2(err_w, 2)  # type: ignore[arg-type]
+                os.close(out_w)  # type: ignore[arg-type]
+                os.close(err_w)  # type: ignore[arg-type]
             else:
                 # stdout=/stderr= redirects (int fd, file-like, DEVNULL,
                 # STDOUT for stderr). Pre-fix these kwargs were silently
@@ -3244,14 +3244,14 @@ def run_sandboxed(
                         for _pt, _pfd in _persona_proc_pins:
                             _rb = -1
                             try:
-                                _rb = int(_libc.mount(
+                                _rb = int(_libc.mount(  # type: ignore[union-attr]
                                     f"/proc/self/fd/{_pfd}".encode(),
                                     _pt.encode(), None, _MS_BIND_G,
                                     None))
                             except Exception:  # noqa: BLE001
                                 _rb = -1
                             if _rb != 0:
-                                if persona.strict:
+                                if persona.strict:  # type: ignore[union-attr]
                                     _write_setup_status(
                                         status_w, b"M",
                                         f"persona re-overlay bind "
@@ -3628,6 +3628,7 @@ def run_sandboxed(
     # the supervisor.
     _unix_scope_supervisor: list = []
     if _unix_scope_parent_sock is not None:
+        assert _unix_scope_child_sock is not None
         _unix_scope_child_sock.close()
 
         def _unix_scope_receiver() -> None:
@@ -3763,9 +3764,9 @@ def run_sandboxed(
             os.close(pid_w)
             _parent_fds.discard(pid_w)
         if capture_output:
-            os.close(out_w)
+            os.close(out_w)  # type: ignore[arg-type]
             _parent_fds.discard(out_w)
-            os.close(err_w)
+            os.close(err_w)  # type: ignore[arg-type]
             _parent_fds.discard(err_w)
 
         # Step 4: wait for child to signal "unshare done, ready for newuidmap".
@@ -4010,7 +4011,7 @@ def run_sandboxed(
                 except OSError:
                     pass
                 # Close the read end — only the parent reads.
-                os.close(t_ready_r)
+                os.close(t_ready_r)  # type: ignore[arg-type]
                 # Defence-in-depth: close all inherited fds except
                 # stdio (0/1/2) and the sync write end. The tracer
                 # subprocess has no legitimate need for the parent's
@@ -4080,7 +4081,7 @@ def run_sandboxed(
                 # exec keeps the default close-on-exec, so the
                 # nonce-carrying config and the evidence fd never
                 # reach the target's fd table.
-                for _fd in (_audit_config_fd,
+                for _fd in (_audit_config_fd,  # type: ignore[assignment]
                             _evidence_file.fd if _evidence_file is not None
                             else None):
                     if _fd is not None:
@@ -4165,7 +4166,7 @@ def run_sandboxed(
             # below would block FOREVER on tracer death, because the
             # parent's own t_ready_w would keep the pipe write end
             # alive and EOF would never be signalled to the read.
-            os.close(t_ready_w)
+            os.close(t_ready_w)  # type: ignore[arg-type]
             _parent_fds.discard(t_ready_w)
 
             # Parent: wait for tracer to signal ready. If tracer dies
@@ -4182,10 +4183,10 @@ def run_sandboxed(
             # withheld, which the deadline bounds.
             _tracer_ready_wait_timed_out = False
             try:
-                os.set_blocking(t_ready_r, False)
+                os.set_blocking(t_ready_r, False)  # type: ignore[arg-type]
                 import select as _tr_sel
                 _tr_deadline = time.monotonic() + 15.0
-                ready = b""
+                ready = b""  # type: ignore[assignment]
                 while True:
                     _tr_remaining = _tr_deadline - time.monotonic()
                     if _tr_remaining <= 0:
@@ -4196,12 +4197,12 @@ def run_sandboxed(
                     if not _tr_ready:
                         continue  # loop re-checks the deadline
                     try:
-                        ready = os.read(t_ready_r, 1)
+                        ready = os.read(t_ready_r, 1)  # type: ignore[assignment,arg-type]
                     except BlockingIOError:
                         continue  # spurious wakeup — keep waiting
                     break  # 1 byte (ready) or b"" (EOF — tracer died)
             finally:
-                os.close(t_ready_r)
+                os.close(t_ready_r)  # type: ignore[arg-type]
                 _parent_fds.discard(t_ready_r)
             if not ready:
                 # Tracer failed to attach. Reap it (capture exit code
@@ -4321,7 +4322,7 @@ def run_sandboxed(
                 # child and then raises has still killed it.
                 _exec_pid_delivered = True
                 try:
-                    exec_pid_callback(_exec_pid)
+                    exec_pid_callback(_exec_pid)  # type: ignore[misc]
                 except Exception:
                     logger.warning(
                         "exec_pid_callback raised; continuing with the "
@@ -4437,10 +4438,10 @@ def run_sandboxed(
             def _materialize() -> None:
                 nonlocal stdout_buf, stderr_buf
                 if stdout_chunks:
-                    stdout_buf += b"".join(stdout_chunks)
+                    stdout_buf += b"".join(stdout_chunks)  # type: ignore[operator]
                     stdout_chunks.clear()
                 if stderr_chunks:
-                    stderr_buf += b"".join(stderr_chunks)
+                    stderr_buf += b"".join(stderr_chunks)  # type: ignore[operator]
                     stderr_chunks.clear()
 
             drain_deadline = None
@@ -4481,10 +4482,10 @@ def run_sandboxed(
                         # reach it by pid.
                         _teardown_target(child_pid, death_w, _parent_fds)
                         _materialize()
-                        out_str = stdout_buf.decode("utf-8", errors="replace") if text else stdout_buf
-                        err_str = stderr_buf.decode("utf-8", errors="replace") if text else stderr_buf
+                        out_str = stdout_buf.decode("utf-8", errors="replace") if text else stdout_buf  # type: ignore[union-attr]
+                        err_str = stderr_buf.decode("utf-8", errors="replace") if text else stderr_buf  # type: ignore[union-attr]
                         raise subprocess.TimeoutExpired(
-                            list(cmd), timeout, output=out_str, stderr=err_str
+                            list(cmd), timeout, output=out_str, stderr=err_str  # type: ignore[arg-type]
                         )
                     waits = []
                     if remaining is not None:
@@ -4519,12 +4520,12 @@ def run_sandboxed(
                                 _truncated[2] = True
                 _materialize()
                 if _truncated[1]:
-                    stdout_buf += (
+                    stdout_buf += (  # type: ignore[operator]
                         b"\n[sandbox: stdout capture truncated "
                         b"at %d bytes]\n" % _capture_cap
                     )
                 if _truncated[2]:
-                    stderr_buf += (
+                    stderr_buf += (  # type: ignore[operator]
                         b"\n[sandbox: stderr capture truncated "
                         b"at %d bytes]\n" % _capture_cap
                     )
@@ -4562,7 +4563,7 @@ def run_sandboxed(
                         out_str = (stdout_buf or b"").decode("utf-8", errors="replace") if text else stdout_buf
                         err_str = (stderr_buf or b"").decode("utf-8", errors="replace") if text else stderr_buf
                         raise subprocess.TimeoutExpired(
-                            list(cmd), timeout, output=out_str, stderr=err_str
+                            list(cmd), timeout, output=out_str, stderr=err_str  # type: ignore[arg-type]
                         )
                     time.sleep(0.01)
             else:
@@ -4661,8 +4662,8 @@ def run_sandboxed(
         setup_status = None
     stdout_out = stderr_out = None
     if capture_output:
-        stdout_out = stdout_buf.decode("utf-8", errors="replace") if text else stdout_buf
-        stderr_out = stderr_buf.decode("utf-8", errors="replace") if text else stderr_buf
+        stdout_out = stdout_buf.decode("utf-8", errors="replace") if text else stdout_buf  # type: ignore[union-attr]
+        stderr_out = stderr_buf.decode("utf-8", errors="replace") if text else stderr_buf  # type: ignore[union-attr]
 
     cp = subprocess.CompletedProcess(
         args=list(cmd),
@@ -4672,5 +4673,5 @@ def run_sandboxed(
     )
     # Authoritative setup-failure signal for context.py's decision table
     # (degrade on M/X, fail loud on L/S/U). None ⇒ target execed.
-    cp._setup_status = setup_status
+    cp._setup_status = setup_status  # type: ignore[attr-defined]
     return cp

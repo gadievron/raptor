@@ -656,13 +656,13 @@ async def _run_async(
             quiescer=quiescer,
         )
     finally:
-        if throttle.signal_count:
+        if throttle is not None and throttle.signal_count:
             logger.info(
                 "throttle stats: %d 429 signals, final effective=%d/%d",
                 throttle.signal_count, throttle.effective_workers,
                 throttle.max_workers,
             )
-        if owns_throttle:
+        if owns_throttle and throttle is not None:
             throttle.close()
 
 
@@ -858,9 +858,9 @@ async def _run_async_body(
             try:
                 await loop.run_in_executor(
                     None,
-                    lambda bt=batch_tasks, ri=idx: _process_glance_batch(
+                    lambda bt=batch_tasks, ri=idx: _process_glance_batch(  # type: ignore[misc]
                         bt, batch_review_fn, shared, config,
-                        result, review_one_fn, review_fn,
+                        result, review_one_fn, review_fn,  # type: ignore[arg-type]
                         joern_server=joern_server,
                         audit_log=audit_log,
                         workqueue=workqueue,
@@ -928,7 +928,7 @@ async def _run_async_body(
             try:
                 await loop.run_in_executor(
                     None,
-                    lambda t=task, i=idx: review_one_fn(
+                    lambda t=task, i=idx: review_one_fn(  # type: ignore[misc]
                         t.gap, shared, config, review_fn, result,
                         joern_server=joern_server,
                         audit_log=audit_log,
@@ -1008,11 +1008,11 @@ async def _run_async_body(
             consumer,
         )
         if snap == held_stall["snap"]:
-            held_stall["count"] += 1
+            held_stall["count"] += 1  # type: ignore[operator]
         else:
-            held_stall["snap"] = snap
+            held_stall["snap"] = snap  # type: ignore[assignment]
             held_stall["count"] = 0
-        return held_stall["count"] >= _ALL_HELD_STALL_CYCLES
+        return held_stall["count"] >= _ALL_HELD_STALL_CYCLES  # type: ignore[operator]
 
     def _force_release_held() -> None:
         blocking = sorted({c for s in hold_set.values() for c in s})
@@ -1182,7 +1182,7 @@ async def _run_async_body(
                 try:
                     await loop.run_in_executor(
                         None,
-                        lambda t=task, i=idx: review_one_fn(
+                        lambda t=task, i=idx: review_one_fn(  # type: ignore[misc]
                             t.gap, shared, config, review_fn, result,
                             joern_server=joern_server,
                             audit_log=audit_log,

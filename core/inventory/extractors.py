@@ -233,7 +233,7 @@ class PythonExtractor:
     def _extract_function(self, node: ast.AST, class_name: str | None,
                           class_attributes: Sequence[str] = ()) -> FunctionInfo:
         """Extract a single function with full metadata."""
-        args = node.args.args
+        args = node.args.args  # type: ignore[attr-defined]
         # Build signature
         arg_strs = []
         for arg in args:
@@ -241,11 +241,11 @@ class PythonExtractor:
             if arg.annotation:
                 s += f": {ast.unparse(arg.annotation)}"
             arg_strs.append(s)
-        signature = f"def {node.name}({', '.join(arg_strs)})"
+        signature = f"def {node.name}({', '.join(arg_strs)})"  # type: ignore[attr-defined]
         if isinstance(node, ast.AsyncFunctionDef):
             signature = "async " + signature
-        if node.returns:
-            signature += f" -> {ast.unparse(node.returns)}"
+        if node.returns:  # type: ignore[attr-defined]
+            signature += f" -> {ast.unparse(node.returns)}"  # type: ignore[attr-defined]
 
         # Parameters as (name, type) tuples
         parameters = []
@@ -254,14 +254,14 @@ class PythonExtractor:
             parameters.append((arg.arg, type_str))
 
         # Return type
-        return_type = ast.unparse(node.returns) if node.returns else None
+        return_type = ast.unparse(node.returns) if node.returns else None  # type: ignore[attr-defined]
 
         # Decorators
-        attributes = [ast.unparse(dec) for dec in node.decorator_list]
+        attributes = [ast.unparse(dec) for dec in node.decorator_list]  # type: ignore[attr-defined]
 
         return FunctionInfo(
-            name=node.name,
-            line_start=node.lineno,
+            name=node.name,  # type: ignore[attr-defined]
+            line_start=node.lineno,  # type: ignore[attr-defined]
             line_end=node.end_lineno if hasattr(node, 'end_lineno') else None,
             signature=signature,
             metadata=FunctionMetadata(
@@ -1392,7 +1392,7 @@ class JavaExtractor:
                             class_name=current_class,
                             visibility=visibility,
                             return_type=return_type,
-                            parameters=parameters,
+                            parameters=parameters,  # type: ignore[arg-type]
                         ),
                     ))
 
@@ -1482,7 +1482,7 @@ class LuaExtractor:
                 params.append((name, None))
             elif name == "...":
                 params.append(("...", None))
-        return params
+        return params  # type: ignore[return-value]
 
     @staticmethod
     def _strip_strings_and_comments(line: str) -> str:
@@ -2039,7 +2039,7 @@ class GitHubWorkflowExtractor:
     def _extract_run_steps(self, lines: list[str], job_id: str,
                            start: int, end: int) -> list[CodeItem]:
         """Steps carrying a ``run:`` script within lines[start:end]."""
-        steps: list[tuple] = []  # (0-based start line)
+        steps: list[int] = []  # (0-based start line)
         step_indent = None
         in_steps = False
         for i in range(start + 1, end):
@@ -2644,7 +2644,7 @@ class TreeSitterExtractor:
         sib = node.prev_sibling
         while sib is not None:
             if sib.type == "decorator":
-                out.append(sib.text.decode().lstrip("@").strip())
+                out.append(sib.text.decode().lstrip("@").strip())  # type: ignore[union-attr]
             elif sib.is_named and sib.type not in self._TS_DECORATOR_SKIP:
                 break  # a real declaration / statement — decorators stop here
             sib = sib.prev_sibling
@@ -2874,7 +2874,7 @@ class TreeSitterExtractor:
         name = None
         for sub in decl_node.children:
             if sub.type == "identifier":
-                name = sub.text.decode()
+                name = sub.text.decode()  # type: ignore[union-attr]
                 break
         # RESERVED_WORDS here is belt-and-braces: reserved words lex as
         # keyword / primitive_type nodes, never as the `identifier`
@@ -3825,7 +3825,7 @@ def extract_functions(filepath: str, language: str, content: str) -> list[CodeIt
         return PythonExtractor().extract(filepath, content)
 
     # Regex fallback (basic metadata)
-    extractor = _REGEX_EXTRACTORS.get(language, GenericExtractor())
+    extractor = _REGEX_EXTRACTORS.get(language, GenericExtractor())  # type: ignore[assignment]
     return list(extractor.extract(filepath, content))
 
 
@@ -3942,7 +3942,7 @@ def extract_items(filepath: str, language: str, content: str,
             items.extend(PythonExtractor().extract(filepath, content))
         else:
             items = [i for i in items if i.kind != KIND_FUNCTION]
-            extractor = _REGEX_EXTRACTORS.get(language, GenericExtractor())
+            extractor = _REGEX_EXTRACTORS.get(language, GenericExtractor())  # type: ignore[assignment]
             items.extend(extractor.extract(filepath, content))
 
     # C/C++ repair pass: tree-sitter fragmentation from unknown macros
@@ -3966,7 +3966,7 @@ def extract_items(filepath: str, language: str, content: str,
         # (a reviewable checklist unit over dead text, its span
         # overlapping the real function below the comment).
         from core.inventory.dead_scope import _c_strip_comments_and_strings
-        regex_funcs = regex_ext.extract(
+        regex_funcs = regex_ext.extract(  # type: ignore[attr-defined]
             filepath, _c_strip_comments_and_strings(content))
         # Reserved-word gate at the merge seam (defense in depth): the
         # recognition fix in CExtractor already refuses reserved words,
@@ -3987,8 +3987,8 @@ def extract_items(filepath: str, language: str, content: str,
                         name=item.name,
                         line_start=item.line_start,
                         line_end=repair.line_end,
-                        signature=item.signature or repair.signature,
-                        metadata=item.metadata or repair.metadata,
+                        signature=item.signature or repair.signature,  # type: ignore[attr-defined]
+                        metadata=item.metadata or repair.metadata,  # type: ignore[attr-defined]
                     )
         for name, rfn in regex_by_name.items():
             if name not in ts_funcs:
@@ -4042,7 +4042,7 @@ def _extract_top_level_ts(root_node, language: str) -> list[CodeItem]:
 
 def _extract_globals_ts(root_node, language: str) -> list[CodeItem]:
     """Extract global variables/constants from a tree-sitter parse tree."""
-    globals_found = []
+    globals_found: list[CodeItem] = []
 
     # Node types for global declarations per language
     global_types = {
@@ -4155,14 +4155,14 @@ def _typedef_name(node: "Node") -> str | None:
     decl = node.child_by_field_name("declarator")
     if decl is not None:
         if decl.type in ("type_identifier", "identifier"):
-            return decl.text.decode()
+            return decl.text.decode()  # type: ignore[union-attr]
         inner = _c_declarator_name(decl)
         if inner:
             return inner
     # Fallback: a direct type_identifier child (not nested in a specifier).
     for c in node.children:
         if c.type in ("type_identifier", "identifier"):
-            return c.text.decode()
+            return c.text.decode()  # type: ignore[union-attr]
     return None
 
 
@@ -4178,7 +4178,7 @@ def _extract_c_types_ts(root_node, language: str) -> list[CodeItem]:
         return []
     specifiers = ("struct_specifier", "union_specifier", "enum_specifier")
     if language == "cpp":
-        specifiers = specifiers + ("class_specifier",)
+        specifiers = specifiers + ("class_specifier",)  # type: ignore[assignment]
     out: list[CodeItem] = []
     for child in root_node.children:
         name = None

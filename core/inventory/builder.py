@@ -742,16 +742,16 @@ def build_inventory(
     # Build macro config once (compile_commands.json / .config). Drives
     # config-aware #ifdef resolution in each file's TranslationView. Empty
     # (and inert) when no build artifacts are present or in isolation mode.
-    macro_config = extract_macro_config(target_path)
+    macro_config = extract_macro_config(target_path)  # type: ignore[arg-type]
     if allow_unreachable:
-        macro_config = None
+        macro_config = None  # type: ignore[assignment]
     # Translation-unit set (compile_commands membership), built once for the
     # C/C++ build-membership witness. A witness record (not a view transform),
     # so — like the Go //go:build detector — it is NOT disabled under
     # allow_unreachable; the surface-only consumers ignore it in that mode.
-    build_tus = extract_build_tus(target_path)
+    build_tus = extract_build_tus(target_path)  # type: ignore[arg-type]
     # Rust crate-module set (mod-tree membership), same role for .rs sources.
-    crate_modules = extract_rust_crate_modules(target_path)
+    crate_modules = extract_rust_crate_modules(target_path)  # type: ignore[arg-type]
     cfg_fp = macro_config.fingerprint() if macro_config else ""
     # Fold the membership sets into the cache key: a compile_commands / mod-tree
     # change (a file added to / removed from the build) must invalidate cached
@@ -1227,9 +1227,9 @@ def build_inventory(
             _gp = graph_path_for_run(Path(output_dir), target_path)
             if _gp.exists():
                 _bo_verdicts: dict[str, str] = {}
-                for _f in (inventory.get("files") or []):
-                    _fp = _f.get("path", "")
-                    for _item in (_f.get("items") or []):
+                for _f in (inventory.get("files") or []):  # type: ignore[union-attr]
+                    _fp = _f.get("path", "")  # type: ignore[union-attr]
+                    for _item in (_f.get("items") or []):  # type: ignore[union-attr]
                         _bo = ((_item.get("metadata") or {}).get("binary_oracle") or {})
                         _cls = _bo.get("classification")
                         _name = _item.get("name")
@@ -1945,7 +1945,7 @@ def _process_single_file(
                 items_list = old_entry.get('items')
                 if isinstance(items_list, list):
                     healed = reconcile_interstitial_items(
-                        items_list, language, content, path=rel_path,
+                        items_list, language, content, path=rel_path,  # type: ignore[arg-type]
                     )
                     if healed:
                         # Replaced items lost builder-stamped sibling
@@ -1955,7 +1955,7 @@ def _process_single_file(
                         # dead range) so a healed record equals a
                         # fresh build's interstitial state.
                         dead_ranges = detect_dead_scopes(
-                            language, content)
+                            language, content)  # type: ignore[arg-type]
                         if dead_ranges:
                             for it in items_list:
                                 if (not isinstance(it, dict)
@@ -1968,7 +1968,7 @@ def _process_single_file(
                                               in dead_ranges):
                                     it['lexical_dead'] = True
                     stamp_script_handler_items(
-                        items_list, language, content,
+                        items_list, language, content,  # type: ignore[arg-type]
                     )
                     # Gated on the DETECTED language (the stamp
                     # producer's own scope), never the cached record:
@@ -2029,12 +2029,12 @@ def _process_single_file(
                         try:
                             fresh = extract_call_graph_php(content)
                             if fresh.includes_extracted:
-                                fd = fresh.to_dict()
+                                fd = fresh.to_dict()  # type: ignore[assignment]
                                 for k in ('includes', 'defines',
                                           'includes_truncated',
                                           'direct_access_guard'):
-                                    if k in fd:
-                                        cg[k] = fd[k]
+                                    if k in fd:  # type: ignore[operator]
+                                        cg[k] = fd[k]  # type: ignore[index]
                                 from .include_graph import (
                                     anchor_literal_include_targets,
                                 )
@@ -2055,13 +2055,13 @@ def _process_single_file(
         # (detect_dead_scopes / detect_module_load_abort) keep using the
         # real `content`; only the tree-sitter / AST parse uses parse_text.
         view = preprocess_view(
-            str(filepath), language, content,
+            str(filepath), language, content,  # type: ignore[arg-type]
             allow_unreachable=allow_unreachable,
             config=macro_config,
         )
         parse_text = view.parse_text
         tree_cache: dict[str, Any] = {}
-        items = extract_items(str(filepath), language, parse_text, _tree_cache=tree_cache)
+        items = extract_items(str(filepath), language, parse_text, _tree_cache=tree_cache)  # type: ignore[arg-type]
         # Safety net: every SLOC-bearing line outside an extracted item becomes
         # an interstitial item, so non-function code (top-level statements,
         # missed globals) is never invisible to coverage (coverage Decision #2).
@@ -2070,7 +2070,7 @@ def _process_single_file(
         # blank lines from raw content while the tree (comment lines)
         # came from parse_text made comment lines inside blanked
         # preprocessor arms count as SLOC — the two inputs must agree.
-        sloc = count_sloc(parse_text, language, _tree=tree_cache.get("tree"))
+        sloc = count_sloc(parse_text, language, _tree=tree_cache.get("tree"))  # type: ignore[arg-type]
 
         record: dict[str, Any] = {
             'path': rel_path,
@@ -2091,7 +2091,7 @@ def _process_single_file(
         # of each recomputing from source. Classified over the raw
         # ``content`` — the same bytes gap-side hydration reads — not
         # the translation view.
-        stamp_script_handler_items(record['items'], language, content)
+        stamp_script_handler_items(record['items'], language, content)  # type: ignore[arg-type]
         # Per-item span hashes (core.staleness format: SHA-256[:12] of
         # the raw span lines). The function-level inventory diff
         # compares these across runs to find added/changed functions
@@ -2132,7 +2132,7 @@ def _process_single_file(
         # as mutually CALLED). Tagged here (not in each extractor) so
         # detection lives in one place per language; field is set only
         # when dead so inventory size stays flat.
-        dead_ranges = detect_dead_scopes(language, content)
+        dead_ranges = detect_dead_scopes(language, content)  # type: ignore[arg-type]
         if dead_ranges:
             for item_dict in record['items']:
                 ls = item_dict.get('line_start') or 0
@@ -2251,7 +2251,7 @@ def _process_single_file(
         # NOT_REACHED gate. Stored only when detected so the field
         # is absent (not False) on the overwhelming majority of
         # files — keeps inventory size flat.
-        abort = detect_module_load_abort(language, content)
+        abort = detect_module_load_abort(language, content)  # type: ignore[arg-type]
         if abort is not None:
             record['module_aborts_on_load'] = {
                 'line': abort.line,
@@ -2261,7 +2261,7 @@ def _process_single_file(
         # is never compiled, so every function in it is dead regardless of
         # call edges or external linkage. Heuristic (config-dependent) — a
         # surface-only gate, never hard-suppress.
-        excluded = detect_build_excluded(language, content)
+        excluded = detect_build_excluded(language, content)  # type: ignore[arg-type]
         if excluded is not None:
             record['build_excluded'] = {
                 'line': excluded.line,
