@@ -279,17 +279,16 @@ class CredentialStore:
             "anthropic":  _read_env("ANTHROPIC_API_KEY"),
             "gemini":     _read_env("GEMINI_API_KEY") or _google_api_key,
             "openai":     _read_env("OPENAI_API_KEY"),
-            # --- direct providers (read-and-keep, env-direct) ---
+            # --- aggregator / routing providers (read-and-keep) ---
             # Workers reach these env-direct (no worker-side dispatcher
             # factory routes them); see the comment above the class.
-            "mistral":    _read_env_keep("MISTRAL_API_KEY"),
-            # --- aggregator / routing providers (read-and-keep) ---
             "apiroute": _read_env_keep("API_ROUTE_API_KEY"),
             "cheaperinference": _read_env_keep("CHEAPER_INFERENCE_API_KEY"),
             "cohere":     _read_env_keep("COHERE_API_KEY"),
             "deepinfra":  _read_env_keep("DEEPINFRA_API_KEY"),
             "fireworks":  _read_env_keep("FIREWORKS_API_KEY"),
             "groq":       _read_env_keep("GROQ_API_KEY"),
+            "mistral":    _read_env_keep("MISTRAL_API_KEY"),
             "openrouter": _read_env_keep("OPENROUTER_API_KEY"),
             "orcarouter": _read_env_keep("ORCAROUTER_API_KEY"),
             "perplexity": _read_env_keep("PERPLEXITY_API_KEY"),
@@ -1257,11 +1256,6 @@ def build_rules(creds: CredentialStore) -> dict[str, ProviderRule]:
             upstream_base_url="https://generativelanguage.googleapis.com",
             inject_headers=_gemini_headers,
         ),
-        "mistral": ProviderRule(
-            name="mistral",
-            upstream_base_url="https://api.mistral.ai",
-            inject_headers=_bearer_headers("mistral"),
-        ),
         "openai": ProviderRule(
             name="openai",
             upstream_base_url="https://api.openai.com",
@@ -1300,6 +1294,11 @@ def build_rules(creds: CredentialStore) -> dict[str, ProviderRule]:
             name="groq",
             upstream_base_url="https://api.groq.com",
             inject_headers=_bearer_headers("groq"),
+        ),
+        "mistral": ProviderRule(
+            name="mistral",
+            upstream_base_url="https://api.mistral.ai",
+            inject_headers=_bearer_headers("mistral"),
         ),
         "openrouter": ProviderRule(
             name="openrouter",

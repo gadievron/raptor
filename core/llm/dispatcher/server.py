@@ -2627,7 +2627,6 @@ _CALLER_WINS_INJECT_HEADERS = frozenset({"anthropic-version"})
 _DIRECT_PATH_PREFIXES = {
     "/anthropic/":    "anthropic",
     "/gemini/":       "gemini",
-    "/mistral/":      "mistral",
     "/openai/":       "openai",
 }
 
@@ -2638,6 +2637,7 @@ _AGGREGATOR_PATH_PREFIXES = {
     "/deepinfra/":    "deepinfra",
     "/fireworks/":    "fireworks",
     "/groq/":         "groq",
+    "/mistral/":      "mistral",
     "/openrouter/":   "openrouter",
     "/orcarouter/":   "orcarouter",
     "/perplexity/":   "perplexity",
