@@ -1469,8 +1469,8 @@ def _get_or_build_index(
         has_wildcard = INDIRECTION_WILDCARD_IMPORT in flags
 
         for call in cg.get("calls") or []:
-            chain_: list[str] = list(call.get("chain") or [])
-            if not chain_:
+            chain = list(call.get("chain") or [])  # type: ignore[no-redef]
+            if not chain:
                 continue
             line = int(call.get("line", 0) or 0)
             caller_name: str | None = call.get("caller")
@@ -1483,7 +1483,7 @@ def _get_or_build_index(
                 # primitives we expose; drop them.
                 continue
 
-            callee = _resolve_callee_chain(chain_, imports)
+            callee = _resolve_callee_chain(chain, imports)
             if callee is not None:
                 # Canonicalise: if this external qualified name
                 # actually resolves to a project-defined function,
