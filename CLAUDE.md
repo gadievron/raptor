@@ -61,6 +61,8 @@ When a `/command` fires:
 /scorecard - Inspect per-model reliability across decision classes; ask natural-language questions about which model is good at what
 /ask - Send a prompt to any configured LLM model (routing below)
 /create-skill - Save approaches (alpha)
+/hardware - Hardware interface enumeration (Glasgow Interface Explorer) — `python3 raptor.py hardware`
+/firmware - Firmware analysis — `python3 raptor.py scan --firmware-root <path>`
 /describe - Describe a target (language mix, build system, cost estimate) — `libexec/raptor-describe --target <path>`
 /binary - Black-box binary investigation (rank, map, fuzz, graph, report) — `libexec/raptor-binary <command> [args]`
 /ghidra - Ghidra RE bridge (attach, import, diff, decompile, export) — `libexec/raptor-ghidra <subcommand> [args]`
@@ -228,6 +230,8 @@ Load the named file when its trigger fires. For every subsystem listed here, the
 ## BINARY ANALYSIS
 
 **Flow: Find vulnerabilities FIRST, then check exploitability.**
+
+**Firmware targets:** When `/describe` reports `firmware_like: true`, use `--firmware-root` instead of `--repo` for `/agentic` and `/scan`.
 
 1. **Analyze the binary** - Find vulnerabilities (buffer overflows, format strings, etc.)
 2. **If vulnerabilities found** - Run exploit feasibility analysis (MANDATORY)

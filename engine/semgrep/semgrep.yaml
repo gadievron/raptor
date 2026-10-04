@@ -1,0 +1,11 @@
+# RAPTOR Semgrep configuration (local-only)
+# Pass this file to --config OR pass the rules directory directly.
+#
+# Note: Semgrep expects either a directory of rules or a file with top-level 'rules:'.
+# This file delegates to the local rules directory for clarity.
+rules:
+  - id: raptor.config.include-local-rules
+    message: Delegates to local rules under engine/semgrep/rules.
+    languages: [generic]
+    severity: INFO
+    pattern: $X  # dummy to satisfy schema; actual rules loaded when you pass the directory

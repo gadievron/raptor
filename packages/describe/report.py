@@ -518,6 +518,8 @@ def format_json(report: DescribeReport) -> str:
         "target_type": s.target_type,
         "total_files": s.total_files,
         "total_lines": s.total_lines,
+        "elf_count": s.elf_count,
+        "firmware_like": s.firmware_like,
         "file_extensions": s.file_extensions,
         "language_lines": s.language_lines,
         "git": (

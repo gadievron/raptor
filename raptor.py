@@ -24,6 +24,7 @@ Available Modes:
     describe    - Pre-flight inspection: target type, tool readiness, cost estimate
     doctor      - Status report for local setup (no claude needed)
     frida       - Dynamic instrumentation via Frida (alpha)
+    hardware    - Hardware interface enumeration (Glasgow Interface Explorer)
     openant     - OpenAnt AST+LLM source-code vulnerability scan
 
 Examples:
@@ -44,6 +45,9 @@ Examples:
 
     # CodeQL analysis
     python3 raptor.py codeql --repo /path/to/code --languages java
+
+    # Hardware interface enumeration
+    python3 raptor.py hardware --voltage 3.3 --pins 0-7
 """
 
 import argparse
@@ -73,7 +77,6 @@ from core.run.metadata import complete_run, fail_run, start_run
 from core.run.output import (
     TargetMismatchError,
     get_output_dir,
-    resolve_default_target,
 )
 from core.run.safe_io import safe_run_mkdir
 
@@ -347,10 +350,42 @@ def _extract_agentic_log_level(args: list) -> str | None:
     return None
 
 
+def _same_path(a: str, b: str) -> bool:
+    """Path equality tolerant of symlinks/trailing slashes; falls back
+    to string compare when resolution fails (dangling paths)."""
+    try:
+        return Path(a).resolve() == Path(b).resolve()
+    except OSError:
+        return a == b
+
+
+def _swap_repo_for_firmware_root(args: list, target: str) -> list:
+    """Replace ``--repo <target>`` / ``--repo=<target>`` with the
+    --firmware-root equivalent, leaving every other argument alone."""
+    out: list = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--repo" and i + 1 < len(args) and args[i + 1] == target:
+            out += ["--firmware-root", target]
+            i += 2
+            continue
+        if a == f"--repo={target}":
+            out.append(f"--firmware-root={target}")
+            i += 1
+            continue
+        out.append(a)
+        i += 1
+    return out
+
+
 def _rewrite_target_arg(args: list, old: str, new: str) -> list:
-    """Return ``args`` with the --repo/--binary/--url value ``old`` replaced by
-    ``new`` (both ``--flag value`` and ``--flag=value`` forms)."""
-    flags = ("--repo", "--binary", "--url")
+    """Return ``args`` with the target-flag value ``old`` replaced by
+    ``new`` (both ``--flag value`` and ``--flag=value`` forms). Must
+    cover every flag ``_extract_target`` recognises — an extracted
+    archive target is otherwise forwarded as the archive path and the
+    child errors after the extraction cost is already paid."""
+    flags = ("--repo", "--firmware-root", "--binary", "--url")
     out: list = []
     i = 0
     while i < len(args):
@@ -565,6 +600,33 @@ def _resolve_target_for_command(command: str, args: list,
     argparse error then left a spurious failed run dir behind.
     """
     if target is not None:
+        # Explicit targets normally pass through untouched — but the
+        # slash-command dispatch surfaces substitute the PROJECT target
+        # into --repo verbatim, which on a firmware project reproduces
+        # exactly the misreading the routing below exists to prevent.
+        # When an explicit --repo IS the active firmware project's
+        # target (and no --firmware-root was given), rewrite the flag;
+        # a --repo pointing anywhere else is a genuine operator
+        # override and passes through.
+        if (command in _REPO_TARGET_COMMANDS
+                and "--firmware-root" not in args
+                and not any(a.startswith("--firmware-root=") for a in args)
+                and _extract_target(args) == target):
+            from core.run.output import resolve_default_target_with_kind
+            project_target, project_kind = resolve_default_target_with_kind()
+            if (project_kind == "firmware" and project_target
+                    and _same_path(target, project_target)):
+                if command == "codeql":
+                    return None, args, (
+                        "codeql: the active project's target-kind is "
+                        "firmware — extracted firmware roots have no "
+                        "buildable source tree for CodeQL. Use /scan "
+                        "or /agentic (firmware mode)."
+                    )
+                print("[*] Active project target-kind is firmware — "
+                      "running in firmware mode (--repo rewritten to "
+                      "--firmware-root)")
+                args = _swap_repo_for_firmware_root(args, target)
         return target, args, None
     if command in _REPO_TARGET_COMMANDS:
         # Stray-positional gate BEFORE any default back-fill: an argv
@@ -588,9 +650,28 @@ def _resolve_target_for_command(command: str, args: list,
         # CLAUDE.md DEFAULT TARGET DIRECTORY: (1) active project,
         # (2) RAPTOR_CALLER_DIR. Explicit --repo always wins (the
         # caller only reaches here when args carry no target).
-        target = resolve_default_target()
+        from core.run.output import resolve_default_target_with_kind
+        target, target_kind = resolve_default_target_with_kind()
         if target is not None:
-            args = args + ["--repo", target]
+            # Project-sticky firmware routing: a project whose
+            # target-kind is `firmware` points at an extracted
+            # firmware root — inject it as --firmware-root so bare
+            # /scan and /agentic run in firmware mode instead of
+            # misreading the root as a source repo. Target and kind
+            # come from ONE resolution pass, so they cannot describe
+            # different projects.
+            if target_kind == "firmware":
+                if command == "codeql":
+                    return None, args, (
+                        "codeql: the active project's target-kind is "
+                        "firmware — extracted firmware roots have no "
+                        "buildable source tree for CodeQL. Use /scan "
+                        "or /agentic (firmware mode), or pass --repo "
+                        "explicitly to override."
+                    )
+                args = args + ["--firmware-root", target]
+            else:
+                args = args + ["--repo", target]
         return target, args, None
     required = _REQUIRED_TARGET_FLAG.get(command)
     if required is None:
@@ -1399,6 +1480,32 @@ def mode_binary(args: list) -> int:
         return 1
 
 
+def mode_hardware(args: list) -> int:
+    """Run hardware interface enumeration (Glasgow Interface Explorer).
+
+    Direct subprocess, no lifecycle wrapper: the target is a physical
+    device (there is no --repo to resolve or back-fill), the pipeline
+    is operator-attended (stdin prompts for power-cycling the target),
+    and no LLM is involved. The enumerator creates its own output
+    directory under out/ unless --out is passed.
+    """
+    from core.config import RaptorConfig
+
+    script = Path(__file__).parent / "packages/hardware/enumerator.py"
+    if not script.exists():
+        print(f"✗ Hardware enumerator not found: {script}", file=sys.stderr)
+        return 1
+
+    try:
+        return subprocess.call(
+            [sys.executable, str(script), *args],
+            env=RaptorConfig.get_safe_env(),
+        )
+    except KeyboardInterrupt:
+        print("\n\nInterrupted by user", file=sys.stderr)
+        return 130
+
+
 def mode_web(args: list) -> int:
     """Run web application security testing."""
     script_root = Path(__file__).parent
@@ -1673,6 +1780,7 @@ def _mode_help_scripts() -> dict:
         'agentic': script_root / "raptor_agentic.py",
         'codeql': script_root / "raptor_codeql.py",
         'analyze': script_root / "packages/llm_analysis/agent.py",
+        'hardware': script_root / "packages/hardware/enumerator.py",
         'openant': script_root / "raptor_openant.py",
     }
 
@@ -1798,6 +1906,9 @@ Examples:
 
   # LLM analysis of existing SARIF
   python3 raptor.py analyze --repo /path/to/code --sarif findings.sarif
+
+  # Hardware interface enumeration
+  python3 raptor.py hardware --voltage 3.3 --pins 0-7
 
 Sandbox isolation (mode-level flags — pass them AFTER the mode name,
 not before; the top-level parser does not declare them directly):
@@ -1939,6 +2050,7 @@ def main():
         'describe': mode_describe,
         'frida': mode_frida,
         'openant': mode_openant,
+        'hardware': mode_hardware,
     }
     
     if mode not in mode_handlers:
