@@ -9,9 +9,20 @@ Dangerous operations (apply patches, delete, git push): ASK FIRST.
 
 **On first message:**
 VERY IMPORTANT: follow these steps in order.
-1. Read `.startup-output` using the Read tool, then output its contents verbatim as a fenced code block (``` with no language tag). Do NOT paraphrase or reformat. (The SessionStart hook generates this file automatically before your first message.)
+1. The SessionStart hook has already attached the RAPTOR startup banner to the conversation before the first user message. Output that banner verbatim as a fenced code block (``` with no language tag). Do NOT paraphrase, reformat, or call the Read tool just to fetch `.startup-output`. Only fall back to reading `.startup-output` if the SessionStart hook content is genuinely absent.
 2. On a single line, output "Quick commands:" then list the /agentic, /scan, /fuzz, /web commands (don't explain what they do) and note /commands for the full list.
-3. If the `sage_inception` tool is present in your available MCP tools, load `core/sage/AGENTS.md` (persistent-memory workflow). If absent, SAGE is not installed — skip silently and do not mention it.
+3. If the `sage_inception` tool is present in your available MCP tools, load `core/sage/CLAUDE.md` (persistent-memory workflow). If absent, SAGE is not installed — skip silently and do not mention it.
+
+---
+
+## EXECUTION RULES
+
+When a skill or user message specifies a literal command (`Execute: foo`, a fenced shell block as the action, or "run X"), execute it verbatim. Do not add pipes (`| tail`, `| head`, `| grep`), redirects (`2>&1`, `>/dev/null`), flags (`--verbose`, `-q`), wrappers (`timeout`, `nice`), `cd` prefixes, or env-var prefixes (`VAR=x cmd`).
+RAPTOR pipelines emit progress lines, real-time cost tracking, and the `OUTPUT_DIR=<path>` sentinel that downstream lifecycle steps parse. Truncating or filtering that stream breaks both operator visibility and orchestration.
+
+Never paste operator-, repo-, or target-derived values inside a double-quoted `python3 -c` block (or any double-quoted program text on a shell command line): the shell expands `$(…)` and backticks carried in the pasted value before the interpreter runs. Dynamic values ride as argv data — a `libexec/raptor-*` shim taking them as arguments, or a script file written and run with `sys.argv` arguments.
+
+Exception: when the skill itself shows the modification (e.g. a documented `| tee logfile` pattern), follow what the skill prints.
 
 ---
 
@@ -24,19 +35,41 @@ VERY IMPORTANT: follow these steps in order.
 /understand - Code understanding: map attack surface, trace flows, hunt variants (see below)
 /diagram - Generate Mermaid visual maps from /understand or /validate output (see below)
 
-**Coverage:** When asked about coverage, run `libexec/raptor-coverage-summary` (no args = active project). Use `--detailed` for per-file table, `--gaps` for unreviewed functions. See `.agents/skills/coverage/SKILL.md` for mark/unmark and the full API.
+**Coverage:** When asked about coverage, run `libexec/raptor-coverage-summary` (no args = active project). Use `--detailed` for per-file table, `--gaps` for unreviewed functions. See `.agents/skills/coverage.md` for mark/unmark and the full API.
 
-**Note:** `/agentic` runs scan → dedup → prep → analysis (with validation methodology). Use `--sequential` to bypass parallel orchestration. Use `--understand` to pre-map the codebase before scanning, and `--validate` to run the full validation pipeline on exploitable findings afterwards. Both flags are opt-in.
+**Note:** `/agentic` runs scan → dedup → prep → analysis (exploitation-validator methodology) — `libexec/raptor-agentic --repo <path>`. Optional flags, all opt-in: `--sequential` (orchestration bypass), `--understand` (pre-map the codebase), `--validate` (validation pipeline on exploitable findings afterwards), `--gap-audit` (audit the coverage residual), `--openant` (semantic scan phase alongside Semgrep/CodeQL), repeatable `--model` (independent analyses, correlated), `--consensus` / `--judge` / `--aggregate` (review/synthesis models).
 /crash-analysis - Autonomous crash root-cause analysis (see below)
 /oss-forensics - GitHub forensic investigation (see below)
 /create-skill - Save approaches (alpha)
+/audit - Hypothesis-driven code audit with tool verification. The LLM forms hypotheses; deterministic tools (Semgrep, Coccinelle, CodeQL, SMT, Joern) validate — the LLM never directly classifies code as vulnerable, tool output is the verdict. Flags: `--model <name>`, `--max-cost <usd>`, `--review-passes N`, `--adversarial`, `--local`. Full pipeline: `docs/audit.md`.
+/review - Navigate audit results across all four layers (coverage, journal, context-map, annotations) — `libexec/raptor-review`
+/annotate - Per-function prose annotations — `libexec/raptor-annotate <subcommand> [args]`
+/sage - SAGE persistent memory: status, recall, browse, store, manage
+/scorecard - Inspect per-model reliability across decision classes
+/ask - Send a prompt to any configured LLM model — `libexec/raptor-llm-ask --model <name> "prompt"`
+/openant - OpenAnt LLM semantic scan — `libexec/raptor-openant --repo <path> [options]`
 /tune - Show or update RAPTOR resource tuning profiles
+
+**Ask:** `libexec/raptor-llm-ask --model <name> "prompt"` sends a free-form prompt to any configured model and prints the response. Use for cross-model diagnosis, debugging model reasoning, or comparing verdicts. When the user says "ask gemini...", "ask claude...", "ask gpt..." or similar, route through this tool.
+
+**SAGE:** `libexec/raptor-sage` is the mechanical CLI for SAGE persistent memory (status, recall, list, remember, forget, domains, timeline, backlog, task, link, corroborate, get). When asked about SAGE memories, what SAGE knows, or to store/recall knowledge, route to this. If SAGE is not installed, run `libexec/raptor-sage-setup` to install the Docker sidecar and embedding model.
+
+**Verified outcomes:** When asked what RAPTOR has confirmed, proven, or verified, run `libexec/raptor-verified-outcomes <output_dir>` (or `--project-root <dir>` for cross-run view). Surfaces oracle-verified confirmations from `/fuzz`, `/agentic`, `/crash-analysis`, `/validate` in one place.
 
 ---
 
 ## PROJECTS
 
-Projects are opt-in named workspaces that corral analysis runs into a shared directory. Commands with `--project <name>` or after `/project use <name>` write output to the project directory. Without a project, commands behave as before (timestamped dirs under `out/`).
+Projects are opt-in named workspaces that corral analysis runs into a shared directory. Project state is TWO-LAYERED so concurrent sessions never steer each other:
+
+- **Session binding** (authoritative): each launcher session carries its own project in `~/.local/share/raptor/sessions.d/`, seeded at launch and changed only by THIS session's `/project use <name>` / `/project none` / `/project create`. Bound-to-none is authoritative — a cleared session does not follow the default.
+- **Last-activated default** (the `.active` symlink): a bookmark that seeds NEW sessions and serves bare shells. `use`/`create`/`-p` bump it; auto-detect and `/project none` do not.
+
+Activate with `/project use <name>` in-session, or at launch with `-p <name>` (auto-detect activates for the session only). While a project is active, analysis commands write output to the project directory, and every RUN is pinned to its project at start — a mid-run project switch never moves an in-flight run's output, trust markers, or stores. Analysis commands also accept `--project <name>` to pin a single run explicitly (`--project -` = explicitly projectless); invalid values are a hard error, never a fallback. Without a project, commands behave as before (timestamped dirs under `out/`).
+
+Subcommand surface: `create`, `use`, `status`, `findings`, `coverage`, `report`, `correlate`, `adopt`, `binary …`, `ghidra …`, `graph …`, `trust`/`untrust`, `set`/`unset`/`get`, `clean --keep N`, `sessions`, `none`.
+
+**Trust markers** (`config` / `build` / `dynamic`) are operator assertions persisted on the project — never auto-set, never read from the scanned repo. Per-run flags always win in both directions where they exist, and `build` does NOT imply `config`.
 
 ```
 /project create myapp --target /path/to/code -d "Description"
@@ -58,7 +91,7 @@ See `/project help` for full command list.
 
 When a command like `/scan`, `/agentic`, `/validate`, `/codeql`, or `/fuzz` is run **without a path argument**, resolve the default target in this order:
 
-1. **Active project target:** the run lifecycle script reads the `.active` symlink to find the project target automatically
+1. **Active project target:** the run lifecycle script resolves THIS SESSION's project (session binding first, then the last-activated `.active` default) and uses its target automatically
 2. **Caller's directory:** if `$RAPTOR_CALLER_DIR` is set (launcher saves the user's cwd before switching to the RAPTOR repo dir), use it
 3. **Ask the user** for the target path
 
