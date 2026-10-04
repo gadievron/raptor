@@ -776,7 +776,9 @@ class Project:
 
         dirs = self._list_run_dirs()
         if sweep:
-            in_session = bool(os.environ.get("CLAUDECODE"))
+            in_session = bool(
+                os.environ.get("CLAUDECODE") or os.environ.get("CODEX")
+            )
             self._sweep_stale(dirs, keep_latest=in_session)
         return sorted(dirs, key=_sort_key, reverse=True)
 

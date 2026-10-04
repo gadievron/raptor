@@ -225,7 +225,9 @@ def _comm(pid: int) -> str | None:
 
 def _claude_shaped(comm: str | None) -> bool:
     """ONE comm predicate for walker, liveness, and readers."""
-    return comm is not None and comm.startswith("claude")
+    return comm is not None and (
+        comm.startswith("claude") or comm.startswith("codex")
+    )
 
 
 def proc_starttime(pid: int) -> str | None:
