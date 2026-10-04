@@ -1932,6 +1932,22 @@ def _finalize_sandbox_triage(output_dir: Path) -> str | None:
         return None
 
 
+def _finalize_egress_summary(output_dir: Path) -> None:
+    """Write egress-summary.json and log a one-line egress report.
+
+    Best-effort, mirrors _finalize_sandbox_summary: never raises.
+    """
+    try:
+        from core.sandbox.egress_summary import finalize_egress_summary
+        finalize_egress_summary(output_dir)
+    except Exception:  # noqa: BLE001 — never fail lifecycle
+        import logging
+        logging.getLogger(__name__).debug(
+            "_finalize_egress_summary failed for %s",
+            output_dir, exc_info=True,
+        )
+
+
 # Sandbox summary + triage are finalized BEFORE the status update in every
 # terminal-state transition. If the process crashes between them:
 #  - finalize-then-status-update path: status stays "running", summary/triage
@@ -2000,6 +2016,7 @@ def complete_run(output_dir: Path, extra: dict[str, Any] | None = None,
     ensure_run_command(output_dir, expected_command)
     _finalize_sandbox_summary(output_dir)
     _triage_verdict = _finalize_sandbox_triage(output_dir)
+    _finalize_egress_summary(output_dir)
     if _triage_verdict is not None:
         # Surface the verdict in .raptor-run.json so cross-run views
         # (/project status, /review) can flag non-clean runs without
@@ -2514,6 +2531,7 @@ def fail_run(output_dir: Path, error: str | None = None,
         extra["error"] = error
     _finalize_sandbox_summary(output_dir)
     _triage_verdict = _finalize_sandbox_triage(output_dir)
+    _finalize_egress_summary(output_dir)
     if _triage_verdict is not None:
         extra.setdefault("sandbox_triage", _triage_verdict)
     _update_status(output_dir, STATUS_FAILED, extra, record_timing=record_timing)
@@ -2539,6 +2557,7 @@ def cancel_run(output_dir: Path, extra: dict[str, Any] | None = None,
         return
     _finalize_sandbox_summary(output_dir)
     _triage_verdict = _finalize_sandbox_triage(output_dir)
+    _finalize_egress_summary(output_dir)
     if _triage_verdict is not None:
         extra = dict(extra or {})
         extra.setdefault("sandbox_triage", _triage_verdict)
@@ -2568,6 +2587,7 @@ def interrupt_run(output_dir: Path, reason: str | None = None,
         extra["interrupt_reason"] = reason
     _finalize_sandbox_summary(output_dir)
     _triage_verdict = _finalize_sandbox_triage(output_dir)
+    _finalize_egress_summary(output_dir)
     if _triage_verdict is not None:
         extra.setdefault("sandbox_triage", _triage_verdict)
     _update_status(output_dir, STATUS_INTERRUPTED, extra)
