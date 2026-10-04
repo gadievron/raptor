@@ -176,9 +176,10 @@ SID_VALUES = (SID_SELF, SID_INHERITED, SID_UNKNOWN)
 
 # ``envm`` marker names (fixed recording order) + the empty value.
 ENV_MARKER_CLAUDECODE = "claudecode"
+ENV_MARKER_CODEX = "codex"
 ENV_MARKER_TRUSTED = "trusted"
 ENV_MARKER_SSH = "ssh"
-ENV_MARKERS = (ENV_MARKER_CLAUDECODE, ENV_MARKER_TRUSTED, ENV_MARKER_SSH)
+ENV_MARKERS = (ENV_MARKER_CLAUDECODE, ENV_MARKER_CODEX, ENV_MARKER_TRUSTED, ENV_MARKER_SSH)
 _ENV_MARKERS_NONE = "none"
 
 # ``corroboration`` marker: the only recognised value. Written by the
@@ -253,6 +254,8 @@ def _detect_env_markers(environ: Mapping[str, str] | None = None) -> str:
     markers = []
     if env.get("CLAUDECODE"):
         markers.append(ENV_MARKER_CLAUDECODE)
+    if env.get("CODEX"):
+        markers.append(ENV_MARKER_CODEX)
     if env.get("_RAPTOR_TRUSTED"):
         markers.append(ENV_MARKER_TRUSTED)
     if env.get("SSH_TTY") or env.get("SSH_CONNECTION"):

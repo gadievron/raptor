@@ -190,7 +190,7 @@ def _find_claude_ancestor() -> int | None:
                     return None
         except OSError:
             return None
-        if comm == "claude":
+        if comm in ("claude", "codex"):
             return pid
     return None
 
@@ -269,7 +269,7 @@ def _get_session_pid() -> int | None:
     pid = resolve_session_pid()
     if pid is not None:
         return pid
-    if not os.environ.get("CLAUDECODE"):
+    if not (os.environ.get("CLAUDECODE") or os.environ.get("CODEX")):
         return None
     ppid = os.getppid()
     if ppid <= 1:
