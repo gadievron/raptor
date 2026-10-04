@@ -110,6 +110,32 @@ override-dependencies = [
     "z3-solver==4.15.4.0",
 ]
 
+[tool.mypy]
+exclude = ["tests/", "static-analysis/"]
+warn_return_any = false
+
+[[tool.mypy.overrides]]
+module = [
+    "atheris",
+    "botocore.*",
+    "core.analysis.cfg_builder_generic",
+    "cve_diff.*",
+    "cve_env.*",
+    "defusedxml.*",
+    "ghidra.*",
+    "google.cloud.*",
+    "instructor.*",
+    "jsonschema.*",
+    "pwn",
+    "pwnlib.*",
+    "r2pipe",
+    "sage_sdk.*",
+    "tabulate",
+    "yaml",
+    "z3",
+]
+ignore_missing_imports = true
+
 [tool.ruff]
 target-version = "py312"
 
