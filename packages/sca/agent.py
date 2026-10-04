@@ -156,6 +156,10 @@ def run_sca_subprocess(
     log_dir = RaptorConfig.LOG_DIR
     log_dir.mkdir(parents=True, exist_ok=True)
 
+    from packages.sca import sca_cache_root as _sca_cache_root
+    cache_dir = _sca_cache_root()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
     try:
         result = sandbox_run(
             cmd,
@@ -165,7 +169,7 @@ def run_sca_subprocess(
             caller_label="sca-agent",
             target=str(target),
             output=str(output_dir),
-            writable_paths=[str(log_dir)],
+            writable_paths=[str(log_dir), str(cache_dir)],
             env=env if env is not None else RaptorConfig.get_safe_env(),
             env_caller_filtered=True,
             # ``cmd`` runs RAPTOR's OWN SCA agent — a trusted in-tree
@@ -310,6 +314,10 @@ def _run_sandboxed(
         )
         raise RuntimeError(msg) from None
 
+    from packages.sca import sca_cache_root as _sca_cache_root
+    cache_dir = _sca_cache_root()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
     with sandbox(
         target=str(target),
         output=str(output_dir),
@@ -318,6 +326,7 @@ def _run_sandboxed(
         require_proxy_netns=True,  # 00015
         proxy_hosts=_compose_proxy_hosts(target),
         caller_label="sca-agent",
+        writable_paths=[str(cache_dir)],
         audit=audit,
         audit_verbose=audit_verbose,
         audit_run_dir=str(output_dir) if audit else None,
