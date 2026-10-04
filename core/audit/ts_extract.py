@@ -608,11 +608,11 @@ def extract_call_chains(
                 continue
             if _is_chain_object(desc, call_types):
                 continue
-            chain = _extract_method_chain(desc, lang, src, call_types)
-            if chain and len(chain.steps) >= 2:
-                chain.file = file_path
-                chain.function = func_name
-                results.append(chain)
+            method_chain = _extract_method_chain(desc, lang, src, call_types)
+            if method_chain and len(method_chain.steps) >= 2:
+                method_chain.file = file_path
+                method_chain.function = func_name
+                results.append(method_chain)
 
         for var, steps in var_chains.items():
             if len(steps) >= 2:

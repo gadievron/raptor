@@ -1847,10 +1847,10 @@ def setup_mount_ns(target: str | None, output: str | None,
 
     def _bind_target_step8() -> None:
         inside = f"{root}{target}"
-        _step8_refuse_symlink_walk(target)
+        _step8_refuse_symlink_walk(target)  # type: ignore[arg-type]
         os.makedirs(inside, exist_ok=True)
-        _bind_pinned_source(target, inside, MS_BIND,
-                            pinned_fd=_required_pin_fd(src_fds, target))
+        _bind_pinned_source(target, inside, MS_BIND,  # type: ignore[arg-type]
+                            pinned_fd=_required_pin_fd(src_fds, target))  # type: ignore[arg-type]
         _bound_dirs.add(target)
         # Remount-bind-ro is best-effort. Skip when output == target
         # since output must remain writable. Landlock enforces
@@ -1878,17 +1878,17 @@ def setup_mount_ns(target: str | None, output: str | None,
 
     def _bind_output_step8() -> None:
         inside = f"{root}{output}"
-        _step8_refuse_symlink_walk(output)
+        _step8_refuse_symlink_walk(output)  # type: ignore[arg-type]
         os.makedirs(inside, exist_ok=True)
-        _bind_pinned_source(output, inside, MS_BIND,
-                            pinned_fd=_required_pin_fd(src_fds, output))
+        _bind_pinned_source(output, inside, MS_BIND,  # type: ignore[arg-type]
+                            pinned_fd=_required_pin_fd(src_fds, output))  # type: ignore[arg-type]
         _bound_dirs.add(output)
 
     _do_target = bool(target and not _shadows_per_ns(target))
     _do_output = bool(output and output != target
                       and not _shadows_per_ns(output))
     if (_do_target and _do_output
-            and target.startswith(output + "/")):
+            and target.startswith(output + "/")):  # type: ignore[union-attr,operator]
         # Output is a proper ancestor of target: same ancestors-first
         # invariant as above — the output bind mounts first so the ro
         # target bind stacks on top of it and the target stays

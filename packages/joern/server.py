@@ -38,7 +38,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 try:
     import httpx as _httpx
 except ImportError:
-    _httpx = None
+    _httpx = None  # type: ignore[assignment]
 
 from core.run.tmp_ownership import sweep_dead_owner_dirs, write_owner_marker
 
@@ -1374,8 +1374,8 @@ class JoernServer:
     def _wait_for_ready(self) -> bool:
         deadline = time.monotonic() + self._boot_timeout_s
         while time.monotonic() < deadline:
-            if self._proc.poll() is not None:
-                stderr = self._proc.stderr.read() if self._proc.stderr else ""
+            if self._proc.poll() is not None:  # type: ignore[union-attr]
+                stderr = self._proc.stderr.read() if self._proc.stderr else ""  # type: ignore[union-attr]
                 logger.error("Joern server exited during boot: %s",
                              stderr[:500])
                 return False
@@ -1487,9 +1487,9 @@ class JoernServer:
                 os.killpg(pid, sig)
             except (ProcessLookupError, PermissionError, OSError):
                 if sig == signal.SIGTERM:
-                    self._proc.terminate()
+                    self._proc.terminate()  # type: ignore[union-attr]
                 else:
-                    self._proc.kill()
+                    self._proc.kill()  # type: ignore[union-attr]
 
         # Pid-ns supervised boot: the leader is the forwarder, which
         # forwards signals down the supervision chain, and the kernel

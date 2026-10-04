@@ -1002,14 +1002,14 @@ def _line_in_try_body_with_catching_handler(
         # validator_line must be inside try.body specifically (NOT inside
         # an except handler or finally — those are different control paths)
         in_try_body = False
-        for stmt in node.body:
+        for stmt in node.body:  # type: ignore[attr-defined]
             stmt_end = getattr(stmt, "end_lineno", None) or stmt.lineno
             if stmt.lineno <= validator_line <= stmt_end:
                 in_try_body = True
                 break
         if not in_try_body:
             continue
-        for h in node.handlers:
+        for h in node.handlers:  # type: ignore[attr-defined]
             names = _handler_type_names(h.type) if h.type is not None else []
             # bare except: -> catches everything (UNSOUND if validator raises)
             if h.type is None:
@@ -1112,7 +1112,7 @@ def _validator_in_branch(
     plain statements — callers leave the exclusion unset.
     """
     fn = _function_containing(tree, sink_line)
-    body = fn.body if fn else tree.body
+    body = fn.body if fn else tree.body  # type: ignore[attr-defined]
 
     def _in_branch(stmts, target) -> bool:
         for stmt in stmts:
@@ -1132,14 +1132,14 @@ def _validator_in_branch(
                 if _spans(stmt.body, target) or _spans(stmt.orelse, target):
                     return True
             elif isinstance(stmt, _TRY_NODES):
-                for handler in stmt.handlers:
+                for handler in stmt.handlers:  # type: ignore[attr-defined]
                     if _spans(handler.body, target):
                         return True
                 # A conditional nested inside the try body / else /
                 # finally still wraps the validator — descend.
-                if (_in_branch(stmt.body, target)
-                        or _in_branch(stmt.orelse, target)
-                        or _in_branch(stmt.finalbody, target)):
+                if (_in_branch(stmt.body, target)  # type: ignore[attr-defined]
+                        or _in_branch(stmt.orelse, target)  # type: ignore[attr-defined]
+                        or _in_branch(stmt.finalbody, target)):  # type: ignore[attr-defined]
                     return True
             elif isinstance(stmt, (ast.With, ast.AsyncWith)):
                 # ``with`` executes unconditionally, but its body can
@@ -1583,7 +1583,7 @@ def _node_rebinds_var(node: ast.AST, var_name: str) -> bool:
                 return True
     # ``type x = ...`` (3.12+) binds x like a class definition.
     if _TYPE_ALIAS_NODE is not None and isinstance(node, _TYPE_ALIAS_NODE):
-        alias_name = node.name
+        alias_name = node.name  # type: ignore[attr-defined]
         if isinstance(alias_name, ast.Name) and alias_name.id == var_name:
             return True
     # Nested function / class definitions inside the body shadow

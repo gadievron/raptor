@@ -443,7 +443,7 @@ def _filter_devices(spec: dict, *, allow_all: bool = False) -> None:
             # ``{source, target, permissions}``.
             norm = _safe_device_source(str(dev.get("source") or ""))
             if norm is not None:
-                kept.append({**dev, "source": norm})
+                kept.append({**dev, "source": norm})  # type: ignore[arg-type]
                 continue
         logger.warning("compose sanitize: dropping device %r", dev)
     if kept:
@@ -738,8 +738,8 @@ def _run_resolver(
         from core.sandbox import SandboxSetupError
         from core.sandbox import run as sandbox_run
     except ImportError:  # pragma: no cover — core.sandbox always ships
-        sandbox_run = None
-        SandboxSetupError = Exception  # noqa: N806
+        sandbox_run = None  # type: ignore[assignment]
+        SandboxSetupError = Exception  # type: ignore[misc,assignment]  # noqa: N806
     if sandbox_run is not None:
         try:
             proc = sandbox_run(
@@ -1235,11 +1235,11 @@ def _sanitize_service(
             if "host-gateway" not in str(v)
         }
     if kept_hosts is not None:
-        if len(kept_hosts) != len(extra_hosts):
+        if len(kept_hosts) != len(extra_hosts):  # type: ignore[arg-type]
             logger.warning(
                 "compose sanitize: dropping host-gateway extra_hosts "
                 "entr%s from service %r",
-                "y" if len(extra_hosts) - len(kept_hosts) == 1 else "ies",
+                "y" if len(extra_hosts) - len(kept_hosts) == 1 else "ies",  # type: ignore[arg-type]
                 name,
             )
         if kept_hosts:

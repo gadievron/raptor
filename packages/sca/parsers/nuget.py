@@ -143,7 +143,7 @@ def parse_msbuild_project(path: Path) -> list[Dependency]:
 
     try:
         root = _safe_fromstring(text)
-    except (_ET.ParseError, *PARSE_ESCAPE_ERRORS) as e:  # defused XML refusals are ValueError subclasses
+    except (_ET.ParseError, *PARSE_ESCAPE_ERRORS) as e:  # defused XML refusals are ValueError subclasses  # type: ignore[misc]
         logger.warning(
             "sca.parsers.nuget: XML parse failed for %s: %s", path, e)
         return []
@@ -400,7 +400,7 @@ def _resolve_cpm_chain(start_dir: Path):
     targets_files = [parse_directory_build_props(p) for p in targets_paths]
     targets_files = [f for f in targets_files if f is not None]
 
-    cpm_active = bool(cpm_files) and all(f.cpm_enabled for f in cpm_files)
+    cpm_active = bool(cpm_files) and all(f.cpm_enabled for f in cpm_files)  # type: ignore[union-attr]
 
     # ``merged`` carries (version, central_file_path) per package — the path
     # is the file that ACTUALLY owns the version (vs the csproj that
@@ -417,14 +417,14 @@ def _resolve_cpm_chain(start_dir: Path):
     # 2 = cpm.  Sort outer-to-inner (deepest last = last-write-wins).
     all_entries: list = []
     for bf in build_files:
-        depth = len(bf.path.parent.parts)
+        depth = len(bf.path.parent.parts)  # type: ignore[union-attr]
         all_entries.append((depth, 0, bf, False))
     for tf in targets_files:
-        depth = len(tf.path.parent.parts)
+        depth = len(tf.path.parent.parts)  # type: ignore[union-attr]
         all_entries.append((depth, 1, tf, False))
     if cpm_active:
         for cf in cpm_files:
-            depth = len(cf.path.parent.parts)
+            depth = len(cf.path.parent.parts)  # type: ignore[union-attr]
             all_entries.append((depth, 2, cf, True))
 
     # Sort: shallowest first (outer-to-inner), then by sub-priority
@@ -528,7 +528,7 @@ def parse_packages_config(path: Path) -> list[Dependency]:
         return []
     try:
         root = _safe_fromstring(text)
-    except (_ET.ParseError, *PARSE_ESCAPE_ERRORS) as e:  # defused XML refusals are ValueError subclasses
+    except (_ET.ParseError, *PARSE_ESCAPE_ERRORS) as e:  # defused XML refusals are ValueError subclasses  # type: ignore[misc]
         logger.warning(
             "sca.parsers.nuget: XML parse failed for %s: %s", path, e)
         return []
@@ -603,7 +603,7 @@ def parse_lockfile(path: Path) -> list[Dependency]:
         return []
     try:
         data = json.loads(text)
-    except (json.JSONDecodeError, *PARSE_ESCAPE_ERRORS) as e:  # hostile-input escape classes
+    except (json.JSONDecodeError, *PARSE_ESCAPE_ERRORS) as e:  # hostile-input escape classes  # type: ignore[misc]
         logger.warning(
             "sca.parsers.nuget: JSON parse failed for %s: %s", path, e)
         return []

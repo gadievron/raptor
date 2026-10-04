@@ -913,7 +913,7 @@ class ModelScorecard:
         keys = set(repos) if isinstance(repos, dict) else set()
         if len(keys) >= REPO_DIVERSITY_FLOOR:
             return True
-        return bool(repo) and repo_key(repo) in keys
+        return bool(repo) and repo_key(repo) in keys  # type: ignore[arg-type]
 
     def register_uses(self, uses: list[dict]) -> None:
         """Record per-(model, decision_class) USAGE — a volume/presence signal,
@@ -1093,7 +1093,7 @@ class ModelScorecard:
             correct, incorrect = flatten_counts(ev)
         if correct + incorrect < sample_size_floor:
             return Policy.LEARNING
-        if _wilson_upper_bound(correct, incorrect) > self.miss_rate_ceiling:
+        if _wilson_upper_bound(correct, incorrect) > self.miss_rate_ceiling:  # type: ignore[arg-type]
             return Policy.FALL_THROUGH
         return Policy.SHORT_CIRCUIT
 
@@ -1694,11 +1694,11 @@ class ModelScorecard:
             # is a kernel-level construct that doesn't need file
             # contents.
             lock_path = path.with_suffix(path.suffix + ".lock")
-            self.lock_fh = open(lock_path, "a+", encoding="utf-8")
+            self.lock_fh = open(lock_path, "a+", encoding="utf-8")  # type: ignore[assignment]
             try:
                 return self._enter_under_lock(path, lock_path)
             except BaseException:
-                self.lock_fh.close()
+                self.lock_fh.close()  # type: ignore[attr-defined]
                 self.lock_fh = None
                 raise
 
@@ -1715,7 +1715,7 @@ class ModelScorecard:
             import errno as _errno
 
             contention = (_errno.EACCES, _errno.EAGAIN, _errno.EWOULDBLOCK)
-            fd = self.lock_fh.fileno()
+            fd = self.lock_fh.fileno()  # type: ignore[attr-defined]
             try:
                 fcntl.flock(fd, mode | fcntl.LOCK_NB)
                 return
@@ -2039,8 +2039,8 @@ class ModelScorecard:
                             if not isinstance(et_counts, dict):
                                 continue
                             c, i = flatten_counts(et_counts)
-                            events_correct += c
-                            events_incorrect += i
+                            events_correct += c  # type: ignore[assignment]
+                            events_incorrect += i  # type: ignore[assignment]
                     del by_dc[dc_key]
                     per_model_counts[m_key] = (
                         per_model_counts.get(m_key, 0) + 1)

@@ -132,12 +132,12 @@ def counters_delta(
         if d:
             events_d[svc] = d
     cache_d: dict[str, dict[str, int]] = {}
-    for name, counts in after[1].items():
-        base = before[1].get(name, {})
+    for name, counts in after[1].items():  # type: ignore[assignment]
+        base = before[1].get(name, {})  # type: ignore[assignment]
         d = {k: v - base.get(k, 0) for k, v in counts.items()
              if v - base.get(k, 0) > 0}
         if d:
-            cache_d[name] = d
+            cache_d[name] = d  # type: ignore[assignment]
     return events_d, cache_d
 
 
@@ -154,10 +154,10 @@ def absorb(
         for svc, counts in (rate_limit_delta or {}).items():
             for status, n in counts.items():
                 _events[svc][int(status)] += int(n)
-        for name, counts in (cache_delta or {}).items():
+        for name, counts in (cache_delta or {}).items():  # type: ignore[assignment]
             for kind, n in counts.items():
                 if kind in ("hits", "misses"):
-                    _cache_events[name][kind] += int(n)
+                    _cache_events[name][kind] += int(n)  # type: ignore[index]
 
 
 def api_key_status() -> list[tuple[ApiKeySpec, bool]]:

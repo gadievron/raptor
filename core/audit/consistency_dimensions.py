@@ -343,14 +343,14 @@ def detect_flag_mode_deviations(
             if is_mask_position and len(flagged) >= min_sites:
                 all_tokens: set[str] = set()
                 for s in flagged:
-                    all_tokens |= token_sets[id(s)]
+                    all_tokens |= token_sets[id(s)]  # type: ignore[arg-type]
                 for token in sorted(all_tokens):
                     have = [
-                        s for s in flagged if token in token_sets[id(s)]
+                        s for s in flagged if token in token_sets[id(s)]  # type: ignore[operator]
                     ]
                     lack = [
                         s for s in flagged
-                        if token not in token_sets[id(s)]
+                        if token not in token_sets[id(s)]  # type: ignore[operator]
                     ]
                     if not lack or len(have) < len(flagged) * ratio \
                             or len(have) <= len(lack):
@@ -387,7 +387,7 @@ def detect_flag_mode_deviations(
                 continue
             counts: dict[int, int] = {}
             for s in resolved:
-                counts[values[id(s)]] = counts.get(values[id(s)], 0) + 1
+                counts[values[id(s)]] = counts.get(values[id(s)], 0) + 1  # type: ignore[index,arg-type]
             majority_value = max(counts, key=lambda v: counts[v])
             if counts[majority_value] < len(resolved) * ratio:
                 continue
@@ -399,7 +399,7 @@ def detect_flag_mode_deviations(
                     continue
                 sec = None
                 cwe = ""
-                if _mode_grades_permissive(values[id(s)], majority_value):
+                if _mode_grades_permissive(values[id(s)], majority_value):  # type: ignore[arg-type]
                     cwe = "CWE-732"
                 deviations.append(FlagModeDeviation(
                     callee=callee,
@@ -2166,6 +2166,8 @@ def detect_sanitize_sink_deviations(
         annotated = bool(meta.get("registry"))
         exhibits = []
         for (fp, _fn), _ev, dom in conforming[:3]:
+            if dom is None:
+                continue
             san_name, san_line = dom
             lines = split_lines(source_texts.get(fp, ""))
             snippet = (
@@ -2532,7 +2534,7 @@ def _bounds_leg_sites(
                     cmp_table.get(index, []), idx, m.start(),
                 )
                 guarded = guard_j is not None
-                guard_line = start + guard_j if guarded else 0
+                guard_line = start + guard_j if guard_j is not None else 0
                 by_field.setdefault(fld, []).append(_AccessSite(
                     file=file_path,
                     line=start + idx,

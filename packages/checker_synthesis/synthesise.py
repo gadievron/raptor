@@ -771,7 +771,7 @@ def synthesise_and_run(
                 feedback = err
                 continue
 
-            rule_path = _write_rule(out_dir, rule)
+            rule_path = _write_rule(out_dir, rule)  # type: ignore[arg-type]
             gt_negative_ok: bool | None = None
             if ground_truth_fixtures is not None:
                 ok, gt_negative_ok, run_errors = _ground_truth_control(
@@ -804,9 +804,9 @@ def synthesise_and_run(
             result.errors.extend(f"{tag}: {e}" for e in run_errors)
             if ok:
                 ext = _fixture_ext(seed, engine)
-                if rule.test_positive and rule.test_negative:
+                if rule.test_positive and rule.test_negative:  # type: ignore[union-attr]
                     dc_ok, dc_errors = _dual_control(
-                        rule, rule_path, engine, ext,
+                        rule, rule_path, engine, ext,  # type: ignore[arg-type]
                     )
                     result.errors.extend(
                         f"{tag}: {e}" for e in dc_errors

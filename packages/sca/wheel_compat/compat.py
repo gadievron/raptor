@@ -266,13 +266,13 @@ def _verdict_for_pair(
         ]
         if same_family:
             min_libc = min(
-                same_family, key=lambda w: w.libc.version,
+                same_family, key=lambda w: w.libc.version,  # type: ignore[union-attr]
             )
             return CompatVerdict(
                 pair=pair, verdict="libc_too_new",
                 reason=(
                     f"{wm.name}=={wm.version}'s {pair.arch} wheels "
-                    f"require {min_libc.libc.as_str()} or newer; "
+                    f"require {min_libc.libc.as_str()} or newer; "  # type: ignore[union-attr]
                     f"project pair has only {pair.libc.as_str()}"
                 ),
                 matching_wheel=min_libc.raw,
@@ -290,15 +290,15 @@ def _verdict_for_pair(
         ]
         if same_macos:
             min_required = min(
-                same_macos, key=lambda w: w.macos_version,
+                same_macos, key=lambda w: w.macos_version,  # type: ignore[arg-type]
             )
-            if min_required.macos_version > pair.macos_version:
+            if min_required.macos_version > pair.macos_version:  # type: ignore[operator]
                 return CompatVerdict(
                     pair=pair, verdict="macos_too_new",
                     reason=(
                         f"{wm.name}=={wm.version}'s {pair.arch} wheels "
                         f"require macOS "
-                        f"{min_required.macos_version[0]}.{min_required.macos_version[1]} "
+                        f"{min_required.macos_version[0]}.{min_required.macos_version[1]} "  # type: ignore[index]
                         f"or newer; project pair targets macOS "
                         f"{pair.macos_version[0]}.{pair.macos_version[1]}"
                     ),

@@ -176,7 +176,7 @@ class VulnrichmentClient:
 
         hit, record = self._cached_record(key)
         if hit:
-            decision = self._decode_guarded(key, record)
+            decision: SSVCDecision | None = self._decode_guarded(key, record)  # type: ignore[assignment]
             if decision is not _DECODE_FAILED:
                 self._memo[key] = decision
                 return decision
@@ -188,7 +188,7 @@ class VulnrichmentClient:
             self._memo[key] = None
             return None
         record, _definitive = self._fetch_remote(key)
-        decision = self._decode_guarded(key, record)
+        decision = self._decode_guarded(key, record)  # type: ignore[assignment]
         if decision is _DECODE_FAILED:
             decision = None
         self._memo[key] = decision
@@ -252,7 +252,7 @@ class VulnrichmentClient:
                 continue
             hit, record = self._cached_record(key)
             if hit:
-                decision = self._decode_guarded(key, record)
+                decision = self._decode_guarded(key, record)  # type: ignore[assignment]
                 if decision is _DECODE_FAILED:
                     # Poisoned entry evicted — requeue for a fresh
                     # fetch under the normal budget rules.
@@ -290,7 +290,7 @@ class VulnrichmentClient:
                     key, e,
                 )
                 return key, None, False
-            decision = self._decode_guarded(key, record)
+            decision: SSVCDecision | None = self._decode_guarded(key, record)  # type: ignore[assignment]
             if decision is _DECODE_FAILED:
                 # The fetch itself succeeded — the record is junk.
                 # Definitive for this run; a refetch returns the

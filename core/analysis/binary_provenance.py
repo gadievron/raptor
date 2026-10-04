@@ -23,7 +23,7 @@ import logging
 import re
 import shutil
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, Literal, Optional
 
 from core.binary.elf import is_elf
 
@@ -77,7 +77,7 @@ def _debug_info_header_sane(
         return False
     if len(head) < 8:
         return False
-    endian = "little" if little_endian else "big"
+    endian: Literal["little", "big"] = "little" if little_endian else "big"
 
     # Compressed section: Elf_Chdr.ch_type (always 4 bytes first).
     if int.from_bytes(head[0:4], endian) in _ELFCOMPRESS_TYPES:

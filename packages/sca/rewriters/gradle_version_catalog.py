@@ -215,11 +215,11 @@ def _apply_one(text: str, edit: RewriteEdit) -> tuple[str, RewriteResult]:
         candidates = [_version_key_pattern]
     elif section == "library":
         candidates = [
-            _inline_library_version_pattern,
-            _inline_library_string_pattern,
+            _inline_library_version_pattern,  # type: ignore[list-item]
+            _inline_library_string_pattern,  # type: ignore[list-item]
         ]
     elif section == "plugin":
-        candidates = [_inline_plugin_version_pattern, _inline_plugin_string_pattern]
+        candidates = [_inline_plugin_version_pattern, _inline_plugin_string_pattern]  # type: ignore[list-item]
     else:
         return text, RewriteResult(
             edit=edit, applied=False,

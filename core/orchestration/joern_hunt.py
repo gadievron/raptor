@@ -262,7 +262,7 @@ def classify_taint_batch(
         key = (caller, sink)
         if key not in verdicts:
             if len(verdicts) >= MAX_TAINT_QUERIES:
-                dropped_pairs.add(key)
+                dropped_pairs.add(key)  # type: ignore[arg-type]
                 continue
             query_errors: list = []
             try:
@@ -275,17 +275,17 @@ def classify_taint_batch(
                         "taint classification degraded for %s -> %s: %s",
                         caller, sink, query_errors,
                     )
-                    verdicts[key] = None
+                    verdicts[key] = None  # type: ignore[index]
                 else:
-                    verdicts[key] = bool(flows)
+                    verdicts[key] = bool(flows)  # type: ignore[index]
             except Exception:
                 logger.debug(
                     "taint query failed for %s -> %s",
                     caller, sink, exc_info=True,
                 )
-                verdicts[key] = None
-        if verdicts[key] is not None:
-            match["joern_tainted"] = verdicts[key]
+                verdicts[key] = None  # type: ignore[index]
+        if verdicts[key] is not None:  # type: ignore[index]
+            match["joern_tainted"] = verdicts[key]  # type: ignore[index]
     if dropped_pairs:
         logger.warning(
             "taint classification: unique-pair cap (%d) reached — "

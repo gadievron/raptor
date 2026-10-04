@@ -186,7 +186,7 @@ def view(
         # by checking against the source length. Better than tripping
         # downstream assumptions about line_end being None.
         lines=(fi.line_start, fi.line_end if fi.line_end is not None else fi.line_start),
-        signature=fi.signature or "",
+        signature=fi.signature or "",  # type: ignore[attr-defined]
         calls_made=calls_made,
         returns=returns,
         has_inline_asm=has_asm,
@@ -359,16 +359,16 @@ def _ts_grammar_module(language: str):
             import tree_sitter_c as m
             return m
         if language == "cpp":
-            import tree_sitter_cpp as m
+            import tree_sitter_cpp as m  # type: ignore[no-redef]
             return m
         if language in ("javascript", "typescript", "tsx"):
-            import tree_sitter_javascript as m
+            import tree_sitter_javascript as m  # type: ignore[no-redef]
             return m
         if language == "java":
-            import tree_sitter_java as m
+            import tree_sitter_java as m  # type: ignore[no-redef]
             return m
         if language == "go":
-            import tree_sitter_go as m
+            import tree_sitter_go as m  # type: ignore[no-redef]
             return m
     except ImportError:
         return None

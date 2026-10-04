@@ -298,7 +298,7 @@ def _inventory_interest_key(raw: Any) -> tuple[int, int, int, str]:
     if addr is None:
         addr = raw.get("minaddr")
     try:
-        addr = int(addr)
+        addr = int(addr)  # type: ignore[arg-type]
     except (ValueError, TypeError, OverflowError):
         addr = 0
     return (0 if is_imported else 1, -size, addr, name)
@@ -1066,7 +1066,7 @@ class BinaryUnderstand:
                               what="export table (iEj)") or "[]")
             exports: list[str] = []
             export_types: dict[str, str] = {}
-            for e in exports_raw:
+            for e in exports_raw:  # type: ignore[misc]
                 name = str(e.get("name", ""))
                 if not name:
                     continue
@@ -1409,7 +1409,7 @@ class BinaryUnderstand:
                 continue  # r2 output is hostile; skip malformed elements
             text = str(s.get("string", ""))
             try:
-                vaddr = int(s.get("vaddr"))
+                vaddr = int(s.get("vaddr"))  # type: ignore[arg-type]
             except (ValueError, TypeError, OverflowError):
                 # OverflowError: json.loads accepts Infinity/NaN and
                 # int() refuses them — never-raise contract.
@@ -1449,7 +1449,7 @@ class BinaryUnderstand:
                 if not isinstance(ref, dict):
                     continue
                 try:
-                    fcn_addr = int(ref.get("fcn_addr"))
+                    fcn_addr = int(ref.get("fcn_addr"))  # type: ignore[arg-type]
                 except (ValueError, TypeError, OverflowError):
                     continue
                 if fcn_addr in seen_fns:

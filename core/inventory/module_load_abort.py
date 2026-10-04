@@ -883,11 +883,11 @@ def _detect_php(content: str) -> ModuleLoadAbort | None:
         elif depth == 0 and (c in "tde") and (
                 last_significant is None or last_significant in _PHP_STMT_BOUNDARY):
             # Only attempt a match at a statement boundary at file scope.
-            m = _PHP_ABORT.match(stripped, i)
+            m = _PHP_ABORT.match(stripped, i)  # type: ignore[assignment]
             if m:
-                tok = m.group(0).split()[0]
-                summary = (f"throw new {m.group(1).split(chr(92))[-1]}"
-                           if m.group(1) else tok)
+                tok = m.group(0).split()[0]  # type: ignore[attr-defined]
+                summary = (f"throw new {m.group(1).split(chr(92))[-1]}"  # type: ignore[attr-defined]
+                           if m.group(1) else tok)  # type: ignore[attr-defined]
                 line_no = stripped.count("\n", 0, i) + 1
                 return ModuleLoadAbort(line=line_no, summary=summary)
         if not c.isspace():

@@ -1930,7 +1930,7 @@ def run_coccinelle_file_sweep(
 
         try:
             result = run_rule(
-                full_path,
+                Path(full_path),
                 effective_rule,
                 defines=defines or {},
                 timeout=120,
@@ -4149,6 +4149,7 @@ def _sandboxed_codeql_runner(
         # The sandbox applies get_safe_env() itself; forwarding
         # analyze()'s env would fight its sanitisation.
         kwargs.pop("env", None)
+        assert run_fn is not None
         return run_fn(
             cmd, block_network=True, caller_label=caller_label,
             tool_paths=tool_paths,
@@ -4326,7 +4327,7 @@ def warm_codeql_memo(
             if orphan_rules:
                 continue
             slice_ = []
-        _value, was_cached = _memo.get_or_compute(key, lambda s=slice_: s)
+        _value, was_cached = _memo.get_or_compute(key, lambda s=slice_: s)  # type: ignore[misc]
         if not was_cached:
             prefilled += 1
 
@@ -4433,7 +4434,7 @@ def run_consistency_check(
 
         try:
             result = run_rule(
-                target_path,
+                Path(target_path),
                 effective_rule,
                 defines={"func": function_name},
                 timeout=300,
@@ -5001,7 +5002,7 @@ def run_joern_pre_sweep(
                 requeued,
             )
 
-        flows_by_key: dict[str, list] = {}
+        flows_by_key: dict[str, list] = {}  # type: ignore[no-redef]
         for flow in result.flows:
             if flow.steps:
                 step_file = flow.steps[0].file
@@ -5058,7 +5059,7 @@ def run_joern_pre_sweep(
     try:
         if _aborted("taint query"):
             return {}
-        cpg_bytes: int | None = None
+        cpg_bytes: int | None = None  # type: ignore[no-redef]
         try:
             cpg_bytes = cpg.path.stat().st_size
         except OSError:
@@ -5108,7 +5109,7 @@ def run_joern_pre_sweep(
                 status_out["reason"] = _presweep_error_reason(
                     result.errors)
 
-        flows_by_key: dict[str, list] = {}
+        flows_by_key: dict[str, list] = {}  # type: ignore[no-redef]
         for flow in result.flows:
             if flow.steps:
                 step_file = flow.steps[0].file

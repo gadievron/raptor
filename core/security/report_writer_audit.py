@@ -2201,7 +2201,7 @@ def _naked_keys(
             # traceback.format_exc() / format_exception(...): the call
             # RESULT is exception text — flag the read itself; the
             # arguments (an exception object, limits) add nothing.
-            out.append((getattr(n, "lineno", 0), _call_name(n)))
+            out.append((getattr(n, "lineno", 0), _call_name(n)))  # type: ignore[arg-type]
             return
         if isinstance(n, ast.Call) and _is_ascii_json_dumps(n):
             # json.dumps(..., ensure_ascii=True): C0 escaped by JSON,
@@ -2264,8 +2264,8 @@ def _naked_keys(
                     and isinstance(n.func, ast.Attribute)):
                 # ``d.get("count")`` — same field-scoped rule; still
                 # walk the DEFAULT argument (it flows into the value).
-                for extra in n.args[1:]:
-                    walk(extra)
+                for extra in n.args[1:]:  # type: ignore[assignment]
+                    walk(extra)  # type: ignore[arg-type]
                 return
         if isinstance(n, ast.Name) and n.id in tainted:
             out.append((getattr(n, "lineno", 0), n.id))
@@ -2305,7 +2305,7 @@ def _naked_keys(
                                          if kw.value is not None]:
                 walk(child)
             return
-        for child in ast.iter_child_nodes(n):
+        for child in ast.iter_child_nodes(n):  # type: ignore[assignment]
             walk(child)
 
     walk(node)
@@ -2348,7 +2348,7 @@ def _is_broad_handler(node: ast.excepthandler) -> bool:
     def _broad(t: ast.AST) -> bool:
         return (isinstance(t, ast.Name)
                 and t.id in ("Exception", "BaseException"))
-    t = node.type
+    t = node.type  # type: ignore[attr-defined]
     if t is None:
         return True
     if _broad(t):
@@ -2543,17 +2543,17 @@ class _Scanner(ast.NodeVisitor):
         func = node.func
         if isinstance(func, ast.Name):
             if func.id in _SINK_FUNCTIONS or func.id in _REPORT_CONSTRUCTORS:
-                return list(node.args) + [kw.value for kw in node.keywords
+                return list(node.args) + [kw.value for kw in node.keywords  # type: ignore[return-value]
                                           if kw.value is not None]
             return None
         if isinstance(func, ast.Attribute):
             if func.attr in _REPORT_CONSTRUCTORS:
-                return list(node.args) + [kw.value for kw in node.keywords
+                return list(node.args) + [kw.value for kw in node.keywords  # type: ignore[return-value]
                                           if kw.value is not None]
             if func.attr in ("echo", "secho"):
                 # typer.echo / click.secho attribute-form terminal
                 # sinks (module receivers, occasionally aliased).
-                return list(node.args) + [kw.value for kw in node.keywords
+                return list(node.args) + [kw.value for kw in node.keywords  # type: ignore[return-value]
                                           if kw.value is not None]
             if func.attr in _SINK_METHODS:
                 return list(node.args)

@@ -1078,7 +1078,7 @@ def orchestrate(
         [analysis_model] if analysis_model else []
     )
     _probe_failed = False
-    if dispatch_fn and _models_to_probe:
+    if dispatch_fn and _models_to_probe:  # type: ignore[truthy-function]
         from core.security.envelope_probe import probe_envelope_compatibility
         # Per-model profile collection. Pre-fix the outer `profile`
         # was set ONCE to the primary's profile and used unchanged
@@ -1849,7 +1849,7 @@ def orchestrate(
     merged["orchestration"] = {
         "mode": dispatch_mode,
         "multi_model": len(analysis_models_list) > 1,
-        "analysis_model": (role_resolution.get("analysis_model").model_name
+        "analysis_model": (role_resolution.get("analysis_model").model_name  # type: ignore[union-attr]
                           if role_resolution.get("analysis_model")
                           else ("Claude Code" if is_cc_dispatch else None)),
         "analysis_models": ([m.model_name for m in analysis_models_list]
@@ -2330,7 +2330,7 @@ def _detect_multi_model_collapse(
             if isinstance(item, dict) and "error" not in item:
                 contributors = {item.get("analysed_by")} - {None, "?"}
                 if len(contributors) < n_analysis_models:
-                    collapsed.append((fid, sorted(contributors)))
+                    collapsed.append((fid, sorted(contributors)))  # type: ignore[arg-type]
             continue
         distinct = {
             a.get("model") for a in analyses if isinstance(a, dict)
@@ -2338,7 +2338,7 @@ def _detect_multi_model_collapse(
         distinct.discard("?")
         distinct.discard(None)
         if len(distinct) < n_analysis_models:
-            collapsed.append((fid, sorted(distinct)))
+            collapsed.append((fid, sorted(distinct)))  # type: ignore[arg-type]
     return collapsed
 
 

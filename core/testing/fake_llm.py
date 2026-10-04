@@ -132,7 +132,7 @@ def install_provider(client: LLMClient, provider: Any) -> None:
     """Wire *provider* into ``client.providers`` under the key that
     ``_get_provider`` looks up for the primary model."""
     pm = client.config.primary_model
-    client.providers[f"{pm.provider}:{pm.model_name}"] = provider
+    client.providers[f"{pm.provider}:{pm.model_name}"] = provider  # type: ignore[union-attr]
 
 
 @dataclass
@@ -201,9 +201,9 @@ def ensure_anthropic_error_types(monkeypatch) -> None:
     class APIStatusError(APIError):
         status_code: int | None = None
 
-    stub.APIError = APIError
-    stub.APIConnectionError = APIConnectionError
-    stub.APIStatusError = APIStatusError
+    stub.APIError = APIError  # type: ignore[attr-defined]
+    stub.APIConnectionError = APIConnectionError  # type: ignore[attr-defined]
+    stub.APIStatusError = APIStatusError  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "anthropic", stub)
 
 

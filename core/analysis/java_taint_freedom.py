@@ -119,6 +119,7 @@ def _method_key(m: Node) -> tuple[str, int] | None:
     arity = sum(
         1 for c in params.children if c.type == "formal_parameter"
     )
+    assert name.text is not None
     return name.text.decode(), arity
 
 
@@ -130,7 +131,7 @@ def _param_names(m: Node) -> set[str]:
     for c in params.children:
         if c.type == "formal_parameter":
             nm = c.child_by_field_name("name")
-            if nm is not None:
+            if nm is not None and nm.text is not None:
                 out.add(nm.text.decode())
     return out
 
@@ -156,7 +157,7 @@ def _enclosing_class_field_names(method: Node) -> set[str]:
         for c in member.children:
             if c.type == "variable_declarator":
                 nm = c.child_by_field_name("name")
-                if nm is not None:
+                if nm is not None and nm.text is not None:
                     names.add(nm.text.decode())
     return names
 
@@ -307,7 +308,7 @@ def derive_tf_helpers(source_text: str, span=None) -> TfHelperIndex:
     if len(methods) > _MAX_HELPERS:
         idx._refuse("too-many-methods")
         return idx
-    by_key: dict[tuple[str, int], list[object]] = {}
+    by_key: dict[tuple[str, int], list[Node]] = {}
     for m in methods:
         key = _method_key(m)
         if key is None:
@@ -437,6 +438,7 @@ def make_tf_helper_resolver(source_text: str, span=None,
         if name is None or args is None:
             return None
         arity = sum(1 for c in args.children if c.is_named)
+        assert name.text is not None
         key = (name.text.decode(), arity)
         if key not in idx.taint_free:
             return None

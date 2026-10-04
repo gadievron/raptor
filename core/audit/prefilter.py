@@ -821,7 +821,7 @@ def _py_value_refs(node: ast.expr | None) -> _WrapperValue:
     if isinstance(node, (ast.Constant, ast.JoinedStr, ast.FormattedValue)):
         return set(), True
     if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
-        refs: set[str] = set()
+        refs: set[str] = set()  # type: ignore[no-redef]
         ok = True
         for e in node.elts:
             r, o = _py_value_refs(e)
@@ -1004,9 +1004,9 @@ def _py_wrapper_escape(
                 params.add(a.kwarg.arg)
         for arg_, default in zip(pos[len(pos) - len(a.defaults):], a.defaults):
             bind_default(arg_.arg, default)
-        for arg_, default in zip(a.kwonlyargs, a.kw_defaults):
-            if default is not None:
-                bind_default(arg_.arg, default)
+        for arg_, kw_default in zip(a.kwonlyargs, a.kw_defaults):
+            if kw_default is not None:
+                bind_default(arg_.arg, kw_default)
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
@@ -1089,9 +1089,9 @@ def _py_wrapper_escape(
             for comp in node.generators:
                 r, _o = _py_value_refs(comp.iter)
                 judged.append((r, _o))
-                for n in ast.walk(comp.target):
-                    if isinstance(n, ast.Name):
-                        accounted.add(n.id)  # comprehension-scoped
+                for tgt_node in ast.walk(comp.target):
+                    if isinstance(tgt_node, ast.Name):
+                        accounted.add(tgt_node.id)  # comprehension-scoped
         elif isinstance(node, ast.Call):
             # The callee reference is judged too: the textual
             # single-call gate and the main callee check can miss a
@@ -1265,7 +1265,7 @@ def _text_wrapper_escape(
         lhs = stmt[:lhs_end].strip()
         rhs = stmt[rhs_start:].strip()
         if _c_find_assign(rhs) is not None:
-            value = process(rhs)  # chained: bind inner target first
+            value: tuple[set[str], bool] | None = process(rhs)
             if value is None:
                 return None
         else:
@@ -1684,10 +1684,10 @@ def _is_trivial_wrapper(
             return False, ""
         wrapper_bindings, judged_values, wrapper_params = escape
     else:
-        escape = _text_wrapper_escape(ref_lines)
-        if escape is None:
+        text_escape = _text_wrapper_escape(ref_lines)
+        if text_escape is None:
             return False, ""
-        wrapper_bindings, judged_values = escape
+        wrapper_bindings, judged_values = text_escape
     for refs, _resolved in judged_values:
         for r in refs:
             expanded, _ok = _resolve_wrapper_ref(r, wrapper_bindings)

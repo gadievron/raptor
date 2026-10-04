@@ -463,18 +463,18 @@ class LanguageDetector:
         pruned_dirs: list[str] = []
         try:
             for file_path in self._walk_repository(pruned_dirs):
-                stats["scanned_files"] += 1
+                stats["scanned_files"] += 1  # type: ignore[operator]
 
                 # Check for build files (exact name or suffix)
                 fname = file_path.name
                 if fname in build_files or fname.endswith(build_suffixes):
-                    stats["build_files"].add(fname)
+                    stats["build_files"].add(fname)  # type: ignore[attr-defined]
 
                 # Check for structural indicators
                 relative = file_path.relative_to(self.repo_path).as_posix()
                 for indicator in indicators:
                     if self._indicator_matches(indicator, relative):
-                        stats["indicators"].add(indicator)
+                        stats["indicators"].add(indicator)  # type: ignore[attr-defined]
 
                 # Count extensions, case-folded: LANGUAGE_PATTERNS /
                 # NO_EXTRACTOR_EXTENSIONS keys are lowercase and the
@@ -486,12 +486,12 @@ class LanguageDetector:
                 # mixed repo silently lost its C++ bulk with no
                 # unsupported-primary warning.
                 if file_path.suffix:
-                    stats["extensions"][file_path.suffix.lower()] += 1
+                    stats["extensions"][file_path.suffix.lower()] += 1  # type: ignore[index]
 
-                stats["total_files"] += 1
+                stats["total_files"] += 1  # type: ignore[operator]
 
                 # Performance limit
-                if stats["scanned_files"] >= self.max_files:
+                if stats["scanned_files"] >= self.max_files:  # type: ignore[operator]
                     logger.warning(
                         "Reached max file scan limit (%s) — language "
                         "statistics computed from a walk-order sample; "
@@ -512,7 +512,7 @@ class LanguageDetector:
         for rel_dir in pruned_dirs:
             for indicator in indicators:
                 if self._indicator_matches(indicator, rel_dir):
-                    stats["indicators"].add(indicator)
+                    stats["indicators"].add(indicator)  # type: ignore[attr-defined]
 
         logger.debug("Scanned %s files", stats['scanned_files'])
         return stats

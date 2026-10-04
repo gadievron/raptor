@@ -605,8 +605,8 @@ class PomInheritanceResolver:
         ):
             if _text(entry, "scope") != "import":
                 continue
-            group = _text(entry, "groupId")
-            artifact = _text(entry, "artifactId")
+            group = _text(entry, "groupId")  # type: ignore[assignment]
+            artifact = _text(entry, "artifactId")  # type: ignore[assignment]
             version = _resolve_property(
                 _text(entry, "version"), resolve_props)
             if not (group and artifact and version):
@@ -817,8 +817,8 @@ def _merge_into(dst: InheritanceView, src: InheritanceView) -> None:
     processing precedence)."""
     for k, v in src.properties.items():
         dst.properties.setdefault(k, v)
-    for k, v in src.managed.items():
-        dst.managed.setdefault(k, v)
+    for k, v in src.managed.items():  # type: ignore[assignment]
+        dst.managed.setdefault(k, v)  # type: ignore[arg-type]
     dst.bom_imports.extend(src.bom_imports)
 
 

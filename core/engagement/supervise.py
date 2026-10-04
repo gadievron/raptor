@@ -509,8 +509,8 @@ def write_interim_report(output_dir: Path | str, *,
                          f": {_esc(fields, 120)}")
     lines.append("")
     committed = governor.committed_usd(doc)
-    block = doc.get("policy") if isinstance(doc.get("policy"), dict) \
-        else {}
+    _raw_pol = doc.get("policy")
+    block = _raw_pol if isinstance(_raw_pol, dict) else {}
     envelope = block.get("envelope_usd")
     env_s = (f"${envelope:.2f}"
              if isinstance(envelope, (int, float))
@@ -586,8 +586,8 @@ def _persisted_max_cost(state: dict[str, Any]) -> float | None:
 def _persisted_envelope(doc: dict[str, Any]) -> float | None:
     """The engagement envelope persisted on the ledger policy block
     (``governor.set_envelope``); ``None`` when uncapped."""
-    block = doc.get("policy") if isinstance(doc.get("policy"), dict) \
-        else {}
+    _raw_pol = doc.get("policy")
+    block = _raw_pol if isinstance(_raw_pol, dict) else {}
     figure = block.get("envelope_usd")
     if (isinstance(figure, (int, float))
             and not isinstance(figure, bool)):
@@ -921,8 +921,8 @@ def supervise(output_dir: Path | str, *,
         # replace the persisted figures and leave a residual + policy
         # amendment saying so. A bare --resume changes nothing — it
         # keeps enforcing what launch persisted.
-        block = doc.get("policy") \
-            if isinstance(doc.get("policy"), dict) else {}
+        _raw_pol = doc.get("policy")
+        block = _raw_pol if isinstance(_raw_pol, dict) else {}
         prior_env = block.get("envelope_usd")
         prior_env = (float(prior_env)
                      if isinstance(prior_env, (int, float))

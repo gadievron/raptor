@@ -157,9 +157,9 @@ def _pick_cwe_eco(adv: dict, cwes: set, ecosystems: set) -> tuple[str, str]:
     )
     adv_ecos = sorted(
         {(a.get("package") or {}).get("ecosystem")
-         for a in adv.get("affected") or []} & ecosystems
+         for a in adv.get("affected") or []} & ecosystems  # type: ignore[type-var]
     )
-    return adv_cwes[0], adv_ecos[0]
+    return str(adv_cwes[0]), str(adv_ecos[0])
 
 
 # ---------------------------------------------------------------------------
@@ -214,15 +214,15 @@ def _resolve_parent(repo_url: str, fix_hash: str, timeout: int = 60) -> str | No
             )
             if r.returncode != 0:
                 return None
-            r = subprocess.run(
+            r2 = subprocess.run(
                 safe_git_readonly_command(
                     "-C", str(td_p), "rev-list", "--parents", "-n", "1", fix_hash),
                 check=False, timeout=15, capture_output=True, text=True,
                 env=_env, preexec_fn=_pds,
             )
-            if r.returncode != 0:
+            if r2.returncode != 0:
                 return None
-            parts = r.stdout.split()
+            parts = r2.stdout.split()
             # `rev-list --parents -n 1 <sha>` -> "<sha> <parent1> [<parent2> ...]"
             # We want the single-parent case: exactly one parent.  Merge
             # commits (2+ parents) and roots (0 parents) are deliberately

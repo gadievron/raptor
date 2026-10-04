@@ -1094,22 +1094,22 @@ def _import_lockfile_parser(ecosystem: str) -> Callable | None:
         from .parsers.requirements import parse as _parse
         return _parse
     if ecosystem == "npm":
-        from .parsers.package_lock_json import parse as _parse
+        from .parsers.package_lock_json import parse as _parse  # type: ignore[assignment]
         return _parse
     if ecosystem == "Cargo":
-        from .parsers.cargo import parse_lockfile as _parse
+        from .parsers.cargo import parse_lockfile as _parse  # type: ignore[assignment]
         return _parse
     if ecosystem == "Go":
-        from .parsers.gomod import parse_lockfile as _parse
+        from .parsers.gomod import parse_lockfile as _parse  # type: ignore[assignment]
         return _parse
     if ecosystem == "RubyGems":
-        from .parsers.gemfile import parse_lockfile as _parse
+        from .parsers.gemfile import parse_lockfile as _parse  # type: ignore[assignment]
         return _parse
     if ecosystem == "Packagist":
-        from .parsers.composer import parse_lockfile as _parse
+        from .parsers.composer import parse_lockfile as _parse  # type: ignore[assignment]
         return _parse
     if ecosystem == "NuGet":
-        from .parsers.nuget import parse_lockfile as _parse
+        from .parsers.nuget import parse_lockfile as _parse  # type: ignore[assignment]
         return _parse
     return None
 

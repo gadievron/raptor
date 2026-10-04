@@ -578,8 +578,8 @@ class JazzerRunner(LibFuzzerRunner):
         # tool installs may live — re-append their own directories.
         parts = [p for p in env.get("PATH", "").split(os.pathsep) if p]
         for extra in (
-            str(Path(self._build_tool_path).parent),
-            str(self._java_home / "bin"),
+            str(Path(self._build_tool_path).parent),  # type: ignore[arg-type]
+            str(self._java_home / "bin"),  # type: ignore[operator]
         ):
             if extra not in parts:
                 parts.append(extra)
@@ -605,8 +605,8 @@ class JazzerRunner(LibFuzzerRunner):
         paths: list[str] = []
         candidates = [
             self._java_home,
-            Path(self._build_tool_path).parent,
-            Path(self._build_tool_path).resolve().parent,
+            Path(self._build_tool_path).parent,  # type: ignore[arg-type]
+            Path(self._build_tool_path).resolve().parent,  # type: ignore[arg-type]
         ]
         for candidate in candidates:
             if candidate is None:
@@ -861,7 +861,7 @@ class JazzerRunner(LibFuzzerRunner):
         cmd.extend(str(s) for s in sources)
         # Writes: the run dir only (-d routes the classes there) — no
         # in-project grant at all on the bare lane.
-        self._run_build(cmd, env=self._build_env(), writable_paths=[])
+        self._run_build(cmd, env=self._build_env(), writable_paths=[])  # type: ignore[arg-type]
         return [str(self._run_classes)]
 
     def _build_maven(self) -> list[str]:
@@ -873,7 +873,7 @@ class JazzerRunner(LibFuzzerRunner):
             f"-Dmdep.outputFile={self._classpath_file}",
             f"-Dmaven.repo.local={self._run_m2_repo}",
         ]
-        self._run_build(cmd, env=self._build_env(),
+        self._run_build(cmd, env=self._build_env(),  # type: ignore[arg-type]
                         writable_paths=[str(m) for m in modules])
         entries = self._read_classpath_file()
         # The dependency classpath plus each module's own compiled
@@ -959,7 +959,7 @@ allprojects { project ->
             f"-Draptor.classpath.out={self._classpath_file}",
             "testClasses", "raptorFuzzClasspath",
         ]
-        self._run_build(cmd, env=env, writable_paths=grants)
+        self._run_build(cmd, env=env, writable_paths=grants)  # type: ignore[arg-type]
         classpath = self._vet_classpath_entries(
             self._read_classpath_file())
         if not classpath:

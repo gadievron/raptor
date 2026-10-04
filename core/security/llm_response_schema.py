@@ -90,15 +90,15 @@ def _build_strict_clone(schema: type[BaseModel],
     in_progress[schema] = clone
     try:
         changed = False
-        for fname, finfo in list(clone.model_fields.items()):
+        for fname, finfo in list(clone.model_fields.items()):  # type: ignore[attr-defined]
             new_ann = _rewrite_annotation(finfo.annotation, in_progress)
             if new_ann is not finfo.annotation:
                 new_info = copy.copy(finfo)
                 new_info.annotation = new_ann
-                clone.model_fields[fname] = new_info
+                clone.model_fields[fname] = new_info  # type: ignore[attr-defined]
                 changed = True
         if changed:
-            clone.model_rebuild(force=True)
+            clone.model_rebuild(force=True)  # type: ignore[attr-defined]
         elif base_extra == "forbid":
             # Nothing to rewrite and the original already forbids —
             # keep the caller's class identity (isinstance stability).
@@ -172,7 +172,7 @@ def validate_response(
     # also feed None / int into this path. Same fail-uniform handling
     # for both branches.
     try:
-        return strict.model_validate_json(raw)
+        return strict.model_validate_json(raw)  # type: ignore[return-value]
     except (ValidationError, TypeError):
         pass
 
@@ -185,6 +185,6 @@ def validate_response(
         return None
 
     try:
-        return strict.model_validate_json(retry)
+        return strict.model_validate_json(retry)  # type: ignore[return-value]
     except (ValidationError, TypeError):
         return None

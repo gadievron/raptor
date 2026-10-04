@@ -337,7 +337,7 @@ def build_include_graph(
     # Pruned directories are recorded as one ``dir/`` entry; a target
     # under one is excluded, not language-unknown.
     excluded_dir_prefixes = tuple(
-        p for p in excluded_paths if p.endswith("/"))
+        p for p in excluded_paths if p.endswith("/"))  # type: ignore[union-attr]
     inventory_paths = {
         f["path"] for f in files if isinstance(f.get("path"), str)
     }
@@ -349,7 +349,7 @@ def build_include_graph(
         # Inventory-only universe: honest but narrower — foreign-
         # extension files never entered the inventory, so the
         # unwalked census can only cover excluded/parse-fail cases.
-        tree_paths = sorted(inventory_paths | excluded_paths)
+        tree_paths = sorted(inventory_paths | excluded_paths)  # type: ignore[operator]
     tree_set = set(tree_paths)
     by_basename: dict[str, list[str]] = {}
     for p in tree_paths:
@@ -455,7 +455,7 @@ def build_include_graph(
                 return "php_unparsed"
             return None
         if (target in excluded_paths
-                or target.startswith(excluded_dir_prefixes)):
+                or target.startswith(excluded_dir_prefixes)):  # type: ignore[arg-type]
             return "excluded"
         if target in inventory_paths:
             return "not_php"
@@ -517,7 +517,7 @@ def build_include_graph(
                 # capless collect-then-sort let one flooded file grind
                 # the whole build against a large tree.
                 matches = _match_tail(
-                    tail, None, tree_paths, by_basename, cap=2,
+                    tail, None, tree_paths, by_basename, cap=2,  # type: ignore[arg-type]
                     probe_budget=probe_budget,
                 )
                 if matches and len(matches) == 1:
@@ -552,7 +552,7 @@ def build_include_graph(
                 tree_paths, by_basename, cap=MAX_CANDIDATES_PER_EDGE,
                 scan_budget=scan_budget, probe_budget=probe_budget,
             ) if isinstance(tail, str) else []
-            rec: dict[str, Any] = {
+            rec: dict[str, Any] = {  # type: ignore[no-redef]
                 **_edge_ref(path, e), "file": path, "shape": shape,
                 "raw": str(e.get("raw") or ""), "reason": "dynamic",
             }
@@ -1102,7 +1102,7 @@ def bootstrap_context_for_file(
         shared.sort(key=lambda f: (order.get(f, unseen), f))
     guaranteed_prefix = []
     for f in shared[:max_prefix]:
-        row: dict[str, Any] = {"file": f, "guaranteed": True}
+        row: dict[str, Any] = {"file": f, "guaranteed": True}  # type: ignore[no-redef]
         f_ff = file_facts.get(f)
         if isinstance(f_ff, dict):
             for cr in f_ff.get("classes") or []:

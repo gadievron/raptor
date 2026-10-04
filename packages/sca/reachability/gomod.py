@@ -209,19 +209,19 @@ def _imports_in(text: str) -> Iterable[tuple[str, int]]:
     # Block form — parsed line-wise from ``import (`` to the line
     # carrying the unquoted closing ``)``.
     in_block = False
-    for line_no, line in enumerate(split_lines(text), start=1):
+    for line_no, line in enumerate(split_lines(text), start=1):  # type: ignore[assignment]
         if not in_block:
-            open_m = _IMPORT_BLOCK_OPEN_RE.match(line)
+            open_m = _IMPORT_BLOCK_OPEN_RE.match(line)  # type: ignore[call-overload]
             if not open_m:
                 continue
             # Same-line body (``import ( "fmt" )``) is legal Go.
-            code, closed = _code_before_close(line[open_m.end():])
+            code, closed = _code_before_close(line[open_m.end():])  # type: ignore[index]
             line_m = _BLOCK_LINE_RE.match(code.lstrip())
             if line_m:
                 yield line_m.group(1), line_no
             in_block = not closed
         else:
-            code, closed = _code_before_close(line)
+            code, closed = _code_before_close(line)  # type: ignore[arg-type]
             line_m = _BLOCK_LINE_RE.match(code)
             if line_m:
                 yield line_m.group(1), line_no

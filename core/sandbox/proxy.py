@@ -2813,7 +2813,7 @@ class EgressProxy:
         if cached is not None and cached[0] > now:
             return cached[1]
         addrinfo = await asyncio.wait_for(
-            self._loop.getaddrinfo(host, port, type=socket.SOCK_STREAM),
+            self._loop.getaddrinfo(host, port, type=socket.SOCK_STREAM),  # type: ignore[union-attr]
             timeout=_PROXY_READ_TIMEOUT_S,
         )
         # Insert-time hygiene (single-threaded on the event loop; no
@@ -3085,9 +3085,9 @@ class EgressProxy:
         if drain_timeout > 0 and self._server is not None and self._loop.is_running():
             async def _graceful() -> None:
                 try:
-                    self._server.close()
+                    self._server.close()  # type: ignore[union-attr]
                     await asyncio.wait_for(
-                        self._server.wait_closed(),
+                        self._server.wait_closed(),  # type: ignore[union-attr]
                         timeout=drain_timeout,
                     )
                 except (asyncio.TimeoutError, RuntimeError):
@@ -3103,7 +3103,7 @@ class EgressProxy:
                 if stale_clients:
                     await asyncio.gather(*stale_clients, return_exceptions=True)
                 self._client_tasks.clear()
-                self._loop.stop()
+                self._loop.stop()  # type: ignore[union-attr]
             try:
                 asyncio.run_coroutine_threadsafe(_graceful(), self._loop)
             except RuntimeError:
@@ -3115,7 +3115,7 @@ class EgressProxy:
                     t.cancel()
                 if stale:
                     await asyncio.gather(*stale, return_exceptions=True)
-                self._loop.stop()
+                self._loop.stop()  # type: ignore[union-attr]
             try:
                 asyncio.run_coroutine_threadsafe(_cancel_unix(), self._loop)
             except RuntimeError:
@@ -3341,7 +3341,7 @@ class EgressProxy:
                 # capture stream) is gone.
                 with contextlib.suppress(RuntimeError, OSError,
                                          asyncio.CancelledError):
-                    self._loop.run_until_complete(self._heartbeat_task)
+                    self._loop.run_until_complete(self._heartbeat_task)  # type: ignore[union-attr]
             if self._server is not None and self._loop is not None:
                 self._server.close()
                 # run_until_complete on a loop that crashed or was
@@ -3870,7 +3870,7 @@ class EgressProxy:
                                          "resolved_ip_blocked")
                 await self._write_error(writer, 403, "Forbidden")
                 return
-            up_host, up_port = self._upstream
+            up_host, up_port = self._upstream  # type: ignore[misc]
             event["resolved_ip"] = f"{up_host}:{up_port} (upstream)"
             try:
                 up_reader, up_writer = await asyncio.wait_for(
@@ -3943,7 +3943,7 @@ class EgressProxy:
             while True:
                 try:
                     hdr = await asyncio.wait_for(
-                        up_reader.readuntil(b"\r\n"), timeout=5.0,
+                        up_reader.readuntil(b"\r\n"), timeout=5.0,  # type: ignore[arg-type]
                     )
                 except (asyncio.TimeoutError, asyncio.IncompleteReadError):
                     break

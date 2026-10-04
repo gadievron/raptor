@@ -173,7 +173,7 @@ def check_landlock_available() -> bool:
             return state._landlock_cache > 0
 
         if not _LANDLOCK_ARCH_OK:
-            state._landlock_cache = -1
+            state._landlock_cache = -1  # type: ignore[assignment]
             logger.debug("Sandbox: Landlock skipped — unknown syscall table for %s", platform.machine())
             return False
 
@@ -188,12 +188,12 @@ def check_landlock_available() -> bool:
             # consistently).
             result = libc.syscall(_SYS_LANDLOCK_CREATE, 0, 0, 1)
             if result <= 0:
-                state._landlock_cache = -1
+                state._landlock_cache = -1  # type: ignore[assignment]
                 logger.debug("Sandbox: Landlock not available (errno=%d)", ctypes.get_errno())
                 return False
             abi = int(result)
         except Exception:  # noqa: BLE001 — any probe failure (missing libc, ctypes quirk) means Landlock is unusable; fail closed to unavailable
-            state._landlock_cache = -1
+            state._landlock_cache = -1  # type: ignore[assignment]
             return False
 
         # Step 2: Functional self-test in a child process. Must run in a
@@ -212,10 +212,10 @@ def check_landlock_available() -> bool:
                 "UAPI bit values / kernel quirk). Do not rely on "
                 "Landlock restrictions until this is resolved."
             )
-            state._landlock_cache = -1
+            state._landlock_cache = -1  # type: ignore[assignment]
             return False
 
-        state._landlock_cache = abi
+        state._landlock_cache = abi  # type: ignore[assignment]
         logger.debug("Sandbox: Landlock available and functional (ABI version %d)", abi)
         return True
 

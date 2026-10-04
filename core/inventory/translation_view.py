@@ -109,7 +109,7 @@ def _pp_cond(kind: str, rest: str, macros: object | None = None) -> str:
         m = _IDENT_RE.match(_strip_pp_comments(rest))
         if not (m and macros):
             return "unknown"
-        d = macros.is_defined(m.group(1))
+        d = macros.is_defined(m.group(1))  # type: ignore[attr-defined]
         if d is None:
             return "unknown"
         defined_true = d if kind == "ifdef" else (not d)
@@ -126,7 +126,7 @@ def _pp_cond(kind: str, rest: str, macros: object | None = None) -> str:
     # defined(X) / !defined(X) / defined X
     dm = _DEFINED_RE.match(r) or _DEFINED_BARE_RE.match(r)
     if dm:
-        d = macros.is_defined(dm.group(2))
+        d = macros.is_defined(dm.group(2))  # type: ignore[attr-defined]
         if d is None:
             return "unknown"
         res = (not d) if dm.group(1) else d
@@ -136,13 +136,13 @@ def _pp_cond(kind: str, rest: str, macros: object | None = None) -> str:
     im = _IDENT_RE.match(r)
     if im:
         name = im.group(1)
-        val = macros.value_of(name)
+        val = macros.value_of(name)  # type: ignore[attr-defined]
         if val is not None:
             iv = _eval_int_literal(val)
             return "unknown" if iv is None else ("true" if iv != 0 else "false")
         # known-undefined identifier evaluates to 0 in #if → false. Absent
         # (unknown) stays unknown — header might define it.
-        if macros.is_defined(name) is False:
+        if macros.is_defined(name) is False:  # type: ignore[attr-defined]
             return "false"
     return "unknown"
 

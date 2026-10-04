@@ -1505,7 +1505,7 @@ def run_sandboxed(cmd: list[str], *,
                 exc_info=True,
             )
         result = subprocess.CompletedProcess(
-            sandbox_cmd, _retcode, _stdout, _stderr,
+            sandbox_cmd, _retcode, _stdout, _stderr,  # type: ignore[arg-type]
         )
     finally:
         # Close our copies and drain the status channel (idempotent —
@@ -1581,9 +1581,9 @@ def run_sandboxed(cmd: list[str], *,
              f"to trust the result"),
         )
     elif _READY_BYTE in _status_bytes:
-        result._setup_status = None
+        result._setup_status = None  # type: ignore[attr-defined]
     else:
-        result._setup_status = (
+        result._setup_status = (  # type: ignore[attr-defined]
             "E",
             ("seatbelt profile did not apply: the in-sandbox readiness "
              "byte was not received from raptor-seatbelt-shim"),
@@ -1593,8 +1593,8 @@ def run_sandboxed(cmd: list[str], *,
     #    we just guarantee the attribute exists so callers don't have
     #    to defensive-attr it.
     if not hasattr(result, "sandbox_info"):
-        result.sandbox_info = {}
-    result.sandbox_info.setdefault("backend", "macos-seatbelt")
+        result.sandbox_info = {}  # type: ignore[attr-defined]
+    result.sandbox_info.setdefault("backend", "macos-seatbelt")  # type: ignore[attr-defined]
     if _weak_grant_pins:
         # Identity-weak pins (no birth-time witness at capture): the
         # dev/ino arms enforced for the whole run, but an

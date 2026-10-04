@@ -958,7 +958,7 @@ def run_landlock_audit(
                         _kill_and_reap(tracer_pid)
                         tracer_pid = -1
                     raise subprocess.TimeoutExpired(
-                        cmd=list(cmd), timeout=timeout,
+                        cmd=list(cmd), timeout=timeout,  # type: ignore[arg-type]
                         output=stdout_bytes if text is False else (
                             stdout_bytes.decode(errors="replace")
                         ),
@@ -1008,8 +1008,8 @@ def run_landlock_audit(
             stdout_out = stdout_bytes.decode(errors="replace")
             stderr_out = stderr_bytes.decode(errors="replace")
         else:
-            stdout_out = stdout_bytes
-            stderr_out = stderr_bytes
+            stdout_out = stdout_bytes  # type: ignore[assignment]
+            stderr_out = stderr_bytes  # type: ignore[assignment]
 
         # Finalise the evidence file now that both children are
         # reaped: verify the on-disk path still names the inode
@@ -1027,7 +1027,7 @@ def run_landlock_audit(
             stdout=stdout_out if capture_output else None,
             stderr=stderr_out if capture_output else None,
         )
-        result.evidence_verified = evidence_ok
+        result.evidence_verified = evidence_ok  # type: ignore[attr-defined]
         return result
     finally:
         _cleanup_fds()

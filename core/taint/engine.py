@@ -2064,7 +2064,7 @@ class _Engine:
         out: list[AlternativePath] = []
         for source, entries in selected:
             steps = renderer.render(
-                [(k[1] if k is not None else None, h)
+                [(k[1] if k is not None else None, h)  # type: ignore[misc]
                  for k, h in entries],
                 sink=sink, with_excerpts=False)
             rank = max(
@@ -2142,7 +2142,7 @@ class _Engine:
                 killed=tuple(sorted(hit.killed)),
             )
             steps = renderer.render(
-                list(zip(hop_params, candidate.hops)), sink=sink)
+                list(zip(hop_params, candidate.hops)), sink=sink)  # type: ignore[arg-type]
             candidate = replace(
                 candidate,
                 steps=steps,

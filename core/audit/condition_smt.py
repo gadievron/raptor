@@ -198,32 +198,32 @@ class DomainVocabulary:
             "security_fields", "security_attributes", "sensitive_fields",
         ):
             for entry in domain_model.get(key, []):
-                name = _entry_name(entry)
-                name = _vocab_name(name) if name else None
-                if name:
-                    sec_fields.add(name)
+                raw_name = _entry_name(entry)
+                vname = _vocab_name(raw_name) if raw_name else None
+                if vname:
+                    sec_fields.add(vname)
 
         nullable: set[str] = set()
         for entry in domain_model.get("nullable_returns", []):
-            name = _entry_name(entry)
-            name = _vocab_name(name) if name else None
-            if name:
-                nullable.add(name)
+            raw_name = _entry_name(entry)
+            vname = _vocab_name(raw_name) if raw_name else None
+            if vname:
+                nullable.add(vname)
 
         auth: set[tuple[str, str]] = set()
         for entry in domain_model.get("auth_predicates", []):
             if isinstance(entry, str):
-                name = _vocab_name(entry)
-                if name:
-                    auth.add((name, "domain"))
+                vname = _vocab_name(entry)
+                if vname:
+                    auth.add((vname, "domain"))
             elif (
                 isinstance(entry, dict) and entry.get("name")
                 and _entry_actionable(entry)
             ):
-                name = _vocab_name(str(entry["name"]))
+                vname = _vocab_name(str(entry["name"]))
                 kind_label = str(entry.get("kind", "domain"))
-                if name and _VOCAB_IDENT_RE.match(kind_label):
-                    auth.add((name, kind_label))
+                if vname and _VOCAB_IDENT_RE.match(kind_label):
+                    auth.add((vname, kind_label))
 
         return cls(
             allocators=frozenset(alloc),
@@ -645,7 +645,7 @@ def _try_z3_path_feasibility(
     out = _run_z3_child("path_feasibility", {
         "constraints": [asdict(c) for c in constraints],
     })
-    return _verdict_tuple_from_child(out)
+    return _verdict_tuple_from_child(out)  # type: ignore[return-value]
 
 
 def _arithmetic_path_feasibility(
@@ -776,7 +776,7 @@ def check_signed_mismatch(
     for c in constraints:
         unsigned = var_is_unsigned
         if unsigned is None:
-            unsigned = declared_signedness(c.variable, source)
+            unsigned = declared_signedness(c.variable, source)  # type: ignore[assignment]
         if unsigned is not True:
             # Signed or unknown signedness: no witness-stamped
             # mismatch finding without type evidence.
@@ -4182,7 +4182,7 @@ def _check_early_release_c(
                 applicable=False,
                 reasoning="no lock acquires found",
             )
-        acquires = release_only
+        acquires = release_only  # type: ignore[assignment]
 
     for acq_line, lock_func, unlock_name, *_ in acquires:
         unlock_re = re.compile(

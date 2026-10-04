@@ -276,8 +276,8 @@ def _sort_stats(
     if sort_key == "miss-rate":
         return sorted(
             stats,
-            key=lambda s: (
-                _wilson_ub_pct(s, event_type)
+            key=lambda s: (  # type: ignore[arg-type]
+                _wilson_ub_pct(s, event_type)  # type: ignore[return-value]
                 if _wilson_ub_pct(s, event_type) is not None
                 else -1
             ),
@@ -568,7 +568,7 @@ def cmd_list(args: argparse.Namespace) -> int:
         for s in stats:
             d = _stats_to_json(s)
             if drift_map:
-                baseline = drift_map.get((s.decision_class, s.model))
+                baseline = drift_map.get((s.decision_class, s.model))  # type: ignore[assignment]
                 if baseline and baseline != d["policy"]:
                     d["freshness_drift"] = {"baseline_policy": baseline}
             cells.append(d)
@@ -936,8 +936,8 @@ def cmd_chain_closure(args: argparse.Namespace) -> int:
         if not rows:
             return None
         top = rows[0]
-        if top["n"] and (top["success_rate"] or 0.0) > 0.0:
-            return top["model"]
+        if top["n"] and (top["success_rate"] or 0.0) > 0.0:  # type: ignore[operator]
+            return top["model"]  # type: ignore[return-value]
         return None
 
     if getattr(args, "json", False):
@@ -954,7 +954,7 @@ def cmd_chain_closure(args: argparse.Namespace) -> int:
         f"{'rate':>7} {'cost/fire':>10}",
     )
     for r in rows:
-        rate_s = f"{r['success_rate']*100:5.1f}%" if r['success_rate'] is not None else "  n/a"
+        rate_s = f"{r['success_rate']*100:5.1f}%" if r['success_rate'] is not None else "  n/a"  # type: ignore[operator]
         cpc_s = f"${r['cost_per_call']:.3f}" if r['cost_per_call'] is not None else "  n/a"
         # Model names are sidecar-derived (forgeable) — scrub for the
         # terminal, like the list/compare table cells.

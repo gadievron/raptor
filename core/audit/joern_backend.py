@@ -1847,12 +1847,12 @@ def resolve_joern_evidence(
         if pinned_runner is None:
             return build_joern_evidence(
                 target_path, out_dir, joern_overrides, _progress,
-                joern_server, **kwargs,
+                joern_server, **kwargs,  # type: ignore[arg-type]
             )
         with bound_sandbox_runner(pinned_runner):
             return build_joern_evidence(
                 target_path, out_dir, joern_overrides, _progress,
-                joern_server, **kwargs,
+                joern_server, **kwargs,  # type: ignore[arg-type]
             )
 
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="joern-cpg")

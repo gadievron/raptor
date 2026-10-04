@@ -161,11 +161,11 @@ class FunctionSummary:
 
         if self.returns:
             lines.append("**Returns:**")
-            for r in self.returns[:5]:
+            for rc in self.returns[:5]:
                 cond_str = ""
-                if r.conditions:
-                    cond_str = f" when {_dpf(r.conditions[0], 60)}"
-                lines.append(f"- `{_dpf(r.code, 80)}`{cond_str}")
+                if rc.conditions:
+                    cond_str = f" when {_dpf(rc.conditions[0], 60)}"
+                lines.append(f"- `{_dpf(rc.code, 80)}`{cond_str}")
 
         if self.error_paths:
             lines.append("**Error returns:**")

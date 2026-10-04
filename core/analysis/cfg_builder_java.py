@@ -285,7 +285,7 @@ def _unwrap_value_expr(n):
     return n
 
 
-def _base_ident(n: Node) -> str | None:
+def _base_ident(n: Node | None) -> str | None:
     """Leftmost identifier: ``a.b.c`` → ``a``; ``arr[i]`` → ``arr``."""
     if n is None:
         return None
@@ -303,7 +303,7 @@ def _base_ident(n: Node) -> str | None:
     return None
 
 
-def _dotted_chain(n: Node) -> str | None:
+def _dotted_chain(n: Node | None) -> str | None:
     """Render an identifier / field_access chain as a dotted string.
     ``org.owasp.esapi.ESAPI`` (parsed as nested field_access) →
     ``"org.owasp.esapi.ESAPI"``. Anything else → None."""
@@ -644,6 +644,7 @@ def _payload_from_assignment(
         # store).
         clean_lhs = (lhs is not None and lhs.type == _IDENT
                      and op == "=" and local_scopes is not None
+                     and lhs_name is not None
                      and local_scopes.vouches(lhs_name, lhs.start_byte))
         assigned = defs if clean_lhs else frozenset()
         css.extend(_walk_call_sites(rhs, resolver, assigned_for_root=assigned))

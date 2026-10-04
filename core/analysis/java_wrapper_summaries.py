@@ -231,9 +231,9 @@ def _straight_line_locals(body, params: tuple[str, ...],
                 msg = "non-assignment statement in body"
                 raise _Refused(msg)
             left = inner.child_by_field_name("left")
-            name = _text(left) if left is not None \
+            lhs_name = _text(left) if left is not None \
                 and left.type == _IDENT else None
-            if name is not None and (name in assigned or name in params):
+            if lhs_name is not None and (lhs_name in assigned or lhs_name in params):
                 msg = "local reassignment / parameter shadowing"
                 raise _Refused(msg)
             # Any other bare ``name = expr`` target is NEVER a
@@ -735,13 +735,13 @@ def synthetic_wrapper_bindings_java(
                     continue
                 summary = matching[0]
             else:
-                summary = summaries.get((info.owner, method_name, arity))
+                summary = summaries.get((info.owner, method_name, arity))  # type: ignore[arg-type]
                 if summary is None:
                     continue
                 if info.form == "static" and not summary.is_static:
                     continue
-            input_symbols = frozenset(
-                info.args[i]
+            input_symbols: frozenset[str] = frozenset(
+                info.args[i]  # type: ignore[misc]
                 for i in summary.sanitized_positions
                 if i < len(info.args) and info.args[i] is not None
             )

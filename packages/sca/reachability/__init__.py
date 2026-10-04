@@ -69,28 +69,28 @@ _Resolver = Callable[
 
 _HANDLERS: dict[str, tuple[_Scanner, _Resolver]] = {
     "PyPI": (_python.scan_imports,
-             lambda name, scan, target=None:
+             lambda name, scan, target=None:  # type: ignore[misc]
                  _python.resolve_dep(name, scan, target=target)),
     "npm":  (_nodejs.scan_imports,
-             lambda name, scan, target=None:
+             lambda name, scan, target=None:  # type: ignore[misc]
                  _nodejs.resolve_dep(name, scan, target=target)),
     "Cargo": (_cargo.scan_imports,
-              lambda name, scan, target=None:
+              lambda name, scan, target=None:  # type: ignore[misc]
                   _cargo.resolve_dep(name, scan, target=target)),
     "Go": (_gomod.scan_imports,
-           lambda name, scan, target=None:
+           lambda name, scan, target=None:  # type: ignore[misc]
                _gomod.resolve_dep(name, scan, target=target)),
     "RubyGems": (_gemfile.scan_imports,
-                  lambda name, scan, target=None:
+                  lambda name, scan, target=None:  # type: ignore[misc]
                       _gemfile.resolve_dep(name, scan, target=target)),
     "NuGet": (_nuget.scan_imports,
-              lambda name, scan, target=None:
+              lambda name, scan, target=None:  # type: ignore[misc]
                   _nuget.resolve_dep(name, scan, target=target)),
     "Packagist": (_composer.scan_imports,
-                   lambda name, scan, target=None:
+                   lambda name, scan, target=None:  # type: ignore[misc]
                        _composer.resolve_dep(name, scan, target=target)),
     "Maven": (_maven.scan_imports,
-              lambda name, scan, target=None:
+              lambda name, scan, target=None:  # type: ignore[misc]
                   _maven.resolve_dep(name, scan, target=target)),
 }
 

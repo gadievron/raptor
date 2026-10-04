@@ -626,9 +626,9 @@ class FuzzingMemory:
         # Count by type
         for k in self.knowledge.values():
             k_type = k.knowledge_type
-            if k_type not in stats["knowledge_by_type"]:
-                stats["knowledge_by_type"][k_type] = 0
-            stats["knowledge_by_type"][k_type] += 1
+            if k_type not in stats["knowledge_by_type"]:  # type: ignore[operator]
+                stats["knowledge_by_type"][k_type] = 0  # type: ignore[index]
+            stats["knowledge_by_type"][k_type] += 1  # type: ignore[index]
 
         # Average confidence
         if self.knowledge:

@@ -618,7 +618,7 @@ class ClientShards(Generic[_PooledT]):
                 # safe to reoccupy — tombstoning requires
                 # in_flight == 0, and every release/report for the old
                 # occupant lands before its slot is ever cleared.
-                index = next(
+                index = next(  # type: ignore[assignment]
                     (i for i, s in enumerate(self._slots) if s is None),
                     None,
                 )
@@ -632,7 +632,7 @@ class ClientShards(Generic[_PooledT]):
                 raise RuntimeError("selected shard slot is empty")
             shard.in_flight += 1
             client = shard.client
-        self._close_stale(stale)
+        self._close_stale(stale)  # type: ignore[arg-type]
         return client, index
 
     def release(self, index: int) -> None:
@@ -651,7 +651,7 @@ class ClientShards(Generic[_PooledT]):
                 and shard.in_flight == 0
                 else []
             )
-        self._close_stale(stale)
+        self._close_stale(stale)  # type: ignore[arg-type]
 
     def report_success(self, index: int) -> None:
         """Caller seam: the held shard carried a request to clean
@@ -701,7 +701,7 @@ class ClientShards(Generic[_PooledT]):
                 if shard is not None:
                     shard.draining = True
             stale = self._retire_idle_draining_locked()
-        self._close_stale(stale)
+        self._close_stale(stale)  # type: ignore[arg-type]
 
     def close(self) -> None:
         """Close every live shard client. Idempotent."""
@@ -712,7 +712,7 @@ class ClientShards(Generic[_PooledT]):
             clients = [
                 shard.client for shard in self._slots if shard is not None
             ]
-        self._close_stale(clients)
+        self._close_stale(clients)  # type: ignore[arg-type]
 
 
 def sdk_http_client(

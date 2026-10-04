@@ -1013,9 +1013,9 @@ def classify_binary_evidence(
                         inlined_names.add(bare)
 
     for off in inline_origins:
-        die = subs.get(off)
-        if die:
-            _note_inlined(die)
+        sub = subs.get(off)
+        if sub:
+            _note_inlined(sub)
     for die in subs.values():
         if die.has_inline_marker:
             _note_inlined(die)
@@ -1157,7 +1157,7 @@ def _combine_verdicts(
             )
     full = [c for c, t in pairs if t == "full"]
     pool = full or [c for c, _ in pairs]
-    return max(pool, key=lambda v: _CLASS_PRIORITY.get(v, 0))
+    return max(pool, key=lambda v: _CLASS_PRIORITY.get(v, 0))  # type: ignore[arg-type]
 
 
 def _pin_open_verified(
@@ -1181,7 +1181,7 @@ def _pin_open_verified(
         st = os.fstat(fh.fileno())
         if ((st.st_dev, st.st_ino, st.st_size)
                 == (pin[0], pin[1], pin[2])
-                and sha256_fileobj(fh) == pin[3]):
+                and sha256_fileobj(fh) == pin[3]):  # type: ignore[arg-type]
             return fh
     except OSError:
         pass
@@ -1207,7 +1207,7 @@ def _pin_still_holds(
     from core.hash import sha256_fileobj
     try:
         fh.seek(0)
-        if sha256_fileobj(fh) != pin[3]:
+        if sha256_fileobj(fh) != pin[3]:  # type: ignore[arg-type]
             return False
         st = os.stat(bp)
     except OSError:
@@ -1596,7 +1596,7 @@ def enrich_inventory_with_binary_oracle(
         if not per_binary_entries:
             continue
         combined = _combine_verdicts(
-            (entry["classification"], entry["tier"])
+            (str(entry["classification"]), str(entry["tier"]))
             for entry in per_binary_entries)
         # NB: ``setdefault('metadata', {})`` returns the *existing* value
         # if the key is present — even when that value is ``None``. A

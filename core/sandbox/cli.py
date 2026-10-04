@@ -63,7 +63,7 @@ def _set_cli_state(profile: str) -> None:
         state._cli_sandbox_disable_consent = consent
     else:
         state._cli_sandbox_disable_consent = None
-    state._cli_sandbox_profile = profile
+    state._cli_sandbox_profile = profile  # type: ignore[assignment]
     state._cli_sandbox_disabled = (profile == "none")
 
 
@@ -202,7 +202,7 @@ def set_cli_readable_paths(paths: list) -> None:
         "Sandbox read allowlist extended via --sandbox-readable-path: %s",
         ", ".join(paths),
     )
-    state._cli_sandbox_readable_paths = list(paths)
+    state._cli_sandbox_readable_paths = list(paths)  # type: ignore[assignment]
 
 
 def set_cli_tool_paths(paths: list) -> None:
@@ -216,7 +216,7 @@ def set_cli_tool_paths(paths: list) -> None:
         "Sandbox tool paths extended via --sandbox-tool-path: %s",
         ", ".join(paths),
     )
-    state._cli_sandbox_tool_paths = list(paths)
+    state._cli_sandbox_tool_paths = list(paths)  # type: ignore[assignment]
 
 
 def add_cli_args(parser: argparse.ArgumentParser) -> None:
@@ -521,7 +521,7 @@ def apply_cli_args(
     if verbose:
         state._cli_sandbox_audit_verbose = True
     if budget is not None:
-        state._cli_sandbox_audit_budget = int(budget)
+        state._cli_sandbox_audit_budget = int(budget)  # type: ignore[assignment]
     if _validated_readable:
         set_cli_readable_paths(_validated_readable)
     if _validated_tools:

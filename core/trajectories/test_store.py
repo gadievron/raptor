@@ -68,7 +68,7 @@ def _record(run_id: str = "run-0001", **overrides) -> TrajectoryRecord:
         "timestamp": "2026-06-03T14:05:32+00:00",
     }
     base.update(overrides)
-    return TrajectoryRecord(**base)
+    return TrajectoryRecord(**base)  # type: ignore[arg-type]
 
 
 # --------------------------------------------------------------------------

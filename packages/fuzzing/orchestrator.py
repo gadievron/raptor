@@ -1089,16 +1089,16 @@ class FuzzingOrchestrator:
                 binary_only_mode=afl_binary_mode,
             )
             telemetry_target = str(plan.target.path)
-        runner.telemetry = FuzzingTelemetry(
+        runner.telemetry = FuzzingTelemetry(  # type: ignore[assignment]
             out_dir=out_dir,
             fuzzer="afl++",
             target=telemetry_target,
         )
-        runner.telemetry.start()
+        runner.telemetry.start()  # type: ignore[attr-defined]
         try:
             crashes, crashes_dir = runner.run_fuzzing(duration=duration_seconds)
         finally:
-            runner.telemetry.stop()
+            runner.telemetry.stop()  # type: ignore[attr-defined]
         return {
             "fuzzer": "afl",
             "campaign_failed": bool(getattr(runner, "campaign_failed",
@@ -1247,7 +1247,7 @@ class FuzzingOrchestrator:
         finally:
             telemetry.stop()
 
-        recorded = self._record_atheris_witnesses(out_dir, harness, result)
+        recorded = self._record_atheris_witnesses(out_dir, harness, result)  # type: ignore[arg-type]
 
         return {
             "fuzzer": "atheris",
@@ -1259,12 +1259,12 @@ class FuzzingOrchestrator:
             "crashes_dir": str(runner.crashes_dir),
             "harness": str(harness),
             "python_exception": (
-                result.python_exception.to_dict()
-                if result.python_exception else None
+                result.python_exception.to_dict()  # type: ignore[attr-defined]
+                if result.python_exception else None  # type: ignore[attr-defined]
             ),
             "crash_records": (
                 str(runner.output_dir / "atheris-crashes.json")
-                if result.crash_records else None
+                if result.crash_records else None  # type: ignore[attr-defined]
             ),
             "witnesses_recorded": recorded,
             "stats": result.stats.__dict__,

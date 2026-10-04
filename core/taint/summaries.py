@@ -1540,7 +1540,7 @@ class _Extraction:
             while isinstance(base, (ast.Attribute, ast.Subscript)):
                 if isinstance(base, ast.Subscript):
                     self._eval(base.slice, depth + 1)
-                base = base.value
+                base = base.value  # type: ignore[assignment]
                 hops += 1
                 if hops > self.limits.max_access_path_depth:
                     self._count("access_path_depth_capped")
@@ -1669,7 +1669,7 @@ class _Extraction:
         # Generators first (they bind the loop variables), then the
         # element expressions — the design's stated approximation:
         # comprehensions propagate, whole-value.
-        for gen in node.generators:
+        for gen in node.generators:  # type: ignore[attr-defined]
             iter_flows = self._eval(gen.iter, depth)
             self._assign_target(gen.target, iter_flows, strong=False,
                                 depth=depth)
@@ -1680,7 +1680,7 @@ class _Extraction:
             out = self._union(self._eval(node.key, depth),
                               self._eval(node.value, depth))
         else:
-            out = self._eval(node.elt, depth)
+            out = self._eval(node.elt, depth)  # type: ignore[attr-defined]
         return out
 
     # -- calls ----------------------------------------------------------
@@ -1755,8 +1755,8 @@ class _Extraction:
             for spec in self.specs.sinks_by_name.get(name, ()):
                 self._match_sink(spec, node, line, pos_flows, kw_flows,
                                  star_flows, dstar_flows)
-        for spec in self.specs.learned_sinks_by_name.get(name, ()):
-            self._match_learned_sink(spec, line, pos_flows, kw_flows,
+        for spec in self.specs.learned_sinks_by_name.get(name, ()):  # type: ignore[assignment]
+            self._match_learned_sink(spec, line, pos_flows, kw_flows,  # type: ignore[arg-type]
                                      star_flows, dstar_flows)
         # method_name sinks: bare-name equality on attribute calls,
         # heuristic by construction, resolution-independent (that is
@@ -1786,12 +1786,12 @@ class _Extraction:
             srcs = self.specs.call_sources_by_name.get(name, ())
             if srcs:
                 out = self._assume_propagation(all_arg_flows)
-                for spec in srcs:
-                    self._record_source(spec, line)
+                for spec in srcs:  # type: ignore[assignment]
+                    self._record_source(spec, line)  # type: ignore[arg-type]
                     out = self._union(out, frozenset({Flow(
                         origin=(f"{_SOURCE_ORIGIN_PREFIX}"
                                 f"{spec.kind}:{spec.match}"),
-                        classes=spec.taint_classes,
+                        classes=spec.taint_classes,  # type: ignore[attr-defined]
                     )}))
                 return out
         lprops = self.specs.learned_propagators_by_name.get(name, ())

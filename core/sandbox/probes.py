@@ -617,8 +617,8 @@ def check_net_available() -> bool:
 
     with state._cache_lock:
         if state._net_available_cache is None:
-            state._net_available_cache = available
-        return state._net_available_cache
+            state._net_available_cache = available  # type: ignore[assignment]
+        return state._net_available_cache  # type: ignore[return-value]
 
 
 def _probe_net_available() -> bool:
@@ -783,7 +783,7 @@ def check_mount_available() -> bool:
             return state._mount_available_cache
 
         if not check_net_available():
-            state._mount_available_cache = False
+            state._mount_available_cache = False  # type: ignore[assignment]
             return False
 
         # Check AppArmor restriction — fast path, avoids functional test.
@@ -818,7 +818,7 @@ def check_mount_available() -> bool:
                         "sudo sysctl -w "
                         "kernel.apparmor_restrict_unprivileged_userns=0"
                     )
-                state._mount_available_cache = False
+                state._mount_available_cache = False  # type: ignore[assignment]
                 return False
         except OSError:
             pass
@@ -850,7 +850,7 @@ def check_mount_available() -> bool:
                     "newgidmap missing). Fallback: Landlock-only. "
                     "To enable, run: sudo apt install uidmap"
                 )
-            state._mount_available_cache = False
+            state._mount_available_cache = False  # type: ignore[assignment]
             return False
 
         # Functional test (see _mount_ns_functional_selftest): binary presence
@@ -867,10 +867,10 @@ def check_mount_available() -> bool:
                     "namespace refused at runtime (outer seccomp / LSM / "
                     "nested-userns restriction). Fallback: Landlock-only."
                 )
-            state._mount_available_cache = False
+            state._mount_available_cache = False  # type: ignore[assignment]
             return False
 
-        state._mount_available_cache = True
+        state._mount_available_cache = True  # type: ignore[assignment]
         return True
 
 

@@ -294,7 +294,7 @@ def classify_function(
                         # the resolver's own wording (resolved
                         # dangerous callee, or an over-cap file whose
                         # resolution is incomplete).
-                        signal = vendor_file_dangerous
+                        signal = vendor_file_dangerous or "vendor file"
                     reasons.append(
                         f"generated code ({vendor_verdict.signal}) "
                         f"with {signal} — glance: {vendor_verdict.detail}"
@@ -442,7 +442,7 @@ def classify_all(
     scores = priority_scores or {}
     prefilters = prefilter_results or {}
     results: dict[str, TriageResult] = {}
-    vendor_dangerous_files: dict[str, bool] = {}
+    vendor_dangerous_files: dict[str, str | None] = {}
 
     for gap in gaps:
         bare_key = f"{gap['file']}:{gap['name']}"
@@ -664,7 +664,7 @@ def _alias_resolved_dangerous(source: str, ext: str) -> bool:
         if _is_dangerous([target, *rest]):
             return True
         seg = target.replace("::", "/").rsplit("/", 1)[-1]
-        return seg != target and _is_dangerous([seg, *rest])
+        return bool(seg != target and _is_dangerous([seg, *rest]))
 
     def _dangerous(chain: list[str]) -> bool:
         if _is_dangerous(chain):

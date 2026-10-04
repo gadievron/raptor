@@ -617,8 +617,8 @@ class CorpusGenerator:
             return base_seed + (base_seed * random.randint(1, 10))  # nosemgrep: crypto.prng.random-module.python
 
         # havoc - combine multiple mutations
-        seed = base_seed
+        seed = base_seed  # type: ignore[assignment]
         for _ in range(random.randint(1, 5)):  # nosemgrep: crypto.prng.random-module.python
             mutation = random.choice(["bit_flip", "byte_insert", "byte_delete", "expand"])  # nosemgrep: crypto.prng.random-module.python
-            seed = self.generate_mutated_seed(seed, mutation)
-        return seed
+            seed = self.generate_mutated_seed(seed, mutation)  # type: ignore[assignment,arg-type]
+        return seed  # type: ignore[return-value]

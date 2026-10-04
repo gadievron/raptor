@@ -118,7 +118,7 @@ class XFileConst:
         # None = not scanned; ("poisoned",) = a variable-key
         # System.setProperty exists somewhere (any key may be written);
         # otherwise the frozenset of literally-written property keys.
-        self._setproperty_scan = None
+        self._setproperty_scan: frozenset[str] | tuple[str] | None = None
         # imports are needed even without a source root: the JDK tier
         # resolves imported simple names (ResultSet -> java.sql.*)
         # from them, and JDK resolution reads no tree files.
@@ -149,6 +149,7 @@ class XFileConst:
             simple = fqn.rsplit(".", 1)[-1]
             package = fqn.rsplit(".", 1)[0] if "." in fqn else ""
             candidates = []
+            assert self._root is not None
             for f in self._root.rglob(f"{simple}.java"):
                 candidates.append(f)
                 if len(candidates) > _MAX_DECLARING_CANDIDATES:
@@ -182,7 +183,7 @@ class XFileConst:
                     msg = "ambiguous declaring file"
                     raise _Refused(msg)
                 declaring, declaring_root = f, tree.root_node
-            if declaring_root is not None:
+            if declaring_root is not None and declaring is not None:
                 result = (declaring_root, declaring)
         except _Refused:
             result = None
@@ -259,6 +260,7 @@ class XFileConst:
             return False
         if self._setproperty_scan is None:
             try:
+                assert self._root is not None
                 self._setproperty_scan = _scan_setproperty(
                     self._root, self._parser)
             except Exception:  # noqa: BLE001 — refusal direction
@@ -294,6 +296,7 @@ class XFileConst:
         cached = self._simple_name_cache.get(simple)
         if cached is None:
             try:
+                assert self._root is not None
                 cached = next(
                     self._root.rglob(f"{simple}.java"), None) is not None
             except OSError:

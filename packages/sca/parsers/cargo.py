@@ -202,8 +202,8 @@ def _build_dep(
     is_optional = False
     declared_features: list | None = None
 
-    git_url: str | None = None
-    path_ref: str | None = None
+    git_url: str | None = None  # type: ignore[no-redef]
+    path_ref: str | None = None  # type: ignore[no-redef]
     if isinstance(spec, str):
         version = spec
         pin_style, normalised = _classify_version_spec(spec)
@@ -256,11 +256,11 @@ def _build_dep(
         if is_optional:
             source_extra["cargo_optional"] = True
         if declared_features is not None:
-            source_extra["cargo_features"] = declared_features
+            source_extra["cargo_features"] = declared_features  # type: ignore[assignment]
         if git_url:
-            source_extra["cargo_git"] = git_url
+            source_extra["cargo_git"] = git_url  # type: ignore[assignment]
         if path_ref:
-            source_extra["cargo_path"] = path_ref
+            source_extra["cargo_path"] = path_ref  # type: ignore[assignment]
 
     purl = build_purl(_PURL_TYPE, name, version)
     return Dependency(

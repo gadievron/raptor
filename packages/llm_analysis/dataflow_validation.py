@@ -160,7 +160,7 @@ def discover_codeql_database(
     if not dbs:
         return None
     if language:
-        return dbs.get(_normalise_language(language))
+        return dbs.get(_normalise_language(language))  # type: ignore[arg-type]
     return next(iter(dbs.values()))
 
 
@@ -1072,7 +1072,7 @@ def _taint_path_tiers(finding: dict) -> list[str]:
                 tiers.append(tier)
     path = finding.get("dataflow_path")
     if isinstance(path, dict):
-        steps = [path.get("source"), *(
+        steps = [path.get("source"), *(  # type: ignore[misc]
             path.get("steps") if isinstance(path.get("steps"), list)
             else []
         ), path.get("sink")]
@@ -1749,7 +1749,7 @@ def _tier4_smt_refine_inner(
             summary=summary,
             matches=[],
             success=True,
-            error=None,
+            error=None,  # type: ignore[arg-type]
         )
 
     feasible = smt.get("feasible")
@@ -1872,7 +1872,7 @@ def _wrap_result(
         or f"{tier}: {len(evidence.matches)} match(es)"
     )
     return ValidationResult(
-        verdict=verdict,
+        verdict=verdict,  # type: ignore[arg-type]
         evidence=[rec],
         iterations=1,
         reasoning=f"[{tier}] {reason}",
@@ -2977,7 +2977,7 @@ def _attach_result(
         elif hasattr(e, "to_dict"):
             evidence.append(e.to_dict())
         else:
-            evidence.append(str(e))
+            evidence.append(str(e))  # type: ignore[arg-type]
     recommends_downgrade = (
         result.refuted and read_verdict(analysis, "is_exploitable") is True
     )

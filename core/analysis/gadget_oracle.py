@@ -887,8 +887,9 @@ class _MethodWalker:
         if t == "function_call_expression":
             fn = node.child_by_field_name("function")
             args = node.child_by_field_name("arguments")
-            name = _callee_name(fn, self.src)
-            if name is not None:
+            callee = _callee_name(fn, self.src)
+            if callee is not None:
+                name = callee
                 tainted = self._tainted_args(args)
                 if name in _CALLABLE_SINKS:
                     first = [v for i, v in tainted if i == 0]
@@ -1613,6 +1614,8 @@ def _backstop_literal_content(
             if c.type in ("string_content", "heredoc_string",
                           "nowdoc_string"):
                 text: str | None = _node_text(c, src)
+                if text is None:
+                    return _MALFORMED_LITERAL
                 if line_head:
                     text = _strip_heredoc_indent(text, indent)
                     if text is None:
@@ -2966,7 +2969,8 @@ def _coerce_chain(raw: Any) -> dict[str, Any] | None:
     JSON — tampered strings must never ride unbounded into prompts."""
     if not isinstance(raw, dict):
         return None
-    sink = raw.get("sink") if isinstance(raw.get("sink"), dict) else {}
+    _raw_sink = raw.get("sink")
+    sink = _raw_sink if isinstance(_raw_sink, dict) else {}
     line = raw.get("line")
     sink_line = sink.get("line")
     steps = []

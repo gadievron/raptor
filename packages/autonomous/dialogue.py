@@ -171,7 +171,7 @@ class MultiTurnAnalyser:
         )
         response = llm_response.content
         messages.append(Message(role="assistant", content=response))
-        analysis_result["reasoning_steps"].append({
+        analysis_result["reasoning_steps"].append({  # type: ignore[attr-defined]
             "turn": 1,
             "question": "Initial analysis",
             "response": response[:200] + "...",
@@ -183,7 +183,7 @@ class MultiTurnAnalyser:
         turns_used = 1
 
         # Turn 2: Clarify exploitability
-        if analysis_result["confidence"] < 0.8 and turns_used < max_turns:
+        if analysis_result["confidence"] < 0.8 and turns_used < max_turns:  # type: ignore[operator]
             logger.info("Turn 2: Clarifying exploitability")
             clarify_bundle = self._build_clarification_prompt(
                 initial_analysis, crash_context, history=messages,
@@ -197,7 +197,7 @@ class MultiTurnAnalyser:
             )
             response = llm_response.content
             messages.append(Message(role="assistant", content=response))
-            analysis_result["reasoning_steps"].append({
+            analysis_result["reasoning_steps"].append({  # type: ignore[attr-defined]
                 "turn": 2,
                 "question": "Exploitability clarification",
                 "response": response[:200] + "...",
@@ -214,7 +214,7 @@ class MultiTurnAnalyser:
                 analysis_result["exploitability"] = refined_level
                 if refined_level == initial_level:
                     analysis_result["confidence"] = min(
-                        1.0, analysis_result["confidence"] + 0.2,
+                        1.0, analysis_result["confidence"] + 0.2,  # type: ignore[operator]
                     )
             turns_used += 1
 
@@ -222,7 +222,7 @@ class MultiTurnAnalyser:
         # earned only when memory AGREES with the verdict — a
         # contradiction warning must never make the verdict MORE
         # confident (mirrors the agreement-conditional turn-2 boost).
-        if self.memory and analysis_result["confidence"] < 0.9 and turns_used < max_turns:
+        if self.memory and analysis_result["confidence"] < 0.9 and turns_used < max_turns:  # type: ignore[operator]
             logger.info("Turn 3: Validating with memory")
             validation, agrees = self._validate_with_memory(
                 analysis_result, crash_context,
@@ -230,9 +230,9 @@ class MultiTurnAnalyser:
             if validation:
                 if agrees:
                     analysis_result["confidence"] = min(
-                        1.0, analysis_result["confidence"] + 0.1,
+                        1.0, analysis_result["confidence"] + 0.1,  # type: ignore[operator]
                     )
-                analysis_result["reasoning_steps"].append({
+                analysis_result["reasoning_steps"].append({  # type: ignore[attr-defined]
                     "turn": 3,
                     "question": "Memory validation",
                     "response": validation,

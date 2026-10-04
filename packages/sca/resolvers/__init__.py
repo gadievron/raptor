@@ -284,7 +284,7 @@ def _run(
             sandbox_kwargs["require_proxy_netns"] = True  # 00015: untrusted egress must use the netns tier
             sandbox_kwargs["proxy_hosts"] = list(proxy_hosts)
 
-        return sandbox_run(cmd, **sandbox_kwargs)
+        return sandbox_run(cmd, **sandbox_kwargs)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -354,8 +354,8 @@ def get_resolver(
     if project_dir is not None:
         for r in candidates:
             if r.matches(project_dir):
-                return r
-    return candidates[-1]
+                return r  # type: ignore[return-value]
+    return candidates[-1]  # type: ignore[return-value]
 
 
 __all__ = [
