@@ -97,7 +97,7 @@ test = [
 ]
 lint = [
     "ruff==0.15.12",
-    "mypy==2.1.0",
+    "mypy==2.4.0",
 ]
 dev = [
     { include-group = "test" },
