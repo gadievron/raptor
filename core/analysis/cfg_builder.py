@@ -1140,6 +1140,8 @@ def _scope_escape_names(
 
 def build_python_cfg(
     source: str | Path, function_name: str,
+    *,
+    _module_tree: ast.Module | None = None,
 ) -> PythonCFG | None:
     """Build the CFG for one named function in a Python source file or
     in-memory source string.
@@ -1147,6 +1149,12 @@ def build_python_cfg(
     ``source`` can be a :class:`Path` (read from disk) or a ``str``
     containing source code (parsed directly — useful for tests).
     Returns ``None`` if the named function isn't found.
+
+    ``_module_tree`` — when the caller already holds a parsed
+    :class:`ast.Module` for the same ``source`` text, pass it here
+    to skip the redundant ``ast.parse()``.  Internal optimisation
+    for the finding resolver's hot loop (one parse per finding
+    instead of two).
     """
     if isinstance(source, Path):
         file_path = str(source)
@@ -1161,7 +1169,7 @@ def build_python_cfg(
     else:
         file_path = "<string>"
         source_text = source
-    tree = ast.parse(source_text)
+    tree = _module_tree if _module_tree is not None else ast.parse(source_text)
     func: ast.AST | None = None
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) \

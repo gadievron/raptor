@@ -494,7 +494,7 @@ def _resolve_from_parsed_python(
             ),
         )
 
-    cfg = build_python_cfg(source_text, fn.name)
+    cfg = build_python_cfg(source_text, fn.name, _module_tree=tree)
     if cfg is None:
         return ResolutionFailure(
             reason=f"CFG construction failed for {fn.name} in {parsed.file}",
@@ -639,7 +639,7 @@ def _resolve_from_parsed_cpp(
     if isinstance(source_text, ResolutionFailure):
         return source_text
 
-    fn_name, fn_start = _find_enclosing_function_cpp(
+    fn_name, fn_start, ts_tree = _find_enclosing_function_cpp(
         source_text, parsed.language, parsed.source_lineno,
         parsed.sink_lineno,
     )
@@ -655,6 +655,7 @@ def _resolve_from_parsed_cpp(
 
     cfg = build_cpp_intraproc_cfg(
         source_text, fn_name, language=parsed.language,
+        _ts_tree=ts_tree,
     )
     if cfg is None:
         return ResolutionFailure(
@@ -1017,8 +1018,27 @@ def _resolve_from_parsed_java(
     if isinstance(source_text, ResolutionFailure):
         return source_text
 
+    from core.analysis.cfg_builder_java import (
+        _get_parser as _java_get_parser,
+    )
+
+    _java_parser = _java_get_parser()
+    if _java_parser is None:
+        return ResolutionFailure(
+            reason=(
+                f"no enclosing Java method for source line "
+                f"{parsed.source_lineno} / sink line {parsed.sink_lineno} "
+                f"in {parsed.file} (tree-sitter grammar missing or no "
+                "method declaration spans the range)"
+            ),
+        )
+    java_ts_tree = _java_parser.parse(
+        source_text.encode("utf-8", errors="replace"),
+    )
+
     fn_name, fn_start = find_enclosing_method(
         source_text, parsed.source_lineno, parsed.sink_lineno,
+        _ts_tree=java_ts_tree,
     )
     if fn_name is None:
         return ResolutionFailure(
@@ -1033,6 +1053,7 @@ def _resolve_from_parsed_java(
     cfg = build_java_intraproc_cfg(
         source_text, fn_name,
         line_hint=(parsed.source_lineno, parsed.sink_lineno),
+        _ts_tree=java_ts_tree,
     )
     if cfg is None:
         return ResolutionFailure(
@@ -1223,15 +1244,17 @@ def _inter_proc_bindings_java(
 
 def _find_enclosing_function_cpp(
     source_text: str, language: str, source_line: int, sink_line: int,
-) -> tuple[str | None, int]:
+) -> tuple[str | None, int, Any]:
     """Smallest C / C++ function_definition spanning [source, sink].
 
-    Returns ``(function_name, header_line)`` on success, ``(None, 0)``
-    on any failure (missing grammar, no spanning definition, function
-    has no resolvable name). ``header_line`` is the function's
-    start_point line (1-indexed) — the value Phase 11's
+    Returns ``(function_name, header_line, ts_tree)`` on success,
+    ``(None, 0, None)`` on any failure (missing grammar, no spanning
+    definition, function has no resolvable name). ``header_line`` is
+    the function's start_point line (1-indexed) — the value Phase 11's
     :func:`_resolve_source_cpp` compares against to spot the
-    "source == function entry" case.
+    "source == function entry" case.  ``ts_tree`` is the tree-sitter
+    parse tree, returned so the caller can forward it to
+    :func:`build_cpp_intraproc_cfg` and avoid a redundant re-parse.
 
     Smallest by end-line span so nested helpers / lambdas win over
     their enclosing function when both contain the range.
@@ -1247,7 +1270,7 @@ def _find_enclosing_function_cpp(
 
     parser = _cpp_get_parser(language)
     if parser is None:
-        return None, 0
+        return None, 0, None
     tree = parser.parse(source_text.encode("utf-8", errors="replace"))
     lo = min(source_line, sink_line)
     hi = max(source_line, sink_line)
@@ -1266,8 +1289,8 @@ def _find_enclosing_function_cpp(
                         best = (span, name, start)
         stack.extend(child for child in cur.children if child.is_named)
     if best is None:
-        return None, 0
-    return best[1], best[2]
+        return None, 0, None
+    return best[1], best[2], tree
 
 
 def _resolve_source_cpp(

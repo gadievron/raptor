@@ -1514,6 +1514,7 @@ class _CPPCFGBuilder:
 
 def build_cpp_intraproc_cfg(
     source: str | Path, function_name: str, *, language: str = "c",
+    _ts_tree: "Any | None" = None,
 ) -> CPPCFG | None:
     """Build the CFG for one named C/C++ function.
 
@@ -1533,6 +1534,11 @@ def build_cpp_intraproc_cfg(
     recovery yields ``ERROR`` subtrees that the walker treats as
     opaque straight-line statements. This matches the inventory
     walks' degrade-cleanly contract.
+
+    ``_ts_tree`` — when the caller already holds a tree-sitter tree
+    for the same ``source`` text, pass it here to skip the redundant
+    ``parser.parse()``.  Internal optimisation for the finding
+    resolver (one parse per finding instead of two).
     """
     if language not in ("c", "cpp"):
         return None
@@ -1552,11 +1558,14 @@ def build_cpp_intraproc_cfg(
     else:
         file_path = "<string>"
         source_text = source
-    # parse_origin: a budget-abandoned parse must name this file on
-    # the run's analysis-gap trail.
-    from core.run.gaps import parse_origin
-    with parse_origin(file_path):
-        tree = parser.parse(source_text.encode("utf-8", errors="replace"))
+    if _ts_tree is not None:
+        tree = _ts_tree
+    else:
+        # parse_origin: a budget-abandoned parse must name this file on
+        # the run's analysis-gap trail.
+        from core.run.gaps import parse_origin
+        with parse_origin(file_path):
+            tree = parser.parse(source_text.encode("utf-8", errors="replace"))
     fn_def = _find_function_definition(tree.root_node, function_name)
     if fn_def is None:
         return None

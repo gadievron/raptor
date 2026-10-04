@@ -949,14 +949,24 @@ def _file_method_names(root: Node) -> frozenset[str]:
 
 def find_enclosing_method(
     source_text: str, source_line: int, sink_line: int,
+    *,
+    _ts_tree: "Any | None" = None,
 ) -> tuple[str | None, int]:
     """Smallest method / constructor declaration spanning
     [source_line, sink_line]. Returns ``(name, header_line)`` or
-    ``(None, 0)``."""
-    parser = _get_parser()
-    if parser is None:
-        return None, 0
-    tree = parser.parse(source_text.encode("utf-8", errors="replace"))
+    ``(None, 0)``.
+
+    ``_ts_tree`` — when the caller already holds a tree-sitter tree
+    for the same ``source_text``, pass it here to skip the redundant
+    ``parser.parse()``.
+    """
+    if _ts_tree is not None:
+        tree = _ts_tree
+    else:
+        parser = _get_parser()
+        if parser is None:
+            return None, 0
+        tree = parser.parse(source_text.encode("utf-8", errors="replace"))
     lo, hi = min(source_line, sink_line), max(source_line, sink_line)
     best: tuple[int, str, int] | None = None
     stack = [tree.root_node]
@@ -1599,6 +1609,7 @@ def build_java_intraproc_cfg(
     function_name: str,
     *,
     line_hint: tuple[int, int] | None = None,
+    _ts_tree: "Any | None" = None,
 ) -> JavaCFG | None:
     """Build the CFG for one Java method / constructor.
 
@@ -1613,11 +1624,19 @@ def build_java_intraproc_cfg(
     references, anonymous/local classes, switch, labeled jumps) —
     the caller treats ``None`` as resolution failure, never as an
     empty-but-valid graph.
+
+    ``_ts_tree`` — when the caller already holds a tree-sitter tree
+    for the same ``source_text``, pass it here to skip the redundant
+    ``parser.parse()``.  Internal optimisation for the finding
+    resolver (one parse per finding instead of two).
     """
-    parser = _get_parser()
-    if parser is None:
-        return None
-    tree = parser.parse(source_text.encode("utf-8", errors="replace"))
+    if _ts_tree is not None:
+        tree = _ts_tree
+    else:
+        parser = _get_parser()
+        if parser is None:
+            return None
+        tree = parser.parse(source_text.encode("utf-8", errors="replace"))
     root = tree.root_node
 
     candidates = []
