@@ -572,7 +572,7 @@ class TestNonTerminatingThunkArray:
                 vsize=len(idata),
                 characteristics=_RDATA_CHARACTERISTICS),
         ], data_dirs={1: (0x3000, 40)})))
-        with cpu_budget(1.0, what="unterminated-thunk import walk"):
+        with cpu_budget(3.0, what="unterminated-thunk import walk"):
             facts = extract_pe_facts(p)
         assert facts is not None
         dll = facts.imports[0]

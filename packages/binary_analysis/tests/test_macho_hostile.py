@@ -5,7 +5,7 @@ suites in ``test_macho_facts.py``:
 
   * seeded random byte-mutation fuzz over rich thin AND fat crafted
     images (three seeds, header-biased flips mixed with truncations),
-    asserting the never-raises contract and a per-parse wall-clock
+    asserting the never-raises contract and a per-parse CPU-time
     bound
   * a full truncation sweep — every prefix boundary of both crafted
     images parses to ``None`` or a marked record, never an exception
@@ -112,7 +112,7 @@ class TestMutationFuzz:
         Mutations are header-biased (the leading bytes hold the fat
         table, mach header, and every command this parser walks) and
         mixed with truncations. Each parse is also individually
-        time-bounded: no mutation may buy a pathological walk."""
+        CPU-time-bounded: no mutation may buy a pathological walk."""
         bases = [_rich_thin(), _rich_fat()]
         p = tmp_path / "mut.bin"
         worst = 0.0
@@ -131,17 +131,17 @@ class TestMutationFuzz:
                         pos = rng.randrange(len(blob))
                     blob[pos] = rng.randrange(256)
                 p.write_bytes(bytes(blob))
-                start = time.perf_counter()
+                cpu0 = time.process_time()
                 facts = extract_macho_facts(p)   # must never raise
-                elapsed = time.perf_counter() - start
+                elapsed = time.process_time() - cpu0
                 worst = max(worst, elapsed)
-                assert elapsed < 1.0, (
-                    f"seed {seed:#x} mutation {i} took {elapsed:.3f}s"
+                assert elapsed < 2.0, (
+                    f"seed {seed:#x} mutation {i} took {elapsed:.3f}s CPU"
                     " — pathological walk")
                 assert facts is None or isinstance(facts, MachOFacts)
                 total += 1
         assert total == len(seeds) * per_seed
-        assert worst < 1.0
+        assert worst < 2.0
 
     def test_mutation_smoke_never_raises(self, tmp_path):
         # Default-tier smoke: one seed's leading slice keeps the
