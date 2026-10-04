@@ -46,7 +46,7 @@ def test_prefer_kwarg_forwarded(monkeypatch):
         "core.llm.config._get_default_primary_model", _fake_default,
     )
     get_client(prefer="anthropic")
-    assert seen["prefer"] == "anthropic"
+    assert seen["prefer"] == ["anthropic"]
 
 
 class TestTranscriptRouting:

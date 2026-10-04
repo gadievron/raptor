@@ -210,7 +210,7 @@ def _run_coccinelle_rule(rule_path: Path, target_path: Path) -> dict[str, Any]:
         if not is_available():
             return {"error": "coccinelle (spatch) not installed"}
 
-        result = run_rule(target_path, Path(rule_path), timeout=300)
+        result = run_rule(target_path, rule_path, timeout=300)
         # ``SpatchResult`` carries ``matches`` (SpatchMatch dataclasses),
         # not ``findings`` — the old attribute raised AttributeError on
         # every sweep of a saved coccinelle rule.
