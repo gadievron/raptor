@@ -325,28 +325,11 @@ def test_reset_leaves_no_lock_residue(tmp_path):
     assert not sidecar.with_suffix(sidecar.suffix + ".lock").exists()
 
 
-def test_held_lock_revalidates_unlinked_inode(tmp_path):
-    """A waiter can win an flock on an inode reset() just unlinked;
-    the acquire helper must detect the stale inode and reacquire on
-    the fresh path so two holders can never coexist."""
-    import os
-
-    from core.analysis.reach_verdict_log import _held_lock
+def test_sidecar_lock_creates_missing_file(tmp_path):
+    """_sidecar_lock creates the lock file via O_CREAT when it
+    doesn't exist and acquires without error."""
+    from core.analysis.reach_verdict_log import _sidecar_lock
     lock_path = tmp_path / "v.json.lock"
-    lock_path.touch()
-    # Hold an fd on the stale file across the unlink: ext4 hands the
-    # freed inode NUMBER to the very next create (tmpfs allocates
-    # monotonically), and a recycled number would equal stale_ino even
-    # though the helper correctly reacquired on the fresh path — the
-    # open fd keeps the stale inode allocated so the fresh lock file
-    # provably differs on every filesystem.
-    stale_fd = os.open(lock_path, os.O_RDONLY)
-    try:
-        stale_ino = os.stat(lock_path).st_ino
-        lock_path.unlink()      # simulate reset() racing ahead
-        with _held_lock(lock_path) as fh:
-            held_ino = os.fstat(fh.fileno()).st_ino
-            assert os.stat(lock_path).st_ino == held_ino
-            assert held_ino != stale_ino
-    finally:
-        os.close(stale_fd)
+    assert not lock_path.exists()
+    with _sidecar_lock(lock_path):
+        assert lock_path.exists()

@@ -43,10 +43,8 @@ increments. Same pattern as ``llm_scorecard`` (q.v.).
 from __future__ import annotations
 
 import atexit
-import fcntl
 import os
 import threading
-from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -126,33 +124,17 @@ def _drain_in_memory() -> dict[str, dict[str, int]]:
         return out
 
 
-@contextmanager
-def _held_lock(lock_path: Path):
-    """flock on ``lock_path``, revalidated against unlink races.
+def _sidecar_lock(lock_path: Path):
+    """Bounded flock on ``lock_path`` via :func:`sidecar_flock`.
 
-    ``reset()`` unlinks the lock file while holding it, so a waiter
-    can wake up holding an flock on an UNLINKED inode while a third
-    process creates-and-locks a fresh file at the same path — two
-    "holders" at once (lost-update on the sidecar merge). After
-    acquiring, re-stat the path and verify it is still THIS inode;
-    otherwise reopen and retry. Bounded retries; on exhaustion the
-    lock is held best-effort (telemetry must never block a run)."""
-    for attempt in range(5):
-        fh = Path(lock_path).open("a+", encoding="utf-8")
-        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-        try:
-            if os.fstat(fh.fileno()).st_ino == os.stat(lock_path).st_ino:
-                break
-        except OSError:
-            pass  # path vanished — retry with a fresh file
-        if attempt < 4:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
-            fh.close()
-    try:
-        yield fh
-    finally:
-        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
-        fh.close()
+    Telemetry must never block a run — ``sidecar_flock`` provides
+    hardened open (O_NOFOLLOW, O_CLOEXEC), bounded LOCK_NB
+    acquisition with a 60 s deadline, and degrade-to-unlocked on
+    any failure.
+    """
+    from core.atomic_fs.fs_lock import sidecar_flock
+
+    return sidecar_flock(lock_path, subject="reach verdict log")
 
 
 def _merge_disk(path: Path, increments: dict[str, dict[str, int]]) -> None:
@@ -163,10 +145,7 @@ def _merge_disk(path: Path, increments: dict[str, dict[str, int]]) -> None:
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_suffix(path.suffix + ".lock")
-    # ``a+`` semantics — create if absent, never written to. flock
-    # operates on the inode so the lock-file's contents are irrelevant
-    # (unlink-revalidated — see _held_lock).
-    with _held_lock(lock_path):
+    with _sidecar_lock(lock_path):
         if path.exists():
             try:
                 data = load_json(path)
@@ -281,7 +260,7 @@ def reset(path: Path | None = None) -> None:
     p = path or _sidecar_path()
     lock_path = p.with_suffix(p.suffix + ".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with _held_lock(lock_path):
+    with _sidecar_lock(lock_path):
         p.unlink(missing_ok=True)
         lock_path.unlink(missing_ok=True)
 
