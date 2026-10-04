@@ -68,6 +68,7 @@ class TestPostureRecording:
         assert summary_mod.get_run_posture(tmp_path) == {
             "mount_ns_active": True, "restrict_reads": False,
             "mac_key_hidden": True,
+            "block_network": False, "udp_block_engaged": False,
         }
 
     def test_unknown_run_is_none(self, tmp_path):
@@ -311,7 +312,9 @@ class TestMacosSpawnWiring:
         posture = summary_mod.get_run_posture(tmp_path)
         assert posture == {"mount_ns_active": False,
                            "restrict_reads": False,
-                           "mac_key_hidden": False}
+                           "mac_key_hidden": False,
+                           "block_network": False,
+                           "udp_block_engaged": False}
 
     def test_restrict_reads_run_records_hidden_key(
             self, tmp_path, monkeypatch):

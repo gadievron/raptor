@@ -164,6 +164,9 @@ def test_live_runtime_demotion_denies_dns(monkeypatch):
     if not (check_landlock_available() and _get_landlock_abi() >= 4
             and check_seccomp_available()):
         pytest.skip("requires Landlock TCP policy and seccomp")
+    if not context.check_net_available():
+        pytest.skip("requires network namespace support (the restored "
+                     "run_sandboxed must succeed on the retry)")
     monkeypatch.setattr(context, "check_net_available", lambda: True)
     monkeypatch.setattr(context, "check_mount_available", lambda: True)
 

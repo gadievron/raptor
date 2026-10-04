@@ -3217,5 +3217,10 @@
     "kind": "literal",
     "note": "Autonomous-run summary dict: counter + provenance KEYS written to the analysis-summary JSON (persistence schema keys, not a name vocabulary); root-module universe addition.",
     "reviewed": "2026-09-21"
+  },
+  "core/sandbox/triage.py::_KNOWN_2LD_TLDS": {
+    "count": 18,
+    "kind": "literal",
+    "note": "closed set of known two-level-domain TLD suffixes (co.uk, com.au, etc.) for the dns_exfil_indicator triage signal\u2019s effective-parent-domain extraction \u2014 IANA registry data, not a learned name vocabulary"
   }
 }
