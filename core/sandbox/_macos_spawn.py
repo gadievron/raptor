@@ -1468,7 +1468,13 @@ def run_sandboxed(cmd: list[str], *,
                 )
             except subprocess.TimeoutExpired:
                 _teardown_shim_tree(_process)
-                _process.wait()
+                try:
+                    _process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    logger.debug(
+                        "macOS sandbox: killed shim process did "
+                        "not exit within 10s; abandoning reap",
+                    )
                 raise
             except BaseException:
                 # Mirror subprocess.run: never leave the tree running
