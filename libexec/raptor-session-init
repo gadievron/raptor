@@ -38,6 +38,104 @@ sys.path.insert(0, str(REPO_ROOT))
 import core.startup.process_init  # noqa: E402,F401
 
 
+
+def _seed_codex_session() -> tuple[str, str] | None:
+    """Create a sessions.d entry for a Codex session (no launcher).
+
+    Returns (pid_str, token) on success, None on failure or if not a
+    Codex session. Claude Code sessions are seeded by ``bin/raptor``.
+    """
+    if not os.environ.get("CODEX"):
+        return None
+
+    import secrets
+    from datetime import datetime, timezone
+
+    try:
+        from core.project.registry_home import registry_home
+        from core.run.metadata import _find_claude_ancestor
+    except ImportError:
+        return None
+
+    codex_pid = _find_claude_ancestor()
+    if codex_pid is None:
+        return None
+
+    sessions_dir = registry_home() / "sessions.d"
+    try:
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        sessions_dir.chmod(0o700)
+    except OSError:
+        return None
+
+    pid = codex_pid
+    pid_str = str(pid)
+
+    starttime = "0"
+    stat_path = Path(f"/proc/{pid}/stat")
+    if stat_path.exists():
+        try:
+            stat_text = stat_path.read_text(encoding="utf-8", errors="replace")
+            cp = stat_text.rfind(")")
+            if cp >= 0:
+                fields = stat_text[cp + 2:].split()
+                starttime = fields[22 - 3] if len(fields) > 22 - 3 else "0"
+        except (OSError, IndexError):
+            pass
+
+    boot_id = f"none-{sys.platform}"
+    bid_path = Path("/proc/sys/kernel/random/boot_id")
+    if bid_path.exists():
+        try:
+            boot_id = bid_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            boot_id = "none-linux"
+
+    pidns = ""
+    ns_path = Path("/proc/self/ns/pid")
+    if ns_path.exists():
+        try:
+            pidns = str(ns_path.stat().st_ino)
+        except OSError:
+            pass
+
+    token = secrets.token_hex(16)
+
+    for stale in (sessions_dir / pid_str,
+                  sessions_dir / f"{pid_str}.run",
+                  sessions_dir / f"{pid_str}.run.lock"):
+        try:
+            stale.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    since = datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    lines = [
+        "v=2", "project=-", f"since={since}",
+        f"starttime={starttime}", f"boot_id={boot_id}",
+    ]
+    if pidns:
+        lines.append(f"pidns={pidns}")
+    lines.append(f"token={token}")
+    lines.append("seeded_by=codex-hook")
+
+    entry_path = sessions_dir / pid_str
+    tmp_path = sessions_dir / f".{pid_str}.tmp.{pid_str}"
+    try:
+        tmp_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        tmp_path.chmod(0o600)
+        tmp_path.rename(entry_path)
+    except OSError:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return None
+
+    os.environ["RAPTOR_SESSION_PID"] = pid_str
+    os.environ["RAPTOR_SESSION_TOKEN"] = token
+    return (pid_str, token)
+
 def write_env_file():
     """Write the env file with static vars. Overwrites to ensure clean state.
 
@@ -62,6 +160,14 @@ def write_env_file():
         f'export RAPTOR_DIR={shlex.quote(repo_root)}\n'
         f'export PATH="$PATH":{shlex.quote(bin_dir)}\n'
     )
+
+    creds = _seed_codex_session()
+    if creds:
+        pid_str, token = creds
+        content += (
+            f'export RAPTOR_SESSION_PID={shlex.quote(pid_str)}\n'
+            f'export RAPTOR_SESSION_TOKEN={shlex.quote(token)}\n'
+        )
 
     try:
         Path(env_file).write_text(content, encoding="utf-8")
