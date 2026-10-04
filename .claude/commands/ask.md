@@ -20,6 +20,10 @@ tool.
 | `--system <text>` | System prompt |
 | `--file <path>` | Prepend file as context |
 | `--json-schema <schema>` | Structured output |
+| `--raw` | With `--json-schema`: compact (unindented) JSON output |
+| `--system-file <path>` | Load system prompt from a file |
+| `--max-tokens <n>` | Maximum output tokens (default: 4096) |
+| `--temperature <t>` | Sampling temperature (default: model default) |
 | `--debug` | Show cost and metadata |
 | `--show-primary` | Print the default primary model a run without `--model` resolves — provider/model — and exit without sending a prompt; use it to verify the run's transport before launch |
 

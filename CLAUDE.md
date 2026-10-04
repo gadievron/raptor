@@ -55,14 +55,23 @@ When a `/command` fires:
 /review - Navigate audit results across all four layers (coverage, journal, context-map, annotations) — `libexec/raptor-review $ARGUMENTS`
 /annotate - Per-function prose annotations (human notes get authority; agent notes are hint-tier) — `libexec/raptor-annotate <subcommand> [args]` (see ANNOTATIONS)
 /tune - Resource tuning (show / max / balanced / default) — `libexec/raptor-tune [profile]`
-/sage - SAGE persistent memory: status, recall, browse, store, manage
+/sage - SAGE persistent memory: status, recall, list, remember, forget, domains, timeline, backlog, task, link, corroborate, get
 /crash-analysis - Autonomous crash root-cause analysis for C/C++ — `dispatch: skill`; usage `/crash-analysis <bug-tracker-url> <git-repo-url>`; requires rr, gcc/clang (with ASAN), gdb, gcov; agents + skills: `.claude/commands/crash-analysis.md`
 /oss-forensics - Evidence-backed GitHub forensic investigation — `dispatch: skill`; usage `/oss-forensics <prompt> [--max-followups 3] [--max-retries 3]`; requires `GOOGLE_APPLICATION_CREDENTIALS` for BigQuery; output `.out/oss-forensics-<timestamp>/forensic-report.md` (hidden `.out/` directory, not the usual `out/`); agents + skills: `.claude/commands/oss-forensics.md`
 /scorecard - Inspect per-model reliability across decision classes; ask natural-language questions about which model is good at what
 /ask - Send a prompt to any configured LLM model (routing below)
 /create-skill - Save approaches (alpha)
+/describe - Describe a target (language mix, build system, cost estimate) — `libexec/raptor-describe --target <path>`
+/binary - Black-box binary investigation (rank, map, fuzz, graph, report) — `libexec/raptor-binary <command> [args]`
+/ghidra - Ghidra RE bridge (attach, import, diff, decompile, export) — `libexec/raptor-ghidra <subcommand> [args]`
+/sca - Software Composition Analysis (vulnerable deps, CI gate, fix/pin) — `dispatch: skill`
+/frida - Dynamic instrumentation via Frida (alpha) — `dispatch: skill`
+/threat-model - Project threat model (show, build, lint, diff, export) — `libexec/raptor-threat-model <command> [args]`
+/cve-diff - CVE patch discovery (find, acquire, diff the fix commit) — `libexec/raptor-cve-diff <subcommand> [args]`
+/cve-env - CVE → Docker environment builder (agentic build + verify) — `libexec/raptor-cve-env <subcommand> [args]`
+/version - Show the running RAPTOR framework version — `python3 raptor.py --version`
 
-**Ask:** `libexec/raptor-llm-ask --model <name> "prompt"` sends a free-form prompt to any configured model and prints the response. Use for cross-model diagnosis, debugging model reasoning, or comparing verdicts. When the user says "ask gemini...", "ask claude...", "ask gpt..." or similar, route through this tool. Options (`--system`, `--file`, `--json-schema`, `--debug`, `--show-primary` pre-launch transport check) and examples: `.claude/commands/ask.md`.
+**Ask:** `libexec/raptor-llm-ask --model <name> "prompt"` sends a free-form prompt to any configured model and prints the response. Use for cross-model diagnosis, debugging model reasoning, or comparing verdicts. When the user says "ask gemini...", "ask claude...", "ask gpt..." or similar, route through this tool. Options (`--system`, `--system-file`, `--file`, `--json-schema`, `--raw`, `--max-tokens`, `--temperature`, `--debug`, `--show-primary` pre-launch transport check) and examples: `.claude/commands/ask.md`.
 
 **Coverage:** When asked about coverage, run `libexec/raptor-coverage-summary` (no args = active project). Use `--detailed` for per-file table, `--gaps` for unreviewed functions. See `.claude/skills/coverage.md` for mark/unmark and the full API.
 
@@ -81,7 +90,7 @@ Projects are opt-in named workspaces that corral analysis runs into a shared dir
 
 Activate with `/project use <name>` in-session, or at launch with `-p <name>` (auto-detect activates for the session only). While a project is active, analysis commands write output to the project directory, and every RUN is pinned to its project at start — a mid-run project switch never moves an in-flight run's output, trust markers, or stores. Analysis commands also accept `--project <name>` to pin a single run explicitly (`--project -` = explicitly projectless); invalid values are a hard error, never a fallback. Without a project, commands behave as before (timestamped dirs under `out/`). `/project sessions` shows which live sessions are bound to what.
 
-Subcommand surface: `create`, `use`, `status`, `findings`, `coverage`, `report`, `correlate`, `adopt`, `binary …`, `ghidra …`, `graph …`, `trust`/`untrust`, `set`/`unset`/`get`, `clean --keep N`, `sessions`, `none`. Full table with per-subcommand semantics (including the `sandbox-floor` containment-floor setting): `.claude/commands/project.md`, or `/project help`.
+Subcommand surface: `create`, `use`, `none`, `status`, `list`, `show`, `findings`, `coverage`, `provenance`, `annotations`, `report`, `correlate`, `adopt`, `binary …`, `ghidra …`, `graph …`, `ledger`, `threat-model`, `trust`/`untrust`, `set`/`unset`/`get`, `clean --keep N`, `sessions`, `delete`, `rename`. Full table with per-subcommand semantics (including the `sandbox-floor` containment-floor setting): `.claude/commands/project.md`, or `/project help`.
 
 **Trust markers** (`config` / `build` / `dynamic`) are operator assertions persisted on the project — never auto-set, never read from the scanned repo. Per-run flags always win in both directions where they exist, and `build` does NOT imply `config`. Full consumer doctrine: `.claude/commands/project.md` § Trust markers — consumer doctrine.
 
