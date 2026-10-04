@@ -309,27 +309,11 @@ def _findings_lock(out_dir: Path):
     — a locker that opened the old inode holds a lock nobody else
     sees. The empty leftover is cosmetic.
     """
+    from core.atomic_fs.fs_lock import sidecar_flock
+
     lock_path = out_dir / "findings.json.lock"
-    fh = None
-    try:
-        import fcntl
-        fh = open(lock_path, "a+")  # noqa: SIM115 — held across yield  # raw-open: run-dir lock file created by this module; append handle
-        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-    except Exception:
-        logger.debug("findings lock unavailable", exc_info=True)
-        if fh is not None:
-            with contextlib.suppress(OSError):
-                fh.close()
-            fh = None
-    try:
+    with sidecar_flock(lock_path, subject="audit findings"):
         yield
-    finally:
-        if fh is not None:
-            with contextlib.suppress(OSError):
-                import fcntl
-                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
-            with contextlib.suppress(OSError):
-                fh.close()
 
 
 def _next_finding_id(existing: list[dict[str, Any]]) -> str:
