@@ -224,7 +224,12 @@ def _run_child(cmd: list[str], *, llm: bool = False,
             os.killpg(proc.pid, signal.SIGKILL)
         except (OSError, ProcessLookupError):
             proc.kill()
-        proc.wait()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            for pipe in (proc.stdout, proc.stderr, proc.stdin):
+                if pipe is not None and not pipe.closed:
+                    pipe.close()
         return 1
 
 

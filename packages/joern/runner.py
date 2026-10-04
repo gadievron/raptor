@@ -983,7 +983,12 @@ def _build_cpg_with_stall_monitor(
         proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         _kill_build_group(proc)
-        proc.wait()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            for pipe in (proc.stdout, proc.stderr, proc.stdin):
+                if pipe is not None and not pipe.closed:
+                    pipe.close()
         logger.warning("joern-parse timed out after %ds", timeout)
         return _failed_build_cpg(cpg_path, target)
 

@@ -1659,7 +1659,12 @@ def run_cc_streaming(
                 if remaining <= 0:
                     _close_stdin()
                     proc.kill()
-                    proc.wait()
+                    try:
+                        proc.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        for pipe in (proc.stdout, proc.stderr, proc.stdin):
+                            if pipe is not None and not pipe.closed:
+                                pipe.close()
                     raise subprocess.TimeoutExpired(cmd, timeout_s or 0)
             read_set = [
                 fd for fd in (stdout_fd, stderr_fd) if fd is not None
@@ -1740,7 +1745,12 @@ def run_cc_streaming(
         # fires on an abnormal unwind while the child still runs.
         if proc.poll() is None:
             proc.kill()
-            proc.wait()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                for pipe in (proc.stdout, proc.stderr, proc.stdin):
+                    if pipe is not None and not pipe.closed:
+                        pipe.close()
 
     for stream_name, capture in (
         ("stdout", collected), ("stderr", stderr_chunks),
