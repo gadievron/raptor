@@ -1227,7 +1227,7 @@ def build_inventory(
             _gp = graph_path_for_run(Path(output_dir), target_path)
             if _gp.exists():
                 _bo_verdicts: dict[str, str] = {}
-                for _f in (inventory.get("files") or []):  # type: ignore[union-attr]
+                for _f in (inventory.get("files") or []):  # type: ignore[union-attr,attr-defined]
                     _fp = _f.get("path", "")  # type: ignore[union-attr]
                     for _item in (_f.get("items") or []):  # type: ignore[union-attr]
                         _bo = ((_item.get("metadata") or {}).get("binary_oracle") or {})

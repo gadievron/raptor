@@ -146,7 +146,7 @@ def evaluate_probe_response(raw_response: str, nonce: str) -> ProbeResult:
 
     compatible = valid_json and correct_verdict and not nonce_leaked
 
-    error: str | None = None
+    error: str | None = None  # type: ignore[no-redef]
     if nonce_leaked:
         error = "Model leaked the envelope nonce"
     elif not valid_json:

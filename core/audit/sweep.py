@@ -1931,7 +1931,7 @@ def run_coccinelle_file_sweep(
         try:
             result = run_rule(
                 Path(full_path),
-                effective_rule,
+                Path(effective_rule),
                 defines=defines or {},
                 timeout=120,
                 # In-repo engine/coccinelle rules via cwe_dispatch
@@ -4435,7 +4435,7 @@ def run_consistency_check(
         try:
             result = run_rule(
                 Path(target_path),
-                effective_rule,
+                Path(effective_rule),
                 defines={"func": function_name},
                 timeout=300,
                 # In-repo engine/coccinelle rules via cwe_dispatch

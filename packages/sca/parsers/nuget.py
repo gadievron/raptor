@@ -143,7 +143,7 @@ def parse_msbuild_project(path: Path) -> list[Dependency]:
 
     try:
         root = _safe_fromstring(text)
-    except (_ET.ParseError, *PARSE_ESCAPE_ERRORS) as e:  # defused XML refusals are ValueError subclasses  # type: ignore[misc]
+    except (_ET.ParseError, *PARSE_ESCAPE_ERRORS) as e:  # type: ignore[misc]  # defused XML refusals are ValueError subclasses
         logger.warning(
             "sca.parsers.nuget: XML parse failed for %s: %s", path, e)
         return []
@@ -528,7 +528,7 @@ def parse_packages_config(path: Path) -> list[Dependency]:
         return []
     try:
         root = _safe_fromstring(text)
-    except (_ET.ParseError, *PARSE_ESCAPE_ERRORS) as e:  # defused XML refusals are ValueError subclasses  # type: ignore[misc]
+    except (_ET.ParseError, *PARSE_ESCAPE_ERRORS) as e:  # type: ignore[misc]  # defused XML refusals are ValueError subclasses
         logger.warning(
             "sca.parsers.nuget: XML parse failed for %s: %s", path, e)
         return []
@@ -603,7 +603,7 @@ def parse_lockfile(path: Path) -> list[Dependency]:
         return []
     try:
         data = json.loads(text)
-    except (json.JSONDecodeError, *PARSE_ESCAPE_ERRORS) as e:  # hostile-input escape classes  # type: ignore[misc]
+    except (json.JSONDecodeError, *PARSE_ESCAPE_ERRORS) as e:  # type: ignore[misc]  # hostile-input escape classes
         logger.warning(
             "sca.parsers.nuget: JSON parse failed for %s: %s", path, e)
         return []

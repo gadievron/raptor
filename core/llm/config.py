@@ -248,7 +248,7 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
                                 )
                                 api_base = f"{ollama_base.rstrip('/')}/v1"
                             else:
-                                api_base = PROVIDER_ENDPOINTS.get(entry_provider)
+                                api_base = PROVIDER_ENDPOINTS.get(entry_provider)  # type: ignore[assignment]
 
                             # Optional overrides from config
                             api_base = model_entry.get('api_base') or api_base  # type: ignore[assignment]

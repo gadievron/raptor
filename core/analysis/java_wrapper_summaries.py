@@ -735,7 +735,7 @@ def synthetic_wrapper_bindings_java(
                     continue
                 summary = matching[0]
             else:
-                summary = summaries.get((info.owner, method_name, arity))  # type: ignore[arg-type]
+                summary = summaries.get((info.owner, method_name, arity))  # type: ignore[arg-type,assignment]
                 if summary is None:
                     continue
                 if info.form == "static" and not summary.is_static:

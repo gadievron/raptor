@@ -258,9 +258,9 @@ class VulnrichmentClient:
                     # fetch under the normal budget rules.
                     uncached.append(key)
                     continue
-                self._memo[key] = decision
+                self._memo[key] = decision  # type: ignore[assignment]
                 if decision is not None:
-                    out[key] = decision
+                    out[key] = decision  # type: ignore[assignment]
                 continue
             uncached.append(key)
 

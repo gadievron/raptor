@@ -1753,7 +1753,7 @@ class _Engine:
             params.append(cur[1])
             kind, parent = st.pred
             if kind == "seed":
-                seed = self.seeds[parent]  # type: ignore[index]
+                seed = self.seeds[parent]  # type: ignore[index,call-overload]
                 if seed.head_hop is not None:
                     hops.append(seed.head_hop)
                     params.append(None)
@@ -1771,7 +1771,7 @@ class _Engine:
                 break
             kind, parent = st.pred
             if kind == "seed":
-                return self.seeds[parent].descriptor  # type: ignore[index]
+                return self.seeds[parent].descriptor  # type: ignore[index,call-overload]
             cur = parent  # type: ignore[assignment]
         # Witness-loop truncation (counted above) can orphan the
         # root; the record stays honest about not knowing it.
@@ -1958,7 +1958,7 @@ class _Engine:
             entries.append((cur, st.hop))
             kind, parent = st.pred
             if kind == "seed":
-                seed = self.seeds[parent]  # type: ignore[index]
+                seed = self.seeds[parent]  # type: ignore[index,call-overload]
                 if seed.head_hop is not None:
                     entries.append((None, seed.head_hop))
                 entries.reverse()
@@ -2003,7 +2003,7 @@ class _Engine:
             suffix = wentries[pos + 1:]
             for alt in st.alts:
                 if alt.pred[0] == "seed":
-                    seed = self.seeds[alt.pred[1]]  # type: ignore[index]
+                    seed = self.seeds[alt.pred[1]]  # type: ignore[index,call-overload]
                     prefix: list[tuple[_FactKey | None, Hop]] = (
                         [(None, seed.head_hop)]
                         if seed.head_hop is not None else [])

@@ -207,8 +207,8 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
             return _SOFTWARE_EX
         env_sig = cal._env_signature(env_keys)
         fp = cal._fingerprint(bin_sha, env_sig)
-        cached = cal._load_from_cache(fp)
-        if cached is None:
+        cached_profile = cal._load_from_cache(fp)
+        if cached_profile is None:
             sys.stderr.write(
                 f"raptor-sandbox-calibrate: no cached profile for "
                 f"{bin_path} (env keys: "
@@ -217,9 +217,9 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
             )
             return _SOFTWARE_EX
         if args.json_output:
-            sys.stdout.write(_profile_to_json(cached) + "\n")
+            sys.stdout.write(_profile_to_json(cached_profile) + "\n")
         else:
-            sys.stdout.write(_format_human(cached, cached=True) + "\n")
+            sys.stdout.write(_format_human(cached_profile, cached=True) + "\n")
         return 0
 
     # Spawn path: load_or_calibrate handles cache hit / miss /

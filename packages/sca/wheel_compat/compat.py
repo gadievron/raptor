@@ -290,7 +290,7 @@ def _verdict_for_pair(
         ]
         if same_macos:
             min_required = min(
-                same_macos, key=lambda w: w.macos_version,  # type: ignore[arg-type]
+                same_macos, key=lambda w: w.macos_version,  # type: ignore[arg-type,return-value]
             )
             if min_required.macos_version > pair.macos_version:  # type: ignore[operator]
                 return CompatVerdict(

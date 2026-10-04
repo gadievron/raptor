@@ -919,7 +919,7 @@ class _ProxyKeepaliveTransport(httpx.HTTPTransport):
                 inner._socket_options = options
             return connection
 
-        pool.create_connection = create_with_keepalive  # type: ignore[method-assign]
+        pool.create_connection = create_with_keepalive  # type: ignore[method-assign,union-attr]
 
 
 # Warn-once flag for "httpx stopped exposing its env-proxy helper" —

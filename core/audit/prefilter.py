@@ -1265,7 +1265,7 @@ def _text_wrapper_escape(
         lhs = stmt[:lhs_end].strip()
         rhs = stmt[rhs_start:].strip()
         if _c_find_assign(rhs) is not None:
-            value: tuple[set[str], bool] | None = process(rhs)
+            value = process(rhs)  # type: ignore[assignment]
             if value is None:
                 return None
         else:

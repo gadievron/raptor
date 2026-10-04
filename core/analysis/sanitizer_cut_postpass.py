@@ -897,8 +897,8 @@ def run_postpass(
             # call — pinned by test_candidate_only_never_enforces.
             if full_proof and enforce_live:
                 record_sanitizer_cut_suppression(
-                    out_dir, native, result, enforce=True,
-                    extra_fields=extra_fields,  # type: ignore[arg-type]
+                    out_dir, native, result, enforce=True,  # type: ignore[arg-type]
+                    extra_fields=extra_fields,
                 )
                 stats.enforced += 1
                 stats.enforced_findings.append({

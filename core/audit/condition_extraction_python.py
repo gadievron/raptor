@@ -277,7 +277,7 @@ def _find_preceding_guard_clauses_ast(
         if len(results) >= max_depth:
             break
         # Only look at statements BEFORE the call
-        stmt_end: int = getattr(stmt, "end_lineno", None) or getattr(stmt, "lineno", 0)
+        stmt_end: int = getattr(stmt, "end_lineno", None) or getattr(stmt, "lineno", 0)  # type: ignore[assignment]
         if stmt_end >= call_line:
             break
         # Must be an If with exit-only body and no else

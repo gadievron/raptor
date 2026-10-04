@@ -1195,7 +1195,7 @@ def _compute_one_summary(
         # positional args' contributions.
         if n.call_sites:
             for ast_n in _calls_by_line.get(n.lineno, ()):
-                callable_name: str | None = _attribute_chain_str(ast_n.func)
+                callable_name = _attribute_chain_str(ast_n.func)  # type: ignore[no-redef,assignment]
                 if callable_name is None:
                     continue
                 for arg_idx, arg_ast in enumerate(ast_n.args):

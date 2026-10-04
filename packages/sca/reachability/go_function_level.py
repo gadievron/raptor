@@ -406,7 +406,7 @@ def refine_go_verdicts(
                                     queries.append(twin)
                 head, _, rest = rem.partition(".")
                 for pth in universe:
-                    twin = None
+                    twin = None  # type: ignore[assignment]
                     if pth == dep_module:
                         if rest and head and head in _bare_names(pth):
                             twin = f"{pth}.{rest}"

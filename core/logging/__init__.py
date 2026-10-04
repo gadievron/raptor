@@ -556,11 +556,11 @@ def get_logger(name: str | None = None) -> "logging.Logger":
     # creates a child logger that needs to inherit from it.
     base = RaptorLogger()
     if name is None:
-        return base
+        return base  # type: ignore[return-value]
     # Namespace under "raptor" so child propagation reaches the
     # audit handlers attached to the base "raptor" logger.
     safe_name = name if name.startswith("raptor.") else f"raptor.{name}"
-    return logging.getLogger(safe_name)  # type: ignore[return-value]
+    return logging.getLogger(safe_name)
 
 
 def set_console_log_level(level: int, *, include_root: bool = False) -> None:

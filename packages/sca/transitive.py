@@ -753,7 +753,7 @@ def _extract_cargo_lock_parents(blob: bytes) -> dict[str, list[str]]:
         try:
             import tomllib
         except ImportError:
-            import tomli as tomllib  # type: ignore[import]
+            import tomli as tomllib  # type: ignore[import,no-redef]
         data = tomllib.loads(blob.decode("utf-8", errors="replace"))
     except Exception:                                       # noqa: BLE001
         return {}

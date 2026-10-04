@@ -251,11 +251,11 @@ def _entry_to_credentials(entry: dict) -> BasicCredentials | None:
         user, _, password = decoded.partition(":")
         if user:
             return BasicCredentials(user, password)
-    user: str | None = entry.get("username")  # type: ignore[assignment]
-    password: str | None = entry.get("password")  # type: ignore[assignment]
-    if isinstance(user, str) and isinstance(password, str) \
-            and user and password:
-        return BasicCredentials(user, password)
+    entry_user: str | None = entry.get("username")  # type: ignore[assignment]
+    entry_password: str | None = entry.get("password")  # type: ignore[assignment]
+    if isinstance(entry_user, str) and isinstance(entry_password, str) \
+            and entry_user and entry_password:
+        return BasicCredentials(entry_user, entry_password)
     return None
 
 
