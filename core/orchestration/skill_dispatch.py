@@ -648,6 +648,16 @@ def start_lifecycle(command: str, target: Path,
     """
     from core.config import RaptorConfig
     safe_env = RaptorConfig.get_safe_env()
+    # The libexec trust guard requires _RAPTOR_TRUSTED or CLAUDECODE in the
+    # child env. get_safe_env() only COPIES those if already in os.environ —
+    # under bin/raptor (or a Claude Code session) they are, but on the direct
+    # `python3 raptor.py agentic` path they are not, so the /understand
+    # pre-pass's lifecycle call hit the guard and exited 2 ("Pre-pass
+    # skipped"). This is RAPTOR dispatching its OWN lifecycle helper, so
+    # asserting the trust marker is correct. setdefault so a real parent
+    # value (bin/raptor / CC) is never overwritten; _RAPTOR_TRUSTED (not a
+    # fabricated CLAUDECODE) is the honest marker for a non-CC transport.
+    safe_env.setdefault("_RAPTOR_TRUSTED", "1")
     argv = [str(_LIFECYCLE), "start", command, "--target", str(target)]
     # Thread the parent's project explicitly: a sibling lifecycle run
     # (the /understand pre-pass, the /validate post-pass, the gap-audit
@@ -982,6 +992,16 @@ def run_skill_dispatch(
             skipped_reason="claude CLI transport disabled "
             "(RAPTOR_CC_TRANSPORT_DISABLED is set)")
 
+    # Operator-forced local-only posture: these skill passes are
+    # claude-bound (agentic tool-using investigations; there is no
+    # Ollama agent loop), so under RAPTOR_NO_CLAUDE skip them cleanly
+    # rather than spawning claude. Same skip shape as the other gates.
+    if os.environ.get("RAPTOR_NO_CLAUDE"):
+        return SkillDispatchResult(
+            ran=False,
+            skipped_reason="claude CLI skipped (RAPTOR_NO_CLAUDE is set); "
+            "this pass requires the Claude Code agent")
+
     # Realpath at the resolution seam: symlinked installs otherwise
     # fail the mount-ns visibility check and silently downgrade the
     # dispatch to Landlock-only (see resolve_claude_cli).
@@ -993,6 +1013,20 @@ def run_skill_dispatch(
         reason = preflight()
         if reason is not None:
             return SkillDispatchResult(ran=False, skipped_reason=reason)
+
+    # Present-but-unusable claude (installed, NOT logged in) must skip
+    # like "not on PATH" — otherwise start_lifecycle creates a run dir,
+    # the dispatch spawns `claude -p` which exits with "Not logged in",
+    # and the run surfaces a noisy failure. The cc-probe (cache-first;
+    # a real call only on cold cache) returns None when the transport
+    # is not trustworthy, including the unauthenticated case.
+    from core.llm.cc_probe import probe_cc_session_model
+    if probe_cc_session_model(claude_bin) is None:
+        return SkillDispatchResult(
+            ran=False,
+            skipped_reason="claude CLI present but not usable "
+            "(not logged in, or transport probe failed) — "
+            "run `claude /login`")
 
     target = Path(target).resolve()
     context_dirs = [Path(d).resolve() for d in context_dirs]
@@ -1259,6 +1293,21 @@ def run_skill_dispatch(
 
         if proc.returncode != 0:
             lifecycle_settled = True
+            # Safety net for the cc-probe gate above: auth can expire
+            # between the probe and the dispatch, so detect the CLI's
+            # own "Not logged in" on a non-zero exit and skip cleanly.
+            _child_out = ((proc.stdout or "") + (proc.stderr or "")).lower()
+            if ("not logged in" in _child_out
+                    or "please run /login" in _child_out
+                    or "please run `claude /login`" in _child_out):
+                reason = ("claude CLI present but not logged in — run "
+                          "`claude /login` (skill pass skipped)")
+                fail_lifecycle(run_dir, reason)
+                logger.warning("%s skipped: %s", log_label, reason)
+                return SkillDispatchResult(
+                    ran=False, skipped_reason=reason,
+                    run_dir=run_dir, duration_s=time.monotonic() - t0,
+                    child_exit=str(proc.returncode))
             fail_lifecycle(run_dir, f"subprocess returned {proc.returncode}")
             _persist_child_tail(run_dir, proc,
                                 duration_s=time.monotonic() - t0)

@@ -627,7 +627,9 @@ class TestDispatchGates:
         with patch("core.orchestration.skill_dispatch.subprocess.run",
                    side_effect=_lifecycle), \
              patch("core.orchestration.skill_dispatch."
-                   "run_untrusted_networked", side_effect=_sandbox):
+                   "run_untrusted_networked", side_effect=_sandbox), \
+             patch("core.llm.cc_probe.probe_cc_session_model",
+                   return_value="fake-model"):
             postpass = _dispatch_validate(
                 target_path=tmp_path,
                 audit_out_dir=tmp_path,

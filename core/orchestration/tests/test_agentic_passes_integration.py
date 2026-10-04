@@ -150,7 +150,9 @@ class PrepassIntegrationTests(unittest.TestCase):
                  patch("core.orchestration.skill_dispatch.subprocess.run",
                        side_effect=sub_disp), \
                  patch("core.orchestration.skill_dispatch.run_untrusted_networked",
-                       side_effect=sbx_disp):
+                       side_effect=sbx_disp), \
+                 patch("core.llm.cc_probe.probe_cc_session_model",
+                       return_value="fake-model"):
                 result = run_understand_prepass(
                     target=target, agentic_out_dir=agentic_out,
                     claude_bin="/fake/claude",
@@ -221,7 +223,9 @@ class PrepassIntegrationTests(unittest.TestCase):
                  patch("core.orchestration.skill_dispatch.subprocess.run",
                        side_effect=sub_disp), \
                  patch("core.orchestration.skill_dispatch.run_untrusted_networked",
-                       side_effect=sbx_disp):
+                       side_effect=sbx_disp), \
+                 patch("core.llm.cc_probe.probe_cc_session_model",
+                       return_value="fake-model"):
                 prepass = run_understand_prepass(
                     target=target, agentic_out_dir=agentic_out,
                     claude_bin="/fake/claude",
@@ -285,7 +289,9 @@ class PrepassIntegrationTests(unittest.TestCase):
                  patch("core.orchestration.skill_dispatch.subprocess.run",
                        side_effect=sub_disp), \
                  patch("core.orchestration.skill_dispatch.run_untrusted_networked",
-                       side_effect=sbx_disp):
+                       side_effect=sbx_disp), \
+                 patch("core.llm.cc_probe.probe_cc_session_model",
+                       return_value="fake-model"):
                 result = run_understand_prepass(
                     target=target, agentic_out_dir=agentic_out,
                     claude_bin="/fake/claude",
@@ -343,7 +349,9 @@ class PostpassIntegrationTests(unittest.TestCase):
                  patch("core.orchestration.skill_dispatch.subprocess.run",
                        side_effect=sub_disp1), \
                  patch("core.orchestration.skill_dispatch.run_untrusted_networked",
-                       side_effect=sbx_disp1):
+                       side_effect=sbx_disp1), \
+                 patch("core.llm.cc_probe.probe_cc_session_model",
+                       return_value="fake-model"):
                 prepass = run_understand_prepass(
                     target=target, agentic_out_dir=agentic_out,
                     claude_bin="/fake/claude",
@@ -363,7 +371,9 @@ class PostpassIntegrationTests(unittest.TestCase):
                  patch("core.orchestration.skill_dispatch.subprocess.run",
                        side_effect=sub_disp2), \
                  patch("core.orchestration.skill_dispatch.run_untrusted_networked",
-                       side_effect=sbx_disp2):
+                       side_effect=sbx_disp2), \
+                 patch("core.llm.cc_probe.probe_cc_session_model",
+                       return_value="fake-model"):
                 postpass = run_validate_postpass(
                     target=target, agentic_out_dir=agentic_out,
                     analysis_report=report, claude_bin="/fake/claude",

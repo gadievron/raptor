@@ -154,7 +154,9 @@ def test_agentic_launcher_writes_pointer_into_validate_dir(tmp_path):
          patch("core.llm.cc_adapter.resolve_claude_cli",
                return_value="/usr/bin/fake-claude"), \
          patch("core.security.rule_of_two."
-               "require_human_or_sandbox_for_agentic_pass"):
+               "require_human_or_sandbox_for_agentic_pass"), \
+         patch("core.llm.cc_probe.probe_cc_session_model",
+               return_value="fake-model"):
         result = agentic_passes.run_validate_postpass(
             target=target,
             agentic_out_dir=agentic_out,

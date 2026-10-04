@@ -127,6 +127,9 @@ def seam(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "core.orchestration.skill_dispatch.run_untrusted_networked",
         _fake_cc_dispatch)
+    monkeypatch.setattr(
+        "core.llm.cc_probe.probe_cc_session_model",
+        lambda _binary=None: "fake-model")
 
     return SimpleNamespace(code=code, proj_out=proj_out, parent=parent,
                            out_base=out_base, projects_dir=projects_dir)

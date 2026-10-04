@@ -236,6 +236,11 @@ class TestRunSkillDispatchProxyMode:
             cc_adapter, "resolve_claude_cli",
             lambda _e=None: "/usr/bin/claude",
         )
+        import core.llm.cc_probe as cc_probe
+        monkeypatch.setattr(
+            cc_probe, "probe_cc_session_model",
+            lambda _binary=None: "fake-model",
+        )
         run_dir = tmp_path / "run"
         run_dir.mkdir()
         monkeypatch.setattr(
