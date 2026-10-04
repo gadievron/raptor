@@ -344,7 +344,7 @@ def _find_regions(
         release_off = 0
         release_name = ""
         for off2 in range(offset + 1, len(segment)):
-            m = rel_re.search(segment[off2])
+            m = rel_re.search(segment[off2])  # type: ignore[assignment]
             if m:
                 release_off = off2
                 release_name = m.group(0).rstrip("( \t")
@@ -859,7 +859,7 @@ def cocci_corroboration(
             return None
         res = run_rule(
             Path(target_path),
-            str(rule_path),
+            Path(rule_path),
             defines={"lock": lock, "unlock": unlock},
             timeout=120,
             allow_scripting=True,

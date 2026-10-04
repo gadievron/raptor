@@ -172,16 +172,16 @@ def scan_java_source(source_text: str, file_path: str,
         res = resolver.resolve_call(rhs, allow_default=True)
         if not res.resolved:
             continue  # refusal accounting lives on resolver.stats
-        if not _weak_class(family, res.value):
+        if not _weak_class(family, res.value):  # type: ignore[arg-type]
             stats["resolved_safe"] += 1
             continue
         rule_id, cwe = _RULES[family]
         try:
             rel_cfg = str(
-                Path(res.config_file).resolve().relative_to(
+                Path(res.config_file).resolve().relative_to(  # type: ignore[arg-type]
                     Path(repo_root).resolve()))
         except ValueError:
-            rel_cfg = Path(res.config_file).name
+            rel_cfg = Path(res.config_file).name  # type: ignore[arg-type]
         stats["emitted"] += 1
         findings.append({
             "rule_id": rule_id,

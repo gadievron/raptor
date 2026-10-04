@@ -243,7 +243,7 @@ class RaptorLogger:
             with cls._lock:
                 if cls._instance is None:
                     cls._instance = super().__new__(cls)
-        return cls._instance
+        return cls._instance  # type: ignore[return-value]
 
     def __init__(self) -> None:
         """Initialize the logger (only once)."""
@@ -354,7 +354,7 @@ class RaptorLogger:
                 root_console = logging.StreamHandler(sys.stderr)
                 root_console.setLevel(logging.INFO)
                 root_console.setFormatter(console_formatter)
-                root_console._raptor_root_handler = True  # sentinel for the guard above
+                root_console._raptor_root_handler = True  # type: ignore[attr-defined]  # sentinel for the guard above
                 root_logger.addHandler(root_console)
                 # Ensure root accepts INFO-level records; default is WARNING.
                 if root_logger.level == logging.NOTSET or root_logger.level > logging.INFO:
@@ -560,7 +560,7 @@ def get_logger(name: str | None = None) -> "logging.Logger":
     # Namespace under "raptor" so child propagation reaches the
     # audit handlers attached to the base "raptor" logger.
     safe_name = name if name.startswith("raptor.") else f"raptor.{name}"
-    return logging.getLogger(safe_name)
+    return logging.getLogger(safe_name)  # type: ignore[return-value]
 
 
 def set_console_log_level(level: int, *, include_root: bool = False) -> None:

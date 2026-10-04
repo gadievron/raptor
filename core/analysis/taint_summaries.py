@@ -785,7 +785,7 @@ def _expr_taint(
         return out
     if isinstance(expr, ast.Dict):
         out = _empty_state()
-        for e in (*expr.keys, *expr.values):
+        for e in (*expr.keys, *expr.values):  # type: ignore[assignment]
             if e is not None:  # None key = ``**expr`` expansion's slot
                 out = _merge_states(
                     out, _expr_taint(e, cfg_node, in_state_fn, summaries, local_bindings, distrusted_roots),
@@ -812,7 +812,7 @@ def _expr_taint(
             parts.append(gen.iter)
             parts.extend(gen.ifs)
         out = _empty_state()
-        for e in parts:
+        for e in parts:  # type: ignore[assignment]
             out = _merge_states(
                 out, _expr_taint(e, cfg_node, in_state_fn, summaries, local_bindings, distrusted_roots),
             )
@@ -1195,7 +1195,7 @@ def _compute_one_summary(
         # positional args' contributions.
         if n.call_sites:
             for ast_n in _calls_by_line.get(n.lineno, ()):
-                callable_name = _attribute_chain_str(ast_n.func)
+                callable_name: str | None = _attribute_chain_str(ast_n.func)
                 if callable_name is None:
                     continue
                 for arg_idx, arg_ast in enumerate(ast_n.args):

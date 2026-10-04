@@ -208,6 +208,7 @@ def _run_understand_prepass_unsafe(
                              understand_dir=dispatch.run_dir,
                              duration_s=dispatch.duration_s)
 
+    assert dispatch.run_dir is not None
     context_map = dispatch.run_dir / "context-map.json"
 
     # Best-effort: enrich the agentic checklist with priority markers from
@@ -427,6 +428,7 @@ def _run_validate_postpass_unsafe(
                               skipped_reason=dispatch.skipped_reason,
                               duration_s=dispatch.duration_s)
 
+    assert dispatch.run_dir is not None
     report_path = dispatch.run_dir / "validation-report.md"
     return PostpassResult(ran=True,
                           selected_count=len(selected) + len(audit_selected),

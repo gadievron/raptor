@@ -39,7 +39,7 @@ class AccessorRecord:
 class CoAccessorGroup:
     """A struct field accessed by multiple functions with different locking."""
     field: str
-    accessors: list = field(default_factory=list)
+    accessors: list = field(default_factory=list)  # type: ignore[operator]
     lock_conflict: bool = False
 
     @property
@@ -62,9 +62,9 @@ class CoAccessorGroup:
                 parts.append(f"{', '.join(names[:2])} (under {lock})")
             return f"`{self.field}` accessed under different locks: {'; '.join(parts)}"
         n = len(funcs)
-        names = ", ".join(funcs[:4])
+        names_str = ", ".join(funcs[:4])
         suffix = f" (+{n - 4} more)" if n > 4 else ""
-        return f"`{self.field}` accessed by {names}{suffix}"
+        return f"`{self.field}` accessed by {names_str}{suffix}"
 
 
 # \b pins the receiver to a word start: unanchored, every position

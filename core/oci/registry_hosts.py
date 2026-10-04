@@ -356,12 +356,12 @@ _REGISTRY_FAMILIES: list[tuple[Callable[[str], bool], list[str]]] = [
     # istio-era k8s.gcr.io images share it).
     (lambda r: r in {"gcr.io", "us.gcr.io", "eu.gcr.io", "asia.gcr.io",
                      "k8s.gcr.io"},
-     [None, "storage.googleapis.com"]),
+     [None, "storage.googleapis.com"]),  # type: ignore[list-item]
     (lambda r: r.endswith("-docker.pkg.dev"),
-     [None, "storage.googleapis.com"]),
+     [None, "storage.googleapis.com"]),  # type: ignore[list-item]
 
     # Azure Container Registry — ``<name>.azurecr.io``.
-    (lambda r: r.endswith(".azurecr.io"), [None]),
+    (lambda r: r.endswith(".azurecr.io"), [None]),  # type: ignore[list-item]
 
     # GitLab Container Registry — usually ``registry.gitlab.com`` for
     # the SaaS, or ``registry.<host>`` for self-hosted.

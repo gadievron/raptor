@@ -108,7 +108,7 @@ def record_tool_evidence_outcome(
                 decision_class=decision_class,
                 model=str(model),
                 finding_id=str(finding_id),
-                outcome=outcome,
+                outcome=outcome,  # type: ignore[arg-type]
                 sample=sample,
             )
         except Exception as e:                          # noqa: BLE001
@@ -132,7 +132,7 @@ def record_tool_evidence_outcome(
             decision_class=decision_class,
             model=str(model),
             event_type=EventType.TOOL_EVIDENCE,
-            outcome=outcome,
+            outcome=outcome,  # type: ignore[arg-type]
             sample=sample,
         )
         return True

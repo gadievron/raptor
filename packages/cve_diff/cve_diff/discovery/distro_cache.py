@@ -211,6 +211,7 @@ def _fetch_debian(cve_id: str) -> dict[str, Any]:
     resp, err = _http_or_error(_DEBIAN_URL.format(cve_id=cve_id))
     if err:
         return err
+    assert resp is not None
     body = resp.body.decode("utf-8", errors="replace")[:_MAX_BYTES]
     refs: list[str] = []
     for href in _HREF_RE.findall(body):
@@ -225,6 +226,7 @@ def _fetch_ubuntu(cve_id: str) -> dict[str, Any]:
     resp, err = _http_or_error(_UBUNTU_URL.format(cve_id=cve_id))
     if err:
         return err
+    assert resp is not None
     try:
         data = resp.json()
     except Exception as exc:
@@ -252,6 +254,7 @@ def _fetch_redhat(cve_id: str) -> dict[str, Any]:
     resp, err = _http_or_error(_REDHAT_URL.format(cve_id=cve_id))
     if err:
         return err
+    assert resp is not None
     try:
         data = resp.json()
     except Exception as exc:

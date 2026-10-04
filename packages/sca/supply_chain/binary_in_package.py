@@ -288,7 +288,7 @@ def _manifest_own_name(manifest: Manifest) -> str | None:
         return None
     try:
         data = json.loads(text)
-    except (json.JSONDecodeError, *PARSE_ESCAPE_ERRORS):  # hostile-input escape classes
+    except (json.JSONDecodeError, *PARSE_ESCAPE_ERRORS):  # type: ignore[misc]  # hostile-input escape classes
         return None
     if not isinstance(data, dict):
         return None
@@ -319,7 +319,7 @@ def _manifest_declares_native(manifest: Manifest) -> bool:
         return False
     try:
         data = json.loads(text)
-    except (json.JSONDecodeError, *PARSE_ESCAPE_ERRORS):  # hostile-input escape classes
+    except (json.JSONDecodeError, *PARSE_ESCAPE_ERRORS):  # type: ignore[misc]  # hostile-input escape classes
         return False
     if not isinstance(data, dict):
         return False

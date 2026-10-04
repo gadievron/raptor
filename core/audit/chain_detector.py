@@ -97,7 +97,7 @@ def _load_flow_trace_pairs(out_dir: Path) -> set[tuple[str, str]]:
             for i, a in enumerate(keys):
                 for b in keys[i + 1:]:
                     pair = tuple(sorted([a, b]))
-                    pairs.add(pair)
+                    pairs.add(pair)  # type: ignore[arg-type]
         except Exception:
             logger.debug("flow trace pair load failed", exc_info=True)
             continue
@@ -148,7 +148,7 @@ def find_chain_candidates(
             )
             if connected:
                 candidates.append((a, b))
-                seen.add(pair_key)
+                seen.add(pair_key)  # type: ignore[arg-type]
 
     return candidates
 

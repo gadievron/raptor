@@ -385,7 +385,7 @@ def build_schema(no_exploits: bool = False, no_patches: bool = False) -> dict[st
     """Build JSON Schema for CC output, excluding fields the user didn't ask for."""
     schema = copy.deepcopy(FINDING_RESULT_SCHEMA)
     if no_exploits:
-        schema["properties"].pop("exploit_code", None)
+        schema["properties"].pop("exploit_code", None)  # type: ignore[attr-defined]
     if no_patches:
-        schema["properties"].pop("patch_code", None)
+        schema["properties"].pop("patch_code", None)  # type: ignore[attr-defined]
     return schema

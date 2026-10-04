@@ -280,7 +280,7 @@ def _verify_proxy_events(
         seqs = []
         for e in usable:
             try:
-                seqs.append(int(e.get("seq")))
+                seqs.append(int(e.get("seq")))  # type: ignore[arg-type]
             except (TypeError, ValueError):
                 integrity = _INTEGRITY_TAMPERED
         if seqs and (len(set(seqs)) != len(seqs)
@@ -815,7 +815,7 @@ def _check_host_recon(proxy_events: list[dict], threshold: int) -> list[dict]:
         "type": "host_recon_pattern",
         "severity": SEVERITY_MEDIUM,
         "count": len(hosts),
-        "evidence": _cap_evidence(sorted(hosts)),
+        "evidence": _cap_evidence(sorted(hosts)),  # type: ignore[arg-type]
     }]
 
 
@@ -846,7 +846,7 @@ def _check_volume_anomaly(summary: dict | None,
         evidence.append(
             f"total_denials={total} near/at cap ({MAX_DENIALS_PER_RUN})"
         )
-    marker_types = sorted({m.get("type") for m in budget_markers
+    marker_types = sorted({m.get("type") for m in budget_markers  # type: ignore[type-var]
                             if m.get("type") != "audit_summary"})
     if marker_types:
         evidence.append(f"audit budget markers present: {marker_types}")

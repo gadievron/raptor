@@ -301,7 +301,7 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
         # Same propagation path the main CLI's apply_cli_args uses:
         # the tracer builds its AuditBudget from this state slot.
         from core.sandbox import state as _sbx_state
-        _sbx_state._cli_sandbox_audit_budget = int(args.audit_budget)
+        _sbx_state._cli_sandbox_audit_budget = int(args.audit_budget)  # type: ignore[assignment]
 
     with contextlib.ExitStack() as stack:
         run_dir, kept = _resolve_run_dir(args, stack)
@@ -416,7 +416,7 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
             return _TIMEOUT_EX
         # Forward the spawned command's exit code as our own — caller
         # composes naturally with shell pipelines that check $?.
-        return return_code
+        return return_code  # type: ignore[return-value]
 
 
 if __name__ == "__main__":

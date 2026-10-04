@@ -83,13 +83,13 @@ def extract_conditions_from_flow_trace(
             if isinstance(cond, str):
                 conditions.append(PathCondition(
                     text=cond,
-                    source=step.get("definition", step.get("file", "")),
+                    source=step.get("definition", step.get("file", "")) or "",
                 ))
             elif isinstance(cond, dict):
                 conditions.append(PathCondition(
                     text=cond.get("text", ""),
                     negated=bool(cond.get("negated", False)),
-                    source=step.get("definition", step.get("file", "")),
+                    source=step.get("definition", step.get("file", "")) or "",
                 ))
 
     top_level = trace.get("path_conditions", [])

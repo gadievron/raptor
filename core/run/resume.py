@@ -307,7 +307,8 @@ def spans_drift(
                 (r.line_start, r.line_end or r.line_start)
                 for r in span_group
             ]
-            span_hashes = iter(hash_spans(resolved, spans))
+            assert resolved is not None
+            span_hashes = iter(hash_spans(resolved, spans))  # type: ignore[arg-type]
         else:
             span_hashes = iter([""] * len(span_group))
         whole_hash: str | None = None
@@ -317,7 +318,7 @@ def spans_drift(
             else:
                 if whole_hash is None:
                     whole_hash = (
-                        hash_whole_file(resolved) if readable else ""
+                        hash_whole_file(resolved) if readable else ""  # type: ignore[arg-type]
                     )
                 current = whole_hash
             checked += 1

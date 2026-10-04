@@ -356,7 +356,7 @@ def run_audit_multi_review(
 
     return run_multi_model(
         task=task,
-        models=handles,
+        models=handles,  # type: ignore[arg-type]
         adapter=adapter,
         reviewers=reviewers,
         cost_gate=cost_gate,
@@ -397,7 +397,7 @@ def run_self_consistency(
 
     return run_multi_model(
         task=task,
-        models=handles,
+        models=handles,  # type: ignore[arg-type]
         adapter=adapter,
         reviewers=reviewers,
         cost_gate=cost_gate,

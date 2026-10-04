@@ -295,7 +295,7 @@ def parse_directory_packages_props(path: Path) -> CPMFile | None:
         return _PARSE_CACHE[resolved]
     try:
         root = _safe_fromstring(text)
-    except (_ET.ParseError, *PARSE_ESCAPE_ERRORS) as e:  # defused XML refusals are ValueError subclasses
+    except (_ET.ParseError, *PARSE_ESCAPE_ERRORS) as e:  # type: ignore[misc]  # defused XML refusals are ValueError subclasses
         logger.warning(
             "sca.parsers.directory_packages_props: XML parse failed "
             "for %s: %s",
@@ -579,7 +579,7 @@ def parse_directory_build_props(path: Path) -> CPMFile | None:
         return _PARSE_CACHE[resolved]
     try:
         root = _safe_fromstring(text)
-    except (_ET.ParseError, *PARSE_ESCAPE_ERRORS) as e:  # defused XML refusals are ValueError subclasses
+    except (_ET.ParseError, *PARSE_ESCAPE_ERRORS) as e:  # type: ignore[misc]  # defused XML refusals are ValueError subclasses
         logger.warning(
             "sca.parsers.directory_packages_props: XML parse failed "
             "for %s: %s",

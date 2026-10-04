@@ -193,7 +193,7 @@ def _get_parser(language: str):
         if language == "c":
             import tree_sitter_c as ts_lang
         elif language == "cpp":
-            import tree_sitter_cpp as ts_lang
+            import tree_sitter_cpp as ts_lang  # type: ignore[no-redef]
         else:
             return None
         # Reuse the call_graph parser cache so we don't re-allocate
@@ -479,7 +479,7 @@ def _walk_subtree_for_call_sites(
             return
         if t == _CALL_EXPR:
             callee = node.child_by_field_name("function")
-            name = _resolve_callable_name(callee)
+            name = _resolve_callable_name(callee)  # type: ignore[arg-type]
             args = _arg_surface_names(node)
             is_root = id(_unwrap_value_expr(node)) == root_id or \
                 id(node) == root_id
@@ -647,7 +647,7 @@ def _payload_from_assignment(
     if rhs is not None:
         clean_lhs = (lhs is not None and lhs.type == _IDENT
                      and op == "=" and local_scopes is not None
-                     and local_scopes.vouches(lhs_name, lhs.start_byte))
+                     and local_scopes.vouches(lhs_name, lhs.start_byte))  # type: ignore[arg-type]
         assigned = defs if clean_lhs else frozenset()
         cs_acc.extend(
             _walk_subtree_for_call_sites(rhs, assigned_for_root=assigned)

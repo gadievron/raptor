@@ -214,7 +214,7 @@ def _summary_section(
             kev_count += 1
     for collection in (supply_chain_findings, hygiene_findings,
                         license_findings):
-        for f in collection:
+        for f in collection:  # type: ignore[assignment]
             if getattr(f, "suppressed", False):
                 suppressed_count += 1
                 continue
@@ -245,7 +245,7 @@ def _summary_section(
         if cache_evictions is not None and cache_evictions > 0:
             # See report.py — surface evictions only when LRU fired.
             cache_label += f", {cache_evictions} memo evictions"
-        counts.append(("Advisory cache", cache_label))
+        counts.append(("Advisory cache", cache_label))  # type: ignore[arg-type]
 
     counts_html = "".join(
         f"<dt>{escape(k)}</dt><dd>{escape(str(v))}</dd>"

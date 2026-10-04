@@ -387,10 +387,10 @@ class CoverageStore:
                     "first: libexec/raptor-audit coverage compact %s",
                     self.path, over_budget_size, _MAX_STORE_BYTES,
                     self.path)
-                data = {}
+                data: dict[str, Any] = {}
             else:
                 try:
-                    data = load_json(
+                    data = load_json(  # type: ignore[assignment]
                         self.path, strict=True, max_bytes=_MAX_STORE_BYTES,
                     )
                 except (ValueError, OSError, RecursionError) as exc:

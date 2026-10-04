@@ -296,7 +296,7 @@ def enrich_attack_surface_with_taint(
             source_method = source.get("function", "")
         if not _is_identifier(source_method):
             continue
-        source_rows.append((source, source_method))
+        source_rows.append((source, source_method))  # type: ignore[arg-type]
 
     sink_rows: list[tuple[dict[str, Any], str]] = []
     if source_rows:
@@ -304,7 +304,7 @@ def enrich_attack_surface_with_taint(
             sink_call = _sink_call_name(sink, calls)
             if not _is_identifier(sink_call):
                 continue
-            sink_rows.append((sink, sink_call))
+            sink_rows.append((sink, sink_call))  # type: ignore[arg-type]
 
     total = len(source_rows) * len(sink_rows)
     dropped = max(0, total - max_pairs)

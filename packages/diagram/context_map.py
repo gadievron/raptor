@@ -98,8 +98,8 @@ def _location_text(item: dict[str, Any], *, compact_binary: bool = False) -> str
 
 def _is_remote_surface(data: dict[str, Any]) -> bool:
     meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
-    app_type = str(meta.get("app_type") or meta.get("target_kind") or "").lower()
-    target = str(meta.get("target") or "").lower()
+    app_type = str(meta.get("app_type") or meta.get("target_kind") or "").lower()  # type: ignore[union-attr]
+    target = str(meta.get("target") or "").lower()  # type: ignore[union-attr]
     return (
         app_type in {"http_server", "web_app", "web_service", "web"}
         or "httpd-" in target
@@ -109,7 +109,7 @@ def _is_remote_surface(data: dict[str, Any]) -> bool:
 
 def _is_blackbox_binary(data: dict[str, Any]) -> bool:
     meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
-    return str(meta.get("analysis_mode") or "").lower() == "blackbox_binary"
+    return str(meta.get("analysis_mode") or "").lower() == "blackbox_binary"  # type: ignore[union-attr]
 
 
 def _is_support_tool(item: dict[str, Any]) -> bool:

@@ -356,7 +356,7 @@ def _norm_pypi(meta: dict) -> dict:
 
 def _norm_packagist(meta: dict) -> dict:
     pkgs = meta.get("packages")
-    vlist = next(iter(pkgs.values()), []) if isinstance(pkgs, dict) else []
+    vlist: list = next(iter(pkgs.values()), []) if isinstance(pkgs, dict) else []
     head = vlist[0] if vlist and isinstance(vlist[0], dict) else {}
     return dict(
         description=head.get("description"),
@@ -455,7 +455,7 @@ def _evidence_pypi_rich(candidate: Candidate, http) -> Evidence:
         description=info.get("summary"),
         readme=(_as_str(info.get("description"))[:_README_CAP] or None),
         num_versions=len(releases),
-        age_days=_age_days(min(times)) if times else None,
+        age_days=_age_days(min(times)) if times else None,  # type: ignore[type-var]
         has_repo=bool(urls or info.get("home_page")),
         deprecated=bool(info.get("yanked")),
     )
@@ -635,7 +635,7 @@ def reaudit_reviewed_legit(
                     "removed from registry or unreachable")
                 continue
             ev = collect_evidence(Candidate(name, "", 0, 0, 0), eco,
-                                  lambda _n, _meta=meta: _meta)
+                                  lambda _n, _meta=meta: _meta)  # type: ignore[misc]
             if ev.deprecated:
                 flags.setdefault(name, []).append("now deprecated")
         if osv_malicious_fn is not None:

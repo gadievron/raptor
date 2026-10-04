@@ -124,7 +124,7 @@ def main(argv: Sequence[str]) -> int:
                                 thread_name_prefix="sca-health") as pool:
             futs = [
                 pool.submit(_run_probe,
-                            factory(http, cache, offline=args.offline),
+                            factory(http, cache, offline=args.offline),  # type: ignore[arg-type]
                             eco, probe, capture)
                 for eco, factory, probe in _PROBES
             ]
@@ -198,7 +198,7 @@ class _ThreadLogCapture(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         with self._lock2:
-            self._by_thread.setdefault(record.thread, []).append(
+            self._by_thread.setdefault(record.thread, []).append(  # type: ignore[arg-type]
                 record.getMessage())
 
     def last_for_current_thread(self) -> str | None:

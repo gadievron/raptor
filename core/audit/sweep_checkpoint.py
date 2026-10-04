@@ -510,13 +510,13 @@ class SweepCheckpoint:
             return False
         if not _valid_parts(parts) or not _valid_result_payload(payload):
             return False
-        key = SweepMemo.make_key(tool, parts)
+        key = SweepMemo.make_key(tool, parts)  # type: ignore[arg-type]
         if key is None:
             return False
         # Duplicate keys are legitimate (concurrent first dispatches
         # both persisting) — last record wins, like the memo's store.
-        self._loaded[key] = payload
-        self._persisted.add(_key_digest(tool, parts))
+        self._loaded[key] = payload  # type: ignore[assignment]
+        self._persisted.add(_key_digest(tool, parts))  # type: ignore[arg-type]
         return True
 
     # ── read side ────────────────────────────────────────────────────

@@ -348,10 +348,10 @@ def detect_boundary_unit_deviations(
             for pos in range(min(max_pos, _MAX_ARG_POSITIONS)):
                 views: list[_LitView] = []
                 unresolved = 0
-                for s in arg_sites:
-                    if len(s.args) <= pos:
+                for s in arg_sites:  # type: ignore[assignment]
+                    if len(s.args) <= pos:  # type: ignore[attr-defined]
                         continue
-                    value = _parse_int_literal(s.args[pos])
+                    value = _parse_int_literal(s.args[pos])  # type: ignore[attr-defined]
                     if value is None:
                         unresolved += 1
                         continue

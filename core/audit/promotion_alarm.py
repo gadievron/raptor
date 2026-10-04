@@ -119,10 +119,10 @@ def build_alarm_record(
         # them) go on the record so the operator can audit what the
         # unverified claim named.
         record["bypass_claimed"] = [str(b)[:100] for b in bypass][:16] \
-            if isinstance(bypass, (list, tuple)) else str(bypass)[:200]
+            if isinstance(bypass, (list, tuple)) else str(bypass)[:200]  # type: ignore[assignment]
         tiers = (review_result or {}).get("g2_invariant_bypass_tiers")
         if isinstance(tiers, dict):
-            record["bypass_claimed_tiers"] = {
+            record["bypass_claimed_tiers"] = {  # type: ignore[assignment]
                 str(k)[:100]: str(v)[:40]
                 for k, v in list(tiers.items())[:16]
             }

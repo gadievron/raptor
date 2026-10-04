@@ -469,7 +469,7 @@ def compute_gaps(
         # moved/edited function whose slice differs at the verified
         # span (or errors) falls back to the relevance diff — the
         # fail-toward-re-review direction.
-        _slice_out_dir = Path(out_dir)
+        _slice_out_dir = Path(out_dir)  # type: ignore[arg-type]
         _slice_target = Path(target_path_str)
 
         def _current_slice_hash(
@@ -2002,7 +2002,7 @@ def gap_for_site(
                 (is_func and not best_is_func)
                 or best_span is None
                 or span < best_span
-                or (span == best_span and line_start > best["line_start"])
+                or (span == best_span and best is not None and line_start > best["line_start"])
             ):
                 best = dict(item)
                 best_span = span
@@ -3375,6 +3375,7 @@ def _verify_entries_fold(
     from core.staleness import hash_spans
 
     stale = 0
+    assert target_path is not None
     for file_path, items in to_verify.items():
         resolved = safe_join(Path(target_path), file_path)
         if resolved is None or not resolved.is_file():

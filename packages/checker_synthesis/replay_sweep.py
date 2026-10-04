@@ -493,38 +493,38 @@ def run_sweep(
             rule_id = rule_file.stem
             if rule_id in swept_library_stems:
                 continue  # already ran as a library entry on this target
-            entry = _entry_for_stem(rule_id)
+            entry_sem = _entry_for_stem(rule_id)
             matches, errored = _sweep_semgrep_rule(
                 report, target, rule_file,
                 rule_id=rule_id,
-                cwe=entry.cwe if entry else "",
+                cwe=entry_sem.cwe if entry_sem else "",
                 provenance="graduated",
                 tier="graduated",
-                tp_rate=entry.tp_rate if entry else None,
-                targets_tested=len(entry.targets) if entry else 0,
+                tp_rate=entry_sem.tp_rate if entry_sem else None,
+                targets_tested=len(entry_sem.targets) if entry_sem else 0,
             )
             report.matches.extend(matches)
-            if record and not errored and entry is not None:
-                _record(lib, report, entry, target, matches, timestamp)
+            if record and not errored and entry_sem is not None:
+                _record(lib, report, entry_sem, target, matches, timestamp)
 
         if target_is_c:
             for rule_file in graduated_cocci:
                 rule_id = rule_file.stem
                 if rule_id in swept_library_stems:
                     continue
-                entry = _entry_for_stem(rule_id)
+                entry_cocci = _entry_for_stem(rule_id)
                 matches, errored = _sweep_cocci_rule(
                     report, target, rule_file,
                     rule_id=rule_id,
-                    cwe=entry.cwe if entry else "",
-                    tp_rate=entry.tp_rate if entry else None,
-                    targets_tested=len(entry.targets) if entry else 0,
+                    cwe=entry_cocci.cwe if entry_cocci else "",
+                    tp_rate=entry_cocci.tp_rate if entry_cocci else None,
+                    targets_tested=len(entry_cocci.targets) if entry_cocci else 0,
                     provenance="graduated",
                     tier="graduated",
                 )
                 report.matches.extend(matches)
-                if record and not errored and entry is not None:
-                    _record(lib, report, entry, target, matches, timestamp)
+                if record and not errored and entry_cocci is not None:
+                    _record(lib, report, entry_cocci, target, matches, timestamp)
 
     return report
 

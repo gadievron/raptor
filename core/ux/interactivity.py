@@ -93,7 +93,7 @@ def session_may_ask(
         return False
     if ci is None:
         from core.security.rule_of_two import is_ci as ci
-    if ci():
+    if ci():  # type: ignore[misc]
         return False
     if std_fd_interactive is None:
         from core.annotations.provenance import (
@@ -114,7 +114,7 @@ def session_may_ask(
             _session_has_human_terminal as human_probe,
         )
     try:
-        return bool(human_probe())
+        return bool(human_probe())  # type: ignore[misc]
     except Exception:  # noqa: BLE001 — fail closed: no proof of an operator
         return False
 

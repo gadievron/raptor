@@ -270,8 +270,8 @@ def tree_language_set(inventory: dict[str, Any] | None) -> frozenset[str] | None
     with _TREE_LOCK:
         if len(_TREE_CACHE) >= _TREE_CACHE_MAX:
             _TREE_CACHE.clear()
-        _TREE_CACHE[key] = (files, langs)
-    return langs
+        _TREE_CACHE[key] = (files, langs)  # type: ignore[assignment]
+    return langs  # type: ignore[return-value]
 
 
 # ── per-tier predicates ──────────────────────────────────────────────

@@ -153,8 +153,8 @@ class FieldRecord:
     """All census sites for one field name."""
 
     field: str
-    writes: list[FieldWrite] = field(default_factory=list)
-    reads: list[FieldRead] = field(default_factory=list)
+    writes: list[FieldWrite] = field(default_factory=list)  # type: ignore[operator]
+    reads: list[FieldRead] = field(default_factory=list)  # type: ignore[operator]
     tier: str = TIER_TREE_SITTER
     sites_capped: bool = False
 

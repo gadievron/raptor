@@ -695,7 +695,7 @@ def _group_families(samples: list[_Sample]) -> tuple[dict[str, list[_Sample]], l
             for key, members in ordered[MAX_FAMILIES:MAX_FAMILIES + _MAX_SKIP_EXAMPLES]
         ],
     }
-    return kept, overflow
+    return kept, overflow  # type: ignore[return-value]
 
 
 def _offset_fields(members: list[_Sample], window: int) -> list[dict[str, Any]]:
@@ -942,7 +942,7 @@ def _tlv_walk(
     lengths: set[int] = set()
     n = len(data)
     while pos + header_size <= n and records < TLV_MAX_RECORDS:
-        length = int.from_bytes(data[pos + type_size:pos + header_size], endian)
+        length = int.from_bytes(data[pos + type_size:pos + header_size], endian)  # type: ignore[arg-type]
         value_len = (length - header_size) if includes_header else length
         if value_len < 0:
             return 0, 0
@@ -1874,7 +1874,7 @@ def profile_corpus(options: CorpusProfileOptions) -> dict[str, Any]:
 
     samples, skipped_count, skip_examples, caps_hit, seen = _collect_samples(options)
     grouped, overflow = _group_families(samples)
-    if overflow["count"]:
+    if overflow["count"]:  # type: ignore[call-overload]
         caps_hit = sorted({*caps_hit, "max_families"})
 
     families: dict[str, dict[str, Any]] = {}

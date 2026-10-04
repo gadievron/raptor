@@ -507,7 +507,7 @@ def parse_source_cached(file_path: str, source: str):
         # file on the run's analysis-gap trail.
         from core.run.gaps import parse_origin
         with parse_origin(file_path):
-            result = (parser.parse(src_bytes), lang)
+            result = (parser.parse(src_bytes), lang)  # type: ignore[assignment]
     if len(_parse_cache) >= _PARSE_CACHE_MAX:
         _parse_cache.popitem(last=False)
     _parse_cache[key] = result
@@ -1253,7 +1253,7 @@ def build_return_census(
     if budget_s is _DERIVE_BUDGET:
         budget_s = _derive_census_budget_s(len(source_texts))
     limiter = _CensusLimiter(
-        (time.monotonic() + budget_s) if budget_s is not None else None,
+        (time.monotonic() + budget_s) if budget_s is not None else None,  # type: ignore[operator]
         max_sites_per_file,
     )
     truncated = False

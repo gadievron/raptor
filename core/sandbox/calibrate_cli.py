@@ -232,7 +232,7 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
         try:
             bin_sha = cal._sha256_file(bin_path.resolve())
         except OSError:
-            bin_sha = None
+            bin_sha = None  # type: ignore[assignment]
         env_sig = cal._env_signature(env_keys)
         fp = (cal._fingerprint(bin_sha, env_sig)
               if bin_sha is not None else None)
@@ -244,7 +244,7 @@ def _cli_main(argv: Sequence[str] | None = None) -> int:
             env_keys=env_keys, force=args.force,
             timeout=args.timeout,
         )
-        cached = (
+        cached: bool = (
             before is not None
             and before.captured_at == profile.captured_at
         )

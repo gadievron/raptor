@@ -423,7 +423,7 @@ class CodeQLAdapter(ToolAdapter):
         # (real-HOME pack cache) rationale.
         runner = (
             make_sandbox_runner(
-                target=self._database_path,
+                target=self._database_path,  # type: ignore[arg-type]
                 output=self._database_path,
                 fake_home=False,
                 readable_paths=_codeql_user_state_paths(),
@@ -435,7 +435,7 @@ class CodeQLAdapter(ToolAdapter):
         # RAPTOR-shipped manifests only, and the lockfile fetch needs
         # the network the sandbox denies. Analyze stays sandboxed.
         for qp in unique_paths:
-            _ensure_pack_installed(Path(qp), self._codeql_bin, subprocess.run, env)
+            _ensure_pack_installed(Path(qp), self._codeql_bin or "", subprocess.run, env)
 
         try:
             # Scratch (SARIF output, temp pack) lives INSIDE the
@@ -449,7 +449,7 @@ class CodeQLAdapter(ToolAdapter):
             ) as tmp:
                 sarif_path = Path(tmp) / "result.sarif"
                 cmd = [
-                    self._codeql_bin,
+                    self._codeql_bin or "codeql",
                     "database", "analyze",
                     str(self._database_path),
                     *unique_paths,

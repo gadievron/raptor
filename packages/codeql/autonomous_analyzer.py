@@ -1265,7 +1265,7 @@ class AutonomousCodeQLAnalyzer:
                 record_suppression(
                     Path(_out),
                     finding=_finding_dict,
-                    verdict=reachability_verdict,
+                    verdict=reachability_verdict or "",
                     reason=(
                         f"CodeQL chokepoint: sink at "
                         f"{_finding_dict['file_path']}:"
@@ -1278,7 +1278,7 @@ class AutonomousCodeQLAnalyzer:
                 logger.debug("record_suppression failed for %s", _finding_dict.get("finding_id", "?"))
             return AutonomousAnalysisResult(
                 finding=finding,
-                analysis=None,
+                analysis=None,  # type: ignore[arg-type]
                 dataflow_validation=None,
                 exploitable=False,
                 exploit_code=None,
@@ -1349,7 +1349,7 @@ class AutonomousCodeQLAnalyzer:
                 self.logger.info("✗ Dataflow not exploitable - skipping exploit generation")
                 return AutonomousAnalysisResult(
                     finding=finding,
-                    analysis=None,
+                    analysis=None,  # type: ignore[arg-type]
                     dataflow_validation=dataflow_validation,
                     exploitable=False,
                     exploit_code=None,

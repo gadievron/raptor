@@ -48,9 +48,9 @@ try:
     _AVAILABLE = True
 except ImportError:                       # pragma: no cover — env-dependent
     InvalidRequirement = Exception        # type: ignore[assignment,misc]
-    Requirement = None                    # type: ignore[assignment]
-    SpecifierSet = None                   # type: ignore[assignment]
-    Version = None                        # type: ignore[assignment]
+    Requirement = None                    # type: ignore[assignment,misc]
+    SpecifierSet = None                   # type: ignore[assignment,misc]
+    Version = None                        # type: ignore[assignment,misc]
     _AVAILABLE = False
     logger.warning(
         "sca.parsers.requirements: 'packaging' not installed — requirements*.txt "

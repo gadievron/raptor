@@ -84,7 +84,7 @@ def _restore_termination_handlers(
     """Undo :func:`_install_termination_handlers`."""
     for signum, previous in restore:
         try:
-            signal.signal(signum, previous)
+            signal.signal(signum, previous)  # type: ignore[arg-type]
         except (ValueError, TypeError):
             pass
 
@@ -464,6 +464,7 @@ def run(
                         scorecard_enabled=True,
                         sage_enabled=True,
                     )
+                    assert pipeline_slot[0] is not None
                     result = pipeline_slot[0].run(cve_id, work)
                     break
                 except DiscoveryError as exc:

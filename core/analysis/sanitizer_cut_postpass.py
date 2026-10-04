@@ -898,7 +898,7 @@ def run_postpass(
             if full_proof and enforce_live:
                 record_sanitizer_cut_suppression(
                     out_dir, native, result, enforce=True,
-                    extra_fields=extra_fields,
+                    extra_fields=extra_fields,  # type: ignore[arg-type]
                 )
                 stats.enforced += 1
                 stats.enforced_findings.append({
@@ -908,7 +908,7 @@ def run_postpass(
                 })
             else:
                 record_sanitizer_cut_suppression(
-                    out_dir, native, result, extra_fields=extra_fields,
+                    out_dir, native, result, extra_fields=extra_fields,  # type: ignore[arg-type]
                 )
         except Exception as exc:  # noqa: BLE001
             logger.warning("sanitizer-cut post-pass: record failed: %s", exc)

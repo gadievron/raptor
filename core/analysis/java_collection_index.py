@@ -396,9 +396,9 @@ def build_local_collection_index(
             if method == "add" and len(args) == 1:
                 op = ("add", None, args[0])
             elif method == "add":
-                op = ("add_at", _int_literal(args[0]), args[1])
+                op = ("add_at", _int_literal(args[0]), args[1])  # type: ignore[assignment]
             else:
-                op = ("set", _int_literal(args[0]), args[1])
+                op = ("set", _int_literal(args[0]), args[1])  # type: ignore[assignment]
             idx._list_ops.setdefault(recv, []).append(
                 (ln, col, _linear_block_id(call)) + op)
             consumed.add((obj.start_byte, obj.end_byte))

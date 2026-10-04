@@ -600,7 +600,7 @@ def _execute_native(
             timeout=NATIVE_TIMEOUT_S,
             caller_label="audit-sanwit-php",
             tool_paths=tool_reads,
-            **({"audit_run_dir": audit_run_dir} if audit_run_dir else {}),
+            **({"audit_run_dir": audit_run_dir} if audit_run_dir else {}),  # type: ignore[arg-type]
         )
     except floor_errors as exc:
         from core.witness.sandbox_outcome import refusal_detail
@@ -739,7 +739,7 @@ def _run_capped_pipes(
                     break
                 continue
             for fd in ready:
-                chunk = fd.read1(65536)
+                chunk = fd.read1(65536)  # type: ignore[attr-defined]
                 if not chunk:
                     del open_fds[fd]
                     continue

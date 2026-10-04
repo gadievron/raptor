@@ -1026,6 +1026,7 @@ def discover_sinks_for_target(
         # sink_unreachable scope-narrowing downstream (core.evidence
         # consumes eligible verdicts as permission to narrow, never
         # as suppression on their own).
+        assert result.unreachable_eligible is not None
         for key, verdict in result.unreachable_eligible.items():
             if verdict.eligible:
                 result.unreachable_eligible[key] = UnreachableVerdict(

@@ -129,7 +129,7 @@ def record_reasoning_divergence(
         if metric is None:
             # Panel too small or reasoning too short to measure.
             continue
-        mean_pw = float(metric["mean_pairwise_distance"])
+        mean_pw = float(metric["mean_pairwise_distance"])  # type: ignore[arg-type]
         if mean_pw < divergence_threshold:
             # Panel is tight enough; no anomaly to report.
             continue
@@ -173,8 +173,8 @@ def record_reasoning_divergence(
                     "other_reasoning": (
                         f"panel mean pairwise distance: {mean_pw:.3f} "
                         f"(threshold {divergence_threshold:.2f}); "
-                        f"max pairwise: {float(metric['max_pairwise_distance']):.3f}; "
-                        f"outlier of {int(metric['n_models'])} models"
+                        f"max pairwise: {float(metric['max_pairwise_distance']):.3f}; "  # type: ignore[arg-type]
+                        f"outlier of {int(metric['n_models'])} models"  # type: ignore[call-overload]
                     ),
                 }
             pending.append({

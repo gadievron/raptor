@@ -82,10 +82,10 @@ def build_prompts(sample: EfficacySample) -> tuple[str, str, str]:
         raise KeyError(msg)
 
     baseline = [general] if general is not None else []
-    control_system = _REVIEW_INSTRUCTIONS + "\n\n" + render_strategies(baseline)
+    control_system = _REVIEW_INSTRUCTIONS + "\n\n" + render_strategies(baseline)  # type: ignore[arg-type]
     # If the target IS general, treatment == control (no delta).
     treat_lenses = baseline if lens is general else baseline + [lens]
-    treatment_system = _REVIEW_INSTRUCTIONS + "\n\n" + render_strategies(treat_lenses)
+    treatment_system = _REVIEW_INSTRUCTIONS + "\n\n" + render_strategies(treat_lenses)  # type: ignore[arg-type]
     return control_system, treatment_system, sample.code
 
 
@@ -159,7 +159,7 @@ def format_report(results: list[ABResult]) -> str:
     for strat in strategies:
         lines.append(f"{strat}:")
         for variant in ("vulnerable", "patched"):
-            slot = agg.get((strat, variant))
+            slot = agg.get((strat, variant))  # type: ignore[assignment]
             if not slot:
                 continue
             runs, ctrl, treat = slot

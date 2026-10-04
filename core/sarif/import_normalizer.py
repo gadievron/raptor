@@ -330,7 +330,7 @@ def _resolve_uri(
 
     parts = Path(clean).parts
     if not parts:
-        return _fail()
+        return _fail()  # type: ignore[func-returns-value]
     # Component cap before the depth loop: each iteration resolves a
     # path of O(N) components, so an N-component URI costs O(N²) —
     # measured 62s at 8000 components (~16 KB of SARIF text), and the
@@ -346,7 +346,7 @@ def _resolve_uri(
             "URI rejected: %d path components exceeds the %d cap",
             len(parts), _MAX_URI_COMPONENTS,
         )
-        return _fail()
+        return _fail()  # type: ignore[func-returns-value]
 
     for i, cached_depth in enumerate(depth_cache):
         if cached_depth is None or cached_depth >= len(parts):
@@ -412,7 +412,7 @@ def _resolve_uri(
                 "the index match)",
                 _MAX_FAILED_URI_SCANS,
             )
-    return _fail()
+    return _fail()  # type: ignore[func-returns-value]
 
 
 # ---------------------------------------------------------------------------

@@ -214,7 +214,7 @@ class CrashCollector:
         }
 
         def crash_priority(crash: Crash) -> int:
-            return signal_priority.get(crash.signal, 99)
+            return signal_priority.get(crash.signal or "", 99)
 
         ranked = sorted(crashes, key=crash_priority)
 
@@ -235,4 +235,4 @@ class CrashCollector:
             "08": "SIGFPE (Floating Point Exception)",
             "11": "SIGSEGV (Segmentation Fault)",
         }
-        return signal_names.get(signal, f"Signal {signal}" if signal else "Unknown")
+        return signal_names.get(signal or "", f"Signal {signal}" if signal else "Unknown")

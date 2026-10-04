@@ -158,7 +158,7 @@ def iter_checklist_items(
     top-level ``items`` reads silently see nothing on real artifacts.
     """
     if isinstance(checklist, (str, os.PathLike)):
-        yield from _iter_checklist_items_from_dir(checklist)
+        yield from _iter_checklist_items_from_dir(checklist)  # type: ignore[arg-type]
         return
     yield from _iter_items_of(checklist)
 
@@ -174,7 +174,7 @@ def _iter_items_of(checklist: Any) -> "Iterator[tuple[str, dict, dict]]":
         for item in get_items(file_entry):
             if not isinstance(item, dict):
                 continue
-            yield file_path, file_entry, item
+            yield file_path, file_entry, item  # type: ignore[misc]
 
 
 # checklist.json is read-modify-written many times per run and

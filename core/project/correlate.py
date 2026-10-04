@@ -279,7 +279,7 @@ def correlate_project(project) -> dict[str, Any]:
     }
     if sandbox_campaign is not None:
         result["sandbox_campaign"] = sandbox_campaign
-        result["summary"]["sandbox_campaign_severity"] = (
+        result["summary"]["sandbox_campaign_severity"] = (  # type: ignore[index]
             sandbox_campaign["campaign_severity"]
         )
     return result
@@ -587,7 +587,7 @@ def _build_tool_gaps(
 
     suggested = []
     if scanned_not_validated:
-        n = sum(item["finding_count"] for item in scanned_not_validated)
+        n = sum(item["finding_count"] for item in scanned_not_validated)  # type: ignore[misc]
         suggested.append(
             f"raptor validate  # {n} unvalidated scan finding"
             f"{'s' if n != 1 else ''}"

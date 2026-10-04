@@ -183,11 +183,11 @@ class Hypothesis:
         # to_dict shape (and round-trip equality) is unchanged for callers
         # that don't use them.
         if self.source is not None:
-            d["source"] = self.source.to_dict()
+            d["source"] = self.source.to_dict()  # type: ignore[assignment]
         if self.sink is not None:
-            d["sink"] = self.sink.to_dict()
+            d["sink"] = self.sink.to_dict()  # type: ignore[assignment]
         if self.flow_steps:
-            d["flow_steps"] = [s.to_dict() for s in self.flow_steps]
+            d["flow_steps"] = [s.to_dict() for s in self.flow_steps]  # type: ignore[misc]
         if self.sanitizers:
             d["sanitizers"] = list(self.sanitizers)
         if self.smt_constraints:

@@ -56,14 +56,14 @@ try:
         DEFAULT_SOURCE_INTEL_RULE_PREFIXES as _DEFAULT_RULE_PREFIXES,
     )
 except ImportError:
-    _analyze = None
-    _derive_evidence_strings = None
+    _analyze = None  # type: ignore[assignment]
+    _derive_evidence_strings = None  # type: ignore[assignment]
     _DEFAULT_RULE_PREFIXES = frozenset()
 
 try:
     from core.build.build_flags import extract_flags as _extract_flags
 except ImportError:
-    _extract_flags = None
+    _extract_flags = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 

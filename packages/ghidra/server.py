@@ -237,6 +237,7 @@ class GhidraServer:
         parent_sock: Optional[socket.socket] = None
         child_sock: Optional[socket.socket] = None
         if use_pathname:
+            assert self._work_dir is not None
             socket_path = self._work_dir / f"worker-{self._boot_seq}.sock"
             # The work dir is worker-writable: a hostile worker from a
             # previous boot can squat the predictable next socket name
@@ -272,8 +273,8 @@ class GhidraServer:
         env = {
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
             "HOME": str(self._work_dir),
-            "XDG_CONFIG_HOME": str(self._work_dir / ".config"),
-            "XDG_CACHE_HOME": str(self._work_dir / ".cache"),
+            "XDG_CONFIG_HOME": str(self._work_dir / ".config"),  # type: ignore[operator]
+            "XDG_CACHE_HOME": str(self._work_dir / ".cache"),  # type: ignore[operator]
             "JAVA_TOOL_OPTIONS": (
                 f"-Duser.home={self._work_dir} "
                 f"-Duser.name={getpass.getuser()}"

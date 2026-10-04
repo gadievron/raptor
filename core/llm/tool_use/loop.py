@@ -686,7 +686,7 @@ class ToolUseLoop:
                     else "provider_error"
                 )
                 self._emit(LoopTerminated(
-                    reason=reason,
+                    reason=reason,  # type: ignore[arg-type]
                     iterations=iteration,
                     total_cost_usd=total_cost_usd,
                     error_message=str(exc),
@@ -816,7 +816,7 @@ class ToolUseLoop:
                 # only seeing it in warning logs.
                 err = response.error_message
                 self._emit(LoopTerminated(
-                    reason=term_reason,
+                    reason=term_reason,  # type: ignore[arg-type]
                     iterations=iteration + 1,
                     total_cost_usd=total_cost_usd,
                     error_message=err,

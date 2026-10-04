@@ -428,7 +428,7 @@ class PipResolver:
         # that opt-in already grants code execution, so the residual
         # is attribution shuffling inside an accepted trust grant.
         nonce = secrets.token_hex(16)
-        script = self._build_batch_script(venv_dir, manifests, nonce)
+        script = self._build_batch_script(venv_dir, manifests, nonce)  # type: ignore[arg-type]
         try:
             proc = _run(
                 ["sh", "-c", script],
@@ -461,7 +461,7 @@ class PipResolver:
             rmtree_hardened(venv_dir)
 
         return self._parse_batch_output(
-            proc.stdout, proc.stderr, proc.returncode, manifests,
+            proc.stdout, proc.stderr, proc.returncode, manifests,  # type: ignore[arg-type]
             nonce,
         )
 
@@ -633,7 +633,7 @@ class PipResolver:
         # whole call returns the first failing step's stderr.
         qvenv = shlex.quote(str(venv_dir))
         script = (
-            self._venv_setup_script(venv_dir)
+            self._venv_setup_script(venv_dir)  # type: ignore[arg-type]
             + f"{qvenv}/bin/python -m pip install --quiet pip-tools && "
             + f"{qvenv}/bin/pip-compile --quiet "
             + f"--output-file - {shlex.quote(str(rel_manifest))}"

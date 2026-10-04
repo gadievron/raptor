@@ -260,7 +260,7 @@ def detect_stale_doc(
 
     # (b) Go doc convention: comment should start with the item name
     if language == "go":
-        m = _GO_LEADING_IDENT_RE.match(doc_comment)
+        m = _GO_LEADING_IDENT_RE.match(doc_comment)  # type: ignore[assignment]
         if m and m.group(1) != name and len(m.group(1)) > 2:
             # Only flag when the leading identifier looks like a
             # code name that exists nowhere in the definition —
@@ -275,7 +275,7 @@ def detect_stale_doc(
                 )
 
     # (c) doc claims NULL/None/nil return the body never produces
-    m = _RETURNS_NULL_DOC_RE.search(doc_comment)
+    m = _RETURNS_NULL_DOC_RE.search(doc_comment)  # type: ignore[assignment]
     if m and "return" in definition \
             and not _NEGATED_RETURNS_RE.search(doc_comment):
         token = m.group(1)

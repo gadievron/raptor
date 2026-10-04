@@ -243,7 +243,7 @@ def _extract_offset_accesses(
         if is_pointer:
             elem_size = 8
         else:
-            elem_size = _TYPE_SIZES.get(base_type, None)
+            elem_size = _TYPE_SIZES.get(base_type)  # type: ignore[assignment]
 
         if base_ptr not in accesses:
             accesses[base_ptr] = []
@@ -417,7 +417,7 @@ def check_struct_field_copy(
         offset_str = m.group(3)
         copy_len = m.group(5).strip()
 
-        offset = _parse_int(offset_str)
+        offset = _parse_int(offset_str)  # type: ignore[assignment]
         if offset is None:
             continue
 

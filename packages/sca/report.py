@@ -320,12 +320,12 @@ def _render_summary(
         severity_counts[f.severity] += 1
         if f.in_kev:
             kev_count += 1
-    for f in supply_chain_findings:
+    for f in supply_chain_findings:  # type: ignore[assignment]
         if getattr(f, "suppressed", False):
             suppressed_count += 1
             continue
         severity_counts[f.severity] += 1
-    for f in hygiene_findings:
+    for f in hygiene_findings:  # type: ignore[assignment]
         if getattr(f, "suppressed", False):
             suppressed_count += 1
             continue

@@ -291,14 +291,14 @@ def _verdict_table_entry(output_dir: Path,
         "artifact_id": artifact_id,
         "class": str(row.get("class") or "unknown"),
         "path": str(row.get("path") or ""),
-        "status_state": str(status.get("state") or "inventoried"),
+        "status_state": str(status.get("state") or "inventoried"),  # type: ignore[union-attr]
         "low_exposure": {
-            "basis": str(policy.get("basis") or ""),
+            "basis": str(policy.get("basis") or ""),  # type: ignore[union-attr]
             # ``is True``, not ``bool()`` — a hand-edited ledger
             # carrying the STRING "false" must not coerce to a
             # verified-low claim (M3d mirrors build_report's check).
             "low_exposure_verified":
-                policy.get("low_exposure_verified") is True,
+                policy.get("low_exposure_verified") is True,  # type: ignore[union-attr]
         },
     }
 

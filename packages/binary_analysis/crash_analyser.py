@@ -1418,7 +1418,7 @@ class CrashAnalyser:
             
         # Check if binary has stack canaries via symbol table (not objdump -d
         # which disassembles the entire binary and can OOM on large inputs)
-        result = _nm(self.binary, "-D", timeout=10)
+        result = _nm(self.binary, "-D", timeout=10)  # type: ignore[assignment]
         if result.returncode == 0:
             if "__stack_chk_fail" in result.stdout or "__chk_fail" in result.stdout:
                 info["stack_canaries"] = "enabled"
@@ -1444,7 +1444,7 @@ class CrashAnalyser:
                 info["nx_enabled"] = "not_detected"
         except (OSError, subprocess.SubprocessError):
             # Try Linux way
-            result = _readelf(self.binary, "-l", timeout=5)
+            result = _readelf(self.binary, "-l", timeout=5)  # type: ignore[assignment]
             if result.returncode is None:
                 info["nx_enabled"] = "unknown"
             elif "GNU_STACK" in result.stdout and "RWE" not in result.stdout:
@@ -1632,7 +1632,7 @@ class CrashAnalyser:
             # Check for ASan runtime library dependencies. otool under
             # run_trusted: documented darwin-only sandbox seam — see
             # macho._run_readonly_tool.
-            result = _run_trusted(
+            result = _run_trusted(  # type: ignore[assignment]
                 ["otool", "-L", str(self.binary)],
                 capture_output=True,
                 text=True,

@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -85,11 +86,10 @@ def load_overrides(
     ``env`` parameter is for tests; production callers omit it
     and ``os.environ`` is consulted.
     """
-    if env is None:
-        env = os.environ
+    env_: Mapping[str, str] = env if env is not None else os.environ
     out: dict[str, RegistryOverride] = {}
     for ecosystem, url_var in _ENV_URL.items():
-        url = (env.get(url_var) or "").strip()
+        url = (env_.get(url_var) or "").strip()
         if not url:
             continue
         # Sanity-check: must be http(s) — refuses ``file://``,
@@ -100,7 +100,7 @@ def load_overrides(
                 "accepted; ignoring", url_var, url,
             )
             continue
-        auth = env.get(_ENV_AUTH[ecosystem])
+        auth = env_.get(_ENV_AUTH[ecosystem])
         out[ecosystem] = RegistryOverride(
             base_url=url,
             auth_header=(auth.strip() if auth else None),

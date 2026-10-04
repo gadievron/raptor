@@ -551,7 +551,7 @@ def extract_guard_target(
             ident = None
     if ident is None:
         for cand in _BACKTICK_RE.findall(hyp):
-            cand = _plausible_identifier(cand)
+            cand = _plausible_identifier(cand)  # type: ignore[assignment]
             if cand and cand != sink:
                 ident = cand
                 break
@@ -593,7 +593,7 @@ def extract_flow_endpoints(
             break
     if sink:
         for cand in _BACKTICK_RE.findall(hyp):
-            cand = _plausible_identifier(cand)
+            cand = _plausible_identifier(cand)  # type: ignore[assignment]
             if cand and cand != sink:
                 return (cand, sink)
 
@@ -654,7 +654,7 @@ def _guard_matches_kind(code: str, identifier: str, kind: str) -> bool:
             rf"(?:^|!|&&|\|\||(?<!\w)\()\s*{ident}\s*(?:[)&|]|$)",
         )
     elif kind == "bounds":
-        shapes = (
+        shapes = (  # type: ignore[assignment]
             rf"\b{ident}\b\s*(?:<=|>=|<(?!<)|>(?!>))",
             # (?<![->])> : the > of a -> member access is not a
             # comparison (live shape: `if (s->len)` must not count

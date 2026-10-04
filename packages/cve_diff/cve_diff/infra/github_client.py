@@ -316,9 +316,9 @@ def get_commit(slug: str, sha: str) -> dict[str, Any] | None:
     (bench summary, not correctness-critical), so we accept the
     looseness rather than thread per-call locking.
     """
-    info_before = _get_commit_cached.cache_info()
+    info_before = _get_commit_cached.cache_info()  # type: ignore[attr-defined]
     result = _get_commit_cached(slug, sha)
-    info_after = _get_commit_cached.cache_info()
+    info_after = _get_commit_cached.cache_info()  # type: ignore[attr-defined]
     # Avoid the api_status import at module-load time (avoids a circular
     # path during startup; api_status is part of the same package).
     from cve_diff.infra import api_status

@@ -72,7 +72,7 @@ def _load_json(path: Path) -> dict | None:
         return None
     try:
         data = json.loads(text)
-    except (json.JSONDecodeError, *PARSE_ESCAPE_ERRORS):  # hostile-input escape classes
+    except (json.JSONDecodeError, *PARSE_ESCAPE_ERRORS):  # type: ignore[misc]  # hostile-input escape classes
         return None
     return data if isinstance(data, dict) else None
 
@@ -83,7 +83,7 @@ def _load_toml(path: Path) -> dict | None:
         return None
     try:
         data = tomllib.loads(text)
-    except (tomllib.TOMLDecodeError, *PARSE_ESCAPE_ERRORS):  # hostile-input escape classes
+    except (tomllib.TOMLDecodeError, *PARSE_ESCAPE_ERRORS):  # type: ignore[misc]  # hostile-input escape classes
         return None
     return data if isinstance(data, dict) else None
 

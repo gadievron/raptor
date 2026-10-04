@@ -220,8 +220,8 @@ def derive_allowlist(config: LLMConfig) -> set[str]:
         # bypasses api_base entirely.
         url = (
             getattr(model, "api_base", None)
-            or PROVIDER_ENDPOINTS.get(getattr(model, "provider", None))
-            or _KNOWN_DEFAULTS.get(getattr(model, "provider", None))
+            or PROVIDER_ENDPOINTS.get(getattr(model, "provider", None) or "")
+            or _KNOWN_DEFAULTS.get(getattr(model, "provider", None) or "")
         )
         if not url:
             continue

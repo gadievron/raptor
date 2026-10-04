@@ -298,7 +298,7 @@ def replay(
             converged=ds_result.converged,
             iterations=ds_result.iterations,
             model_reliabilities=[
-                {"model": r.model, "alpha": r.alpha, "beta": r.beta}
+                {"model": r.model, "alpha": r.alpha, "beta": r.beta}  # type: ignore[dict-item]
                 for r in ds_result.model_reliabilities
             ],
         ))
@@ -408,8 +408,8 @@ def render_markdown(report: ReplayReport) -> str:
         per_model_beta: dict[str, list[float]] = {}
         for s in report.class_summaries:
             for r in s.model_reliabilities:
-                per_model_alpha.setdefault(r["model"], []).append(r["alpha"])
-                per_model_beta.setdefault(r["model"], []).append(r["beta"])
+                per_model_alpha.setdefault(r["model"], []).append(r["alpha"])  # type: ignore[arg-type]
+                per_model_beta.setdefault(r["model"], []).append(r["beta"])  # type: ignore[arg-type]
         lines.append("| model | mean α | mean β | n classes |")
         lines.append("|---|---:|---:|---:|")
         for model in sorted(per_model_alpha):

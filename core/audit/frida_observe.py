@@ -471,12 +471,12 @@ def _run_frida_session(
         logger.debug("Frida session timed out after %ds", timeout)
         partial = exc.stdout
         if isinstance(partial, bytes):
-            partial = partial.decode("utf-8", errors="replace")
+            partial = partial.decode("utf-8", errors="replace")  # type: ignore[assignment]
         if partial:
             # Keep whatever the killed CLI managed to emit; when the
             # exception carries nothing, leave any existing log
             # content untouched rather than clobbering it with "".
-            _write_session_log(log_fd, partial)
+            _write_session_log(log_fd, partial)  # type: ignore[arg-type]
         return _fd_size(log_fd) > 0
     except FileNotFoundError:
         logger.debug("frida CLI not found")

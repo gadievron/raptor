@@ -211,9 +211,9 @@ def build_edge_obligations(
             boundary_label.setdefault(
                 (path, name), str(tb.get("boundary") or "unnamed"))
 
-    entry_nodes = _anchor_nodes(cm.get("entry_points"), spans, inv_paths)
-    sink_nodes = _anchor_nodes(cm.get("sinks"), spans, inv_paths)
-    sink_nodes |= _anchor_nodes(cm.get("sink_details"), spans, inv_paths)
+    entry_nodes = _anchor_nodes(cm.get("entry_points") or [], spans, inv_paths)
+    sink_nodes = _anchor_nodes(cm.get("sinks") or [], spans, inv_paths)
+    sink_nodes |= _anchor_nodes(cm.get("sink_details") or [], spans, inv_paths)
     if cm and not boundary_label:
         degraded.append("no-boundary-anchors")
     if cm and (not entry_nodes or not sink_nodes):

@@ -319,7 +319,8 @@ def _try_graph_store(binary_path: Path) -> BinaryEdgeIndex | None:
     # the project-dir search leg never fired.
     projects_dir: Path | None
     try:
-        from core.project.project import PROJECTS_DIR as projects_dir
+        from core.project.project import PROJECTS_DIR as projects_dir_  # noqa: N812
+        projects_dir = projects_dir_
     except ImportError:
         projects_dir = None
     if projects_dir is not None:
@@ -511,7 +512,7 @@ def _extract_direct_call_edges_impl(
         if cached is not None:
             logger.info(
                 "binary_oracle_edges: cache hit for %s (build_id=%s, %d edges)",
-                binary_path.name, build_id[:12], len(cached.edges))
+                binary_path.name, build_id[:12] if build_id else "", len(cached.edges))
             return cached
 
     # ``aaa`` is the heavy analyse-all; ~10s on a snappy_unittest-sized
@@ -666,7 +667,7 @@ def _extract_direct_call_edges_impl(
         _save_cached_index(cache_file, index)
         logger.info(
             "binary_oracle_edges: cached %d edges for %s (build_id=%s)",
-            len(index.edges), binary_path.name, build_id[:12])
+            len(index.edges), binary_path.name, build_id[:12] if build_id else "")
     return index
 
 

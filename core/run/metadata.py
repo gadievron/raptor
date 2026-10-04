@@ -3167,6 +3167,7 @@ def _update_status(output_dir: Path, status: str,
                     "(the heuristic finaliser misjudged a live run)",
                     "/".join(stored_marks), current, status, output_dir,
                 )
+                assert stamped_extra is not None
                 for _mark in _HEURISTIC_FINALIZE_MARKERS:
                     stamped_extra.pop(_mark, None)
                 # The error field was set by the same heuristic that

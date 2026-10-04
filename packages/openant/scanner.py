@@ -689,8 +689,8 @@ def enforce_core_consent(
     elif provenance["matches"] is True:
         detail = (
             f"it is at the pinned commit but its working tree deviates "
-            f"from the pinned content ({dirty['modified']} tracked "
-            f"file(s) modified/missing, {dirty['untracked']} untracked "
+            f"from the pinned content ({dirty['modified']} tracked "  # type: ignore[index]
+            f"file(s) modified/missing, {dirty['untracked']} untracked "  # type: ignore[index]
             f"file(s), ignored files included)"
         )
     elif provenance["matches"] is False:

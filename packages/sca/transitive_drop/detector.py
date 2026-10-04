@@ -135,14 +135,14 @@ def detect_droppable_transitives(
             sev = getattr(f, "severity", "medium")
             # Keep the most severe finding for tier escalation.
             issue_keys[key] = _max_severity(issue_keys.get(key), sev)
-    for f in supply_chain_findings:
+    for f in supply_chain_findings:  # type: ignore[assignment]
         d = f.dependency
         if d is not None:
             key = (d.ecosystem, _canonical_name(d.ecosystem, d.name))
             sev = getattr(f, "severity", "info")
             issue_keys[key] = _max_severity(issue_keys.get(key), sev)
-    for f in hygiene_findings:
-        d = getattr(f, "dependency", None)
+    for f in hygiene_findings:  # type: ignore[assignment]
+        d = getattr(f, "dependency", None)  # type: ignore[assignment]
         if d is not None:
             key = (d.ecosystem, _canonical_name(d.ecosystem, d.name))
             sev = getattr(f, "severity", "info")
@@ -200,7 +200,7 @@ def detect_droppable_transitives(
         member_parents = [
             (member, parent)
             for member in transitive_deps
-            for parent in member.source_extra.get("via") or []
+            for parent in (member.source_extra or {}).get("via") or []
         ]
         for sample, parent in member_parents:
             parent_join = parent_join_key(parent.strip(), eco)

@@ -157,6 +157,7 @@ def main() -> int:
         )
 
         # --- 5. Real LLM exploit generation + execution ---
+        assert agent.llm_config.primary_model is not None
         print(f"[5/6] Invoking LLM (provider="
               f"{agent.llm_config.primary_model.provider}, "
               f"model={agent.llm_config.primary_model.model_name})...")

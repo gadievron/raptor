@@ -485,7 +485,7 @@ def _evaluate_or(
     # All choices produced findings. If they're all DENY, the
     # OR is unambiguously denied. Otherwise it's "incompatible"
     # (operator should pick / configure one).
-    if all(f.kind == "license_denied" for _, f in classified):
+    if all(f.kind == "license_denied" for _, f in classified):  # type: ignore[union-attr]
         return _deny_finding(dep, spdx)
     return LicenseFinding(
         finding_id=_finding_id(dep, "license_incompatible"),
@@ -601,7 +601,7 @@ def _unknown_finding(
             f"No license metadata for {dep.ecosystem}:{dep.name}"
             f"@{dep.version or '*'} — registry returned no SPDX field"
         ),
-        severity=severity,
+        severity=severity,  # type: ignore[arg-type]
         confidence=Confidence(
             "medium",
             reason="declared_license is None after enrichment",
@@ -633,7 +633,7 @@ def _unparseable_finding(
             f"Unparseable SPDX license expression {spdx!r} — "
             f"cannot evaluate it against the license policy"
         ),
-        severity=severity,
+        severity=severity,  # type: ignore[arg-type]
         confidence=Confidence(
             "medium",
             reason="declared license expression failed SPDX parsing",

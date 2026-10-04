@@ -314,7 +314,7 @@ def _spawn_probe(
             env=extra_env,
             timeout=timeout,
         )
-        nonce = result.sandbox_info.get("observe_nonce")
+        nonce = result.sandbox_info.get("observe_nonce")  # type: ignore[attr-defined]
         # current_run=True: this parse reads a run THIS process just
         # executed. On a degraded host that produced no nonce it
         # refuses the target-writable legacy log location and demotes
@@ -323,7 +323,7 @@ def _spawn_probe(
         # allowlists this profile feeds.
         observed = parse_observe_log(
             scratch_path, expected_nonce=nonce,
-            sandbox_info=result.sandbox_info,
+            sandbox_info=result.sandbox_info,  # type: ignore[attr-defined]
             current_run=True,
         )
 
@@ -331,7 +331,7 @@ def _spawn_probe(
         # CONNECT target by name regardless of allow/deny). De-dup
         # + sort so repeated probes of the same binary produce
         # identical profiles (modulo timestamp).
-        events = result.sandbox_info.get("proxy_events") or ()
+        events = result.sandbox_info.get("proxy_events") or ()  # type: ignore[attr-defined]
         hosts = sorted({
             ev["host"] for ev in events
             if isinstance(ev, dict) and ev.get("host")

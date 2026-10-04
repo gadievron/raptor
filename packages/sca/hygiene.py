@@ -218,9 +218,9 @@ def check_lockfile_drift(
         bucket = "lockfile" if d.is_lockfile else "manifest"
         by_key[ws_key].setdefault(bucket, d)
 
-    for (eco, _ws, _name), bucket in by_key.items():
-        manifest = bucket.get("manifest")
-        lockfile = bucket.get("lockfile")
+    for (eco, _ws, _name), bucket in by_key.items():  # type: ignore[assignment]
+        manifest = bucket.get("manifest")  # type: ignore[attr-defined]
+        lockfile = bucket.get("lockfile")  # type: ignore[attr-defined]
         if manifest is None or lockfile is None:
             continue
         if manifest.pin_style is not PinStyle.EXACT:

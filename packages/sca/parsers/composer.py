@@ -50,7 +50,7 @@ def parse_manifest(path: Path) -> list[Dependency]:
         return []
     try:
         data = json.loads(text)
-    except (json.JSONDecodeError, *PARSE_ESCAPE_ERRORS) as e:  # hostile-input escape classes
+    except (json.JSONDecodeError, *PARSE_ESCAPE_ERRORS) as e:  # type: ignore[misc]  # hostile-input escape classes
         logger.warning(
             "sca.parsers.composer: JSON parse failed for %s: %s", path, e)
         return []
@@ -131,7 +131,7 @@ def parse_lockfile(path: Path) -> list[Dependency]:
         return []
     try:
         data = json.loads(text)
-    except (json.JSONDecodeError, *PARSE_ESCAPE_ERRORS) as e:  # hostile-input escape classes
+    except (json.JSONDecodeError, *PARSE_ESCAPE_ERRORS) as e:  # type: ignore[misc]  # hostile-input escape classes
         logger.warning(
             "sca.parsers.composer: JSON parse failed for %s: %s", path, e)
         return []

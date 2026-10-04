@@ -66,7 +66,7 @@ from . import slopsquat as _slopsquat
 from . import typosquat as _typosquat
 from . import typosquat_domain as _typosquat_domain
 from . import workflow_signing as _workflow_signing
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -158,7 +158,7 @@ def evaluate(
             detail=cbs.detail,
             evidence={"file": "build.rs",
                       "ecosystem": "Cargo"},
-            severity=cbs.severity,
+            severity=cbs.severity,  # type: ignore[arg-type]
             confidence=cbs.confidence,
         )
         for cbs in _cargo_build.scan_manifests(manifests_list, deps_list)
@@ -944,7 +944,7 @@ def _binary_in_package_to_finding(
             "imports include high-severity capability bucket(s): "
             + ", ".join(forensic["high_severity_buckets"])
         )
-    evidence = {
+    evidence: dict[str, Any] = {
         "path": bip.relpath,
         "family": bip.family,
     }

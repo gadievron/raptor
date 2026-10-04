@@ -255,7 +255,7 @@ def _build_llm_callable(config: Any):
             )
             data, _raw = resp
             with cost_lock:
-                _call.cost_usd += float(getattr(resp, "cost", 0.0) or 0.0)
+                _call.cost_usd += float(getattr(resp, "cost", 0.0) or 0.0)  # type: ignore[attr-defined]
             auth_tracker.note_success()
             return data
         except Exception as exc:  # noqa: BLE001 — any transport failure degrades to no-synthesis
@@ -263,8 +263,8 @@ def _build_llm_callable(config: Any):
             logger.debug("checker_synthesis LLM call failed: %s", exc)
             return None
 
-    _call.auth_tracker = auth_tracker
-    _call.cost_usd = 0.0
+    _call.auth_tracker = auth_tracker  # type: ignore[attr-defined]
+    _call.cost_usd = 0.0  # type: ignore[attr-defined]
     return _call, client
 
 

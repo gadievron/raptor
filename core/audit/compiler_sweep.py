@@ -999,12 +999,12 @@ def run_compiler_analyzer_sweep(
         mode = spec.clang_engine
         if spec.clang_engine == "analyze":
             cmd = [
-                clang, "--analyze", "--analyzer-output", "text",
+                clang, "--analyze", "--analyzer-output", "text",  # type: ignore[list-item]
                 *include_flags, str(full_path),
             ]
         else:
             cmd = [
-                clang, "-fsyntax-only", *spec.clang_flags,
+                clang, "-fsyntax-only", *spec.clang_flags,  # type: ignore[list-item]
                 *include_flags, str(full_path),
             ]
 

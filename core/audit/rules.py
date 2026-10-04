@@ -105,7 +105,7 @@ def list_rules(out_dir: Path) -> list[dict[str, Any]]:
     manifest = _load_manifest(out_dir)
     rules = []
     for rule_id, meta in manifest.items():
-        entry = {"rule_id": rule_id}
+        entry: dict[str, Any] = {"rule_id": rule_id}
         entry.update(meta)
         rule_path = out_dir / meta.get("file", "")
         entry["exists"] = rule_path.exists() if rule_path.name else False
@@ -210,7 +210,7 @@ def _run_coccinelle_rule(rule_path: Path, target_path: Path) -> dict[str, Any]:
         if not is_available():
             return {"error": "coccinelle (spatch) not installed"}
 
-        result = run_rule(target_path, str(rule_path), timeout=300)
+        result = run_rule(target_path, Path(rule_path), timeout=300)
         # ``SpatchResult`` carries ``matches`` (SpatchMatch dataclasses),
         # not ``findings`` — the old attribute raised AttributeError on
         # every sweep of a saved coccinelle rule.

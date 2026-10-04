@@ -54,7 +54,7 @@ def _call_name(node: ast.Call) -> str:
         cur = func
         while isinstance(cur, ast.Attribute):
             parts.append(cur.attr)
-            cur = cur.value
+            cur = cur.value  # type: ignore[assignment]
         if isinstance(cur, ast.Name):
             parts.append(cur.id)
         parts.reverse()
@@ -277,7 +277,7 @@ def _find_preceding_guard_clauses_ast(
         if len(results) >= max_depth:
             break
         # Only look at statements BEFORE the call
-        stmt_end = getattr(stmt, "end_lineno", None) or getattr(stmt, "lineno", 0)
+        stmt_end: int = getattr(stmt, "end_lineno", None) or getattr(stmt, "lineno", 0)
         if stmt_end >= call_line:
             break
         # Must be an If with exit-only body and no else
@@ -391,7 +391,7 @@ def extract_sink_guards_python(
                         text=dec,
                         category=category,
                         polarity="required",
-                        line=func_node.lineno,
+                        line=func_node.lineno,  # type: ignore[attr-defined]
                     ))
 
         # 2. Enclosing conditionals (if/with/match)

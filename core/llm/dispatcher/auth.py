@@ -633,14 +633,14 @@ class CredentialStore:
         resolved = self._aws_signer_cache[cache_key]
         if resolved is None:
             return None
-        credentials, resolved_region = resolved
-        effective_region = region or resolved_region
+        credentials, resolved_region = resolved  # type: ignore[misc]
+        effective_region = region or resolved_region  # type: ignore[has-type]
         if not effective_region:
             return None
         endpoint = self.aws_bedrock_endpoint(api, region=effective_region)
         if endpoint is None:
             return None
-        return (credentials, effective_region, endpoint)
+        return (credentials, effective_region, endpoint)  # type: ignore[has-type]
 
     def _resolve_aws_credentials(self, profile: str | None = None):
         """Resolve ``(credentials, region)`` from botocore.

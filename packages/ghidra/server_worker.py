@@ -94,7 +94,7 @@ class _Session:
         self.project = open_project(
             str(gpr_path.parent), gpr_path.stem,
         )
-        root = self.project.getProjectData().getRootFolder()
+        root = self.project.getProjectData().getRootFolder()  # type: ignore[attr-defined]
         files = self._walk_programs(root)
         if not files:
             raise RuntimeError("project contains no programs")
@@ -266,7 +266,7 @@ class _Session:
             program.endTransaction(tx, False)
             raise
         from pyghidra.api import task_monitor
-        self.program.save("RAPTOR enrichments", task_monitor())
+        self.program.save("RAPTOR enrichments", task_monitor())  # type: ignore[attr-defined]
         return {"comments": n_comments, "bookmarks": n_bookmarks}
 
     def _require_program(self):

@@ -492,7 +492,7 @@ class DataflowValidator:
             ),
             "sanitizers": TaintedString(value=sanitizer_text, trust="untrusted"),
         }
-        blocks = ()
+        blocks: tuple[UntrustedBlock, ...] = ()
         if dataflow.message:
             blocks = (UntrustedBlock(
                 content=dataflow.message,
@@ -977,6 +977,7 @@ class DataflowValidator:
                 )
             else:
                 if paths_checked == 1:
+                    assert smt_result is not None
                     reasoning = (
                         f"SMT analysis: {smt_result.reasoning}. Path conditions are mutually exclusive. "
                         f"Confidence is capped at {SMT_INFEASIBLE_CONFIDENCE} because this formal verdict depends on "

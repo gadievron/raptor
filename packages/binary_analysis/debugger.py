@@ -128,7 +128,7 @@ class GDBDebugger:
         # when the binary was also placed in /tmp; we pass both for
         # coverage. Landlock allows reads everywhere (gcc includes etc.),
         # writes only to these.
-        binary_dir = str(self.binary.parent.resolve())
+        binary_dir_str = str(self.binary.parent.resolve())
         script_dir = str(script_file.parent.resolve())
 
         # Build GDB command
@@ -142,7 +142,7 @@ class GDBDebugger:
                 with Path(input_file).open("rb") as f:
                     result = _sandbox_run(
                         cmd, profile="debug",
-                        target=binary_dir, output=script_dir,
+                        target=binary_dir_str, output=script_dir,
                         stdin=f,
                         capture_output=True,
                         text=True,
@@ -152,7 +152,7 @@ class GDBDebugger:
             else:
                 result = _sandbox_run(
                     cmd, profile="debug",
-                    target=binary_dir, output=script_dir,
+                    target=binary_dir_str, output=script_dir,
                     capture_output=True,
                     text=True,
                     timeout=timeout,

@@ -1135,7 +1135,7 @@ def _bounded_downgrade(
     import functools
     # Highest clean version (descending per the ecosystem's comparator).
     return max(clean, key=functools.cmp_to_key(
-        lambda a, b: version_compare(eco, a, b)))
+        lambda a, b: version_compare(eco, a, b)))  # type: ignore[arg-type]
 
 
 # Severity ordinal: lower is less bad. ``None`` (advisory has no scored

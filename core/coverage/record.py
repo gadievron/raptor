@@ -188,7 +188,7 @@ def read_manifest_lines(manifest_path: Path) -> set[str]:
         try:
             import fcntl as _fcntl
         except ImportError:
-            _fcntl = None
+            _fcntl = None  # type: ignore[assignment]
         with f:
             if _fcntl is not None:
                 try:
@@ -594,7 +594,7 @@ def build_from_findings(findings_path: Path, reads_manifest_path: Path | None = 
     if not all_files and not functions:
         return None
 
-    record = {
+    record: dict[str, Any] = {
         "tool": tool,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }

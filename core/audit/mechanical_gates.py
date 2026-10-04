@@ -580,7 +580,7 @@ def _call_name(node: ast.Call) -> str:
         obj = node.func
         while isinstance(obj, ast.Attribute):
             parts.append(obj.attr)
-            obj = obj.value
+            obj = obj.value  # type: ignore[assignment]
         if isinstance(obj, ast.Name):
             parts.append(obj.id)
         return ".".join(reversed(parts))
@@ -914,7 +914,7 @@ def _ast_type_name(node: ast.AST) -> str:
         obj = node
         while isinstance(obj, ast.Attribute):
             parts.append(obj.attr)
-            obj = obj.value
+            obj = obj.value  # type: ignore[assignment]
         if isinstance(obj, ast.Name):
             parts.append(obj.id)
         return ".".join(reversed(parts))

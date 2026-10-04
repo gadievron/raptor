@@ -277,8 +277,8 @@ class TriageSignalAvailability:
         Conservative = assume reachable/present (review more, not less).
         """
         return {
-            "on_reachable_path": True if not self.joern_reachability else None,
-            "binary_present": True if not self.binary_oracle else None,
+            "on_reachable_path": True if not self.joern_reachability else None,  # type: ignore[dict-item]
+            "binary_present": True if not self.binary_oracle else None,  # type: ignore[dict-item]
         }
 
     def summary(self) -> str:

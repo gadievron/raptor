@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 # tomllib is stdlib on 3.11+; older interpreters need the `tomli` backport.
 _tomllib = None
 if sys.version_info >= (3, 11):
-    import tomllib as _tomllib            # type: ignore[no-redef]
+    import tomllib as _tomllib            # type: ignore[no-redef,assignment]
 else:                                     # pragma: no cover — env-dependent
     try:
         import tomli as _tomllib          # type: ignore[no-redef]
@@ -57,7 +57,7 @@ try:
     _HAS_PACKAGING = True
 except ImportError:                       # pragma: no cover — env-dependent
     InvalidRequirement = Exception        # type: ignore[assignment,misc]
-    Requirement = None                    # type: ignore[assignment]
+    Requirement = None                    # type: ignore[assignment,misc]
     _HAS_PACKAGING = False
     logger.warning(
         "sca.parsers.pyproject: 'packaging' not installed — PEP 621/PDM "

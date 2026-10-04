@@ -1476,7 +1476,7 @@ class _CappedCapture:
         self._tail_cap = cap - self._head_cap
         self._head: list = []
         self._head_bytes = 0
-        self._tail = deque()
+        self._tail: deque[bytes] = deque()
         self._tail_bytes = 0
         self.dropped_bytes = 0
 
@@ -1594,7 +1594,8 @@ def run_cc_streaming(
             return
         stdin_fd = None
         try:
-            proc.stdin.close()
+            if proc.stdin is not None:
+                proc.stdin.close()
         except (BrokenPipeError, OSError):
             pass
 

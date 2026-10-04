@@ -133,7 +133,11 @@ def observe_target(
     if out_dir is not None:
         run_dir = Path(out_dir)
     else:
-        run_dir = _extract_output_dir(result.stderr or "", nonce)
+        run_dir_ = _extract_output_dir(result.stderr or "", nonce)
+        if not run_dir_:
+            log.error("frida observation produced no output directory")
+            return None
+        run_dir = run_dir_
     if run_dir and run_dir.is_dir() and (run_dir / "metadata.json").is_file():
         log.info("observation complete: %s", run_dir)
         return run_dir
@@ -226,7 +230,11 @@ def watch_sinks(
     if out_dir is not None:
         run_dir = Path(out_dir)
     else:
-        run_dir = _extract_output_dir(result.stderr or "", nonce)
+        run_dir_ = _extract_output_dir(result.stderr or "", nonce)
+        if not run_dir_:
+            log.error("frida sink watch produced no output directory")
+            return None
+        run_dir = run_dir_
     if run_dir and run_dir.is_dir() and (run_dir / "metadata.json").is_file():
         log.info("sink watch complete: %s", run_dir)
         return run_dir

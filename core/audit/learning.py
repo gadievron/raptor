@@ -146,7 +146,7 @@ def extract_fp_patterns(
                 "examples": category_examples.get(cat_name, []),
             })
 
-    patterns.sort(key=lambda p: p["count"], reverse=True)
+    patterns.sort(key=lambda p: p["count"], reverse=True)  # type: ignore[arg-type,return-value]
     return patterns
 
 

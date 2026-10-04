@@ -26,8 +26,8 @@ def generate_priority_paths(paths: list[dict[str, Any]], *, limit: int = 20) -> 
         pid = _sid(path.get("id") or f"GRAPH-PATH-{i + 1}")
         entry = path.get("entry") if isinstance(path.get("entry"), dict) else {}
         sink = path.get("sink") if isinstance(path.get("sink"), dict) else {}
-        entry_label = _node_label(entry, fallback="entry")
-        sink_label = _node_label(sink, fallback="sink")
+        entry_label = _node_label(entry, fallback="entry")  # type: ignore[arg-type]
+        sink_label = _node_label(sink, fallback="sink")  # type: ignore[arg-type]
         risk = path.get("risk_score")
         confidence = path.get("confidence") or path.get("evidence", {}).get("confidence") or "candidate"
         missing = path.get("missing_boundary") or "graph path"
@@ -109,7 +109,7 @@ def generate_diff(diff: dict[str, Any]) -> str:
         lines.append(f"    BASE -.-> {nid}")
 
     node_sections = diff.get("nodes") if isinstance(diff.get("nodes"), dict) else {}
-    for kind, change in node_sections.items():
+    for kind, change in node_sections.items():  # type: ignore[union-attr]
         if not isinstance(change, dict):
             continue
         added = change.get("added") or []

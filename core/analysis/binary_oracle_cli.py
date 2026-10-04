@@ -315,7 +315,7 @@ def _autodetect_binaries(
     # filter — operator asserts trust). The post-filter below is a
     # belt-and-braces re-check of the (≤ cap) returned paths.
     detected = detect_binaries(
-        repo, target_kind, path_filter=_drop_repo_committed)
+        repo, target_kind, path_filter=_drop_repo_committed)  # type: ignore[arg-type]
     locally_built = _drop_repo_committed(detected)
     if locally_built:
         print(
@@ -475,7 +475,7 @@ def _project_binaries(
                 try:
                     with fh:
                         st = os.fstat(fh.fileno())
-                        actual = sha256_fileobj(fh)
+                        actual = sha256_fileobj(fh)  # type: ignore[arg-type]
                 except OSError:
                     logger.warning(
                         "binary-oracle: project binary %s could not "
@@ -750,7 +750,7 @@ def resolve_binary_paths(args, repo: Path, target_kind: str,
         # earlier.
         env_paths, guessed = _env_build_debug_binaries(
             repo, run_dir=Path(_out) if _out else None)
-        for p in env_paths:
+        for p in env_paths:  # type: ignore[assignment]
             seen.setdefault(p, True)
         if guessed and env_paths and no_suppress_out is not None:
             no_suppress_out.extend(env_paths)

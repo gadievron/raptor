@@ -65,7 +65,7 @@ def parse(path: Path) -> list[Dependency]:
 
     try:
         data = json.loads(text)
-    except (json.JSONDecodeError, *PARSE_ESCAPE_ERRORS) as e:  # hostile-input escape classes
+    except (json.JSONDecodeError, *PARSE_ESCAPE_ERRORS) as e:  # type: ignore[misc]  # hostile-input escape classes
         logger.warning(
             "sca.parsers.vcpkg: JSON parse failed for %s: %s", path, e,
         )
@@ -107,7 +107,7 @@ def _build_dep(
     entry: Any, *, scope: str, path: Path,
 ) -> Dependency | None:
     if isinstance(entry, str):
-        name = entry
+        name: Any = entry
         version = None
         pin_style = PinStyle.WILDCARD
     elif isinstance(entry, dict):

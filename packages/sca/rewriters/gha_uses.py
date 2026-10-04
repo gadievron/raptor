@@ -171,8 +171,8 @@ def _apply_sha_pinned(
     tags (``v6`` / ``v7``); SHAs are in extra.
     """
     locator = re.escape(edit.locator)
-    old_sha = edit.extra.get("old_sha") or ""
-    new_sha = edit.extra.get("new_sha") or ""
+    old_sha = (edit.extra or {}).get("old_sha") or ""
+    new_sha = (edit.extra or {}).get("new_sha") or ""
     # The ``rewrite()`` chokepoint validates ``new_value`` (the tag),
     # but the bytes actually spliced into the workflow line on this
     # path are the SHAs from ``edit.extra`` — a poisoned upstream
