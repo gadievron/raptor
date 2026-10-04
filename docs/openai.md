@@ -7,10 +7,11 @@ RAPTOR can now run its operator-facing workflow from OpenAI Codex as well as Cla
 | Path | Purpose |
 |------|---------|
 | `AGENTS.md` | Repository instructions Codex reads before working in RAPTOR |
-| `.agents/skills/` | Codex skills for commands, validation, understanding, crash work, coverage and OSS forensics |
+| `.agents/skills/` | Symlink to `../.claude/skills/` — shared skill definitions for both Claude Code and Codex |
 | `.codex/agents/` | Codex sub-agent definitions converted from the existing RAPTOR specialist agents |
 | `.codex/config.toml` | Codex shell environment settings for RAPTOR sessions |
 | `.codex/hooks.json` | Session-start hook that runs `libexec/raptor-session-init` |
+| `docs/openai.md` | This file — OpenAI Codex setup and agent-surface layout |
 
 The `.claude/` surface remains in place. This is not a fork of the workflow; it is the same RAPTOR machinery exposed to another agent shell.
 
@@ -40,7 +41,7 @@ That generates `.startup-output` and `.codex/raptor.env`. The env file is ignore
 
 ## Skill Shape
 
-Each skill is a directory containing a `SKILL.md` with `name` and `description` frontmatter. Extra notes, scripts and reference files stay inside that skill directory and are loaded progressively by the agent when needed.
+`.agents/skills` is a symlink to `../.claude/skills`, so both Claude Code and Codex read the same skill definitions. Each skill is a directory containing a `SKILL.md` with `name` and `description` frontmatter. Extra notes, scripts and reference files stay inside that skill directory and are loaded progressively by the agent when needed.
 
 The copied skills intentionally keep RAPTOR's existing command boundaries:
 
@@ -53,7 +54,7 @@ The copied skills intentionally keep RAPTOR's existing command boundaries:
 When adding a new RAPTOR command, add or update the Python/libexec implementation first, then expose it through:
 
 1. `.claude/commands/` if Claude needs it.
-2. `.agents/skills/source-command-*/SKILL.md` if Codex needs it.
+2. Skills are shared via the `.agents/skills` → `.claude/skills` symlink, so updating `.claude/skills/` covers both platforms.
 3. `AGENTS.md` if it changes global operating rules.
 4. `README.md` or command docs if it is user-facing.
 
