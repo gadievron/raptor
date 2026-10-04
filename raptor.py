@@ -25,6 +25,7 @@ Available Modes:
     doctor      - Status report for local setup (no claude needed)
     frida       - Dynamic instrumentation via Frida (alpha)
     openant     - OpenAnt AST+LLM source-code vulnerability scan
+    zkpox       - Zero-knowledge proof of exploit: prove / verify (beta)
 
 Examples:
     # Full autonomous workflow
@@ -1697,6 +1698,19 @@ def mode_openant(args: list) -> int:
                               "Running OpenAnt LLM-powered source-code scan...")
 
 
+def mode_zkpox(args: list) -> int:
+    """Run ZKPoX zero-knowledge proof of exploit."""
+    script_root = Path(__file__).parent
+    zkpox_script = script_root / "raptor_zkpox.py"
+
+    if not zkpox_script.exists():
+        print(f"✗ ZKPoX script not found: {zkpox_script}", file=sys.stderr)
+        return 1
+
+    return _run_with_lifecycle("zkpox", zkpox_script, args,
+                              "Running ZKPoX...")
+
+
 def show_mode_help(mode: str, preamble: bool = True) -> None:
     """Show detailed help for a specific mode.
 
@@ -1708,7 +1722,7 @@ def show_mode_help(mode: str, preamble: bool = True) -> None:
     mode_scripts = _mode_help_scripts()
 
     if mode not in mode_scripts:
-        all_modes = set(mode_scripts.keys()) | {'describe', 'doctor', 'sca', 'frida'}
+        all_modes = set(mode_scripts.keys()) | {'describe', 'doctor', 'sca', 'frida', 'zkpox'}
         if mode not in all_modes:
             print(f"✗ Unknown mode: {mode}", file=sys.stderr)
             print(f"Available modes: {', '.join(sorted(all_modes))}", file=sys.stderr)
@@ -1719,7 +1733,8 @@ def show_mode_help(mode: str, preamble: bool = True) -> None:
             'doctor': mode_doctor,
             'sca': mode_sca,
             'frida': mode_frida,
-        'openant': mode_openant,
+            'openant': mode_openant,
+            'zkpox': mode_zkpox,
         }
         mode_handlers[mode](["--help"])
         return
@@ -1776,6 +1791,7 @@ Available Modes:
   doctor      - Status report for local setup (no claude needed)
   frida       - Dynamic instrumentation via Frida (alpha)
   openant     - OpenAnt AST+LLM source-code vulnerability scan
+  zkpox       - Zero-knowledge proof of exploit: prove / verify (beta)
 
 Examples:
   # Full autonomous workflow
@@ -1939,8 +1955,9 @@ def main():
         'describe': mode_describe,
         'frida': mode_frida,
         'openant': mode_openant,
+        'zkpox': mode_zkpox,
     }
-    
+
     if mode not in mode_handlers:
         print(f"✗ Unknown mode: {mode}", file=sys.stderr)
         # Suggest the closest match — typos like ``agantic`` for
