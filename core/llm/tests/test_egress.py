@@ -383,6 +383,27 @@ class TestUrlIsLoopback:
         assert egress._is_loopback("0.0.0.0")
 
 
+class TestIsLocalInference:
+    def test_ollama_is_local(self):
+        assert egress.is_local_inference("ollama") is True
+        assert egress.is_local_inference("Ollama") is True
+
+    def test_loopback_api_base_is_local(self):
+        assert egress.is_local_inference(
+            "openai", "http://localhost:8000/v1") is True
+        assert egress.is_local_inference(
+            "openai", "http://127.0.0.1:1234/v1") is True
+
+    def test_cloud_is_not_local(self):
+        assert egress.is_local_inference("anthropic") is False
+        assert egress.is_local_inference(
+            "openai", "https://api.openai.com/v1") is False
+
+    def test_none_provider_is_not_local(self):
+        assert egress.is_local_inference("", None) is False
+        assert egress.is_local_inference(None, None) is False
+
+
 class TestLoopbackSafeGet:
     def test_loopback_bypasses_proxy_env(self, monkeypatch):
         captured = {}

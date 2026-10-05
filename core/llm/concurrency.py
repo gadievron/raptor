@@ -139,11 +139,9 @@ def _local_worker_cap() -> int:
 def _is_local_primary(model: str) -> bool:
     """True when *model* is served by a single local inference server.
 
-    Covers the Ollama provider (local or a remote GPU box named via
-    ``OLLAMA_HOST``) AND any other provider whose ``api_base`` resolves to
-    a loopback/local host — the vLLM / LM Studio / llama.cpp case, usually
-    configured as ``provider: openai`` with a custom ``api_base``. The
-    overload risk is the same for all of them: one server, one GPU pool.
+    Delegates to ``core.llm.egress.is_local_inference`` for the
+    provider/api_base detection, then verifies *model* actually names
+    the configured primary (not a cloud fallback dispatched alongside).
     """
     try:
         from core.llm.config import _get_default_primary_model
@@ -152,18 +150,13 @@ def _is_local_primary(model: str) -> bool:
         return False
     if mc is None:
         return False
-    if mc.provider == "ollama":
-        return model in ("default", mc.model_name)
-    # Non-ollama provider pointed at a local endpoint (vLLM/LM Studio/…).
-    api_base = getattr(mc, "api_base", None)
-    if api_base:
-        try:
-            from core.llm.egress import url_is_loopback
-            if url_is_loopback(api_base):
-                return model in ("default", mc.model_name)
-        except Exception:  # noqa: BLE001 — detection is best-effort
+    try:
+        from core.llm.egress import is_local_inference
+        if not is_local_inference(mc.provider, getattr(mc, "api_base", None)):
             return False
-    return False
+    except Exception:  # noqa: BLE001 — detection is best-effort
+        return False
+    return model in ("default", mc.model_name)
 
 
 def _is_claudecode_primary(model: str) -> bool:
