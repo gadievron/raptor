@@ -931,7 +931,7 @@ def confirm_elapsed_regressions(
     *,
     out_root: Path | None = None,
     git_clone_timeout: int = 300,
-    max_remeasures: int = 3,
+    max_remeasures: int = 5,
     vuln_warn_pct: float = DEFAULT_VULN_WARN_PCT,
     vuln_fail_pct: float = DEFAULT_VULN_FAIL_PCT,
     deps_warn_pct: float = DEFAULT_DEPS_WARN_PCT,
