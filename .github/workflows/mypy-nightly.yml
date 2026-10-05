@@ -1,4 +1,4 @@
-name: mypy (nightly)
+name: Nightly (mypy)
 
 # Nightly full-tree type check.  Not a PR gate — regressions found
 # here are fixed when convenient, not blocking merges.  The pyproject

@@ -8185,7 +8185,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                     containment_floor=_tiers.tier_label(_floor),
                     block_network=bool(block_network),
                     udp_block_engaged=bool(
-                        result.sandbox_info.get("udp_block_engaged",
+                        result.sandbox_info.get("udp_block_engaged",  # type: ignore[attr-defined]
                                                 False)),
                 )
             except Exception:  # noqa: BLE001 — best-effort telemetry posture
