@@ -152,7 +152,6 @@ _MAX_CACHE_ENTRIES = 32
 # Their availability determines extraction QUALITY for the same source
 # bytes: without a grammar a language's files get empty call graphs.
 _GRAMMAR_MODULES: tuple[str, ...] = (
-    "tree_sitter",
     "tree_sitter_c",
     "tree_sitter_c_sharp",
     "tree_sitter_cpp",

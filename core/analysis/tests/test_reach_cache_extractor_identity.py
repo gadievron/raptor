@@ -73,14 +73,16 @@ def test_identity_excludes_findable_but_unimportable_grammar(
     identity = rc_mod._extractor_identity()
 
     assert stub_name not in identity.split(",")
-    # And the real runtime module, when importable, still registers —
+    # The real language grammars, when importable, still register —
     # the probe rejects import failure, not the mechanism itself.
+    # (The base ``tree_sitter`` runtime is NOT a grammar and is
+    # deliberately absent from ``_GRAMMAR_MODULES``.)
     try:
-        import tree_sitter  # noqa: F401
+        import tree_sitter_c  # noqa: F401
     except ImportError:
         pass
     else:
-        assert "tree_sitter" in identity.split(",")
+        assert "tree_sitter_c" in identity.split(",")
 
 
 def test_identity_degrades_on_non_importerror_grammar(
