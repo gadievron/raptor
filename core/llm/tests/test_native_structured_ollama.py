@@ -188,6 +188,25 @@ class TestStripThinkBlocks:
             "saw <think>x</think> in output",
         ]
 
+    def test_think_tags_inside_json_survive_structured_fallback(self):
+        # Regression: _structured_fallback calls generate(), which used to
+        # strip think blocks unconditionally. That corrupted JSON values
+        # containing <think>…</think> before the parse-first guard in
+        # _build_structured_response could protect them.
+        provider = _provider("openai")
+        body = (
+            '{"verdict": "needs_analysis", '
+            '"prerequisites": ["saw <think>x</think> in output"]}'
+        )
+        calls = _wire_recording_generate(provider, content=body)
+
+        out = provider.generate_structured("p", _SCHEMA)
+
+        assert out.result["prerequisites"] == [
+            "saw <think>x</think> in output",
+        ]
+        assert calls[0].get("_raw_think_blocks") is True
+
     def test_leaves_clean_text_untouched(self):
         assert _strip_think_blocks('{"x": 1}') == '{"x": 1}'
 

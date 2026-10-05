@@ -1074,7 +1074,9 @@ class LLMProvider(ABC):
             gen_kwargs["max_tokens"] = max_tokens
         if temperature is not None:
             gen_kwargs["temperature"] = temperature
-        response = self.generate(prompt, augmented_system, **gen_kwargs)
+        response = self.generate(
+            prompt, augmented_system, _raw_think_blocks=True, **gen_kwargs,
+        )
         if response.finish_reason in ("max_tokens", "length"):
             # RuntimeError, not json.JSONDecodeError: the client's
             # retry loop treats JSON decode failures as retryable, but
@@ -1923,7 +1925,8 @@ class OpenAICompatibleProvider(LLMProvider):
                     raise RuntimeError(msg)
                 logger.warning("Response truncated by content filter")
 
-            content = _strip_think_blocks(content)
+            if not kwargs.get("_raw_think_blocks"):
+                content = _strip_think_blocks(content)
 
             input_tokens = 0
             output_tokens = 0
@@ -2039,6 +2042,7 @@ class OpenAICompatibleProvider(LLMProvider):
                         },
                     },
                     extra_body={"think": False},
+                    _raw_think_blocks=True,
                     timeout_s=kwargs.get("timeout_s"),
                     **{k: kwargs[k] for k in ("max_tokens", "temperature")
                        if k in kwargs},
