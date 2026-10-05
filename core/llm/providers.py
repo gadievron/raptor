@@ -3040,7 +3040,7 @@ class AnthropicProvider(LLMProvider):
         # 3 SDK attempts x 120s walls while its class ceiling said
         # 480. The SDK accepts a per-request ``timeout`` override.
         _timeout_s = kwargs.get("timeout_s")
-        if _timeout_s:
+        if _timeout_s is not None:
             try:
                 create_kwargs["timeout"] = float(_timeout_s)
             except (TypeError, ValueError):
@@ -3305,7 +3305,7 @@ class AnthropicProvider(LLMProvider):
                 # the ones the wall killed. Instructor forwards unknown
                 # kwargs to the underlying SDK ``messages.create``.
                 _timeout_s = kwargs.get("timeout_s")
-                if _timeout_s:
+                if _timeout_s is not None:
                     try:
                         create_kwargs["timeout"] = float(_timeout_s)
                     except (TypeError, ValueError):
