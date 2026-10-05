@@ -4801,6 +4801,8 @@ def main() -> None:
                              help="Non-blind review model")
     model_group.add_argument("--aggregate", metavar="MODEL",
                              help="Final synthesis model for multi-model results")
+    model_group.add_argument("--exploit-model", metavar="MODEL",
+                             help="Model for PoC/patch generation (falls back to code model)")
 
     # IRIS Tier 2/3 deep-validate gate. Mirrors raptor_agentic.py.
     # Without these flags /analyze can never reach Tier 4 SMT
@@ -4864,6 +4866,7 @@ def main() -> None:
         getattr(args, "consensus", None),
         getattr(args, "judge", None),
         getattr(args, "aggregate", None),
+        getattr(args, "exploit_model", None),
     ])
 
     try:
@@ -4987,6 +4990,7 @@ def main() -> None:
                 consensus=args.consensus,
                 judge=args.judge,
                 aggregate=args.aggregate,
+                exploit=args.exploit_model,
             )
             if llm_config:
                 result = orchestrate(

@@ -2534,6 +2534,12 @@ Examples:
              "two --model values; without --aggregate you still get the "
              "correlation results.",
     )
+    model_group.add_argument(
+        "--exploit-model",
+        metavar="MODEL",
+        help="Model for PoC/patch generation. Falls back to code model, "
+             "then analysis model if not set.",
+    )
     parser.add_argument(
         "--no-validate-dataflow",
         action="store_true",
@@ -4693,6 +4699,7 @@ def main() -> int:
                 consensus=getattr(args, "consensus", None),
                 judge=getattr(args, "judge", None),
                 aggregate=getattr(args, "aggregate", None),
+                exploit=getattr(args, "exploit_model", None),
                 auto_detect=llm_env.external_llm,
             )
             if llm_config and getattr(args, "max_cost_usd", None) is not None:

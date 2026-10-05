@@ -961,6 +961,7 @@ class TestWeakenedDefenses:
         role_resolution = {
             "analysis_model": mock_model,
             "code_model": None,
+            "exploit_model": None,
             "consensus_models": [],
             "fallback_models": [],
         }

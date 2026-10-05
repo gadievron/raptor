@@ -390,6 +390,7 @@ def build_llm_config_from_flags(
     consensus: str | None = None,
     judge: str | None = None,
     aggregate: str | None = None,
+    exploit: str | None = None,
     auto_detect: bool = True,
 ) -> Any | None:
     """Build an LLMConfig from CLI flags, shared by /agentic and /analyze.
@@ -404,6 +405,7 @@ def build_llm_config_from_flags(
         consensus: Blind second-opinion model name.
         judge: Non-blind review model name.
         aggregate: Final synthesis model name.
+        exploit: Model for PoC/patch generation.
         auto_detect: Try env vars / models.json if no --model given.
 
     Returns LLMConfig or None if no model could be resolved.
@@ -557,6 +559,7 @@ def build_llm_config_from_flags(
         ("consensus", consensus),
         ("judge", judge),
         ("aggregate", aggregate),
+        ("exploit", exploit),
     ]
     has_role_flags = any(m for _, m in role_flags)
     if has_role_flags and not llm_config:
@@ -873,9 +876,9 @@ def orchestrate(
     # Resolve model roles
     from core.llm.config import resolve_model_roles
     role_resolution: dict[str, Any] = {"analysis_model": None, "code_model": None,
-                       "consensus_models": [], "judge_models": [],
-                       "aggregate_models": [], "fallback_models": [],
-                       "analysis_models": []}
+                       "exploit_model": None, "consensus_models": [],
+                       "judge_models": [], "aggregate_models": [],
+                       "fallback_models": [], "analysis_models": []}
     if llm_config and llm_config.primary_model:
         role_resolution = resolve_model_roles(
             llm_config.primary_model,

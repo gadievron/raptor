@@ -1353,7 +1353,7 @@ def _get_default_fallback_models() -> list['ModelConfig']:
 # Model role resolution
 # ---------------------------------------------------------------------------
 
-VALID_ROLES = {"analysis", "code", "consensus", "fallback", "judge", "aggregate"}
+VALID_ROLES = {"analysis", "code", "consensus", "exploit", "fallback", "judge", "aggregate"}
 
 
 def get_configured_models() -> list[dict]:
@@ -1378,8 +1378,9 @@ def resolve_model_roles(
 
     Returns:
         {analysis_model: ModelConfig, code_model: ModelConfig,
-         consensus_models: [ModelConfig], judge_models: [ModelConfig],
-         aggregate_models: [ModelConfig], fallback_models: [ModelConfig]}
+         exploit_model: ModelConfig, consensus_models: [ModelConfig],
+         judge_models: [ModelConfig], aggregate_models: [ModelConfig],
+         fallback_models: [ModelConfig]}
 
     Raises:
         ConfigError on invalid role configurations.
@@ -1396,6 +1397,7 @@ def resolve_model_roles(
             "analysis_model": None,
             "analysis_models": [],
             "code_model": None,
+            "exploit_model": None,
             "consensus_models": [],
             "judge_models": [],
             "aggregate_models": [],
@@ -1418,6 +1420,7 @@ def resolve_model_roles(
             "analysis_model": first,
             "analysis_models": [first] if first is not None else [],
             "code_model": first,
+            "exploit_model": first,
             "consensus_models": [],
             "judge_models": [],
             "aggregate_models": [],
@@ -1430,6 +1433,7 @@ def resolve_model_roles(
     # Resolve by role
     analysis = [m for m in all_models if m.role == "analysis"]
     code = [m for m in all_models if m.role == "code"]
+    exploit = [m for m in all_models if m.role == "exploit"]
     consensus = [m for m in all_models if m.role == "consensus"]
     judge = [m for m in all_models if m.role == "judge"]
     aggregate = [m for m in all_models if m.role == "aggregate"]
@@ -1437,11 +1441,13 @@ def resolve_model_roles(
 
     analysis_model = analysis[0] if analysis else (all_models[0] if all_models else None)
     code_model = code[0] if code else analysis_model
+    exploit_model = exploit[0] if exploit else code_model
 
     return {
         "analysis_model": analysis_model,
         "analysis_models": analysis or ([all_models[0]] if all_models else []),
         "code_model": code_model,
+        "exploit_model": exploit_model,
         "consensus_models": consensus,
         "judge_models": judge,
         "aggregate_models": aggregate,
@@ -1513,6 +1519,16 @@ def _validate_model_roles(models: list['ModelConfig']) -> None:
 
     if code_count > 1:
         msg = "Multiple models with role 'code'. Only one code model is supported"
+        raise ConfigError(msg)
+
+    has_exploit = "exploit" in roles
+    exploit_count = roles.count("exploit")
+    if exploit_count > 1:
+        msg = "Multiple models with role 'exploit'. Only one exploit model is supported"
+        raise ConfigError(msg)
+
+    if has_exploit and not has_analysis:
+        msg = "Exploit model configured without an analysis model"
         raise ConfigError(msg)
 
     if only_fallback:

@@ -174,7 +174,7 @@ class ExploitTask(DispatchTask):
     """Exploit PoC generation for exploitable findings."""
 
     name = "exploit"
-    model_role = "code"
+    model_role = "exploit"
     temperature = 0.8
     budget_cutoff = 0.85
 
@@ -267,7 +267,7 @@ class PatchTask(DispatchTask):
     """Secure patch generation for exploitable findings."""
 
     name = "patch"
-    model_role = "code"
+    model_role = "exploit"
     temperature = 0.3
     budget_cutoff = 0.85
 

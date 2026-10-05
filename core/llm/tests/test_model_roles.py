@@ -178,10 +178,59 @@ class TestRoleValidation:
             resolve_model_roles(m1, [m2])
 
 
+class TestExploitRole:
+    def test_explicit_exploit_model(self):
+        m1 = ModelConfig(provider="anthropic", model_name="opus", role="analysis")
+        m2 = ModelConfig(provider="ollama", model_name="abliterated-70b", role="exploit")
+        r = resolve_model_roles(m1, [m2])
+        assert r["exploit_model"].model_name == "abliterated-70b"
+        assert r["code_model"].model_name == "opus"
+
+    def test_exploit_falls_back_to_code_model(self):
+        m1 = ModelConfig(provider="anthropic", model_name="opus", role="analysis")
+        m2 = ModelConfig(provider="ollama", model_name="deepseek-coder", role="code")
+        r = resolve_model_roles(m1, [m2])
+        assert r["exploit_model"].model_name == "deepseek-coder"
+
+    def test_exploit_falls_back_to_primary_when_no_code(self):
+        m1 = ModelConfig(provider="anthropic", model_name="opus", role="analysis")
+        r = resolve_model_roles(m1)
+        assert r["exploit_model"].model_name == "opus"
+
+    def test_no_roles_exploit_defaults_to_primary(self):
+        m1 = ModelConfig(provider="anthropic", model_name="opus")
+        r = resolve_model_roles(m1)
+        assert r["exploit_model"].model_name == "opus"
+
+    def test_multiple_exploit_raises(self):
+        m1 = ModelConfig(provider="anthropic", model_name="opus", role="analysis")
+        m2 = ModelConfig(provider="ollama", model_name="a", role="exploit")
+        m3 = ModelConfig(provider="ollama", model_name="b", role="exploit")
+        with pytest.raises(ConfigError, match="Multiple models with role 'exploit'"):
+            resolve_model_roles(m1, [m2, m3])
+
+    def test_empty_config_has_exploit_key(self):
+        r = resolve_model_roles(None, None)
+        assert r["exploit_model"] is None
+
+    def test_exploit_without_analysis_raises(self):
+        m = ModelConfig(provider="ollama", model_name="abliterated", role="exploit")
+        with pytest.raises(ConfigError, match="without an analysis model"):
+            resolve_model_roles(None, [m])
+
+    def test_roleless_primary_with_exploit_allowed(self):
+        primary = ModelConfig(provider="anthropic", model_name="opus")
+        exploit = ModelConfig(provider="ollama", model_name="abliterated", role="exploit")
+        r = resolve_model_roles(primary, [exploit])
+        assert r["analysis_model"] is primary
+        assert r["exploit_model"].model_name == "abliterated"
+
+
 class TestValidRoles:
     def test_valid_roles_set(self):
         assert "analysis" in VALID_ROLES
         assert "code" in VALID_ROLES
         assert "consensus" in VALID_ROLES
+        assert "exploit" in VALID_ROLES
         assert "fallback" in VALID_ROLES
         assert "wizard" not in VALID_ROLES
