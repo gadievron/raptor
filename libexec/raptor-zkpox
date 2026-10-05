@@ -177,6 +177,7 @@ def _cmd_reproduce(args) -> int:
     result = reproduce_witness(
         bundle, witness_bytes,
         binary_path=binary_path, n=args.n,
+        sandbox_timeout=args.timeout,
     )
     attach_reproduction(bundle, result)
 
@@ -223,6 +224,8 @@ def main() -> int:
     r.add_argument("--binary", help="target binary (FUZZ/replay sources)")
     r.add_argument("--n", type=int, default=3,
                    help="consecutive runs (default 3)")
+    r.add_argument("--timeout", type=int, default=5,
+                   help="per-run sandbox timeout in seconds (default 5)")
 
     args = ap.parse_args()
     if args.cmd == "bundle":

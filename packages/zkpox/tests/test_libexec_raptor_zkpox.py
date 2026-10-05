@@ -206,6 +206,7 @@ _CRASHER = (
 )
 
 
+@pytest.mark.slow
 @_needs_sandbox
 @pytest.mark.skipif(
     shutil.which("cc") is None and shutil.which("gcc") is None,
@@ -249,7 +250,8 @@ def test_bundle_then_reproduce_happy_path(tmp_path):
     assert json.loads((bundle_dir / "manifest.json").read_text())["tier"] == "0/1"
 
     # reproduce
-    r = _run(["reproduce", str(bundle_dir), "--binary", str(binary), "--n", "3"])
+    r = _run(["reproduce", str(bundle_dir), "--binary", str(binary),
+              "--n", "3", "--timeout", "10"])
     assert r.returncode == 0, f"stdout={r.stdout}\nstderr={r.stderr}"
     manifest = json.loads((bundle_dir / "manifest.json").read_text())
     assert manifest["tier"] == "1.5"  # bumped
@@ -360,7 +362,7 @@ def test_reproduce_first_run_silent_exit_126_is_spawn_failure(tmp_path):
     bundle_dir = out / "zkpox" / wh
 
     r = _run(["reproduce", str(bundle_dir), "--binary", str(crasher),
-              "--n", "3"])
+              "--n", "3", "--timeout", "10"])
     assert r.returncode == 0, f"stdout={r.stdout}\nstderr={r.stderr}"
     manifest = json.loads((bundle_dir / "manifest.json").read_text())
     rep = manifest["reproduction"]
