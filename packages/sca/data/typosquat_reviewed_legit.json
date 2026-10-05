@@ -1,19 +1,168 @@
 {
   "_comment": "Confirmed-legitimate near-name packages: real, independent projects whose names are one edit from a more-popular package (npm 'preact' vs 'react'). They are NOT typosquats. READ BY TWO CONSUMERS: (1) the detector (typosquat.py _load_allowlist) short-circuits the distance check for names here — this is the durable FP suppression for legitimate near-names that may not appear in the upstream popularity feeds (e.g. pnpm is a CLI tool, not depended-upon, so npmrank omits it); (2) the curation audit (typosquat_audit.py) suppresses these from the review-delta queue. Counterpart to typosquat_denylist.json (confirmed squats, which the detector subtracts from the popular list). Adding here is FP-safe; adding to the denylist is the FP-creating action and stays human-gated. Keys are ecosystem names; values map name -> {near_twin, decided_by, date, note}.",
   "npm": {
-    "preact": {"near_twin": "react", "decided_by": "human", "date": "2026-05-28", "note": "distinct project: fast 3kB React alternative"},
-    "enquirer": {"near_twin": "inquirer", "decided_by": "human", "date": "2026-05-28", "note": "distinct, widely-used prompt library"},
-    "gaxios": {"near_twin": "axios", "decided_by": "human", "date": "2026-05-28", "note": "Google's HTTP client (google-gax); real project"},
-    "mquery": {"near_twin": "jquery", "decided_by": "human", "date": "2026-05-28", "note": "MongoDB query builder; unrelated to jquery"},
-    "useragent": {"near_twin": "superagent", "decided_by": "human", "date": "2026-05-28", "note": "UA-string parser; unrelated to the HTTP client"},
-    "vasync": {"near_twin": "async", "decided_by": "human", "date": "2026-05-28", "note": "Joyent's async-control library; real project"},
-    "inherit": {"near_twin": "inherits", "decided_by": "human", "date": "2026-05-28", "note": "real OOP-inheritance helper, distinct from inherits"},
-    "rambda": {"near_twin": "ramda", "decided_by": "human", "date": "2026-05-28", "note": "deliberate lightweight ramda alternative; real project"},
-    "jslint": {"near_twin": "eslint", "decided_by": "human", "date": "2026-05-28", "note": "Crockford's original linter; predates eslint"},
-    "reqwest": {"near_twin": "request", "decided_by": "human", "date": "2026-05-28", "note": "real AJAX library; deliberate pun name"},
-    "pnpm": {"near_twin": "npm", "decided_by": "human", "date": "2026-06-25", "note": "pnpm package manager; top-3 JS package manager alongside npm and yarn"}
+    "preact": {
+      "near_twin": "react",
+      "decided_by": "human",
+      "date": "2026-05-28",
+      "note": "distinct project: fast 3kB React alternative"
+    },
+    "enquirer": {
+      "near_twin": "inquirer",
+      "decided_by": "human",
+      "date": "2026-05-28",
+      "note": "distinct, widely-used prompt library"
+    },
+    "gaxios": {
+      "near_twin": "axios",
+      "decided_by": "human",
+      "date": "2026-05-28",
+      "note": "Google's HTTP client (google-gax); real project"
+    },
+    "mquery": {
+      "near_twin": "jquery",
+      "decided_by": "human",
+      "date": "2026-05-28",
+      "note": "MongoDB query builder; unrelated to jquery"
+    },
+    "useragent": {
+      "near_twin": "superagent",
+      "decided_by": "human",
+      "date": "2026-05-28",
+      "note": "UA-string parser; unrelated to the HTTP client"
+    },
+    "vasync": {
+      "near_twin": "async",
+      "decided_by": "human",
+      "date": "2026-05-28",
+      "note": "Joyent's async-control library; real project"
+    },
+    "inherit": {
+      "near_twin": "inherits",
+      "decided_by": "human",
+      "date": "2026-05-28",
+      "note": "real OOP-inheritance helper, distinct from inherits"
+    },
+    "rambda": {
+      "near_twin": "ramda",
+      "decided_by": "human",
+      "date": "2026-05-28",
+      "note": "deliberate lightweight ramda alternative; real project"
+    },
+    "jslint": {
+      "near_twin": "eslint",
+      "decided_by": "human",
+      "date": "2026-05-28",
+      "note": "Crockford's original linter; predates eslint"
+    },
+    "reqwest": {
+      "near_twin": "request",
+      "decided_by": "human",
+      "date": "2026-05-28",
+      "note": "real AJAX library; deliberate pun name"
+    },
+    "pnpm": {
+      "near_twin": "npm",
+      "decided_by": "human",
+      "date": "2026-06-25",
+      "note": "pnpm package manager; top-3 JS package manager alongside npm and yarn"
+    },
+    "through3": {
+      "near_twin": "through",
+      "decided_by": "llm",
+      "model": "llm",
+      "date": "2026-10-05",
+      "note": "The package is over 11 years old and declares a source repository, indicating it is not a recent malicious creation. Its README explicitly lists 'through' and 'through3' as distinct sections, suggesti"
+    },
+    "fs.extra": {
+      "near_twin": "fs-extra",
+      "decided_by": "human",
+      "date": "2026-10-05",
+      "note": "by AJ ONeal (coolaj86), published 2011 — predates fs-extra; different author, real repo (utile-fs), 11 releases"
+    },
+    "uglifyjs": {
+      "near_twin": "uglify-js",
+      "decided_by": "human",
+      "date": "2026-10-05",
+      "note": "defensive name reservation by alexlamsl, who also maintains uglify-js; same owner"
+    },
+    "extend2": {
+      "near_twin": "extend",
+      "decided_by": "human",
+      "date": "2026-10-05",
+      "note": "eggjs team (popomore/fengmk2); jQuery.extend port, published 2017; real repo under eggjs/extend2"
+    }
   },
-  "PyPI": {},
-  "Cargo": {},
-  "Packagist": {}
+  "PyPI": {
+    "gsutil": {
+      "near_twin": "psutil",
+      "decided_by": "llm",
+      "model": "llm",
+      "date": "2026-10-05",
+      "note": "The package gsutil has a distinct and well-defined purpose related to Google Cloud Storage management, separate from the functionality of its more popular near-twin, psutil. It exhibits a long history"
+    },
+    "unicorn": {
+      "near_twin": "uvicorn",
+      "decided_by": "llm",
+      "model": "llm",
+      "date": "2026-10-05",
+      "note": "The package 'unicorn' serves as a CPU emulator engine, a purpose entirely distinct from the popular ASGI server 'uvicorn'. Its long history of nearly a decade, coupled with a declared source repositor"
+    },
+    "isolate": {
+      "near_twin": "isodate",
+      "decided_by": "llm",
+      "model": "llm",
+      "date": "2026-10-05",
+      "note": "The package 'isolate' has a distinct stated purpose related to Python environment management, differentiating it from the likely function of 'isodate'. It also shows a healthy release history with 92 "
+    },
+    "dydantic": {
+      "near_twin": "pydantic",
+      "decided_by": "human",
+      "date": "2026-10-05",
+      "note": "dynamic+pydantic portmanteau by LangChain engineer (hinthornw); real repo, 45 stars, 9 releases"
+    }
+  },
+  "Cargo": {
+    "manyhow": {
+      "near_twin": "anyhow",
+      "decided_by": "llm",
+      "model": "llm",
+      "date": "2026-10-05",
+      "note": "The package \"manyhow\" is a legitimate, independent project despite its name being one edit away from the more popular \"anyhow\". It has a distinct stated purpose related to \"proc macro error handling\","
+    },
+    "base62": {
+      "near_twin": "base64",
+      "decided_by": "llm",
+      "model": "llm",
+      "date": "2026-10-05",
+      "note": "The package base62 shares a name similar to the much more popular base64 package, differing by only one character. However, it has a distinct stated purpose as a Base62 encoding library, a declared so"
+    },
+    "rustfix": {
+      "near_twin": "rustix",
+      "decided_by": "llm",
+      "model": "llm",
+      "date": "2026-10-05",
+      "note": "The package \"rustfix\" has a distinct stated purpose related to Rust compiler suggestions, differentiating it from its more popular near-twin \"rustix\". It shows signs of an independent project with a h"
+    }
+  },
+  "Packagist": {
+    "symfony/polyfill-php70": {
+      "near_twin": "symfony/polyfill-php80",
+      "decided_by": "human",
+      "date": "2026-10-05",
+      "note": "official Symfony polyfill for PHP 7.0; same vendor namespace, same maintainers as php80/php84/php85"
+    },
+    "symfony/polyfill-php55": {
+      "near_twin": "symfony/polyfill-php85",
+      "decided_by": "human",
+      "date": "2026-10-05",
+      "note": "official Symfony polyfill for PHP 5.5; same vendor namespace, same maintainers"
+    },
+    "symfony/polyfill-php54": {
+      "near_twin": "symfony/polyfill-php84",
+      "decided_by": "human",
+      "date": "2026-10-05",
+      "note": "official Symfony polyfill for PHP 5.4; same vendor namespace, same maintainers"
+    }
+  }
 }
