@@ -43,7 +43,7 @@
 # exact glibc it runs on. The OCaml build adds minutes on 4-vCPU runners
 # (the image workflow's timeout is sized for it), weekly +
 # on-manifest-change only (that workflow builds uncached anyway).
-FROM python:3.14.7-slim-bookworm AS coccinelle-build
+FROM python:3.14.8-slim-bookworm AS coccinelle-build
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -67,7 +67,7 @@ RUN cd /tmp/coccinelle \
     && make install DESTDIR=/tmp/coccinelle-dest
 
 # --- runtime stage -----------------------------------------------------
-FROM python:3.14.7-slim-bookworm
+FROM python:3.14.8-slim-bookworm
 
 # OCI labels surface on the GHCR package page. `description` is the only
 # per-package text GHCR renders (it has no per-image README upload — the
