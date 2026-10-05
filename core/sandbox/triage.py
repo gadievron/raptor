@@ -840,7 +840,7 @@ def _check_resolved_ip_screened(proxy_events: list[dict]) -> list[dict]:
 
 
 def _check_host_recon(proxy_events: list[dict], threshold: int) -> list[dict]:
-    hosts = {e.get("host") for e in proxy_events
+    hosts = {e["host"].lower() for e in proxy_events
              if e.get("result") in ("denied_host", "would_deny_host")
              and e.get("host")}
     if len(hosts) < threshold:
@@ -948,7 +948,7 @@ def _check_host_retry(proxy_events: list[dict]) -> list[dict]:
         if e.get("result") in ("denied_host", "would_deny_host"):
             host = e.get("host")
             if host:
-                host_counts[host] += 1
+                host_counts[host.lower()] += 1
     retried = {h: c for h, c in host_counts.items()
                if c >= _HOST_RETRY_THRESHOLD}
     if not retried:

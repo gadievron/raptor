@@ -1437,3 +1437,33 @@ class TestUdpPostureGap:
         result = triage_mod.triage_run(tmp_path)
         types = {s["type"] for s in result["signals"]}
         assert "udp_posture_gap" not in types
+
+
+class TestHostCaseNormalisation:
+    def test_retry_counts_mixed_case_as_one_host(self, tmp_path):
+        events = [
+            {"t": i, "host": h, "port": 443, "result": "denied_host"}
+            for i, h in enumerate([
+                "C2.Evil.COM", "c2.evil.com", "c2.EVIL.com",
+                "C2.EVIL.COM", "c2.Evil.Com", "C2.evil.com",
+                "c2.evil.COM", "C2.Evil.com", "c2.Evil.COM",
+                "C2.evil.COM", "c2.evil.com", "C2.Evil.COM",
+            ])
+        ]
+        _write_proxy_events(tmp_path, events)
+        result = triage_mod.triage_run(tmp_path)
+        types = {s["type"] for s in result["signals"]}
+        assert "host_retry_pattern" in types
+
+    def test_recon_deduplicates_mixed_case(self, tmp_path):
+        events = [
+            {"t": i, "host": h, "port": 443, "result": "denied_host"}
+            for i, h in enumerate([
+                "A.com", "a.com", "a.COM",
+                "B.com", "b.com", "b.COM",
+            ])
+        ]
+        _write_proxy_events(tmp_path, events)
+        result = triage_mod.triage_run(tmp_path)
+        assert not any(s["type"] == "host_recon_pattern"
+                       for s in result["signals"])

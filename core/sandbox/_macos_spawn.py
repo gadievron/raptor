@@ -1595,6 +1595,10 @@ def run_sandboxed(cmd: list[str], *,
     if not hasattr(result, "sandbox_info"):
         result.sandbox_info = {}  # type: ignore[attr-defined]
     result.sandbox_info.setdefault("backend", "macos-seatbelt")  # type: ignore[attr-defined]
+    if block_network:
+        result.sandbox_info.setdefault(  # type: ignore[attr-defined]
+            "udp_block_engaged", True)
+
     if _weak_grant_pins:
         # Identity-weak pins (no birth-time witness at capture): the
         # dev/ino arms enforced for the whole run, but an

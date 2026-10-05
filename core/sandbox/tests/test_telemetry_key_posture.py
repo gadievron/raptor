@@ -322,6 +322,12 @@ class TestMacosSpawnWiring:
         posture = summary_mod.get_run_posture(tmp_path)
         assert posture["mac_key_hidden"] is True
 
+    def test_block_network_sets_udp_engaged_in_sandbox_info(
+            self, tmp_path, monkeypatch):
+        result = self._run(tmp_path, monkeypatch, restrict_reads=False,
+                           block_network=True)
+        assert result.sandbox_info["udp_block_engaged"] is True
+
 
 # The Linux dispatch layer with a real sandboxed call — a real-Linux
 # binding (requires_landlock already keeps it off real macs).
