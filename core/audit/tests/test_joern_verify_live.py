@@ -129,30 +129,32 @@ void cap_evade(char *buf, int len, int flag) {
 """
 
 
+@pytest.fixture(scope="class")
+def live(tmp_path_factory):
+    """Start a Joern server and load a CPG for the test fixture."""
+    from core.audit.joern_backend import (
+        _ensure_cpg_loaded,
+        joern_tunables,
+    )
+    from packages.joern.server import JoernServer
+
+    target = tmp_path_factory.mktemp("verify-target")
+    (target / "copy.c").write_text(_FIXTURE)
+    srv = JoernServer.from_tunables(joern_tunables())
+    srv.start()
+    try:
+        assert _ensure_cpg_loaded(srv, target) is True
+    except BaseException:
+        srv.stop()
+        raise
+    yield srv, target
+    srv.stop()
+
+
 @pytest.mark.slow
 @pytest.mark.skipif(not _live_ready(),
                     reason="needs a joern install and user namespaces")
 class TestLiveVerifyChannels:
-    @pytest.fixture(scope="class")
-    def live(self, tmp_path_factory):
-        from core.audit.joern_backend import (
-            _ensure_cpg_loaded,
-            joern_tunables,
-        )
-        from packages.joern.server import JoernServer
-
-        target = tmp_path_factory.mktemp("verify-target")
-        (target / "copy.c").write_text(_FIXTURE)
-        srv = JoernServer.from_tunables(joern_tunables())
-        srv.start()
-        try:
-            assert _ensure_cpg_loaded(srv, target) is True
-        except BaseException:
-            srv.stop()
-            raise
-        yield srv, target
-        srv.stop()
-
     def test_guard_dominance_answers_both_directions(self, live):
         from core.audit.joern_verify import run_guard_dominance_check
 
