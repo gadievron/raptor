@@ -70,6 +70,11 @@ class TestOpenWeightReasoningStemMatch:
         assert result is not None
         assert result.model_name == "DeepSeek-R1:70b"
 
+    def test_stem_boundary_rejects_prefix_collision(self):
+        with _mock_models([{"provider": "ollama", "model": "qwen32b-instruct:latest"}]):
+            result = _get_best_thinking_model()
+        assert result is None
+
 
 class TestRoleThinkingStandalone:
     def test_unknown_model_with_thinking_role_eligible(self):

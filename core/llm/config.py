@@ -210,9 +210,12 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
                 if effective_score < 0:
                     model_lower = entry_model_undated.lower()
                     for stem, stem_score in _REASONING_MODEL_STEMS:
-                        if stem in model_lower:
-                            effective_score = stem_score
-                            break
+                        pos = model_lower.find(stem)
+                        if pos != -1:
+                            end = pos + len(stem)
+                            if end == len(model_lower) or not model_lower[end].isalnum():
+                                effective_score = stem_score
+                                break
 
                 if effective_score < 0 and entry_role in ('thinking', 'reasoning'):
                     effective_score = 40

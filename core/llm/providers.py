@@ -1304,6 +1304,72 @@ def _strip_think_blocks(text: str) -> str:
     return stripped.strip()
 
 
+class _StreamThinkFilter:
+    """Buffer streaming text deltas until any leading ``<think>`` block passes.
+
+    Non-reasoning responses see at most a few chunks of latency (until the
+    first non-whitespace character rules out ``<think``).  Reasoning responses
+    have their think block silently consumed; the answer streams normally once
+    ``</think>`` arrives.
+    """
+
+    __slots__ = ("_buf", "_state")
+
+    def __init__(self) -> None:
+        self._buf: list[str] = []
+        self._state = 0  # 0=detecting, 1=inside_think, 2=passthrough
+
+    def feed(self, text: str) -> str | None:
+        """Return text to yield, or ``None`` to suppress this delta."""
+        if self._state == 2:
+            return text
+
+        self._buf.append(text)
+        joined = "".join(self._buf)
+
+        if self._state == 0:
+            stripped = joined.lstrip()
+            if not stripped:
+                return None
+            if stripped[0] != "<":
+                self._state = 2
+                self._buf.clear()
+                return joined
+            if stripped.lower().startswith("<think"):
+                self._state = 1
+            elif len(stripped) >= 6:
+                self._state = 2
+                self._buf.clear()
+                return joined
+            else:
+                return None
+
+        if self._state == 1:
+            idx = joined.lower().find("</think>")
+            if idx != -1:
+                after = joined[idx + len("</think>"):]
+                self._buf.clear()
+                after_stripped = after.lstrip()
+                if after_stripped and after_stripped.lower().startswith("<think"):
+                    self._buf.append(after)
+                elif after_stripped:
+                    self._state = 2
+                    return after
+                else:
+                    self._state = 0
+
+        return None
+
+    def flush(self) -> str | None:
+        """Flush remaining buffer at end of stream."""
+        if not self._buf:
+            return None
+        joined = "".join(self._buf)
+        self._buf.clear()
+        cleaned = _strip_think_blocks(joined)
+        return cleaned or None
+
+
 def _coerce_to_schema(data: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:
     """Coerce LLM output values to match schema types before Pydantic validation.
 
@@ -1841,7 +1907,6 @@ class OpenAICompatibleProvider(LLMProvider):
             # Ollama thinking models (qwen3, etc.) put responses in reasoning_content
             if not content:
                 content = getattr(message, 'reasoning_content', '') or ""
-            content = _strip_think_blocks(content)
             finish_reason = response.choices[0].finish_reason or "complete"
 
             # Detect content filter blocks and model refusals
@@ -1857,6 +1922,8 @@ class OpenAICompatibleProvider(LLMProvider):
                     )
                     raise RuntimeError(msg)
                 logger.warning("Response truncated by content filter")
+
+            content = _strip_think_blocks(content)
 
             input_tokens = 0
             output_tokens = 0
@@ -2521,6 +2588,7 @@ class OpenAICompatibleProvider(LLMProvider):
         # final usage payload never arrived.
         approx_output_chars = 0
         stop = StopReason.ERROR
+        think_filter = _StreamThinkFilter()
 
         try:
             for chunk in resp:
@@ -2543,9 +2611,11 @@ class OpenAICompatibleProvider(LLMProvider):
 
                 if delta and getattr(delta, "content", None):
                     approx_output_chars += len(delta.content)
-                    yield StreamChunk(
-                        type="text_delta", text=delta.content,
-                    )
+                    cleaned = think_filter.feed(delta.content)
+                    if cleaned:
+                        yield StreamChunk(
+                            type="text_delta", text=cleaned,
+                        )
 
                 if delta and getattr(delta, "tool_calls", None):
                     for tc in delta.tool_calls:
@@ -2612,6 +2682,10 @@ class OpenAICompatibleProvider(LLMProvider):
             resp.close()
 
         duration = time.monotonic() - t_start
+
+        remainder = think_filter.flush()
+        if remainder:
+            yield StreamChunk(type="text_delta", text=remainder)
 
         yield StreamChunk(
             type="usage",
