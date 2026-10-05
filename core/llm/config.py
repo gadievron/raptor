@@ -153,6 +153,18 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
             ("gemini", "gemini-2.5-flash", 55),
         ]
 
+        # Open-weight reasoning model stems — scored by substring match
+        # so operators running local reasoning models get reasoning-tier
+        # eligibility without requiring an exact entry in the cloud
+        # pattern table.  Scored below cloud tiers but above role-only.
+        _REASONING_MODEL_STEMS: list[tuple[str, int]] = [
+            ("deepseek-r1", 52),
+            ("qwq", 50),
+            ("qwen3", 48),
+            ("marco-o1", 46),
+            ("skywork-o1", 44),
+        ]
+
         # Find best matching model
         best_model = None
         best_score = -1
@@ -187,86 +199,80 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
                 from core.llm.model_data import _strip_dated_alias
                 entry_model_undated = _strip_dated_alias(entry_model)
 
-                # Score this model
+                # Score this model — try exact cloud patterns first,
+                # then open-weight reasoning stems, then explicit role.
+                effective_score = -1
                 for pattern_provider, pattern_model, base_score in thinking_model_patterns:
                     if entry_provider == pattern_provider and entry_model_undated == pattern_model:
-                        # Boost score if explicitly tagged as reasoning/thinking
                         effective_score = base_score
-                        if entry_role in ('thinking', 'reasoning'):
-                            effective_score += 10
-
-                        if effective_score > best_score:
-                            best_score = effective_score
-
-                            # Resolve API key: entry-level, then env var
-                            api_key = model_entry.get('api_key')
-                            if not api_key:
-                                env_key = PROVIDER_ENV_KEYS.get(entry_provider)
-                                if env_key:
-                                    api_key = os.getenv(env_key)
-
-                            # Determine cost/limits via the canonical
-                            # resolver chain — the same one
-                            # _model_config_from_entry uses (dated,
-                            # prefixed, and combined id forms all
-                            # resolve their catalog row).
-                            from core.llm.model_data import (
-                                resolve_model_costs,
-                                resolve_model_limits,
-                            )
-                            cost_info = resolve_model_costs(entry_model) or {}
-                            cost_per_1k = (cost_info.get('input', 0.005) + cost_info.get('output', 0.005)) / 2
-
-                            # Determine max_tokens and max_context from config or limits
-                            limits = resolve_model_limits(entry_model) or {}
-                            max_tokens = model_entry.get(
-                                'max_output',
-                                limits.get('max_output', _DEFAULT_MAX_OUTPUT_USER_CONFIGURED),
-                            )
-                            max_context = model_entry.get(
-                                'max_context',
-                                limits.get('max_context', _DEFAULT_MAX_CONTEXT_LOCAL),
-                            )
-
-                            # Set api_base for non-Anthropic providers. For
-                            # ``ollama`` specifically, prefer the operator-
-                            # configured ``RaptorConfig.OLLAMA_HOST`` over
-                            # the ``localhost:11434`` default; otherwise an
-                            # operator running a remote Ollama server gets a
-                            # ``Connection refused`` against their loopback
-                            # interface even though the rest of the codebase
-                            # (``_build_ollama_config`` /
-                            # ``_ollama_check_url``) correctly honours the
-                            # configured host. Explicit ``api_base`` in
-                            # ``model_entry`` wins over both — handled below
-                            # via the ``Optional overrides from config``
-                            # path.
-                            if entry_provider == "ollama":
-                                from core.config import RaptorConfig
-                                ollama_base = _validate_ollama_url(
-                                    RaptorConfig.OLLAMA_HOST,
-                                )
-                                api_base = f"{ollama_base.rstrip('/')}/v1"
-                            else:
-                                api_base = PROVIDER_ENDPOINTS.get(entry_provider)  # type: ignore[assignment]
-
-                            # Optional overrides from config
-                            api_base = model_entry.get('api_base') or api_base  # type: ignore[assignment]
-                            timeout = model_entry.get('timeout', 120)
-
-                            best_model = ModelConfig(
-                                provider=entry_provider,
-                                model_name=entry_model,
-                                api_key=api_key,
-                                api_base=api_base,
-                                max_tokens=max_tokens,
-                                max_context=max_context,
-                                timeout=timeout,
-                                temperature=0.7,
-                                cost_per_1k_tokens=cost_per_1k,
-                                role=entry_role or None,
-                            )
                         break
+
+                if effective_score < 0:
+                    model_lower = entry_model_undated.lower()
+                    for stem, stem_score in _REASONING_MODEL_STEMS:
+                        if stem in model_lower:
+                            effective_score = stem_score
+                            break
+
+                if effective_score < 0 and entry_role in ('thinking', 'reasoning'):
+                    effective_score = 40
+
+                if effective_score < 0:
+                    continue
+
+                if entry_role in ('thinking', 'reasoning'):
+                    effective_score += 10
+
+                if effective_score > best_score:
+                    best_score = effective_score
+
+                    api_key = model_entry.get('api_key')
+                    if not api_key:
+                        env_key = PROVIDER_ENV_KEYS.get(entry_provider)
+                        if env_key:
+                            api_key = os.getenv(env_key)
+
+                    from core.llm.model_data import (
+                        resolve_model_costs,
+                        resolve_model_limits,
+                    )
+                    cost_info = resolve_model_costs(entry_model) or {}
+                    cost_per_1k = (cost_info.get('input', 0.005) + cost_info.get('output', 0.005)) / 2
+
+                    limits = resolve_model_limits(entry_model) or {}
+                    max_tokens = model_entry.get(
+                        'max_output',
+                        limits.get('max_output', _DEFAULT_MAX_OUTPUT_USER_CONFIGURED),
+                    )
+                    max_context = model_entry.get(
+                        'max_context',
+                        limits.get('max_context', _DEFAULT_MAX_CONTEXT_LOCAL),
+                    )
+
+                    if entry_provider == "ollama":
+                        from core.config import RaptorConfig
+                        ollama_base = _validate_ollama_url(
+                            RaptorConfig.OLLAMA_HOST,
+                        )
+                        api_base = f"{ollama_base.rstrip('/')}/v1"
+                    else:
+                        api_base = PROVIDER_ENDPOINTS.get(entry_provider)  # type: ignore[assignment]
+
+                    api_base = model_entry.get('api_base') or api_base  # type: ignore[assignment]
+                    timeout = model_entry.get('timeout', 120)
+
+                    best_model = ModelConfig(
+                        provider=entry_provider,
+                        model_name=entry_model,
+                        api_key=api_key,
+                        api_base=api_base,
+                        max_tokens=max_tokens,
+                        max_context=max_context,
+                        timeout=timeout,
+                        temperature=0.7,
+                        cost_per_1k_tokens=cost_per_1k,
+                        role=entry_role or None,
+                    )
 
             except Exception as e:  # noqa: BLE001 — malformed entries skipped
                 logger.debug("Error processing model entry %s: %s", model_entry.get('model', 'unknown'), e)

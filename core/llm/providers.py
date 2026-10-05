@@ -1841,6 +1841,7 @@ class OpenAICompatibleProvider(LLMProvider):
             # Ollama thinking models (qwen3, etc.) put responses in reasoning_content
             if not content:
                 content = getattr(message, 'reasoning_content', '') or ""
+            content = _strip_think_blocks(content)
             finish_reason = response.choices[0].finish_reason or "complete"
 
             # Detect content filter blocks and model refusals
@@ -2299,7 +2300,9 @@ class OpenAICompatibleProvider(LLMProvider):
 
         out_blocks: list = []
         if msg.content:
-            out_blocks.append(TextBlock(text=msg.content))
+            cleaned = _strip_think_blocks(msg.content)
+            if cleaned:
+                out_blocks.append(TextBlock(text=cleaned))
         for tc in (msg.tool_calls or []):
             # Pre-fix `args = json.loads(tc.function.arguments)`
             # silently fell back to `args = {}` on JSON parse
