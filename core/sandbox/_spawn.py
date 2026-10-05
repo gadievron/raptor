@@ -4192,7 +4192,7 @@ def run_sandboxed(
                     if _tr_remaining <= 0:
                         _tracer_ready_wait_timed_out = True
                         break
-                    _tr_ready, _, _ = _tr_sel.select(
+                    _tr_ready, _, _ = _tr_sel.select(  # type: ignore[type-var]
                         [t_ready_r], [], [], _tr_remaining)
                     if not _tr_ready:
                         continue  # loop re-checks the deadline

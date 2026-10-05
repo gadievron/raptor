@@ -6,7 +6,7 @@ from core.security.log_sanitisation import escape_nonprintable
 
 _wcswidth: Callable[[str], int] | None
 try:
-    from wcwidth import wcswidth as _wcswidth
+    from wcwidth import wcswidth as _wcswidth  # type: ignore[no-redef]
 except ImportError:  # pragma: no cover
     _wcswidth = None
 

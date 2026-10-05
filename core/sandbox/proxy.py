@@ -3043,7 +3043,7 @@ class EgressProxy:
             # Best-effort: ensure no task is left dangling. Tasks that
             # already returned a result are no-op'd on cancel; in-flight
             # tasks get torn down so we don't leak a half-open socket.
-            for t in (v6_task, v4_task):
+            for t in (v6_task, v4_task):  # type: ignore[assignment]
                 if t is not None and not t.done():
                     t.cancel()
 

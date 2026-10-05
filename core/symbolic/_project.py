@@ -150,7 +150,7 @@ def _load_binary_pyelftools(binary_path: Path) -> BinaryInfo:
         for section in elf.iter_sections():
             if section.name not in (".symtab", ".dynsym"):
                 continue
-            for sym in section.iter_symbols():
+            for sym in section.iter_symbols():  # type: ignore[attr-defined]
                 name = sym.name
                 if not name:
                     continue

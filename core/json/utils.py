@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 _orjson: types.ModuleType | None
 try:
-    import orjson as _orjson
+    import orjson as _orjson  # type: ignore[no-redef]
 except ImportError:
     _orjson = None
 

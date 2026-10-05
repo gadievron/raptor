@@ -113,6 +113,7 @@ override-dependencies = [
 [tool.mypy]
 exclude = ["tests/", "static-analysis/"]
 warn_return_any = false
+disable_error_code = ["annotation-unchecked"]
 
 [[tool.mypy.overrides]]
 module = [
