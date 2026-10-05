@@ -1467,3 +1467,68 @@ class TestHostCaseNormalisation:
         result = triage_mod.triage_run(tmp_path)
         assert not any(s["type"] == "host_recon_pattern"
                        for s in result["signals"])
+
+
+class TestDomainFrontingAttempt:
+    def test_single_sni_mismatch_fires_suspicious(self, tmp_path):
+        _write_proxy_events(tmp_path, [
+            {"t": 1.0, "host": "cdn.allowed.com", "port": 443,
+             "result": "denied_sni",
+             "reason": "TLS SNI 'evil.com' != CONNECT host"},
+        ])
+        result = triage_mod.triage_run(tmp_path)
+        assert result["verdict"] == triage_mod.VERDICT_SUSPICIOUS
+        signal = next(s for s in result["signals"]
+                      if s["type"] == "domain_fronting_attempt")
+        assert signal["severity"] == "high"
+        assert signal["count"] == 1
+
+    def test_multiple_fronting_attempts_counted(self, tmp_path):
+        _write_proxy_events(tmp_path, [
+            {"t": 1.0, "host": "cdn.allowed.com", "port": 443,
+             "result": "denied_sni",
+             "reason": "TLS SNI 'evil.com' != CONNECT host"},
+            {"t": 2.0, "host": "cdn.allowed.com", "port": 443,
+             "result": "denied_sni",
+             "reason": "TLS SNI 'c2.bad.org' != CONNECT host"},
+        ])
+        result = triage_mod.triage_run(tmp_path)
+        signal = next(s for s in result["signals"]
+                      if s["type"] == "domain_fronting_attempt")
+        assert signal["count"] == 2
+
+    def test_no_signal_without_denied_sni(self, tmp_path):
+        _write_proxy_events(tmp_path, [
+            {"t": 1.0, "host": "allowed.com", "port": 443,
+             "result": "allowed"},
+        ])
+        result = triage_mod.triage_run(tmp_path)
+        types = {s["type"] for s in result["signals"]}
+        assert "domain_fronting_attempt" not in types
+
+
+class TestPortProbe:
+    def test_single_denied_port_fires_notable(self, tmp_path):
+        _write_proxy_events(tmp_path, [
+            {"t": 1.0, "host": "allowed.com", "port": 22,
+             "result": "denied_port",
+             "reason": "port 22 not in allowed set {443}"},
+        ])
+        result = triage_mod.triage_run(tmp_path)
+        assert result["verdict"] == triage_mod.VERDICT_NOTABLE
+        signal = next(s for s in result["signals"]
+                      if s["type"] == "port_probe")
+        assert signal["severity"] == "medium"
+        assert signal["count"] == 1
+
+    def test_multiple_ports_counted(self, tmp_path):
+        events = [
+            {"t": float(i), "host": "allowed.com", "port": p,
+             "result": "denied_port", "reason": f"port {p} denied"}
+            for i, p in enumerate([22, 80, 3306, 5432])
+        ]
+        _write_proxy_events(tmp_path, events)
+        result = triage_mod.triage_run(tmp_path)
+        signal = next(s for s in result["signals"]
+                      if s["type"] == "port_probe")
+        assert signal["count"] == 4

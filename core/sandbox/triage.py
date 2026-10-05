@@ -10,8 +10,8 @@ denial noise.
 Signals: escape_primitive_denied, escape_burst (temporal clustering),
 hostile_syscall_argument, seccomp_denied_unattributed, resolved_ip_screened,
 host_recon_pattern, host_retry_pattern, credential_path_touch,
-volume_anomaly, udp_posture_gap, dns_exfil_indicator, telemetry_tampering,
-provenance_unavailable.
+volume_anomaly, udp_posture_gap, dns_exfil_indicator, domain_fronting_attempt,
+port_probe, telemetry_tampering, provenance_unavailable.
 
 Pure, rules-based, offline: no LLM call, no network, no cost — cheap
 enough that core/run/metadata.py runs it unconditionally on every
@@ -634,6 +634,8 @@ def triage_run(run_dir: Path, *,
     signals += _check_host_retry(proxy_events)
     signals += _check_dns_exfil_indicator(proxy_events)
     signals += _check_udp_posture_gap(posture)
+    signals += _check_domain_fronting(proxy_events)
+    signals += _check_port_probe(proxy_events)
 
     # Destruction detection: an artifact that exists but yields no
     # usable content (garbage bytes, oversized blob, FIFO, symlink)
@@ -1008,6 +1010,44 @@ def _check_dns_exfil_indicator(proxy_events: list[dict]) -> list[dict]:
             for parent, subs
             in sorted(suspects.items(), key=lambda x: -len(x[1]))
         ]),
+    }]
+
+
+def _check_domain_fronting(proxy_events: list[dict]) -> list[dict]:
+    """Detect TLS SNI mismatch — a domain-fronting attempt.
+
+    Any ``denied_sni`` is purely adversarial: the child sent a
+    ClientHello whose SNI differs from the authorised CONNECT host.
+    """
+    hits = [e for e in proxy_events if e.get("result") == "denied_sni"]
+    if not hits:
+        return []
+    return [{
+        "type": "domain_fronting_attempt",
+        "severity": SEVERITY_HIGH,
+        "count": len(hits),
+        "evidence": _cap_evidence(sorted({
+            f"{e.get('host', '?')} (SNI: {e.get('reason', '?')})"
+            for e in hits})),
+    }]
+
+
+def _check_port_probe(proxy_events: list[dict]) -> list[dict]:
+    """Detect out-of-policy port access attempts.
+
+    ``denied_port`` means the child tried a port outside the
+    caller-declared contract.
+    """
+    hits = [e for e in proxy_events if e.get("result") == "denied_port"]
+    if not hits:
+        return []
+    return [{
+        "type": "port_probe",
+        "severity": SEVERITY_MEDIUM,
+        "count": len(hits),
+        "evidence": _cap_evidence(sorted({
+            f"{e.get('host', '?')}:{e.get('port', '?')}"
+            for e in hits})),
     }]
 
 
