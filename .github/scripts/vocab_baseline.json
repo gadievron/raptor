@@ -3177,10 +3177,10 @@
     "reviewed": "2026-08-28"
   },
   "raptor.py::mode_handlers": {
-    "count": 12,
+    "count": 13,
     "kind": "literal",
-    "note": "CLI mode -> handler dispatch table (the command surface CLAUDE.md documents), a closed command taxonomy, not a learned name vocabulary; first indexed when the scan universe gained the repo-root entry modules.",
-    "reviewed": "2026-09-21"
+    "note": "CLI mode -> handler dispatch table (the command surface CLAUDE.md documents), a closed command taxonomy, not a learned name vocabulary; first indexed when the scan universe gained the repo-root entry modules. Grew to 13 with the zkpox mode (ZKPoX Tier 2/3 reland).",
+    "reviewed": "2026-10-04"
   },
   "raptor_agentic.py::_build_fuzz_phase_summary": {
     "count": 13,
