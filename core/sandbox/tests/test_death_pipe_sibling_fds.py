@@ -262,6 +262,9 @@ def test_any_fork_sweeps_death_w_without_opting_in() -> None:
 # Exercises mount-delivered capability; hosts with userns but no mount
 # capability degrade by design -> named SKIP, not a mid-flight failure.
 @requires_mount
+# Two overlapped real spawns with a 120s staging deadline and 150s run
+# timeout — the same profile as test_cohort_reaped_when_supervisor_hard_killed.
+@_pytest.mark.slow
 def test_concurrent_intermediates_hold_no_death_w(
         tmp_path: Path, monkeypatch: _pytest.MonkeyPatch) -> None:
     """Two deliberately-overlapped spawns: each live intermediate must

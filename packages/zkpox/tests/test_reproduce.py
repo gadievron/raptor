@@ -827,19 +827,20 @@ def test_attach_reproduction_keeps_tier_when_not_reproduced(tmp_path):
 @functools.lru_cache(maxsize=None)
 def _untrusted_contract_available() -> bool:
     """The integration tests execute witness code under
-    ``run_untrusted()``, which fails closed on Linux hosts without
-    unprivileged user namespaces unless the operator opted into
-    degraded containment. Skip there — the refusal is the sandbox's
+    ``run_untrusted()``, whose containment floor requires mount-ns
+    capability. Skip when the authoritative mount-ns probe
+    (``check_mount_available``: AppArmor sysctl + newuidmap + functional
+    self-test) reports unavailable — the refusal is the sandbox's
     contract working as designed, not a reproduction failure.
 
     Memoised and evaluated lazily from ``_untrusted_contract_or_skip``:
-    ``check_net_available()`` is a subprocess probe (cached, but up to
+    ``check_mount_available()`` is a subprocess probe (cached, but up to
     seconds cold), and a module-level ``skipif`` condition would run it
     at pytest COLLECTION in every invocation and every xdist worker."""
     if sys.platform == "darwin":
         return True
-    from core.sandbox import check_net_available
-    if check_net_available():
+    from core.sandbox.probes import check_mount_available
+    if check_mount_available():
         return True
     import os
     return os.environ.get(
@@ -970,11 +971,15 @@ def test_real_fuzz_replay_reproduces(tmp_path):
 def _mount_ns_spawn_lane_usable() -> bool:
     """The ETXTBSY integration test needs the mount-ns spawn lane: on
     the plain-subprocess fallback lanes Popen surfaces ETXTBSY as an
-    in-parent OSError (recorded 'error', a different contract)."""
+    in-parent OSError (recorded 'error', a different contract).
+
+    Uses the authoritative ``check_mount_available()`` probe (AppArmor
+    sysctl + newuidmap presence + functional self-test), not the partial
+    ``mount_ns_available()`` from ``_spawn`` (newuidmap-only)."""
     if sys.platform != "linux":
         return False
-    from core.sandbox._spawn import mount_ns_available
-    return mount_ns_available()
+    from core.sandbox.probes import check_mount_available
+    return check_mount_available()
 
 
 @pytest.mark.slow  # compile + up to four real sandboxed replays

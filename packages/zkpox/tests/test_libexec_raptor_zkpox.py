@@ -21,19 +21,21 @@ import pytest
 REPO = Path(__file__).resolve().parents[3]
 
 def _mount_ns_usable() -> bool:
+    """Authoritative mount-ns probe: AppArmor sysctl + newuidmap +
+    functional self-test. The static checks (newuidmap presence +
+    AppArmor sysctl) are necessary but not sufficient — the kernel can
+    still refuse unshare(CLONE_NEWNS) under outer seccomp, SELinux, or
+    nested userns restrictions."""
     if sys.platform != "linux":
         return False
-    if not shutil.which("newuidmap") or not shutil.which("newgidmap"):
-        return False
-    sysctl = Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
-    if sysctl.exists() and sysctl.read_text().strip() == "1":
-        return False
-    return True
+    sys.path.insert(0, str(REPO))
+    from core.sandbox.probes import check_mount_available
+    return check_mount_available()
 
 
 _needs_sandbox = pytest.mark.skipif(
     not _mount_ns_usable(),
-    reason="reproduce needs mount-ns sandbox (uidmap + apparmor userns=0)",
+    reason="reproduce needs mount-ns sandbox (authoritative probe)",
 )
 
 SCRIPT = REPO / "libexec" / "raptor-zkpox"
