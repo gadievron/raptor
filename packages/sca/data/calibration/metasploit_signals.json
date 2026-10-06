@@ -1,8 +1,8 @@
 {
   "_source": {
-    "fetched_at": "2026-09-29T11:47:17Z",
+    "fetched_at": "2026-10-06T12:24:18Z",
     "license": "Metasploit Framework is BSD-3-Clause. We embed only module-path references + booleans (a public fact about the framework's contents); no MSF code is stored.",
-    "modules_scanned": 7182,
+    "modules_scanned": 7188,
     "name": "Metasploit Framework module metadata",
     "provenance": "rapid7/metasploit-framework modules_metadata_base.json. We extract the CVE→module-path mapping; framework code itself is not redistributed.",
     "url": "https://raw.githubusercontent.com/rapid7/metasploit-framework/HEAD/db/modules_metadata_base.json"
@@ -243,6 +243,12 @@
       "has_msf_module": true,
       "module_paths": [
         "auxiliary_scanner/http/cisco_device_manager"
+      ]
+    },
+    "CVE-2000-0979": {
+      "has_msf_module": true,
+      "module_paths": [
+        "auxiliary_scanner/smb/cve_2000_0979"
       ]
     },
     "CVE-2000-1089": {
@@ -17892,6 +17898,12 @@
         "auxiliary_gather/progress_moveit_sftp_fileread_cve_2024_5806"
       ]
     },
+    "CVE-2024-58286": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/dizquetv_rce"
+      ]
+    },
     "CVE-2024-5910": {
       "has_msf_module": true,
       "module_paths": [
@@ -18965,6 +18977,12 @@
         "auxiliary_scanner/http/panos_cve_2026_0265"
       ]
     },
+    "CVE-2026-0770": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/langflow_rce_cve_2026_0770"
+      ]
+    },
     "CVE-2026-0826": {
       "has_msf_module": true,
       "module_paths": [
@@ -19261,6 +19279,18 @@
         "auxiliary_scanner/http/litellm_proxy_sqli"
       ]
     },
+    "CVE-2026-42248": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_windows/persistence/ollama_auto_update"
+      ]
+    },
+    "CVE-2026-42249": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_windows/persistence/ollama_auto_update"
+      ]
+    },
     "CVE-2026-42271": {
       "has_msf_module": true,
       "module_paths": [
@@ -19283,6 +19313,12 @@
       "has_msf_module": true,
       "module_paths": [
         "exploit_linux/local/cve_2026_43500_dirty_frag"
+      ]
+    },
+    "CVE-2026-43503": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_linux/local/dirtyclone_cve_2026_43503"
       ]
     },
     "CVE-2026-45087": {
