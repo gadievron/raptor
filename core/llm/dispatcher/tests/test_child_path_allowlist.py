@@ -283,6 +283,7 @@ class TestAllowlistComposesWithCostFreeExemption:
             f"POST /anthropic/v1/messages#/count_tokens HTTP/1.1\r\n"
             f"Host: d\r\nAuthorization: Bearer {token}\r\n"
             f"Content-Type: application/json\r\n"
+            f"Connection: close\r\n"
             f"Content-Length: {len(payload)}\r\n\r\n"
         ).encode() + payload
         s.sendall(req)
