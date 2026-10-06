@@ -171,6 +171,10 @@ jobs:
       # partial download from a failed cold path can never be cached:
       # only a fully successful install step banks its .debs.
       - name: Save apt toolchain cache
+        # continue-on-error: a transient tar/cache-service failure must
+        # not abort the nightly before tests run — the next cold run
+        # rebuilds and retries the save.
+        continue-on-error: true
         if: steps.apt-debs.outputs.cache-hit != 'true' && steps.toolchain.outcome == 'success'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:

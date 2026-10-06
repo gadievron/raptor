@@ -377,6 +377,7 @@ jobs:
         run: test -d "$VENV_PATH" || (echo "venv missing at $VENV_PATH" && exit 1)
 
       - name: Save venv to cache
+        continue-on-error: true
         if: steps.venv-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
@@ -703,6 +704,7 @@ jobs:
           uv export --locked --no-hashes | uv pip install -r -
 
       - name: Save venv to cache
+        continue-on-error: true
         if: steps.venv-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:

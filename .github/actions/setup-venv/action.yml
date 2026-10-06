@@ -108,6 +108,11 @@ runs:
         uv export --locked --no-hashes $UV_EXPORT_EXTRA_ARGS | uv pip install -r -
 
     - name: Save rebuilt venv to cache
+      # continue-on-error: the cache is an optimisation — a failed save
+      # (tar exit 2 on disk pressure, transient cache-service errors)
+      # means the next run rebuilds again, not that this run's tests
+      # should be skipped.
+      continue-on-error: true
       if: >-
         inputs.save-on-rebuild == 'true' &&
         steps.cache-1.outcome == 'failure' &&
