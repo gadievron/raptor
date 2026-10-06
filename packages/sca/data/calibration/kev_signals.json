@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-09-29T11:47:17Z",
+    "fetched_at": "2026-10-06T12:24:18Z",
     "license": "Public Domain (US Government work)",
     "name": "CISA KEV",
     "provenance": "CISA Known Exploited Vulnerabilities Catalog. Public Domain; embedded verbatim.",
@@ -10983,6 +10983,27 @@
       "ransomware_use": false,
       "vendor": "Langflow"
     },
+    "CVE-2026-102489": {
+      "date_added": "2026-10-02",
+      "kev": true,
+      "product": "Zammad",
+      "ransomware_use": false,
+      "vendor": "Zammad GmbH"
+    },
+    "CVE-2026-102490": {
+      "date_added": "2026-10-02",
+      "kev": true,
+      "product": "Zammad",
+      "ransomware_use": false,
+      "vendor": "Zammad GmbH"
+    },
+    "CVE-2026-104286": {
+      "date_added": "2026-10-01",
+      "kev": true,
+      "product": "FortiMail",
+      "ransomware_use": false,
+      "vendor": "Fortinet"
+    },
     "CVE-2026-10520": {
       "date_added": "2026-06-11",
       "kev": true,
@@ -11914,6 +11935,13 @@
       "ransomware_use": false,
       "vendor": "Cisco"
     },
+    "CVE-2026-76504": {
+      "date_added": "2026-09-30",
+      "kev": true,
+      "product": "Catalyst SD-WAN Manager",
+      "ransomware_use": false,
+      "vendor": "Cisco"
+    },
     "CVE-2026-8037": {
       "date_added": "2026-08-07",
       "kev": true,
@@ -12026,6 +12054,13 @@
       "ransomware_use": false,
       "vendor": "N-able"
     },
+    "CVE-2026-86950": {
+      "date_added": "2026-09-29",
+      "kev": true,
+      "product": "Multiple Products",
+      "ransomware_use": false,
+      "vendor": "Apple"
+    },
     "CVE-2026-87491": {
       "date_added": "2026-09-09",
       "kev": true,
@@ -12056,6 +12091,13 @@
     },
     "CVE-2026-88772": {
       "date_added": "2026-09-27",
+      "kev": true,
+      "product": "NetScaler",
+      "ransomware_use": false,
+      "vendor": "Citrix"
+    },
+    "CVE-2026-88779": {
+      "date_added": "2026-10-04",
       "kev": true,
       "product": "NetScaler",
       "ransomware_use": false,
