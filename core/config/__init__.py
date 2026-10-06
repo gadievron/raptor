@@ -1284,6 +1284,7 @@ class RaptorConfig:
         "PERPLEXITY_API_KEY",
         "REPLICATE_API_TOKEN",  # uses _TOKEN suffix
         "TOGETHER_API_KEY",
+        "YAPI_API_KEY",
     )
 
     # Cloud gateway keys (Bedrock, Vertex AI, Azure OpenAI).

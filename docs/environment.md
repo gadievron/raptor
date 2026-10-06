@@ -650,12 +650,21 @@ dispatcher or aggregator route.
 | `PERPLEXITY_API_KEY` | Perplexity |
 | `REPLICATE_API_TOKEN` | Replicate (note the `_TOKEN` suffix) |
 | `TOGETHER_API_KEY` | Together |
+| `YAPI_API_KEY` | [Y-API](https://y-api.bestvirtualgoods.com) |
 
 For API Route, set `API_ROUTE_API_KEY` to your own key. Dispatcher requests to
 `/apiroute/v1/chat/completions` are forwarded to
 `https://global.api-route.com/v1/chat/completions` with Bearer authentication.
 Use a model ID from API Route's `/v1/models` catalog. This route is opt-in and
 does not change the default provider or model selection.
+
+For Y-API, set `YAPI_API_KEY` to your own key. Dispatcher requests to
+`/yapi/v1/chat/completions` are forwarded to
+`https://api.y-api.bestvirtualgoods.com/v1/chat/completions` with Bearer
+authentication. Its `/v1/models` catalog addresses models vendor-qualified
+(`deepseek/deepseek-v4-flash`, `anthropic/claude-sonnet-5`), and that inner
+segment is the part the relay looks up, so pass it through unchanged. This
+route is opt-in and does not change the default provider or model selection.
 
 **Cloud gateways** — AWS Bedrock, Azure OpenAI, and GCP Vertex when
 used as LLM backends.

@@ -295,6 +295,7 @@ class CredentialStore:
             # Replicate — uses ``Token <key>`` prefix, not ``Bearer``.
             "replicate":  _read_env_keep("REPLICATE_API_TOKEN"),
             "together":   _read_env_keep("TOGETHER_API_KEY"),
+            "yapi":       _read_env_keep("YAPI_API_KEY"),
             # --- cloud gateways ---
             # Azure OpenAI — endpoint absent → sentinel producing 503.
             "azure_openai":           _read_env_keep("AZURE_OPENAI_API_KEY"),
@@ -1327,6 +1328,14 @@ def build_rules(creds: CredentialStore) -> dict[str, ProviderRule]:
             name="together",
             upstream_base_url="https://api.together.xyz",
             inject_headers=_bearer_headers("together"),
+        ),
+        "yapi": ProviderRule(
+            name="yapi",
+            # /v1 root (OpenAI-compatible); bare host is the correct
+            # upstream — the worker's SDK path is preserved end-to-end, so
+            # vendor-slashed model ids reach the relay untouched.
+            upstream_base_url="https://api.y-api.bestvirtualgoods.com",
+            inject_headers=_bearer_headers("yapi"),
         ),
         # --- cloud gateways ---
         "azure_openai": ProviderRule(
