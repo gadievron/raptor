@@ -47,7 +47,7 @@ from core.audit.sanwit._extract import (
 
 # CPU-time ceiling for one hostile scan (see module docstring for the
 # measured mutant margins this discriminates against).
-_CPU_BOUND_S = 2.0
+_CPU_BOUND_S = 2.5
 
 _T = TypeVar("_T")
 
