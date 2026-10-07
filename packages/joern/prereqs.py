@@ -111,6 +111,43 @@ def _java_declared_root(java_real: str) -> str | None:
     return bin_dir
 
 
+def _joern_declared_root(launcher_real: str) -> str:
+    """The directory a resolved Joern launcher earns in the sandbox bind set.
+
+    Real tarball installs put launchers in ``joern-cli/bin/`` while the
+    JARs live in ``joern-cli/lib/``.  Declaring only ``bin/`` (the
+    launcher's parent) is safe but incomplete — the JVM can't find its
+    class JARs and fails with ClassNotFoundException inside mount-ns.
+
+    The climb from ``bin/`` to the distribution root is earned, not
+    assumed: the candidate must carry a Joern shape marker (``lib/``
+    subdir or ``c2cpg.sh``) and must not be ``$HOME`` or an ancestor.
+    When the climb isn't earned the launcher's parent dir (safe
+    fallback) is returned.
+    """
+    bin_dir = os.path.realpath(str(Path(launcher_real).parent))
+    if Path(bin_dir).name != "bin":
+        return bin_dir
+
+    root = os.path.realpath(str(Path(bin_dir).parent))
+    home = os.path.realpath(os.path.expanduser("~"))
+    rootp, homep = Path(root), Path(home)
+
+    joern_shaped = ((rootp / "lib").is_dir()
+                    or (rootp / "c2cpg.sh").is_file())
+    home_or_above = root == home or homep.is_relative_to(rootp)
+
+    if joern_shaped and not home_or_above:
+        return root
+
+    if home_or_above:
+        logging.getLogger(__name__).warning(
+            "joern tool_paths: launcher at %s resolves under a root too "
+            "broad to declare (%s); declaring only the bin dir",
+            launcher_real, root)
+    return bin_dir
+
+
 def _under_system_prefix(path: str) -> bool:
     return any(
         path == prefix.rstrip("/") or path.startswith(prefix)
@@ -142,7 +179,7 @@ def joern_tool_paths() -> list[str]:
     candidates: list[str] = []
     for launcher in (_joern_path(), _joern_parse_path()):
         if launcher:
-            candidates.append(str(Path(launcher).parent))
+            candidates.append(_joern_declared_root(launcher))
     java = _java_path()
     if java and not _under_system_prefix(java):
         root = _java_declared_root(java)

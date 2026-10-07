@@ -25,12 +25,25 @@ def _fresh_path_cache():
     prereqs.reset_path_cache()
 
 
-def _fake_install(root: Path) -> dict[str, str]:
+def _fake_install(root: Path, *, flat: bool = False) -> dict[str, str]:
+    """Create a fake Joern install tree.
+
+    Default (tarball) layout: ``joern-cli/bin/joern``, ``joern-cli/lib/``.
+    ``flat=True``: launchers directly in ``joern-cli/`` with no ``bin/``
+    subdir (e.g. coursier or manual unpack).
+    """
     cli = root / "joern-install" / "joern-cli"
-    cli.mkdir(parents=True)
+    if flat:
+        cli.mkdir(parents=True)
+        launcher_dir = cli
+    else:
+        bin_dir = cli / "bin"
+        bin_dir.mkdir(parents=True)
+        (cli / "lib").mkdir()
+        launcher_dir = bin_dir
     launchers = {}
     for name in ("joern", "joern-parse"):
-        p = cli / name
+        p = launcher_dir / name
         p.write_text("#!/bin/sh\n")
         launchers[name] = str(p)
     return launchers
@@ -43,6 +56,43 @@ class TestJoernToolPaths:
             "shutil.which", lambda name: launchers.get(name))
         paths = joern_tool_paths()
         assert paths == [str(tmp_path / "joern-install" / "joern-cli")]
+
+    def test_flat_install_returns_cli_dir(self, tmp_path, monkeypatch):
+        launchers = _fake_install(tmp_path, flat=True)
+        monkeypatch.setattr(
+            "shutil.which", lambda name: launchers.get(name))
+        paths = joern_tool_paths()
+        assert paths == [str(tmp_path / "joern-install" / "joern-cli")]
+
+    def test_flat_install_ignores_grandparent_lib(
+            self, tmp_path, monkeypatch):
+        # A flat Joern under /opt/joern-cli/ must not climb to /opt/
+        # even when /opt/lib/ exists (unrelated system libraries).
+        launchers = _fake_install(tmp_path, flat=True)
+        (tmp_path / "joern-install" / "lib").mkdir()
+        monkeypatch.setattr(
+            "shutil.which", lambda name: launchers.get(name))
+        paths = joern_tool_paths()
+        assert paths == [str(tmp_path / "joern-install" / "joern-cli")]
+        assert str(tmp_path / "joern-install") not in paths
+
+    def test_home_bin_joern_never_declares_home(
+            self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home_bin = home / "bin"
+        home_bin.mkdir(parents=True)
+        (home / "lib").mkdir()
+        launchers = {}
+        for name in ("joern", "joern-parse"):
+            p = home_bin / name
+            p.write_text("#!/bin/sh\n")
+            launchers[name] = str(p)
+        monkeypatch.setattr(
+            "shutil.which", lambda name: launchers.get(name))
+        monkeypatch.setenv("HOME", str(home))
+        paths = joern_tool_paths()
+        assert str(home) not in paths
+        assert str(home_bin) in paths
 
     def test_system_installs_need_no_declaration(self, monkeypatch):
         monkeypatch.setattr(
