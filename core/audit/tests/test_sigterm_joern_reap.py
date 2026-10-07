@@ -2,10 +2,11 @@
 
 run_orchestrator's ``finally`` stops the run's Joern server, but the
 FORCED-exit paths (SIGTERM-grace watchdog expiry, second TERM) run
-only ``_sigterm_flush_hooks`` before ``os._exit`` — so every server
-whose forwarder ``Popen`` handle the run owns needs an entry there:
-run-private servers AND fresh lifecycle-recorded ones. Reuse handles
-and caller-owned servers stay refused (another owner's process).
+only ``_sigterm_flush_hooks`` before ``os._exit`` — so every
+run-private server (lifecycle acquire failed, no state-file record)
+needs an entry there. Lifecycle-managed servers (fresh or reused) are
+released through the bounded ``joern_release`` on the flush-hook
+registry; reuse handles and caller-owned servers stay refused.
 
 Unit layer only — the hook decision and the flush-hook plumbing are
 driven directly with fake server handles (no JVM, no signals).
@@ -79,21 +80,19 @@ class TestRegistration:
         ) is False
         assert orch._sigterm_flush_hooks == []
 
-    def test_lifecycle_fresh_server_registers(self):
+    def test_lifecycle_fresh_server_refused(self):
         # Freshly started via the lifecycle: recorded in the state
-        # file (token set) but the forwarder Popen handle is OURS —
-        # this run started the process, and the graceful finally
-        # stops it, so forced exit must reap it too. Refusing this
-        # class leaked one forwarder+JVM pair per SIGTERM-drained
-        # segment (the drain normally concludes through the
-        # watchdog, the only teardown of which is the hook registry).
+        # file (token set) AND the forwarder Popen handle is ours.
+        # The call site passes lifecycle_shared=True because
+        # _lifecycle_token is set — a concurrent session may hold a
+        # refcount, so stop_fast here would be cross-run collateral.
+        # The bounded joern_release on the flush-hook registry
+        # handles these through the refcount path.
         srv = _FakeServer(token="abc123")
         assert orch._register_private_joern_reap_hook(
-            srv, caller_owns=False, lifecycle_shared=False,
-        ) is True
-        assert len(orch._sigterm_flush_hooks) == 1
-        orch._run_sigterm_flush_hooks()
-        assert srv.stop_fast_calls == 1
+            srv, caller_owns=False, lifecycle_shared=True,
+        ) is False
+        assert orch._sigterm_flush_hooks == []
 
     def test_no_server_refused(self):
         assert orch._register_private_joern_reap_hook(
@@ -202,13 +201,11 @@ class TestBackstopWindow:
     def test_reap_fires_when_guarded_release_is_locked_out(self):
         import threading
 
-        srv = _FakeServer(token="tok-fresh")
+        srv = _FakeServer()
         release_guard = threading.Lock()
         release_ran: list[bool] = []
 
         def _guarded_release() -> None:
-            # Same shape as run_orchestrator's _release_joern_for_exit:
-            # non-blocking acquire, silent no-op when already held.
             if not release_guard.acquire(blocking=False):
                 return
             release_ran.append(True)

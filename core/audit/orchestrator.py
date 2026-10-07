@@ -463,31 +463,22 @@ def _register_private_joern_reap_hook(
     second TERM) run only ``_sigterm_flush_hooks`` before
     ``os._exit`` — without an entry here the netns forwarder detaches
     to init with its JVM and squats on the heap until its own 8h
-    orphan TTL. Registered for every server whose forwarder ``Popen``
-    handle this run owns (it started the process), which is exactly
-    the set the graceful ``finally`` stops via
-    :func:`_stop_joern_server` — run-private servers AND fresh
-    lifecycle-recorded ones (``_lifecycle_token`` set). The bounded
-    joern release also rides the flush-hook registry, but behind an
-    exactly-once lock: a watchdog expiring while the graceful release
-    is still mid-ladder finds that lock held, no-ops, and can
-    ``os._exit`` between the ladder's TERM and KILL — this UNGUARDED,
-    idempotent ``stop_fast`` backstop is what closes that window, so
-    the fresh class needs it exactly as much as the run-private
-    class. Refused classes:
+    orphan TTL. Registered only for run-private servers (lifecycle
+    acquire failed, so no state-file record exists): their ``_proc``
+    handle is ours and no other session can reference them. The
+    bounded joern release also rides the flush-hook registry, but
+    behind an exactly-once lock: a watchdog expiring while the
+    graceful release is still mid-ladder finds that lock held, no-ops,
+    and can ``os._exit`` between the ladder's TERM and KILL — this
+    UNGUARDED, idempotent ``stop_fast`` backstop is what closes that
+    window. Refused classes:
 
     * caller-owned servers are the caller's lifecycle;
-    * reuse handles (``lifecycle_shared`` / no ``_proc``) — another
-      session's process, never ours to signal.
-
-    A concurrent session that acquired this run's fresh recorded
-    server loses it here — the same exposure the graceful stop
-    already has; the next acquire's health check reconciles the
-    stale state-file record (connect fails → kill + remove). A
-    refcount-aware release is deliberately NOT attempted from this
-    hook: the guarded bounded release handles that when it wins its
-    lock, and the state-file flock is unbounded while this path runs
-    moments before ``os._exit``.
+    * lifecycle-managed servers (``_lifecycle_token`` set) — another
+      session may hold a refcount; the bounded release on the flush-
+      hook registry handles these through ``joern_release``;
+    * reuse handles (no ``_proc``) — another session's process,
+      never ours to signal.
 
     Returns True when a hook was registered. The hook is
     exception-guarded and idempotent against the graceful path: the
@@ -2214,17 +2205,14 @@ def run_orchestrator(
             )
         _joern_lifecycle = (
             joern_server is not None
-            and hasattr(joern_server, "_proc")
-            and joern_server._proc is None
+            and getattr(joern_server, "_lifecycle_token", None) is not None
         )
 
-    # Forced-exit reap for the pair this run started (see the
-    # helper): the graceful finally below stops it, but watchdog-
-    # expiry / second-TERM exits bypass that finally entirely. This
-    # is the UNGUARDED backstop next to the lock-guarded bounded
-    # release registered just below — the lock no-ops the release
-    # while the graceful teardown is mid-flight; this hook still
-    # fires (stop_fast, idempotent) in exactly that window.
+    # Forced-exit reap for run-private servers only (lifecycle acquire
+    # failed — no state-file record, so no other session can reference
+    # them). Lifecycle-managed servers are released through the bounded
+    # joern_release registered just below; a stop_fast here would kill
+    # the process under another session's refcount.
     _register_private_joern_reap_hook(
         joern_server,
         caller_owns=_caller_owns_joern,
