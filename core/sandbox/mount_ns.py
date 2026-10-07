@@ -25,11 +25,10 @@ matches the inline step comments in the function body):
     4. Bind-mounts system dirs (/usr, /lib, /lib64, /etc, /bin, /sbin)
        read-only into the new root. When an etc_overlay targets paths
        missing on the host, /etc becomes a tmpfs populated by a
-       breadth-first, budgeted copy of host /etc — /etc/skel (new-user
-       home templates; CI runner images stuff whole toolchains into
-       it) is never copied, and the copy stops at a total
-       bytes/entry budget rather than crawling a pathological host
-       /etc (see _copy_etc_tree).
+       breadth-first, budgeted copy of host /etc — non-config
+       directories (skel, alternatives) are never copied, and the
+       copy stops at a total bytes/entry/wall-clock budget rather
+       than crawling a pathological host /etc (see _copy_etc_tree).
     5. builds a minimal per-sandbox /dev (fresh tmpfs, per-node binds,
        fresh devpts — never the host's pty slaves) and rbinds /sys.
     6. Bind-mounts host /proc (a fresh procfs would need a pid-ns first).
@@ -565,13 +564,15 @@ _PHASE_TRACE_ENV = "RAPTOR_SANDBOX_PHASE_TRACE"
 _PHASE_TRACE_MAX_ENTRIES = 4096
 
 # Top-level host-/etc directories the overlay copy never descends
-# into. /etc/skel is the new-user home-directory TEMPLATE tree — no
-# sandboxed target consumes it, and CI runner images stuff whole
-# toolchains into it (rustup under .cargo/bin, nvm test corpora,
-# dotnet tool stores: tens of thousands of entries, hundreds of MB)
-# which the pre-fix linear copy crawled until the caller's timeout.
-# Each skip emits a loud named phase-trace marker.
-_ETC_COPY_SKIP_TOP_DIRS = frozenset({"skel"})
+# into.  Each skip emits a loud named phase-trace marker.
+#
+#   skel — new-user home-directory TEMPLATE tree; CI runner images stuff
+#          whole toolchains into it (100k+ entries, hundreds of MB).
+#   alternatives — Debian/Ubuntu alternatives symlinks; one per binary
+#          variant per package (PostgreSQL alone plants 60+); no sandbox
+#          target reads /etc/alternatives directly, and the originals
+#          live under /usr which is already bind-mounted.
+_ETC_COPY_SKIP_TOP_DIRS = frozenset({"skel", "alternatives"})
 
 # Total copy budget (belt-and-braces behind the skel skip). The copy
 # exists to carry config files — passwd, group, hosts, resolv.conf,
@@ -586,6 +587,13 @@ _ETC_COPY_SKIP_TOP_DIRS = frozenset({"skel"})
 # so passwd/hosts/ssl are never the casualties.
 _ETC_COPY_MAX_BYTES = 64 * 1024 * 1024
 _ETC_COPY_MAX_ENTRIES = 8192
+# Wall-clock deadline (seconds) for the entire copy.  BFS ordering
+# guarantees root-level config files copy before any directory descent,
+# so the deadline only trims deep service-manager trees (apparmor.d,
+# systemd, init.d, …) that no sandbox target consumes.  The skip-set
+# above handles the known-large directories; this catches the long tail
+# on CI runners whose /etc we cannot predict.
+_ETC_COPY_MAX_SECONDS = 3.0
 
 
 def _phase_trace(marker: bytes) -> None:
@@ -638,16 +646,19 @@ def _copy_etc_tree(src: str, dst: str) -> None:
     Bounds (all loud, named in the phase trace; none may wedge or fail
     the setup):
 
-    * ``/etc/skel`` (any name in ``_ETC_COPY_SKIP_TOP_DIRS`` at the
-      TOP level of *src*) is never copied — new-user home templates
-      that no sandboxed target consumes; CI runner images stuff whole
-      toolchains into it (100k+ entries, hundreds of MB).
+    * ``_ETC_COPY_SKIP_TOP_DIRS`` (top-level directories: skel,
+      alternatives) are never entered — non-config payload the sandbox
+      doesn't need; CI runner images stuff whole toolchains / hundreds
+      of package-manager symlinks into them.
     * ``_ETC_COPY_MAX_ENTRIES`` total entries (files, dirs, symlinks,
       FIFOs): reaching it stops the copy with a marker + post-fork
       warning; the sandbox proceeds with what was copied.
     * ``_ETC_COPY_MAX_BYTES`` total bytes byte-copied: a file larger
       than the remaining byte budget is skipped individually (marker)
       while smaller entries keep copying.
+    * ``_ETC_COPY_MAX_SECONDS`` wall-clock deadline: stops the copy if
+      the host /etc is large enough that even the entry/byte budgets
+      can't prevent the copy from exceeding the caller's timeout.
 
     Files are hard-linked when possible (same filesystem — preserves
     the source inode's mode/owner exactly), otherwise copied
@@ -670,6 +681,7 @@ def _copy_etc_tree(src: str, dst: str) -> None:
     _trace_capped = False
     entries = 0
     copied_bytes = 0
+    deadline = time.monotonic() + _ETC_COPY_MAX_SECONDS
     # BFS queue of (src_dir, dst_dir); list-with-cursor instead of
     # collections.deque to keep the post-fork path on plain builtins.
     queue: list[tuple[str, str]] = [(src, dst)]
@@ -677,6 +689,24 @@ def _copy_etc_tree(src: str, dst: str) -> None:
     while qi < len(queue):
         dirpath, dst_dir = queue[qi]
         qi += 1
+        # Wall-clock deadline — checked per-directory, not per-entry,
+        # so a complete directory level always finishes.  qi > 1 skips
+        # the root level: BFS guarantees root-level config files (the
+        # ones the sandbox needs) are in the first directory processed.
+        if qi > 1 and time.monotonic() > deadline:
+            _phase_trace(
+                b"etc copy deadline exceeded (%.1fs): stopping "
+                b"with %d entries copied"
+                % (_ETC_COPY_MAX_SECONDS, entries)
+            )
+            warn_post_fork(
+                b"sandbox: mount_ns: /etc overlay copy stopped at "
+                b"the wall-clock deadline -- host /etc is "
+                b"pathologically large; the sandbox keeps the "
+                b"entries copied so far (root-level config files "
+                b"copy first)\n"
+            )
+            return
         try:
             names = sorted(os.listdir(dirpath))
         except OSError:
@@ -690,11 +720,9 @@ def _copy_etc_tree(src: str, dst: str) -> None:
                 continue
             if stat_module.S_ISDIR(st.st_mode):
                 if dirpath == src and name in _ETC_COPY_SKIP_TOP_DIRS:
-                    # Loud named skip — always emitted, never counted
-                    # against the per-entry trace cap.
                     _phase_trace(
                         b"etc copy skip: " + os.fsencode(src_entry)
-                        + b" (new-user home templates; never copied)"
+                        + b" (non-config payload; never copied)"
                     )
                     continue
                 subdirs.append(name)
