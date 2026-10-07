@@ -9314,15 +9314,19 @@ def _run_audit_body(
             with review_work_active():
                 return _review_items(
                     batch,
+                    shared,
                     config,
                     review_fn,
-                    checklist,
-                    context_map,
-                    fuzz_coverage,
-                    evidence_index,
-                    discovered_evidence=discovered_evidence,
-                    domain_model=domain_model,
-                    tier_counters=result.tier_counters,
+                    result,
+                    joern_server=joern_server,
+                    audit_log=audit_log,
+                    workqueue=workqueue,
+                    reviewed_set=reviewed_set,
+                    start_time=start_time,
+                    layer_disagreements=layer_disagreements,
+                    collector=collector,
+                    graph=graph,
+                    reviewed_outcomes=reviewed_outcomes,
                 ), batch
 
         review_idx = 0
@@ -9353,33 +9357,11 @@ def _run_audit_body(
                         # Worker-side rail refusal — nothing was
                         # dispatched.
                         continue
-                    # Tally BEFORE the stop decision: these outcomes
-                    # are paid work. Pre-fix the consumption loop broke
-                    # on the rail check and every outcome the workers
-                    # completed after that vanished from the result
-                    # (journal had them; result.total_cost_usd froze,
-                    # blinding the cost-cap rail itself).
-                    for outcome, gap in zip(batch_outcomes, batch):
-                        outcome.line = gap.get("line_start", 0)
-                        # Phase-book batched reviews like the
-                        # single-review path does — pre-fix only that
-                        # path booked, so every batched review's spend
-                        # surfaced as "unattributed" in the run cost
-                        # summary (measured as the large majority of
-                        # one run's spend; same class of miss as the
-                        # two-call continuation booking above).
-                        result.cost_tracker.record_call(
-                            "review",
-                            cost_usd=outcome.cost_usd,
-                            tokens_in=getattr(outcome, "tokens_in", 0),
-                            tokens_out=getattr(outcome, "tokens_out", 0),
-                            cache_read_tokens=getattr(
-                                outcome, "cache_read_tokens", 0),
-                            cache_write_tokens=getattr(
-                                outcome, "cache_write_tokens", 0),
-                            wall_time_s=getattr(outcome, "duration_s", 0.0),
-                        )
-                        _tally_outcome(result, outcome)
+                    # review_one_function (called by _review_items)
+                    # already handles cost booking, tally, and commit
+                    # for each outcome.  The consumption loop only
+                    # tracks progress and the budget rail.
+                    for outcome in batch_outcomes:
                         if on_progress:
                             on_progress(review_idx, total, outcome)
                         review_idx += 1
@@ -17800,230 +17782,58 @@ def _write_unresolved_synthesis_hits(
 
 def _review_items(
     batch: list[dict[str, Any]],
+    shared: Any,
     config: OrchestratorConfig,
     review_fn: Callable,
-    checklist: dict[str, Any],
-    context_map: dict[str, Any] | None,
-    fuzz_coverage: dict[str, Any] | None,
-    evidence_index: dict[str, EvidenceRecord] | None = None,
-    discovered_evidence: dict[str, Any] | None = None,
-    domain_model: dict[str, Any] | None = None,
-    tier_counters: dict[str, TierCounters] | None = None,
+    result: Any,
+    *,
+    joern_server: Any = None,
+    audit_log: Any = None,
+    workqueue: list[dict[str, Any]] | None = None,
+    reviewed_set: set[str] | None = None,
+    start_time: float = 0.0,
+    layer_disagreements: list[Any] | None = None,
+    collector: Any = None,
+    graph: Any = None,
+    reviewed_outcomes: Any = None,
 ) -> list[ReviewOutcome]:
-    """Review a group of trivial functions from the same file individually."""
-    outcomes = []
+    """Review a batch of trivial functions through the full pipeline.
+
+    Delegates to ``review_one_function`` so batched outcomes receive the
+    same post-review verification (sweep validation, proactive validation,
+    refinement, chain injection, etc.) as individually reviewed functions.
+    """
+    from core.llm.client import LLMBudgetExceededError
+
+    outcomes: list[ReviewOutcome] = []
     for gap in batch:
-        dead_reason = _dead_code_reason(gap)
-        if dead_reason:
-            outcome = ReviewOutcome(
-                file=gap["file"],
-                function=gap["name"],
-                status="dormant",
-                body=(
-                    f"[dead-code gate: {dead_reason}] "
-                    f"Function is in provably dead code — skipped LLM review."
-                ),
-                evidence_tool="reachability:dead_code",
-            )
-            outcome.line = gap.get("line_start", 0)
-            try:
-                _commit_outcome(config, outcome, gap, batch=True)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "commit failed for %s:%s: %s",
-                    gap["file"],
-                    gap["name"],
-                    exc,
-                )
-            outcomes.append(outcome)
-            continue
-
-        ctx = _build_context(
-            config,
-            gap,
-            checklist,
-            context_map,
-            evidence_index,
-            discovered_evidence=discovered_evidence,
-            blind=config.blind_first_pass,
-        )
-        if fuzz_coverage:
-            ctx["fuzz_coverage"] = _fuzz_coverage_for(
-                fuzz_coverage,
-                gap["file"],
-                gap["name"],
-            )
-        ctx["batch_context"] = [
-            f"{g['name']} (L{g.get('line_start', '?')}-{g.get('line_end', '?')})"
-            for g in batch
-        ]
         try:
-            outcome = review_fn(ctx, config)
-        except _ContentFilterError:
-            outcome = ReviewOutcome(
-                file=gap["file"],
-                function=gap["name"],
-                status="error",
-                body="blocked by content filter",
+            outcome = review_one_function(
+                gap,
+                shared,
+                config,
+                review_fn,
+                result,
+                joern_server=joern_server,
+                audit_log=audit_log,
+                workqueue=workqueue,
+                reviewed_set=reviewed_set,
+                start_time=start_time,
+                layer_disagreements=layer_disagreements,
+                on_progress=None,
+                review_idx=0,
+                total=0,
+                collector=collector,
+                graph=graph,
+                reviewed_outcomes=reviewed_outcomes,
             )
-        except Exception as exc:  # noqa: BLE001
-            from core.llm.client import is_budget_exceeded_error
-
-            if is_budget_exceeded_error(exc):
-                # Terminal: stop the batch and return what completed.
-                # The budget-killed function is NOT journaled, so it
-                # stays gap-eligible for a future run.
-                logger.warning(
-                    "batch review stopped at %s:%s — LLM budget exhausted "
-                    "(%d/%d reviewed; rest stay gaps)",
-                    gap["file"], gap["name"], len(outcomes), len(batch),
-                )
-                break
+        except LLMBudgetExceededError:
             logger.warning(
-                "review_fn failed for %s:%s: %s",
-                gap["file"],
-                gap["name"],
-                exc,
+                "batch review stopped at %s:%s — LLM budget exhausted "
+                "(%d/%d reviewed; rest stay gaps)",
+                gap["file"], gap["name"], len(outcomes), len(batch),
             )
-            # Terminal for this function — let the breaker correlate
-            # it with other functions' failures.
-            from .environment import note_dispatch_failure
-            note_dispatch_failure(
-                config, f"{gap['file']}:{gap['name']}", exc,
-            )
-            outcome = _error_outcome(gap, exc, config)
-
-        if outcome.status == "finding":
-            gate_violations = _check_finding_gates(outcome, mode=config.mode)
-            if gate_violations:
-                for v in gate_violations:
-                    logger.warning(
-                        "gate violation %s:%s: %s — demoted to suspicious",
-                        outcome.file,
-                        outcome.function,
-                        v,
-                    )
-                outcome = _demote_outcome(
-                    outcome,
-                    f"[gate violation: {'; '.join(gate_violations)}]",
-                )
-
-        # ── Refutation gates (batch path) ─────────────────────────
-        if outcome.status in ("finding", "suspicious"):
-            # Own try: records only, must never skip refutation.
-            try:
-                from .binary_honesty import record_gate_engagement
-
-                record_gate_engagement(
-                    config.out_dir,
-                    outcome,
-                    domain_model=domain_model,
-                    checklist=checklist,
-                    line_start=gap.get("line_start", 0),
-                    phase="review_batch",
-                )
-            except Exception:
-                logger.debug(
-                    "gate-engagement record skipped (batch)",
-                    exc_info=True,
-                )
-
-            try:
-                from .refutation import refute_hypothesis
-
-                rv = refute_hypothesis(
-                    outcome,
-                    domain_model=domain_model,
-                    checklist=checklist,
-                    config=config,
-                    tier_counters=tier_counters,
-                )
-                if rv is not None:
-                    append_audit_log(config.out_dir, {
-                        "action": "refutation_gate",
-                        "gate": rv.gate,
-                        "key": f"{outcome.file}:{outcome.function}:{gap.get('line_start', 0)}",
-                        "file": outcome.file,
-                        "function": outcome.function,
-                        "reason": rv.reason,
-                        "demote_to": rv.demote_to,
-                        "original_status": outcome.status,
-                        "applied": True,
-                        "batch": True,
-                    })
-                    logger.info(
-                        "refutation gate [%s] %s:%s — %s → %s (batch)",
-                        rv.gate, outcome.file, outcome.function,
-                        rv.reason, rv.demote_to,
-                    )
-                    outcome = _demote_outcome(
-                        outcome, f"[{rv.gate}: {rv.reason}]",
-                    )
-                    outcome.status = rv.demote_to
-            except Exception:
-                logger.debug(
-                    "refutation gate error for %s:%s (batch)",
-                    gap.get("file"), gap.get("name"),
-                    exc_info=True,
-                )
-
-        # ── Anti-self-refutation (batch path) ────────────────────
-        if outcome.status == "clean":
-            try:
-                from .refutation import rescue_self_refuted
-
-                rv = rescue_self_refuted(
-                    outcome,
-                    config=config,
-                    source=_read_raw_source(
-                        config.target_path,
-                        gap.get("file", ""),
-                        gap.get("line_start", 0),
-                        gap.get("line_end"),
-                    ) or None,
-                    pre_evidence=gap.get("_smt_pre_evidence"),
-                    target_path=config.target_path,
-                    out_dir=config.out_dir,
-                    repo_trusted=config.repo_trusted,
-                )
-                if rv is not None:
-                    append_audit_log(config.out_dir, {
-                        "action": "refutation_gate",
-                        "gate": rv.gate,
-                        "key": f"{outcome.file}:{outcome.function}:{gap.get('line_start', 0)}",
-                        "file": outcome.file,
-                        "function": outcome.function,
-                        "reason": rv.reason,
-                        "demote_to": rv.demote_to,
-                        "original_status": outcome.status,
-                        "applied": True,
-                        "batch": True,
-                    })
-                    logger.info(
-                        "anti-self-refutation %s:%s — %s → %s (batch)",
-                        outcome.file, outcome.function,
-                        rv.reason, rv.demote_to,
-                    )
-                    outcome.status = rv.demote_to
-                    outcome.body = (
-                        f"[{rv.gate}: {rv.reason}]\n\n" + outcome.body
-                    )
-            except Exception:
-                logger.debug(
-                    "anti-self-refutation error for %s:%s (batch)",
-                    gap.get("file"), gap.get("name"),
-                    exc_info=True,
-                )
-
-        try:
-            _commit_outcome(config, outcome, gap, batch=True)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "commit failed for %s:%s: %s",
-                gap["file"],
-                gap["name"],
-                exc,
-            )
+            break
         outcomes.append(outcome)
     return outcomes
 
