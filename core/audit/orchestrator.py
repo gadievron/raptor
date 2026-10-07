@@ -2512,6 +2512,7 @@ def review_one_function(
     collector=None,
     graph=None,
     reviewed_outcomes=None,
+    batch_context: list[str] | None = None,
 ):
     """Review a single function gap and return the outcome.
 
@@ -3389,6 +3390,8 @@ def review_one_function(
             gap["file"],
             gap["name"],
         )
+    if batch_context:
+        ctx["batch_context"] = batch_context
 
     if gap_key in widely_used_keys:
         ctx["widely_used"] = True
@@ -17793,6 +17796,10 @@ def _review_items(
     """
     from core.llm.client import LLMBudgetExceededError
 
+    siblings = [
+        f"{g['name']} (L{g.get('line_start', '?')}-{g.get('line_end', '?')})"
+        for g in batch
+    ]
     outcomes: list[ReviewOutcome] = []
     for gap in batch:
         try:
@@ -17814,6 +17821,7 @@ def _review_items(
                 collector=collector,
                 graph=graph,
                 reviewed_outcomes=reviewed_outcomes,
+                batch_context=siblings,
             )
         except LLMBudgetExceededError:
             logger.warning(
