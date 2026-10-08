@@ -63,8 +63,8 @@ detection:
 semgrep_packs:
   default:
     - security-audit
-    - python-django
-    - python-flask
+    - django
+    - flask
     - owasp-top-ten
   optional:
     - secrets
