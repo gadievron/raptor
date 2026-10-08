@@ -1280,6 +1280,7 @@ class RaptorConfig:
         "FIREWORKS_API_KEY",
         "GROQ_API_KEY",
         "OPENROUTER_API_KEY",
+        "OPPER_API_KEY",
         "ORCAROUTER_API_KEY",
         "PERPLEXITY_API_KEY",
         "REPLICATE_API_TOKEN",  # uses _TOKEN suffix

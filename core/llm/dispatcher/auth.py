@@ -290,6 +290,7 @@ class CredentialStore:
             "groq":       _read_env_keep("GROQ_API_KEY"),
             "mistral":    _read_env_keep("MISTRAL_API_KEY"),
             "openrouter": _read_env_keep("OPENROUTER_API_KEY"),
+            "opper":      _read_env_keep("OPPER_API_KEY"),
             "orcarouter": _read_env_keep("ORCAROUTER_API_KEY"),
             "perplexity": _read_env_keep("PERPLEXITY_API_KEY"),
             # Replicate — uses ``Token <key>`` prefix, not ``Bearer``.
@@ -1305,6 +1306,13 @@ def build_rules(creds: CredentialStore) -> dict[str, ProviderRule]:
             # API rooted at /api/v1; bare host is the correct upstream.
             upstream_base_url="https://openrouter.ai",
             inject_headers=_bearer_headers("openrouter"),
+        ),
+        "opper": ProviderRule(
+            name="opper",
+            # API rooted at /v3/compat (OpenAI-compatible); bare host is the
+            # correct upstream, same shape as OpenRouter.
+            upstream_base_url="https://api.opper.ai",
+            inject_headers=_bearer_headers("opper"),
         ),
         "orcarouter": ProviderRule(
             name="orcarouter",
