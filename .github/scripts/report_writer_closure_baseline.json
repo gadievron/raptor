@@ -730,6 +730,9 @@
     "packages/source_intel/render.py::derive_evidence_strings::unsanitised_llm_value::_render_hazard_line": {
       "note": "prompt-construction lane, not an operator terminal/report lane — input-side envelope territory"
     },
+    "packages/studio/scripts/seed_demo.py::<module>::unsanitised_llm_value::name": {
+      "note": "seed_demo.py demo-data generator; name values are hardcoded demo strings, not LLM output"
+    },
     "packages/web/scanner.py::main::unsanitised_exception_text::e": {
       "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },

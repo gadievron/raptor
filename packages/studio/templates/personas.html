@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Personas — {{ app_title }}{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Expert personas</h1>
+  <div class="sub">Raptor's on-demand specialist briefs. Loaded from <code class="mono">{{ raptor_home }}/tiers/personas/</code>.</div>
+</div>
+
+<div class="grid g2">
+{% for p in personas %}
+  <div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 8px;">
+      <div>
+        <h2 style="margin: 0; font-size: 15px;">{{ p.label }}</h2>
+        {% if p.handle %}<div style="font-size: 11px; color: var(--fg3); font-style: italic; margin-top: 2px;">{{ p.handle }}</div>{% endif %}
+      </div>
+      {% if p.is_loaded %}<span class="badge b-ok">loaded</span>
+      {% else %}<span class="badge b-neutral">not found</span>{% endif %}
+    </div>
+    <div style="font-size: 12px; color: var(--fg2); margin-top: 8px;">{{ p.use_when }}</div>
+    <div style="font-size: 11px; color: var(--fg3); margin-top: 6px;">
+      Bound to <code class="mono">{{ p.component }}</code>
+    </div>
+    {% if p.content %}
+    <details style="margin-top: 12px;">
+      <summary style="cursor: pointer; font-size: 12px; color: var(--fg);">Read full brief ({{ p.content|length }} bytes)</summary>
+      <pre style="margin-top: 8px; font-size: 11px; max-height: 420px; overflow: auto;">{{ p.content }}</pre>
+    </details>
+    {% endif %}
+    <div style="margin-top: 10px; font-size: 11px; color: var(--fg3);">
+      Invoke: <code class="mono">"Use {{ p.label|lower }} persona to …"</code>
+    </div>
+  </div>
+{% endfor %}
+</div>
+
+{% endblock %}

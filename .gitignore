@@ -54,3 +54,10 @@ core/sandbox/helpers/raptor-coord-launcher.apparmor
 # expectations supplied per-machine; machinery ships in-tree, case
 # content never does — same convention as the corpus labels)
 core/audit/corpus/replay-cases/
+
+# raptor-studio test venv (local only — not checked in)
+.venv-studio/
+packages/studio/__pycache__/
+packages/studio/**/__pycache__/
+packages/studio/.pytest_cache/
+packages/studio/**/.pytest_cache/

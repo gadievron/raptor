@@ -8,6 +8,12 @@
     "libexec/raptor-self-test::combined.sarif::json.loads",
     "libexec/raptor-self-test::combined.sarif::read_text",
     "libexec/raptor-self-test::sbom.cdx.json::json.loads",
-    "libexec/raptor-self-test::sbom.cdx.json::read_text"
+    "libexec/raptor-self-test::sbom.cdx.json::read_text",
+    "packages/studio/services/raptor_reader.py::.raptor-run.json::json.loads",
+    "packages/studio/services/raptor_reader.py::.raptor-run.json::read_text",
+    "packages/studio/services/sarif_reader.py::scan_metrics.json::json.loads",
+    "packages/studio/services/sarif_reader.py::scan_metrics.json::read_text",
+    "packages/studio/services/validation_reader.py::fuzzing_report.json::json.loads",
+    "packages/studio/services/validation_reader.py::fuzzing_report.json::read_text"
   ]
 }
