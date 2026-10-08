@@ -769,6 +769,16 @@ class TestStructuralGrouping:
 # ── CostTracker ──────────────────────────────────────────────────────
 
 class TestCostTracker:
+    @pytest.mark.parametrize("ceiling,serialized", [(float("inf"), None), (10.0, 10.0), (0.0, 0.0)])
+    def test_cost_summary_is_strict_json_and_preserves_enforcement(self, ceiling, serialized):
+        tracker = CostTracker(max_cost=ceiling)
+        tracker.add_cost("fixture-model", 0.25, tokens=100)
+        summary = json.loads(json.dumps(tracker.get_summary(), allow_nan=False))
+        assert summary["max_cost"] == serialized
+        assert summary["total_cost"] == 0.25
+        assert summary["total_tokens"] == 100
+        assert tracker._max_cost == ceiling
+
     def test_basic_tracking(self):
         ct = CostTracker(max_cost=10.0)
         ct.add_cost("opus", 3.0)

@@ -65,8 +65,8 @@ DEFAULT_PACKS = [
     "xss",
     "0xdea",
     "trailofbits",
-    "python-django",
-    "python-flask",
+    "django",
+    "flask",
 ]
 
 # Registry pack ids are flat lowercase names. The id is spliced into
