@@ -193,7 +193,9 @@ class CostTracker:
             summary = {
                 "total_cost": round(self._total_cost, 4),
                 "total_tokens": self._total_tokens,
-                "max_cost": self._max_cost,
+                # An uncapped run uses +inf internally; JSON represents
+                # its absent ceiling as null while enforcement stays unchanged.
+                "max_cost": None if self._max_cost == float("inf") else self._max_cost,
                 "budget_used_percent": round(self._budget_ratio() * 100, 1) if self._max_cost > 0 else 0,
                 "cost_by_model": {k: round(v, 4) for k, v in self._per_model.items()},
             }

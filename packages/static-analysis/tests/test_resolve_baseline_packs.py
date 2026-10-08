@@ -116,12 +116,11 @@ class TestResolveBaselinePacks:
         (tmp_path / "settings.py").write_text("")
         (tmp_path / "urls.py").write_text("")
         result = _resolve_baseline_packs(tmp_path)
-        # python.web-app.yml ships a broader set including
-        # ``python-django`` / ``python-flask`` packs — verify
-        # security-audit + owasp-top-ten at minimum are in.
+        # Framework defaults must resolve to the public registry IDs.
         pack_ids = {fid for _, fid in result}
-        assert "p/security-audit" in pack_ids
-        assert "p/owasp-top-ten" in pack_ids
+        assert pack_ids == {
+            "p/security-audit", "p/django", "p/flask", "p/owasp-top-ten",
+        }
 
 
 class TestCatalogLoadFailureTolerated:
