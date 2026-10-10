@@ -96,6 +96,7 @@ _AGGREGATOR_PREFIXES: tuple[str, ...] = (
     "perplexity/",
     "replicate/",
     "together/",
+    "yapi/",
     # Route-prefixed Bedrock ids (``bedrock/anthropic.claude-…``) — the
     # form the mode resolver and operator ``--model`` overrides use.
     # Peeling it leaves the dotted Bedrock id, which the existing
