@@ -645,7 +645,7 @@ def _extract_constraints(outcome: Any) -> list[str]:
     constraints = []
     review = getattr(outcome, "review_result", None) or {}
 
-    preconditions = review.get("preconditions", [])
+    preconditions = review.get("preconditions") or []
     for p in preconditions:
         assumption = p.get("assumption", "")
         if assumption:
