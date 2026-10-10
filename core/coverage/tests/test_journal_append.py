@@ -1076,3 +1076,39 @@ class TestReemissionPruneElection:
         assert loaded.pruned > 0
         reused = [e for e in loaded.entries if e.reused]
         assert [e.run_id for e in reused] == ["seg-9"]
+
+
+class TestWeaknessRoundTrip:
+    """weakness dict survives journal write → read."""
+
+    def test_weaknesses_round_trip(self, tmp_path: Path) -> None:
+        ws = [
+            {
+                "guard_type": "bounds",
+                "assumed_property": "length capped by caller",
+                "assumed_by": "parse_header",
+                "guarded_by": ["validate_input"],
+                "source": "hypothesis",
+            },
+        ]
+        e = ReviewJournalEntry(
+            ts=now_iso(),
+            run_id="run-rt",
+            file="src/a.c",
+            function="fn_a",
+            verdict="clean",
+            source_hash="abc",
+            weaknesses=ws,
+        )
+        append_entry(tmp_path, e)
+        loaded = load_entries(tmp_path)
+        assert len(loaded) == 1
+        assert loaded[0].weaknesses == ws
+
+    def test_missing_weaknesses_deserialises_as_none(
+        self, tmp_path: Path,
+    ) -> None:
+        e = _entry(1)
+        append_entry(tmp_path, e)
+        loaded = load_entries(tmp_path)
+        assert loaded[0].weaknesses is None

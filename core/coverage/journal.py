@@ -502,6 +502,7 @@ class ReviewJournalEntry:
     # read as coverage or as a silently-refuting run) and from
     # tools that errored. Additive; absent on rows without a skip.
     tools_skipped: list[str] | None = None
+    weaknesses: list[dict] | None = None
     token_budget: int | None = None
     cost_usd: float | None = None
     duration_s: float | None = None
@@ -2709,6 +2710,7 @@ def _entry_from_validated(
         evidence_tools=raw.get("evidence_tools", []),
         tools_dispatched=raw.get("tools_dispatched", []),
         tools_skipped=raw.get("tools_skipped"),
+        weaknesses=raw.get("weaknesses"),
         token_budget=raw.get("token_budget"),
         cost_usd=raw.get("cost_usd"),
         duration_s=raw.get("duration_s"),

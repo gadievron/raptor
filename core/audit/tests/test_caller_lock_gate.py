@@ -360,10 +360,11 @@ class TestFloorStands:
     def test_pure_toctou_claim_never_floors_and_writes_no_record(
         self, tmp_path,
     ):
-        # CWE-367 alone is outside the allowlist floor: the dismissal
-        # is accepted with or without the witness, and the arm must
-        # not manufacture a discharge record for a floor that never
-        # existed.
+        # CWE-367 alone is outside the allowlist floor: the caller-lock
+        # discharge arm must not fire.  The anti-self-refutation gate
+        # catches the cross-function counter (keyword fallback detects
+        # "caller" + "holds"), which is correct — but the caller-lock
+        # gate itself must not manufacture a discharge record.
         target = _write_tu(tmp_path, _CALLEE + _CALLER_LOCKED)
         out = tmp_path / "out"
         o = _Outcome(hypotheses=[_hyp(
@@ -374,7 +375,8 @@ class TestFloorStands:
             o, source=_CALLEE,
             config=_Config(target_path=target, out_dir=out),
         )
-        assert rv is None
+        assert rv is not None
+        assert rv.gate == "anti_self_refutation"
         assert _records(out) == []
 
 

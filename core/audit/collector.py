@@ -28,6 +28,75 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_GUARD_TYPE_VALUES = frozenset({
+    "bounds", "null_safety", "validation", "sanitisation",
+    "lifetime", "ordering", "concurrency", "other",
+})
+
+_FUNC_NAME_RE = None  # lazy compile
+
+
+def _get_func_name_re():
+    global _FUNC_NAME_RE
+    if _FUNC_NAME_RE is None:
+        import re
+        _FUNC_NAME_RE = re.compile(r"\b([a-zA-Z_][a-zA-Z0-9_]{2,})\s*\(")
+    return _FUNC_NAME_RE
+
+
+_NOISE_NAMES = frozenset({
+    "caller", "callers", "function", "method",
+    "return", "returns", "check", "checks",
+    "ensure", "ensures", "validate", "validates",
+    "NULL", "null", "True", "False", "None",
+    "assert", "sizeof", "static", "inline",
+})
+
+
+def extract_weaknesses(
+    hypotheses: list[dict[str, Any]],
+    function: str = "",
+    file: str = "",
+    cwe: str | None = None,
+) -> list[dict[str, Any]]:
+    """Extract weakness records from cross-function guard-shaped hypotheses.
+
+    A weakness is a hypothesis where the function's correctness depends
+    on an external entity (caller, framework) providing a guarantee it
+    does not verify itself.
+    """
+    result: list[dict[str, Any]] = []
+    pat = _get_func_name_re()
+    for h in hypotheses:
+        scope = str(h.get("counter_scope") or "").strip().lower()
+        if scope != "cross_function":
+            continue
+        guard_type = str(h.get("guard_type") or "").strip().lower()
+        if guard_type not in _GUARD_TYPE_VALUES:
+            continue
+        assumed = (h.get("assumed_property") or "").strip()
+        mechanism = (h.get("mechanism") or "").strip()
+        counter = (h.get("counter") or "").strip()
+        guarded_by: list[str] = []
+        if counter:
+            for m in pat.finditer(counter):
+                name = m.group(1)
+                if name not in _NOISE_NAMES and name != function:
+                    guarded_by.append(name)
+        w: dict[str, Any] = {
+            "property": assumed or mechanism[:200],
+            "guard_type": guard_type,
+            "assumed_by": f"{file}:{function}" if file else function,
+            "guarded_by": guarded_by,
+            "mechanism": mechanism[:200],
+            "source": "structured_pass",
+        }
+        h_cwe = h.get("cwe") or cwe
+        if h_cwe:
+            w["cwe_class"] = str(h_cwe)
+        result.append(w)
+    return result
+
 
 #: Per-run-dir snapshot of the latest journaled strategy set per
 #: reviewed site, for strategy inheritance on corrective re-journal
@@ -297,6 +366,23 @@ def append_journal_for_outcome(
             {"mechanism": outcome.hypothesis, "confidence": "unknown"},
         ]
 
+    weaknesses: list[dict[str, Any]] | None = None
+    if hypotheses_list:
+        review_result = getattr(outcome, "review_result", None)
+        _cwe = (review_result.get("cwe") if review_result else None) or None
+        ws = extract_weaknesses(
+            hypotheses_list,
+            function=outcome.function,
+            file=outcome.file,
+            cwe=_cwe,
+        )
+        if ws:
+            weaknesses = ws
+            try:
+                outcome.weaknesses = ws
+            except Exception:
+                pass
+
     # ``evidence_tools`` is the CONFIRMING receipt only. The old union
     # with ``tools_dispatched`` blurred exactly the distinction
     # promotion_alarm documents as never-blur: a tool that
@@ -557,6 +643,7 @@ def append_journal_for_outcome(
             (getattr(outcome, "error_class", "") or None)
             if outcome.status == "error" else None
         ),
+        weaknesses=weaknesses,
     )
     try:
         append_entry(out_dir, entry)

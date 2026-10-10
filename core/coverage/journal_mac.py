@@ -251,6 +251,7 @@ _GENERATION_VOCABULARY: dict[int, frozenset[str]] = {
         "validate_verdict",
         "verdict",
         "verdict_rationale",
+        "weaknesses",
     }),
 }
 

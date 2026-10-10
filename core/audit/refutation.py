@@ -1267,6 +1267,43 @@ _SELF_REFUTATION_CWES = frozenset({
     "CWE-416", "CWE-415",
 })
 
+_EXTERNAL_PREMISE_WORDS = (
+    "caller", "callers", "call site", "call sites", "callee",
+    "callees", "upstream", "api contract", "api guarantees",
+    "contract guarantees", "before this function", "before calling",
+    "grace period", "pre-validate", "pre-validates",
+)
+_GUARANTEE_VERBS = (
+    "caps", "clamps", "pins", "pinned", "validates", "ensures",
+    "guarantees", "prevents", "serialises", "serializes",
+    "serialised", "serialized", "protected by", "held across",
+    "bounded by", "never returns", "never exceeds", "cannot exceed",
+    "re-points", "repoints",
+)
+_EXTERNAL_SYMBOL_RE = re.compile(r"\b[a-z][a-z0-9]*_[a-z0-9_]+\b")
+
+
+def _counter_scope_cross_function(h: dict[str, Any]) -> bool:
+    """Does this hypothesis's refutation rest on a cross-function premise?
+
+    Prefers the structured ``counter_scope`` field; falls back to
+    keyword matching on counter text for older responses that omit it.
+    """
+    scope = str(h.get("counter_scope") or "").strip().lower()
+    if scope == "cross_function":
+        return True
+    if scope == "local":
+        return False
+    counter = (h.get("counter") or "").strip().lower()
+    if len(counter) < 20:
+        return False
+    if any(w in counter for w in _EXTERNAL_PREMISE_WORDS):
+        return True
+    return (
+        bool(_EXTERNAL_SYMBOL_RE.search(counter))
+        and any(v in counter for v in _GUARANTEE_VERBS)
+    )
+
 
 def _receipt_matches_mechanism(check_type: str, mechanism: str) -> bool:
     """Does a structural receipt's family appear in the hypothesis text?
@@ -2824,8 +2861,7 @@ def rescue_self_refuted(
         # unverifiable from the local review alone — promote to
         # suspicious so the sweep can dispatch a cross-function
         # tool (Joern/CodeQL dataflow).
-        scope = str(h.get("counter_scope") or "").strip().lower()
-        if scope == "cross_function":
+        if _counter_scope_cross_function(h):
             return RefutationVerdict(
                 gate="anti_self_refutation",
                 reason=(
@@ -2929,8 +2965,7 @@ def diagnose_rescue(
                     **base,
                 }
             return None
-        scope = str(h.get("counter_scope") or "").strip().lower()
-        if scope == "cross_function":
+        if _counter_scope_cross_function(h):
             return None
     return {"blocked_on": "no_matching_receipt_or_cwe", **base}
 
