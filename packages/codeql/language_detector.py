@@ -438,6 +438,67 @@ class LanguageDetector:
 
         return detected
 
+    def detect_languages_tiered(
+        self,
+        min_files: int = 3,
+        *,
+        codeql_filter: bool = False,
+    ) -> dict[str, LanguageInfo]:
+        """Three-tier detection cascade for small and large targets.
+
+        Tier 1: ``detect_languages(min_files=min_files)`` — the normal
+        confidence + file-count gate.
+
+        Tier 2: ``detect_languages(min_files=1)`` — drops the file-count
+        floor so single-file targets pass (confidence gate still active).
+
+        Tier 3: ``detect_languages_floor(floor=2)`` — ignores the
+        confidence gate entirely; a last resort for fixture trees with
+        no build manifests.
+
+        Walks the repository once; the same scan statistics are reused
+        across all tiers.
+
+        Args:
+            min_files: Starting file-count threshold (tier 1).
+            codeql_filter: When True, each tier's result is narrowed to
+                CodeQL-supported languages via
+                :meth:`filter_codeql_supported` before the emptiness
+                check that triggers the next tier.
+
+        Returns:
+            The detected-languages dict from whichever tier first
+            produced a non-empty result (or empty if all three fail).
+        """
+        scan = self.scan_repository()
+
+        def _maybe_filter(d: dict[str, LanguageInfo]) -> dict[str, LanguageInfo]:
+            return self.filter_codeql_supported(d) if codeql_filter else d
+
+        detected = _maybe_filter(self.detect_languages(
+            min_files=min_files, scan=scan))
+
+        if not detected and min_files > 1:
+            logger.warning(
+                "No languages met min_files=%s threshold; retrying "
+                "with min_files=1 (small target — single-file fixtures "
+                "and minimal repros land here)",
+                min_files,
+            )
+            detected = _maybe_filter(self.detect_languages(
+                min_files=1, scan=scan))
+
+        if not detected:
+            logger.warning(
+                "No languages cleared the confidence gate after two "
+                "retries; falling back to file-count floor "
+                "(low-confidence detection — verify results)",
+            )
+            detected = _maybe_filter(self.detect_languages_floor(
+                floor=2, scan=scan))
+
+        return detected
+
     def _scan_repository(self) -> dict:
         """
         Scan repository and collect file statistics.

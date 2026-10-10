@@ -415,53 +415,9 @@ class CodeQLAgent:
                     )
             else:
                 logger.info("Auto-detecting languages...")
-                # One repository walk serves every retry tier below.
-                # Re-scanning per tier re-emitted the walk-scoped
-                # banners (unsupported-primary warning) on sparse
-                # targets. Scoped to this flow on purpose — repo state
-                # can change between runs, so nothing is memoised on
-                # the detector or module.
-                scan = self.language_detector.scan_repository()
-                detected = self.language_detector.detect_languages(
-                    min_files=min_files, scan=scan)
-                detected = self.language_detector.filter_codeql_supported(detected)
-
-                # Small-target retry. The default min_files=3 is a
-                # noise floor for monorepos but a footgun on tiny
-                # targets (single-file fixtures, minimal repros) —
-                # the detector sees the file, classifies it, then
-                # silently filters it out. If the first pass
-                # returns empty, drop the floor to 1 and warn so
-                # the operator knows we widened the criterion.
-                if not detected and min_files > 1:
-                    logger.warning(
-                        "No languages met min_files=%s threshold; retrying with min_files=1 (small target — single-file fixtures and minimal repros land here)",
-                        min_files
-                    )
-                    detected = self.language_detector.detect_languages(
-                        min_files=1, scan=scan)
-                    detected = self.language_detector.filter_codeql_supported(detected)
-
-                # Confidence-gate fallback. The min_confidence threshold
-                # in detect_languages defends against stray manifests
-                # (e.g. a `pom.xml` in a docs example dir) but is also
-                # tripped by trees with real source code and zero build
-                # files — multi-language minimal repros, fixture trees,
-                # vendored reference snapshots. The two retry
-                # tiers above both gate on confidence; if both returned
-                # empty, fall back to a file-count-only floor and log
-                # loud per-language WARNINGs so the operator knows the
-                # scan is running on low-confidence detection. Better
-                # than the silent-skip footgun of the pre-fix path.
-                if not detected:
-                    logger.warning(
-                        "No languages cleared the confidence gate after "
-                        "two retries; falling back to file-count floor "
-                        "(low-confidence detection — verify results)"
-                    )
-                    detected = self.language_detector.detect_languages_floor(
-                        floor=2, scan=scan)
-                    detected = self.language_detector.filter_codeql_supported(detected)
+                detected = self.language_detector.detect_languages_tiered(
+                    min_files=min_files, codeql_filter=True,
+                )
 
             _collapse_shared_extractor_languages(detected)
 

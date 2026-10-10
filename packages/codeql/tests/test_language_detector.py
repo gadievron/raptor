@@ -317,6 +317,70 @@ class TestFloorFallback:
         ), f"expected loud floor-include WARN for python; got: {warns}"
 
 
+class TestTieredDetection:
+    """detect_languages_tiered() consolidates the three-tier cascade."""
+
+    def test_single_file_c_detected(self, tmp_path: Path):
+        _write(tmp_path, "vuln.c", "int main() {}")
+
+        det = LanguageDetector(tmp_path)
+        assert det.detect_languages(min_files=3) == {}, (
+            "strict tier must reject a single-file target"
+        )
+
+        tiered = det.detect_languages_tiered(min_files=3)
+        assert "cpp" in tiered, (
+            f"tiered cascade must find C via min_files=1 fallback; "
+            f"got {sorted(tiered.keys())}"
+        )
+
+    def test_walks_once(self, tmp_path: Path, monkeypatch):
+        _write(tmp_path, "a.c", "")
+
+        det = LanguageDetector(tmp_path)
+        walks: list[int] = []
+        original = det._scan_repository
+
+        def counting():
+            walks.append(1)
+            return original()
+
+        monkeypatch.setattr(det, "_scan_repository", counting)
+
+        det.detect_languages_tiered(min_files=3)
+
+        assert len(walks) == 1, (
+            "tiered detection must reuse the first scan"
+        )
+
+    def test_codeql_filter_applied_per_tier(self, tmp_path: Path, monkeypatch):
+        for i in range(5):
+            _write(tmp_path, f"a{i}.php", "<?php\n")
+
+        det = LanguageDetector(tmp_path)
+
+        unfiltered = det.detect_languages_tiered(min_files=3, codeql_filter=False)
+        filtered = det.detect_languages_tiered(min_files=3, codeql_filter=True)
+
+        if "php" in unfiltered:
+            assert "php" not in filtered, (
+                "codeql_filter=True must remove unsupported languages"
+            )
+
+    def test_tier1_wins_when_sufficient(self, tmp_path: Path):
+        for i in range(5):
+            _write(tmp_path, f"a{i}.py", "")
+        _write(tmp_path, "requirements.txt", "")
+
+        det = LanguageDetector(tmp_path)
+        strict = det.detect_languages(min_files=3)
+        tiered = det.detect_languages_tiered(min_files=3)
+
+        assert strict.keys() == tiered.keys(), (
+            "when tier 1 succeeds, tiered must return the same result"
+        )
+
+
 class TestPrunedDirIndicators:
     """Ignored dirs still count as structural evidence.
 
