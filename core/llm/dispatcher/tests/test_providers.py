@@ -31,6 +31,7 @@ def all_providers_creds():
         # swaps providers shows up immediately in the upstream-captured
         # headers.
         "apiroute": "apiroute-real-NOT-LEAKED",
+        "atlascloud": "ac-atlascloud-real-NOT-LEAKED",
         "cheaperinference": "ci-cheaperinference-real-NOT-LEAKED",
         "cohere":      "cohere-real-NOT-LEAKED",
         "deepinfra":   "deepinfra-real-NOT-LEAKED",
@@ -287,6 +288,7 @@ class TestUnknownProviderPath:
 _BEARER_PROVIDERS = [
     # (provider name, path tail, expected key)
     ("apiroute", "v1/chat/completions", "apiroute-real-NOT-LEAKED"),
+    ("atlascloud", "v1/chat/completions", "ac-atlascloud-real-NOT-LEAKED"),
     ("cheaperinference", "v1/chat/completions", "ci-cheaperinference-real-NOT-LEAKED"),
     ("cohere",     "v1/chat",                "cohere-real-NOT-LEAKED"),
     ("deepinfra",  "v1/openai/chat/completions", "deepinfra-real-NOT-LEAKED"),
@@ -496,6 +498,7 @@ class TestCredentialStoreReadsAggregatorEnvs:
     def test_all_new_keys_read_and_kept_in_env(self, monkeypatch):
         env_to_set = {
             "API_ROUTE_API_KEY": "apiroute-test",
+            "ATLASCLOUD_API_KEY": "atlascloud-test",
             "CHEAPER_INFERENCE_API_KEY": "cheaperinference-test",
             "COHERE_API_KEY":     "cohere-test",
             "DEEPINFRA_API_KEY":  "deepinfra-test",
@@ -515,6 +518,7 @@ class TestCredentialStoreReadsAggregatorEnvs:
         creds = CredentialStore()
         # Each key landed in the store under the expected name.
         assert creds.get("apiroute") == "apiroute-test"
+        assert creds.get("atlascloud") == "atlascloud-test"
         assert creds.get("cheaperinference") == "cheaperinference-test"
         assert creds.get("cohere") == "cohere-test"
         assert creds.get("deepinfra") == "deepinfra-test"
