@@ -545,3 +545,97 @@ class TestAllocSinkNamePattern:
         # Call names never carry parens — a paren-suffixed arm can
         # match nothing.
         assert "\\(" not in pattern
+
+
+class TestCounterDrivenDispatch:
+    """When the hypothesis doesn't match a verifier but the counter does,
+    the counter-side dispatch kicks in."""
+
+    def test_counter_triggers_caller_constraint(self):
+        """Counter with 'callers guarantee' dispatches caller_constraint
+        even when the hypothesis is about a buffer over-read."""
+        server = MockJoernServer()
+        server.add_response(".caller", 'List((process_auth, auth.c, 10))')
+        # No strlen/strnlen calls in the caller → unguarded.
+        server.add_response("nonEmpty", "List()")
+        result = cross_function_verify(
+            function_name="validate_token_format",
+            file_path="auth_handler.c",
+            hypothesis=(
+                "A buffer over-read occurs if the input token is not "
+                "null-terminated, as the validating loop lacks a "
+                "bounds check."
+            ),
+            server=server,
+            counter=(
+                "All callers could be guaranteeing that the token "
+                "is null-terminated before passing it to this function."
+            ),
+        )
+        assert result is not None
+        assert result.verified is True
+        assert result.verifier_name == "caller_constraint"
+        assert "input validation" in result.evidence
+
+    def test_counter_with_null_terminated_keyword(self):
+        server = MockJoernServer()
+        server.add_response(".caller", 'List((main, main.c, 5))')
+        server.add_response("nonEmpty", "List()")
+        result = cross_function_verify(
+            function_name="parse_input",
+            file_path="input.c",
+            hypothesis="buffer over-read in parse_input",
+            server=server,
+            counter="the caller ensures the buffer is null-terminated",
+        )
+        assert result is not None
+        assert result.verified is True
+        assert result.verifier_name == "caller_constraint"
+
+    def test_no_dispatch_without_counter(self):
+        """Hypothesis alone doesn't match any verifier → None."""
+        server = MockJoernServer()
+        result = cross_function_verify(
+            function_name="validate_token_format",
+            file_path="auth_handler.c",
+            hypothesis=(
+                "A buffer over-read occurs if the input token is not "
+                "null-terminated."
+            ),
+            server=server,
+        )
+        assert result is None
+
+    def test_validation_fallback_uses_strlen_not_locks(self):
+        """When counter is set, the fallback query checks for
+        length/bounds functions, not lock/mutex patterns."""
+        server = _RecordingJoernServer()
+        server.add_response(".caller", 'List((caller_a, file.c, 10))')
+        server.add_response("nonEmpty", "List()")
+        _verify_caller_constraint(
+            "parse_token",
+            "buffer over-read in parse_token",
+            server,
+            counter="callers guarantee null-termination",
+        )
+        guard_queries = [
+            q for q in server.queries if "nonEmpty" in q
+        ]
+        assert guard_queries, "expected a guard query"
+        assert "strlen" in guard_queries[0]
+        assert "lock" not in guard_queries[0]
+
+    def test_callers_with_strlen_are_guarded(self):
+        """When the caller has a strlen call, the verifier treats it
+        as guarded — returns False (swallowed by confirmation-only)."""
+        server = MockJoernServer()
+        server.add_response(".caller", 'List((safe_caller, file.c, 10))')
+        server.add_response("strlen", 'List(true)')
+        result = _verify_caller_constraint(
+            "parse_input",
+            "buffer over-read",
+            server,
+            counter="callers validate the length",
+        )
+        assert result is not None
+        assert result.verified is False

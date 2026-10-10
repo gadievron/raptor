@@ -83,7 +83,14 @@ def _init_dispatch() -> None:
             r"|lock\s+(?:not\s+)?held"
             # The pre-lock word run is iteration-bounded (same rationale
             # as the bounded gaps above).
-            r"|after\s+(?:sleeping|releasing|dropping)\s+(?:and\s+)?(?:releasing\s+)?(?:\w+\s+){0,8}(?:lock|mutex|sem|rwsem)",
+            r"|after\s+(?:sleeping|releasing|dropping)\s+(?:and\s+)?(?:releasing\s+)?(?:\w+\s+){0,8}(?:lock|mutex|sem|rwsem)"
+            # Counter-side: the refutation claims callers enforce a
+            # guarantee the reviewer never checked.  Bounded gap
+            # between "caller(s)" and the guarantee verb (same
+            # rationale as the lock pattern above).
+            r"|caller(?:s)?\s+(?:\w+\s+){0,8}(?:guarante|validat|ensur|verif|sanitiz|sanitise)\w{0,20}"
+            r"|null.terminat\w{0,10}"
+            r"|bounds?\s+check",
             re.IGNORECASE,
         ), "caller_constraint"),
 
@@ -288,17 +295,23 @@ def _verify_caller_constraint(
     function_name: str,
     hypothesis: str,
     server: Any,
+    *,
+    counter: str = "",
 ) -> CrossFunctionVerdict | None:
     """Check whether all callers hold a required lock or call a guard before F.
 
-    Extracts the required guard/lock from the hypothesis, then checks
-    every caller for dominance of that guard over the call to F.
+    Extracts the required guard/lock from the hypothesis (or counter),
+    then checks every caller for presence of that guard.  When
+    *counter* is set and no specific guard is found, falls back to
+    length/bounds-checking function patterns instead of lock patterns.
     """
     safe_fn = _safe_name(function_name)
     if safe_fn is None:
         return None
 
     guard = _extract_guard_from_hypothesis(hypothesis)
+    if not guard and counter:
+        guard = _extract_guard_from_hypothesis(counter)
 
     callers_query = (
         f'cpg.method.name("{safe_fn}")'
@@ -338,6 +351,13 @@ def _verify_caller_constraint(
                 f'.ast.isCall.name("(.*_)?{safe_guard}(_.*)?")'
                 f".l.nonEmpty"
             )
+        elif counter:
+            guard_query = (
+                f'cpg.method.name("{safe_caller}")'
+                f'.ast.isCall.name("(.*_)?(strlen|strnlen|strlcpy|strlcat'
+                f'|snprintf|stpncpy|memchr)(_.*)?")'
+                f".l.nonEmpty"
+            )
         else:
             guard_query = (
                 f'cpg.method.name("{safe_caller}")'
@@ -356,7 +376,7 @@ def _verify_caller_constraint(
         return None
 
     if unguarded:
-        guard_desc = guard or "required lock/guard"
+        guard_desc = guard or ("input validation" if counter else "required lock/guard")
         evidence = (
             f"{len(unguarded)}/{len(unguarded) + len(guarded)} callers of "
             f"{function_name} lack {guard_desc}: "
@@ -626,12 +646,20 @@ def cross_function_verify(
     file_path: str,
     hypothesis: str,
     server: Any,
+    *,
+    counter: str = "",
 ) -> CrossFunctionVerdict | None:
     """Dispatch cross-function verifiers based on hypothesis keywords.
 
     Tries up to _MAX_VERIFIERS_PER_FUNCTION matching verifiers in
     dispatch order.  Returns the first positive verification, or
     None if no verifier matches or none confirms.
+
+    When *counter* is provided (the cross-function refutation text),
+    the dispatch also matches against counter keywords so that
+    counter-side phrases ("callers guarantee null-termination") can
+    trigger the appropriate verifier even when the hypothesis itself
+    contains no cross-function keywords.
 
     Confirmation-only contract: verified=False verdicts from the
     individual verifiers are intentionally NOT returned.  These are
@@ -645,7 +673,7 @@ def cross_function_verify(
 
     matched = []
     for pattern, verifier_name in _VERIFIER_DISPATCH:
-        if pattern.search(hypothesis):
+        if pattern.search(hypothesis) or (counter and pattern.search(counter)):
             matched.append(verifier_name)
             if len(matched) >= _MAX_VERIFIERS_PER_FUNCTION:
                 break
@@ -658,7 +686,10 @@ def cross_function_verify(
         if fn is None:
             continue
         try:
-            verdict = fn(function_name, hypothesis, server)
+            if vname == "caller_constraint":
+                verdict = fn(function_name, hypothesis, server, counter=counter)
+            else:
+                verdict = fn(function_name, hypothesis, server)
             if verdict is not None and verdict.verified:
                 return verdict
         except Exception:

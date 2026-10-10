@@ -23348,11 +23348,19 @@ def _proactive_validate(
         try:
             from .cross_function_verify import cross_function_verify
             ran.add("cross_function")
+            _xf_parts = []
+            for _h in getattr(outcome, "hypotheses", None) or []:
+                if str(_h.get("counter_scope") or "").strip().lower() == "cross_function":
+                    _c = (_h.get("counter") or "").strip()
+                    if _c:
+                        _xf_parts.append(_c)
+            _xf_counter = "\n".join(_xf_parts)
             xf_result = cross_function_verify(
                 function_name=outcome.function,
                 file_path=outcome.file,
                 hypothesis=outcome.hypothesis or "",
                 server=joern_server,
+                counter=_xf_counter,
             )
             if xf_result is None:
                 # Inconclusive — no verifier decided anything.
