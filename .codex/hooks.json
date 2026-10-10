@@ -1,0 +1,51 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "_RAPTOR_TRUSTED=1 libexec/raptor-session-init"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "_RAPTOR_TRUSTED=1 libexec/raptor-lifecycle-hook stop",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "_RAPTOR_TRUSTED=1 libexec/raptor-lifecycle-hook tool-failure",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "_RAPTOR_TRUSTED=1 libexec/raptor-lifecycle-hook session-end",
+            "timeout": 1
+          }
+        ]
+      }
+    ]
+  }
+}

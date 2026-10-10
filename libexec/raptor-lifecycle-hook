@@ -99,6 +99,10 @@ def _tool_failure_command(stream) -> str | None:
     and require a Bash tool_input whose command INVOKES the
     ``libexec/raptor-`` dispatch surface (see the regex above).
 
+    On Codex, ``PostToolUse`` fires on success AND failure (no
+    ``PostToolUseFailure`` event). An exit_code check early-returns
+    on success so the marker is only written for actual failures.
+
     Fail direction (both-directions trade-off): unreadable, malformed,
     or non-matching stdin → NOT relevant, no marker. A spurious marker
     flips a successful run to Failed at the next Stop; a missed marker
@@ -112,6 +116,19 @@ def _tool_failure_command(stream) -> str | None:
         return None
     if not isinstance(payload, dict) or payload.get("tool_name") != "Bash":
         return None
+    # Codex fires PostToolUse on success AND failure (no separate
+    # PostToolUseFailure event).  When exit_code is present and 0 the
+    # tool succeeded — skip it.  Absent exit_code (older Claude Code
+    # PostToolUseFailure payloads) falls through to the existing
+    # command-pattern filter.
+    tool_output = payload.get("tool_output")
+    if isinstance(tool_output, dict):
+        ec = tool_output.get("exit_code")
+        try:
+            if ec is not None and int(ec) == 0:
+                return None
+        except (ValueError, TypeError):
+            pass
     tool_input = payload.get("tool_input")
     command = tool_input.get("command") if isinstance(tool_input, dict) else None
     if isinstance(command, str) and _RAPTOR_INVOCATION_RE.search(command):

@@ -253,6 +253,31 @@ class TestToolFailureFiltering(unittest.TestCase):
                 )
 
 
+    def test_exit_code_zero_skips_marker(self):
+        """Codex PostToolUse fires on success AND failure.  exit_code 0
+        must not stamp a marker — otherwise successful RAPTOR commands
+        flip the run to failed at the next Stop."""
+        payload = json.dumps({
+            "tool_name": "Bash",
+            "tool_input": {"command": "libexec/raptor-run-lifecycle start scan"},
+            "tool_output": {"exit_code": 0, "stdout": "OK"},
+        })
+        with TemporaryDirectory() as tmp:
+            run = self._run_hook(tmp, payload)
+            self.assertFalse((run / FAILURE_MARKER).exists())
+
+    def test_exit_code_nonzero_writes_marker(self):
+        """A non-zero exit_code is a real failure — marker must be written."""
+        payload = json.dumps({
+            "tool_name": "Bash",
+            "tool_input": {"command": "libexec/raptor-run-lifecycle start scan"},
+            "tool_output": {"exit_code": 1, "stderr": "error"},
+        })
+        with TemporaryDirectory() as tmp:
+            run = self._run_hook(tmp, payload)
+            self.assertTrue((run / FAILURE_MARKER).exists())
+
+
 class TestStopHook(unittest.TestCase):
     """Stop mode: complete or fail single-call runs with dead tool_pid."""
 
