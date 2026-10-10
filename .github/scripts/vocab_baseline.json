@@ -837,10 +837,6 @@
     "kind": "literal",
     "note": "audit-log refutation-gate record field names (framework record keys, not target API names)"
   },
-  "core/audit/orchestrator.py::_review_items": {
-    "count": 10,
-    "kind": "literal"
-  },
   "core/audit/orchestrator.py::study_consumer_thread": {
     "count": 14,
     "kind": "literal"
@@ -1213,11 +1209,6 @@
     "count": 72,
     "kind": "literal"
   },
-  "core/config/__init__.py::_LLM_AGGREGATOR_KEYS": {
-    "count": 10,
-    "kind": "literal",
-    "note": "aggregator/routing provider API-key env vars splatted into LLM_API_KEY_VARS (infrastructure constants, not a learnable name vocabulary)"
-  },
   "core/config/__init__.py::LLM_ROUTING_ENV_VARS": {
     "count": 12,
     "kind": "literal",
@@ -1237,6 +1228,11 @@
     "count": 11,
     "kind": "literal",
     "note": "tool-dependency registry keys (doctor/banner); crossed the seed threshold when the perl entry (perlasm generated-asm inventory) was added - not a name vocabulary"
+  },
+  "core/config/__init__.py::_LLM_AGGREGATOR_KEYS": {
+    "count": 10,
+    "kind": "literal",
+    "note": "aggregator/routing provider API-key env vars splatted into LLM_API_KEY_VARS (infrastructure constants, not a learnable name vocabulary)"
   },
   "core/container/compose.py::_BUILD_ALLOWED_KEYS": {
     "count": 10,
@@ -1835,6 +1831,11 @@
     "count": 35,
     "kind": "literal",
     "note": "Linux syscall names (POSIX/kernel ABI), permitted like libc vocab"
+  },
+  "core/sandbox/triage.py::_KNOWN_2LD_TLDS": {
+    "count": 18,
+    "kind": "literal",
+    "note": "closed set of known two-level-domain TLD suffixes (co.uk, com.au, etc.) for the dns_exfil_indicator triage signal\u2019s effective-parent-domain extraction \u2014 IANA registry data, not a learned name vocabulary"
   },
   "core/sarif/import_normalizer.py::_DEPENDENCY_MANIFEST_NAMES": {
     "count": 22,
@@ -3217,10 +3218,5 @@
     "kind": "literal",
     "note": "Autonomous-run summary dict: counter + provenance KEYS written to the analysis-summary JSON (persistence schema keys, not a name vocabulary); root-module universe addition.",
     "reviewed": "2026-09-21"
-  },
-  "core/sandbox/triage.py::_KNOWN_2LD_TLDS": {
-    "count": 18,
-    "kind": "literal",
-    "note": "closed set of known two-level-domain TLD suffixes (co.uk, com.au, etc.) for the dns_exfil_indicator triage signal\u2019s effective-parent-domain extraction \u2014 IANA registry data, not a learned name vocabulary"
   }
 }
