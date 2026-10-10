@@ -1289,6 +1289,7 @@ class ReviewOutcome:
     # entries mid-loop — an index window rescans shifted items
     # (duplicate non-memoized tool dispatch) or skips fresh ones.
     _incr_ticked: bool = field(default=False, repr=False, compare=False)
+    weaknesses: list[dict[str, Any]] | None = None
 
     _CONFIRMED_EVIDENCE = frozenset({
         "dark_verify:confirmed", "dynamic:crash", "frida:runtime",
@@ -23350,7 +23351,7 @@ def _proactive_validate(
             ran.add("cross_function")
             _xf_parts = []
             for _h in getattr(outcome, "hypotheses", None) or []:
-                if str(_h.get("counter_scope") or "").strip().lower() == "cross_function":
+                if _refutation_scope_cross_function(_h):
                     _c = (_h.get("counter") or "").strip()
                     if _c:
                         _xf_parts.append(_c)

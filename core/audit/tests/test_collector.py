@@ -26,6 +26,7 @@ class _FakeOutcome:
     # (that path is exercised in test_promotion_alarm.py).
     evidence_tool: str = "semgrep:sql-injection"
     review_result: dict[str, Any] | None = None
+    weaknesses: list[dict[str, Any]] | None = None
 
 
 def _make_gap(file: str = "src/auth.py", name: str = "check_pw") -> dict[str, Any]:
@@ -963,3 +964,165 @@ class TestDomainSliceStamp:
         [entry] = load_entries(run)
         assert entry.verdict
         assert entry.domain_slice_hash is None
+
+
+class TestExtractWeaknesses:
+    """Tests for extract_weaknesses (weakness tier extraction)."""
+
+    def test_cross_function_with_guard_type(self):
+        from core.audit.collector import extract_weaknesses
+
+        hyps = [{
+            "mechanism": "CWE-120 buffer overflow in parse_input",
+            "confidence": "refuted",
+            "counter": "the caller validate_input() checks buffer length",
+            "counter_scope": "cross_function",
+            "guard_type": "bounds",
+            "assumed_property": "input length <= 256",
+        }]
+        ws = extract_weaknesses(hyps, function="parse_input", file="src/parse.c")
+        assert len(ws) == 1
+        w = ws[0]
+        assert w["guard_type"] == "bounds"
+        assert w["property"] == "input length <= 256"
+        assert w["assumed_by"] == "src/parse.c:parse_input"
+        assert "validate_input" in w["guarded_by"]
+        assert w["source"] == "structured_pass"
+
+    def test_local_scope_no_weakness(self):
+        from core.audit.collector import extract_weaknesses
+
+        hyps = [{
+            "mechanism": "CWE-120 overflow",
+            "confidence": "refuted",
+            "counter": "length is checked at line 42",
+            "counter_scope": "local",
+            "guard_type": "bounds",
+        }]
+        ws = extract_weaknesses(hyps, function="f", file="a.c")
+        assert ws == []
+
+    def test_missing_guard_type_no_weakness(self):
+        from core.audit.collector import extract_weaknesses
+
+        hyps = [{
+            "mechanism": "CWE-120 overflow",
+            "confidence": "refuted",
+            "counter": "caller caps the buffer",
+            "counter_scope": "cross_function",
+        }]
+        ws = extract_weaknesses(hyps, function="f", file="a.c")
+        assert ws == []
+
+    def test_missing_counter_scope_no_weakness(self):
+        from core.audit.collector import extract_weaknesses
+
+        hyps = [{
+            "mechanism": "CWE-120 overflow",
+            "confidence": "refuted",
+            "counter": "caller caps the buffer",
+            "guard_type": "bounds",
+        }]
+        ws = extract_weaknesses(hyps, function="f", file="a.c")
+        assert ws == []
+
+    def test_cwe_carried_from_hypothesis(self):
+        from core.audit.collector import extract_weaknesses
+
+        hyps = [{
+            "mechanism": "CWE-476 null dereference",
+            "confidence": "refuted",
+            "counter": "caller guarantees non-NULL",
+            "counter_scope": "cross_function",
+            "guard_type": "null_safety",
+            "assumed_property": "pointer is non-NULL",
+        }]
+        ws = extract_weaknesses(hyps, cwe="CWE-476")
+        assert len(ws) == 1
+        assert ws[0]["cwe_class"] == "CWE-476"
+
+    def test_invalid_guard_type_rejected(self):
+        from core.audit.collector import extract_weaknesses
+
+        hyps = [{
+            "mechanism": "overflow",
+            "confidence": "refuted",
+            "counter": "caller caps it",
+            "counter_scope": "cross_function",
+            "guard_type": "magic",
+        }]
+        ws = extract_weaknesses(hyps, function="f")
+        assert ws == []
+
+    def test_all_guard_types_accepted(self):
+        from core.audit.collector import extract_weaknesses
+
+        for gt in ("bounds", "null_safety", "validation", "sanitisation",
+                    "lifetime", "ordering", "concurrency", "other"):
+            hyps = [{
+                "mechanism": "test",
+                "confidence": "refuted",
+                "counter": "caller provides",
+                "counter_scope": "cross_function",
+                "guard_type": gt,
+            }]
+            ws = extract_weaknesses(hyps, function="f")
+            assert len(ws) == 1, f"guard_type={gt} rejected"
+            assert ws[0]["guard_type"] == gt
+
+    def test_mechanism_used_when_no_assumed_property(self):
+        from core.audit.collector import extract_weaknesses
+
+        hyps = [{
+            "mechanism": "CWE-120 stack buffer overflow via strcpy",
+            "confidence": "refuted",
+            "counter": "caller provides safe input",
+            "counter_scope": "cross_function",
+            "guard_type": "bounds",
+        }]
+        ws = extract_weaknesses(hyps, function="f")
+        assert len(ws) == 1
+        assert ws[0]["property"] == "CWE-120 stack buffer overflow via strcpy"
+
+    def test_empty_guard_type_rejected(self):
+        from core.audit.collector import extract_weaknesses
+
+        hyps = [{
+            "mechanism": "overflow",
+            "confidence": "refuted",
+            "counter": "caller caps it",
+            "counter_scope": "cross_function",
+            "guard_type": "",
+        }]
+        ws = extract_weaknesses(hyps, function="f")
+        assert ws == []
+
+    def test_empty_guarded_by_when_no_function_names(self):
+        from core.audit.collector import extract_weaknesses
+
+        hyps = [{
+            "mechanism": "overflow",
+            "confidence": "refuted",
+            "counter": "the input is safe",
+            "counter_scope": "cross_function",
+            "guard_type": "bounds",
+            "assumed_property": "length bounded",
+        }]
+        ws = extract_weaknesses(hyps, function="f")
+        assert len(ws) == 1
+        assert ws[0]["guarded_by"] == []
+
+    def test_hypothesis_cwe_overrides_fallback(self):
+        from core.audit.collector import extract_weaknesses
+
+        hyps = [{
+            "mechanism": "null dereference",
+            "confidence": "refuted",
+            "counter": "caller guarantees non-NULL",
+            "counter_scope": "cross_function",
+            "guard_type": "null_safety",
+            "cwe": "CWE-476",
+        }]
+        ws = extract_weaknesses(hyps, cwe="CWE-120")
+        assert len(ws) == 1
+        assert ws[0]["cwe_class"] == "CWE-476"

@@ -266,6 +266,37 @@ REVIEW_SCHEMA = {
                             "counter."
                         ),
                     },
+                    "guard_type": {
+                        "type": "string",
+                        "enum": [
+                            "bounds",
+                            "null_safety",
+                            "validation",
+                            "sanitisation",
+                            "lifetime",
+                            "ordering",
+                            "concurrency",
+                            "other",
+                        ],
+                        "description": (
+                            "When counter_scope is cross_function: "
+                            "what category of guarantee does the "
+                            "external entity provide? Omit when "
+                            "counter_scope is local or absent."
+                        ),
+                    },
+                    "assumed_property": {
+                        "type": "string",
+                        "description": (
+                            "When counter_scope is cross_function: "
+                            "one-phrase description of what this "
+                            "function assumes but does not check, "
+                            "e.g. 'input length <= 256', 'pointer "
+                            "is non-NULL', 'buffer is null-"
+                            "terminated'. Omit when counter_scope "
+                            "is local or absent."
+                        ),
+                    },
                 },
                 "required": ["mechanism", "confidence"],
             },

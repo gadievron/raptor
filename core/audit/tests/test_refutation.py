@@ -1514,6 +1514,38 @@ class TestRescueSelfRefuted:
         r = rescue_self_refuted(outcome)
         assert r is None
 
+    def test_rescues_cross_function_keyword_fallback(self):
+        """Missing counter_scope but counter text names a caller → rescue."""
+        outcome = _Outcome(
+            status="clean",
+            hypotheses=[{
+                "mechanism": "CWE-120 buffer overflow in parse_data",
+                "confidence": "refuted",
+                "counter": (
+                    "the caller validate_input() ensures the buffer "
+                    "length is within bounds before passing it here"
+                ),
+            }],
+        )
+        r = rescue_self_refuted(outcome)
+        assert r is not None
+        assert r.gate == "anti_self_refutation"
+        assert r.demote_to == "suspicious"
+        assert "cross-function" in r.reason
+
+    def test_no_rescue_keyword_fallback_local_code(self):
+        """Counter text about local code with no external premise → no rescue."""
+        outcome = _Outcome(
+            status="clean",
+            hypotheses=[{
+                "mechanism": "CWE-120 buffer overflow",
+                "confidence": "refuted",
+                "counter": "the length is bounded by the static array size",
+            }],
+        )
+        r = rescue_self_refuted(outcome)
+        assert r is None
+
     def test_cross_function_not_rescued_when_tool_evidence(self):
         """Tool already spoke — cross-function scope doesn't override."""
         outcome = _Outcome(
@@ -2087,7 +2119,7 @@ class TestDiagnoseRescue:
             hypotheses=[{
                 "mechanism": "CWE-190 integer overflow in size",
                 "confidence": "refuted",
-                "counter": "value bounded by caller",
+                "counter": "value bounded by the static array size",
             }],
         )
         d = diagnose_rescue(outcome, negative_space=[self._RECEIPT])
@@ -2442,7 +2474,7 @@ class TestReturnDomainFamilyDismissal:
                     "`== -1` check"
                 ),
                 "confidence": conf,
-                "counter": "the callee only ever returns 0 or -1",
+                "counter": "the return-value check covers all documented error codes",
             }],
         )
 
