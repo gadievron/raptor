@@ -1274,6 +1274,7 @@ class RaptorConfig:
     # wires up a custom dispatcher or aggregator route.
     _LLM_AGGREGATOR_KEYS = (
         "API_ROUTE_API_KEY",
+        "ATLASCLOUD_API_KEY",
         "CHEAPER_INFERENCE_API_KEY",
         "COHERE_API_KEY",
         "DEEPINFRA_API_KEY",

@@ -283,6 +283,7 @@ class CredentialStore:
             # Workers reach these env-direct (no worker-side dispatcher
             # factory routes them); see the comment above the class.
             "apiroute": _read_env_keep("API_ROUTE_API_KEY"),
+            "atlascloud": _read_env_keep("ATLASCLOUD_API_KEY"),
             "cheaperinference": _read_env_keep("CHEAPER_INFERENCE_API_KEY"),
             "cohere":     _read_env_keep("COHERE_API_KEY"),
             "deepinfra":  _read_env_keep("DEEPINFRA_API_KEY"),
@@ -1267,6 +1268,13 @@ def build_rules(creds: CredentialStore) -> dict[str, ProviderRule]:
             # Preserve the SDK's /v1 path, as with other compatible gateways.
             upstream_base_url="https://global.api-route.com",
             inject_headers=_bearer_headers("apiroute"),
+        ),
+        "atlascloud": ProviderRule(
+            name="atlascloud",
+            # /v1 root (OpenAI-compatible); bare host is the correct
+            # upstream — SDK path preserved end-to-end.
+            upstream_base_url="https://api.atlascloud.ai",
+            inject_headers=_bearer_headers("atlascloud"),
         ),
         "cheaperinference": ProviderRule(
             name="cheaperinference",
