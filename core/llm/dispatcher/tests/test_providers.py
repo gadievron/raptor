@@ -38,6 +38,7 @@ def all_providers_creds():
         "groq":        "gsk-groq-real-NOT-LEAKED",
         "mistral":     "mistral-real-NOT-LEAKED",
         "openrouter":  "sk-or-real-NOT-LEAKED",
+        "opper":       "opper-real-NOT-LEAKED",
         "orcarouter":  "sk-orca-real-NOT-LEAKED",
         "perplexity":  "pplx-perplexity-real-NOT-LEAKED",
         "replicate":   "r8-replicate-real-NOT-LEAKED",
@@ -294,6 +295,7 @@ _BEARER_PROVIDERS = [
     ("groq",       "openai/v1/chat/completions", "gsk-groq-real-NOT-LEAKED"),
     ("mistral",    "v1/chat/completions",    "mistral-real-NOT-LEAKED"),
     ("openrouter", "api/v1/chat/completions", "sk-or-real-NOT-LEAKED"),
+    ("opper",      "v3/compat/chat/completions", "opper-real-NOT-LEAKED"),
     ("orcarouter", "v1/chat/completions", "sk-orca-real-NOT-LEAKED"),
     ("perplexity", "chat/completions",       "pplx-perplexity-real-NOT-LEAKED"),
     ("together",   "v1/chat/completions",    "together-real-NOT-LEAKED"),
@@ -503,6 +505,7 @@ class TestCredentialStoreReadsAggregatorEnvs:
             "GROQ_API_KEY":       "groq-test",
             "MISTRAL_API_KEY":    "mistral-test",
             "OPENROUTER_API_KEY": "openrouter-test",
+            "OPPER_API_KEY":      "opper-test",
             "ORCAROUTER_API_KEY": "orcarouter-test",
             "PERPLEXITY_API_KEY": "perplexity-test",
             "REPLICATE_API_TOKEN": "replicate-test",
@@ -522,6 +525,7 @@ class TestCredentialStoreReadsAggregatorEnvs:
         assert creds.get("groq") == "groq-test"
         assert creds.get("mistral") == "mistral-test"
         assert creds.get("openrouter") == "openrouter-test"
+        assert creds.get("opper") == "opper-test"
         assert creds.get("orcarouter") == "orcarouter-test"
         assert creds.get("perplexity") == "perplexity-test"
         assert creds.get("replicate") == "replicate-test"
