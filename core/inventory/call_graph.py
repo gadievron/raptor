@@ -52,6 +52,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import logging
+from collections import defaultdict
 import sys
 import warnings
 from dataclasses import dataclass, field
@@ -8380,4 +8381,39 @@ __all__ = [
     "extract_call_graph_scala",
     "extract_call_graph_swift",
     "load_call_graphs",
+    "build_reverse_edges",
 ]
+
+
+FuncKey = tuple[str, str]
+
+
+def build_reverse_edges(
+    call_graphs: dict[str, FileCallGraph],
+) -> dict[FuncKey, set[FuncKey]]:
+    """Build a reverse call graph: callee → set of callers.
+
+    Each key is ``(file, function)`` and maps to the set of
+    ``(file, function)`` pairs that call it.  Same-file and cross-file
+    edges are included (cross-file via bare-name matching).
+    """
+    reverse: dict[FuncKey, set[FuncKey]] = defaultdict(set)
+    func_defined_in: dict[str, set[str]] = defaultdict(set)
+    for filepath, graph in call_graphs.items():
+        for call in graph.calls:
+            if call.caller and call.caller != "<module>":
+                func_defined_in[call.caller].add(filepath)
+
+    for filepath, graph in call_graphs.items():
+        for call in graph.calls:
+            caller = call.caller or "<module>"
+            caller_key: FuncKey = (filepath, caller)
+            if len(call.chain) == 1:
+                callee_name = call.chain[0]
+                reverse[(filepath, callee_name)].add(caller_key)
+                for other_file in func_defined_in.get(callee_name, ()):
+                    if other_file != filepath:
+                        reverse[(other_file, callee_name)].add(caller_key)
+            elif len(call.chain) == 2 and call.chain[0] in ("self", "this"):
+                reverse[(filepath, call.chain[1])].add(caller_key)
+    return dict(reverse)
