@@ -37,6 +37,8 @@ from typing import Any, TYPE_CHECKING
 if TYPE_CHECKING:
     from core.inventory.call_graph import FileCallGraph
 
+from core.inventory.call_graph import build_reverse_edges
+
 logger = logging.getLogger(__name__)
 
 # Byte budgets for the discovery walk over the (target-controlled)
@@ -665,23 +667,10 @@ def discover_sinks(
     """
     # Phase 1: Find direct dangerous callers
     direct_sinks: list[SinkInfo] = []
-    # Build forward call graph: (file, caller) → set of (file, callee)
-    forward_edges: dict[FuncKey, set[FuncKey]] = defaultdict(set)
-    # Build reverse call graph: (file, callee) → set of (file, caller)
-    reverse_edges: dict[FuncKey, set[FuncKey]] = defaultdict(set)
-    # Track which functions directly call dangerous targets
+    reverse_edges = build_reverse_edges(call_graphs)
     direct_dangerous: dict[FuncKey, set[str]] = defaultdict(set)
-    # Track all call targets for framework discovery
     target_callers: dict[str, set[FuncKey]] = defaultdict(set)
     target_files: dict[str, set[str]] = defaultdict(set)
-    # Build cross-file function index: function name → files where it is
-    # defined (approximated by where it appears as a caller in call graphs).
-    # This enables cross-file edge building below.
-    _func_defined_in: dict[str, set[str]] = defaultdict(set)
-    for filepath, graph in call_graphs.items():
-        for call in graph.calls:
-            if call.caller and call.caller != "<module>":
-                _func_defined_in[call.caller].add(filepath)
 
     for filepath, graph in call_graphs.items():
         for call in graph.calls:
@@ -689,12 +678,10 @@ def discover_sinks(
             caller_key: FuncKey = (filepath, caller)
             dotted = ".".join(call.chain)
 
-            # Track for framework discovery
             if "." in dotted or ":" in dotted:
                 target_callers[dotted].add(caller_key)
                 target_files[dotted].add(filepath)
 
-            # Check if this is a dangerous call
             danger = _is_dangerous(call.chain)
             if danger:
                 direct_sinks.append(SinkInfo(
@@ -704,31 +691,6 @@ def discover_sinks(
                     target=danger,
                 ))
                 direct_dangerous[caller_key].add(danger)
-
-            # Build inter-function edges — same-file and cross-file.
-            # Cross-file edges are added when a bare function call
-            # matches a function defined in another file within the
-            # inventory.  Import-qualified resolution (e.g. resolving
-            # ``from pkg import func`` to the defining file) is not
-            # yet handled — that requires the import resolver in
-            # core.analysis.reachability.
-            # TODO: use import resolution from core.analysis.reachability
-            # to resolve qualified cross-file calls (e.g. module.func).
-            if len(call.chain) == 1:
-                callee_name = call.chain[0]
-                callee_key: FuncKey = (filepath, callee_name)
-                forward_edges[caller_key].add(callee_key)
-                reverse_edges[callee_key].add(caller_key)
-                # Cross-file: callee defined in other inventory files
-                for other_file in _func_defined_in.get(callee_name, ()):
-                    if other_file != filepath:
-                        cross_key: FuncKey = (other_file, callee_name)
-                        forward_edges[caller_key].add(cross_key)
-                        reverse_edges[cross_key].add(caller_key)
-            elif len(call.chain) == 2 and call.chain[0] in ("self", "this"):
-                callee_key = (filepath, call.chain[1])
-                forward_edges[caller_key].add(callee_key)
-                reverse_edges[callee_key].add(caller_key)
 
     # Phase 2: Transitive reverse reachability from dangerous callers
     # BFS backwards from every function that directly calls a dangerous target
