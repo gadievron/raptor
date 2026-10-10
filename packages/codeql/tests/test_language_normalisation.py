@@ -143,11 +143,11 @@ class TestExplicitLanguagesNormalised:
 
 
 class TestSmallTargetRetry:
-    """Auto-detect on small targets retries with min_files=1."""
+    """Agent delegates to detect_languages_tiered for the retry cascade."""
 
-    def test_retry_widens_when_first_pass_empty(self, tmp_path):
-        """If detect_languages(min_files=3) returns empty, the agent
-        retries with min_files=1 before giving up."""
+    def test_agent_calls_tiered_detection(self, tmp_path):
+        """The agent calls detect_languages_tiered (not the individual
+        tiers) so every caller gets the cascade automatically."""
         from packages.codeql.agent import CodeQLAgent
 
         agent = CodeQLAgent.__new__(CodeQLAgent)
@@ -159,72 +159,15 @@ class TestSmallTargetRetry:
         agent.database_manager = MagicMock()
         agent.query_runner = MagicMock()
 
-        # First pass returns empty; second pass (min_files=1)
-        # returns a single language. The agent must call detect
-        # twice and consume the second result.
         from packages.codeql.language_detector import LanguageInfo
         cpp_info = LanguageInfo(
             language="cpp", confidence=0.5, file_count=1,
             extensions_found={".c"}, build_files_found=[],
             indicators_found=[],
         )
-        agent.language_detector.detect_languages.side_effect = [
-            {},  # first call: min_files=3, nothing found
-            {"cpp": cpp_info},  # second call: min_files=1, found
-        ]
-        agent.language_detector.filter_codeql_supported.side_effect = (
-            lambda d: d
-        )
-
-        agent.build_detector.detect_build_system.return_value = None
-        agent.build_detector.synthesise_build_command.return_value = None
-        from core.build.build_detector import BuildSystem
-        agent.build_detector.generate_no_build_config.return_value = (
-            BuildSystem(
-                type="no-build", command="", working_dir=tmp_path,
-                env_vars={}, confidence=1.0, detected_files=[],
-            )
-        )
-        agent.database_manager.create_databases_parallel.return_value = {}
-
-        agent.run_autonomous_analysis()
-
-        # Two calls: first with min_files=3, second with min_files=1.
-        assert agent.language_detector.detect_languages.call_count == 2
-        first_call_kwargs = (
-            agent.language_detector.detect_languages.call_args_list[0].kwargs
-        )
-        second_call_kwargs = (
-            agent.language_detector.detect_languages.call_args_list[1].kwargs
-        )
-        assert first_call_kwargs.get("min_files") == 3
-        assert second_call_kwargs.get("min_files") == 1
-
-    def test_no_retry_when_first_pass_succeeds(self, tmp_path):
-        """If the first pass already finds languages, no retry."""
-        from packages.codeql.agent import CodeQLAgent
-
-        agent = CodeQLAgent.__new__(CodeQLAgent)
-        agent.repo_path = tmp_path
-        agent.out_dir = tmp_path / "out"
-        agent.start_time = 0.0
-        agent.language_detector = MagicMock()
-        agent.build_detector = MagicMock()
-        agent.database_manager = MagicMock()
-        agent.query_runner = MagicMock()
-
-        from packages.codeql.language_detector import LanguageInfo
-        cpp_info = LanguageInfo(
-            language="cpp", confidence=0.8, file_count=10,
-            extensions_found={".c"}, build_files_found=[],
-            indicators_found=[],
-        )
-        agent.language_detector.detect_languages.return_value = {
-            "cpp": cpp_info
+        agent.language_detector.detect_languages_tiered.return_value = {
+            "cpp": cpp_info,
         }
-        agent.language_detector.filter_codeql_supported.side_effect = (
-            lambda d: d
-        )
         agent.build_detector.detect_build_system.return_value = None
         agent.build_detector.synthesise_build_command.return_value = None
         from core.build.build_detector import BuildSystem
@@ -238,4 +181,6 @@ class TestSmallTargetRetry:
 
         agent.run_autonomous_analysis()
 
-        assert agent.language_detector.detect_languages.call_count == 1
+        agent.language_detector.detect_languages_tiered.assert_called_once_with(
+            min_files=3, codeql_filter=True,
+        )

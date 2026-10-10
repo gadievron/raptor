@@ -79,6 +79,9 @@ class _FakeDetector:
     def detect_languages(self, min_files=3):
         return dict(self.languages)
 
+    def detect_languages_tiered(self, min_files=3, *, codeql_filter=False):
+        return dict(self.languages)
+
     def filter_codeql_supported(self, detected):
         return detected
 

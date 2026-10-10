@@ -147,9 +147,7 @@ def discover_codeql_dbs(target_path: Path) -> list[str]:
 
         manager = DatabaseManager()
         detector = LanguageDetector(Path(target_path))
-        detected = detector.filter_codeql_supported(
-            detector.detect_languages(),
-        )
+        detected = detector.detect_languages_tiered(codeql_filter=True)
         found: list[str] = []
         for language in sorted(detected):
             cached = manager.get_cached_database(
@@ -278,9 +276,7 @@ def provision_codeql_dbs(
 
     try:
         detector = LanguageDetector(target_path)
-        detected = detector.filter_codeql_supported(
-            detector.detect_languages(),
-        )
+        detected = detector.detect_languages_tiered(codeql_filter=True)
     except Exception:  # noqa: BLE001 — detection is best-effort
         logger.warning(
             "codeql provisioning: language detection failed", exc_info=True,
