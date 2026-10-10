@@ -53,7 +53,62 @@ from .snappy import (
 if TYPE_CHECKING:
     from pathlib import Path
 
+
+_rust_sysroot_llvm_bin_cache: str | None | bool = False
+
+
+def _rust_sysroot_llvm_bin() -> str | None:
+    """Return the Rust toolchain's bundled LLVM bin directory, or None.
+
+    Rust ships its own LLVM whose profraw format version matches the
+    compiler's.  System llvm-profdata/llvm-cov may lag behind (e.g.
+    llvm-profdata-21 expects format v10 but rustc's LLVM emits v11),
+    so the sysroot tools must be tried first for Rust corpus builds.
+    """
+    global _rust_sysroot_llvm_bin_cache  # noqa: PLW0603
+    if _rust_sysroot_llvm_bin_cache is not False:
+        return _rust_sysroot_llvm_bin_cache  # type: ignore[return-value]
+    try:
+        proc = subprocess.run(
+            ["rustc", "--print", "sysroot"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if proc.returncode != 0 or not proc.stdout.strip():
+            _rust_sysroot_llvm_bin_cache = None
+            return None
+        import platform
+        sysroot = proc.stdout.strip()
+        host = platform.machine() + "-unknown-linux-gnu"
+        bindir = os.path.join(sysroot, "lib", "rustlib", host, "bin")
+        if os.path.isdir(bindir):
+            _rust_sysroot_llvm_bin_cache = bindir
+            return bindir
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    _rust_sysroot_llvm_bin_cache = None
+    return None
+
 logger = logging.getLogger(__name__)
+
+
+def _rust_profdata_candidates() -> tuple[str, ...]:
+    """Profdata candidates with the Rust sysroot's tool first."""
+    bindir = _rust_sysroot_llvm_bin()
+    if bindir:
+        sysroot_tool = os.path.join(bindir, "llvm-profdata")
+        if os.path.isfile(sysroot_tool):
+            return (sysroot_tool, *_LLVM_PROFDATA_CANDIDATES)
+    return _LLVM_PROFDATA_CANDIDATES
+
+
+def _rust_cov_candidates() -> tuple[str, ...]:
+    """Cov candidates with the Rust sysroot's tool first."""
+    bindir = _rust_sysroot_llvm_bin()
+    if bindir:
+        sysroot_tool = os.path.join(bindir, "llvm-cov")
+        if os.path.isfile(sysroot_tool):
+            return (sysroot_tool, *_LLVM_COV_CANDIDATES)
+    return _LLVM_COV_CANDIDATES
 
 REGEX_URL = "https://github.com/rust-lang/regex.git"
 REGEX_TAG = "1.10.6"
@@ -183,7 +238,7 @@ def _build_and_run(tag_dir: Path, target_dir: Path, profdata: Path) -> None:
         )
         raise RuntimeError(msg)
 
-    profdata_tool = _resolve(_LLVM_PROFDATA_CANDIDATES)
+    profdata_tool = _resolve(_rust_profdata_candidates())
     run_tool(
         [profdata_tool, "merge", "-sparse", *(str(p) for p in profraw),
          "-o", str(profdata)],
@@ -237,7 +292,7 @@ def _liveness_from_llvm_cov(
     """Run ``llvm-cov export`` → JSON, demangle Rust names via nm-map
     (covers v0 + legacy) with c++filt as fallback, reduce to qualified-
     no-args form, filter to regex's surface."""
-    cov_tool = _resolve(_LLVM_COV_CANDIDATES)
+    cov_tool = _resolve(_rust_cov_candidates())
     proc = run_tool(
         [cov_tool, "export", f"--instr-profile={profdata}", str(binary)],
         check=False, timeout=300,
