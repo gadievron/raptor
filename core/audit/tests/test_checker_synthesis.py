@@ -12,6 +12,7 @@ import pytest
 from core.audit.checker_synthesis import (
     SynthesisResult,
     _build_llm_callable,
+    _is_prefilter_sourced,
     _seed_from_outcome,
     synthesize_and_sweep,
 )
@@ -840,3 +841,55 @@ class TestSageReplayRuleIdShape(TestSageReplayRule):
             )
         assert replay is not None
         assert replay[1] == "sage:src_auth.c.check_pw.CWE-89.1"
+
+
+# ---------------------------------------------------------------------------
+# _is_prefilter_sourced
+# ---------------------------------------------------------------------------
+
+
+class TestIsPrefilterSourced:
+    def test_prefilter_only(self):
+        assert _is_prefilter_sourced("prefilter:unbounded-strcpy") is True
+
+    def test_multiple_prefilter_parts(self):
+        assert _is_prefilter_sourced(
+            "prefilter:unbounded-strcpy+prefilter:format-string",
+        ) is True
+
+    def test_mixed_with_tool(self):
+        assert _is_prefilter_sourced(
+            "prefilter:unbounded-strcpy+joern:guard-dominance",
+        ) is False
+
+    def test_tool_only(self):
+        assert _is_prefilter_sourced("semgrep:rule-123") is False
+
+    def test_empty(self):
+        assert _is_prefilter_sourced("") is False
+
+    def test_prefilter_plus_validate(self):
+        assert _is_prefilter_sourced(
+            "prefilter:unbounded-strcpy+validate:confirmed-history",
+        ) is False
+
+
+class TestPrefilterSkipsSynthesis:
+    """synthesize_and_sweep returns None for prefilter-sourced findings."""
+
+    def test_skips_prefilter_sourced(self):
+        o = _StubOutcome(evidence_tool="prefilter:unbounded-strcpy")
+        result = synthesize_and_sweep(o, _StubConfig(), set())
+        assert result is None
+
+    def test_does_not_skip_tool_confirmed(self):
+        """joern-confirmed evidence must pass the prefilter gate and
+        reach _seed_from_outcome (the next gate after prefilter)."""
+        o = _StubOutcome(evidence_tool="joern:guard-dominance")
+        with patch(
+            "core.audit.checker_synthesis._seed_from_outcome",
+            return_value=None,
+        ) as mock_seed:
+            result = synthesize_and_sweep(o, _StubConfig(), set())
+        assert result is None
+        mock_seed.assert_called_once_with(o)
