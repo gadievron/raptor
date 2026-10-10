@@ -41,6 +41,21 @@ MAX_ONDEMAND_SYNTHESIS_PER_RUN = 10
 # Non-claudecode providers ignore the kwarg (SDK-timeout governed).
 SYNTHESIS_TIMEOUT_S = 1800
 
+_PREFILTER_PREFIX = "prefilter:"
+
+
+def _is_prefilter_sourced(evidence_tool: str) -> bool:
+    """True when every mechanical part of evidence_tool is a prefilter stamp.
+
+    The prefilter is a deterministic codebase-wide scanner — it already
+    found every instance of the pattern it knows.  Synthesising an
+    LLM-generated rule to re-discover the same pattern is redundant.
+    """
+    parts = [p.strip() for p in evidence_tool.split("+") if p.strip()]
+    if not parts:
+        return False
+    return all(p.startswith(_PREFILTER_PREFIX) for p in parts)
+
 
 @dataclass
 class SynthesisResult:
@@ -456,6 +471,17 @@ def synthesize_and_sweep(
     """
     if synthesis_count >= max_per_run:
         logger.debug("synthesis cap reached (%d/%d)", synthesis_count, max_per_run)
+        return None
+
+    et = getattr(outcome, "evidence_tool", "") or ""
+    if _is_prefilter_sourced(et):
+        logger.debug(
+            "synthesis skipped for %s:%s — prefilter already covers "
+            "this pattern codebase-wide (%s)",
+            getattr(outcome, "file", "?"),
+            getattr(outcome, "function", "?"),
+            et,
+        )
         return None
 
     seed = _seed_from_outcome(outcome)
