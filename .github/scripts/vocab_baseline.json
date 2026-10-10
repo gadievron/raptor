@@ -356,6 +356,11 @@
     "count": 11,
     "kind": "alternation"
   },
+  "core/audit/collector.py::_NOISE_NAMES": {
+    "count": 21,
+    "kind": "literal",
+    "note": "noise-word filter for extract_weaknesses: language keywords, common verbs, and boolean literals stripped from counter text before function-name extraction via regex"
+  },
   "core/audit/compiler_sweep.py::_STOP_WORDS": {
     "count": 95,
     "kind": "literal"

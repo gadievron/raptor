@@ -344,7 +344,7 @@ if __name__ == "__main__":
     journal = Path(args.journal)
     ep: set[str] = set()
     if args.context_map:
-        cm = json.loads(Path(args.context_map).read_text())
+        cm = json.loads(Path(args.context_map).read_text())  # raw-open: operator CLI arg, not scanned-repo content
         from core.audit._util import extract_context_map_set
         ep = extract_context_map_set(cm, "entry_points")
 
@@ -354,7 +354,7 @@ if __name__ == "__main__":
     cg_path = journal / "call-graph.json"
     cg: dict[str, Any] = {}
     if cg_path.exists():
-        raw = json.loads(cg_path.read_text())
+        raw = json.loads(cg_path.read_text())  # raw-open: reads this run's own output, not scanned-repo content
         if isinstance(raw, dict):
             for k, v in raw.items():
                 if isinstance(v, dict):
