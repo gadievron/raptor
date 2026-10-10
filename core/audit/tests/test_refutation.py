@@ -1478,6 +1478,57 @@ class TestRescueSelfRefuted:
         r = rescue_self_refuted(outcome)
         assert r is None
 
+    def test_rescues_cross_function_refutation(self):
+        """Refutation citing a cross-function guarantee → suspicious.
+
+        CWE-120 is NOT in _SELF_REFUTATION_CWES, but a cross-function
+        refutation is unverifiable from the local review alone — the
+        scope arm catches it regardless of CWE.
+        """
+        outcome = _Outcome(
+            status="clean",
+            hypotheses=[{
+                "mechanism": "CWE-120 strcpy overflow in parse_input",
+                "confidence": "refuted",
+                "counter": "the caller validates the format string length",
+                "counter_scope": "cross_function",
+            }],
+        )
+        r = rescue_self_refuted(outcome)
+        assert r is not None
+        assert r.gate == "anti_self_refutation"
+        assert r.demote_to == "suspicious"
+        assert "cross-function" in r.reason
+
+    def test_no_rescue_for_local_scope_non_race_cwe(self):
+        """Local-scope refutation on a non-race CWE stays clean."""
+        outcome = _Outcome(
+            status="clean",
+            hypotheses=[{
+                "mechanism": "CWE-120 buffer overflow in format handler",
+                "confidence": "refuted",
+                "counter": "the length is checked at line 42",
+                "counter_scope": "local",
+            }],
+        )
+        r = rescue_self_refuted(outcome)
+        assert r is None
+
+    def test_cross_function_not_rescued_when_tool_evidence(self):
+        """Tool already spoke — cross-function scope doesn't override."""
+        outcome = _Outcome(
+            status="clean",
+            evidence_tool="joern:taint",
+            hypotheses=[{
+                "mechanism": "CWE-120 overflow via strcpy",
+                "confidence": "refuted",
+                "counter": "caller caps the buffer",
+                "counter_scope": "cross_function",
+            }],
+        )
+        r = rescue_self_refuted(outcome)
+        assert r is None
+
 
 class TestRaceProtectedSelfRefutation:
     """A race-family self-refutation corroborated by mechanical lock
@@ -2041,6 +2092,19 @@ class TestDiagnoseRescue:
         )
         d = diagnose_rescue(outcome, negative_space=[self._RECEIPT])
         assert d["blocked_on"] == "no_matching_receipt_or_cwe"
+
+    def test_cross_function_scope_means_gate_would_fire(self):
+        from core.audit.refutation import diagnose_rescue
+        outcome = _Outcome(
+            status="clean",
+            hypotheses=[{
+                "mechanism": "CWE-120 strcpy overflow",
+                "confidence": "refuted",
+                "counter": "the caller validates the length",
+                "counter_scope": "cross_function",
+            }],
+        )
+        assert diagnose_rescue(outcome) is None
 
     def test_receipt_on_other_function_not_counted(self):
         from core.audit.refutation import diagnose_rescue

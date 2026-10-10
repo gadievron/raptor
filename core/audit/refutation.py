@@ -2817,6 +2817,24 @@ def rescue_self_refuted(
                 ),
                 demote_to="suspicious",
             )
+        # Cross-function scope: the refutation cites a guarantee
+        # from code outside the reviewed function ("the caller
+        # validates the format", "that helper caps the length").
+        # The reviewer never examined that code, so the claim is
+        # unverifiable from the local review alone — promote to
+        # suspicious so the sweep can dispatch a cross-function
+        # tool (Joern/CodeQL dataflow).
+        scope = str(h.get("counter_scope") or "").strip().lower()
+        if scope == "cross_function":
+            return RefutationVerdict(
+                gate="anti_self_refutation",
+                reason=(
+                    f"hypothesis '{mechanism[:80]}' refuted by "
+                    f"citing a cross-function guarantee the "
+                    f"review did not verify"
+                ),
+                demote_to="suspicious",
+            )
 
     return None
 
@@ -2910,6 +2928,9 @@ def diagnose_rescue(
                     "receipt": receipt,
                     **base,
                 }
+            return None
+        scope = str(h.get("counter_scope") or "").strip().lower()
+        if scope == "cross_function":
             return None
     return {"blocked_on": "no_matching_receipt_or_cwe", **base}
 
