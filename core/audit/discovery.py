@@ -1158,6 +1158,7 @@ if __name__ == "__main__":
 
     checklist_path = run_dir / "checklist.json"
     checklist = load_json(checklist_path, strict=True)
+    assert isinstance(checklist, dict)
 
     context_map = load_json(run_dir / "context-map.json")
 
