@@ -2046,6 +2046,7 @@ _SCAN_DEGENERATE_MEMBERS: frozenset[str] = frozenset({
     "core/analysis/taint_multi_lang.py :: assert_re",
     "core/analysis/taint_multi_lang.py :: named_re",
     "core/audit/corpus/rule_eval.py :: _CWE_RE",
+    "core/audit/discovery.py :: ```(?:json)?[ \\t]*\\n(.+?)```",
     "core/audit/negative_space.py :: assign_re",
     "core/audit/prefilter.py :: `[^`]*\\$",
     "core/audit/release_order.py :: assign_re",
