@@ -70,7 +70,7 @@
    "digests": [
     "2da2d1408533"
    ],
-   "exp": 1.01,
+   "exp": 1.11,
    "verdict": "linear"
   },
   "core/analysis/taint_multi_lang.py\u001fassert_re": {
@@ -154,7 +154,7 @@
    "digests": [
     "7bac92ef17b0"
    ],
-   "exp": 1.01,
+   "exp": 1.06,
    "verdict": "linear"
   },
   "core/audit/auth_witnesses.py\u001f_GETTER_DECL_RE": {
@@ -175,7 +175,7 @@
    "digests": [
     "c8f8ffc78d2c"
    ],
-   "exp": 1.0,
+   "exp": 1.06,
    "verdict": "linear"
   },
   "core/audit/binary_layer0.py\u001f_CALLEE_RE": {
@@ -210,7 +210,7 @@
    "digests": [
     "65ffe561ec4e"
    ],
-   "exp": 1.0,
+   "exp": 1.06,
    "verdict": "linear"
   },
   "core/audit/caller_lock.py\u001f\\b(?:X|X)\\w*\\s*\\(": {
@@ -287,7 +287,7 @@
    "digests": [
     "67411e1bdce8"
    ],
-   "exp": 1.0,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/audit/cocci_flow.py\u001f[`'\\\"]?\\b([A-Za-z_][A-Za-z0-9_]*)\\(\\)?[`": {
@@ -318,11 +318,18 @@
    "exp": 1.0,
    "verdict": "linear"
   },
+  "core/audit/collector.py\u001f_FUNC_NAME_RE": {
+   "digests": [
+    "c974e41a964d"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
   "core/audit/compile_probe.py\u001f_BUILTIN_EXPR_RE": {
    "digests": [
     "aa7b1d8b05bf"
    ],
-   "exp": 1.0,
+   "exp": 1.02,
    "verdict": "linear"
   },
   "core/audit/compile_probe.py\u001f_DETERMINE_BUILTIN_RE": {
@@ -350,7 +357,7 @@
    "digests": [
     "469705e1436b"
    ],
-   "exp": 1.0,
+   "exp": 1.02,
    "verdict": "linear"
   },
   "core/audit/compiler_sweep.py\u001f_PP_SUPPRESSION_RE": {
@@ -504,7 +511,7 @@
    "digests": [
     "be592db3fa7b"
    ],
-   "exp": 0.99,
+   "exp": 1.04,
    "verdict": "linear"
   },
   "core/audit/condition_smt.py\u001f_GO_ATOI_RE": {
@@ -610,7 +617,7 @@
    "digests": [
     "a56ab90d3d8a"
    ],
-   "exp": 0.99,
+   "exp": 1.07,
    "verdict": "linear"
   },
   "core/audit/condition_smt.py\u001fwrapper_re": {
@@ -732,6 +739,13 @@
    "exp": 1.0,
    "verdict": "linear"
   },
+  "core/audit/discovery.py\u001f```(?:json)?[ \\t]*\\n(.+?)```": {
+   "digests": [
+    "b6b44de44e78"
+   ],
+   "exp": null,
+   "verdict": "noattack"
+  },
   "core/audit/expanded_semgrep.py\u001f_MACRO_USE_RE": {
    "digests": [
     "340c470c0081"
@@ -799,7 +813,7 @@
    "digests": [
     "7ebd359a4d82"
    ],
-   "exp": 1.01,
+   "exp": 1.06,
    "verdict": "linear"
   },
   "core/audit/integer_truncation_checker.py\u001f_ALLOC_RE": {
@@ -841,7 +855,7 @@
    "digests": [
     "f7b4a925ef64"
    ],
-   "exp": 1.0,
+   "exp": 1.07,
    "verdict": "linear"
   },
   "core/audit/joern_verify.py\u001f[`'\\\"]?\\b([A-Za-z_][A-Za-z0-9_]*)[`'\\\"]?": {
@@ -982,7 +996,7 @@
    "digests": [
     "e1f4089e2628"
    ],
-   "exp": 1.0,
+   "exp": 1.02,
    "verdict": "linear"
   },
   "core/audit/parser_shape.py\u001f_ERROR_PATH_RE": {
@@ -1059,21 +1073,21 @@
    "digests": [
     "0d3f53af0a22"
    ],
-   "exp": 0.99,
+   "exp": 1.06,
    "verdict": "linear"
   },
   "core/audit/precondition_check.py\u001f\\b\\w{0,256}len\\w*\\s*[<>=!]+": {
    "digests": [
     "d017fec15766"
    ],
-   "exp": 1.0,
+   "exp": 1.07,
    "verdict": "linear"
   },
   "core/audit/precondition_check.py\u001f\\b\\w{0,256}size\\w*\\s*[<>=!]+": {
    "digests": [
     "451711e8fcea"
    ],
-   "exp": 1.01,
+   "exp": 1.06,
    "verdict": "linear"
   },
   "core/audit/precondition_check.py\u001f\\bexecv\\w*\\s*\\(": {
@@ -1087,7 +1101,7 @@
    "digests": [
     "89e3b1ffe284"
    ],
-   "exp": 1.0,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/audit/prefilter.py\u001f=~\\s*s/(?:\\\\.|[^/\\\\\\n$])*\\$(?:\\\\.|[^/\\\\\\": {
@@ -1150,7 +1164,7 @@
    "digests": [
     "5182f1664553"
    ],
-   "exp": 1.0,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/audit/prefilter.py\u001f_WRAPPER_REF_TOKEN_RE": {
@@ -1234,7 +1248,7 @@
    "digests": [
     "6791b0fd26a9"
    ],
-   "exp": 1.02,
+   "exp": 1.06,
    "verdict": "linear"
   },
   "core/audit/ptr_lifecycle.py\u001f_RCU_DEREF_RE": {
@@ -1247,6 +1261,13 @@
   "core/audit/ptr_lifecycle.py\u001fcall_re": {
    "digests": [
     "a323d32174b9"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/refutation.py\u001f_EXTERNAL_SYMBOL_RE": {
+   "digests": [
+    "a51c462c44f9"
    ],
    "exp": 1.0,
    "verdict": "linear"
@@ -1269,7 +1290,7 @@
    "digests": [
     "87a22b640da8"
    ],
-   "exp": 1.0,
+   "exp": 1.02,
    "verdict": "linear"
   },
   "core/audit/release_order.py\u001f[\\w\\*\\s]\\b([A-Za-z_]\\w*)\\s*[,)]": {
@@ -1311,7 +1332,7 @@
    "digests": [
     "a0cc73423185"
    ],
-   "exp": 1.04,
+   "exp": 1.07,
    "verdict": "linear"
   },
   "core/audit/return_contracts.py\u001fdecl_re": {
@@ -1395,7 +1416,7 @@
    "digests": [
     "2b45a83c9d10"
    ],
-   "exp": 1.0,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/audit/sibling_analysis.py\u001f_NULL_GUARD_RE": {
@@ -1409,7 +1430,7 @@
    "digests": [
     "2cde3d41b296"
    ],
-   "exp": 1.0,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/audit/spec_inference.py\u001fvar_match": {
@@ -1634,7 +1655,7 @@
    "digests": [
     "e082325c8dd4"
    ],
-   "exp": 1.0,
+   "exp": 1.04,
    "verdict": "linear"
   },
   "core/dataflow/injection_prescreen.py\u001f_PY_STRICT_SUB": {
@@ -1655,7 +1676,7 @@
    "digests": [
     "5d3943e2b96d"
    ],
-   "exp": 1.0,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/dataflow/smt_barrier.py\u001f\\bfunction\\s*(?:\\*\\s*)?(?:\\w+\\s*)?\\(|=>\\": {
@@ -1711,7 +1732,7 @@
    "digests": [
     "37de29a408f1"
    ],
-   "exp": 1.99,
+   "exp": 1.98,
    "verdict": "adjudicated"
   },
   "core/inventory/extractors.py\u001fPATTERNS[1]": {
@@ -1865,7 +1886,7 @@
    "digests": [
     "44a2e5aa9242"
    ],
-   "exp": 1.02,
+   "exp": 1.03,
    "verdict": "linear"
   },
   "core/inventory/translation_view.py\u001f_CALL_IN_BODY": {
@@ -1879,14 +1900,14 @@
    "digests": [
     "5f33a892b9ad"
    ],
-   "exp": 2.0,
+   "exp": 2.01,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[2]": {
    "digests": [
     "74f670123f14"
    ],
-   "exp": 2.01,
+   "exp": 2.02,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[3]": {
@@ -1907,7 +1928,7 @@
    "digests": [
     "88e933d23e53"
    ],
-   "exp": 2.0,
+   "exp": 2.01,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[6]": {
@@ -1921,14 +1942,14 @@
    "digests": [
     "8eba6201f599"
    ],
-   "exp": 2.0,
+   "exp": 1.99,
    "verdict": "adjudicated"
   },
   "core/license/detector.py\u001f(?:please\\s+)?see\\s+(?:the\\s+file\\s+)?((": {
    "digests": [
     "439e5df59d15"
    ],
-   "exp": 1.0,
+   "exp": 1.02,
    "verdict": "linear"
   },
   "core/license/detector.py\u001f_ANDOR_SPLIT_RE_CI": {
@@ -2035,7 +2056,7 @@
    "digests": [
     "036baa0ec248"
    ],
-   "exp": 1.0,
+   "exp": 0.98,
    "verdict": "linear"
   },
   "core/oci/auth.py\u001f_WWW_AUTH_PARAM_RE": {
@@ -2541,7 +2562,7 @@
    "digests": [
     "db21eb0cc688"
    ],
-   "exp": 1.98,
+   "exp": 2.01,
    "verdict": "adjudicated"
   },
   "packages/ghidra/ebpf_probe.py\u001fPROBE_OBJECTS[70]": {
@@ -2730,7 +2751,7 @@
    "digests": [
     "e20a6500fcbb"
    ],
-   "exp": 1.0,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "packages/sca/supply_chain/gha_secret_flow.py\u001findir_re": {

@@ -1,6 +1,6 @@
 {
   "core/analysis/_reach_cache.py::_GRAMMAR_MODULES": {
-    "count": 15,
+    "count": 14,
     "kind": "literal",
     "note": "closed toolchain-module taxonomy: the tree-sitter grammar modules the call-graph extractors probe (mirrors the _import_grammar call sites in core/inventory/call_graph.py); availability is folded into the cache fingerprint so extraction-quality changes invalidate cached indices \u2014 infrastructure module names, not a learned name vocabulary"
   },
@@ -358,8 +358,7 @@
   },
   "core/audit/collector.py::_NOISE_NAMES": {
     "count": 21,
-    "kind": "literal",
-    "note": "noise-word filter for extract_weaknesses: language keywords, common verbs, and boolean literals stripped from counter text before function-name extraction via regex"
+    "kind": "literal"
   },
   "core/audit/compiler_sweep.py::_STOP_WORDS": {
     "count": 95,
@@ -598,6 +597,10 @@
     "count": 11,
     "kind": "literal",
     "note": "disasm_xcheck receipt record shape (journal-row schema keys, not a name vocabulary; same class as the baselined manifest/to_dict shapes)"
+  },
+  "core/audit/discovery.py::_STATE_NAME_RE": {
+    "count": 10,
+    "kind": "alternation"
   },
   "core/audit/edge_obligations.py::build_edge_obligations": {
     "count": 10,
@@ -1235,7 +1238,7 @@
     "note": "tool-dependency registry keys (doctor/banner); crossed the seed threshold when the perl entry (perlasm generated-asm inventory) was added - not a name vocabulary"
   },
   "core/config/__init__.py::_LLM_AGGREGATOR_KEYS": {
-    "count": 10,
+    "count": 11,
     "kind": "literal",
     "note": "aggregator/routing provider API-key env vars splatted into LLM_API_KEY_VARS (infrastructure constants, not a learnable name vocabulary)"
   },
@@ -1265,7 +1268,7 @@
     "note": "closed record schema, not a name vocabulary: the checkpoint hysteresis state record written to the run dir (the exact fields _load_state validates on read; the two sides must stay in lockstep)"
   },
   "core/coverage/journal_mac.py::_GENERATION_VOCABULARY": {
-    "count": 49,
+    "count": 50,
     "kind": "literal",
     "note": "shipped-generation schema manifest for the journal-row MAC verifier: the enumerated extra-key vocabulary each provenance generation is allowed to carry (covered-additive-field invariant - a row with keys outside its generation's set never verifies via the raw form); persistence schema keys in lockstep with the row writers, not a learned name vocabulary"
   },
@@ -1536,11 +1539,11 @@
     "note": "allowlist of RAPTOR's own run-lifecycle command names that hold LLM quota mid-run (the sibling-observation classifier; includes forward-compat members that cannot occur on the ledger yet \u2014 rationale inline), not a learned name vocabulary; same class as core/run/provenance.py::_DETERMINISTIC_COMMANDS"
   },
   "core/llm/dispatcher/auth.py::__init__": {
-    "count": 19,
+    "count": 21,
     "kind": "literal"
   },
   "core/llm/dispatcher/auth.py::build_rules": {
-    "count": 15,
+    "count": 17,
     "kind": "literal"
   },
   "core/llm/providers.py::_TRANSPORT_EXC_MODULE_ROOTS": {
@@ -2073,7 +2076,7 @@
     "note": "graph schema node-kind enum (entry_point/sink/function/...) \u2014 fixed taxonomy for the understand graph, not target API names"
   },
   "libexec/raptor-audit::_run_config_from_args": {
-    "count": 43,
+    "count": 44,
     "kind": "literal",
     "note": "serialised run-option field names for audit-run-config.json (same-run resume contract) - CLI flag surface, not a name vocabulary"
   },

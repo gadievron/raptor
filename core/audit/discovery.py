@@ -573,10 +573,10 @@ def _parse_findings(
     # Extract JSON from code fences — take the last fenced block
     # (LLMs commonly emit preamble text before the fence).
     _fence_matches = list(
-        re.finditer(r"```(?:json)?\s*\n(.*?)(?:\n\s*)?```", text, re.DOTALL),
+        re.finditer(r"```(?:json)?[ \t]*\n(.+?)```", text, re.DOTALL),
     )
     if _fence_matches:
-        text = _fence_matches[-1].group(1)
+        text = _fence_matches[-1].group(1).strip()
     elif text.startswith("```"):
         lines = text.splitlines()
         lines = [l for l in lines if not l.startswith("```")]
@@ -1129,7 +1129,8 @@ if __name__ == "__main__":
     import argparse
     import sys
 
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    from core.logging import configure_cli_logging
+    configure_cli_logging(logging.INFO, fmt="%(message)s")
 
     parser = argparse.ArgumentParser(
         description="Cross-scope contract discovery engine",
@@ -1153,13 +1154,12 @@ if __name__ == "__main__":
     run_dir = Path(args.run_dir)
     target = Path(args.target)
 
-    checklist_path = run_dir / "checklist.json"
-    # raw-open: CLI reads run-dir artifact, not target source
-    checklist = json.loads(checklist_path.read_text())
+    from core.json.utils import load_json
 
-    cm_path = run_dir / "context-map.json"
-    # raw-open: CLI reads run-dir artifact, not target source
-    context_map = json.loads(cm_path.read_text()) if cm_path.exists() else {}
+    checklist_path = run_dir / "checklist.json"
+    checklist = load_json(checklist_path, strict=True)
+
+    context_map = load_json(run_dir / "context-map.json")
 
     entry_points: set[str] = set()
     if context_map:

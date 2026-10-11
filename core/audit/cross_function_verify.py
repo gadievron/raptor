@@ -687,7 +687,9 @@ def cross_function_verify(
             continue
         try:
             if vname == "caller_constraint":
-                verdict = fn(function_name, hypothesis, server, counter=counter)
+                verdict = _verify_caller_constraint(
+                    function_name, hypothesis, server, counter=counter,
+                )
             else:
                 verdict = fn(function_name, hypothesis, server)
             if verdict is not None and verdict.verified:
