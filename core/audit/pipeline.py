@@ -131,6 +131,10 @@ class AuditPipelineOpts:
     # Cross-function edge obligations (--edges): flag-gated review of
     # tier-1 edge contracts + tier-2 folded edge verdicts.
     edges: bool = False
+    # Cross-scope discovery (contract perspective): post-structured-pass
+    # analysis that finds contract mismatches across module boundaries.
+    open_discovery: bool = False
+    discovery_budget_fraction: float = 0.20
     # Mid-run journal checkpoint tri-state: True/False = explicit
     # per-run choice (--no-journal-checkpoint sets False); None =
     # defer to the active project's 'journal-checkpoint' setting
@@ -443,6 +447,8 @@ def _build_orchestrator_config(
         repo_trusted=_resolve_repo_trust(opts),
         verdict_reuse=opts.verdict_reuse,
         edges=opts.edges,
+        open_discovery=opts.open_discovery,
+        discovery_budget_fraction=opts.discovery_budget_fraction,
         journal_checkpoint=_resolve_journal_checkpoint(opts),
         force=opts.force,
         prefilter_skip=opts.prefilter_skip,

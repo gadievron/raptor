@@ -940,6 +940,8 @@ class OrchestratorConfig:
     # function loop, and fold tier-2 edge contracts into caller
     # reviews. Default off.
     edges: bool = False
+    open_discovery: bool = False
+    discovery_budget_fraction: float = 0.20
     # Mid-run journal checkpoint (core.coverage.journal_checkpoint):
     # when the journal's largest shard crosses the retained-size
     # trigger, quiesce the review workers and compact (dedup +
@@ -10447,6 +10449,79 @@ def _run_audit_body(
                     plf_func,
                     exc_info=True,
                 )
+
+    # --- Cross-scope contract discovery (--open-discovery) ---
+    if config.open_discovery:
+        try:
+            from .discovery import (
+                build_seam_bundles,
+                run_contract_discovery,
+                write_discovery_weaknesses,
+            )
+
+            _disc_entry_points: set[str] = set()
+            if context_map:
+                _disc_entry_points = entry_points
+
+            _disc_weakness_fids: set[str] = set()
+            try:
+                from .composition import build_weakness_inventory
+                _disc_inv = build_weakness_inventory(config.out_dir)
+                _disc_weakness_fids = {w.fid for w in _disc_inv}
+            except Exception:
+                pass
+
+            _disc_bundles = build_seam_bundles(
+                checklist,
+                context_map,
+                _disc_entry_points,
+                target_path=config.target_path,
+                weakness_fids=_disc_weakness_fids,
+            )
+            if _disc_bundles:
+                _disc_budget = (
+                    (config.max_cost_usd or 50.0)
+                    * config.discovery_budget_fraction
+                )
+
+                _disc_client = _run_llm_client(config)
+
+                def _disc_review_fn(
+                    system: str, prompt: str,
+                ) -> tuple[str, float]:
+                    resp = _disc_client.generate(
+                        prompt, system_prompt=system,
+                    )
+                    return resp.content, resp.cost
+
+                _disc_results = run_contract_discovery(
+                    _disc_bundles,
+                    review_fn=_disc_review_fn,
+                    max_cost_usd=_disc_budget,
+                )
+                _disc_run_id = _resolved_run_id(config.out_dir)
+                _disc_total_w = 0
+                for dr in _disc_results:
+                    callee_fid = dr.seam_or_field.split("->")[-1].strip()
+                    if callee_fid and dr.weaknesses:
+                        write_discovery_weaknesses(
+                            config.out_dir,
+                            callee_fid,
+                            dr.weaknesses,
+                            run_id=_disc_run_id,
+                            cost_usd=dr.cost_usd,
+                        )
+                        _disc_total_w += len(dr.weaknesses)
+                if _disc_total_w:
+                    logger.info(
+                        "open discovery: %d contract weaknesses from "
+                        "%d seams",
+                        _disc_total_w, len(_disc_results),
+                    )
+        except Exception:
+            logger.warning(
+                "open discovery failed", exc_info=True,
+            )
 
     # --- Structural-receipt rescue composition (post-loop) ---
     #
