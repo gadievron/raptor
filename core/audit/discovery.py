@@ -970,7 +970,7 @@ def _parse_sm_findings(
     if _fence_matches:
         text = _fence_matches[-1].group(1).strip()
     elif text.startswith("```"):
-        lines = text.split("\n")
+        lines = text.splitlines()
         lines = [ln for ln in lines if not ln.startswith("```")]
         text = "\n".join(lines)
 
