@@ -1,11 +1,10 @@
-"""Cross-scope discovery engine (B1a contract perspective).
+"""Cross-scope discovery engine.
 
 Post-structured-pass analysis that finds contract mismatches between
-callers and callees across module boundaries.  Produces weakness
+callers and callees across module boundaries, and state-machine
+violations across cross-file field handlers.  Produces weakness
 records in the same schema as the structured pass, consumable by the
 composition engine and verification pipeline.
-
-Build 1 of the Open Discovery plan (A5 bundle builder + B1a).
 """
 
 from __future__ import annotations
@@ -28,11 +27,22 @@ DEFAULT_MAX_SEAMS = 500
 DEFAULT_TOKEN_BUDGET = 8000
 CALL_SITE_CONTEXT_LINES = 2
 
-_INPUT_NAME_RE = re.compile(
-    r"(recv|read|parse|decode|process|handle)"
-    r".*(input|packet|request|message|buffer|data|frame|query)",
+_INPUT_PREFIX_RE = re.compile(
+    r"(?:recv|read|parse|decode|process|handle)", re.IGNORECASE,
+)
+_INPUT_SUFFIX_RE = re.compile(
+    r"(?:input|packet|request|message|buffer|data|frame|query)", re.IGNORECASE,
+)
+
+_STATE_NAME_RE = re.compile(
+    r"(state|status|phase|mode|flag[s]?|is_|has_|enabled|active|locked)",
     re.IGNORECASE,
 )
+
+DEFAULT_SM_MIN_FILES = 2
+DEFAULT_SM_MIN_HANDLERS = 3
+DEFAULT_SM_MAX_BUNDLES = 50
+HANDLER_CONTEXT_LINES = 10
 
 # Single-character or very short names that are almost always macros,
 # aliases, or wrappers — not interesting contract surfaces.
@@ -62,6 +72,29 @@ class SeamBundle:
     caller_source: str
     callee_source: str
     call_site_snippet: str
+    annotation: str
+    priority_score: float
+    priority_reason: str
+
+
+@dataclass
+class HandlerSite:
+    """One access site for a state field."""
+
+    file: str
+    function: str
+    line: int
+    code: str
+    access: str  # "read" or "write"
+    context: str  # surrounding source lines
+
+
+@dataclass
+class StateMachineBundle:
+    """All handlers of one state field, packaged for LLM review."""
+
+    field_name: str
+    handler_sites: list[HandlerSite]
     annotation: str
     priority_score: float
     priority_reason: str
@@ -203,7 +236,7 @@ def _score_seam(
         score += 1
         reasons.append("cross-directory")
 
-    if _INPUT_NAME_RE.search(callee_name):
+    if _INPUT_PREFIX_RE.search(callee_name) and _INPUT_SUFFIX_RE.search(callee_name):
         score += 2
         reasons.append("input-handler-name")
 
@@ -373,11 +406,13 @@ def _read_function_source(
     if text is None:
         return None
 
-    lines = text.splitlines(keepends=True)
+    from core.source.lines import split_lines
+
+    lines = split_lines(text)
     start = max(0, func_info["line_start"] - 1)
     end = func_info.get("line_end") or len(lines)
     func_lines = lines[start:end]
-    source = "".join(func_lines)
+    source = "\n".join(func_lines)
 
     if estimate_tokens(source) <= max_tokens:
         return source
@@ -402,7 +437,9 @@ def _extract_call_site_snippet(
     if not text:
         return ""
 
-    lines = text.splitlines()
+    from core.source.lines import split_lines
+
+    lines = split_lines(text)
     start = max(0, caller_start - 1)
     end = caller_end or len(lines)
     caller_lines = lines[start:end]
@@ -664,6 +701,393 @@ def run_contract_discovery(
     return results
 
 
+# ── state machine discovery ───────────────────────────────────────
+
+def build_state_machine_bundles(
+    field_census: dict[str, Any],
+    *,
+    target_path: Path,
+    min_files: int = DEFAULT_SM_MIN_FILES,
+    min_handlers: int = DEFAULT_SM_MIN_HANDLERS,
+    max_bundles: int = DEFAULT_SM_MAX_BUNDLES,
+    token_budget: int = DEFAULT_TOKEN_BUDGET,
+) -> list[StateMachineBundle]:
+    """Select cross-file state fields, read handler sites, budget-fit."""
+    fields = field_census.get("fields", {})
+    if not fields:
+        logger.info("discovery: field census empty, no state machine bundles")
+        return []
+
+    candidates: list[tuple[float, str, dict[str, Any]]] = []
+
+    for name, data in fields.items():
+        writes = data.get("writes", [])
+        reads = data.get("reads", [])
+        all_sites = writes + reads
+        if len(all_sites) < min_handlers:
+            continue
+        file_set = {s.get("file", "") for s in all_sites} - {""}
+        if len(file_set) < min_files:
+            continue
+        score, reason = _score_field(name, writes, reads, file_set)
+        candidates.append((-score, name, data))
+
+    candidates.sort()
+
+    bundles: list[StateMachineBundle] = []
+    for neg_score, name, data in candidates[:max_bundles]:
+        bundle = _try_build_sm_bundle(
+            name, data, target_path, token_budget,
+            -neg_score,
+        )
+        if bundle is not None:
+            bundles.append(bundle)
+
+    logger.info(
+        "discovery: %d fields → %d state machine bundles (cap %d)",
+        len(fields), len(bundles), max_bundles,
+    )
+    return bundles
+
+
+def _score_field(
+    name: str,
+    writes: list[dict[str, Any]],
+    reads: list[dict[str, Any]],
+    file_set: set[str],
+) -> tuple[float, str]:
+    """Score a state field for priority."""
+    score = 0.0
+    reasons: list[str] = []
+
+    if _STATE_NAME_RE.search(name):
+        score += 2
+        reasons.append("state-name")
+
+    write_files = {s.get("file", "") for s in writes} - {""}
+    read_files = {s.get("file", "") for s in reads} - {""}
+    if write_files and read_files and write_files != read_files:
+        score += 2
+        reasons.append("cross-file-rw")
+
+    if len(file_set) >= 4:
+        score += 1
+        reasons.append(f"spread={len(file_set)}")
+
+    return score, "; ".join(reasons) if reasons else "cross-file"
+
+
+def _try_build_sm_bundle(
+    field_name: str,
+    field_data: dict[str, Any],
+    target_path: Path,
+    token_budget: int,
+    score: float,
+) -> StateMachineBundle | None:
+    """Build a StateMachineBundle from field census data."""
+    writes = field_data.get("writes", [])
+    reads = field_data.get("reads", [])
+
+    handler_sites: list[HandlerSite] = []
+    total_tokens = 0
+
+    for access_type, sites in [("write", writes), ("read", reads)]:
+        for site in sites:
+            file_path = site.get("file", "")
+            line = site.get("line", 0)
+            function = site.get("function", "")
+            code = site.get("code", "")
+            if not file_path or not line:
+                continue
+
+            context = _read_handler_context(
+                target_path / file_path, line,
+            )
+
+            hs = HandlerSite(
+                file=file_path,
+                function=function,
+                line=line,
+                code=code,
+                access=access_type,
+                context=context,
+            )
+            handler_sites.append(hs)
+            total_tokens += estimate_tokens(context)
+
+            if total_tokens > token_budget:
+                break
+        if total_tokens > token_budget:
+            break
+
+    if not handler_sites:
+        return None
+
+    _, reason = _score_field(
+        field_name, writes, reads,
+        {s.file for s in handler_sites},
+    )
+    annotation = _render_sm_annotation(field_name, handler_sites)
+    return StateMachineBundle(
+        field_name=field_name,
+        handler_sites=handler_sites,
+        annotation=annotation,
+        priority_score=score,
+        priority_reason=reason,
+    )
+
+
+def _read_handler_context(
+    file_path: Path,
+    line: int,
+) -> str:
+    """Read HANDLER_CONTEXT_LINES around a handler site."""
+    from core.audit.context import _read_target_text
+
+    text = _read_target_text(file_path)
+    if not text:
+        return ""
+
+    from core.source.lines import split_lines
+
+    lines = split_lines(text)
+    start = max(0, line - 1 - HANDLER_CONTEXT_LINES)
+    end = min(len(lines), line + HANDLER_CONTEXT_LINES)
+    return "\n".join(
+        f"{j + 1}: {lines[j]}" for j in range(start, end)
+    )
+
+
+def _render_sm_annotation(
+    field_name: str,
+    handler_sites: list[HandlerSite],
+) -> str:
+    """Render the structural annotation for a state machine bundle."""
+    files = sorted({s.file for s in handler_sites})
+
+    parts = [
+        f"## State machine analysis: field `{field_name}` "
+        f"across {len(files)} files",
+        "",
+        f"**Handlers:** {len(handler_sites)} sites "
+        f"({sum(1 for s in handler_sites if s.access == 'write')} writes, "
+        f"{sum(1 for s in handler_sites if s.access == 'read')} reads)",
+        "",
+    ]
+
+    for site in handler_sites:
+        label = "(W)" if site.access == "write" else "(R)"
+        lang = _detect_lang(site.file)
+        parts.extend([
+            f"### {label} {site.file}:{site.function} (line {site.line})",
+            f"```{lang}",
+            site.context,
+            "```",
+            "",
+        ])
+
+    return "\n".join(parts)
+
+
+STATE_MACHINE_PROMPT_TEMPLATE = """\
+Here are all handlers that read or write the field `{field_name}` \
+across {n_files} files.
+
+Each handler is shown with its surrounding context.  Handlers are \
+labelled (R) for read and (W) for write.
+
+{annotation}
+{concurrency_hint}
+Analyse the state machine:
+
+1. What are the valid states and transitions?
+2. What happens if handler B fires before handler A completes?
+3. Are there reachable states that shouldn't exist?
+4. Is there a handler that writes without checking the current value?
+5. Can an error path leave the field in an intermediate state?
+
+For each issue found, respond in JSON: {{ "findings": [ {{ \
+"guard_type": "...", "assumed_property": "...", "mechanism": "...", \
+"cwe_class": "...", "standalone": true/false }} ] }}
+
+If the state machine is sound, respond: {{ "findings": [] }}
+"""
+
+
+_HINT_SINGLE_THREADED = (
+    "\nThis target is single-threaded (no threading primitives detected). "
+    "Do NOT report race conditions, data races, or concurrency issues. "
+    "Do NOT use CWE-362. "
+    "Valid CWEs for single-threaded state machines: "
+    "CWE-908, CWE-457, CWE-662, CWE-672, CWE-416, CWE-401, CWE-476. "
+    "Focus on ordering, reachable-state, error-path cleanup, and "
+    "unguarded-write bugs only.\n"
+)
+_HINT_MULTI_THREADED = (
+    "\nThis target uses threads / concurrent execution. "
+    "Consider data races and unsynchronised access when relevant.\n"
+)
+
+
+def detect_single_threaded(target_path: Path | str) -> bool:
+    """Detect whether the target is single-threaded.
+
+    Uses the mechanical veto scanner from refutation — the same regex
+    that gates CWE-362 demotion in the structured pass.
+    """
+    from core.audit.refutation import _threading_primitives_seen
+
+    return not _threading_primitives_seen(target_path).seen
+
+
+def _build_sm_prompt(
+    bundle: StateMachineBundle,
+    concurrency_hint: str = "",
+) -> str:
+    files = sorted({s.file for s in bundle.handler_sites})
+    return STATE_MACHINE_PROMPT_TEMPLATE.format(
+        field_name=bundle.field_name,
+        n_files=len(files),
+        annotation=bundle.annotation,
+        concurrency_hint=concurrency_hint,
+    )
+
+
+_RACE_CWES = frozenset({"CWE-362", "CWE-366", "CWE-367"})
+
+
+def _parse_sm_findings(
+    raw: str,
+    bundle: StateMachineBundle,
+    *,
+    single_threaded: bool = False,
+) -> DiscoveryResult:
+    """Parse LLM JSON response into a DiscoveryResult for state machine."""
+    text = raw.strip()
+    _fence_matches = list(
+        re.finditer(r"```(?:json)?[ \t]*\n(.+?)```", text, re.DOTALL),
+    )
+    if _fence_matches:
+        text = _fence_matches[-1].group(1).strip()
+    elif text.startswith("```"):
+        lines = text.split("\n")
+        lines = [ln for ln in lines if not ln.startswith("```")]
+        text = "\n".join(lines)
+
+    result = DiscoveryResult(
+        source="state_machine",
+        seam_or_field=bundle.field_name,
+    )
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        logger.warning(
+            "discovery: failed to parse SM response for field %s",
+            bundle.field_name,
+        )
+        return result
+
+    findings = parsed.get("findings", [])
+    if not isinstance(findings, list):
+        return result
+
+    handler_files = sorted({s.file for s in bundle.handler_sites})
+
+    for f in findings:
+        if not isinstance(f, dict):
+            continue
+        gt = f.get("guard_type", "")
+        if not gt:
+            continue
+
+        cwe = f.get("cwe_class") or ""
+        if single_threaded and any(cwe.startswith(c) for c in _RACE_CWES):
+            continue
+
+        weakness = {
+            "property": f.get("assumed_property", ""),
+            "guard_type": gt,
+            "mechanism": f.get("mechanism", ""),
+            "cwe_class": cwe or None,
+            "source": "state_machine",
+            "guarded_by": [],
+        }
+        result.weaknesses.append(weakness)
+
+        hypothesis = {
+            "text": (
+                f"State machine gap: field `{bundle.field_name}` — "
+                f"{gt} — {f.get('mechanism', 'unspecified')}"
+            ),
+            "source": "state_machine",
+            "standalone": bool(f.get("standalone")),
+            "field": bundle.field_name,
+            "files": handler_files,
+        }
+        result.hypotheses.append(hypothesis)
+
+    return result
+
+
+def run_state_machine_discovery(
+    bundles: list[StateMachineBundle],
+    *,
+    review_fn: Callable[[str, str], tuple[str, float]],
+    max_cost_usd: float = 5.0,
+    single_threaded: bool = False,
+) -> list[DiscoveryResult]:
+    """Run the state machine prompt on each bundle."""
+    results: list[DiscoveryResult] = []
+    total_cost = 0.0
+    hint = _HINT_SINGLE_THREADED if single_threaded else _HINT_MULTI_THREADED
+
+    system = (
+        "You are a security auditor analysing cross-module state machines. "
+        "Respond only with the JSON object described in the prompt."
+    )
+
+    for bundle in bundles:
+        if total_cost >= max_cost_usd:
+            logger.info(
+                "discovery: SM cost cap reached ($%.2f >= $%.2f), "
+                "stopping after %d/%d bundles",
+                total_cost, max_cost_usd, len(results), len(bundles),
+            )
+            break
+
+        prompt = _build_sm_prompt(bundle, concurrency_hint=hint)
+        try:
+            response, cost = review_fn(system, prompt)
+        except Exception as exc:
+            from core.llm.client import is_budget_exceeded_error
+            if is_budget_exceeded_error(exc):
+                logger.info(
+                    "discovery: SM run budget exhausted after %d/%d bundles",
+                    len(results), len(bundles),
+                )
+                break
+            logger.exception(
+                "discovery: SM LLM call failed for field %s",
+                bundle.field_name,
+            )
+            continue
+
+        result = _parse_sm_findings(
+            response, bundle, single_threaded=single_threaded,
+        )
+        result.cost_usd = cost
+        total_cost += cost
+        results.append(result)
+
+    total_findings = sum(len(r.weaknesses) for r in results)
+    logger.info(
+        "discovery: SM %d bundles reviewed, %d findings, $%.2f total",
+        len(results), total_findings, total_cost,
+    )
+    return results
+
+
 # ── journal integration ─────────────────────────────────────────────
 
 def write_discovery_weaknesses(
@@ -730,15 +1154,12 @@ if __name__ == "__main__":
     target = Path(args.target)
 
     checklist_path = run_dir / "checklist.json"
-    if not checklist_path.exists():
-        print(f"error: {checklist_path} not found", file=sys.stderr)
-        sys.exit(1)
+    # raw-open: CLI reads run-dir artifact, not target source
     checklist = json.loads(checklist_path.read_text())
 
-    context_map = None
     cm_path = run_dir / "context-map.json"
-    if cm_path.exists():
-        context_map = json.loads(cm_path.read_text())
+    # raw-open: CLI reads run-dir artifact, not target source
+    context_map = json.loads(cm_path.read_text()) if cm_path.exists() else {}
 
     entry_points: set[str] = set()
     if context_map:
@@ -774,7 +1195,8 @@ if __name__ == "__main__":
             )
             caller_tok = estimate_tokens(b.caller_source)
             callee_tok = estimate_tokens(b.callee_source)
-            print(f"       caller={caller_tok}tok  callee={callee_tok}tok")
+            snippet_lines = len(b.call_site_snippet.splitlines()) if b.call_site_snippet else 0
+            print(f"       caller={caller_tok}tok  callee={callee_tok}tok  snippet={snippet_lines}L")
         total_tok = sum(
             estimate_tokens(b.caller_source) + estimate_tokens(b.callee_source)
             for b in bundles

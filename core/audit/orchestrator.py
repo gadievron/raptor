@@ -10455,7 +10455,10 @@ def _run_audit_body(
         try:
             from .discovery import (
                 build_seam_bundles,
+                build_state_machine_bundles,
+                detect_single_threaded,
                 run_contract_discovery,
+                run_state_machine_discovery,
                 write_discovery_weaknesses,
             )
 
@@ -10471,6 +10474,7 @@ def _run_audit_body(
             except Exception:
                 pass
 
+            _disc_run_id = _resolved_run_id(config.out_dir)
             _disc_bundles = build_seam_bundles(
                 checklist,
                 context_map,
@@ -10499,7 +10503,6 @@ def _run_audit_body(
                     review_fn=_disc_review_fn,
                     max_cost_usd=_disc_budget,
                 )
-                _disc_run_id = _resolved_run_id(config.out_dir)
                 _disc_total_w = 0
                 for dr in _disc_results:
                     callee_fid = dr.seam_or_field.split("->")[-1].strip()
@@ -10518,6 +10521,63 @@ def _run_audit_body(
                         "%d seams",
                         _disc_total_w, len(_disc_results),
                     )
+
+            # state machine discovery
+            _fc_path = config.out_dir / "field-census.json"
+            if _fc_path.exists():
+                _fc = json.loads(
+                    _fc_path.read_text()  # raw-open: RAPTOR run-dir artifact, not target source
+                )
+                _sm_bundles = build_state_machine_bundles(
+                    _fc,
+                    target_path=config.target_path,
+                )
+                if _sm_bundles:
+                    _sm_budget = (
+                        (config.max_cost_usd or 50.0)
+                        * config.discovery_budget_fraction
+                        * 0.3
+                    )
+                    if not _disc_bundles:
+                        _sm_budget = (
+                            (config.max_cost_usd or 50.0)
+                            * config.discovery_budget_fraction
+                        )
+
+                    _sm_st = detect_single_threaded(config.target_path)
+                    _sm_client = _run_llm_client(config)
+
+                    def _sm_review_fn(
+                        system: str, prompt: str,
+                    ) -> tuple[str, float]:
+                        resp = _sm_client.generate(
+                            prompt, system_prompt=system,
+                        )
+                        return resp.content, resp.cost
+
+                    _sm_results = run_state_machine_discovery(
+                        _sm_bundles,
+                        review_fn=_sm_review_fn,
+                        max_cost_usd=_sm_budget,
+                        single_threaded=_sm_st,
+                    )
+                    _sm_total_w = 0
+                    for sr in _sm_results:
+                        if sr.weaknesses:
+                            write_discovery_weaknesses(
+                                config.out_dir,
+                                sr.seam_or_field,
+                                sr.weaknesses,
+                                run_id=_disc_run_id,
+                                cost_usd=sr.cost_usd,
+                            )
+                            _sm_total_w += len(sr.weaknesses)
+                    if _sm_total_w:
+                        logger.info(
+                            "open discovery: %d state machine weaknesses "
+                            "from %d fields",
+                            _sm_total_w, len(_sm_results),
+                        )
         except Exception:
             logger.warning(
                 "open discovery failed", exc_info=True,

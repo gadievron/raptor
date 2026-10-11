@@ -1,19 +1,31 @@
-"""Tests for the cross-scope discovery engine (B1a contract perspective)."""
+"""Tests for the cross-scope discovery engine."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
+_REPO_ROOT = str(Path(__file__).resolve().parents[3])
+
 from core.audit.discovery import (
+    HandlerSite,
     SeamBundle,
+    StateMachineBundle,
+    _HINT_MULTI_THREADED,
+    _HINT_SINGLE_THREADED,
     _build_func_index,
+    _build_sm_prompt,
     _extract_call_site_snippet,
     _extract_cross_file_seams,
     _parse_findings,
+    _parse_sm_findings,
+    _score_field,
     _score_seam,
     build_seam_bundles,
+    build_state_machine_bundles,
+    detect_single_threaded,
     run_contract_discovery,
+    run_state_machine_discovery,
     write_discovery_weaknesses,
 )
 
@@ -918,7 +930,7 @@ class TestCLIArgParsing:
         import subprocess
         result = subprocess.run(
             ["python3", "libexec/raptor-audit", "run", "--help"],
-            capture_output=True, text=True, cwd="/home/raptor/raptor",
+            capture_output=True, text=True, cwd=_REPO_ROOT,
         )
         assert "--open-discovery" in result.stdout
 
@@ -926,7 +938,7 @@ class TestCLIArgParsing:
         import subprocess
         result = subprocess.run(
             ["python3", "libexec/raptor-audit", "run", "--help"],
-            capture_output=True, text=True, cwd="/home/raptor/raptor",
+            capture_output=True, text=True, cwd=_REPO_ROOT,
         )
         assert "--discovery-budget" in result.stdout
 
@@ -1069,7 +1081,7 @@ class TestDryRunEndToEnd:
                 "--dry-run",
             ],
             capture_output=True, text=True,
-            cwd="/home/raptor/raptor",
+            cwd=_REPO_ROOT,
         )
         assert result.returncode == 0, result.stderr
         assert "Seam bundles:" in result.stdout
@@ -1103,7 +1115,7 @@ class TestDryRunEndToEnd:
                 "--dry-run",
             ],
             capture_output=True, text=True,
-            cwd="/home/raptor/raptor",
+            cwd=_REPO_ROOT,
         )
         assert result.returncode == 0
         assert "Seam bundles: 0" in result.stdout
@@ -1197,3 +1209,319 @@ class TestFullPipelineMock:
             cl, None, set(), target_path=tmp_path,
         )
         assert bundles == []
+
+
+# ── state machine discovery ────────────────────────────────────────
+
+def _make_field_census(fields):
+    return {"tier": "t0", "telemetry": {}, "fields": fields, "functions": {}}
+
+
+class TestScoreField:
+    def test_state_name_scores_higher(self):
+        score_state, _ = _score_field(
+            "conn_state", [], [], {"a.c", "b.c"},
+        )
+        score_generic, _ = _score_field(
+            "count", [], [], {"a.c", "b.c"},
+        )
+        assert score_state > score_generic
+
+    def test_cross_file_rw_bonus(self):
+        writes = [{"file": "a.c", "line": 1}]
+        reads = [{"file": "b.c", "line": 2}]
+        score, reason = _score_field("x", writes, reads, {"a.c", "b.c"})
+        assert "cross-file-rw" in reason
+
+
+class TestBuildStateMachineBundles:
+    def test_filters_by_min_files(self, tmp_path):
+        (tmp_path / "a.c").write_text(
+            "\n".join(f"line {i}" for i in range(30)),
+        )
+        fc = _make_field_census({
+            "single_file_field": {
+                "field": "single_file_field",
+                "tier": "t0",
+                "sites_capped": False,
+                "writes": [
+                    {"file": "a.c", "line": 5, "function": "f1", "code": "x=1;"},
+                    {"file": "a.c", "line": 10, "function": "f2", "code": "x=2;"},
+                    {"file": "a.c", "line": 15, "function": "f3", "code": "x=3;"},
+                ],
+                "reads": [],
+            },
+        })
+        bundles = build_state_machine_bundles(
+            fc, target_path=tmp_path,
+        )
+        assert bundles == []
+
+    def test_cross_file_field_produces_bundle(self, tmp_path):
+        for name in ["a.c", "b.c"]:
+            (tmp_path / name).write_text(
+                "\n".join(f"line {i}" for i in range(30)),
+            )
+        fc = _make_field_census({
+            "state": {
+                "field": "state",
+                "tier": "t0",
+                "sites_capped": False,
+                "writes": [
+                    {"file": "a.c", "line": 5, "function": "init", "code": "state=0;"},
+                    {"file": "a.c", "line": 15, "function": "update", "code": "state=1;"},
+                ],
+                "reads": [
+                    {"file": "b.c", "line": 10, "function": "check", "code": "if(state)"},
+                ],
+            },
+        })
+        bundles = build_state_machine_bundles(
+            fc, target_path=tmp_path,
+        )
+        assert len(bundles) == 1
+        b = bundles[0]
+        assert b.field_name == "state"
+        assert len(b.handler_sites) == 3
+        writes = [s for s in b.handler_sites if s.access == "write"]
+        reads = [s for s in b.handler_sites if s.access == "read"]
+        assert len(writes) == 2
+        assert len(reads) == 1
+
+
+class TestParseSmFindings:
+    def test_valid_json(self):
+        bundle = StateMachineBundle(
+            field_name="state",
+            handler_sites=[],
+            annotation="test",
+            priority_score=1.0,
+            priority_reason="test",
+        )
+        raw = json.dumps({"findings": [
+            {
+                "guard_type": "ordering",
+                "assumed_property": "init before use",
+                "mechanism": "write without lock",
+                "cwe_class": "CWE-362",
+                "standalone": True,
+            },
+        ]})
+        result = _parse_sm_findings(raw, bundle)
+        assert result.source == "state_machine"
+        assert len(result.weaknesses) == 1
+        assert result.weaknesses[0]["guard_type"] == "ordering"
+        assert len(result.hypotheses) == 1
+
+    def test_empty_findings(self):
+        bundle = StateMachineBundle(
+            field_name="x",
+            handler_sites=[],
+            annotation="test",
+            priority_score=0.0,
+            priority_reason="test",
+        )
+        result = _parse_sm_findings('{"findings": []}', bundle)
+        assert result.weaknesses == []
+        assert result.hypotheses == []
+
+
+class TestRunStateMachineDiscovery:
+    def test_mock_llm(self):
+        bundle = StateMachineBundle(
+            field_name="conn_state",
+            handler_sites=[
+                HandlerSite(
+                    file="net.c", function="connect",
+                    line=10, code="conn_state=1;",
+                    access="write", context="conn_state=1;",
+                ),
+                HandlerSite(
+                    file="io.c", function="on_data",
+                    line=20, code="if(conn_state)",
+                    access="read", context="if(conn_state)",
+                ),
+            ],
+            annotation="test annotation",
+            priority_score=3.0,
+            priority_reason="state-name; cross-file-rw",
+        )
+        response = json.dumps({"findings": [
+            {
+                "guard_type": "concurrency",
+                "assumed_property": "atomic state transitions",
+                "mechanism": "no locking around state write",
+                "cwe_class": "CWE-362",
+                "standalone": True,
+            },
+        ]})
+
+        def mock_review(system, prompt):
+            return response, 0.01
+
+        results = run_state_machine_discovery(
+            [bundle], review_fn=mock_review, max_cost_usd=1.0,
+        )
+        assert len(results) == 1
+        assert len(results[0].weaknesses) == 1
+        assert results[0].weaknesses[0]["source"] == "state_machine"
+        assert results[0].cost_usd == 0.01
+
+    def test_concurrency_hint_flows_to_prompt(self):
+        """Verify that concurrency_hint reaches the generated prompt."""
+        bundle = StateMachineBundle(
+            field_name="state",
+            handler_sites=[
+                HandlerSite(
+                    file="a.c", function="set_state",
+                    line=1, code="state=1;",
+                    access="write", context="state=1;",
+                ),
+                HandlerSite(
+                    file="b.c", function="get_state",
+                    line=1, code="if(state)",
+                    access="read", context="if(state)",
+                ),
+            ],
+            annotation="",
+            priority_score=1.0,
+            priority_reason="test",
+        )
+        prompt = _build_sm_prompt(bundle, concurrency_hint=_HINT_SINGLE_THREADED)
+        assert "single-threaded" in prompt
+        assert "Do NOT report race conditions" in prompt
+
+        prompt_mt = _build_sm_prompt(bundle, concurrency_hint=_HINT_MULTI_THREADED)
+        assert "uses threads" in prompt_mt
+
+    def test_hint_passed_through_run(self):
+        """Verify run_state_machine_discovery derives the hint from the bool."""
+        bundle = StateMachineBundle(
+            field_name="flags",
+            handler_sites=[
+                HandlerSite(
+                    file="x.c", function="set_flags",
+                    line=1, code="flags=1;",
+                    access="write", context="flags=1;",
+                ),
+                HandlerSite(
+                    file="y.c", function="check_flags",
+                    line=1, code="if(flags)",
+                    access="read", context="if(flags)",
+                ),
+            ],
+            annotation="",
+            priority_score=1.0,
+            priority_reason="test",
+        )
+        captured_prompts = []
+
+        def mock_review(system, prompt):
+            captured_prompts.append(prompt)
+            return '{"findings": []}', 0.001
+
+        run_state_machine_discovery(
+            [bundle],
+            review_fn=mock_review,
+            max_cost_usd=1.0,
+            single_threaded=True,
+        )
+        assert len(captured_prompts) == 1
+        assert "single-threaded" in captured_prompts[0]
+
+        captured_prompts.clear()
+        run_state_machine_discovery(
+            [bundle],
+            review_fn=mock_review,
+            max_cost_usd=1.0,
+            single_threaded=False,
+        )
+        assert len(captured_prompts) == 1
+        assert "uses threads" in captured_prompts[0]
+
+
+class TestDetectSingleThreaded:
+    def test_no_threading_primitives(self, tmp_path):
+        src = tmp_path / "main.c"
+        src.write_text("int main() { return 0; }\n")
+        assert detect_single_threaded(tmp_path) is True
+
+    def test_pthread_detected(self, tmp_path):
+        src = tmp_path / "server.c"
+        src.write_text("void start() { pthread_create(&t, NULL, fn, NULL); }\n")
+        assert detect_single_threaded(tmp_path) is False
+
+
+class TestCwe362PostFilter:
+    def test_cwe362_stripped_when_single_threaded(self):
+        bundle = StateMachineBundle(
+            field_name="state",
+            handler_sites=[
+                HandlerSite(
+                    file="a.c", function="f", line=1,
+                    code="x", access="write", context="x",
+                ),
+                HandlerSite(
+                    file="b.c", function="g", line=1,
+                    code="y", access="read", context="y",
+                ),
+            ],
+            annotation="", priority_score=1.0, priority_reason="test",
+        )
+        raw = json.dumps({"findings": [
+            {"guard_type": "ordering", "assumed_property": "p",
+             "mechanism": "m", "cwe_class": "CWE-362", "standalone": True},
+            {"guard_type": "uninit", "assumed_property": "q",
+             "mechanism": "n", "cwe_class": "CWE-908", "standalone": True},
+        ]})
+        result = _parse_sm_findings(raw, bundle, single_threaded=True)
+        assert len(result.weaknesses) == 1
+        assert result.weaknesses[0]["cwe_class"] == "CWE-908"
+
+    def test_cwe362_with_title_suffix_stripped(self):
+        """Model may emit 'CWE-362: Concurrent Modification...' — prefix match."""
+        bundle = StateMachineBundle(
+            field_name="state",
+            handler_sites=[
+                HandlerSite(
+                    file="a.c", function="f", line=1,
+                    code="x", access="write", context="x",
+                ),
+                HandlerSite(
+                    file="b.c", function="g", line=1,
+                    code="y", access="read", context="y",
+                ),
+            ],
+            annotation="", priority_score=1.0, priority_reason="test",
+        )
+        raw = json.dumps({"findings": [
+            {"guard_type": "ordering", "assumed_property": "p",
+             "mechanism": "m",
+             "cwe_class": "CWE-362: Concurrent Modification of Shared Resource",
+             "standalone": True},
+        ]})
+        result = _parse_sm_findings(raw, bundle, single_threaded=True)
+        assert len(result.weaknesses) == 0
+
+    def test_cwe362_kept_when_multi_threaded(self):
+        bundle = StateMachineBundle(
+            field_name="state",
+            handler_sites=[
+                HandlerSite(
+                    file="a.c", function="f", line=1,
+                    code="x", access="write", context="x",
+                ),
+                HandlerSite(
+                    file="b.c", function="g", line=1,
+                    code="y", access="read", context="y",
+                ),
+            ],
+            annotation="", priority_score=1.0, priority_reason="test",
+        )
+        raw = json.dumps({"findings": [
+            {"guard_type": "race", "assumed_property": "p",
+             "mechanism": "m", "cwe_class": "CWE-362", "standalone": True},
+        ]})
+        result = _parse_sm_findings(raw, bundle, single_threaded=False)
+        assert len(result.weaknesses) == 1
+        assert result.weaknesses[0]["cwe_class"] == "CWE-362"
