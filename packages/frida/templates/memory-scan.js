@@ -25,6 +25,14 @@ var limitsApplied = false;
 var stopped = false;
 var finished = false;
 var notedLimits = {};
+var MAX_SCAN_BYTES_PER_FLUSH = 512 * 1024;
+var rangeOffsets = Object.create(null);
+var rangeSizes = Object.create(null);
+var seenMatches = Object.create(null);
+var scanInProgress = false;
+var finalFlushRequested = false;
+var rangeWindowStart = 0;
+var startEmitted = false;
 
 function emit(event, fields) {
   send(Object.assign({
@@ -53,6 +61,7 @@ function finish(status, moduleName) {
   }
 
   finished = true;
+  scanInProgress = false;
   emit('summary', {
     status: status === 'complete' && scanErrorCount > 0
       ? 'completed_with_errors'
@@ -69,130 +78,282 @@ function patternBytes(pattern) {
   return pattern.trim().split(/\s+/).length;
 }
 
-function scanConfiguredMemory() {
+function runScanCycle(isFinal) {
+  if (finished) {
+    return;
+  }
+  if (scanInProgress) {
+    if (isFinal) {
+      finalFlushRequested = true;
+    }
+    return;
+  }
+
+  isFinal = isFinal || finalFlushRequested;
+
   if (!CONFIG || !Array.isArray(CONFIG.patterns) ||
       CONFIG.patterns.length === 0) {
     emit('error', {
       reason: 'configuration_required',
-      detail: 'Use --memory-scan with a validated JSON configuration file.'
+      detail: 'The template has no valid scan patterns.'
     });
     finish('error', null);
     return;
   }
 
+  if (scannedBytes >= MAX_SCAN_BYTES) {
+    noteLimit('scan_byte_budget', MAX_SCAN_BYTES);
+    finish(scanErrorCount > 0 ? 'completed_with_errors'
+                              : 'completed_with_limits', CONFIG.module);
+    return;
+  }
+
+  scanInProgress = true;
+
   var selectedModule = null;
-  var ranges;
+  var moduleName = CONFIG.module || null;
+  var allRanges = [];
+  var moduleMissing = false;
+
+  function endCycle(pendingWork, noRanges, missingModule) {
+    scanInProgress = false;
+    if (finished) {
+      return;
+    }
+
+    if (scannedBytes >= MAX_SCAN_BYTES) {
+      noteLimit('scan_byte_budget', MAX_SCAN_BYTES);
+      finish(scanErrorCount > 0 ? 'completed_with_errors'
+                                : 'completed_with_limits', moduleName);
+      return;
+    }
+
+    // A final flush that arrived during an asynchronous scan gets its
+    // own fresh enumeration before the closing summary is emitted.
+    if (finalFlushRequested && !isFinal) {
+      runScanCycle(true);
+      return;
+    }
+
+    if (!isFinal) {
+      return;
+    }
+
+    if (missingModule) {
+      emit('error', {
+        reason: 'module_not_found',
+        module: CONFIG.module
+      });
+      finish('error', CONFIG.module);
+      return;
+    }
+
+    if (pendingWork && !limitsApplied) {
+      noteLimit('final_scan_incomplete', MAX_SCAN_BYTES_PER_FLUSH);
+    }
+
+    if (scanErrorCount > 0) {
+      finish('completed_with_errors', moduleName);
+    } else if (noRanges && scannedBytes === 0 && matchCount === 0) {
+      finish('no_readable_ranges', moduleName);
+    } else if (limitsApplied || pendingWork) {
+      finish('completed_with_limits', moduleName);
+    } else {
+      finish('complete', moduleName);
+    }
+  }
 
   try {
     if (CONFIG.module) {
       selectedModule = Process.findModuleByName(CONFIG.module);
-
       if (selectedModule === null) {
-        emit('error', {
-          reason: 'module_not_found',
-          module: CONFIG.module
-        });
-        finish('error', CONFIG.module);
-        return;
+        moduleMissing = true;
+      } else {
+        // Preserve file-backed ranges belonging to the selected module.
+        // Only the default anonymous-memory mode excludes file mappings.
+        moduleName = selectedModule.name;
+        allRanges = selectedModule.enumerateRanges('r--');
       }
-
-      ranges = selectedModule.enumerateRanges('r--');
     } else {
-      ranges = Process.enumerateRanges({
+      allRanges = Process.enumerateRanges({
         protection: 'rw-',
         coalesce: false
       });
+      allRanges = allRanges.filter(function (range) {
+        return !range.file;
+      });
     }
   } catch (e) {
+    scanErrorCount++;
     emit('error', {
       reason: 'range_enumeration_failed',
       detail: String(e)
     });
-    finish('error', CONFIG.module);
+    endCycle(true, false, false);
     return;
   }
 
-  ranges = ranges.filter(function (range) {
-    return !range.file;
-  });
-
-  if (ranges.length === 0) {
-    finish('no_readable_ranges', CONFIG.module);
+  if (moduleMissing) {
+    // A module may not be loaded on an early flush. Retry until the
+    // controller marks its final flush before reporting it missing.
+    endCycle(false, true, true);
     return;
   }
 
-  if (ranges.length > MAX_RANGES) {
-    ranges = ranges.slice(0, MAX_RANGES);
+  if (allRanges.length === 0) {
+    // Do not conclude that memory is empty before the target has run.
+    endCycle(false, true, false);
+    return;
+  }
+
+  var ranges = allRanges;
+  var cyclePendingWork = false;
+
+  if (allRanges.length > MAX_RANGES) {
     noteLimit('range_count', MAX_RANGES);
+
+    // Rotate the bounded window so mappings beyond the first 32 can
+    // be considered on subsequent controller flushes.
+    var start = rangeWindowStart % allRanges.length;
+    ranges = [];
+    for (var i = 0; i < MAX_RANGES; i++) {
+      ranges.push(allRanges[(start + i) % allRanges.length]);
+    }
+    rangeWindowStart = (start + MAX_RANGES) % allRanges.length;
+    cyclePendingWork = true;
   }
 
-  // Divide the byte budget among patterns so the first pattern cannot
-  // consume the entire run budget and starve all remaining patterns.
+  if (!startEmitted) {
+    emit('start', {
+      module: moduleName,
+      patterns: CONFIG.patterns.length,
+      ranges_available: allRanges.length,
+      ranges_selected: ranges.length,
+      max_scan_bytes: MAX_SCAN_BYTES,
+      max_scan_bytes_per_flush: MAX_SCAN_BYTES_PER_FLUSH,
+      max_matches: MAX_MATCHES
+    });
+    startEmitted = true;
+  }
+
+  var cycleBudget = Math.min(
+    MAX_SCAN_BYTES_PER_FLUSH,
+    MAX_SCAN_BYTES - scannedBytes
+  );
   var perPatternBudget = Math.floor(
-    MAX_SCAN_BYTES / CONFIG.patterns.length
+    cycleBudget / CONFIG.patterns.length
   );
 
-  emit('start', {
-    module: CONFIG.module || null,
-    patterns: CONFIG.patterns.length,
-    ranges_selected: ranges.length,
-    max_scan_bytes: MAX_SCAN_BYTES,
-    max_matches: MAX_MATCHES
-  });
-
   function scanPattern(patternIndex) {
-    if (stopped) {
-      finish('limit_reached', CONFIG.module);
+    if (finished) {
       return;
     }
-
     if (patternIndex >= CONFIG.patterns.length) {
-      finish(limitsApplied ? 'completed_with_limits' : 'complete',
-             CONFIG.module);
+      endCycle(cyclePendingWork, false, false);
       return;
     }
 
     var spec = CONFIG.patterns[patternIndex];
-    var rangeIndex = 0;
-    var patternScanned = 0;
     var patternSize = patternBytes(spec.pattern);
+    var budget = { remaining: perPatternBudget };
+    var rangeIndex = 0;
 
     function nextRange() {
-      if (stopped) {
-        finish('limit_reached', CONFIG.module);
+      if (finished) {
         return;
       }
-
+      if (stopped) {
+        finish('limit_reached', moduleName);
+        return;
+      }
       if (rangeIndex >= ranges.length) {
         scanPattern(patternIndex + 1);
         return;
       }
-
-      if (patternScanned >= perPatternBudget) {
-        noteLimit('pattern_byte_budget', perPatternBudget);
+      if (budget.remaining < patternSize) {
+        cyclePendingWork = true;
         scanPattern(patternIndex + 1);
         return;
       }
 
-      var remaining = perPatternBudget - patternScanned;
       var rangesRemaining = ranges.length - rangeIndex;
-      var rangeBudget = Math.ceil(remaining / rangesRemaining);
       var range = ranges[rangeIndex++];
-      var size = Math.min(range.size, rangeBudget, remaining);
+      var rangeKey = range.base.toString();
 
-      if (size <= 0) {
-        noteLimit('pattern_byte_budget', perPatternBudget);
-        scanPattern(patternIndex + 1);
+      // Reset stale cursors after shrink; revisit the old boundary
+      // if a fully scanned mapping grows, preserving cross-boundary hits.
+      var previousSize = rangeSizes[rangeKey];
+      if (typeof previousSize === 'number' && range.size < previousSize) {
+        CONFIG.patterns.forEach(function (other) {
+          delete rangeOffsets[other.id + '|' + rangeKey];
+        });
+      } else if (typeof previousSize === 'number' &&
+                 range.size > previousSize) {
+        CONFIG.patterns.forEach(function (other) {
+          var otherKey = other.id + '|' + rangeKey;
+          if (rangeOffsets[otherKey] === previousSize) {
+            rangeOffsets[otherKey] = Math.max(
+              0, previousSize - (patternBytes(other.pattern) - 1)
+            );
+          }
+        });
+      }
+      rangeSizes[rangeKey] = range.size;
+
+      var cursorKey = spec.id + '|' + rangeKey;
+      var offset = rangeOffsets[cursorKey];
+      if (typeof offset !== 'number') {
+        offset = 0;
+      }
+      if (offset < 0 || offset > range.size) {
+        offset = 0;
+      }
+      if (offset === range.size) {
+        nextRange();
         return;
       }
 
-      var partialRange = size < range.size;
-      patternScanned += size;
-      scannedBytes += size;
+      var available = range.size - offset;
+
+      var rangeBudget = Math.floor(budget.remaining / rangesRemaining);
+      var scanSize = Math.min(
+        available,
+        rangeBudget,
+        budget.remaining,
+        MAX_SCAN_BYTES - scannedBytes
+      );
+
+      // A partial chunk must be large enough to carry a complete
+      // signature across the overlap with the next chunk.
+      if (scanSize <= 0 ||
+          (scanSize < available && scanSize <= patternSize - 1)) {
+        cyclePendingWork = true;
+        rangeOffsets[cursorKey] = offset;
+        nextRange();
+        return;
+      }
+
+      var partialRange = scanSize < available;
+      var overlap = partialRange ? patternSize - 1 : 0;
+      rangeOffsets[cursorKey] = partialRange
+        ? offset + scanSize - overlap
+        : range.size;
+
+      if (partialRange) {
+        cyclePendingWork = true;
+      }
+
+      budget.remaining -= scanSize;
+      scannedBytes += scanSize;
 
       try {
-        Memory.scan(range.base, size, spec.pattern, {
+        Memory.scan(range.base.add(offset), scanSize, spec.pattern, {
           onMatch: function (address, matchSize) {
+            var matchKey = spec.id + '|' + address.toString();
+            if (seenMatches[matchKey]) {
+              return;
+            }
+            seenMatches[matchKey] = true;
             matchCount++;
 
             var owner = selectedModule;
@@ -213,7 +374,6 @@ function scanConfiguredMemory() {
               record.module = owner.name;
               record.offset = address.sub(owner.base).toString();
             } else {
-              // Anonymous memory has no module-relative offset.
               record.address = address.toString();
             }
 
@@ -237,11 +397,12 @@ function scanConfiguredMemory() {
 
           onComplete: function () {
             if (stopped) {
-              finish('limit_reached', CONFIG.module);
+              finish('limit_reached', moduleName);
+            } else if (scannedBytes >= MAX_SCAN_BYTES) {
+              noteLimit('scan_byte_budget', MAX_SCAN_BYTES);
+              finish(scanErrorCount > 0 ? 'completed_with_errors'
+                                        : 'completed_with_limits', moduleName);
             } else {
-              if (partialRange) {
-                noteLimit('range_byte_budget', rangeBudget);
-              }
               nextRange();
             }
           }
@@ -257,13 +418,8 @@ function scanConfiguredMemory() {
       }
     }
 
-    // Avoid needless scanning when the configured pattern is larger
-    // than every permitted range budget.
     if (patternSize > perPatternBudget) {
-      emit('error', {
-        reason: 'pattern_exceeds_scan_budget',
-        pattern_id: spec.id
-      });
+      cyclePendingWork = true;
       scanPattern(patternIndex + 1);
       return;
     }
@@ -274,4 +430,21 @@ function scanConfiguredMemory() {
   scanPattern(0);
 }
 
-scanConfiguredMemory();
+function onFlushMsg(msg) {
+  // Re-arm before scanning; Memory.scan is asynchronous.
+  recv('raptor:flush', onFlushMsg);
+
+  if (finished) {
+    return;
+  }
+  if (msg && msg.final === true) {
+    finalFlushRequested = true;
+  }
+  if (scanInProgress) {
+    return;
+  }
+
+  runScanCycle(finalFlushRequested);
+}
+
+recv('raptor:flush', onFlushMsg);

@@ -478,9 +478,11 @@ the event drains before the process dies.
 ### memory-scan
 
 Scans anonymous read/write memory for common binary signatures (ELF,
-WebAssembly, DEX, and Mach-O). Matches include a module-relative offset
-when available. Scanning is bounded to 32 ranges, 16 MiB, and 100 matches;
-scan errors and applied limits are reported in the summary.
+WebAssembly, DEX, and Mach-O). The template re-enumerates ranges as the target
+runs, so mappings created after startup can be observed. Matches include a
+module-relative offset when available. Each flush considers at most 32
+ranges; the total scan budget is 16 MiB and up to 100 matches are reported.
+Errors and applied limits appear in the summary.
 
 ```bash
 raptor frida --target ./app --template memory-scan --duration 30

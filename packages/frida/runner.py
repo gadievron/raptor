@@ -464,6 +464,14 @@ def run(cfg: RunConfig,
     events_lock = threading.Lock()
     event_count = {"n": 0}
 
+    template_names = (
+        cfg.script_origin.removeprefix("template:").split("+")
+        if cfg.script_origin.startswith("template:")
+        else []
+    )
+    wait_for_memory_scan_summary = "memory-scan" in template_names
+    memory_scan_summary_received = threading.Event()
+
     def _message_cb(message: dict, data: bytes | None) -> None:
         """Frida's on('message') callback. Both ``send()`` payloads
         (type='send') and uncaught script errors (type='error')
@@ -496,6 +504,15 @@ def run(cfg: RunConfig,
                 payload = message.get("payload")
                 if isinstance(payload, dict) and payload.get("_drcov"):
                     (cfg.out_dir / "coverage.drcov").write_bytes(data)
+        payload = message.get("payload")
+        if (
+            message.get("type") == "send"
+            and isinstance(payload, dict)
+            and payload.get("category") == "memory_scan"
+            and payload.get("event") == "summary"
+        ):
+            memory_scan_summary_received.set()
+
         if on_event is not None:
             try:
                 on_event(record)
@@ -625,9 +642,14 @@ def run(cfg: RunConfig,
                     # spawned: lets mode-dependent verdicts (e.g.
                     # heap-trace invalid_free, meaningless on attach)
                     # gate themselves agent-side.
-                    script.post({"type": "raptor:flush",
-                                 "main_tid": result.resolved_pid or 0,
-                                 "spawned": spawned})
+                    flush_message = {
+                        "type": "raptor:flush",
+                        "main_tid": result.resolved_pid or 0,
+                        "spawned": spawned,
+                    }
+                    if wait_for_memory_scan_summary:
+                        flush_message["final"] = final
+                    script.post(flush_message)
                     result.flushes_completed += 1
                 except Exception:
                     logger.debug("flush post failed", exc_info=True)
@@ -706,6 +728,11 @@ def run(cfg: RunConfig,
                     last_flush = time.monotonic()
             if script_has_flush or script_accepts_post:
                 _script_flush(final=True)
+                if (wait_for_memory_scan_summary
+                        and not memory_scan_summary_received.wait(timeout=5.0)):
+                    logger.warning(
+                        "memory-scan summary not received within 5s; "
+                        "continuing teardown")
                 if result.flushes_completed == 0:
                     logger.warning(
                         "no flush call completed this run; a flush-"
