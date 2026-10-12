@@ -475,6 +475,17 @@ candidate for triage, not a verdict. A detected double free usually
 aborts the target moments later — the abort path is held briefly so
 the event drains before the process dies.
 
+### memory-scan
+
+Scans anonymous read/write memory for common binary signatures (ELF,
+WebAssembly, DEX, and Mach-O). Matches include a module-relative offset
+when available. Scanning is bounded to 32 ranges, 16 MiB, and 100 matches;
+scan errors and applied limits are reported in the summary.
+
+```bash
+raptor frida --target ./app --template memory-scan --duration 30
+```
+
 ---
 
 ## Pipeline Integration
