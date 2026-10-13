@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-10-06T12:24:18Z",
+    "fetched_at": "2026-10-13T13:09:25Z",
     "license": "Public Domain (US Government work)",
     "name": "CISA KEV",
     "provenance": "CISA Known Exploited Vulnerabilities Catalog. Public Domain; embedded verbatim.",
@@ -1323,6 +1323,13 @@
       "ransomware_use": false,
       "vendor": "Red Hat"
     },
+    "CVE-2015-3306": {
+      "date_added": "2026-10-08",
+      "kev": true,
+      "product": "ProFTPD",
+      "ransomware_use": false,
+      "vendor": "ProFTPD"
+    },
     "CVE-2015-4068": {
       "date_added": "2022-03-25",
       "kev": true,
@@ -1385,6 +1392,13 @@
       "product": "Jenkins User Interface (UI)",
       "ransomware_use": false,
       "vendor": "Jenkins"
+    },
+    "CVE-2015-5477": {
+      "date_added": "2026-10-08",
+      "kev": true,
+      "product": "BIND",
+      "ransomware_use": false,
+      "vendor": "ISC"
     },
     "CVE-2015-6175": {
       "date_added": "2022-05-25",
@@ -1567,6 +1581,13 @@
       "product": "NetWeaver",
       "ransomware_use": false,
       "vendor": "SAP"
+    },
+    "CVE-2016-3081": {
+      "date_added": "2026-10-08",
+      "kev": true,
+      "product": "Struts",
+      "ransomware_use": false,
+      "vendor": "Apache"
     },
     "CVE-2016-3088": {
       "date_added": "2022-02-10",
@@ -5859,6 +5880,13 @@
       "ransomware_use": false,
       "vendor": "Microsoft"
     },
+    "CVE-2021-3199": {
+      "date_added": "2026-10-08",
+      "kev": true,
+      "product": "Docs",
+      "ransomware_use": false,
+      "vendor": "ONLYOFFICE"
+    },
     "CVE-2021-32030": {
       "date_added": "2025-06-02",
       "kev": true,
@@ -7524,6 +7552,13 @@
       "product": "Confluence Data Center and Server",
       "ransomware_use": true,
       "vendor": "Atlassian"
+    },
+    "CVE-2023-22894": {
+      "date_added": "2026-10-08",
+      "kev": true,
+      "product": "Strapi",
+      "ransomware_use": false,
+      "vendor": "Strapi"
     },
     "CVE-2023-22952": {
       "date_added": "2023-02-02",

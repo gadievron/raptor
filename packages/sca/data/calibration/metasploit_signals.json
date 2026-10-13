@@ -1,8 +1,8 @@
 {
   "_source": {
-    "fetched_at": "2026-10-06T12:24:18Z",
+    "fetched_at": "2026-10-13T13:09:25Z",
     "license": "Metasploit Framework is BSD-3-Clause. We embed only module-path references + booleans (a public fact about the framework's contents); no MSF code is stored.",
-    "modules_scanned": 7188,
+    "modules_scanned": 7207,
     "name": "Metasploit Framework module metadata",
     "provenance": "rapid7/metasploit-framework modules_metadata_base.json. We extract the CVE→module-path mapping; framework code itself is not redistributed.",
     "url": "https://raw.githubusercontent.com/rapid7/metasploit-framework/HEAD/db/modules_metadata_base.json"
@@ -18977,6 +18977,18 @@
         "auxiliary_scanner/http/panos_cve_2026_0265"
       ]
     },
+    "CVE-2026-0768": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/langflow_unauth_rce_cve_2026_0768"
+      ]
+    },
+    "CVE-2026-0769": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/langflow_unauth_rce_cve_2026_0769"
+      ]
+    },
     "CVE-2026-0770": {
       "has_msf_module": true,
       "module_paths": [
@@ -19243,6 +19255,12 @@
         "auxiliary_gather/wp_planyo_lfi_cve_2026_3576"
       ]
     },
+    "CVE-2026-3888": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_linux/local/cve_2026_3888"
+      ]
+    },
     "CVE-2026-3891": {
       "has_msf_module": true,
       "module_paths": [
@@ -19413,6 +19431,12 @@
         "exploit_multi/http/spip_x_spip_filtre_rce"
       ]
     },
+    "CVE-2026-7873": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/langflow_auth_rce_cve_2026_7873"
+      ]
+    },
     "CVE-2026-81578": {
       "has_msf_module": true,
       "module_paths": [
@@ -19443,6 +19467,12 @@
         "auxiliary_gather/gitlab_file_read_cve_2026_85706"
       ]
     },
+    "CVE-2026-86218": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_linux/http/nable_ncentral_unauth_rce_cve_2026_86218"
+      ]
+    },
     "CVE-2026-9082": {
       "has_msf_module": true,
       "module_paths": [
@@ -19453,6 +19483,12 @@
       "has_msf_module": true,
       "module_paths": [
         "exploit_multi/http/langflow_unauth_rce_cve_2026_9198"
+      ]
+    },
+    "CVE-2026-93680": {
+      "has_msf_module": true,
+      "module_paths": [
+        "auxiliary_gather/langflow_auth_bypass_cve_2026_93680"
       ]
     }
   }
