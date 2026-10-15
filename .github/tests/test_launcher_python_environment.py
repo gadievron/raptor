@@ -310,5 +310,40 @@ class TestLauncherPythonEnvironment(unittest.TestCase):
             self.assertNotIn("uv must not run", proc.stderr)
 
 
+class LauncherIdentityLookupTest(unittest.TestCase):
+    """Ids without passwd/group names must not abort the launcher."""
+
+    def _identity_block(self) -> str:
+        text = (_REPO / "bin" / "raptor").read_text()
+        start = text.index('_raptor_uid=""')
+        end = text.index("_raptor_dir_has_unsafe_write_access() {")
+        return text[start:end]
+
+    def test_unnamed_ids_leave_private_group_unset(self):
+        script = (
+            "set -euo pipefail\n"
+            "_rp() {\n"
+            '  case "$*" in\n'
+            "    'id -u'|'id -g') echo 4242 ;;\n"
+            "    *) echo \"id: cannot find name\" >&2; return 1 ;;\n"
+            "  esac\n"
+            "}\n"
+            + self._identity_block()
+            + 'printf "%s|%s|%s\\n" "$_raptor_uid" "$_raptor_gid" '
+            '"$_raptor_private_gid"\n'
+        )
+        proc = subprocess.run(
+            ["bash", "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env={"PATH": "/usr/bin:/bin"},
+        )
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout, "4242|4242|\n")
+        self.assertEqual(proc.stderr, "")
+
+
 if __name__ == "__main__":
     unittest.main()
