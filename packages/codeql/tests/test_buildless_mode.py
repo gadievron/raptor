@@ -440,6 +440,50 @@ class TestAgentBuildlessRouting:
         agent.build_detector.generate_no_build_config.assert_called_with("java")
         assert result.untrusted_build_languages == []
 
+    @pytest.mark.parametrize(
+        "lang", ["javascript", "typescript", "python", "ruby"],
+    )
+    def test_source_extracted_language_skips_build_detection(
+        self, tmp_path, lang,
+    ):
+        agent = self._agent(tmp_path)
+        result = agent.run_autonomous_analysis(languages=[lang])
+        agent.build_detector.detect_build_system.assert_not_called()
+        agent.build_detector.generate_no_build_config.assert_called_with(lang)
+        lang_map = agent.database_manager.create_databases_parallel.call_args[0][1]
+        assert lang_map[lang].command == ""
+        assert result.untrusted_build_languages == []
+
+    def test_source_extracted_language_traced_build_runs_detection(
+        self, tmp_path,
+    ):
+        agent = self._agent(tmp_path)
+        agent.build_detector.detect_build_system.return_value = BuildSystem(
+            type="npm", command="npm install && npm run build",
+            working_dir=tmp_path, env_vars={}, confidence=1.0,
+            detected_files=[],
+        )
+        agent.build_detector.validate_build_command.return_value = True
+        agent.run_autonomous_analysis(
+            languages=["javascript"], traced_build=True,
+        )
+        agent.build_detector.detect_build_system.assert_called_with(
+            "javascript",
+        )
+        lang_map = agent.database_manager.create_databases_parallel.call_args[0][1]
+        assert lang_map["javascript"].command == "npm install && npm run build"
+
+    def test_source_extracted_language_explicit_build_command_kept(
+        self, tmp_path,
+    ):
+        agent = self._agent(tmp_path)
+        agent.run_autonomous_analysis(
+            languages=["javascript"],
+            build_commands={"javascript": "npm ci && npm run gen"},
+        )
+        lang_map = agent.database_manager.create_databases_parallel.call_args[0][1]
+        assert lang_map["javascript"].command == "npm ci && npm run gen"
+
     def test_untrusted_autobuild_language_recorded(self, tmp_path):
         """A compiled language with no buildless mode (go) executes
         repo build logic via autobuild — it must land in the run

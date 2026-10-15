@@ -32,6 +32,7 @@ from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
 from packages.codeql.database_manager import (
     AUTOBUILD_LANGUAGES,
     BUILDLESS_DEFAULT_LANGUAGES,
+    SOURCE_EXTRACTED_LANGUAGES,
     DatabaseManager,
     DatabaseResult,
 )
@@ -456,6 +457,16 @@ class CodeQLAgent:
                     # Operator explicitly opted this language into a
                     # traced build (asserts trust in the repo).
                     traced_languages.add(lang)
+                if (
+                    lang in SOURCE_EXTRACTED_LANGUAGES
+                    and lang not in traced_languages
+                ):
+                    # Extracted from source: never run build detection,
+                    # so the repo's install/build scripts don't execute.
+                    language_build_map[lang] = (
+                        self.build_detector.generate_no_build_config(lang)
+                    )
+                    continue
                 if (
                     lang in BUILDLESS_DEFAULT_LANGUAGES
                     and lang not in traced_languages

@@ -185,6 +185,17 @@ AUTOBUILD_LANGUAGES = frozenset(
     {"cpp", "java", "csharp", "go", "swift", "kotlin"},
 )
 
+# Languages CodeQL extracts straight from source files: a build adds
+# nothing to the database.  A detected build command for them
+# (``npm install && npm run build``, ``python setup.py build``) would
+# only execute repo-controlled code (install hooks, build scripts)
+# and, with the sandbox network blocked, fail on dependency fetches
+# and sink the whole create.  They get the no-build config unless the
+# operator opts the language into a traced build.
+SOURCE_EXTRACTED_LANGUAGES = frozenset(
+    {"javascript", "typescript", "python", "ruby"},
+)
+
 # Diagnostic messages the extractor emits when an #include could not
 # be resolved.  Matched loosely across CLI versions.
 _UNRESOLVED_INCLUDE_RE = re.compile(
