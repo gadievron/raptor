@@ -27,6 +27,7 @@ def _reset_probe_cache(monkeypatch):
     monkeypatch.setattr(detection, "_ollama_checked", False)
     monkeypatch.setattr(detection, "_cached_ollama_models", None)
     monkeypatch.setattr(detection, "_cached_ollama_capabilities", {})
+    monkeypatch.setattr(detection, "_ollama_capability_probing_disabled", set())
 
 
 def _patch_http(monkeypatch, side_effect=None, response=None, handler=None):
@@ -34,7 +35,7 @@ def _patch_http(monkeypatch, side_effect=None, response=None, handler=None):
     calls = []
 
     def request(method, url, timeout=None, **kwargs):
-        call = {"method": method, "url": url, **kwargs}
+        call = {"method": method, "url": url, "timeout": timeout, **kwargs}
         calls.append(call)
         if side_effect is not None:
             raise side_effect
@@ -193,10 +194,11 @@ def test_tags_capabilities_are_authoritative(monkeypatch):
     assert [call["method"] for call in calls] == ["GET"]
 
 
-def test_show_failure_does_not_discard_other_models(monkeypatch):
+def test_unreachable_show_stops_further_probes(monkeypatch):
     tags = {"models": [
         {"name": "broken-embed:latest"},
-        {"name": "llama3.1:8b", "capabilities": ["completion"]},
+        {"name": "llama3.1:8b"},
+        {"name": "qwen2.5-coder:7b"},
     ]}
 
     def handler(call):
@@ -204,8 +206,39 @@ def test_show_failure_does_not_discard_other_models(monkeypatch):
             return _Resp(200, tags)
         raise ConnectionError("show unavailable")
 
-    _patch_http(monkeypatch, handler=handler)
-    assert detection._get_available_ollama_models() == ["llama3.1:8b"]
+    calls = _patch_http(monkeypatch, handler=handler)
+    assert detection._get_available_ollama_models() == [
+        "llama3.1:8b", "qwen2.5-coder:7b",
+    ]
+    assert [call["method"] for call in calls] == ["GET", "POST"]
+
+
+def test_model_specific_show_failure_keeps_probing(monkeypatch):
+    tags = {"models": [
+        {"name": "missing-embed:latest"},
+        {"name": "vectors:latest"},
+        {"name": "embedded-coder:latest"},
+    ]}
+    shown = {
+        "vectors:latest": {"capabilities": ["embedding"]},
+        "embedded-coder:latest": {"capabilities": ["completion"]},
+    }
+
+    def handler(call):
+        if call["method"] == "GET":
+            return _Resp(200, tags)
+        model = call["json"]["model"]
+        if model == "missing-embed:latest":
+            return _Resp(404)
+        return _Resp(200, shown[model])
+
+    calls = _patch_http(monkeypatch, handler=handler)
+    assert detection._get_available_ollama_models() == [
+        "embedded-coder:latest",
+    ]
+    assert [call["method"] for call in calls] == [
+        "GET", "POST", "POST", "POST",
+    ]
 
 
 def test_show_capabilities_filter_models_when_tags_omit_them(monkeypatch):
@@ -242,5 +275,33 @@ def test_old_server_uses_embedding_heuristic_as_fallback(monkeypatch):
             return _Resp(200, tags)
         return _Resp(200, {"details": {"family": "unknown"}})
 
-    _patch_http(monkeypatch, handler=handler)
+    calls = _patch_http(monkeypatch, handler=handler)
     assert detection._get_available_ollama_models() == ["llama3.1:8b"]
+    assert [call["method"] for call in calls] == ["GET", "POST"]
+
+
+def test_show_probes_share_one_time_budget(monkeypatch):
+    tags = {"models": [
+        {"name": "chat-one:latest"},
+        {"name": "vectors:latest"},
+        {"name": "llama3.1:8b"},
+    ]}
+    shown = {
+        "chat-one:latest": {"capabilities": ["completion"]},
+        "vectors:latest": {"capabilities": ["embedding"]},
+    }
+    clock = iter([10.0, 10.25, 11.5, 12.0])
+    monkeypatch.setattr(detection, "monotonic", lambda: next(clock))
+
+    def handler(call):
+        if call["method"] == "GET":
+            return _Resp(200, tags)
+        return _Resp(200, shown[call["json"]["model"]])
+
+    calls = _patch_http(monkeypatch, handler=handler)
+    assert detection._get_available_ollama_models() == [
+        "chat-one:latest", "llama3.1:8b",
+    ]
+    assert [call["timeout"] for call in calls if call["method"] == "POST"] == [
+        1.75, 0.5,
+    ]
