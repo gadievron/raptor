@@ -1027,6 +1027,28 @@ def test_restrict_reads_allows_homebrew_prefixes():
     assert '(subpath "/usr/local")' in p
 
 
+def test_restrict_reads_allows_active_developer_dir(tmp_path, monkeypatch):
+    """The /usr/bin compiler shims dlopen libxcrun from the directory
+    xcode-select points at; restrict_reads must grant it and the
+    link itself."""
+    developer = tmp_path / "CommandLineTools"
+    developer.mkdir()
+    link = tmp_path / "xcode_select_link"
+    link.symlink_to(developer)
+    monkeypatch.setattr(seatbelt, "_XCODE_SELECT_LINK", str(link))
+    p = seatbelt.build_profile(output="/tmp", restrict_reads=True)
+    assert f'(subpath "{os.path.realpath(developer)}")' in p
+    assert f'(subpath "{link}")' in p
+
+
+def test_restrict_reads_without_selected_toolchain_adds_nothing(
+        tmp_path, monkeypatch):
+    missing = tmp_path / "xcode_select_link"
+    monkeypatch.setattr(seatbelt, "_XCODE_SELECT_LINK", str(missing))
+    p = seatbelt.build_profile(output="/tmp", restrict_reads=True)
+    assert str(missing) not in p
+
+
 def test_seccomp_profile_none_string_omits_deny():
     """`seccomp_profile="none"` is the explicit "no syscall filter"
     sentinel — must NOT engage the macOS hardening either."""

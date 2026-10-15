@@ -284,6 +284,28 @@ def _realpath_or_none(path: str | None) -> str | None:
     return os.path.realpath(path)
 
 
+# xcode-select's pointer to the active developer directory. The
+# /usr/bin compiler shims (gcc, cc, clang, make, ...) are xcrun
+# trampolines that read this link, then dlopen libxcrun.dylib and exec
+# the real tool from the directory it names.
+_XCODE_SELECT_LINK = "/private/var/db/xcode_select_link"
+
+
+def _developer_toolchain_read_dirs() -> tuple[str, ...]:
+    """Read grants that let the /usr/bin developer-tool shims run.
+
+    Returns the xcode-select link and the active developer directory
+    it resolves to (Command Line Tools or an Xcode bundle's
+    Contents/Developer), or nothing when no toolchain is selected.
+    Toolchain trees hold compilers, SDK headers and libraries; the
+    grant matches the /usr and Homebrew posture."""
+    developer_dir = _realpath_or_none(_XCODE_SELECT_LINK)
+    if not developer_dir or developer_dir == _XCODE_SELECT_LINK \
+            or not os.path.isdir(developer_dir):
+        return ()
+    return (_XCODE_SELECT_LINK, developer_dir)
+
+
 def _quote_sbpl(s: str) -> str:
     r"""Quote a string literal for SBPL. SBPL uses double-quoted strings
     with backslash escapes for embedded quotes/backslashes.
@@ -562,7 +584,7 @@ def build_profile(*,
             # /bin/sh's deps (a strict subset of any target's) permitted is
             # exactly what makes "no readiness byte" mean a genuine failure.
             "/bin", "/sbin",
-        )
+        ) + _developer_toolchain_read_dirs()
         # /dev is NOT included wholesale — same posture as Linux
         # (core/sandbox/context.py SYSTEM_READ_DIRS deliberately
         # excludes /dev to keep /dev/shm out of scope; on macOS
