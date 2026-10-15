@@ -380,6 +380,17 @@ fi
 # they write attacker-steerable files or leak/stabilise memory state
 # useful to an exploit. Consistent with core/config.DANGEROUS_ENV_VARS.
 
+# Project environment: re-exec under `uv run` so python3 here, in
+# libexec/, and in the Claude Code session is the project venv that
+# `uv sync --locked` populated. `--locked` matches the documented
+# install and fails loudly on a stale lockfile. Skipped when uv is not
+# installed; _RAPTOR_UV_RUN marks the re-exec'd run.
+if [ -z "${_RAPTOR_UV_RUN:-}" ] && command -v uv >/dev/null 2>&1; then
+    export _RAPTOR_UV_RUN=1
+    exec uv run --project "$RAPTOR_DIR" --locked -- bash "$SCRIPT" "$@"
+fi
+unset _RAPTOR_UV_RUN
+
 if ! command -v python3 >/dev/null 2>&1; then
     echo "raptor: python3 not found" >&2
     exit 1
