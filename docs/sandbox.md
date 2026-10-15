@@ -1062,6 +1062,17 @@ caps are per-UID host-wide, syscall filtering is coarser, and host
 fingerprint sanitisation is unavailable. Under `--sandbox debug`,
 process-info denies are skipped so lldb/sample/dtrace can attach.
 
+Under the hardened profiles, process-info and signals stay open to
+processes inside the same sandbox instance (the PID-namespace
+analogue), so parents can watch and reap their own children; host
+processes and other sandbox runs stay unreachable. The mach-lookup
+allowlist closes the keychain, so children get
+`NIX_SSL_CERT_FILE=/etc/ssl/cert.pem` for file-based trust anchors
+(Semgrep's OCaml TLS stack reads it). `(deny network*)` also denies
+bind/listen, so RAPTOR's own dispatched children behind the egress
+proxy (the SCA agent) route their HTTP clients through the parent
+proxy instead of starting an in-child one.
+
 ---
 
 ## Host and network perimeter
