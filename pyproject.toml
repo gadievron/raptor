@@ -71,6 +71,16 @@ grammars = [
     "tree-sitter-typescript==0.23.2",
 ]
 
+# ZKPoX Tier 2/3 (packages/zkpox/{disclosure,anchor,envelope,prove}).
+# Optional at runtime — kept out of the base dependency set to preserve
+# the dependency-free Tier 0/1 import contract (packages/zkpox/__init__.py
+# guards these behind try/except ImportError) — but required to run the
+# disclosure / anchor / envelope / prove tests.
+zkpox = [
+    "cryptography==50.0.1",
+    "cbor2==6.0.1",
+]
+
 # Smaller optional deps
 h2 = ["h2==4.4.1"]
 cvss = ["cvss==3.6"]
@@ -94,6 +104,10 @@ test = [
     "gcovr==8.6",
     "beautifulsoup4==4.15.0",
     "z3-solver>=4.13.0.0,<4.15.5.0",
+    # ZKPoX Tier 2/3 test deps — so packages/zkpox/{disclosure,anchor,
+    # envelope,prove} tests run in CI instead of importorskip-ing.
+    "cryptography==50.0.1",
+    "cbor2==6.0.1",
 ]
 lint = [
     "ruff==0.15.12",

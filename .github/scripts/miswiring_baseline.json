@@ -613,6 +613,12 @@
     "dead:dead_class:packages/exploit_feasibility/constants.py:TargetPriority": {
       "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
     },
+    "dead:dead_class:packages/zkpox/envelope.py:EnvelopeRoundTripError": {
+      "note": "zkpox public API: raised on AES round-trip verification failure; consumed by downstream callers"
+    },
+    "dead:dead_function:packages/zkpox/anchor.py:load_ed25519_secret_pem": {
+      "note": "zkpox public API: loads a persisted signing key for repeat anchoring; consumed by operator CLI"
+    },
     "dead:dead_function:core/analysis/lifecycle_collector.py:collect_read_site": {
       "note": "kept: feature seed — lifecycle/UAF audit pass (guard-annotated read-site collector, pair of collect_write_site; roadmap decision 2026-08-17)"
     },
