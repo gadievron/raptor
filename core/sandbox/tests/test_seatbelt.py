@@ -1203,14 +1203,14 @@ class TestFileTrustAnchorEnv:
         p = seatbelt.build_profile(seccomp_profile="full")
         assert seatbelt.file_trust_anchor_env(p) == {}
 
-    def test_not_an_openssl_trust_override(self):
-        """The injected name must stay off the OpenSSL / requests /
-        curl trust-override surface the env blocklist guards."""
+    def test_all_file_trust_overrides_are_dangerous(self):
+        """Every caller-controlled file trust root is stripped."""
         from core.config import RaptorConfig
-        name = seatbelt.MACOS_FILE_TRUST_ANCHOR_ENV
-        assert name not in ("SSL_CERT_FILE", "SSL_CERT_DIR",
-                            "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE")
-        assert not RaptorConfig.is_dangerous_env_name(name)
+        names = (seatbelt.MACOS_FILE_TRUST_ANCHOR_ENV,
+                 "SSL_CERT_FILE", "SSL_CERT_DIR",
+                 "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE")
+        assert all(RaptorConfig.is_dangerous_env_name(name)
+                   for name in names)
 
     def test_bundle_readable_under_restrict_reads(self):
         p = seatbelt.build_profile(seccomp_profile="full",

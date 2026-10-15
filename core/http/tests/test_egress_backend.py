@@ -1,14 +1,17 @@
 """Tests for core.http.egress_backend.EgressClient (urllib3-backed).
 
-End-to-end testing through the real proxy lives in ``core/sandbox/tests/`` —
-the proxy has its own coverage there, and CONNECT-tunnel integration
-tests need an HTTPS stub server with a self-signed cert which is heavy
-infrastructure for limited additional confidence.
+The macOS integration case uses a captive TLS server to exercise the
+Seatbelt child-to-parent proxy route without external network access.
 """
 
 from __future__ import annotations
 
+import os
+import ssl
+import subprocess
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -210,3 +213,109 @@ class TestSeatbeltParentProxy:
         client = EgressClient(["api.osv.dev"])
         mock_get_proxy.assert_called_once()
         assert client._http.proxy.port == 1234
+
+    @pytest.mark.darwin_native
+    def test_real_seatbelt_child_uses_parent_proxy_allowlist(
+            self, tmp_path, monkeypatch):
+        """A real seatbelt child reaches an allowed TLS server through
+        the parent lane, while the same lane rejects an undeclared host."""
+        from core.sandbox import _macos_spawn, proxy as proxy_mod
+
+        cert = tmp_path / "server-cert.pem"
+        key = tmp_path / "server-key.pem"
+        subprocess.run(
+            [
+                "/usr/bin/openssl", "req", "-x509", "-newkey", "rsa:2048",
+                "-nodes", "-keyout", str(key), "-out", str(cert),
+                "-days", "1", "-subj", "/CN=127.0.0.1",
+                "-addext", "subjectAltName=IP:127.0.0.1",
+                "-addext", "basicConstraints=critical,CA:TRUE",
+            ],
+            check=True, capture_output=True,
+        )
+
+        hits: list[str] = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                hits.append(self.path)
+                body = b'{"via": "parent-proxy"}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        tls.load_cert_chain(certfile=cert, keyfile=key)
+        server.socket = tls.wrap_socket(server.socket, server_side=True)
+        server_thread = threading.Thread(
+            target=server.serve_forever, daemon=True,
+        )
+        server_thread.start()
+
+        try:
+            for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+                         "http_proxy", "https_proxy", "all_proxy", "no_proxy"):
+                monkeypatch.delenv(name, raising=False)
+            proxy_mod._reset_for_tests()
+            # The captive server is loopback-only. Keep the real proxy and
+            # hostname gate while allowing this test's local destination.
+            monkeypatch.setattr(
+                proxy_mod, "_ip_is_blocked", lambda _ip: False,
+            )
+            server_port = server.server_address[1]
+            parent_proxy = proxy_mod.get_proxy(["127.0.0.1"])
+            proxy_port = parent_proxy.bind_tcp_lane(
+                label="seatbelt-egress-integration",
+                allowed_hosts=["127.0.0.1"],
+                allowed_ports=[server_port],
+            )
+            proxy_url = f"http://127.0.0.1:{proxy_port}"
+            repo = Path(__file__).resolve().parents[3]
+            child_script = (
+                "import sys\n"
+                f"sys.path.insert(0, {str(repo)!r})\n"
+                "from core.http import HttpError\n"
+                "from core.http.egress_backend import EgressClient\n"
+                "client = EgressClient(['127.0.0.1'])\n"
+                f"client._http.connection_pool_kw['ca_certs'] = {str(cert)!r}\n"
+                f"allowed = client.get_json("
+                f"'https://127.0.0.1:{server_port}/ok',"
+                " timeout=5, total_timeout=8, retries=0)\n"
+                "print('allowed-ok' if allowed == {'via': 'parent-proxy'}"
+                " else 'allowed-wrong')\n"
+                "try:\n"
+                f"    client.get_json("
+                f"'https://localhost:{server_port}/denied',"
+                " timeout=5, total_timeout=8, retries=0)\n"
+                "except HttpError as exc:\n"
+                "    print('disallowed-denied' if"
+                " 'host not on the allowlist' in str(exc) else"
+                " 'disallowed-wrong-error')\n"
+                "else:\n"
+                "    print('disallowed-reached')\n"
+            )
+            result = _macos_spawn.run_sandboxed(
+                [sys.executable, "-I", "-c", child_script],
+                output=str(tmp_path), block_network=True,
+                seccomp_profile="full", use_egress_proxy=True,
+                proxy_port=proxy_port, keep_trust_markers=True,
+                env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                     "HTTPS_PROXY": proxy_url},
+                capture_output=True, text=True, timeout=30,
+            )
+            assert result.returncode == 0, (result.stdout, result.stderr)
+            assert result.stdout.splitlines() == [
+                "allowed-ok", "disallowed-denied",
+            ], (result.stdout, result.stderr)
+            assert hits == ["/ok"]
+        finally:
+            proxy_mod._reset_for_tests()
+            server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=5)

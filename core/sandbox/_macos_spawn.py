@@ -1013,10 +1013,10 @@ def run_sandboxed(cmd: list[str], *,
 
     # 2c. File-based TLS trust anchors when the profile closes the
     #     keychain (mach-lookup allowlist): see
-    #     seatbelt.MACOS_FILE_TRUST_ANCHORS. A caller-supplied value
-    #     wins.
+    #     seatbelt.MACOS_FILE_TRUST_ANCHORS. The spawn layer pins the
+    #     value so caller-controlled trust roots never reach the child.
     for _k, _v in seatbelt.file_trust_anchor_env(profile).items():
-        child_env.setdefault(_k, _v)
+        child_env[_k] = _v
 
     # 2d. Parent egress-proxy marker (seatbelt.PARENT_EGRESS_PROXY_ENV):
     #     minted only here, only for RAPTOR's own in-tree dispatch

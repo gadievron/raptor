@@ -21,6 +21,7 @@ import subprocess
 import sys
 import time
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -412,8 +413,8 @@ def test_tmpdir_not_steered_without_write_isolation(tmp_path,
 @pytest.mark.parametrize("seccomp_profile,caller_value,expected", [
     # Hardened profile closes the keychain → file bundle injected.
     ("full", None, "BUNDLE"),
-    # A caller-supplied value wins.
-    ("full", "/caller/ca.pem", "/caller/ca.pem"),
+    # The fixed bundle overrides a caller-controlled trust root.
+    ("full", "/caller/ca.pem", "BUNDLE"),
     # mach-lookup unrestricted → nothing injected.
     (None, None, "unset"),
 ])
@@ -502,15 +503,43 @@ def test_file_trust_anchors_readable_under_hardened_read_restriction(
     from core.sandbox import seatbelt
     if not os.path.isfile(seatbelt.MACOS_FILE_TRUST_ANCHORS):
         pytest.skip("no system CA bundle on this host")
+    script = (
+        f'test "$NIX_SSL_CERT_FILE" = '
+        f'{seatbelt.MACOS_FILE_TRUST_ANCHORS!r} && '
+        'test -z "${SSL_CERT_FILE+x}" && '
+        'test -z "${SSL_CERT_DIR+x}" && '
+        '/usr/bin/grep -c "BEGIN CERTIFICATE" "$NIX_SSL_CERT_FILE"'
+    )
     r = _macos_spawn.run_sandboxed(
-        ["/bin/sh", "-c",
-         '/usr/bin/grep -c "BEGIN CERTIFICATE" "$NIX_SSL_CERT_FILE"'],
+        ["/bin/sh", "-c", script],
         output=str(tmp_path), block_network=True, restrict_reads=True,
         seccomp_profile="full",
+        strict_env=True,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "NIX_SSL_CERT_FILE": "/caller/nix-ca.pem",
+            "SSL_CERT_FILE": "/caller/openssl-ca.pem",
+            "SSL_CERT_DIR": "/caller/openssl-certs",
+        },
         capture_output=True, text=True, timeout=20,
     )
     assert r.returncode == 0, r.stderr
     assert int(r.stdout.strip()) > 0
+
+
+@pytest.mark.darwin_native
+def test_file_trust_override_stripped_without_mach_restriction(tmp_path):
+    r = _macos_spawn.run_sandboxed(
+        ["/bin/sh", "-c", 'printf %s "${NIX_SSL_CERT_FILE-unset}"'],
+        output=str(tmp_path), block_network=True, strict_env=True,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "NIX_SSL_CERT_FILE": "/caller/nix-ca.pem",
+        },
+        capture_output=True, text=True, timeout=20,
+    )
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == "unset"
 
 
 # --- Darwin-only behavioural tests ------------------------------------
@@ -910,40 +939,107 @@ def test_full_profile_parent_can_watch_and_signal_own_child(tmp_path):
     """Under the hardened profile a sandboxed parent must still
     introspect and signal the processes it spawned (the JVM's
     ProcessHandleImpl.isAlive0 under CodeQL, supervisors reaping
-    workers), while host processes stay out of reach.
+    workers), while same-UID host processes and separate sandbox
+    instances stay out of reach.
     proc_pidinfo(PROC_PIDTBSDINFO) is process-info gated; kill(pid, 0)
     is a signal."""
-    script = (
-        "import ctypes, os, subprocess\n"
-        "lib = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)\n"
-        "buf = ctypes.create_string_buffer(512)\n"
-        "def info(pid):\n"
-        "    return lib.proc_pidinfo(pid, 3, ctypes.c_uint64(0), buf,"
-        " 512) > 0\n"
-        "def sig(pid):\n"
-        "    try:\n"
-        "        os.kill(pid, 0)\n"
-        "        return True\n"
-        "    except PermissionError:\n"
-        "        return False\n"
-        "c = subprocess.Popen(['/bin/sleep', '5'])\n"
-        "print('child-info-ok' if info(c.pid) else 'child-info-denied')\n"
-        "print('child-signal-ok' if sig(c.pid) else 'child-signal-denied')\n"
-        "print('host-info-denied' if not info(1) else 'host-info-ok')\n"
-        "print('host-signal-denied' if not sig(1) else 'host-signal-ok')\n"
-        "c.kill()\n"
-        "c.wait()\n"
+    repo = Path(__file__).resolve().parents[3]
+    other_pid_file = tmp_path / "other-sandbox.pid"
+    other_script = (
+        "import os, pathlib, time\n"
+        f"pid_path = pathlib.Path({str(other_pid_file)!r})\n"
+        "pending = pid_path.with_suffix('.pending')\n"
+        "pending.write_text(str(os.getpid()))\n"
+        "os.replace(pending, pid_path)\n"
+        "time.sleep(30)\n"
     )
-    r = _macos_spawn.run_sandboxed(
-        [sys.executable, "-I", "-c", script],
-        output=str(tmp_path),
-        block_network=True,
-        seccomp_profile="full",
-        capture_output=True, text=True, timeout=20,
+    orchestrator_script = (
+        "import sys\n"
+        f"sys.path.insert(0, {str(repo)!r})\n"
+        "from core.sandbox import _macos_spawn\n"
+        f"script = {other_script!r}\n"
+        "result = _macos_spawn.run_sandboxed(\n"
+        "    [sys.executable, '-I', '-c', script],\n"
+        f"    output={str(tmp_path)!r}, block_network=True,\n"
+        "    seccomp_profile='full', capture_output=True, text=True,\n"
+        "    timeout=40,\n"
+        ")\n"
+        "raise SystemExit(result.returncode)\n"
     )
-    for line in ("child-info-ok", "child-signal-ok",
-                 "host-info-denied", "host-signal-denied"):
-        assert line in r.stdout, (r.stdout, r.stderr)
+    host_helper = subprocess.Popen(["/bin/sleep", "30"])
+    other_orchestrator = subprocess.Popen(
+        [sys.executable, "-I", "-c", orchestrator_script],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and not other_pid_file.exists():
+            if other_orchestrator.poll() is not None:
+                stdout, stderr = other_orchestrator.communicate()
+                pytest.fail(
+                    "separate sandbox exited before publishing its PID: "
+                    f"rc={other_orchestrator.returncode}, "
+                    f"stdout={stdout!r}, stderr={stderr!r}"
+                )
+            time.sleep(0.05)
+        assert other_pid_file.exists(), (
+            "separate sandbox did not publish its PID"
+        )
+        other_pid = int(other_pid_file.read_text())
+        # Both controls are live, same-UID processes the test process
+        # can signal; only the Seatbelt boundary should deny access.
+        os.kill(host_helper.pid, 0)
+        os.kill(other_pid, 0)
+        script = (
+            "import ctypes, os, subprocess\n"
+            "lib = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)\n"
+            "buf = ctypes.create_string_buffer(512)\n"
+            "def info(pid):\n"
+            "    return lib.proc_pidinfo(pid, 3, ctypes.c_uint64(0), buf,"
+            " 512) > 0\n"
+            "def sig(pid):\n"
+            "    try:\n"
+            "        os.kill(pid, 0)\n"
+            "        return True\n"
+            "    except PermissionError:\n"
+            "        return False\n"
+            "c = subprocess.Popen(['/bin/sleep', '5'])\n"
+            "print('child-info-ok' if info(c.pid) else"
+            " 'child-info-denied')\n"
+            "print('child-signal-ok' if sig(c.pid) else"
+            " 'child-signal-denied')\n"
+            f"print('host-info-denied' if not info({host_helper.pid}) else"
+            " 'host-info-ok')\n"
+            f"print('host-signal-denied' if not sig({host_helper.pid}) else"
+            " 'host-signal-ok')\n"
+            f"print('sandbox-info-denied' if not info({other_pid}) else"
+            " 'sandbox-info-ok')\n"
+            f"print('sandbox-signal-denied' if not sig({other_pid}) else"
+            " 'sandbox-signal-ok')\n"
+            "c.kill()\n"
+            "c.wait()\n"
+        )
+        r = _macos_spawn.run_sandboxed(
+            [sys.executable, "-I", "-c", script],
+            output=str(tmp_path),
+            block_network=True,
+            seccomp_profile="full",
+            capture_output=True, text=True, timeout=20,
+        )
+        for line in ("child-info-ok", "child-signal-ok",
+                     "host-info-denied", "host-signal-denied",
+                     "sandbox-info-denied", "sandbox-signal-denied"):
+            assert line in r.stdout, (r.stdout, r.stderr)
+    finally:
+        for proc in (host_helper, other_orchestrator):
+            if proc.poll() is None:
+                proc.terminate()
+        for proc in (host_helper, other_orchestrator):
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
 
 
 # --- Darwin-only: seatbelt-shim fail-loud + teardown integration ------
