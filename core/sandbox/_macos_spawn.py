@@ -1018,6 +1018,17 @@ def run_sandboxed(cmd: list[str], *,
     for _k, _v in seatbelt.file_trust_anchor_env(profile).items():
         child_env.setdefault(_k, _v)
 
+    # 2d. Parent egress-proxy marker (seatbelt.PARENT_EGRESS_PROXY_ENV):
+    #     minted only here, only for RAPTOR's own in-tree dispatch
+    #     (keep_trust_markers — target code never sees an
+    #     inside-RAPTOR tell), only when the profile admits exactly the
+    #     loopback proxy port and the child's HTTPS_PROXY names it.
+    child_env.pop(seatbelt.PARENT_EGRESS_PROXY_ENV, None)
+    if keep_trust_markers and use_egress_proxy and proxy_port:
+        _proxy_url = f"http://127.0.0.1:{int(proxy_port)}"
+        if child_env.get("HTTPS_PROXY") == _proxy_url:
+            child_env[seatbelt.PARENT_EGRESS_PROXY_ENV] = _proxy_url
+
     # 3. rlimits via preexec_fn.
     #
     # _make_preexec_fn handles memory / CPU / file-size via setrlimit

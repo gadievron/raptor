@@ -439,6 +439,63 @@ def test_file_trust_anchors_injected_under_mach_restriction(
     assert r.stdout == (str(bundle) if expected == "BUNDLE" else expected)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only")
+@pytest.mark.parametrize("use_proxy,keep,https_proxy,inbound,expected", [
+    # RAPTOR dispatch behind the proxy lane, HTTPS_PROXY names it →
+    # marker minted.
+    (True, True, "http://127.0.0.1:43210", None, "http://127.0.0.1:43210"),
+    # Target code (no keep-trust dispatch) never sees it.
+    (True, False, "http://127.0.0.1:43210", None, "unset"),
+    # HTTPS_PROXY elsewhere → no marker.
+    (True, True, "http://127.0.0.1:1", None, "unset"),
+    # No proxy lane → a caller-supplied marker is dropped.
+    (False, True, "http://127.0.0.1:43210", "http://127.0.0.1:43210",
+     "unset"),
+])
+def test_parent_egress_proxy_marker_minted_only_by_spawn_layer(
+        tmp_path, monkeypatch, use_proxy, keep, https_proxy, inbound,
+        expected):
+    from core.sandbox import seatbelt
+    fake = tmp_path / "fake-sandbox-exec"
+    fake.write_text('#!/bin/sh\nshift 3\nexec "$@"\n')
+    fake.chmod(0o755)
+    monkeypatch.setattr(_macos_spawn, "SANDBOX_EXEC", str(fake))
+    name = seatbelt.PARENT_EGRESS_PROXY_ENV
+    env = {"PATH": "/usr/bin:/bin", "HTTPS_PROXY": https_proxy}
+    if inbound:
+        env[name] = inbound
+    kw = {"use_egress_proxy": True, "proxy_port": 43210} if use_proxy \
+        else {"block_network": True}
+    r = _macos_spawn.run_sandboxed(
+        ["/bin/sh", "-c", f'printf %s "${{{name}-unset}}"'],
+        env=env, keep_trust_markers=keep,
+        capture_output=True, text=True, timeout=15, **kw,
+    )
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == expected
+
+
+@pytest.mark.darwin_native
+def test_sandbox_check_reports_seatbelt_child(tmp_path):
+    """EgressClient's parent-proxy route is gated on kernel truth;
+    the probe must report True inside a profile and False outside."""
+    from core.http import egress_backend
+    assert egress_backend._process_is_sandboxed() is False
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))))
+    script = (
+        f"import sys; sys.path.insert(0, {repo!r}); "
+        "from core.http.egress_backend import _process_is_sandboxed; "
+        "print(_process_is_sandboxed())"
+    )
+    r = _macos_spawn.run_sandboxed(
+        [sys.executable, "-I", "-c", script],
+        output=str(tmp_path), block_network=True, seccomp_profile="full",
+        capture_output=True, text=True, timeout=30,
+    )
+    assert r.stdout.strip() == "True", (r.stdout, r.stderr)
+
+
 @pytest.mark.darwin_native
 def test_file_trust_anchors_readable_under_hardened_read_restriction(
         tmp_path):

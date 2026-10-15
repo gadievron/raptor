@@ -150,3 +150,63 @@ class TestDefaultClientWithHosts:
         mock_get_proxy.return_value = MagicMock(port=1234)
         c = default_client(allowed_hosts=["api.osv.dev"])
         assert isinstance(c, EgressClient)
+
+
+# ---------------------------------------------------------------------------
+# Seatbelt child behind the parent's egress proxy
+# ---------------------------------------------------------------------------
+
+class TestSeatbeltParentProxy:
+    """A macOS seatbelt child under (deny network*) cannot bind an
+    in-process proxy; EgressClient routes through the parent proxy the
+    spawn layer named — only on darwin, only with the marker matching
+    HTTPS_PROXY on a loopback URL, only when the kernel reports the
+    process as sandboxed."""
+
+    URL = "http://127.0.0.1:43210"
+
+    @pytest.fixture
+    def child_env(self, monkeypatch):
+        from core.http import egress_backend
+        from core.sandbox.seatbelt import PARENT_EGRESS_PROXY_ENV
+        monkeypatch.setattr(egress_backend.sys, "platform", "darwin")
+        monkeypatch.setattr(egress_backend, "_process_is_sandboxed",
+                            lambda: True)
+        monkeypatch.setenv(PARENT_EGRESS_PROXY_ENV, self.URL)
+        monkeypatch.setenv("HTTPS_PROXY", self.URL)
+        return monkeypatch
+
+    @patch("core.sandbox.proxy.get_proxy")
+    def test_routes_via_parent_without_starting_a_proxy(
+            self, mock_get_proxy, child_env):
+        client = EgressClient(["api.osv.dev"])
+        mock_get_proxy.assert_not_called()
+        assert isinstance(client._http, urllib3.ProxyManager)
+        assert client._http.proxy.port == 43210
+        assert client._http.proxy.host == "127.0.0.1"
+
+    @pytest.mark.parametrize("mutate", [
+        "not_darwin", "not_sandboxed", "no_marker",
+        "marker_mismatch", "non_loopback",
+    ])
+    @patch("core.sandbox.proxy.get_proxy")
+    def test_any_failed_condition_keeps_in_process_proxy(
+            self, mock_get_proxy, child_env, mutate):
+        from core.http import egress_backend
+        from core.sandbox.seatbelt import PARENT_EGRESS_PROXY_ENV
+        if mutate == "not_darwin":
+            child_env.setattr(egress_backend.sys, "platform", "linux")
+        elif mutate == "not_sandboxed":
+            child_env.setattr(egress_backend, "_process_is_sandboxed",
+                              lambda: False)
+        elif mutate == "no_marker":
+            child_env.delenv(PARENT_EGRESS_PROXY_ENV)
+        elif mutate == "marker_mismatch":
+            child_env.setenv("HTTPS_PROXY", "http://127.0.0.1:1")
+        elif mutate == "non_loopback":
+            child_env.setenv(PARENT_EGRESS_PROXY_ENV, "http://evil:43210")
+            child_env.setenv("HTTPS_PROXY", "http://evil:43210")
+        mock_get_proxy.return_value = MagicMock(port=1234)
+        client = EgressClient(["api.osv.dev"])
+        mock_get_proxy.assert_called_once()
+        assert client._http.proxy.port == 1234

@@ -159,6 +159,17 @@ def file_trust_anchor_env(profile: str) -> dict[str, str]:
         return {}
     return {MACOS_FILE_TRUST_ANCHOR_ENV: MACOS_FILE_TRUST_ANCHORS}
 
+
+# Spawn-layer-minted marker naming the parent's egress-proxy URL for a
+# seatbelt child behind it. `(deny network*)` denies bind/listen, so an
+# in-child core.sandbox.proxy instance cannot start (EPERM on
+# 127.0.0.1:0); in-child RAPTOR HTTP clients (core.http.EgressClient)
+# route through the parent proxy named here instead. The parent proxy
+# is the only egress the profile admits either way. Never taken from a
+# caller env: the spawn layer drops any inbound value.
+PARENT_EGRESS_PROXY_ENV = "_RAPTOR_SEATBELT_EGRESS_PROXY"
+
+
 # sysctl-read allowlist for the hardened profiles, WebKit-seeded
 # (Apple's WebProcess profile uses the same deny-with-sysctl-name-
 # allowlist pattern). Covers hardware identity (hw.*, machdep.cpu.*),
