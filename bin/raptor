@@ -114,10 +114,11 @@ _raptor_private_gid=""
 if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ]; then
     _raptor_uid="$(_rp id -u)"
     _raptor_gid="$(_rp id -g)"
-    # Names are absent when the ids have no passwd/group entry (numeric
-    # --user in a container); the private-group allowance then stays off.
-    _raptor_user="$(_rp id -un 2>/dev/null || true)"
-    _raptor_group="$(_rp id -gn 2>/dev/null || true)"
+    # When an id has no passwd/group entry (numeric --user in a
+    # container), `id -n` prints the number and exits non-zero; the
+    # name stays empty and the private-group allowance stays off.
+    _raptor_user="$(_rp id -un 2>/dev/null)" || _raptor_user=""
+    _raptor_group="$(_rp id -gn 2>/dev/null)" || _raptor_group=""
     if [ -n "$_raptor_user" ] && [ "$_raptor_user" = "$_raptor_group" ]; then
         _raptor_private_gid="$_raptor_gid"
     fi

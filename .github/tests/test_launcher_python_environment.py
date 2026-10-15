@@ -325,7 +325,7 @@ class LauncherIdentityLookupTest(unittest.TestCase):
             "_rp() {\n"
             '  case "$*" in\n'
             "    'id -u'|'id -g') echo 4242 ;;\n"
-            "    *) echo \"id: cannot find name\" >&2; return 1 ;;\n"
+            "    *) echo 4242; echo \"id: cannot find name\" >&2; return 1 ;;\n"
             "  esac\n"
             "}\n"
             + self._identity_block()
