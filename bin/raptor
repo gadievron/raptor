@@ -389,7 +389,7 @@ fi
 # redirect uv to another interpreter, venv, env file, or package index;
 # the project's own pyproject.toml [tool.uv] settings still apply.
 if [ -z "${_RAPTOR_UV_RUN:-}" ] && command -v uv >/dev/null 2>&1; then
-    for _raptor_uv_var in $(compgen -e UV_); do
+    for _raptor_uv_var in "${!UV_@}"; do
         unset "$_raptor_uv_var"
     done
     unset _raptor_uv_var
