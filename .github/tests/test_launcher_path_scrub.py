@@ -6,7 +6,7 @@ Why this test exists
 ``bin/raptor``'s own threat model names PATH entries
 attacker-influenceable (a hostile direnv/.envrc poisons PATH before
 the launcher runs), and the scrub correctly DROPS empty/relative/
-world-writable entries — but the warning lanes then wrote the flagged
+group/world-writable entries — but the warning lanes then wrote the flagged
 entry verbatim to the operator's TTY at the exact launch moment. A
 planted entry carrying ESC/CSI overwrote or forged the very hygiene
 warning that reported it. The bash lanes are outside the AST
@@ -101,7 +101,7 @@ class TestPathScrubWarningsEscaped(unittest.TestCase):
                               | stat.S_IROTH)
             proc = _run_help(f"{hostile_dir}:/usr/bin:/bin")
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("world-writable dir", proc.stderr)
+        self.assertIn("group/world-writable dir", proc.stderr)
         self.assertNotIn("\x1b", proc.stderr)
         self.assertNotIn("\x07", proc.stderr)
 
