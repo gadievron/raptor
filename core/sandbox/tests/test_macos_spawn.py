@@ -800,6 +800,47 @@ def test_seccomp_kwargs_silently_ignored(tmp_path):
     assert r.returncode == 0
 
 
+@pytest.mark.darwin_native
+def test_full_profile_parent_can_watch_and_signal_own_child(tmp_path):
+    """Under the hardened profile a sandboxed parent must still
+    introspect and signal the processes it spawned (the JVM's
+    ProcessHandleImpl.isAlive0 under CodeQL, supervisors reaping
+    workers), while host processes stay out of reach.
+    proc_pidinfo(PROC_PIDTBSDINFO) is process-info gated; kill(pid, 0)
+    is a signal."""
+    script = (
+        "import ctypes, os, subprocess\n"
+        "lib = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)\n"
+        "buf = ctypes.create_string_buffer(512)\n"
+        "def info(pid):\n"
+        "    return lib.proc_pidinfo(pid, 3, ctypes.c_uint64(0), buf,"
+        " 512) > 0\n"
+        "def sig(pid):\n"
+        "    try:\n"
+        "        os.kill(pid, 0)\n"
+        "        return True\n"
+        "    except PermissionError:\n"
+        "        return False\n"
+        "c = subprocess.Popen(['/bin/sleep', '5'])\n"
+        "print('child-info-ok' if info(c.pid) else 'child-info-denied')\n"
+        "print('child-signal-ok' if sig(c.pid) else 'child-signal-denied')\n"
+        "print('host-info-denied' if not info(1) else 'host-info-ok')\n"
+        "print('host-signal-denied' if not sig(1) else 'host-signal-ok')\n"
+        "c.kill()\n"
+        "c.wait()\n"
+    )
+    r = _macos_spawn.run_sandboxed(
+        [sys.executable, "-I", "-c", script],
+        output=str(tmp_path),
+        block_network=True,
+        seccomp_profile="full",
+        capture_output=True, text=True, timeout=20,
+    )
+    for line in ("child-info-ok", "child-signal-ok",
+                 "host-info-denied", "host-signal-denied"):
+        assert line in r.stdout, (r.stdout, r.stderr)
+
+
 # --- Darwin-only: seatbelt-shim fail-loud + teardown integration ------
 # These validate the raptor-seatbelt-shim wiring under a REAL sandbox-exec:
 # the inner shim (python, run INSIDE the applied profile) emitting the

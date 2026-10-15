@@ -699,6 +699,39 @@ def test_seccomp_profile_full_emits_process_info_deny():
     assert "(deny process-info-pidfdinfo" not in p
 
 
+def test_seccomp_profile_full_allows_same_sandbox_introspection():
+    """A parent must be able to watch and signal the processes it
+    spawned inside the sandbox: self-only broke the JVM's
+    ProcessHandleImpl.isAlive0 (sysctl kern.proc.pid.<child> +
+    proc_pidinfo, both gated by process-info*) and kill(own_child).
+    `(target same-sandbox)` is the measured scope — descendants and
+    in-sandbox siblings yes, a separate sandbox instance or any host
+    process no. Each allow must FOLLOW its family deny (later allow
+    wins), and the broader `(target others)` must never appear."""
+    p = seatbelt.build_profile(seccomp_profile="full")
+    lines = [line.strip() for line in p.splitlines() if line.strip()]
+    for family in ("process-info*", "signal"):
+        allow = f"(allow {family} (target same-sandbox))"
+        assert allow in lines, allow
+        assert lines.index(allow) > lines.index(f"(deny {family})")
+    assert "(target others)" not in p
+    assert "(target children)" not in p
+
+
+def test_legacy_strict_branch_allows_same_sandbox_signal():
+    p = seatbelt.build_profile(seccomp_profile="debug",
+                               profile_name="strict")
+    lines = [line.strip() for line in p.splitlines() if line.strip()]
+    assert (lines.index("(allow signal (target same-sandbox))")
+            > lines.index("(deny signal)"))
+
+
+def test_debug_profile_omits_same_sandbox_allows():
+    """debug never denies the families, so it needs no carve-outs."""
+    p = seatbelt.build_profile(seccomp_profile="debug")
+    assert "same-sandbox" not in p
+
+
 def test_seccomp_profile_full_emits_iokit_deny():
     """`(deny iokit-open)` rides the full profile: userland driver /
     device access is the macOS analogue of Linux's blocked
