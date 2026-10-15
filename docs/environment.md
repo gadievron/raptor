@@ -776,7 +776,8 @@ the JVM-installer caveat.
 | `PYTEST_CURRENT_TEST` | Detection only: suppresses the probe warm and attributes live-API leaks to test contexts. Never set manually. |
 | `ASAN_OPTIONS`, `UBSAN_OPTIONS` | Written by RAPTOR into fuzzing/crash-verification child envs (sanitizer contracts); operator values are not consumed. |
 | `AFL_PATH` | Read when probing for AFL++ binary-only tracers (`afl-qemu-trace`, `afl-frida-trace.so`); also set in the campaign child env (setdefault) to the resolved tracer's directory so `afl-fuzz -Q`/`-O` finds a tracer that is not adjacent to the afl-fuzz binary. |
-| `CONDA_DEFAULT_ENV`, `VIRTUAL_ENV` | Read only to phrase install hints for missing tools. |
+| `VIRTUAL_ENV` | When it contains an executable `bin/python3` and its bin directory survives launcher PATH hardening, `bin/raptor` selects that interpreter ahead of the checkout's `.venv` and the `python3` on `PATH`. Also read to phrase install hints for missing tools. |
+| `CONDA_DEFAULT_ENV` | Read only to phrase install hints for missing tools. |
 | `SEMGREP_ENABLE_VERSION_CHECK`, `SEMGREP_SEND_METRICS` | Semgrep's own phone-home switches. Force-set to off by RAPTOR in every sanitised child env so every semgrep invocation shape stays offline — the argv flags only cover subcommands that accept them; operator values do not reach those children. The test conftest only *defaults* them off, so an ambient value survives in the test session's own process. |
 | `RUNNER_TEMP` | GitHub Actions runner scratch directory; the sandbox feature-matrix harness defaults its results base under it (see `RAPTOR_MATRIX_RESULTS` in Core runtime). |
 | `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL` | Pinned by RAPTOR in child envs for internal git operations (deterministic identity); operator values are not consumed. |

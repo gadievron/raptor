@@ -380,28 +380,34 @@ fi
 # they write attacker-steerable files or leak/stabilise memory state
 # useful to an exploit. Consistent with core/config.DANGEROUS_ENV_VARS.
 
-# Project environment: re-exec under `uv run` so python3 here, in
-# libexec/, and in the Claude Code session is the project venv that
-# `uv sync --locked` populated. `--locked` matches the documented
-# install and fails loudly on a stale lockfile. Skipped when uv is not
-# installed; _RAPTOR_UV_RUN marks the re-exec'd run. UV_* variables are
-# dropped first so the inherited environment (e.g. a direnv .envrc) cannot
-# redirect uv to another interpreter, venv, env file, or package index;
-# the project's own pyproject.toml [tool.uv] settings still apply.
-if [ -z "${_RAPTOR_UV_RUN:-}" ] && command -v uv >/dev/null 2>&1; then
-    for _raptor_uv_var in "${!UV_@}"; do
-        unset "$_raptor_uv_var"
-    done
-    unset _raptor_uv_var
-    export _RAPTOR_UV_RUN=1
-    exec uv run --project "$RAPTOR_DIR" --locked -- bash "$SCRIPT" "$@"
+# Python environment: honour an active virtualenv first, then the
+# project environment populated by the documented `uv sync`, then the
+# python3 on PATH used by pip/system installs. Prepending the selected
+# bin directory keeps launcher calls, libexec shebangs, and the Claude
+# Code session on the same interpreter without creating or syncing an
+# environment at launch. A VIRTUAL_ENV counts as active only when its
+# bin directory survived the PATH hardening above.
+_RAPTOR_PYTHON=""
+if [ -n "${VIRTUAL_ENV:-}" ] && [ -x "$VIRTUAL_ENV/bin/python3" ]; then
+    case ":${PATH:-}:" in
+        *":$VIRTUAL_ENV/bin:"*) _RAPTOR_PYTHON="$VIRTUAL_ENV/bin/python3" ;;
+    esac
 fi
-unset _RAPTOR_UV_RUN
-
-if ! command -v python3 >/dev/null 2>&1; then
+if [ -z "$_RAPTOR_PYTHON" ] && [ -x "$RAPTOR_DIR/.venv/bin/python3" ]; then
+    _RAPTOR_PYTHON="$RAPTOR_DIR/.venv/bin/python3"
+elif [ -z "$_RAPTOR_PYTHON" ] && _RAPTOR_PYTHON="$(command -v python3)"; then
+    :
+elif [ -z "$_RAPTOR_PYTHON" ]; then
     echo "raptor: python3 not found" >&2
     exit 1
 fi
+_raptor_python_bin="${_RAPTOR_PYTHON%/*}"
+case "${PATH:-}" in
+    "$_raptor_python_bin"|"$_raptor_python_bin":*) ;;
+    *) PATH="$_raptor_python_bin${PATH:+:$PATH}" ;;
+esac
+export PATH
+unset _raptor_python_bin
 
 # Fast path: print the framework version and exit without launching a
 # session. Sits AFTER the dangerous-env strip and the python3 check on
@@ -410,7 +416,7 @@ fi
 # path, and a missing python3 should die with the friendly message.
 case "${1:-}" in
     --version|-V|version)
-        exec python3 "$RAPTOR_DIR/raptor.py" --version
+        exec "$_RAPTOR_PYTHON" "$RAPTOR_DIR/raptor.py" --version
         ;;
 esac
 
@@ -503,7 +509,7 @@ if [[ "${1:-}" == "doctor" ]]; then
     cd "$RAPTOR_DIR" || exit 1
     export RAPTOR_DIR
     export _RAPTOR_TRUSTED=1
-    exec python3 -m core.startup.doctor "$@"
+    exec "$_RAPTOR_PYTHON" -m core.startup.doctor "$@"
 fi
 
 # Route frida directly (no claude session needed). Do NOT cd into
@@ -573,7 +579,7 @@ _raptor_local_route() {
             # lifecycle/SCA sub-steps — are trusted.
             export RAPTOR_DIR
             export _RAPTOR_TRUSTED=1
-            exec python3 "$RAPTOR_DIR/raptor.py" "$_cmd" "$@"
+            exec "$_RAPTOR_PYTHON" "$RAPTOR_DIR/raptor.py" "$_cmd" "$@"
             ;;
     esac
     return 1
