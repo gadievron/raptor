@@ -461,8 +461,9 @@ class CodeQLAgent:
                     lang in SOURCE_EXTRACTED_LANGUAGES
                     and lang not in traced_languages
                 ):
-                    # Extracted from source: never run build detection,
-                    # so the repo's install/build scripts don't execute.
+                    # Source extraction needs no build. Generated sources
+                    # are included only when the operator opts into a
+                    # traced build, so skip build detection by default.
                     language_build_map[lang] = (
                         self.build_detector.generate_no_build_config(lang)
                     )

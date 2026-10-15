@@ -185,15 +185,17 @@ AUTOBUILD_LANGUAGES = frozenset(
     {"cpp", "java", "csharp", "go", "swift", "kotlin"},
 )
 
-# Languages CodeQL extracts straight from source files: a build adds
-# nothing to the database.  A detected build command for them
-# (``npm install && npm run build``, ``python setup.py build``) would
-# only execute repo-controlled code (install hooks, build scripts)
-# and, with the sandbox network blocked, fail on dependency fetches
-# and sink the whole create.  They get the no-build config unless the
-# operator opts the language into a traced build.
+# Languages CodeQL extracts directly from source without requiring a
+# build.  Generated sources are extracted only when the operator opts
+# into a traced build.  Otherwise, build detection would execute
+# repo-controlled install hooks or build scripts and can fail when they
+# fetch dependencies under the network-blocked sandbox.
 SOURCE_EXTRACTED_LANGUAGES = frozenset(
     {"javascript", "typescript", "python", "ruby"},
+)
+
+_TRACE_SENSITIVE_CACHE_LANGUAGES = (
+    BUILDLESS_DEFAULT_LANGUAGES | SOURCE_EXTRACTED_LANGUAGES
 )
 
 # Diagnostic messages the extractor emits when an #include could not
@@ -815,14 +817,16 @@ class DatabaseManager:
             logger.debug("Cached database marked as failed: %s", language)
             return None
 
-        # Serve-time build-mode check (see the traced_build arg doc).
+        # Serve-time extraction-mode check (see the traced_build arg doc).
         if self._cached_mode_mismatch(metadata, language, traced_build):
             logger.warning(
-                "Cached %s database was built buildless but this run "
-                "requested a traced build — treating as a cache miss "
-                "and rebuilding with the traced extractor (use the "
-                "cached DB via a run without --traced-build if that "
-                "was intended)", language,
+                "Cached %s database was created in %s mode but this "
+                "run requested a traced build — treating as a cache "
+                "miss and rebuilding with the traced extractor (use "
+                "the cached DB via a run without --traced-build if "
+                "that was intended)",
+                language,
+                metadata.build_system,
             )
             return None
         if (
@@ -866,18 +870,19 @@ class DatabaseManager:
         language: str,
         traced_build: bool | None,
     ) -> bool:
-        """True when a cached entry cannot satisfy the requested
-        extraction mode: the request is an explicit traced build for
-        a buildless-default language and the cached DB was built
-        buildless. Only exact ``build_system == "buildless"`` counts
-        as buildless — every other recorded value (a detected build
-        type, ``no-build`` from the pre-buildless traced path) came
-        from a traced-grade create."""
+        """True when a cached entry cannot satisfy an explicit traced
+        request because it was created in buildless or source-only
+        mode. Generic no-build metadata for a source-extracted language
+        cannot establish that generated sources were present."""
         if traced_build is not True:
             return False
-        if language not in BUILDLESS_DEFAULT_LANGUAGES:
-            return False
-        return metadata.build_system == "buildless"
+        return (
+            language in BUILDLESS_DEFAULT_LANGUAGES
+            and metadata.build_system == "buildless"
+        ) or (
+            language in SOURCE_EXTRACTED_LANGUAGES
+            and metadata.build_system in {"source-only", "no-build"}
+        )
 
     def _sibling_canonical_acceptable(
         self,
@@ -888,14 +893,14 @@ class DatabaseManager:
         """Lost-promote-race check: may we use the sibling's canonical
         instead of our own just-built staging DB?
 
-        For a traced request on a buildless-default language the
-        sibling's entry must POSITIVELY record a non-buildless build —
-        missing metadata (their save may not have landed yet) or a
-        buildless record means we install our own traced staging
-        instead; anything else re-opens the silent
-        buildless-served-to-traced fidelity downgrade through the
-        race window."""
-        if traced_build is not True or language not in BUILDLESS_DEFAULT_LANGUAGES:
+        For a traced request on a mode-sensitive language the sibling's
+        entry must POSITIVELY record a traced build. Missing metadata
+        (their save may not have landed yet) or a lower-fidelity record
+        means we install our own traced staging instead."""
+        if (
+            traced_build is not True
+            or language not in _TRACE_SENSITIVE_CACHE_LANGUAGES
+        ):
             return True
         metadata = self.load_metadata(repo_hash, language)
         if metadata is None:
@@ -912,9 +917,9 @@ class DatabaseManager:
 
         A serve-time miss alone is not enough: the atomic-promote
         flow treats ANY valid canonical as a lost race and would hand
-        the surviving buildless DB right back to the traced run that
-        just rebuilt (outcome B in the promote comment). Evicting the
-        mismatched entry up front lets the rebuild land."""
+        the surviving lower-fidelity DB right back to the traced run
+        that just rebuilt (outcome B in the promote comment). Evicting
+        the mismatched entry up front lets the rebuild land."""
         canonical = self.get_database_dir(repo_hash, language)
         if not canonical.exists():
             return
@@ -925,7 +930,9 @@ class DatabaseManager:
             return
         logger.info(
             "Evicting mode-mismatched cached %s database "
-            "(buildless entry; traced build requested)", language,
+            "(%s entry; traced build requested)",
+            language,
+            metadata.build_system,
         )
         try:
             marker = canonical.with_name(self._stale_marker_name(canonical))
@@ -1409,8 +1416,8 @@ class DatabaseManager:
         self._evict_stale_canonical(
             repo_hash, language, max_age_days=self._cache_ttl_days(),
         )
-        # Mode-mismatch eviction: a buildless canonical must not win
-        # the promote race against the traced rebuild it just missed.
+        # Mode-mismatch eviction: a lower-fidelity canonical must not
+        # win the promote race against the traced rebuild it just missed.
         self._evict_mode_mismatched_canonical(
             repo_hash, language, traced_build,
         )
@@ -1920,6 +1927,11 @@ class DatabaseManager:
             # Create metadata; database_path reflects where the DB actually
             # lives (canonical if promote succeeded, staging on fallback,
             # None on build failure)
+            source_only = (
+                language in SOURCE_EXTRACTED_LANGUAGES
+                and not traced_build
+                and (build_system is None or not build_system.command)
+            )
             metadata = DatabaseMetadata(
                 repo_hash=repo_hash,
                 repo_path=str(repo_path),
@@ -1933,11 +1945,12 @@ class DatabaseManager:
                 created_at=datetime.now(timezone.utc).isoformat(),
                 codeql_version=self.get_codeql_version() or "unknown",
                 build_command=(
-                    "" if buildless
+                    "" if buildless or source_only
                     else build_system.command if build_system else ""
                 ),
                 build_system=(
                     "buildless" if buildless
+                    else "source-only" if source_only
                     else build_system.type if build_system else "no-build"
                 ),
                 file_count=file_count,

@@ -3,11 +3,13 @@
 Buildless is the DEFAULT for languages in BUILDLESS_DEFAULT_LANGUAGES:
 an untrusted repo's build scripts must never execute during
 ``codeql database create`` unless the operator explicitly opts into
-traced-build mode. These tests are fully mocked — no codeql CLI, no
-network — plus version-probe tests that only need the probe seam.
+traced-build mode. CodeQL subprocesses are mocked — no codeql CLI or
+network — while cache-contract tests keep the real filesystem and
+metadata paths. Version-probe tests only need the probe seam.
 """
 
 import logging
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -878,11 +880,91 @@ class TestBuildModeCacheContract:
         assert result.cached is True
         assert result.database_path == planted
 
+    def test_explicit_build_replaces_source_only_cache(
+            self, db_manager, repo):
+        """A generated-source build must not reuse the default
+        source-only database."""
+        (repo / "main.js").write_text("const value = 1;\n")
+        create_commands = []
+
+        def fake_codeql_create(cmd, **kwargs):
+            create_commands.append(list(cmd))
+            staging = Path(cmd[3])
+            database = staging / "db-javascript"
+            database.mkdir(parents=True)
+            (staging / "codeql-database.yml").write_text(
+                "primaryLanguage: javascript\n",
+            )
+            (database / "trie.bin").write_bytes(
+                bytes([len(create_commands)]) * 20480,
+            )
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = ""
+            result.stderr = "Finalizing database.\n"
+            return result
+
+        real_subprocess_run = subprocess.run
+
+        def fake_codeql_version(cmd, **kwargs):
+            if cmd == [db_manager.codeql_cli, "version"]:
+                return MagicMock(
+                    returncode=0,
+                    stdout="CodeQL command-line toolchain release 2.26.3.\n",
+                    stderr="",
+                )
+            return real_subprocess_run(cmd, **kwargs)
+
+        source_only = BuildSystem(
+            type="no-build", command="", working_dir=repo,
+            env_vars={}, confidence=1.0, detected_files=[],
+        )
+        explicit_build = BuildSystem(
+            type="custom", command="npm run generate", working_dir=repo,
+            env_vars={}, confidence=1.0, detected_files=[],
+        )
+
+        with patch('core.sandbox.run', side_effect=fake_codeql_create), \
+             patch(
+                 'packages.codeql.database_manager.subprocess.run',
+                 side_effect=fake_codeql_version,
+             ):
+            default_result = db_manager.create_database(
+                repo, "javascript", source_only,
+            )
+            traced_result = db_manager.create_database(
+                repo, "javascript", explicit_build, traced_build=True,
+            )
+
+        assert default_result.success is True
+        assert default_result.cached is False
+        assert default_result.metadata.build_system == "source-only"
+        assert traced_result.success is True
+        assert traced_result.cached is False
+        assert traced_result.metadata.build_system == "custom"
+        assert traced_result.metadata.build_command == "npm run generate"
+        assert len(create_commands) == 2
+
+        repo_hash = db_manager.compute_repo_hash(repo)
+        persisted = db_manager.load_metadata(repo_hash, "javascript")
+        assert persisted is not None
+        assert persisted.build_system == "custom"
+        assert persisted.build_command == "npm run generate"
+
     def test_mode_agnostic_lookup_serves_either(self, db_manager, repo):
         """Discovery-probe callers pass no mode and keep the old
         behaviour."""
         planted = _plant_cached_db(db_manager, repo, "cpp", "buildless")
         assert db_manager.get_cached_database(repo, "cpp") == planted
+
+    def test_traced_lookup_refuses_source_no_build_cache(
+            self, db_manager, repo):
+        """The generic no-build marker cannot prove that generated
+        sources were extracted."""
+        _plant_cached_db(db_manager, repo, "python", "no-build")
+        assert db_manager.get_cached_database(
+            repo, "python", traced_build=True,
+        ) is None
 
     def test_sibling_acceptability_closes_the_race_window(
             self, db_manager, repo):
@@ -900,6 +982,16 @@ class TestBuildModeCacheContract:
             repo_hash, "cpp", False) is True
         assert db_manager._sibling_canonical_acceptable(
             repo_hash, "cpp", None) is True
-        # Non-buildless-default languages are out of scope.
+        # Languages without a lower-fidelity default are out of scope.
         assert db_manager._sibling_canonical_acceptable(
-            repo_hash, "python", True) is True
+            repo_hash, "go", True) is True
+        _plant_cached_db(
+            db_manager, repo, "javascript", "source-only",
+        )
+        assert db_manager._sibling_canonical_acceptable(
+            repo_hash, "javascript", True) is False
+        assert db_manager._sibling_canonical_acceptable(
+            repo_hash, "javascript", False) is True
+        _plant_cached_db(db_manager, repo, "python", "no-build")
+        assert db_manager._sibling_canonical_acceptable(
+            repo_hash, "python", True) is False
