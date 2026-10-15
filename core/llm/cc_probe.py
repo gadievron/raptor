@@ -220,13 +220,15 @@ def probe_cc_session_model(
     if cc_transport_disabled():
         return None
 
-    from core.llm.cc_adapter import cc_subprocess_env, neutral_cwd
+    from core.llm.cc_adapter import (
+        JSON_ENVELOPE_SETTINGS, cc_subprocess_env, neutral_cwd,
+    )
     cmd = [
         resolved_bin, "-p",
         "--no-session-persistence",
         "--allowed-tools", "",
         "--max-budget-usd", _PROBE_BUDGET_USD,
-        "--output-format", "json",
+        "--output-format", "json", *JSON_ENVELOPE_SETTINGS,
         "--strict-mcp-config", "--mcp-config", '{"mcpServers": {}}',
     ]
     try:
