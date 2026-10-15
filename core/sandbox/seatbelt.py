@@ -129,6 +129,36 @@ MACOS_BASE_MACH_SERVICES = (
 # profile.)
 MACOS_STRICT_MACH_SERVICES = MACOS_BASE_MACH_SERVICES
 
+# File-based TLS trust anchors for children of a mach-lookup-restricted
+# profile. With securityd/trustd out of reach, keychain-backed root
+# discovery comes back empty: `security find-certificate -a -p
+# SystemRootCertificates.keychain` returns zero certificates inside the
+# sandbox, and OCaml's ca-certs (Semgrep's osemgrep) aborts at startup
+# with "ca-certs: empty trust anchors". ca-certs reads the
+# NIX_SSL_CERT_FILE bundle before it falls back to the keychain
+# (measured live: Semgrep under the full profile starts and scans with
+# it set). The variable is not on the OpenSSL/requests trust-override
+# surface (SSL_CERT_FILE, REQUESTS_CA_BUNDLE, CURL_CA_BUNDLE), so other
+# tools' trust decisions are unchanged. The bundle is the root-owned,
+# OS-shipped /etc/ssl/cert.pem, readable under every profile's
+# /private/etc read grant.
+MACOS_FILE_TRUST_ANCHORS = "/etc/ssl/cert.pem"
+MACOS_FILE_TRUST_ANCHOR_ENV = "NIX_SSL_CERT_FILE"
+
+
+def file_trust_anchor_env(profile: str) -> dict[str, str]:
+    """Env to add to a child spawned under ``profile`` so file-based
+    trust-anchor discovery works where the keychain is unreachable.
+
+    Empty unless the profile restricts mach-lookup (the keychain
+    channel) and the system bundle exists.
+    """
+    if "(deny mach-lookup" not in profile:
+        return {}
+    if not os.path.isfile(MACOS_FILE_TRUST_ANCHORS):
+        return {}
+    return {MACOS_FILE_TRUST_ANCHOR_ENV: MACOS_FILE_TRUST_ANCHORS}
+
 # sysctl-read allowlist for the hardened profiles, WebKit-seeded
 # (Apple's WebProcess profile uses the same deny-with-sysctl-name-
 # allowlist pattern). Covers hardware identity (hw.*, machdep.cpu.*),

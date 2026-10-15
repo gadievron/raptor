@@ -1011,6 +1011,13 @@ def run_sandboxed(cmd: list[str], *,
             "tmp-dependent tools in this sandbox will fail"
         )
 
+    # 2c. File-based TLS trust anchors when the profile closes the
+    #     keychain (mach-lookup allowlist): see
+    #     seatbelt.MACOS_FILE_TRUST_ANCHORS. A caller-supplied value
+    #     wins.
+    for _k, _v in seatbelt.file_trust_anchor_env(profile).items():
+        child_env.setdefault(_k, _v)
+
     # 3. rlimits via preexec_fn.
     #
     # _make_preexec_fn handles memory / CPU / file-size via setrlimit

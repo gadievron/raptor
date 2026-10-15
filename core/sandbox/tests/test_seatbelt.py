@@ -1171,3 +1171,49 @@ class TestExcludeTmpBaseline:
         assert '"/private/tmp"' not in prof
         # Output stays writable — that's where TMPDIR redirects.
         assert '(subpath "/x/out")' in prof
+
+
+class TestFileTrustAnchorEnv:
+    """A mach-lookup-restricted profile closes the keychain, so
+    keychain-backed root discovery (OCaml ca-certs: Semgrep) comes back
+    empty; the spawn layer hands the child a file bundle instead."""
+
+    def test_hardened_profile_gets_bundle(self, monkeypatch, tmp_path):
+        bundle = tmp_path / "cert.pem"
+        bundle.write_text("x")
+        monkeypatch.setattr(seatbelt, "MACOS_FILE_TRUST_ANCHORS",
+                            str(bundle))
+        p = seatbelt.build_profile(seccomp_profile="full")
+        assert seatbelt.file_trust_anchor_env(p) == {
+            "NIX_SSL_CERT_FILE": str(bundle)}
+
+    def test_unrestricted_mach_gets_nothing(self, monkeypatch, tmp_path):
+        bundle = tmp_path / "cert.pem"
+        bundle.write_text("x")
+        monkeypatch.setattr(seatbelt, "MACOS_FILE_TRUST_ANCHORS",
+                            str(bundle))
+        for kw in ({}, {"seccomp_profile": "debug"},
+                   {"seccomp_profile": "full", "audit_mode": True}):
+            p = seatbelt.build_profile(**kw)
+            assert seatbelt.file_trust_anchor_env(p) == {}, kw
+
+    def test_missing_bundle_gets_nothing(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(seatbelt, "MACOS_FILE_TRUST_ANCHORS",
+                            str(tmp_path / "absent.pem"))
+        p = seatbelt.build_profile(seccomp_profile="full")
+        assert seatbelt.file_trust_anchor_env(p) == {}
+
+    def test_not_an_openssl_trust_override(self):
+        """The injected name must stay off the OpenSSL / requests /
+        curl trust-override surface the env blocklist guards."""
+        from core.config import RaptorConfig
+        name = seatbelt.MACOS_FILE_TRUST_ANCHOR_ENV
+        assert name not in ("SSL_CERT_FILE", "SSL_CERT_DIR",
+                            "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE")
+        assert not RaptorConfig.is_dangerous_env_name(name)
+
+    def test_bundle_readable_under_restrict_reads(self):
+        p = seatbelt.build_profile(seccomp_profile="full",
+                                   restrict_reads=True)
+        assert '"/private/etc"' in p
+        assert seatbelt.MACOS_FILE_TRUST_ANCHORS.startswith("/etc/")

@@ -408,6 +408,54 @@ def test_tmpdir_not_steered_without_write_isolation(tmp_path,
     assert r.stdout == "unset"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only")
+@pytest.mark.parametrize("seccomp_profile,caller_value,expected", [
+    # Hardened profile closes the keychain → file bundle injected.
+    ("full", None, "BUNDLE"),
+    # A caller-supplied value wins.
+    ("full", "/caller/ca.pem", "/caller/ca.pem"),
+    # mach-lookup unrestricted → nothing injected.
+    (None, None, "unset"),
+])
+def test_file_trust_anchors_injected_under_mach_restriction(
+        tmp_path, monkeypatch, seccomp_profile, caller_value, expected):
+    from core.sandbox import seatbelt
+    bundle = tmp_path / "cert.pem"
+    bundle.write_text("x")
+    monkeypatch.setattr(seatbelt, "MACOS_FILE_TRUST_ANCHORS", str(bundle))
+    fake = tmp_path / "fake-sandbox-exec"
+    fake.write_text('#!/bin/sh\nshift 3\nexec "$@"\n')
+    fake.chmod(0o755)
+    monkeypatch.setattr(_macos_spawn, "SANDBOX_EXEC", str(fake))
+    env = {"PATH": "/usr/bin:/bin"}
+    if caller_value:
+        env["NIX_SSL_CERT_FILE"] = caller_value
+    r = _macos_spawn.run_sandboxed(
+        ["/bin/sh", "-c", 'printf %s "${NIX_SSL_CERT_FILE-unset}"'],
+        block_network=True, seccomp_profile=seccomp_profile,
+        env=env, capture_output=True, text=True, timeout=15,
+    )
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == (str(bundle) if expected == "BUNDLE" else expected)
+
+
+@pytest.mark.darwin_native
+def test_file_trust_anchors_readable_under_hardened_read_restriction(
+        tmp_path):
+    from core.sandbox import seatbelt
+    if not os.path.isfile(seatbelt.MACOS_FILE_TRUST_ANCHORS):
+        pytest.skip("no system CA bundle on this host")
+    r = _macos_spawn.run_sandboxed(
+        ["/bin/sh", "-c",
+         '/usr/bin/grep -c "BEGIN CERTIFICATE" "$NIX_SSL_CERT_FILE"'],
+        output=str(tmp_path), block_network=True, restrict_reads=True,
+        seccomp_profile="full",
+        capture_output=True, text=True, timeout=20,
+    )
+    assert r.returncode == 0, r.stderr
+    assert int(r.stdout.strip()) > 0
+
+
 # --- Darwin-only behavioural tests ------------------------------------
 
 @pytest.mark.darwin_native
