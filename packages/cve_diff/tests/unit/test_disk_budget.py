@@ -24,15 +24,23 @@ def test_check_returns_used_pct():
     assert status.ok
 
 
-def test_check_ok_at_threshold():
-    with patch("cve_diff.infra.disk_budget.shutil.disk_usage", return_value=_Usage(79, 100)):
+def test_explicit_limit_rejects_equal_usage():
+    gib = 1024**3
+    usage = _Usage(used=80 * gib, total=100 * gib)
+    with patch("cve_diff.infra.disk_budget.shutil.disk_usage", return_value=usage):
         status = disk_budget.check("/", limit_pct=80.0)
-    assert status.ok
+    assert status.free_bytes == disk_budget.DEFAULT_MIN_FREE_BYTES
+    assert not status.ok
 
 
 def test_check_not_ok_above_limit():
-    with patch("cve_diff.infra.disk_budget.shutil.disk_usage", return_value=_Usage(81, 100)):
-        status = disk_budget.check("/", limit_pct=80.0)
+    gib = 1024**3
+    with patch(
+        "cve_diff.infra.disk_budget.shutil.disk_usage",
+        return_value=_Usage(180 * gib, 200 * gib),
+    ):
+        status = disk_budget.check("/", limit_pct=50.0)
+    assert status.free_bytes == disk_budget.DEFAULT_MIN_FREE_BYTES
     assert not status.ok
 
 
@@ -49,8 +57,48 @@ def test_assert_ok_passes_when_under():
         disk_budget.assert_ok("/", limit_pct=80.0)
 
 
-def test_assert_ok_passes_above_limit_with_ample_free_space():
+def test_assert_ok_passes_default_limit_with_ample_free_space():
     gib = 1024**3
     usage = _Usage(used=762 * gib, total=926 * gib)  # 82% used, 164 GiB free
     with patch("cve_diff.infra.disk_budget.shutil.disk_usage", return_value=usage):
-        disk_budget.assert_ok("/", limit_pct=80.0)
+        disk_budget.assert_ok("/")
+
+
+def test_default_policy_accepts_exact_minimum_free_space():
+    gib = 1024**3
+    usage = _Usage(used=80 * gib, total=100 * gib)
+    with patch("cve_diff.infra.disk_budget.shutil.disk_usage", return_value=usage):
+        status = disk_budget.check("/")
+    assert status.used_pct == disk_budget.DEFAULT_LIMIT_PCT
+    assert status.free_bytes == disk_budget.DEFAULT_MIN_FREE_BYTES
+    assert status.ok
+
+
+def test_default_policy_rejects_equal_usage_below_minimum_free_space():
+    gib = 1024**3
+    usage = _Usage(used=40 * gib, total=50 * gib)
+    with patch("cve_diff.infra.disk_budget.shutil.disk_usage", return_value=usage):
+        status = disk_budget.check("/")
+    assert status.used_pct == disk_budget.DEFAULT_LIMIT_PCT
+    assert status.free_bytes < disk_budget.DEFAULT_MIN_FREE_BYTES
+    assert not status.ok
+
+
+def test_default_policy_rejects_above_limit_just_below_minimum_free_space():
+    gib = 1024**3
+    usage = _Usage(used=180 * gib, total=200 * gib - 1)
+    with patch("cve_diff.infra.disk_budget.shutil.disk_usage", return_value=usage):
+        status = disk_budget.check("/")
+    assert status.used_pct > disk_budget.DEFAULT_LIMIT_PCT
+    assert status.free_bytes == disk_budget.DEFAULT_MIN_FREE_BYTES - 1
+    assert not status.ok
+
+
+def test_default_policy_accepts_usage_below_limit_with_low_free_space():
+    gib = 1024**3
+    usage = _Usage(used=39 * gib, total=50 * gib)
+    with patch("cve_diff.infra.disk_budget.shutil.disk_usage", return_value=usage):
+        status = disk_budget.check("/")
+    assert status.used_pct < disk_budget.DEFAULT_LIMIT_PCT
+    assert status.free_bytes < disk_budget.DEFAULT_MIN_FREE_BYTES
+    assert status.ok
