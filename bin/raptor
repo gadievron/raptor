@@ -547,7 +547,7 @@ fi
 _raptor_local_route() {
     # $1 is the subcommand. execs on match; returns 1 (no match) otherwise.
     case "${1:-}" in
-        agentic|scan|codeql|analyze|fuzz|web|sca|binary|openant)
+        agentic|scan|codeql|analyze|fuzz|web|sca|binary|openant|zkpox)
             _cmd="$1"; shift
             # No cd: a relative --repo/--target/--binary/--url must resolve
             # against the operator's shell cwd (RAPTOR_CALLER_DIR exported
@@ -570,7 +570,7 @@ if [[ -n "${RAPTOR_NO_CLAUDE:-}" ]]; then
     # the bare interactive session, which has no local equivalent).
     echo "raptor: RAPTOR_NO_CLAUDE is set but '${1:-<none>}' needs the" >&2
     echo "  Claude Code session. Unset RAPTOR_NO_CLAUDE, or use a local" >&2
-    echo "  analysis command (agentic/scan/codeql/analyze/fuzz/web/sca/binary/openant)." >&2
+    echo "  analysis command (agentic/scan/codeql/analyze/fuzz/web/sca/binary/openant/zkpox)." >&2
     exit 1
 fi
 

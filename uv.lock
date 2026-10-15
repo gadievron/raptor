@@ -459,6 +459,42 @@ wheels = [
 ]
 
 [[package]]
+name = "cbor2"
+version = "6.0.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/3e/fe/5d7f37d51ec21cccf9ae14a42a674907b8385779e639482f83c6eff1bcee/cbor2-6.0.1.tar.gz", hash = "sha256:46a745c296ec336fe83fa7905b77b4faa243eb32bb84fab1cfdb0e4636d1985b", size = 84191, upload-time = "2026-04-28T21:23:37.629Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ff/06/9bdbdf550f5bddb103efd0fa57023e73ec2339c8e1269a77191a5c5897d0/cbor2-6.0.1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:778746168f80403dcb5e0e85a16076967652aef74bf2d13f53ce3d150e9b8be7", size = 401250, upload-time = "2026-04-28T21:22:53.838Z" },
+    { url = "https://files.pythonhosted.org/packages/fd/0b/8c2b44c7513c58f96a2ef9fed97e504f965ed5cc922f08c1edfe9a0aa808/cbor2-6.0.1-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:82802f05ae595cfe451ab6a15948b20445a411fb83ef8568591577f6b91313aa", size = 445322, upload-time = "2026-04-28T21:22:55.537Z" },
+    { url = "https://files.pythonhosted.org/packages/f9/6c/2c1d9a26bac69b9c97530e342a49c2d8a2fc0aa9e253c5645f074afa17d6/cbor2-6.0.1-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:65f0dc88cbd2cc252c31212b0bac3d10ae8e94db5e476a662022593cdd3cc56a", size = 456460, upload-time = "2026-04-28T21:22:57.021Z" },
+    { url = "https://files.pythonhosted.org/packages/19/c1/feacc2e1278ef708787d61c5e670288353e68dc3a023246d57764e03f373/cbor2-6.0.1-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:10f0376763ce8913c1a5b9f21c51ca55848ed16795bd2b80860d56ed944374ab", size = 511095, upload-time = "2026-04-28T21:22:59.58Z" },
+    { url = "https://files.pythonhosted.org/packages/2b/2e/8c4b5d9d53ca3750ce19878e40be3a7628d7e6e4fb303456ed7c3fc03155/cbor2-6.0.1-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:83d2b27908f8697041cee46af54ab684e9dd6e9710d70d31dc50e89cc908433d", size = 524005, upload-time = "2026-04-28T21:23:01.284Z" },
+    { url = "https://files.pythonhosted.org/packages/e3/36/786ec690daad8d8574a2bf94e6532e39936bbad1d576f2225102298084d1/cbor2-6.0.1-cp312-cp312-win_amd64.whl", hash = "sha256:4d324878156075778da61f9d4a09e6c4306493964f24f8fd92b43d97e99eac10", size = 288302, upload-time = "2026-04-28T21:23:03.081Z" },
+    { url = "https://files.pythonhosted.org/packages/97/64/757b3cede871c52af6e26d713546048953d66db60c8840e5a2434a412e70/cbor2-6.0.1-cp312-cp312-win_arm64.whl", hash = "sha256:3e8eaee64cd09d67a413e1fc758750e9e9c15cdb677a725163da834b981552ec", size = 277907, upload-time = "2026-04-28T21:23:04.518Z" },
+    { url = "https://files.pythonhosted.org/packages/08/ee/d11300317773bc8e85e23f59fc71c732ba1176d059341588318cab81f501/cbor2-6.0.1-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:067d23ac75bfa35bed0e795169139259dc9d9bae503c8ede29740f99b37415f3", size = 400366, upload-time = "2026-04-28T21:23:06.234Z" },
+    { url = "https://files.pythonhosted.org/packages/fb/be/0bc836d8259333277fc532d13197238b7c097e83c8ee3df13e8c5e418ec1/cbor2-6.0.1-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:5df6d0cd72c62dfb300facd6ccb982214fe3376b69f393d0d271e4436fd7b624", size = 444682, upload-time = "2026-04-28T21:23:07.494Z" },
+    { url = "https://files.pythonhosted.org/packages/8f/d0/3ffca18a38f0d8b6b1a6649d1245b876f5cf4cf9be3f5b2d19717b227af8/cbor2-6.0.1-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:50ebae27b72061c8baf3cd8458c3eb2de7c112d0be77af24e8c4206a2b0e7b61", size = 454983, upload-time = "2026-04-28T21:23:09.115Z" },
+    { url = "https://files.pythonhosted.org/packages/73/95/bc054345ef594a6ac92398a453f5e4ec7f45faaf6f18aff61d06fc9bc0c6/cbor2-6.0.1-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:c1cfab10d65989cd79c203a00b5460feb6f34c519714779a77ccfb772704ff4b", size = 510410, upload-time = "2026-04-28T21:23:10.96Z" },
+    { url = "https://files.pythonhosted.org/packages/13/27/47bfc56a269d83713f69166dcadfba6890ff87cdae787c11bcd924d369f8/cbor2-6.0.1-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:df1e47d7dfb335ee82cd6593db111e6ca12d2c370a08a94d3622b4c08fda3b69", size = 522764, upload-time = "2026-04-28T21:23:12.376Z" },
+    { url = "https://files.pythonhosted.org/packages/9f/3e/c86f51bc78c211bcf685485a8c888713d714ebd64192435a45b68bef2b0b/cbor2-6.0.1-cp313-cp313-win_amd64.whl", hash = "sha256:897f6fe58d1522608b6b71a7aa964f31c40deed5fff2d00511233bacb396dded", size = 287646, upload-time = "2026-04-28T21:23:13.799Z" },
+    { url = "https://files.pythonhosted.org/packages/97/e9/4670d40a86ae74b0afcb976e346d5429d745b6780a0407143346b4dab408/cbor2-6.0.1-cp313-cp313-win_arm64.whl", hash = "sha256:80765e22c387fb489102ed751f5706fc184c9cdb34257df3dab4d393564b00e6", size = 276903, upload-time = "2026-04-28T21:23:15.398Z" },
+    { url = "https://files.pythonhosted.org/packages/d1/b6/bf11bd69c8cb4b909caa1e098f8d29aab62694a1126ecace29e57e63fc1d/cbor2-6.0.1-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:67aa9514b08163de9c180d2a2bcf3f3a050d2a2ef9ca9bb8cc8b3a7bd4e6599d", size = 399070, upload-time = "2026-04-28T21:23:16.638Z" },
+    { url = "https://files.pythonhosted.org/packages/66/16/84b689706815f45a702c90043260f3588b6c75c188e0a6d47ff8b0d98b4e/cbor2-6.0.1-cp314-cp314-manylinux_2_28_aarch64.whl", hash = "sha256:f173a5d6a686006c9edaeee5aab1356be2cba86c3af15b592e5cf8749831dcaf", size = 444127, upload-time = "2026-04-28T21:23:18.002Z" },
+    { url = "https://files.pythonhosted.org/packages/f2/93/a7ff418ae1dc40ea06093550c5a6a7c20df602d4a75bd17f11b83c8344c3/cbor2-6.0.1-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:1eedb7bda2a528149ff95345e383c2f97104800debc9ef6f0cd693b46b0df4ff", size = 454497, upload-time = "2026-04-28T21:23:20.04Z" },
+    { url = "https://files.pythonhosted.org/packages/74/43/ea1c74b37b3ebb27567521e74f8c4d4dfdf30d65c0e26934a1717e5de4e0/cbor2-6.0.1-cp314-cp314-musllinux_1_2_aarch64.whl", hash = "sha256:ead214c6d4b4a6b20213c3a4a0e93a565acedbaa367f793cf5bf19936365fa46", size = 509875, upload-time = "2026-04-28T21:23:21.785Z" },
+    { url = "https://files.pythonhosted.org/packages/09/f0/4e2b87da1819d420e8a5b90e1e5cba000e241468b1967e7c695647835236/cbor2-6.0.1-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:d177965364ae29b7d8854a0d38f41e2aa3ef2a440a8fd28550413ea649715eb5", size = 521864, upload-time = "2026-04-28T21:23:23.047Z" },
+    { url = "https://files.pythonhosted.org/packages/ed/a2/210c0adbf443cc09e05bb46ba74124a5cf61fac461d43dc83e23a2093e16/cbor2-6.0.1-cp314-cp314-win_amd64.whl", hash = "sha256:fd7f89d53aea0e7d12a08fc8366a5d7d532d7bdf253b042d1e4fd33398ca6f17", size = 295871, upload-time = "2026-04-28T21:23:24.497Z" },
+    { url = "https://files.pythonhosted.org/packages/37/f4/409010a272ebb1ee7e7ddf4543b4d84d89dcf53c8d425db3c20dc2206e4c/cbor2-6.0.1-cp314-cp314-win_arm64.whl", hash = "sha256:6e8fca9f1860e81e7b78af9d5686380143a2474d6bf4dcae348219cd34013436", size = 286677, upload-time = "2026-04-28T21:23:25.933Z" },
+    { url = "https://files.pythonhosted.org/packages/8f/3d/075bd398465bc9fce9a2ad45d4c146f0e9de927348ff2e44d814af4bc84a/cbor2-6.0.1-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:943e3824c51312f747b0b164fc4ae96c191eae40685e049b28c747158a8613d0", size = 394250, upload-time = "2026-04-28T21:23:27.648Z" },
+    { url = "https://files.pythonhosted.org/packages/2a/3a/925f975f3dc2fd61cec1990e634a88ca041cb31dfde47d6d5a6df492fa4a/cbor2-6.0.1-cp314-cp314t-manylinux_2_28_aarch64.whl", hash = "sha256:f390b24279229499c93f2ba40031fb9dd03cd2fc0d1ae757116013398bb25bc4", size = 436871, upload-time = "2026-04-28T21:23:29.242Z" },
+    { url = "https://files.pythonhosted.org/packages/34/19/4348be4671dd286a10adc1b5182210ddbb2087ed7cb619cf11515bc37721/cbor2-6.0.1-cp314-cp314t-manylinux_2_28_x86_64.whl", hash = "sha256:b8a3cf4a95b219eb10d72e31b6919f47a4928506ae95001e4384531bec5f787d", size = 449349, upload-time = "2026-04-28T21:23:30.66Z" },
+    { url = "https://files.pythonhosted.org/packages/c7/0a/3398bfe315162f5871abb4fe8662f4906b963514dc1f2a0e5ddf5579705f/cbor2-6.0.1-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:77cf35c614be31c5e8be761328b57ef6aaf43a78301e7df10faa7a8c626d6910", size = 502398, upload-time = "2026-04-28T21:23:31.951Z" },
+    { url = "https://files.pythonhosted.org/packages/3a/5d/a61bd7d1bb2df1988bd044352bddaa2cea5cf04a92176e957a7388872d04/cbor2-6.0.1-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:7d936d14307311d0284f7d448fab47a4d1e279305005ffa733411eb81e0b7d81", size = 516987, upload-time = "2026-04-28T21:23:33.311Z" },
+    { url = "https://files.pythonhosted.org/packages/68/74/77c634d2b8aa3b0c10dd2edc28c4daf4d19b3ee7da3aa3f558397aaf4e38/cbor2-6.0.1-cp314-cp314t-win_amd64.whl", hash = "sha256:a4413d99d398858603be036016b59d21c1e6c3a4bb9d12fb9ccf4f8509afde05", size = 290210, upload-time = "2026-04-28T21:23:34.843Z" },
+    { url = "https://files.pythonhosted.org/packages/e9/3a/347c49eb0c959a4342132de8b141af27733ddc873fdc84a17354cdb8bdab/cbor2-6.0.1-cp314-cp314t-win_arm64.whl", hash = "sha256:c6fcf7f406a5e5cda5e993d4dbd064b0cb22e84c9800966e2358a9172b3d4684", size = 278801, upload-time = "2026-04-28T21:23:36.35Z" },
+]
+
+[[package]]
 name = "certifi"
 version = "2026.7.22"
 source = { registry = "https://pypi.org/simple" }
@@ -2845,6 +2881,10 @@ web = [
     { name = "beautifulsoup4" },
     { name = "playwright" },
 ]
+zkpox = [
+    { name = "cbor2" },
+    { name = "cryptography" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -2880,6 +2920,8 @@ requires-dist = [
     { name = "beautifulsoup4", marker = "extra == 'web'", specifier = "==4.15.0" },
     { name = "botocore", marker = "extra == 'bedrock'", specifier = "==1.43.16" },
     { name = "botocore", marker = "extra == 'llm'", specifier = "==1.43.16" },
+    { name = "cbor2", marker = "extra == 'zkpox'", specifier = "==6.0.1" },
+    { name = "cryptography", marker = "extra == 'zkpox'", specifier = "==50.0.1" },
     { name = "cvss", marker = "extra == 'cvss'", specifier = "==3.6" },
     { name = "defusedxml", specifier = "==0.7.1" },
     { name = "frida", marker = "extra == 'frida'", specifier = "==16.7.19" },
@@ -2921,7 +2963,7 @@ requires-dist = [
     { name = "urllib3", specifier = "==2.8.0" },
     { name = "z3-solver", marker = "extra == 'smt'", specifier = ">=4.13.0.0,<4.15.5.0" },
 ]
-provides-extras = ["anthropic", "google", "bedrock", "llm", "web", "smt", "binary", "sage", "grammars", "h2", "cvss", "orjson", "r2pipe", "pyghidra", "frida", "jsonschema"]
+provides-extras = ["anthropic", "google", "bedrock", "llm", "web", "smt", "binary", "sage", "grammars", "h2", "cvss", "orjson", "r2pipe", "pyghidra", "frida", "jsonschema", "zkpox"]
 
 [package.metadata.requires-dev]
 dev = [
