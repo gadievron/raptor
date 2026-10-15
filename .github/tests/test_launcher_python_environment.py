@@ -18,6 +18,19 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parents[2]
 
 
+def _has_private_primary_group() -> bool:
+    user = subprocess.run(
+        ["id", "-un"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    group = subprocess.run(
+        ["id", "-gn"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    return user == group
+
+
+_HAS_PRIVATE_PRIMARY_GROUP = _has_private_primary_group()
+
+
 def _write_interpreter(path: Path, identity: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f"#!/bin/sh\nprintf '%s\\n' {identity!r}\n")
@@ -98,24 +111,59 @@ class TestLauncherPythonEnvironment(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertEqual(proc.stdout, "project\n")
 
-    def test_writable_project_virtualenv_is_skipped(self):
-        for mode in (0o775, 0o777):
-            with self.subTest(mode=oct(mode)), tempfile.TemporaryDirectory() as d:
-                root = Path(d).resolve()
-                tools = _make_tree(root)
-                project_bin = root / ".venv" / "bin"
-                _write_interpreter(project_bin / "python3", "project")
-                project_bin.chmod(mode)
+    @unittest.skipUnless(
+        _HAS_PRIVATE_PRIMARY_GROUP,
+        "requires a same-named private primary group",
+    )
+    def test_private_group_writable_project_virtualenv_is_selected(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d).resolve()
+            tools = _make_tree(root)
+            project_bin = root / ".venv" / "bin"
+            _write_interpreter(project_bin / "python3", "project")
+            project_bin.chmod(0o775)
 
-                proc = _run(root, tools, "--version")
+            proc = _run(root, tools, "--version")
 
-                self.assertEqual(proc.returncode, 0, proc.stderr)
-                self.assertEqual(proc.stdout, "system\n")
-                self.assertIn(
-                    "skipping unsafe project environment "
-                    "(group/world-writable bin dir)",
-                    proc.stderr,
-                )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(proc.stdout, "project\n")
+            self.assertNotIn("skipping unsafe project environment", proc.stderr)
+
+    @unittest.skipIf(
+        _HAS_PRIVATE_PRIMARY_GROUP,
+        "requires a shared primary group",
+    )
+    def test_shared_group_writable_project_virtualenv_is_skipped(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d).resolve()
+            tools = _make_tree(root)
+            project_bin = root / ".venv" / "bin"
+            _write_interpreter(project_bin / "python3", "project")
+            project_bin.chmod(0o775)
+
+            proc = _run(root, tools, "--version")
+
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(proc.stdout, "system\n")
+            self.assertIn("skipping unsafe project environment", proc.stderr)
+
+    def test_other_writable_project_virtualenv_is_skipped(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d).resolve()
+            tools = _make_tree(root)
+            project_bin = root / ".venv" / "bin"
+            _write_interpreter(project_bin / "python3", "project")
+            project_bin.chmod(0o777)
+
+            proc = _run(root, tools, "--version")
+
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(proc.stdout, "system\n")
+            self.assertIn(
+                "skipping unsafe project environment "
+                "(unsafe writable bin dir)",
+                proc.stderr,
+            )
 
     def test_selected_environment_leads_path_for_python_shebangs(self):
         with tempfile.TemporaryDirectory() as d:
@@ -147,6 +195,42 @@ class TestLauncherPythonEnvironment(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertEqual(proc.stdout, "system\n")
 
+    def test_path_fallback_does_not_reorder_other_commands(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d).resolve()
+            tools = _make_tree(root)
+            early = root / "early"
+            _write_interpreter(early / "node", "early")
+            _write_interpreter(tools / "node", "python-bin")
+            (tools / "python3").write_text("#!/bin/sh\ncommand -v node\n")
+            (tools / "python3").chmod(0o755)
+
+            proc = _run(
+                root,
+                tools,
+                "--version",
+                extra_env={"PATH": f"{early}:{tools}:/usr/bin:/bin"},
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(proc.stdout, f"{early / 'node'}\n")
+
+    @unittest.skipUnless(
+        _HAS_PRIVATE_PRIMARY_GROUP,
+        "requires a same-named private primary group",
+    )
+    def test_private_group_writable_path_entry_is_kept(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d).resolve()
+            tools = _make_tree(root)
+            tools.chmod(0o775)
+
+            proc = _run(root, tools, "--version")
+
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(proc.stdout, "system\n")
+            self.assertNotIn("dropped unsafe PATH entry", proc.stderr)
+
     def test_relative_virtualenv_dropped_from_path_is_not_selected(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d).resolve()
@@ -167,31 +251,30 @@ class TestLauncherPythonEnvironment(unittest.TestCase):
             self.assertEqual(proc.stdout, "system\n")
             self.assertIn("dropped unsafe PATH entry (relative entry)", proc.stderr)
 
-    def test_writable_virtualenv_dropped_from_path_is_not_selected(self):
-        for mode in (0o775, 0o777):
-            with self.subTest(mode=oct(mode)), tempfile.TemporaryDirectory() as d:
-                root = Path(d).resolve()
-                tools = _make_tree(root)
-                active = root / "active"
-                _write_interpreter(active / "bin" / "python3", "active")
-                (active / "bin").chmod(mode)
+    def test_other_writable_virtualenv_dropped_from_path_is_not_selected(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d).resolve()
+            tools = _make_tree(root)
+            active = root / "active"
+            _write_interpreter(active / "bin" / "python3", "active")
+            (active / "bin").chmod(0o777)
 
-                proc = _run(
-                    root,
-                    tools,
-                    "--version",
-                    extra_env={
-                        "PATH": f"{active / 'bin'}:{tools}:/usr/bin:/bin",
-                        "VIRTUAL_ENV": str(active),
-                    },
-                )
+            proc = _run(
+                root,
+                tools,
+                "--version",
+                extra_env={
+                    "PATH": f"{active / 'bin'}:{tools}:/usr/bin:/bin",
+                    "VIRTUAL_ENV": str(active),
+                },
+            )
 
-                self.assertEqual(proc.returncode, 0, proc.stderr)
-                self.assertEqual(proc.stdout, "system\n")
-                self.assertIn(
-                    "dropped unsafe PATH entry (group/world-writable dir)",
-                    proc.stderr,
-                )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(proc.stdout, "system\n")
+            self.assertIn(
+                "dropped unsafe PATH entry (unsafe writable dir)",
+                proc.stderr,
+            )
 
     def test_unsafe_path_override_keeps_active_virtualenv(self):
         with tempfile.TemporaryDirectory() as d:

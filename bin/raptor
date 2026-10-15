@@ -51,7 +51,7 @@ set -euo pipefail
 # `cd /untrusted/repo && raptor` even this script's own helpers
 # (dirname, readlink, stat below) would execute repo binaries. Drop
 # them here with builtins only; the full scrub below adds the
-# group/world-writable check. Same messages and RAPTOR_ALLOW_UNSAFE_PATH
+# unsafe-writable check. Same messages and RAPTOR_ALLOW_UNSAFE_PATH
 # keep-with-warning semantics; the full scrub honours the pre-pass
 # decision silently (no second warning).
 if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ]; then
@@ -106,12 +106,42 @@ else
     _rp() { command "$@"; }
 fi
 
-_raptor_dir_is_group_or_world_writable() {
-    local _raptor_perm
-    _raptor_perm="$(_rp stat -Lc '%a' "$1" 2>/dev/null \
-                    || _rp stat -Lf '%Lp' "$1" 2>/dev/null \
+_raptor_uid=""
+_raptor_gid=""
+_raptor_user=""
+_raptor_group=""
+_raptor_private_gid=""
+if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ]; then
+    _raptor_uid="$(_rp id -u)"
+    _raptor_gid="$(_rp id -g)"
+    _raptor_user="$(_rp id -un)"
+    _raptor_group="$(_rp id -gn)"
+    if [ "$_raptor_user" = "$_raptor_group" ]; then
+        _raptor_private_gid="$_raptor_gid"
+    fi
+fi
+
+_raptor_dir_has_unsafe_write_access() {
+    local _raptor_stat _raptor_perm _raptor_owner _raptor_dir_gid
+    _raptor_stat="$(_rp stat -Lc '%a %u %g' "$1" 2>/dev/null \
+                    || _rp stat -Lf '%Lp %u %g' "$1" 2>/dev/null \
                     || echo '')"
-    [ -n "$_raptor_perm" ] && [ "$(( 0$_raptor_perm & 022 ))" -ne 0 ]
+    read -r _raptor_perm _raptor_owner _raptor_dir_gid <<< "$_raptor_stat"
+    [ -n "$_raptor_perm" ] || return 1
+    # Other-write is always unsafe. Group-write is safe only for a
+    # user-owned directory in the user's same-named primary group —
+    # the user-private-group convention used with umask 002.
+    if [ "$(( 0$_raptor_perm & 002 ))" -ne 0 ]; then
+        return 0
+    fi
+    if [ "$(( 0$_raptor_perm & 020 ))" -ne 0 ]; then
+        [ "$_raptor_owner" = "$_raptor_uid" ] \
+            && [ -n "$_raptor_private_gid" ] \
+            && [ "$_raptor_dir_gid" = "$_raptor_private_gid" ] \
+            && return 1
+        return 0
+    fi
+    return 1
 }
 
 # Resolve symlinks to find the real script location.
@@ -155,8 +185,8 @@ if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ]; then
 
     # PATH scrub — a hostile entry can shadow python3/claude. Drop,
     # one stderr line each: empty entries (resolve as cwd), relative
-    # entries (same hazard), group/world-writable dirs (g+w/o+w drop
-    # even with sticky — sticky doesn't stop planting a NEW binary). Skip
+    # entries (same hazard), other-writable dirs, and group-writable
+    # dirs outside the user's private primary group. Skip
     # nonexistent dirs silently. RAPTOR_ALLOW_UNSAFE_PATH=1 keeps
     # flagged entries, with a warning each.
     #
@@ -199,8 +229,8 @@ if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ]; then
             # perms → keep (can't verify; PATH scrub is best-effort).
             # _rp-pinned: stat must not resolve through the very
             # entry under inspection.
-            if _raptor_dir_is_group_or_world_writable "$_entry"; then
-                _drop_reason="group/world-writable dir"
+            if _raptor_dir_has_unsafe_write_access "$_entry"; then
+                _drop_reason="unsafe writable dir"
             fi
         fi
         if [ -n "$_drop_reason" ]; then
@@ -394,41 +424,48 @@ fi
 # bin directory survived the PATH hardening above; the project bin is
 # checked directly because it need not already appear on PATH.
 _RAPTOR_PYTHON=""
+_raptor_python_bin=""
 if [ -n "${VIRTUAL_ENV:-}" ] && [ -x "$VIRTUAL_ENV/bin/python3" ]; then
     case ":${PATH:-}:" in
-        *":$VIRTUAL_ENV/bin:"*) _RAPTOR_PYTHON="$VIRTUAL_ENV/bin/python3" ;;
+        *":$VIRTUAL_ENV/bin:"*)
+            _RAPTOR_PYTHON="$VIRTUAL_ENV/bin/python3"
+            _raptor_python_bin="$VIRTUAL_ENV/bin"
+            ;;
     esac
 fi
 _raptor_project_bin="$RAPTOR_DIR/.venv/bin"
 _raptor_project_python="$_raptor_project_bin/python3"
 _raptor_project_allowed=1
 if [ -z "$_RAPTOR_PYTHON" ] && [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ] && [ -d "$_raptor_project_bin" ]; then
-    if _raptor_dir_is_group_or_world_writable "$_raptor_project_bin"; then
+    if _raptor_dir_has_unsafe_write_access "$_raptor_project_bin"; then
         _shown_project_bin="${_raptor_project_bin//[![:print:]]/}"
         if [ -n "${RAPTOR_ALLOW_UNSAFE_PATH:-}" ]; then
-            echo "raptor: WARNING: keeping unsafe project environment (group/world-writable bin dir; RAPTOR_ALLOW_UNSAFE_PATH set): ${_shown_project_bin:0:200}" >&2
+            echo "raptor: WARNING: keeping unsafe project environment (unsafe writable bin dir; RAPTOR_ALLOW_UNSAFE_PATH set): ${_shown_project_bin:0:200}" >&2
         else
-            echo "raptor: skipping unsafe project environment (group/world-writable bin dir): ${_shown_project_bin:0:200}" >&2
+            echo "raptor: skipping unsafe project environment (unsafe writable bin dir): ${_shown_project_bin:0:200}" >&2
             _raptor_project_allowed=""
         fi
     fi
 fi
 if [ -z "$_RAPTOR_PYTHON" ] && [ -n "$_raptor_project_allowed" ] && [ -x "$_raptor_project_python" ]; then
     _RAPTOR_PYTHON="$_raptor_project_python"
+    _raptor_python_bin="$_raptor_project_bin"
 elif [ -z "$_RAPTOR_PYTHON" ] && _RAPTOR_PYTHON="$(command -v python3)"; then
     :
 elif [ -z "$_RAPTOR_PYTHON" ]; then
     echo "raptor: python3 not found" >&2
     exit 1
 fi
-_raptor_python_bin="${_RAPTOR_PYTHON%/*}"
-case "${PATH:-}" in
-    "$_raptor_python_bin"|"$_raptor_python_bin":*) ;;
-    *) PATH="$_raptor_python_bin${PATH:+:$PATH}" ;;
-esac
+if [ -n "$_raptor_python_bin" ]; then
+    case "${PATH:-}" in
+        "$_raptor_python_bin"|"$_raptor_python_bin":*) ;;
+        *) PATH="$_raptor_python_bin${PATH:+:$PATH}" ;;
+    esac
+fi
 export PATH
 unset _raptor_python_bin _raptor_project_allowed _raptor_project_bin
 unset _raptor_project_python _shown_project_bin
+unset _raptor_uid _raptor_gid _raptor_user _raptor_group _raptor_private_gid
 
 # Fast path: print the framework version and exit without launching a
 # session. Sits AFTER the dangerous-env strip and the python3 check on
