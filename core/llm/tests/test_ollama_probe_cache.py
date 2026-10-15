@@ -139,3 +139,17 @@ def test_local_host_probe_failure_log_stays_verbatim(monkeypatch):
     _patch_probe(monkeypatch, side_effect=ConnectionError("connection refused"))
     assert detection._get_available_ollama_models() == []
     assert any("127.0.0.1:11434" in m for m in recorder.messages)
+
+
+def test_embedding_models_are_excluded(monkeypatch):
+    payload = {"models": [
+        {"name": "qwen3-embedding:0.6b", "details": {"family": "qwen3"}},
+        {"name": "bge-m3:latest", "details": {"family": "bert", "families": ["bert"]}},
+        {"name": "all-minilm:l6-v2", "details": {"families": ["nomic-bert"]}},
+        {"name": "qwen2.5-coder:7b", "details": {"family": "qwen2"}},
+        {"name": "llama3.1:8b"},
+    ]}
+    _patch_probe(monkeypatch, response=_Resp(200, payload))
+    assert detection._get_available_ollama_models() == [
+        "qwen2.5-coder:7b", "llama3.1:8b",
+    ]

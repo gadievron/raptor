@@ -156,9 +156,33 @@ def _redact_remote_host(text: str, url: str) -> str:
 _cached_ollama_models: list[str] | None = None
 _ollama_checked: bool = False
 
+# Encoder-only architectures Ollama reports in ``details.family(ies)``.
+# These serve /api/embed only; chat completion against them fails.
+_OLLAMA_EMBEDDING_FAMILIES = frozenset({"bert", "nomic-bert", "xlm-roberta", "roberta"})
+
+
+def _is_ollama_embedding_model(model: dict) -> bool:
+    """True if an /api/tags entry is an embedding-only model.
+
+    Matches ``embed`` in the name (qwen3-embedding, nomic-embed-text,
+    mxbai-embed-large, snowflake-arctic-embed) or an encoder-only
+    family (bge-m3, all-minilm).
+    """
+    if "embed" in str(model.get("name", "")).lower():
+        return True
+    details = model.get("details")
+    if not isinstance(details, dict):
+        return False
+    families = details.get("families") or []
+    if not isinstance(families, list):
+        families = []
+    names = {str(f).lower() for f in [details.get("family"), *families] if f}
+    return bool(names & _OLLAMA_EMBEDDING_FAMILIES)
+
 
 def _get_available_ollama_models() -> list[str]:
-    """Get list of available Ollama models. Cached per-process to avoid repeated HTTP checks."""
+    """Get list of available Ollama chat models (embedding-only models
+    excluded). Cached per-process to avoid repeated HTTP checks."""
     global _cached_ollama_models, _ollama_checked
     if _ollama_checked:
         return _cached_ollama_models or []
@@ -186,6 +210,7 @@ def _get_available_ollama_models() -> list[str]:
             _cached_ollama_models = [
                 str(model['name']) for model in data.get('models', [])
                 if isinstance(model, dict) and model.get('name')
+                and not _is_ollama_embedding_model(model)
             ]
             _ollama_checked = True
             return _cached_ollama_models
