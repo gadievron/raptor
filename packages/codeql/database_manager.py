@@ -872,8 +872,9 @@ class DatabaseManager:
     ) -> bool:
         """True when a cached entry cannot satisfy an explicit traced
         request because it was created in buildless or source-only
-        mode. Generic no-build metadata for a source-extracted language
-        cannot establish that generated sources were present."""
+        mode. ``no-build`` comes from a create that ran build detection
+        and found no command, so a traced request would produce the
+        same database and reuses it."""
         if traced_build is not True:
             return False
         return (
@@ -881,7 +882,7 @@ class DatabaseManager:
             and metadata.build_system == "buildless"
         ) or (
             language in SOURCE_EXTRACTED_LANGUAGES
-            and metadata.build_system in {"source-only", "no-build"}
+            and metadata.build_system == "source-only"
         )
 
     def _sibling_canonical_acceptable(

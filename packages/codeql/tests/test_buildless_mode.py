@@ -957,14 +957,14 @@ class TestBuildModeCacheContract:
         planted = _plant_cached_db(db_manager, repo, "cpp", "buildless")
         assert db_manager.get_cached_database(repo, "cpp") == planted
 
-    def test_traced_lookup_refuses_source_no_build_cache(
+    def test_traced_lookup_serves_source_no_build_cache(
             self, db_manager, repo):
-        """The generic no-build marker cannot prove that generated
-        sources were extracted."""
-        _plant_cached_db(db_manager, repo, "python", "no-build")
+        """A no-build entry records a create that ran build detection
+        and found no command, which is what a traced run produces."""
+        planted = _plant_cached_db(db_manager, repo, "python", "no-build")
         assert db_manager.get_cached_database(
             repo, "python", traced_build=True,
-        ) is None
+        ) == planted
 
     def test_sibling_acceptability_closes_the_race_window(
             self, db_manager, repo):
@@ -994,4 +994,4 @@ class TestBuildModeCacheContract:
             repo_hash, "javascript", False) is True
         _plant_cached_db(db_manager, repo, "python", "no-build")
         assert db_manager._sibling_canonical_acceptable(
-            repo_hash, "python", True) is False
+            repo_hash, "python", True) is True
