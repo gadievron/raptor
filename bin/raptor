@@ -384,8 +384,15 @@ fi
 # libexec/, and in the Claude Code session is the project venv that
 # `uv sync --locked` populated. `--locked` matches the documented
 # install and fails loudly on a stale lockfile. Skipped when uv is not
-# installed; _RAPTOR_UV_RUN marks the re-exec'd run.
+# installed; _RAPTOR_UV_RUN marks the re-exec'd run. UV_* variables are
+# dropped first so the inherited environment (e.g. a direnv .envrc) cannot
+# redirect uv to another interpreter, venv, env file, or package index;
+# the project's own pyproject.toml [tool.uv] settings still apply.
 if [ -z "${_RAPTOR_UV_RUN:-}" ] && command -v uv >/dev/null 2>&1; then
+    for _raptor_uv_var in $(compgen -e UV_); do
+        unset "$_raptor_uv_var"
+    done
+    unset _raptor_uv_var
     export _RAPTOR_UV_RUN=1
     exec uv run --project "$RAPTOR_DIR" --locked -- bash "$SCRIPT" "$@"
 fi

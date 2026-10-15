@@ -37,6 +37,7 @@ def _make_tree(root: Path, *, with_uv: bool) -> Path:
         uv.write_text(
             "#!/bin/sh\n"
             f"echo \"$@\" >> '{root}/uv.log'\n"
+            f"env | grep '^UV_' >> '{root}/uv.env'\n"
             "while [ \"$1\" != \"--\" ]; do shift; done\n"
             "shift\n"
             "exec \"$@\"\n"
@@ -73,6 +74,18 @@ class TestLauncherUvRun(unittest.TestCase):
                 f"run --project {root} --locked -- bash "
             ), calls[0])
             self.assertTrue(calls[0].endswith("bin/raptor --version"), calls[0])
+
+    def test_inherited_uv_env_is_dropped(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d).resolve()
+            tools = _make_tree(root, with_uv=True)
+            proc = _run_version(root, tools, {
+                "UV_PYTHON": "/attacker/python",
+                "UV_PROJECT_ENVIRONMENT": "/attacker/venv",
+                "UV_INDEX_URL": "https://attacker.invalid/simple",
+            })
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual((root / "uv.env").read_text(), "")
 
     def test_runs_directly_without_uv(self):
         with tempfile.TemporaryDirectory() as d:
