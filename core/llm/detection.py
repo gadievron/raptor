@@ -154,19 +154,23 @@ def _redact_remote_host(text: str, url: str) -> str:
 
 
 _cached_ollama_models: list[str] | None = None
+_cached_ollama_capabilities: dict[
+    tuple[str, str], frozenset[str] | None,
+] = {}
 _ollama_checked: bool = False
 
-# Encoder-only architectures Ollama reports in ``details.family(ies)``.
-# These serve /api/embed only; chat completion against them fails.
-_OLLAMA_EMBEDDING_FAMILIES = frozenset({"bert", "nomic-bert", "xlm-roberta", "roberta"})
+# Encoder-only architectures reported by Ollama versions without
+# capability metadata.
+_OLLAMA_EMBEDDING_FAMILIES = frozenset({
+    "bert", "nomic-bert", "xlm-roberta", "roberta",
+})
 
 
 def _is_ollama_embedding_model(model: dict) -> bool:
-    """True if an /api/tags entry is an embedding-only model.
+    """Fallback for Ollama versions without capability metadata.
 
-    Matches ``embed`` in the name (qwen3-embedding, nomic-embed-text,
-    mxbai-embed-large, snowflake-arctic-embed) or an encoder-only
-    family (bge-m3, all-minilm).
+    Matches ``embed`` in the name or an encoder-only family. Capability
+    metadata is authoritative whenever the server provides it.
     """
     if "embed" in str(model.get("name", "")).lower():
         return True
@@ -178,6 +182,68 @@ def _is_ollama_embedding_model(model: dict) -> bool:
         families = []
     names = {str(f).lower() for f in [details.get("family"), *families] if f}
     return bool(names & _OLLAMA_EMBEDDING_FAMILIES)
+
+
+def _ollama_capabilities(value: object) -> frozenset[str] | None:
+    """Normalise an Ollama capability list, or return None if absent."""
+    if not isinstance(value, list) or not all(
+        isinstance(capability, str) for capability in value
+    ):
+        return None
+    return frozenset(capability.lower() for capability in value)
+
+
+def _show_ollama_capabilities(
+    ollama_url: str, model_name: str,
+) -> frozenset[str] | None:
+    """Read one model's capabilities from Ollama's /api/show endpoint."""
+    from core.llm.egress import loopback_safe_post
+
+    try:
+        response = loopback_safe_post(
+            f"{ollama_url}/api/show",
+            json={"model": model_name},
+            timeout=2,
+        )  # nosemgrep: sinks.raptor.web.ssrf.dynamic-url
+        if response.status_code != 200:
+            return None
+        data = response.json()
+        if not isinstance(data, dict):
+            return None
+        return _ollama_capabilities(data.get("capabilities"))
+    except Exception as e:  # noqa: BLE001
+        err_display = str(e)
+        if not _host_is_local(RaptorConfig.OLLAMA_HOST):
+            err_display = _redact_remote_host(err_display, ollama_url)
+        logger.debug(
+            "Could not inspect Ollama model %s capabilities: %s",
+            model_name,
+            err_display,
+        )
+        return None
+
+
+def _ollama_model_supports_completion(model: dict, ollama_url: str) -> bool:
+    """Return whether an Ollama model can serve completion requests.
+
+    Capability metadata from /api/tags or /api/show is authoritative.
+    Servers that expose neither retain the name/family heuristic as a
+    compatibility fallback.
+    """
+    model_name = str(model["name"])
+    cache_key = (ollama_url, model_name)
+    capabilities = _ollama_capabilities(model.get("capabilities"))
+    if capabilities is not None:
+        _cached_ollama_capabilities[cache_key] = capabilities
+    elif cache_key in _cached_ollama_capabilities:
+        capabilities = _cached_ollama_capabilities[cache_key]
+    else:
+        capabilities = _show_ollama_capabilities(ollama_url, model_name)
+        _cached_ollama_capabilities[cache_key] = capabilities
+
+    if capabilities is not None:
+        return "completion" in capabilities
+    return not _is_ollama_embedding_model(model)
 
 
 def _get_available_ollama_models() -> list[str]:
@@ -210,7 +276,7 @@ def _get_available_ollama_models() -> list[str]:
             _cached_ollama_models = [
                 str(model['name']) for model in data.get('models', [])
                 if isinstance(model, dict) and model.get('name')
-                and not _is_ollama_embedding_model(model)
+                and _ollama_model_supports_completion(model, ollama_url)
             ]
             _ollama_checked = True
             return _cached_ollama_models

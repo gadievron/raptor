@@ -370,6 +370,16 @@ def loopback_safe_get(url: str, timeout: float):
     return requests.get(url, timeout=timeout)
 
 
+def loopback_safe_post(url: str, *, json: dict, timeout: float):
+    """``requests.post`` that bypasses proxy env for loopback targets."""
+    import requests
+    if url_is_loopback(url):
+        with requests.Session() as s:
+            s.trust_env = False
+            return s.post(url, json=json, timeout=timeout)
+    return requests.post(url, json=json, timeout=timeout)
+
+
 def _max_model_timeout(config: LLMConfig) -> float:
     """Return the longest per-model timeout across all configured models."""
     candidates = []
