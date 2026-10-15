@@ -13,6 +13,7 @@ class _Usage:
     def __init__(self, used: int, total: int) -> None:
         self.used = used
         self.total = total
+        self.free = total - used
 
 
 def test_check_returns_used_pct():
@@ -45,4 +46,11 @@ def test_assert_ok_raises_when_full():
 
 def test_assert_ok_passes_when_under():
     with patch("cve_diff.infra.disk_budget.shutil.disk_usage", return_value=_Usage(10, 100)):
+        disk_budget.assert_ok("/", limit_pct=80.0)
+
+
+def test_assert_ok_passes_above_limit_with_ample_free_space():
+    gib = 1024**3
+    usage = _Usage(used=762 * gib, total=926 * gib)  # 82% used, 164 GiB free
+    with patch("cve_diff.infra.disk_budget.shutil.disk_usage", return_value=usage):
         disk_budget.assert_ok("/", limit_pct=80.0)
