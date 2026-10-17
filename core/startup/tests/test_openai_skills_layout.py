@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import tomllib
 from pathlib import Path
 
@@ -34,7 +33,8 @@ def test_codex_repo_guidance_files_exist() -> None:
     assert (ROOT / ".agents" / "skills").is_symlink(), ".agents/skills should be a symlink"
     assert (ROOT / ".agents" / "skills").is_dir(), ".agents/skills symlink target should exist"
     assert (ROOT / ".codex" / "config.toml").is_file()
-    assert (ROOT / ".codex" / "hooks.json").is_file()
+    assert not (ROOT / ".codex" / "hooks.json").exists(), \
+        "hooks.json must not exist — hooks live in config.toml (worktree discovery)"
 
 
 def test_agent_skills_have_required_frontmatter() -> None:
@@ -63,8 +63,8 @@ def test_codex_startup_hook_uses_repo_relative_session_init() -> None:
     assert env["RAPTOR_ENV_FILE"] == ".codex/raptor.env"
     assert "CLAUDE_ENV_FILE" not in env
 
-    hooks = json.loads(_read(ROOT / ".codex" / "hooks.json"))
-    command = hooks["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+    hooks = config["hooks"]["SessionStart"]
+    command = hooks[0]["hooks"][0]["command"]
     assert "_RAPTOR_TRUSTED=1" in command
     assert "libexec/raptor-session-init" in command
     assert "CLAUDE_PROJECT_DIR" not in command
@@ -74,7 +74,6 @@ def test_active_codex_docs_do_not_point_at_retired_skill_paths() -> None:
     paths = [
         ROOT / "AGENTS.md",
         ROOT / ".codex" / "config.toml",
-        ROOT / ".codex" / "hooks.json",
         *sorted((ROOT / ".codex" / "agents").glob("*.toml")),
         *sorted((ROOT / ".agents" / "skills").glob("source-command-*/SKILL.md")),
         ROOT / ".agents" / "skills" / "code-understanding" / "SKILL.md",
