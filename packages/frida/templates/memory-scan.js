@@ -235,6 +235,23 @@ function runScanCycle(isFinal) {
     return;
   }
 
+  // Evict tracking state for ranges that no longer exist (unmapped
+  // between flushes).  Without this, a new allocation at a recycled
+  // base address inherits stale cursors and is skipped as "already
+  // scanned".
+  var liveKeys = Object.create(null);
+  for (var li = 0; li < allRanges.length; li++) {
+    liveKeys[allRanges[li].base.toString()] = true;
+  }
+  Object.keys(rangeSizes).forEach(function (k) {
+    if (!liveKeys[k]) {
+      delete rangeSizes[k];
+      CONFIG.patterns.forEach(function (spec) {
+        delete rangeOffsets[spec.id + '|' + k];
+      });
+    }
+  });
+
   var pendingRanges = allRanges.filter(function (range) {
     var key = range.base.toString();
     var previousSize = rangeSizes[key];

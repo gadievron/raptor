@@ -65,6 +65,8 @@ def test_memory_scan_is_flush_driven_and_module_ranges_are_preserved():
     assert "var scanSize = Math.min(" in source
     assert "seenMatches[matchKey]" in source
     assert "noteLimit('final_scan_incomplete', MAX_SCAN_BYTES_PER_FLUSH)" in source
+    assert "delete rangeSizes[k]" in source
+    assert "delete rangeOffsets[spec.id" in source
 
 
 def test_memory_scan_module_slot_replaceable():
