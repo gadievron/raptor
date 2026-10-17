@@ -727,6 +727,17 @@ _CONSECUTIVE_FAIL_LIMIT = 3  # abort run after N consecutive batch failures
 # ladders' worth of terminal single-item failures.
 _TRUNCATION_FAIL_LIMIT = 6
 
+# After this many escalation-cured truncations in one phase dispatch,
+# start subsequent batches at the escalated ceiling directly — avoids
+# a deterministic wasted call per batch on corpora whose content
+# routinely exceeds the standard output budget (observed: 72 wasted
+# calls on a 99-label kernel corpus).  The ratchet is one-way within
+# a dispatch and resets between phases.  The ``[0] += 1`` increment
+# is not single-bytecode-atomic (load–add–store), so a parallel lost
+# update can delay the trip by one batch — accepted for a cost
+# optimisation that is not a correctness gate.
+_ADAPTIVE_ESCALATION_THRESHOLD = 3
+
 # Estimated structured-output tokens ONE focus item costs in a Phase 2
 # response (concept + invariant/contract share, with evidence quotes).
 # Divides the per-call output budget into the batch-size ceiling
@@ -3310,6 +3321,7 @@ def _run_batch_splitting_on_truncation(
     discard_sink: list | None = None,
     vocab_sink: list | None = None,
     trunc_events: list | None = None,
+    escalation_ratchet: list[int] | None = None,
 ) -> tuple[
     list[Concept], list[Invariant], list[Contract],
     list[BugPattern], list[dict[str, str]],
@@ -3370,14 +3382,41 @@ def _run_batch_splitting_on_truncation(
     discards inside batches that limped to success without
     re-counting the terminal failures the loops already account for
     themselves.
+
+    ``escalation_ratchet``: shared single-element ``[int]`` tracking
+    escalation-cured truncations across the dispatch.  Once the count
+    reaches ``_ADAPTIVE_ESCALATION_THRESHOLD``, subsequent batches
+    start at the escalated ceiling directly — avoiding the
+    deterministic wasted standard-ceiling call.  Thread-safe via GIL
+    (same ``[0] += 1`` convention as ``_truncation_failures``).
+    ``None`` disables the ratchet (recursive halves always use the
+    standard ceiling — the halved batch has twice the per-item
+    headroom and should not inherit the parent's ratchet).
     """
     trunc_exc: _BatchLLMError | None = None
+
+    escalated = _escalated_output_tokens(
+        _client_model_name(llm_client), llm_client,
+    )
+
+    ratcheted = (
+        escalation_ratchet is not None
+        and escalated is not None
+        and escalation_ratchet[0] >= _ADAPTIVE_ESCALATION_THRESHOLD
+    )
+    initial_max_tokens = escalated if ratcheted else None
+
     try:
         return _run_one_batch(
             idx, total, focus, context, target, source_root,
             llm_client, reading_list, on_batch, doc_context=doc_context,
             correlate=correlate, discard_sink=discard_sink,
             vocab_sink=vocab_sink,
+            max_tokens=initial_max_tokens,
+            wall_timeout=(
+                _escalated_wall_timeout(escalated)
+                if ratcheted else None
+            ),
         )
     except _BatchLLMError as exc:
         if not exc.truncation:
@@ -3385,9 +3424,8 @@ def _run_batch_splitting_on_truncation(
         trunc_exc = exc
 
     # From here down we are outside the handler (see docstring).
-    escalated = _escalated_output_tokens(
-        _client_model_name(llm_client), llm_client,
-    )
+    if ratcheted:
+        escalated = None
     if escalated is not None:
         logger.warning(
             "Phase 2 batch %d/%d: response truncated at %d items — "
@@ -3396,7 +3434,7 @@ def _run_batch_splitting_on_truncation(
             idx + 1, total, len(focus), escalated,
         )
         try:
-            return _run_one_batch(
+            result = _run_one_batch(
                 idx, total, focus, context, target, source_root,
                 llm_client, reading_list,
                 # Progress was already reported for the full batch;
@@ -3407,6 +3445,16 @@ def _run_batch_splitting_on_truncation(
                 max_tokens=escalated,
                 wall_timeout=_escalated_wall_timeout(escalated),
             )
+            if escalation_ratchet is not None:
+                escalation_ratchet[0] += 1
+                if escalation_ratchet[0] == _ADAPTIVE_ESCALATION_THRESHOLD:
+                    logger.info(
+                        "Phase 2: %d escalation-cured truncations — "
+                        "subsequent batches will start at the "
+                        "escalated ceiling (%d tokens)",
+                        escalation_ratchet[0], escalated,
+                    )
+            return result
         except _PhaseBudgetExhausted:
             raise
         except _BatchLLMError as retry_exc:
@@ -3664,6 +3712,8 @@ def _run_phase2_serial(
                 truncation_failures >= _TRUNCATION_FAIL_LIMIT
             )
 
+    escalation_ratchet: list[int] = [0]
+
     for idx, (focus, context) in enumerate(batches):
         if should_stop is not None and should_stop():
             # Cooperative stop between paid calls: results already
@@ -3683,6 +3733,7 @@ def _run_phase2_serial(
                     correlate=correlate, discard_sink=discard_sink,
                     vocab_sink=vocab_sink,
                     trunc_events=batch_trunc_events,
+                    escalation_ratchet=escalation_ratchet,
                 )
             )
         except _PhaseBudgetExhausted as exc:
@@ -3820,6 +3871,7 @@ def _run_phase2_parallel(
     _consecutive_failures = [0]
     _truncation_failures = [0]
     _salvaged_truncations = [0]
+    _escalation_ratchet: list[int] = [0]
 
     _successes = [0]
 
@@ -3839,6 +3891,7 @@ def _run_phase2_parallel(
             doc_context=doc_context, correlate=correlate,
             discard_sink=discard_sink, vocab_sink=vocab_sink,
             trunc_events=batch_trunc_events,
+            escalation_ratchet=_escalation_ratchet,
         )
         with _fail_lock:
             _consecutive_failures[0] = 0

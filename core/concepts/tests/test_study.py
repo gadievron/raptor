@@ -3172,6 +3172,71 @@ class TestPhase2TruncationEscalation:
         from core.concepts.study import _TRUNCATION_ESCALATION_MULTIPLIER
         assert _TRUNCATION_ESCALATION_MULTIPLIER <= 4
 
+    def test_adaptive_ratchet_skips_standard_ceiling_after_threshold(
+        self, monkeypatch,
+    ):
+        """After _ADAPTIVE_ESCALATION_THRESHOLD escalation-cured
+        truncations, subsequent batches start at the escalated ceiling
+        directly — no wasted standard-ceiling call."""
+        from core.concepts.study import _ADAPTIVE_ESCALATION_THRESHOLD
+        self._serial(monkeypatch)
+        # Each batch has 2 items × 20000 = 40000 tokens: overflows the
+        # standard 32768, fits the escalated 49152.  Need threshold+1
+        # batches = 2*(threshold+1) items.
+        n_batches = _ADAPTIVE_ESCALATION_THRESHOLD + 1
+        items = self._items(n_batches * 2)
+        client = self._CapSensitiveClient(tokens_per_item=20000)
+        concepts, *_ = run_phase2(
+            items, "t/", client, batch_target=2,
+        )
+        assert sorted(c.id for c in concepts) == [
+            f"fn{k}" for k in range(n_batches * 2)
+        ]
+        # First _ADAPTIVE_ESCALATION_THRESHOLD batches: standard
+        # ceiling (truncates), then escalated (succeeds).  The
+        # (threshold+1)th batch starts at the escalated ceiling
+        # directly — only one call instead of two.
+        expected = [(2, 32768), (2, 49152)] * _ADAPTIVE_ESCALATION_THRESHOLD
+        expected += [(2, 49152)]
+        assert client.calls == expected
+
+    def test_adaptive_ratchet_not_inherited_by_split_halves(
+        self, monkeypatch,
+    ):
+        """The ratchet applies to top-level dispatch only — recursive
+        halves from the split ladder use the standard ceiling (halved
+        batches have twice the per-item headroom)."""
+        self._serial(monkeypatch)
+        monkeypatch.setenv("RAPTOR_STUDY_MAX_OUTPUT_TOKENS", "16384")
+        # 3 batches of 2 items (escalation-cure → ratchet trips), then
+        # 1 batch of 2 items that overflows even the escalated ceiling
+        # and must split — the halves should use the standard ceiling.
+        items = self._items(8)
+        # First 6 items (3 batches of 2): 20000 each → 40000 per batch,
+        # overflows standard 32768, fits escalated 49152.
+        # Last 2 items (1 batch of 2): 30000 each → 60000 per batch,
+        # overflows BOTH ceilings; 30000 solo fits standard 32768.
+        client = self._CapSensitiveClient(tokens_per_item={
+            "fn0": 20000, "fn1": 20000,
+            "fn2": 20000, "fn3": 20000,
+            "fn4": 20000, "fn5": 20000,
+            "fn6": 30000, "fn7": 30000,
+        })
+        concepts, *_ = run_phase2(
+            items, "t/", client, batch_target=2,
+        )
+        assert sorted(c.id for c in concepts) == [
+            f"fn{k}" for k in range(8)
+        ]
+        # Batches 0-2: standard(trunc) + escalated(ok) = 6 calls.
+        # Batch 3 (ratcheted): escalated(trunc), split into 2 halves
+        # each at standard ceiling (NOT escalated):
+        #   fn6 at 32768 (ok), fn7 at 32768 (ok).
+        expected = [(2, 32768), (2, 49152)] * 3
+        expected += [(2, 49152)]  # ratcheted initial, truncates
+        expected += [(1, 32768), (1, 32768)]  # split halves at standard
+        assert client.calls == expected
+
 
 class TestPhase2SalvagedTruncationAccounting:
     """phase_stats["truncation_failures"] must surface the items the
