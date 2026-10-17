@@ -125,17 +125,22 @@ def run_understand_prepass(
     agentic_out_dir: Path,
     block_cc_dispatch: bool = False,
     claude_bin: str | None = None,
+    *,
+    max_cost_usd: float | None = None,
 ) -> PrepassResult:
     """Run the /understand --map skill before scanning.
 
     Creates a proper /understand run directory and enriches the agentic
     pipeline's checklist with priority markers from the resulting context map.
 
+    An explicit ``max_cost_usd`` replaces the helper default budget.
+
     Never raises — enrichment failure must not break the base agentic pipeline.
     """
     try:
         return _run_understand_prepass_unsafe(
-            target, agentic_out_dir, block_cc_dispatch, claude_bin)
+            target, agentic_out_dir, block_cc_dispatch, claude_bin,
+            max_cost_usd=max_cost_usd)
     except Exception as e:
         logger.exception("understand pre-pass crashed unexpectedly")
         return PrepassResult(ran=False,
@@ -147,6 +152,8 @@ def _run_understand_prepass_unsafe(
     agentic_out_dir: Path,
     block_cc_dispatch: bool,
     claude_bin: str | None,
+    *,
+    max_cost_usd: float | None = None,
 ) -> PrepassResult:
     target = Path(target).resolve()
     agentic_out_dir = Path(agentic_out_dir).resolve()
@@ -189,7 +196,8 @@ def _run_understand_prepass_unsafe(
         command="understand",
         target=target,
         tools=_UNDERSTAND_TOOLS,
-        budget_usd=_PREPASS_BUDGET_USD,
+        budget_usd=(str(max_cost_usd) if max_cost_usd is not None
+                    else _PREPASS_BUDGET_USD),
         timeout_s=_PREPASS_TIMEOUT_S,
         caller_label="agentic-understand",
         log_label="understand pre-pass",
@@ -244,6 +252,7 @@ def run_validate_postpass(
     *,
     allow_unreachable: bool = False,
     audit_dir: Path | None = None,
+    max_cost_usd: float | None = None,
 ) -> PostpassResult:
     """Run /validate against findings flagged exploitable or high-confidence.
 
@@ -263,13 +272,15 @@ def run_validate_postpass(
     head of the selection cap; agentic findings fill the remainder in
     signal order.
 
+    An explicit ``max_cost_usd`` replaces the helper default budget.
+
     Never raises — enrichment failure must not break the base agentic pipeline.
     """
     try:
         return _run_validate_postpass_unsafe(
             target, agentic_out_dir, analysis_report, block_cc_dispatch,
             claude_bin, allow_unreachable=allow_unreachable,
-            audit_dir=audit_dir)
+            audit_dir=audit_dir, max_cost_usd=max_cost_usd)
     except Exception as e:
         logger.exception("validate post-pass crashed unexpectedly")
         return PostpassResult(ran=False,
@@ -285,6 +296,7 @@ def _run_validate_postpass_unsafe(
     *,
     allow_unreachable: bool = False,
     audit_dir: Path | None = None,
+    max_cost_usd: float | None = None,
 ) -> PostpassResult:
     target = Path(target).resolve()
     agentic_out_dir = Path(agentic_out_dir).resolve()
@@ -400,7 +412,8 @@ def _run_validate_postpass_unsafe(
         command="validate",
         target=target,
         tools=_VALIDATE_TOOLS,
-        budget_usd=_POSTPASS_BUDGET_USD,
+        budget_usd=(str(max_cost_usd) if max_cost_usd is not None
+                    else _POSTPASS_BUDGET_USD),
         timeout_s=_POSTPASS_TIMEOUT_S,
         caller_label="agentic-validate",
         log_label="validate post-pass",

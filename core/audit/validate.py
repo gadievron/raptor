@@ -74,6 +74,7 @@ def validate_findings(
     *,
     target_path: Path,
     out_dir: Path,
+    max_cost_usd: float | None = None,
     _review_fn: Any = None,
     _config: Any = None,
 ) -> OrchestratorResult:
@@ -146,6 +147,7 @@ def validate_findings(
             audit_out_dir=out_dir,
             findings_path=path,
             findings_count=len(findings_outcomes),
+            max_cost_usd=max_cost_usd,
         )
 
     append_audit_log(out_dir, {
@@ -363,6 +365,7 @@ def _dispatch_validate(
     audit_out_dir: Path,
     findings_path: Path,
     findings_count: int,
+    max_cost_usd: float | None = None,
 ) -> ValidatePostpassResult:
     """Launch /validate as a Claude Code subprocess.
 
@@ -377,6 +380,7 @@ def _dispatch_validate(
             audit_out_dir=audit_out_dir,
             findings_path=findings_path,
             findings_count=findings_count,
+            max_cost_usd=max_cost_usd,
         )
     except Exception as e:
         logger.exception("validate post-pass crashed unexpectedly")
@@ -392,6 +396,7 @@ def _dispatch_validate_unsafe(
     audit_out_dir: Path,
     findings_path: Path,
     findings_count: int,
+    max_cost_usd: float | None = None,
 ) -> ValidatePostpassResult:
     target_path = Path(target_path).resolve()
     audit_out_dir = Path(audit_out_dir).resolve()
@@ -440,7 +445,8 @@ def _dispatch_validate_unsafe(
             command="validate",
             target=target_path,
             tools=_VALIDATE_TOOLS,
-            budget_usd=_VALIDATE_BUDGET_USD,
+            budget_usd=(str(max_cost_usd) if max_cost_usd is not None
+                        else _VALIDATE_BUDGET_USD),
             timeout_s=_VALIDATE_TIMEOUT_S,
             caller_label="audit-validate",
             log_label="validate post-pass",

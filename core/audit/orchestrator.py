@@ -10776,6 +10776,7 @@ def _run_audit_body(
             result,
             target_path=config.target_path,
             out_dir=config.out_dir,
+            max_cost_usd=config.max_cost_usd,
         )
 
     try:

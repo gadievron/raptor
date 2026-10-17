@@ -2757,6 +2757,10 @@ def main() -> int:
     # llm_config cap) sees only the analysis share. Without
     # --max-cost-usd the audit post-pass runs uncapped, matching a
     # bare standalone /audit.
+    # Helper passes inherit the operator cap, before the analysis/audit
+    # split mutates args.max_cost_usd. Their own defaults apply only
+    # when the operator did not supply a cap.
+    helper_max_cost_usd = getattr(args, "max_cost_usd", None)
     args.gap_audit_reserved_cost = None
     if args.gap_audit and getattr(args, "max_cost_usd", None):
         share = min(max(args.gap_audit_share, 0.05), 0.95)
@@ -3288,6 +3292,7 @@ def main() -> int:
         prepass_result = run_understand_prepass(
             target=original_repo_path,
             agentic_out_dir=out_dir,
+            max_cost_usd=helper_max_cost_usd,
             # Re-check at dispatch time — the pre-scan verdict may be stale.
             block_cc_dispatch=check_repo_claude_trust(original_repo_path),
         )
@@ -4834,6 +4839,7 @@ def main() -> int:
             target=original_repo_path,
             agentic_out_dir=out_dir,
             analysis_report=validate_input_report,
+            max_cost_usd=helper_max_cost_usd,
             # Re-check at dispatch time — the pre-scan verdict may be stale.
             block_cc_dispatch=check_repo_claude_trust(original_repo_path),
             allow_unreachable=getattr(args, "allow_unreachable", False),

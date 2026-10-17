@@ -106,7 +106,12 @@ marked *(flag)* only fire when explicitly requested:
     (merged with the gap-audit findings when both flags are set).
 
 Cost is tracked in real time with an adaptive budget cutoff (default $10;
-override with `--max-cost-usd`).
+override with `--max-cost-usd`). An explicit cap is also forwarded to the
+`--understand` and `--validate` Claude Code helpers; otherwise those helpers
+retain their $5/$10 defaults. The helpers inherit the original cap before the
+analysis/gap-audit allocation is split. Standalone audit validation likewise
+inherits its audit cap. These are per-process ceilings; helper and analysis
+cost ledgers remain separate.
 
 
 ### Analysis stages (A--D)
