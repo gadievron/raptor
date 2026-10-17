@@ -46,6 +46,8 @@ import subprocess
 import sys
 import threading
 import time
+from core.sandbox._stream_ipc import recv_exact, send_all
+
 from pathlib import Path
 
 from core.security.log_sanitisation import has_nonprintable, sanitise_for_terminal
@@ -544,47 +546,11 @@ class ParserJail:
         return obj
 
     @staticmethod
-    def _recv_exact(sock: socket.socket, n: int, *, deadline: float,
-                    check_cancel=None) -> bytes:
-        timeout = sock.gettimeout()
-        buf = bytearray()
-        try:
-            while len(buf) < n:
-                sock.settimeout(_socket_io_timeout(deadline, check_cancel))
-                try:
-                    chunk = sock.recv(n - len(buf))
-                except InterruptedError:
-                    continue
-                except socket.timeout:
-                    if check_cancel is None:
-                        raise
-                    continue
-                if not chunk:
-                    raise OSError("parser worker closed the socket")
-                buf.extend(chunk)
-            return bytes(buf)
-        finally:
-            _restore_socket_timeout(sock, timeout)
-
-    @staticmethod
-    def _send_exact(sock: socket.socket, data: bytes, *, deadline: float,
-                    check_cancel=None) -> None:
-        # sendall timeout does not disclose its sent offset. Retrying it after
-        # a cancellation slice would duplicate bytes and desynchronise frames.
-        view = memoryview(data)
-        while view:
-            sock.settimeout(_socket_io_timeout(deadline, check_cancel))
-            try:
-                sent = sock.send(view)
-            except InterruptedError:
-                continue
-            except socket.timeout:
-                if check_cancel is None:
-                    raise
-                continue
-            if sent <= 0:
-                raise OSError("parser worker send made no progress")
-            view = view[sent:]
+    def _recv_exact(sock: socket.socket, n: int) -> bytes:
+        data = recv_exact(sock, n)
+        if data is None:
+            raise OSError("parser worker closed the socket")
+        return data
 
     @staticmethod
     def _new_req_id() -> int:
@@ -608,39 +574,37 @@ class ParserJail:
     ) -> "ParsedRequestLine | ParseRefusal":
         sock = self._sock
         assert sock is not None  # _ensure_worker_locked guarantees it
-        if deadline is None:
-            deadline = time.monotonic() + _ROUNDTRIP_TIMEOUT_S
-        timeout = sock.gettimeout()
+        # Belt two against queued-frame desync: the socket must be
+        # SILENT before a request is sent — one frame in, one frame
+        # out. Any already-buffered bytes are unsolicited worker output
+        # (a pre-queued frame or stream garbage): kill, deny, respawn.
+        # Zero-timeout readability probe, then a one-byte read to distinguish
+        # data from EOF (a worker that died between requests). Either outcome
+        # is fatal here, so preserving the unsolicited byte is unnecessary.
+        readable, _, _ = select.select([sock], [], [], 0)
+        if readable:
+            if os.read(sock.fileno(), 1):
+                raise _ProtocolError(
+                    "unsolicited bytes from worker before request")
+            raise OSError("parser worker closed the socket")
+        req_id = self._new_req_id()
+        deadline = time.monotonic() + _ROUNDTRIP_TIMEOUT_S
         try:
-            # One deadline covers queueing, sendall, header and payload.
-            # A previous socket timeout is not a fresh per-stage budget.
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise socket.timeout("parser worker request deadline exceeded")
-            sock.settimeout(remaining)
-            poller = select.poll()
-            poller.register(sock, select.POLLIN)
-            if poller.poll(0):
-                if sock.recv(1, socket.MSG_PEEK):
-                    raise _ProtocolError("unsolicited bytes from worker before request")
-                raise OSError("parser worker closed the socket")
-            req_id = self._new_req_id()
-            # Preparing the id/checking readiness also consumes the budget.
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise socket.timeout("parser worker request deadline exceeded")
-            sock.settimeout(remaining)
-            self._send_exact(sock, FRAME_HEADER.pack(len(raw), req_id) + raw,
-                             deadline=deadline, check_cancel=self._check_running)
-            header = self._recv_exact(sock, FRAME_HEADER.size, deadline=deadline,
-                             check_cancel=self._check_running)
-            length, resp_id = FRAME_HEADER.unpack(header)
-            if length > MAX_FRAME_PAYLOAD:
-                raise _ProtocolError("oversized verdict frame")
-            if resp_id != req_id:
-                raise _ProtocolError("verdict frame id desync")
-            payload = self._recv_exact(sock, length, deadline=deadline,
-                                       check_cancel=self._check_running)
+            send_all(sock, FRAME_HEADER.pack(len(raw), req_id) + raw)
+            header = self._recv_exact(sock, FRAME_HEADER.size)
+        except socket.timeout as exc:
+            # Wedged worker: kill via the OSError path in parse().
+            raise OSError("parser worker round-trip timed out") from exc
+        length, resp_id = FRAME_HEADER.unpack(header)
+        if length > MAX_FRAME_PAYLOAD:
+            raise _ProtocolError("oversized verdict frame")
+        if resp_id != req_id:
+            # Desync: a response for some other request means the
+            # correlation is gone — nothing further from this worker
+            # can be attributed safely.
+            raise _ProtocolError("verdict frame id desync")
+        try:
+            payload = self._recv_exact(sock, length, deadline=deadline)
             return _validate_verdict(payload)
         except socket.timeout as exc:
             raise OSError("parser worker round-trip timed out") from exc
