@@ -177,14 +177,15 @@ def publish(session_id, pid):
                 else:
                     try:
                         previous = codex_broker.request(session_id, {"op": "environment"})
-                        if previous["environment"]["RAPTOR_SESSION_PID"] != str(pid):
-                            raise CodexEnvironmentError("another live process owns this session")
                     except (OSError, CodexEnvironmentError):
                         # Session IDs survive Codex resume in a new process.
                         # The host can inspect the prior process directly;
                         # unavailable IPC alone never revokes a live owner.
                         if sessions._identity_matches(prior["pid"], prior["identity"]):
                             raise CodexEnvironmentError("previous owner is still live")
+                    else:
+                        if previous["environment"]["RAPTOR_SESSION_PID"] != str(pid):
+                            raise CodexEnvironmentError("another live process owns this session")
             except FileNotFoundError:
                 pass
             content = json.dumps(context)
