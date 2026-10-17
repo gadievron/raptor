@@ -19,16 +19,19 @@ from __future__ import annotations
 import faulthandler
 import importlib.util
 import io
+import os
 import signal
 import sys
 
-if sys.prefix != sys.base_prefix:
+if not os.environ.get("CI") and not os.environ.get("RAPTOR_CI"):
     _REQUIRED_DEPS = ("requests", "pydantic", "openai", "yaml")
     _missing = [m for m in _REQUIRED_DEPS if importlib.util.find_spec(m) is None]
     if _missing:
+        _in_venv = sys.prefix != sys.base_prefix
+        _hint = "uv sync --locked" if _in_venv else "source .venv/bin/activate"
         sys.stderr.write(
             f"raptor: missing dependencies: {', '.join(_missing)}\n"
-            f"  run: uv sync --locked\n"
+            f"  run: {_hint}\n"
             f"  interpreter: {sys.executable}\n"
         )
         raise SystemExit(1)
