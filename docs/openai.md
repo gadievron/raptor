@@ -58,8 +58,9 @@ workflow or install missing backends, tool permissions or isolation controls.
 Generic Codex PreToolUse/PostToolUse command rewriting is disabled: making its
 input rewrite effective required an allow decision that bypassed native command
 rules in testing. Explicit Python lifecycle transitions remain authoritative;
-generic tool-failure interception and automatic read-coverage parity are not
-provided. Stop/SessionEnd hooks use validated session context. Claude's native
+RAPTOR-owned exit receipts now supply failure bookkeeping without changing
+commands or approvals; see [command outcomes](codex-tool-outcomes.md). Arbitrary
+external tool interception and automatic read-coverage parity are not provided. Stop/SessionEnd hooks use validated session context. Claude's native
 failure hooks remain unchanged.
 
 Inspect scan metrics and warnings. A completed local scan may still have reduced

@@ -26,6 +26,8 @@ import core.startup.process_init  # noqa: E402,F401
 from core.startup.codex_broker import serve  # noqa: E402
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        sys.exit(2)
-    serve(sys.argv[1])
+    from core.run.cli_outcome import cli_outcome
+    with cli_outcome():
+        if len(sys.argv) != 2:
+            sys.exit(2)
+        serve(sys.argv[1])

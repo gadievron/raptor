@@ -66,5 +66,6 @@ status after resume. To pin a named project when resuming:
 Never set `BASH_ENV` or change shell profiles for this integration. Existing
 RAPTOR stripping stays in force. A scan's successful exit does not mean all rule
 packs or every optional isolation layer were available; inspect its warnings
-and metrics. Generic tool-failure interception and automatic read-coverage hook
-parity are not yet provided.
+and metrics. RAPTOR Python command failures use [exit receipts](codex-tool-outcomes.md).
+Arbitrary external-tool interception and automatic read-coverage hook parity
+are not provided.

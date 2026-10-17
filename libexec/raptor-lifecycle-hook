@@ -243,13 +243,34 @@ def _too_young_to_judge(meta: dict) -> bool:
 
 def main():
     modes = ("stop", "session-end", "tool-failure", "codex-before",
-             "codex-exit", "codex-after", "codex-stop", "codex-end")
+             "codex-exit", "codex-after", "codex-stop", "codex-end", "codex-outcome")
     if len(sys.argv) < 2 or sys.argv[1] not in modes:
         print(f"Usage: {Path(__file__).name} " + "|".join(modes),
               file=sys.stderr)
         sys.exit(1)
 
     event = sys.argv[1]
+    outcome_scope = None
+    if event == "codex-outcome":
+        import io
+        import json
+        from core.run.cli_outcome import consume
+        from core.startup.codex_environment import restore
+        try:
+            payload = json.loads(sys.stdin.read(1024 * 1024 + 1))
+            receipt = consume(payload)
+            if receipt is None:
+                return
+            command, recorded_run, arguments = receipt
+            outcome_scope = (recorded_run, arguments)
+            restore(payload.get("session_id"))
+        except (OSError, ValueError, TypeError, KeyError, RecursionError):
+            return
+        # Adapt proven exit evidence to the same failure-only attribution path
+        # as Claude. No tool output, permission decision or rewritten input.
+        sys.stdin = io.StringIO(json.dumps({"hook_event_name": "PostToolUseFailure",
+            "tool_name": "Bash", "tool_input": {"command": command}}))
+        event = "tool-failure"
     if event in ("codex-stop", "codex-end"):
         import io
         import json
@@ -263,7 +284,7 @@ def main():
         sys.stdin = io.StringIO(raw)
         if event == "codex-end":
             event = "session-end"
-    failing_command = None
+    failing_command = command if outcome_scope is not None else None
     codex_stop = event == "codex-stop"
     if codex_stop:
         event = "stop"
@@ -282,7 +303,7 @@ def main():
         if exit_code == 0:
             return
         event = "tool-failure"
-    elif event == "tool-failure":
+    elif event == "tool-failure" and outcome_scope is None:
         failing_command = _tool_failure_command(sys.stdin)
         if failing_command is None:
             return
@@ -420,6 +441,17 @@ def main():
                 continue
 
             if event == "tool-failure":
+                if outcome_scope is not None:
+                    recorded_run, arguments = outcome_scope
+                    # Codex receipts never fall back to the newest unrelated
+                    # run. Require this process's active run or an exact run
+                    # directory argument (not a substring or stdout claim).
+                    resolved = d.resolve()
+                    matches = (str(resolved) == recorded_run if recorded_run is not None else any(
+                        (REPO_ROOT / arg).resolve() == resolved
+                        for arg in arguments if arg and not arg.startswith("-")))
+                    if not matches:
+                        continue
                 failure_candidates.append((d, meta))
                 continue
 
@@ -559,4 +591,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    from core.run.cli_outcome import cli_outcome
+    with cli_outcome():
+        main()

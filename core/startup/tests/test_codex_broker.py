@@ -117,3 +117,17 @@ def test_duplicate_server_does_not_clean_live_servers_files(host):
     broker.serve(sid)  # Stable lock already belongs to the active broker.
     assert ready.read_text() == before
     assert broker.request(sid, {'op': 'environment'})['ok'] is True
+
+
+def test_owner_exit_cleans_unconsumed_outcome_receipts(host):
+    sid, process, _credential = host
+    name = 'outcome-' + 'a' * 64 + '-2.json'
+    with environment._directory(broker._address(sid)) as directory:
+        environment._atomic(directory, name, '{"status":7}')
+    process.stdin.close()
+    process.wait(timeout=3)
+    deadline = time.monotonic() + 3
+    receipt = broker._address(sid) / name
+    while receipt.exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert not receipt.exists()

@@ -39,8 +39,9 @@ Linux; macOS and Windows parity has not been established.
 Generic PreToolUse command rewriting is disabled. Making its `updatedInput`
 effective requires an `allow` decision which, in real CLI tests, bypassed both
 forbidden and approval-required execution rules. Native command approval must
-remain authoritative. RAPTOR's explicit Python run lifecycle works; automatic
-Claude-style interception of arbitrary tool failures is not claimed.
+remain authoritative. RAPTOR's explicit Python run lifecycle works; notification-only PostToolUse now consumes RAPTOR-owned Python CLI exit
+receipts. See [command outcomes](codex-tool-outcomes.md) for supported forms,
+strict attribution and unknown outcomes. Arbitrary external tools are not covered.
 
 Validation included a real Codex workspace-write subprocess, project creation,
 project continuity across separate tool calls, and a completed local Semgrep
