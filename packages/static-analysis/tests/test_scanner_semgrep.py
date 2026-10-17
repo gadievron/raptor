@@ -475,3 +475,25 @@ class TestChildJsonPromotion:
         )
         assert not stale.exists()
         assert not (tmp_path / "semgrep_test_scan.json").exists()
+
+
+class TestOfflineLocalRules:
+    @patch('shutil.which', return_value='/usr/bin/semgrep')
+    @patch.object(_scanner_mod, 'run', return_value=(0, '{"runs": []}', ''))
+    @patch.object(_scanner_mod, 'validate_sarif', return_value=True)
+    def test_existing_local_config_needs_no_egress_proxy(self, validate, runner, which, tmp_path):
+        config = tmp_path / 'local.yaml'
+        config.write_text('rules: []\n')
+        _, success = run_single_semgrep('local', str(config), tmp_path, tmp_path, 30)
+        assert success
+        assert runner.call_args.kwargs['proxy_hosts'] is None
+        assert runner.call_args.kwargs['fake_home'] is True
+        assert runner.call_args.kwargs['target'] == str(tmp_path)
+
+    @patch('shutil.which', return_value='/usr/bin/semgrep')
+    @patch.object(_scanner_mod, 'run', return_value=(0, '{"runs": []}', ''))
+    @patch.object(_scanner_mod, 'validate_sarif', return_value=True)
+    def test_registry_config_retains_scoped_proxy(self, validate, runner, which, tmp_path):
+        _, success = run_single_semgrep('registry', 'p/security-audit', tmp_path, tmp_path, 30)
+        assert success
+        assert runner.call_args.kwargs['proxy_hosts']
