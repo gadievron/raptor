@@ -361,6 +361,9 @@
     "core/sandbox/scripts/feature-matrix/bin/report.py::main::unsanitised_llm_value::errors": {
       "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
+    "core/startup/codex_environment.py::_text::sanitiser_shadow::_text": {
+      "note": "startup-context value validator — a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
+    },
     "core/startup/init.py::_check_analyzer_capabilities::unsanitised_llm_value::gcc_ver": {
       "note": "gcc --version first line from the local trusted toolchain probe (safe_subprocess_env, no target input)"
     },
