@@ -288,12 +288,18 @@ function doFlush(mainTid) {
 }
 
 function onFlushMsg(msg) {
+  if (typeof registerRaptorFlushListener !== 'function') {
+    recv('raptor:flush', onFlushMsg);
+  }
   var mainTid = (msg !== null && typeof msg === 'object')
     ? msg.main_tid : 0;
   try { doFlush(mainTid); } catch (_e) {}
+}
+if (typeof registerRaptorFlushListener === 'function') {
+  registerRaptorFlushListener(onFlushMsg);
+} else {
   recv('raptor:flush', onFlushMsg);
 }
-recv('raptor:flush', onFlushMsg);
 
 rpc.exports = {
   flush: function () {

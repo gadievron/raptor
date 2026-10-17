@@ -33,7 +33,8 @@ def test_memory_scan_is_bounded_and_reports_errors():
     assert "protection: 'rw-'" in source
     assert "return !range.file;" in source
     assert "MAX_RANGES = 32" in source
-    assert "var rangesRemaining = ranges.length - rangeIndex;" in source
+    assert "function remainingRangeCount()" in source
+    assert "var rangesRemaining = remainingRangeCount();" in source
     assert "var rangeBudget = Math.floor(budget.remaining / rangesRemaining);" in source
     assert "var cycleBudget = Math.min(" in source
     assert "MAX_SCAN_BYTES_PER_FLUSH = 512 * 1024" in source
@@ -48,6 +49,7 @@ def test_memory_scan_is_flush_driven_and_module_ranges_are_preserved():
     source, _ = load_script_source("memory-scan", None)
 
     assert "function onFlushMsg(msg)" in source
+    assert "registerRaptorFlushListener(onFlushMsg)" in source
     assert "recv('raptor:flush', onFlushMsg)" in source
     assert "msg.final === true" in source
     assert "scanConfiguredMemory();" not in source

@@ -1,5 +1,8 @@
 'use strict';
 
+var __raptorFlushSummaryRequired = true;
+var __raptorFlushSummarySecondsPerFlush = 1.25;
+
 var CONFIG = {
     module: null,
     patterns: [
@@ -31,7 +34,8 @@ var rangeSizes = Object.create(null);
 var seenMatches = Object.create(null);
 var scanInProgress = false;
 var finalFlushRequested = false;
-var rangeWindowStart = 0;
+var flushSummarySent = false;
+var rangeWindowStart = null;
 var startEmitted = false;
 
 function emit(event, fields) {
@@ -55,6 +59,18 @@ function noteLimit(kind, cap) {
   });
 }
 
+function emitFlushSummaryComplete() {
+  if (flushSummarySent) {
+    return;
+  }
+
+  flushSummarySent = true;
+  send({
+    category: 'raptor',
+    event: 'flush_summary_complete'
+  });
+}
+
 function finish(status, moduleName) {
   if (finished) {
     return;
@@ -72,6 +88,10 @@ function finish(status, moduleName) {
     scan_errors: scanErrorCount,
     limits_applied: limitsApplied
   });
+
+  if (finalFlushRequested) {
+    emitFlushSummaryComplete();
+  }
 }
 
 function patternBytes(pattern) {
@@ -109,6 +129,7 @@ function runScanCycle(isFinal) {
   }
 
   scanInProgress = true;
+  var scannedBytesAtCycleStart = scannedBytes;
 
   var selectedModule = null;
   var moduleName = CONFIG.module || null;
@@ -136,6 +157,14 @@ function runScanCycle(isFinal) {
     }
 
     if (!isFinal) {
+      return;
+    }
+
+    if (pendingWork &&
+        !missingModule &&
+        scannedBytes > scannedBytesAtCycleStart &&
+        scannedBytes < MAX_SCAN_BYTES) {
+      runScanCycle(true);
       return;
     }
 
@@ -206,21 +235,46 @@ function runScanCycle(isFinal) {
     return;
   }
 
-  var ranges = allRanges;
+  var pendingRanges = allRanges.filter(function (range) {
+    var key = range.base.toString();
+    var previousSize = rangeSizes[key];
+
+    if (typeof previousSize !== 'number' ||
+        previousSize !== range.size) {
+      return true;
+    }
+
+    return CONFIG.patterns.some(function (spec) {
+      var offset = rangeOffsets[spec.id + '|' + key];
+      return typeof offset !== 'number' || offset !== range.size;
+    });
+  });
+
+  var ranges = pendingRanges;
   var cyclePendingWork = false;
 
-  if (allRanges.length > MAX_RANGES) {
+  if (pendingRanges.length > MAX_RANGES) {
     noteLimit('range_count', MAX_RANGES);
 
-    // Rotate the bounded window so mappings beyond the first 32 can
-    // be considered on subsequent controller flushes.
-    var start = rangeWindowStart % allRanges.length;
+    var start = 0;
+    if (rangeWindowStart !== null) {
+      for (var j = 0; j < pendingRanges.length; j++) {
+        if (pendingRanges[j].base.toString() === rangeWindowStart) {
+          start = (j + 1) % pendingRanges.length;
+          break;
+        }
+      }
+    }
+
     ranges = [];
     for (var i = 0; i < MAX_RANGES; i++) {
-      ranges.push(allRanges[(start + i) % allRanges.length]);
+      ranges.push(pendingRanges[(start + i) % pendingRanges.length]);
     }
-    rangeWindowStart = (start + MAX_RANGES) % allRanges.length;
+
+    rangeWindowStart = ranges[ranges.length - 1].base.toString();
     cyclePendingWork = true;
+  } else {
+    rangeWindowStart = null;
   }
 
   if (!startEmitted) {
@@ -258,6 +312,32 @@ function runScanCycle(isFinal) {
     var budget = { remaining: perPatternBudget };
     var rangeIndex = 0;
 
+    function remainingRangeCount() {
+      var count = 0;
+
+      for (var i = rangeIndex; i < ranges.length; i++) {
+        var candidate = ranges[i];
+        var candidateKey = candidate.base.toString();
+        var previousSize = rangeSizes[candidateKey];
+
+        if (typeof previousSize !== 'number' ||
+            previousSize !== candidate.size) {
+          count++;
+          continue;
+        }
+
+        var candidateOffset =
+          rangeOffsets[spec.id + '|' + candidateKey];
+
+        if (typeof candidateOffset !== 'number' ||
+            candidateOffset !== candidate.size) {
+          count++;
+        }
+      }
+
+      return count;
+    }
+
     function nextRange() {
       if (finished) {
         return;
@@ -276,8 +356,7 @@ function runScanCycle(isFinal) {
         return;
       }
 
-      var rangesRemaining = ranges.length - rangeIndex;
-      var range = ranges[rangeIndex++];
+      var range = ranges[rangeIndex];
       var rangeKey = range.base.toString();
 
       // Reset stale cursors after shrink; revisit the old boundary
@@ -309,9 +388,13 @@ function runScanCycle(isFinal) {
         offset = 0;
       }
       if (offset === range.size) {
+        rangeIndex++;
         nextRange();
         return;
       }
+
+      var rangesRemaining = remainingRangeCount();
+      rangeIndex++;
 
       var available = range.size - offset;
 
@@ -431,15 +514,20 @@ function runScanCycle(isFinal) {
 }
 
 function onFlushMsg(msg) {
-  // Re-arm before scanning; Memory.scan is asynchronous.
-  recv('raptor:flush', onFlushMsg);
-
-  if (finished) {
-    return;
+  if (typeof registerRaptorFlushListener !== 'function') {
+    recv('raptor:flush', onFlushMsg);
   }
   if (msg && msg.final === true) {
     finalFlushRequested = true;
   }
+
+  if (finished) {
+    if (finalFlushRequested) {
+      emitFlushSummaryComplete();
+    }
+    return;
+  }
+
   if (scanInProgress) {
     return;
   }
@@ -447,4 +535,8 @@ function onFlushMsg(msg) {
   runScanCycle(finalFlushRequested);
 }
 
-recv('raptor:flush', onFlushMsg);
+if (typeof registerRaptorFlushListener === 'function') {
+  registerRaptorFlushListener(onFlushMsg);
+} else {
+  recv('raptor:flush', onFlushMsg);
+}

@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import signal
 import threading
 import time
@@ -194,6 +195,134 @@ def _taxonomy_ingest_names() -> list[str]:
     return sorted(NETWORK_INGEST_FUNCS | STREAM_INPUT_FUNCS)
 
 
+_FLUSH_DISPATCHER = """var __raptorFlushListeners = [];
+function registerRaptorFlushListener(listener) {
+  __raptorFlushListeners.push(listener);
+}
+function __raptorDispatchFlush(message) {
+  recv('raptor:flush', __raptorDispatchFlush);
+  var listeners = __raptorFlushListeners.slice();
+  listeners.forEach(function (listener) {
+    try {
+      listener(message);
+    } catch (_e) {}
+  });
+}
+recv('raptor:flush', __raptorDispatchFlush);
+"""
+
+
+def _with_flush_dispatcher(source: str) -> str:
+    if "registerRaptorFlushListener(" not in source:
+        return source
+    return _FLUSH_DISPATCHER + source
+
+
+def _javascript_integer_product(source: str, name: str) -> int | None:
+    if not name:
+        return None
+
+    source_length = len(source)
+    search_from = 0
+
+    while True:
+        name_start = source.find(name, search_from)
+        if name_start < 0:
+            return None
+
+        name_end = name_start + len(name)
+
+        if name_start > 0:
+            previous = source[name_start - 1]
+            if previous.isalnum() or previous in "_$":
+                search_from = name_end
+                continue
+
+        if name_end < source_length:
+            following = source[name_end]
+            if following.isalnum() or following in "_$":
+                search_from = name_end
+                continue
+
+        cursor = name_end
+        while cursor < source_length and source[cursor].isspace():
+            cursor += 1
+
+        if (
+            cursor >= source_length
+            or source[cursor] != "="
+            or (
+                cursor + 1 < source_length
+                and source[cursor + 1] in "=>"
+            )
+        ):
+            search_from = name_end
+            continue
+
+        cursor += 1
+        while cursor < source_length and source[cursor].isspace():
+            cursor += 1
+
+        value: int | None = None
+
+        while cursor < source_length:
+            factor_start = cursor
+
+            while (
+                cursor < source_length
+                and "0" <= source[cursor] <= "9"
+            ):
+                cursor += 1
+
+            if cursor == factor_start:
+                value = None
+                break
+
+            factor = int(source[factor_start:cursor])
+            value = factor if value is None else value * factor
+
+            while cursor < source_length and source[cursor].isspace():
+                cursor += 1
+
+            if cursor < source_length and source[cursor] == "*":
+                cursor += 1
+                while cursor < source_length and source[cursor].isspace():
+                    cursor += 1
+                continue
+
+            if cursor < source_length and source[cursor] == ";":
+                return value
+
+            value = None
+            break
+
+        search_from = name_end
+
+
+def _flush_summary_timeout_seconds(source: str) -> float:
+    per_flush_values = [
+        float(value)
+        for value in re.findall(
+            r"__raptorFlushSummarySecondsPerFlush\s*=\s*(\d+(?:\.\d+)?)\b",
+            source,
+        )
+    ]
+    if not per_flush_values:
+        return 5.0
+
+    total_budget = _javascript_integer_product(source, "MAX_SCAN_BYTES")
+    flush_budget = _javascript_integer_product(
+        source, "MAX_SCAN_BYTES_PER_FLUSH"
+    )
+    seconds_per_flush = max(per_flush_values)
+
+    if total_budget is None or flush_budget is None or flush_budget <= 0:
+        return max(5.0, seconds_per_flush)
+
+    cycles = (total_budget + flush_budget - 1) // flush_budget
+    return max(5.0, cycles * seconds_per_flush)
+
+
 def _render_template_slots(source: str) -> str:
     """Fill generated-vocabulary slots in a bundled template.
 
@@ -269,7 +398,8 @@ def load_script_source(template: str | None,
             parts.append(
                 f"// ─── combined template: {name} ───\n"
                 f";(function () {{\n{rendered}\n}})();\n")
-        return "\n".join(parts), f"template:{'+'.join(names)}"
+        source = "\n".join(parts)
+        return _with_flush_dispatcher(source), f"template:{'+'.join(names)}"
     assert script_path is not None
     p = Path(script_path).resolve()
     if not p.is_file():
@@ -464,15 +594,17 @@ def run(cfg: RunConfig,
     events_lock = threading.Lock()
     event_count = {"n": 0}
 
-    template_names = (
-        cfg.script_origin.removeprefix("template:").split("+")
-        if cfg.script_origin.startswith("template:")
-        else []
-    )
-    wait_for_memory_scan_summary = "memory-scan" in template_names
-    memory_scan_summary_received = threading.Event()
+    summary_required_count = len(re.findall(
+        r"__raptorFlushSummaryRequired\s*=\s*true\b",
+        cfg.script_source,
+    ))
+    summary_timeout_s = _flush_summary_timeout_seconds(cfg.script_source)
+    summary_condition = threading.Condition()
+    summary_ack_counts: dict[int, int] = {}
 
-    def _message_cb(message: dict, data: bytes | None) -> None:
+    def _message_cb(
+        message: dict, data: bytes | None, script_key: int | None = None
+    ) -> None:
         """Frida's on('message') callback. Both ``send()`` payloads
         (type='send') and uncaught script errors (type='error')
         flow through here. We persist both so a hook crashing
@@ -506,12 +638,17 @@ def run(cfg: RunConfig,
                     (cfg.out_dir / "coverage.drcov").write_bytes(data)
         payload = message.get("payload")
         if (
-            message.get("type") == "send"
+            script_key is not None
+            and message.get("type") == "send"
             and isinstance(payload, dict)
-            and payload.get("category") == "memory_scan"
-            and payload.get("event") == "summary"
+            and payload.get("category") == "raptor"
+            and payload.get("event") == "flush_summary_complete"
         ):
-            memory_scan_summary_received.set()
+            with summary_condition:
+                summary_ack_counts[script_key] = (
+                    summary_ack_counts.get(script_key, 0) + 1
+                )
+                summary_condition.notify_all()
 
         if on_event is not None:
             try:
@@ -519,12 +656,23 @@ def run(cfg: RunConfig,
             except Exception:  # never let a test callback break the run
                 logger.debug("frida on_event callback raised", exc_info=True)
 
+    def _message_callback_for(script_obj: Any):
+        script_key = id(script_obj)
+
+        def _bound_message_cb(
+            message: dict, data: bytes | None
+        ) -> None:
+            _message_cb(message, data, script_key)
+
+        return _bound_message_cb
+
     started = time.monotonic()
     session = None
     device = None
     pid: int | None = None
     spawned = False
     child_sessions: list[Any] = []
+    script_entries: list[tuple[Any, int]] = []
     child_handler: Any = None
 
     try:
@@ -535,12 +683,15 @@ def run(cfg: RunConfig,
         result.resolved_pid = pid
 
         script = session.create_script(cfg.script_source)
-        script.on("message", _message_cb)
+        script.on("message", _message_callback_for(script))
         # Stalker-heavy templates have wedged load() on a suspended
         # spawn; a wedged load must fail the run, not hang it.
         if not _bounded_frida_call(script.load, 30.0, "script-load"):
             msg = "script load did not complete within 30s"
             raise RuntimeError(msg)
+
+        with events_lock:
+            script_entries.append((script, result.resolved_pid or 0))
 
         if cfg.follow_children:
             def _instrument_child(child_pid: int) -> None:
@@ -557,10 +708,11 @@ def run(cfg: RunConfig,
                                      exc_info=True)
                     child_script = child_session.create_script(
                         cfg.script_source)
-                    child_script.on("message", _message_cb)
+                    child_script.on("message", _message_callback_for(child_script))
                     child_script.load()
                     with events_lock:
                         child_sessions.append(child_session)
+                        script_entries.append((child_script, child_pid))
                         result.children_observed += 1
                 except Exception:  # best-effort: never wedge the child
                     logger.debug("child instrumentation failed",
@@ -630,54 +782,71 @@ def run(cfg: RunConfig,
         # a delivery race costs one tick instead of wedging the run.
         script_accepts_post = "raptor:flush" in cfg.script_source
 
-        flush_state = {"consecutive_wedges": 0}
+        flush_state: dict[int, int] = {}
 
-        def _script_flush(final: bool = False) -> None:
+        def _script_flush(final: bool = False) -> list[int]:
+            with events_lock:
+                targets = list(script_entries)
+
+            flushed_script_ids: list[int] = []
+
             if script_accepts_post:
-                # main_tid: a process's main thread id equals its pid;
-                # the agent follows it directly instead of calling
-                # Process.enumerateThreads(), which intermittently
-                # wedges the agent's JS thread on current builds.
-                try:
-                    # spawned: lets mode-dependent verdicts (e.g.
-                    # heap-trace invalid_free, meaningless on attach)
-                    # gate themselves agent-side.
+                for target_script, target_pid in targets:
                     flush_message = {
                         "type": "raptor:flush",
-                        "main_tid": result.resolved_pid or 0,
+                        "main_tid": target_pid,
                         "spawned": spawned,
+                        "final": final,
                     }
-                    if wait_for_memory_scan_summary:
-                        flush_message["final"] = final
-                    script.post(flush_message)
+                    try:
+                        target_script.post(flush_message)
+                        result.flushes_completed += 1
+                        flushed_script_ids.append(id(target_script))
+                    except Exception:
+                        logger.debug("flush post failed", exc_info=True)
+
+                return flushed_script_ids
+
+            for target_script, _target_pid in targets:
+                script_key = id(target_script)
+                if flush_state.get(script_key, 0) >= 2 and not final:
+                    continue
+
+                def _call(target_script=target_script) -> None:
+                    exports = getattr(target_script, "exports_sync", None)
+                    if exports is None:
+                        exports = getattr(target_script, "exports", None)
+                    if exports is not None:
+                        exports.flush()
+
+                if _bounded_frida_call(
+                    _call, _FLUSH_RPC_TIMEOUT_S, "script-flush"
+                ):
+                    flush_state[script_key] = 0
                     result.flushes_completed += 1
-                except Exception:
-                    logger.debug("flush post failed", exc_info=True)
-                return
-            # Two consecutive wedged flushes disable the rest: each
-            # timed-out call abandons a daemon worker, and piling
-            # those up helps nobody. ONE wedge must not latch — the
-            # immediate post-resume flush intermittently wedges
-            # racing target startup, and latching there meant a
-            # flush-driven template silently emitted nothing for the
-            # whole run. The teardown flush always gets a shot: it is
-            # the last chance for cumulative output.
-            if flush_state["consecutive_wedges"] >= 2 and not final:
-                return
+                    flushed_script_ids.append(script_key)
+                else:
+                    flush_state[script_key] = flush_state.get(script_key, 0) + 1
 
-            def _call() -> None:
-                exports = getattr(script, "exports_sync", None)
-                if exports is None:
-                    exports = getattr(script, "exports", None)
-                if exports is not None:
-                    exports.flush()
+            return flushed_script_ids
 
-            if _bounded_frida_call(_call, _FLUSH_RPC_TIMEOUT_S,
-                                   "script-flush"):
-                flush_state["consecutive_wedges"] = 0
-                result.flushes_completed += 1
-            else:
-                flush_state["consecutive_wedges"] += 1
+        def _wait_for_flush_summaries(script_ids: list[int]) -> bool:
+            if summary_required_count == 0:
+                return True
+
+            deadline = time.monotonic() + summary_timeout_s
+            with summary_condition:
+                while any(
+                    summary_ack_counts.get(script_id, 0)
+                    < summary_required_count
+                    for script_id in script_ids
+                ):
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        return False
+                    summary_condition.wait(remaining)
+
+            return True
 
         # If we spawned, the process is suspended pre-load. Resume it
         # AFTER load so hooks are in place before main() runs. No
@@ -727,12 +896,19 @@ def run(cfg: RunConfig,
                     _script_flush()
                     last_flush = time.monotonic()
             if script_has_flush or script_accepts_post:
-                _script_flush(final=True)
-                if (wait_for_memory_scan_summary
-                        and not memory_scan_summary_received.wait(timeout=5.0)):
+                final_script_ids = _script_flush(final=True)
+                if (
+                    summary_required_count > 0
+                    and script_accepts_post
+                    and final_script_ids
+                    and not _wait_for_flush_summaries(final_script_ids)
+                ):
                     logger.warning(
-                        "memory-scan summary not received within 5s; "
-                        "continuing teardown")
+                        "flush summary acknowledgement not received "
+                        "within %.1fs from %d script(s)",
+                        summary_timeout_s,
+                        len(final_script_ids),
+                    )
                 if result.flushes_completed == 0:
                     logger.warning(
                         "no flush call completed this run; a flush-"

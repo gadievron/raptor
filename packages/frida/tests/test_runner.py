@@ -302,7 +302,7 @@ def test_run_spawn_resumes_after_load(tmp_path: Path):
     assert result.resolved_pid == 9999
 
 
-def test_post_flush_keeps_custom_script_protocol_unchanged(tmp_path: Path, monkeypatch):
+def test_post_flush_marks_final_message(tmp_path: Path, monkeypatch):
     device = FakeDevice("local")
     fake = _fake_frida(device)
     posted = []
@@ -324,10 +324,22 @@ def test_post_flush_keeps_custom_script_protocol_unchanged(tmp_path: Path, monke
     assert result.ok is True
     assert posted
     assert posted[-1]["type"] == "raptor:flush"
-    assert "final" not in posted[-1]
+    assert posted[-1]["final"] is True
 
 
-def test_memory_scan_waits_for_summary_before_detach(
+def test_flush_summary_timeout_scales_with_scan_budget():
+    source = (
+        "var __raptorFlushSummarySecondsPerFlush = 2; "
+        "var MAX_SCAN_BYTES = 12 * 1024; "
+        "var MAX_SCAN_BYTES_PER_FLUSH = 3 * 1024;"
+    )
+    assert runner._flush_summary_timeout_seconds(source) == 8.0
+    assert runner._flush_summary_timeout_seconds(
+        "var __raptorFlushSummaryRequired = true;"
+    ) == 5.0
+
+
+def test_runner_waits_for_opt_in_flush_ack_before_detach(
     tmp_path: Path, monkeypatch,
 ):
     import json
@@ -345,9 +357,8 @@ def test_memory_scan_waits_for_summary_before_detach(
                 self.fire({
                     "type": "send",
                     "payload": {
-                        "category": "memory_scan",
-                        "event": "summary",
-                        "status": "complete",
+                        "category": "raptor",
+                        "event": "flush_summary_complete",
                     },
                 })
 
@@ -366,8 +377,8 @@ def test_memory_scan_waits_for_summary_before_detach(
                 payload = record.get("payload")
                 if (
                     isinstance(payload, dict)
-                    and payload.get("category") == "memory_scan"
-                    and payload.get("event") == "summary"
+                    and payload.get("category") == "raptor"
+                    and payload.get("event") == "flush_summary_complete"
                 ):
                     summary_seen = True
                     break
@@ -383,7 +394,13 @@ def test_memory_scan_waits_for_summary_before_detach(
     cfg = runner.RunConfig(
         target=runner.parse_target("1234"),
         out_dir=tmp_path,
-        script_source="recv('raptor:flush', function () {});",
+        script_source=(
+            "var __raptorFlushSummaryRequired = true; "
+            "var __raptorFlushSummarySecondsPerFlush = 2; "
+            "var MAX_SCAN_BYTES = 4; "
+            "var MAX_SCAN_BYTES_PER_FLUSH = 1; "
+            "recv('raptor:flush', function () {});"
+        ),
         script_origin="template:memory-scan",
         duration_sec=0.02,
     )
