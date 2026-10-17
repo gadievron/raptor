@@ -284,6 +284,35 @@ def _realpath_or_none(path: str | None) -> str | None:
     return os.path.realpath(path)
 
 
+# xcode-select's pointer to the active developer directory. The
+# /usr/bin compiler shims (gcc, cc, clang, make, ...) are xcrun
+# trampolines that read this link, then dlopen libxcrun.dylib and exec
+# the real tool from the directory it names. With no link, xcrun falls
+# back to the default Xcode bundle, then the Command Line Tools.
+_XCODE_SELECT_LINK = "/private/var/db/xcode_select_link"
+_DEFAULT_DEVELOPER_DIRS = (
+    "/Applications/Xcode.app/Contents/Developer",
+    "/Library/Developer/CommandLineTools",
+)
+
+
+def _developer_toolchain_read_dirs() -> tuple[str, ...]:
+    """Read grants that let the /usr/bin developer-tool shims run.
+
+    Returns the xcode-select link and the developer directory it
+    resolves to when a toolchain is selected; otherwise the default
+    developer directories xcrun falls back to that exist on this host.
+    Toolchain trees hold compilers, SDK headers and libraries; the
+    grant matches the /usr and Homebrew posture."""
+    developer_dir = _realpath_or_none(_XCODE_SELECT_LINK)
+    if developer_dir and developer_dir != _XCODE_SELECT_LINK \
+            and os.path.isdir(developer_dir):
+        return (_XCODE_SELECT_LINK, developer_dir)
+    return tuple(
+        os.path.realpath(d) for d in _DEFAULT_DEVELOPER_DIRS
+        if os.path.isdir(d))
+
+
 def _quote_sbpl(s: str) -> str:
     r"""Quote a string literal for SBPL. SBPL uses double-quoted strings
     with backslash escapes for embedded quotes/backslashes.
@@ -562,7 +591,7 @@ def build_profile(*,
             # /bin/sh's deps (a strict subset of any target's) permitted is
             # exactly what makes "no readiness byte" mean a genuine failure.
             "/bin", "/sbin",
-        )
+        ) + _developer_toolchain_read_dirs()
         # /dev is NOT included wholesale — same posture as Linux
         # (core/sandbox/context.py SYSTEM_READ_DIRS deliberately
         # excludes /dev to keep /dev/shm out of scope; on macOS

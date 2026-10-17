@@ -1027,6 +1027,46 @@ def test_restrict_reads_allows_homebrew_prefixes():
     assert '(subpath "/usr/local")' in p
 
 
+def test_restrict_reads_allows_active_developer_dir(tmp_path, monkeypatch):
+    """The /usr/bin compiler shims dlopen libxcrun from the directory
+    xcode-select points at; restrict_reads must grant it and the
+    link itself."""
+    developer = tmp_path / "CommandLineTools"
+    developer.mkdir()
+    link = tmp_path / "xcode_select_link"
+    link.symlink_to(developer)
+    monkeypatch.setattr(seatbelt, "_XCODE_SELECT_LINK", str(link))
+    p = seatbelt.build_profile(output="/tmp", restrict_reads=True)
+    assert f'(subpath "{os.path.realpath(developer)}")' in p
+    assert f'(subpath "{link}")' in p
+
+
+def test_restrict_reads_without_selected_toolchain_uses_xcrun_defaults(
+        tmp_path, monkeypatch):
+    """No xcode-select link: grant the default developer dirs xcrun
+    falls back to, and only those that exist."""
+    missing = tmp_path / "xcode_select_link"
+    present = tmp_path / "CommandLineTools"
+    present.mkdir()
+    absent = tmp_path / "Xcode.app" / "Contents" / "Developer"
+    monkeypatch.setattr(seatbelt, "_XCODE_SELECT_LINK", str(missing))
+    monkeypatch.setattr(seatbelt, "_DEFAULT_DEVELOPER_DIRS",
+                        (str(absent), str(present)))
+    p = seatbelt.build_profile(output="/tmp", restrict_reads=True)
+    assert str(missing) not in p
+    assert str(absent) not in p
+    assert f'(subpath "{os.path.realpath(present)}")' in p
+
+
+def test_restrict_reads_without_any_toolchain_adds_nothing(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(seatbelt, "_XCODE_SELECT_LINK",
+                        str(tmp_path / "xcode_select_link"))
+    monkeypatch.setattr(seatbelt, "_DEFAULT_DEVELOPER_DIRS",
+                        (str(tmp_path / "CommandLineTools"),))
+    assert seatbelt._developer_toolchain_read_dirs() == ()
+
+
 def test_seccomp_profile_none_string_omits_deny():
     """`seccomp_profile="none"` is the explicit "no syscall filter"
     sentinel — must NOT engage the macOS hardening either."""
