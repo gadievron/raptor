@@ -14,9 +14,10 @@ _RAPTOR_TRUSTED = "1"
 writable_roots = ["~/.raptor", "~/.local/share/raptor"]
 
 # ── Hooks ─────────────────────────────────────────────────────────
-# Defined inline rather than in hooks.json so they are discovered
-# correctly when Codex runs from a git worktree (Codex resolves the
-# JSON path via the git common directory, not the worktree root).
+# Codex 0.163.0 resolves both inline and JSON hook sources through the
+# git common directory in a worktree. AGENTS.md supplies an explicit
+# startup fallback when that prevents discovery; inline TOML alone does
+# not fix native worktree hook discovery.
 
 [[hooks.SessionStart]]
 matcher = "startup|resume"

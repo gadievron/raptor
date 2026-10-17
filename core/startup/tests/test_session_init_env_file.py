@@ -617,3 +617,51 @@ def test_claude_host_with_inherited_codex_marker_keeps_native_env_file(session_i
     assert 'RAPTOR_DIR=' in text
     assert 'inherited-codex-token' not in text
     assert 'RAPTOR_SESSION_PID=' not in text
+
+
+@pytest.mark.parametrize('session_id', ['', 'not-a-session', 'A' * 36])
+def test_explicit_codex_bootstrap_rejects_invalid_session(monkeypatch, session_id):
+    import runpy
+    monkeypatch.setenv('_RAPTOR_TRUSTED', '1')
+    monkeypatch.setenv('CODEX_THREAD_ID', session_id)
+    monkeypatch.setattr(sys, 'argv', [str(SCRIPT), '--codex-bootstrap'])
+    with pytest.raises(SystemExit, match='valid CODEX_THREAD_ID'):
+        runpy.run_path(str(SCRIPT))
+
+
+def test_native_codex_startup_still_reads_hook_stdin(session_init, monkeypatch):
+    import io
+    monkeypatch.setattr(sys, 'stdin', io.StringIO(
+        '{"hook_event_name":"SessionStart","session_id":"from-native-hook"}'))
+    assert session_init.read_codex_start_payload()['session_id'] == 'from-native-hook'
+
+
+def test_explicit_codex_bootstrap_does_not_read_stdin(monkeypatch):
+    import runpy
+    monkeypatch.setenv('_RAPTOR_TRUSTED', '1')
+    sid = '11111111-1111-1111-1111-111111111111'
+    monkeypatch.setenv('CODEX_THREAD_ID', sid)
+    monkeypatch.setenv('RAPTOR_DIR', str(REPO_ROOT))
+    monkeypatch.setenv('CODEX', '')
+    monkeypatch.setenv('RAPTOR_CODEX_HOOK', '')
+    monkeypatch.setattr(sys, 'argv', [str(SCRIPT), '--codex-bootstrap'])
+    module = runpy.run_path(str(SCRIPT))
+    assert module['_is_codex_host']()
+    assert module['read_codex_start_payload']() == {
+        'hook_event_name': 'SessionStart', 'session_id': sid}
+
+
+def test_launcher_context_formatting_needs_no_codex_startup(tmp_path):
+    import json
+    import os
+    caller = str(tmp_path / 'caller with spaces')
+    target = 'a target; $(false); "quoted"'
+    result = subprocess.run(
+        [sys.executable, '-I', str(SCRIPT), '--codex-launch-context', caller, target],
+        env={**os.environ, '_RAPTOR_TRUSTED': '1', 'HOME': str(tmp_path),
+             'CODEX_THREAD_ID': '11111111-1111-1111-1111-111111111111',
+             'RAPTOR_CODEX_ENVIRONMENT': '1'},
+        capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {'caller_dir': caller, 'launch_target': target}
+    assert not list(tmp_path.iterdir())

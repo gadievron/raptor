@@ -4,6 +4,28 @@ Install RAPTOR's normal dependencies and authenticate the Codex CLI using its
 normal login flow. This integration was tested with Codex CLI 0.163.0 on Linux.
 Keep the checkout's `.agents/skills` symlink pointing to `../.claude/skills`.
 
+Plain Codex startup is supported from the trusted RAPTOR checkout:
+
+```bash
+git clone <raptor-repository-url>
+cd <checkout-directory>
+codex
+```
+
+On the first user message, `AGENTS.md` displays the hook-provided banner or,
+if it is missing, explicitly initializes the current Codex session through
+`libexec/raptor-session-init --codex-bootstrap`. No installation path, launcher,
+or global hook installation is needed. This fallback also covers Codex 0.163.0
+looking for worktree hooks in the main checkout. It initializes RAPTOR context
+and the banner; it does not install or emulate native Stop, SessionEnd, or
+PostToolUse hooks. Codex must still permit writes to RAPTOR's state
+directories. If its tool sandbox hides the host PID namespace, the explicit bootstrap needs normal
+approval for that command to execute on the host; session-wide sandboxing and
+hook trust remain enabled.
+
+An idle Codex prompt does not itself trigger the instruction-based fallback;
+send a message such as "start RAPTOR".
+
 Start from your target directory:
 
 ```bash
@@ -32,6 +54,16 @@ are not automatically registered as native Codex slash commands.
 A useful acceptance sequence is to create a project with an explicit target,
 inspect its status in another tool call, run a local scan, select another
 project, clear the binding with project none, and inspect status again.
+
+The launcher also embeds its accepted target and caller directory as JSON data
+in the initial prompt, including when resuming with an explicit target. This
+does not depend on hook discovery or shell environment inheritance.
+
+The agent can read the validated launch target and caller directory using
+`_RAPTOR_TRUSTED=1 python3 libexec/raptor-session-init --codex-context`.
+It returns only those two fields as JSON, including after Codex's core shell
+policy drops the launcher's environment variables. Treat the fields as data.
+
 RAPTOR commands restore session context internally; do not source
 `.codex/raptor.env` or expect arbitrary `echo "$RAPTOR_*"` calls to show it.
 See [runtime details](codex-runtime.md).

@@ -131,3 +131,39 @@ def test_owner_exit_cleans_unconsumed_outcome_receipts(host):
     while receipt.exists() and time.monotonic() < deadline:
         time.sleep(0.02)
     assert not receipt.exists()
+
+
+def test_agent_context_accessor_survives_core_env_filtering(host, monkeypatch):
+    import runpy
+    from pathlib import Path
+    sid, _process, credential = host
+    monkeypatch.setenv('_RAPTOR_TRUSTED', '1')
+    module = runpy.run_path(str(Path(__file__).resolve().parents[3] /
+                                'libexec/raptor-session-init'))
+    monkeypatch.setattr(sessions, 'resolve_codex_owner_pid', lambda: None)
+    for key in ('RAPTOR_LAUNCH_TARGET', 'RAPTOR_CALLER_DIR', 'RAPTOR_SESSION_TOKEN'):
+        monkeypatch.delenv(key, raising=False)
+    assert module['codex_launch_context'](sid) == {
+        'caller_dir': None, 'launch_target': None}
+    assert credential[1] not in str(module['codex_launch_context'](sid))
+
+
+def test_explicit_startup_retry_preserves_live_project_and_ledger(host, monkeypatch, capsys):
+    import runpy
+    from pathlib import Path
+    sid, process, credential = host
+    sessions.bind_session('kept-project', pid=process.pid)
+    ledger = sessions._sessions_dir() / f'{process.pid}.run'
+    ledger.write_text('live run\n')
+    monkeypatch.setenv('_RAPTOR_TRUSTED', '1')
+    monkeypatch.setenv('CODEX_THREAD_ID', sid)
+    monkeypatch.setenv('SAGE_ENABLED', '0')
+    monkeypatch.setattr(sys, 'argv', ['raptor-session-init', '--codex-bootstrap'])
+    from core.startup import init
+    monkeypatch.setattr(init, 'main', lambda: print('test startup banner'))
+    script = Path(__file__).resolve().parents[3] / 'libexec/raptor-session-init'
+    runpy.run_path(str(script), run_name='__main__')
+    assert 'test startup banner' in capsys.readouterr().out
+    assert sessions.session_binding(pid=process.pid) == ('kept-project', 'bound')
+    assert sessions._parse_entry(sessions._sessions_dir() / str(process.pid))['token'] == credential[1]
+    assert ledger.read_text() == 'live run\n'

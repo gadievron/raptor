@@ -34,9 +34,53 @@ if not (os.environ.get("CLAUDECODE")
 # fmt: on
 # ─── end trust-marker check ─────────────────────────────────
 
+# The launcher formats argv data before a Codex process/context exists.
+# Keep this stdlib-only path ahead of process_init and never shell-evaluate
+# either value. It does not seed a session or inspect target code.
+if __name__ == "__main__" and sys.argv[1:2] == ["--codex-launch-context"]:
+    import json
+    if len(sys.argv) != 4:
+        sys.exit("Usage: raptor-session-init --codex-launch-context CALLER TARGET")
+    print(json.dumps({"caller_dir": sys.argv[2],
+                      "launch_target": sys.argv[3] or None}, ensure_ascii=True))
+    sys.exit(0)
+
+# Explicit agent-driven startup is also available when Codex misses worktree
+# hooks. Mark this process as initialization before process_init tries to
+# restore a context that does not exist yet. Never infer this mode merely
+# from a missing context in an ordinary RAPTOR command.
+_CODEX_BOOTSTRAP = sys.argv[1:] == ["--codex-bootstrap"]
+if _CODEX_BOOTSTRAP:
+    import uuid
+    session_id = os.environ.get("CODEX_THREAD_ID", "")
+    try:
+        if str(uuid.UUID(session_id)) != session_id:
+            raise ValueError
+    except ValueError:
+        sys.exit("RAPTOR: --codex-bootstrap requires a valid CODEX_THREAD_ID")
+    os.environ["CODEX"] = "1"
+    os.environ["RAPTOR_CODEX_HOOK"] = "1"
+
 sys.path.insert(0, str(REPO_ROOT))
 import core.startup.process_init  # noqa: E402,F401
 
+
+
+def codex_launch_context(session_id):
+    """Expose only operator launch data after validating the session context."""
+    from core.startup.codex_environment import restore
+    values = restore(session_id)
+    return {"caller_dir": values.get("RAPTOR_CALLER_DIR"),
+            "launch_target": values.get("RAPTOR_LAUNCH_TARGET")}
+
+
+def read_codex_start_payload():
+    """Read a native hook payload, or identify the explicitly bootstrapped turn."""
+    if _CODEX_BOOTSTRAP:
+        return {"hook_event_name": "SessionStart",
+                "session_id": os.environ["CODEX_THREAD_ID"]}
+    import json
+    return json.load(sys.stdin)
 
 
 def _is_codex_host() -> bool:
@@ -160,13 +204,20 @@ def warm_sage_embeddings():
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--codex-context"]:
+        import json
+        try:
+            print(json.dumps(codex_launch_context(os.environ.get("CODEX_THREAD_ID")),
+                             ensure_ascii=True))
+        except (OSError, ValueError, TypeError):
+            sys.exit("RAPTOR: no validated Codex launch context available")
+        sys.exit(0)
     from core.run.cli_outcome import cli_outcome
     with cli_outcome():
         if _is_codex_host():
-            import json
             from core.startup.codex_environment import publish
             try:
-                payload = json.load(sys.stdin)
+                payload = read_codex_start_payload()
                 if (not isinstance(payload, dict)
                         or payload.get("hook_event_name") != "SessionStart"):
                     raise ValueError("invalid SessionStart payload")

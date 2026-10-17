@@ -20,10 +20,15 @@ import time
 from core.startup import codex_environment as environment
 
 
+# Resolve only this platform-owned prefix. Keep private IPC descendants
+# lexical so _directory still rejects links below the trusted temp root.
+_IPC_ROOT = Path("/tmp")
+
+
 def _address(session_id):
     environment._session_id(session_id)
     key = hashlib.sha256((str(environment.ROOT) + '\0' + session_id).encode()).hexdigest()[:40]
-    return Path('/tmp') / f'raptor-codex-env-{os.getuid()}' / key
+    return _IPC_ROOT.resolve(strict=True) / f'raptor-codex-env-{os.getuid()}' / key
 
 
 def request(session_id, message):
