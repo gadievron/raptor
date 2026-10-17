@@ -99,8 +99,24 @@ class TestWriteTextAtomically:
 
         # The tempfile fd (the only os.open in the window) is closed.
         assert len(opened_fds) == 1
-        with pytest.raises(OSError):
-            os.fstat(opened_fds[0])
+        # Verify the fd was closed.  A bare os.fstat check can false-
+        # pass when a parallel xdist worker recycles the fd number
+        # between os.close and this assertion.  Guard against that by
+        # checking the inode: if fstat succeeds, the fd must NOT point
+        # at a file inside tmp_path (the tempfile was unlinked).
+        fd = opened_fds[0]
+        try:
+            st = os.fstat(fd)
+        except OSError:
+            pass  # fd closed — expected
+        else:
+            tmp_inodes = {
+                p.stat().st_ino for p in tmp_path.iterdir()
+            }
+            tmp_inodes.add(target.stat().st_ino)
+            assert st.st_ino not in tmp_inodes, (
+                f"fd {fd} still points at a file in the test tree"
+            )
         # Prior content survives and the tempfile was unlinked.
         assert target.read_text() == "prior\n"
         assert [
