@@ -28,13 +28,13 @@ type = "command"
 command = "_RAPTOR_TRUSTED=1 libexec/raptor-lifecycle-hook stop"
 timeout = 5
 
-[[hooks.PostToolUse]]
-matcher = "Bash"
-
-[[hooks.PostToolUse.hooks]]
-type = "command"
-command = "_RAPTOR_TRUSTED=1 libexec/raptor-lifecycle-hook tool-failure"
-timeout = 5
+# PostToolUse is deliberately NOT registered for Codex.  Codex fires
+# PostToolUse on success AND failure (no PostToolUseFailure event) and
+# sends tool_response as a string rather than tool_output.exit_code as
+# an int — the lifecycle hook cannot distinguish success from failure
+# and stamps a failure marker on every RAPTOR Bash call, flipping
+# successful runs to Failed at the next Stop.  Claude Code's
+# PostToolUseFailure (settings.json) is unaffected.
 
 [[hooks.SessionEnd]]
 matcher = ""

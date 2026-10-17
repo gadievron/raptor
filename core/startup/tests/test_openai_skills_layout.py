@@ -70,6 +70,17 @@ def test_codex_startup_hook_uses_repo_relative_session_init() -> None:
     assert "CLAUDE_PROJECT_DIR" not in command
 
 
+def test_codex_posttooluse_hook_not_registered() -> None:
+    """Codex fires PostToolUse on success AND failure and sends
+    tool_response (string) not tool_output.exit_code (int).  The
+    lifecycle hook cannot distinguish success from failure in that
+    shape, so PostToolUse must NOT be registered — otherwise every
+    successful RAPTOR Bash call stamps a failure marker."""
+    config = tomllib.loads(_read(ROOT / ".codex" / "config.toml"))
+    assert "PostToolUse" not in config.get("hooks", {}), \
+        "PostToolUse must not be registered for Codex (false-failure)"
+
+
 def test_active_codex_docs_do_not_point_at_retired_skill_paths() -> None:
     paths = [
         ROOT / "AGENTS.md",
