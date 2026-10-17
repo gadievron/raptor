@@ -17,9 +17,23 @@ Usage in libexec scripts (one import, no function call needed)::
 from __future__ import annotations
 
 import faulthandler
+import importlib.util
 import io
 import signal
 import sys
+
+_REQUIRED_DEPS = ("requests", "pydantic", "openai", "yaml")
+_missing = [m for m in _REQUIRED_DEPS if importlib.util.find_spec(m) is None]
+if _missing:
+    _in_venv = sys.prefix != sys.base_prefix
+    _hint = "uv sync --locked" if _in_venv else "source .venv/bin/activate"
+    sys.stderr.write(
+        f"raptor: missing dependencies: {', '.join(_missing)}\n"
+        f"  run: {_hint}\n"
+        f"  interpreter: {sys.executable}\n"
+    )
+    raise SystemExit(1)
+del _missing, _REQUIRED_DEPS
 
 
 def _stderr_has_fileno() -> bool:
