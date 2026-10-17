@@ -1391,6 +1391,30 @@ def test_mountless_retry_scratch_swap_keeps_non_shared_grants(
 import os  # noqa: E402  (section-local: only the pin tests below use it)
 
 
+def _open_fds() -> set[str]:
+    """Snapshot currently-open fd numbers, excluding the phantom.
+
+    ``os.listdir("/proc/self/fd")`` opens its own directory fd, which
+    appears in the listing but is closed when ``listdir`` returns.
+    When external fd churn (GC finalising leaked sockets from earlier
+    tests) shifts the lowest-available fd number between two snapshots,
+    the phantom lands on different numbers, creating a spurious diff.
+    Filter it out with a post-hoc ``fstat`` validity check.
+    """
+    return {
+        name for name in os.listdir("/proc/self/fd")
+        if _fd_exists(int(name))
+    }
+
+
+def _fd_exists(fd: int) -> bool:
+    try:
+        os.fstat(fd)
+        return True
+    except OSError:
+        return False
+
+
 class _StatForger:
     """os.stat wrapper that reports a chosen (st_dev, st_ino) for one
     path — the observable a recycling filesystem hands an attacker:
@@ -1565,8 +1589,8 @@ def test_grant_pin_benign_retry_unchanged_and_no_fd_leak(
         return result
 
     _run_once()  # warm-up: one-time lazy imports may open fds
-    before = set(os.listdir("/proc/self/fd"))
+    before = _open_fds()
     _run_once()
-    after = set(os.listdir("/proc/self/fd"))
+    after = _open_fds()
     assert len(after - before) == 0, (
         f"fds leaked across a pinned run: {sorted(after - before)}")
