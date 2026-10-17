@@ -287,23 +287,30 @@ def _realpath_or_none(path: str | None) -> str | None:
 # xcode-select's pointer to the active developer directory. The
 # /usr/bin compiler shims (gcc, cc, clang, make, ...) are xcrun
 # trampolines that read this link, then dlopen libxcrun.dylib and exec
-# the real tool from the directory it names.
+# the real tool from the directory it names. With no link, xcrun falls
+# back to the default Xcode bundle, then the Command Line Tools.
 _XCODE_SELECT_LINK = "/private/var/db/xcode_select_link"
+_DEFAULT_DEVELOPER_DIRS = (
+    "/Applications/Xcode.app/Contents/Developer",
+    "/Library/Developer/CommandLineTools",
+)
 
 
 def _developer_toolchain_read_dirs() -> tuple[str, ...]:
     """Read grants that let the /usr/bin developer-tool shims run.
 
-    Returns the xcode-select link and the active developer directory
-    it resolves to (Command Line Tools or an Xcode bundle's
-    Contents/Developer), or nothing when no toolchain is selected.
+    Returns the xcode-select link and the developer directory it
+    resolves to when a toolchain is selected; otherwise the default
+    developer directories xcrun falls back to that exist on this host.
     Toolchain trees hold compilers, SDK headers and libraries; the
     grant matches the /usr and Homebrew posture."""
     developer_dir = _realpath_or_none(_XCODE_SELECT_LINK)
-    if not developer_dir or developer_dir == _XCODE_SELECT_LINK \
-            or not os.path.isdir(developer_dir):
-        return ()
-    return (_XCODE_SELECT_LINK, developer_dir)
+    if developer_dir and developer_dir != _XCODE_SELECT_LINK \
+            and os.path.isdir(developer_dir):
+        return (_XCODE_SELECT_LINK, developer_dir)
+    return tuple(
+        os.path.realpath(d) for d in _DEFAULT_DEVELOPER_DIRS
+        if os.path.isdir(d))
 
 
 def _quote_sbpl(s: str) -> str:
