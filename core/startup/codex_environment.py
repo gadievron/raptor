@@ -33,7 +33,8 @@ def _session_id(value):
 
 
 def _name(session_id, pid):
-    raw = json.dumps([str(ROOT), _session_id(session_id)]).encode()
+    from core.json import dumps_canonical
+    raw = dumps_canonical([str(ROOT), _session_id(session_id)]).encode()
     return hashlib.sha256(raw).hexdigest() + ".json"
 
 
