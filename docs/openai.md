@@ -1,93 +1,68 @@
-# OpenAI Codex Support
+# OpenAI Codex support
 
-RAPTOR can now run its operator-facing workflow from OpenAI Codex as well as Claude Code. The Python and `libexec/` tools stay the source of truth; the Codex files are the agent-facing layer that teaches Codex how to call them.
+RAPTOR provides initial Codex support through the same Python and `libexec/`
+commands used by Claude Code. Start with the
+[quickstart and troubleshooting guide](codex-quickstart.md).
 
-## What Lives Where
+The shared `bin/raptor` launcher prefers Claude when both CLIs are installed.
+It falls back to Codex when Claude is absent; `bin/raptor --codex` selects Codex
+explicitly. Direct `codex` from a trusted RAPTOR checkout also loads the project
+configuration. Review and trust the checkout and its hooks normally.
+
+## Shared procedures
 
 | Path | Purpose |
-|------|---------|
-| `AGENTS.md` | Repository instructions Codex reads before working in RAPTOR |
-| `.agents/skills/` | Symlink to `../.claude/skills/` — shared skill definitions for both Claude Code and Codex |
-| `.codex/agents/` | Codex sub-agent definitions converted from the existing RAPTOR specialist agents |
-| `.codex/config.toml` | Codex shell environment settings for RAPTOR sessions |
-| `.codex/hooks.json` | Session-start hook that runs `libexec/raptor-session-init` |
-| `docs/openai.md` | This file — OpenAI Codex setup and agent-surface layout |
+| --- | --- |
+| `AGENTS.md` | Repository instructions |
+| `.agents/skills/` | Symlink to `../.claude/skills/` |
+| `.claude/commands/` | Maintained command procedures |
+| `.claude/skills/source-command-*/SKILL.md` | Thin discoverable command entry points |
+| `.claude/agents/` | Maintained specialist role procedures |
+| `.codex/agents/` | Native Codex metadata and loaders for shared role procedures |
+| `.codex/config.toml` | Project-local environment, sandbox directory grants and inline hooks |
 
-The `.claude/` surface remains in place. This is not a fork of the workflow; it is the same RAPTOR machinery exposed to another agent shell.
+Use natural language or explicitly name a skill such as `$source-command-scan`,
+`$source-command-project`, `$source-command-commands`, `$code-understanding`, or
+`$exploitability-validation`. Command skills load the maintained source document;
+they do not copy its workflow body or register native Claude-style slash commands.
 
-## Running It
-
-Install Codex, then open the repo:
-
-```bash
-npm install -g @openai/codex
-cd /path/to/raptor
-codex
-```
-
-Codex loads `AGENTS.md` and discovers repo skills from `.agents/skills`. You can ask for normal RAPTOR commands in plain language, or name a skill explicitly with `$source-command-agentic`, `$source-command-understand`, `$exploitability-validation`, and so on.
-
-## Startup Hook
-
-Codex runs:
+See [command compatibility](codex-command-compatibility.md) for argument handling,
+role adaptation and maintenance. Body edits need no synchronization; after adding
+or renaming commands or changing descriptions, regenerate the thin entry points:
 
 ```bash
-_RAPTOR_TRUSTED=1 libexec/raptor-session-init
+python3 scripts/sync_codex_commands.py --write
+python3 scripts/sync_codex_commands.py --check
 ```
 
-That generates `.startup-output` and `.codex/raptor.env`. The env file is ignored by git and is only session state.
+## Startup and environment
 
-`libexec/raptor-session-init` also keeps the old `CLAUDE_ENV_FILE` fallback so existing Claude Code sessions are not broken by this change.
+SessionStart runs `libexec/raptor-session-init` with explicit internal Codex/hook
+markers. It produces the startup banner, seeds the existing session registry,
+and publishes private context for RAPTOR's shared process startup. The host
+broker validates session identity across Codex's tool PID sandbox.
 
-## Skill Shape
+Codex neither writes nor consumes `.codex/raptor.env`. Restoration happens inside
+RAPTOR commands; arbitrary shell commands retain native environment inheritance.
+Claude continues using its native `CLAUDE_ENV_FILE` mechanism. Existing
+`BASH_ENV` stripping remains unchanged. See [runtime details](codex-runtime.md)
+for storage, ownership, directory grants and validation boundaries.
 
-`.agents/skills` is a symlink to `../.claude/skills`, so both Claude Code and Codex read the same skill definitions. Each skill is a directory containing a `SKILL.md` with `name` and `description` frontmatter. Extra notes, scripts and reference files stay inside that skill directory and are loaded progressively by the agent when needed.
+## Initial support boundary
 
-The copied skills intentionally keep RAPTOR's existing command boundaries:
+Real subprocess validation covers startup, project creation and switching,
+projectless binding, and a local mechanical scan. Generated skills and role
+loaders make procedures discoverable; they do not certify every advanced
+workflow or install missing backends, tool permissions or isolation controls.
 
-- `source-command-*` skills mirror slash-command workflows such as `/scan`, `/agentic`, `/validate`, `/understand`, `/diagram`, `/project`, `/fuzz`, `/web` and `/tune`.
-- `code-understanding` and `exploitability-validation` hold the deeper methodology files.
-- `crash-analysis/*` and `oss-forensics/*` expose the specialist workflows without making the base prompt huge.
+Generic Codex PreToolUse/PostToolUse command rewriting is disabled: making its
+input rewrite effective required an allow decision that bypassed native command
+rules in testing. Explicit Python lifecycle transitions remain authoritative;
+generic tool-failure interception and automatic read-coverage parity are not
+provided. Stop/SessionEnd hooks use validated session context. Claude's native
+failure hooks remain unchanged.
 
-## Developer Notes
-
-When adding a new RAPTOR command, add or update the Python/libexec implementation first, then expose it through:
-
-1. `.claude/commands/` if Claude needs it.
-2. Skills are shared via the `.agents/skills` → `.claude/skills` symlink, so updating `.claude/skills/` covers both platforms.
-3. `AGENTS.md` if it changes global operating rules.
-4. `README.md` or command docs if it is user-facing.
-
-Keep the agent files thin. They should describe how to call RAPTOR, not reimplement RAPTOR in prose.
-
-
-## Codex shell lifecycle hooks
-
-Codex uses `PreToolUse` and `PostToolUse` adapters for simple POSIX-shell
-`libexec/raptor-*` invocations. The pre-hook adds a subshell-local EXIT
-recorder. The post-hook reads its private per-invocation result and shares
-Claude's existing failure-marker and run-attribution logic. Command stdout
-is never treated as exit-status evidence. Re-review changed hooks in `/hooks`.
-
-Successful commands retain their stdout and exit status. Explicit Python
-lifecycle transitions remain authoritative. Codex Stop only finalizes a
-recorded failure; an unknown result stays unresolved for its owner or later
-reconciliation. Claude's failure-only and Stop hooks are unchanged.
-
-Pipelines, shell compounds, redirections, exec wrappers, non-POSIX shells,
-and direct `python3 raptor.py` invocations are not instrumented by this
-initial adapter. These still use the runner's normal lifecycle handling.
-A killed shell, sandbox-denied recorder, or missing completion event can
-leave no result; that is unknown, never inferred success or failure.
-
-Private result files use mode 0600 inside a user-owned 0700 system-temp
-directory named `raptor-codex-hook-results-<uid>`. Normal completion consumes
-the record. Interrupted invocations can leave pending files; they contain
-command text, not captured command output or added session credentials.
-This is status bookkeeping, not a security boundary against an agent or
-process that already runs as the same user. System-temp access must be
-available to both hook and command execution environments.
-
-The adapter does not implement the separate startup/env-file bridge or
-claim full Codex/Claude feature parity. Validate real hook rewriting and
-completion delivery on the installed Codex version before rollout.
+Inspect scan metrics and warnings. A completed local scan may still have reduced
+coverage from unavailable remote packs or warnings about optional isolation
+layers. Do not infer full coverage or complete cross-platform support from the
+Linux smoke tests.
