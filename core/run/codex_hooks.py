@@ -17,6 +17,7 @@ import sys
 import tempfile
 
 from core.atomic_fs import write_new_text, write_text_atomically
+from core.json import dumps_canonical
 
 _KEY = re.compile(r"[0-9a-f]{64}")
 _HELPER = re.compile(r"(?:[^\r\n]*/)?libexec/raptor-[A-Za-z0-9._-]+")
@@ -38,7 +39,7 @@ def _key(payload):
     if any(not isinstance(value, str) or not value or len(value) > 512
            for value in ids):
         return None
-    return hashlib.sha256(json.dumps(ids).encode()).hexdigest()
+    return hashlib.sha256(dumps_canonical(ids).encode()).hexdigest()
 
 
 def _private_directory(path):
