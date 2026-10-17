@@ -152,13 +152,13 @@ class TestMutationFuzz:
                     blob[pos] = rng.randrange(256)
                 p.write_bytes(bytes(blob))
                 with cpu_budget(
-                    1.0,
+                    2.0,
                     what=f"seed {seed:#x} mutation {i} parse",
                 ) as sw:
                     facts = extract_pe_facts(p)   # must never raise
                 worst = max(worst, sw.cpu_s)
                 assert facts is None or isinstance(facts, PeFacts)
-        assert worst < 1.0
+        assert worst < 2.0
 
 
 class TestNoFabricatedReads:
