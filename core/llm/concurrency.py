@@ -497,10 +497,27 @@ def run_parallel(
                 )
                 return on_error(item, exc) if on_error else None
 
+    from concurrent.futures import as_completed
+
+    result: list[Any] = [None] * len(items)
     try:
         with ThreadPoolExecutor(max_workers=max_workers,
                                 thread_name_prefix=label) as pool:
-            result = list(pool.map(_do, enumerate(items)))
+            idx_to_future: dict = {}
+            try:
+                for idx, item in enumerate(items):
+                    idx_to_future[pool.submit(_do, (idx, item))] = idx
+            except RuntimeError:
+                # Interpreter shutdown between submit calls — harvest
+                # whatever was already submitted (same pattern as
+                # _collect_reviews_until_budget in orchestrator.py).
+                pass
+            for fut in as_completed(idx_to_future):
+                idx = idx_to_future[fut]
+                try:
+                    result[idx] = fut.result()
+                except Exception:
+                    pass
     finally:
         final_effective = throttle.effective_workers
         final_signals = throttle.signal_count
