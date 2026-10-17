@@ -927,6 +927,7 @@ def _run_audit(
     triage: bool = True,
     prefilter: bool = True,
     profile: str = "deployed",
+    open_discovery: bool = False,
     checkpoint: Path | None = None,
     checkpoint_stamp: dict[str, Any] | None = None,
     heartbeat: Callable[[], None] | None = None,
@@ -1123,6 +1124,7 @@ def _run_audit(
                 joern_server=joern_srv, study_root=study_root,
                 mode=mode, max_workers=max_workers, triage=triage,
                 prefilter=prefilter, profile=profile,
+                open_discovery=open_discovery,
             )
             if audit_dir:
                 run_dirs.append(audit_dir)
@@ -1449,6 +1451,7 @@ def _run_audit_on_target(
     triage: bool = True,
     prefilter: bool = True,
     profile: str = "deployed",
+    open_discovery: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any], Path | None]:
     """Run /audit orchestrator on a target (in-process).
 
@@ -1571,6 +1574,7 @@ def _run_audit_on_target(
             mode=review_mode,
             max_workers=max_workers,
             validate=False,
+            open_discovery=open_discovery,
             # Corpus fixtures are operator-curated pinned trees — the
             # operator running the corpus IS asserting repo trust, and
             # trust-gated witnesses (goconc) must behave here exactly
@@ -2748,6 +2752,7 @@ def _run_ensemble_audit(
     triage: bool = True,
     prefilter: bool = True,
     profile: str = "deployed",
+    open_discovery: bool = False,
     heartbeat: Callable[[], None] | None = None,
     checkpoint_extra: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], list[Path]]:
@@ -2831,6 +2836,7 @@ def _run_ensemble_audit(
                     triage=triage,
                     prefilter=prefilter,
                     profile=profile,
+                    open_discovery=open_discovery,
                     checkpoint=sec_groups_ckpt,
                     checkpoint_stamp=checkpoint_extra,
                     heartbeat=heartbeat,
@@ -2893,6 +2899,7 @@ def _run_ensemble_audit(
                         triage=triage,
                         prefilter=prefilter,
                         profile=profile,
+                        open_discovery=open_discovery,
                         checkpoint=bf_groups_ckpt,
                         checkpoint_stamp=checkpoint_extra,
                         heartbeat=heartbeat,
@@ -3630,6 +3637,13 @@ def main(argv: list[str] | None = None) -> int:
              "Recorded in results.json meta and the run-history "
              "header",
     )
+    parser.add_argument(
+        "--open-discovery", action="store_true",
+        help="Enable open-discovery engine (contract perspective + "
+             "state machine). Runs after the structured pass and adds "
+             "cross-scope weakness records to the journal. Uses up to "
+             "20%% of the group budget",
+    )
     args = parser.parse_args(argv)
 
     # Pin RAPTOR_DIR to THIS tree for the runner's OWN process, not
@@ -4006,6 +4020,7 @@ def main(argv: list[str] | None = None) -> int:
                         triage=args.triage == "on",
                         prefilter=args.prefilter == "on",
                         profile=args.profile,
+                        open_discovery=args.open_discovery,
                         heartbeat=_heartbeat,
                         checkpoint_extra=ckpt_stamp_extra,
                     )
@@ -4018,6 +4033,7 @@ def main(argv: list[str] | None = None) -> int:
                         triage=args.triage == "on",
                         prefilter=args.prefilter == "on",
                         profile=args.profile,
+                        open_discovery=args.open_discovery,
                         checkpoint=(
                             args.out / f"checkpoint-{mode}-groups.json"
                             if args.out else None
