@@ -197,6 +197,10 @@ SOURCE_EXTRACTED_LANGUAGES = frozenset(
 _TRACE_SENSITIVE_CACHE_LANGUAGES = (
     BUILDLESS_DEFAULT_LANGUAGES | SOURCE_EXTRACTED_LANGUAGES
 )
+assert not (BUILDLESS_DEFAULT_LANGUAGES & SOURCE_EXTRACTED_LANGUAGES), (
+    "language sets must be disjoint — a language in both would take the "
+    "source-extracted path and never reach the buildless gate"
+)
 
 # Diagnostic messages the extractor emits when an #include could not
 # be resolved.  Matched loosely across CLI versions.
@@ -786,10 +790,13 @@ class DatabaseManager:
             traced_build: The requested extraction mode — build mode
                 is part of the cache contract, not just the build
                 path. ``True`` (an explicit operator trust assertion)
-                REFUSES a cached buildless DB with a visible rebuild
-                note: buildless extraction cannot see build-generated
-                code, and silently serving it would misrepresent
-                extraction fidelity for up to the whole cache TTL.
+                REFUSES a cached buildless or source-only DB with a
+                visible rebuild note: those modes cannot see
+                build-generated code, and silently serving them would
+                misrepresent extraction fidelity for up to the whole
+                cache TTL. A ``no-build`` entry (build detection ran
+                and found nothing) is reused — the traced request
+                would produce the same database.
                 ``False`` serves a cached traced DB with a disclosure
                 line (strictly higher fidelity; its build already ran
                 when it was created — nothing untrusted executes by
@@ -838,6 +845,17 @@ class DatabaseManager:
                 "Serving traced-build cached %s database to a "
                 "buildless request (higher extraction fidelity; its "
                 "build already ran when the cache entry was created)",
+                language,
+            )
+        if (
+            traced_build is False
+            and language in SOURCE_EXTRACTED_LANGUAGES
+            and metadata.build_system not in ("source-only", "no-build")
+        ):
+            logger.info(
+                "Serving traced-build cached %s database to a "
+                "source-only request (higher extraction fidelity; "
+                "generated sources from the earlier build are included)",
                 language,
             )
 
@@ -1253,12 +1271,14 @@ class DatabaseManager:
             language: Programming language
             build_system: Build system info (None for no-build mode)
             traced_build: Opt into traced-build extraction for
-                languages in :data:`BUILDLESS_DEFAULT_LANGUAGES`.
-                Default False: C/C++ and Java databases are created
-                with ``--build-mode=none`` so an untrusted repo's
-                build scripts NEVER execute (any ``build_system``
-                command is ignored with a log line).  Buildless needs
-                the per-language CLI floor in
+                languages in :data:`BUILDLESS_DEFAULT_LANGUAGES` or
+                :data:`SOURCE_EXTRACTED_LANGUAGES`.
+                Default False: C/C++/Java/C# databases are created
+                with ``--build-mode=none`` and JS/TS/Python/Ruby
+                extract from source only — an untrusted repo's build
+                scripts NEVER execute (any ``build_system`` command is
+                ignored with a log line).  Buildless needs the
+                per-language CLI floor in
                 :data:`BUILDLESS_MIN_VERSIONS` — older CLIs return a
                 clear failed DatabaseResult (graceful skip, no crash,
                 no silent traced fallback).  ``traced_build=True``

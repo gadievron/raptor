@@ -332,9 +332,10 @@ class CodeQLAgent:
             force_db_creation: Force database recreation
             use_extended: Use extended security suites
             min_files: Minimum files to consider a language present
-            traced_build: Opt into traced-build extraction for C/C++.
-                Default False: C/C++ databases are created with
-                ``--build-mode=none`` — the untrusted repo's build
+            traced_build: Opt into traced-build extraction.
+                Default False: C/C++/Java/C# databases are created
+                with ``--build-mode=none`` and JS/TS/Python/Ruby
+                extract from source only — the untrusted repo's build
                 scripts never execute, and build detection is skipped
                 entirely for those languages.  An explicit per-language
                 entry in ``build_commands`` also opts that language in.
