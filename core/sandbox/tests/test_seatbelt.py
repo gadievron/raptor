@@ -1183,9 +1183,9 @@ class TestFileTrustAnchorEnv:
         bundle.write_text("x")
         monkeypatch.setattr(seatbelt, "MACOS_FILE_TRUST_ANCHORS",
                             str(bundle))
-        p = seatbelt.build_profile(seccomp_profile="full")
-        assert seatbelt.file_trust_anchor_env(p) == {
-            "NIX_SSL_CERT_FILE": str(bundle)}
+        assert seatbelt.file_trust_anchor_env(
+            seccomp_profile="full",
+        ) == {"NIX_SSL_CERT_FILE": str(bundle)}
 
     def test_unrestricted_mach_gets_nothing(self, monkeypatch, tmp_path):
         bundle = tmp_path / "cert.pem"
@@ -1194,14 +1194,14 @@ class TestFileTrustAnchorEnv:
                             str(bundle))
         for kw in ({}, {"seccomp_profile": "debug"},
                    {"seccomp_profile": "full", "audit_mode": True}):
-            p = seatbelt.build_profile(**kw)
-            assert seatbelt.file_trust_anchor_env(p) == {}, kw
+            assert seatbelt.file_trust_anchor_env(**kw) == {}, kw
 
     def test_missing_bundle_gets_nothing(self, monkeypatch, tmp_path):
         monkeypatch.setattr(seatbelt, "MACOS_FILE_TRUST_ANCHORS",
                             str(tmp_path / "absent.pem"))
-        p = seatbelt.build_profile(seccomp_profile="full")
-        assert seatbelt.file_trust_anchor_env(p) == {}
+        assert seatbelt.file_trust_anchor_env(
+            seccomp_profile="full",
+        ) == {}
 
     def test_all_file_trust_overrides_are_dangerous(self):
         """Every caller-controlled file trust root is stripped."""
@@ -1217,3 +1217,189 @@ class TestFileTrustAnchorEnv:
                                    restrict_reads=True)
         assert '"/private/etc"' in p
         assert seatbelt.MACOS_FILE_TRUST_ANCHORS.startswith("/etc/")
+
+
+# ------------------------------------------------------------------
+# Finding #4 — same-sandbox pinning
+# ------------------------------------------------------------------
+
+def test_full_profile_same_sandbox_allows():
+    """The full profile must allow process-info* AND signal to
+    same-sandbox targets (the PID-namespace analogue on macOS).
+    Self-only broke JVM ProcessHandleImpl.isAlive0 (CodeQL create)
+    and every supervisor kill(child). Pin the clauses AND their
+    order: the deny must precede the target-self and same-sandbox
+    allows, because later-allow-wins applies per evaluation in this
+    operation family."""
+    p = seatbelt.build_profile(seccomp_profile="full")
+    lines = p.splitlines()
+
+    for family in ("process-info*", "signal"):
+        deny_idx = lines.index(f"(deny {family})")
+        self_idx = lines.index(f"(allow {family} (target self))")
+        same_idx = lines.index(
+            f"(allow {family} (target same-sandbox))",
+        )
+        assert deny_idx < self_idx < same_idx, (
+            f"{family}: deny@{deny_idx} self@{self_idx} "
+            f"same@{same_idx}"
+        )
+
+
+def test_strict_legacy_branch_same_sandbox_signal():
+    """The strict-legacy fallback (profile_name='strict' with a
+    seccomp_profile outside the hardened set) must also allow
+    signal to same-sandbox. Without it, kill(child) EPERMs."""
+    p = seatbelt.build_profile(
+        profile_name="strict", seccomp_profile="debug",
+    )
+    lines = p.splitlines()
+    deny_idx = lines.index("(deny signal)")
+    self_idx = lines.index("(allow signal (target self))")
+    same_idx = lines.index("(allow signal (target same-sandbox))")
+    assert deny_idx < self_idx < same_idx
+
+
+# ------------------------------------------------------------------
+# Finding #3/#6 — cross-instance isolation (darwin-native)
+# ------------------------------------------------------------------
+
+import subprocess
+import sys
+import pytest
+
+
+@pytest.mark.darwin_native
+def test_cross_instance_signal_denied(tmp_path):
+    """Two sandbox-exec instances running the same SBPL profile must
+    NOT be able to signal each other — (target same-sandbox) scopes
+    to the INSTANCE, not the profile text. This is the kernel
+    property that makes same-sandbox safe to use alongside the
+    cross-process deny.
+
+    Spawn two sandbox-exec children under the full profile (real
+    kernel enforcement). Child A writes its PID; child B sends
+    signal 0 to it. The kernel must return EPERM."""
+    profile = seatbelt.build_profile(
+        output=str(tmp_path), seccomp_profile="full",
+    )
+    profile_file = tmp_path / "profile.sb"
+    profile_file.write_text(profile)
+
+    pid_file = tmp_path / "a.pid"
+    ready_file = tmp_path / "a.ready"
+    done_file = tmp_path / "a.done"
+
+    a_script = (
+        "import os, time, pathlib\n"
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid()))\n"
+        f"pathlib.Path({str(ready_file)!r}).write_text('1')\n"
+        f"while not pathlib.Path({str(done_file)!r}).exists():\n"
+        "    time.sleep(0.05)\n"
+    )
+    b_script = (
+        "import os, errno, time, pathlib, sys\n"
+        f"while not pathlib.Path({str(ready_file)!r}).exists():\n"
+        "    time.sleep(0.05)\n"
+        f"target = int(pathlib.Path({str(pid_file)!r}).read_text())\n"
+        "try:\n"
+        "    os.kill(target, 0)\n"
+        "    print('ALLOWED')  # should NOT happen\n"
+        "except PermissionError:\n"
+        "    print('EPERM')    # expected\n"
+        "except ProcessLookupError:\n"
+        "    print('ESRCH')    # acceptable — process exited\n"
+        f"pathlib.Path({str(done_file)!r}).write_text('1')\n"
+    )
+
+    sb_cmd = ["/usr/bin/sandbox-exec", "-f", str(profile_file)]
+
+    proc_a = subprocess.Popen(
+        sb_cmd + [sys.executable, "-c", a_script],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    try:
+        proc_b = subprocess.run(
+            sb_cmd + [sys.executable, "-c", b_script],
+            capture_output=True, text=True, timeout=15,
+        )
+        assert proc_b.returncode == 0, proc_b.stderr
+        verdict = proc_b.stdout.strip()
+        assert verdict in ("EPERM", "ESRCH"), (
+            f"cross-instance signal must be denied, got: {verdict}"
+        )
+    finally:
+        proc_a.terminate()
+        proc_a.wait(timeout=5)
+
+
+# ------------------------------------------------------------------
+# Finding #2 — _mach_lookup_restricted mirrors build_profile
+# ------------------------------------------------------------------
+
+def test_mach_lookup_restricted_mirrors_build_profile():
+    """_mach_lookup_restricted() must agree with the SBPL actually
+    emitted by build_profile() across all kwarg combinations that
+    affect mach-lookup denies."""
+    combos = [
+        {},
+        {"seccomp_profile": "full"},
+        {"seccomp_profile": "full", "audit_mode": True},
+        {"seccomp_profile": "debug"},
+        {"seccomp_profile": "debug", "profile_name": "strict"},
+        {"seccomp_profile": "debug", "profile_name": "strict",
+         "audit_mode": True},
+        {"seccomp_profile": None},
+        {"seccomp_profile": "none"},
+        {"profile_name": "strict"},
+        {"seccomp_profile": "full", "profile_name": "strict"},
+    ]
+    for kw in combos:
+        profile = seatbelt.build_profile(**kw)
+        has_mach_deny = "(deny mach-lookup" in profile
+        helper_says = seatbelt._mach_lookup_restricted(
+            seccomp_profile=kw.get("seccomp_profile"),
+            audit_mode=kw.get("audit_mode", False),
+            profile_name=kw.get("profile_name"),
+        )
+        assert helper_says == has_mach_deny, (
+            f"mismatch for {kw}: helper={helper_says}, "
+            f"profile has deny={has_mach_deny}"
+        )
+
+
+def test_trust_anchor_env_kwargs_vs_old_string_search(
+    monkeypatch, tmp_path,
+):
+    """Belt-and-braces: the kwargs form of file_trust_anchor_env()
+    must return the same result as the old approach of searching the
+    SBPL string for '(deny mach-lookup' would have."""
+    bundle = tmp_path / "cert.pem"
+    bundle.write_text("x")
+    monkeypatch.setattr(seatbelt, "MACOS_FILE_TRUST_ANCHORS",
+                        str(bundle))
+
+    combos = [
+        {},
+        {"seccomp_profile": "full"},
+        {"seccomp_profile": "full", "audit_mode": True},
+        {"seccomp_profile": "debug"},
+        {"seccomp_profile": "debug", "profile_name": "strict"},
+        {"profile_name": "strict"},
+    ]
+    for kw in combos:
+        profile = seatbelt.build_profile(**kw)
+        old_would = (
+            {seatbelt.MACOS_FILE_TRUST_ANCHOR_ENV:
+             seatbelt.MACOS_FILE_TRUST_ANCHORS}
+            if "(deny mach-lookup" in profile
+            else {}
+        )
+        new_result = seatbelt.file_trust_anchor_env(
+            seccomp_profile=kw.get("seccomp_profile"),
+            audit_mode=kw.get("audit_mode", False),
+            profile_name=kw.get("profile_name"),
+        )
+        assert new_result == old_would, (
+            f"kwargs vs string-search mismatch for {kw}"
+        )

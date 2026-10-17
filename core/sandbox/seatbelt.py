@@ -146,14 +146,47 @@ MACOS_FILE_TRUST_ANCHORS = "/etc/ssl/cert.pem"
 MACOS_FILE_TRUST_ANCHOR_ENV = "NIX_SSL_CERT_FILE"
 
 
-def file_trust_anchor_env(profile: str) -> dict[str, str]:
-    """Env to add to a child spawned under ``profile`` so file-based
-    trust-anchor discovery works where the keychain is unreachable.
+def _mach_lookup_restricted(
+    *,
+    seccomp_profile: str | None = None,
+    audit_mode: bool = False,
+    profile_name: str | None = None,
+) -> bool:
+    """True when build_profile() kwargs would emit a mach-lookup deny.
+
+    Mirrors the two code paths in build_profile() that emit
+    ``(deny mach-lookup ...)``: the hardened-introspection baseline
+    and the strict-legacy fallback.
+    """
+    if audit_mode:
+        return False
+    if seccomp_profile in _SECCOMP_PROFILES_HARDEN_INTROSPECTION:
+        return True
+    if (profile_name == "strict"
+            and seccomp_profile not in (None, "none")
+            and seccomp_profile not in
+            _SECCOMP_PROFILES_HARDEN_INTROSPECTION):
+        return True
+    return False
+
+
+def file_trust_anchor_env(
+    *,
+    seccomp_profile: str | None = None,
+    audit_mode: bool = False,
+    profile_name: str | None = None,
+) -> dict[str, str]:
+    """Env to add to a child so file-based trust-anchor discovery
+    works where the keychain is unreachable.
 
     Empty unless the profile restricts mach-lookup (the keychain
     channel) and the system bundle exists.
     """
-    if "(deny mach-lookup" not in profile:
+    if not _mach_lookup_restricted(
+        seccomp_profile=seccomp_profile,
+        audit_mode=audit_mode,
+        profile_name=profile_name,
+    ):
         return {}
     if not os.path.isfile(MACOS_FILE_TRUST_ANCHORS):
         return {}
@@ -236,6 +269,8 @@ MACOS_HOME_TREE_ROOT = "/Users"
 # the /dev/shm-equivalent surface the Linux tier closes via
 # mount-ns — is denied.
 MACOS_POSIX_SHM_READ_PREFIX_ALLOWLIST = ("apple.cfprefs.",)
+
+_SECCOMP_PROFILES_HARDEN_INTROSPECTION = frozenset({"full"})
 
 
 def _realpath_or_none(path: str | None) -> str | None:
@@ -729,7 +764,7 @@ def build_profile(*,
     # because it'd be neither None nor "none" nor "debug". Pin the
     # explicit set: only "full" engages introspection denies on
     # macOS today. New profiles must opt in here.
-    _SECCOMP_PROFILES_HARDEN_INTROSPECTION = {"full"}
+    # (Module-level _SECCOMP_PROFILES_HARDEN_INTROSPECTION.)
     if seccomp_profile in _SECCOMP_PROFILES_HARDEN_INTROSPECTION:
         # Block introspection of OTHER processes — closest analogue
         # to Linux's seccomp-blocked ptrace under the "full" profile.

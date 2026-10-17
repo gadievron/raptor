@@ -979,6 +979,11 @@ class RaptorConfig:
         "DOCKER_HOST",         # Docker daemon socket. An attacker URL lets
                                # a sandboxed child push images / run
                                # containers against a forged API.
+        # RAPTOR-internal sandbox marker — not code-exec, but a
+        # forged marker steers egress routing to a different loopback
+        # service if the pop-before-add gate in _macos_spawn is
+        # bypassed by a future code path.
+        "_RAPTOR_SEATBELT_EGRESS_PROXY",
         # TLS trust weakening. Not code-exec on their own but let an MITM
         # position actually intercept our traffic (e.g. if a child does
         # the TLS and the attacker planted a CA cert).

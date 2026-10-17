@@ -263,8 +263,11 @@ class TestSeatbeltParentProxy:
                          "http_proxy", "https_proxy", "all_proxy", "no_proxy"):
                 monkeypatch.delenv(name, raising=False)
             proxy_mod._reset_for_tests()
-            # The captive server is loopback-only. Keep the real proxy and
-            # hostname gate while allowing this test's local destination.
+            # The captive server is loopback; the real _ip_is_blocked
+            # gate rejects non-global IPs (tested independently in
+            # test_proxy_ip_blocklist.py — loopback, RFC 1918, CGNAT,
+            # NAT64, metadata endpoint). Patch here so the integration
+            # wiring test can reach its own server.
             monkeypatch.setattr(
                 proxy_mod, "_ip_is_blocked", lambda _ip: False,
             )
@@ -319,3 +322,40 @@ class TestSeatbeltParentProxy:
             server.shutdown()
             server.server_close()
             server_thread.join(timeout=5)
+
+    @pytest.mark.parametrize("bad_url", [
+        "http://127.0.0.1:0",
+        "http://127.0.0.1:65536",
+        "http://127.0.0.1:99999",
+        "http://127.0.0.1:100000",
+        "http://[::1]:43210",
+        "http://localhost:43210",
+        "https://127.0.0.1:43210",
+    ])
+    def test_invalid_proxy_urls_rejected(self, bad_url, child_env):
+        """URLs outside the strict loopback + valid-port window must
+        never be trusted as a parent proxy marker."""
+        from core.sandbox.seatbelt import PARENT_EGRESS_PROXY_ENV
+        child_env.setenv(PARENT_EGRESS_PROXY_ENV, bad_url)
+        child_env.setenv("HTTPS_PROXY", bad_url)
+        from core.http.egress_backend import seatbelt_parent_proxy_url
+        assert seatbelt_parent_proxy_url() is None
+
+
+class TestIpBlocklistCoverageExists:
+    """The seatbelt integration test patches _ip_is_blocked.  This
+    pins the contract that the IP gate is independently tested, so
+    the accommodation doesn't silently become a coverage gap if
+    that test file is deleted or renamed."""
+
+    def test_ip_blocklist_test_module_exists(self):
+        from pathlib import Path
+        blocklist_tests = (
+            Path(__file__).resolve().parents[2]
+            / "sandbox" / "tests" / "test_proxy_ip_blocklist.py"
+        )
+        assert blocklist_tests.exists(), (
+            "test_proxy_ip_blocklist.py is missing — the seatbelt "
+            "integration test patches _ip_is_blocked and relies on "
+            "that file for independent IP-gate coverage"
+        )

@@ -234,7 +234,9 @@ _COMPREHENSIVE_DANGEROUS_ENV_VARS = frozenset({
     # MITM trivial.
     "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
     "SSL_CERT_FILE", "SSL_CERT_DIR",
-    "NODE_EXTRA_CA_CERTS", "SSLKEYLOGFILE",
+    "NODE_EXTRA_CA_CERTS", "SSLKEYLOGFILE", "NIX_SSL_CERT_FILE",
+    # RAPTOR-internal sandbox marker (egress routing).
+    "_RAPTOR_SEATBELT_EGRESS_PROXY",
     # Model-traffic redirect — CC honours this directly: BASE_URL
     # repoints every API call at an attacker endpoint (prompt +
     # source-code exfiltration, poisoned completions). A strictly

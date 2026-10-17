@@ -1015,7 +1015,11 @@ def run_sandboxed(cmd: list[str], *,
     #     keychain (mach-lookup allowlist): see
     #     seatbelt.MACOS_FILE_TRUST_ANCHORS. The spawn layer pins the
     #     value so caller-controlled trust roots never reach the child.
-    for _k, _v in seatbelt.file_trust_anchor_env(profile).items():
+    for _k, _v in seatbelt.file_trust_anchor_env(
+        seccomp_profile=seccomp_profile,
+        audit_mode=audit_mode,
+        profile_name=sandbox_profile,
+    ).items():
         child_env[_k] = _v
 
     # 2d. Parent egress-proxy marker (seatbelt.PARENT_EGRESS_PROXY_ENV):

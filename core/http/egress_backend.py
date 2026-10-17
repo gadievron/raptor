@@ -87,7 +87,11 @@ def _process_is_sandboxed() -> bool:
         check.restype = ctypes.c_int
         check.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
         return check(os.getpid(), None, 0) == 1
-    except (OSError, AttributeError):
+    except (OSError, AttributeError) as exc:
+        logger.debug(
+            "sandbox_check() unavailable (%s); assuming not sandboxed",
+            exc,
+        )
         return False
 
 
@@ -100,6 +104,8 @@ def seatbelt_parent_proxy_url() -> str | None:
     if not url or url != os.environ.get("HTTPS_PROXY"):
         return None
     if not _LOOPBACK_PROXY_RE.fullmatch(url):
+        return None
+    if int(url.rsplit(":", 1)[1]) > 65535:
         return None
     if not _process_is_sandboxed():
         return None
