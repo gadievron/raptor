@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from pathlib import Path
 
 _REPO_ROOT = str(Path(__file__).resolve().parents[3])
@@ -11,19 +12,27 @@ from core.audit.discovery import (
     HandlerSite,
     SeamBundle,
     StateMachineBundle,
+    SweepTarget,
     _HINT_MULTI_THREADED,
     _HINT_SINGLE_THREADED,
     _build_func_index,
     _build_sm_prompt,
     _extract_call_site_snippet,
     _extract_cross_file_seams,
+    _filter_grounded_findings,
+    _parse_assumptions,
+    _parse_discovery_findings,
     _parse_findings,
     _parse_sm_findings,
     _score_field,
     _score_seam,
+    _score_sweep_target,
+    _source_identifiers,
     build_seam_bundles,
     build_state_machine_bundles,
+    build_sweep_targets,
     detect_single_threaded,
+    run_assumption_mining,
     run_contract_discovery,
     run_state_machine_discovery,
     write_discovery_weaknesses,
@@ -1525,3 +1534,525 @@ class TestCwe362PostFilter:
         result = _parse_sm_findings(raw, bundle, single_threaded=False)
         assert len(result.weaknesses) == 1
         assert result.weaknesses[0]["cwe_class"] == "CWE-362"
+
+
+# ── sweep target selection ─────────────────────────────────────────
+
+
+class TestSweepTargetScoring:
+    def test_sink_score(self):
+        score, reason = _score_sweep_target(
+            "a.c:foo", {"line_start": 1, "line_end": 20},
+            sinks={"a.c:foo"}, entry_reachable=set(),
+            weakness_fids=set(), fan_in=Counter(),
+            cross_dir_callers=set(),
+        )
+        assert score >= 3
+        assert "sink" in reason
+
+    def test_weakness_score(self):
+        score, _ = _score_sweep_target(
+            "a.c:foo", {"line_start": 1, "line_end": 20},
+            sinks=set(), entry_reachable=set(),
+            weakness_fids={"a.c:foo"}, fan_in=Counter(),
+            cross_dir_callers=set(),
+        )
+        assert score >= 2
+
+    def test_complexity_score(self):
+        score, reason = _score_sweep_target(
+            "a.c:foo", {"line_start": 1, "line_end": 60},
+            sinks=set(), entry_reachable=set(),
+            weakness_fids=set(), fan_in=Counter(),
+            cross_dir_callers=set(),
+        )
+        assert score >= 1
+        assert "complex" in reason
+
+    def test_combined_scores(self):
+        score, _ = _score_sweep_target(
+            "a.c:foo", {"line_start": 1, "line_end": 60},
+            sinks={"a.c:foo"}, entry_reachable=set(),
+            weakness_fids={"a.c:foo"}, fan_in=Counter({"a.c:foo": 7}),
+            cross_dir_callers={"a.c:foo"},
+        )
+        assert score >= 8
+
+
+class TestBuildSweepTargets:
+    def test_basic_selection(self, tmp_path: Path):
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "main.c").write_text(
+            "\n".join([
+                "extern int parse(char *buf, int len);",
+                "",
+                "void handle_request(int fd) {",
+                "    char buf[4096];",
+                "    int n = read(fd, buf, sizeof(buf));",
+                "    if (n <= 0) return;",
+                "    int result = parse(buf, n);",
+                "    if (result < 0) return;",
+                "    write(fd, &result, sizeof(result));",
+                "    // more processing",
+                "    int x = result * 2;",
+                "    write(fd, &x, sizeof(x));",
+                "}",
+            ]) + "\n",
+        )
+        checklist = {
+            "target_path": str(target),
+            "files": [{
+                "path": "src/main.c",
+                "items": [{
+                    "name": "handle_request",
+                    "line_start": 3,
+                    "line_end": 13,
+                    "signature": "void handle_request(int fd)",
+                }],
+                "call_graph": {"calls": []},
+            }],
+        }
+        targets = build_sweep_targets(
+            checklist, None, set(),
+            target_path=target,
+        )
+        assert len(targets) >= 1
+        assert targets[0].fid == "src/main.c:handle_request"
+        assert "handle_request" in targets[0].annotation
+
+    def test_small_functions_excluded(self, tmp_path: Path):
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "tiny.c").write_text(
+            "int add(int a, int b) {\n    return a + b;\n}\n",
+        )
+        checklist = {
+            "target_path": str(target),
+            "files": [{
+                "path": "src/tiny.c",
+                "items": [{
+                    "name": "add",
+                    "line_start": 1,
+                    "line_end": 3,
+                }],
+                "call_graph": {"calls": []},
+            }],
+        }
+        targets = build_sweep_targets(
+            checklist, None, set(),
+            target_path=target,
+        )
+        assert len(targets) == 0
+
+    def test_max_targets_cap(self, tmp_path: Path):
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        lines = "\n".join(f"    int x{i} = {i};" for i in range(20))
+        for i in range(5):
+            (target / "src" / f"mod{i}.c").write_text(
+                f"void func{i}(void) {{\n{lines}\n}}\n",
+            )
+        checklist = {
+            "target_path": str(target),
+            "files": [{
+                "path": f"src/mod{i}.c",
+                "items": [{
+                    "name": f"func{i}",
+                    "line_start": 1,
+                    "line_end": 22,
+                }],
+                "call_graph": {"calls": []},
+            } for i in range(5)],
+        }
+        targets = build_sweep_targets(
+            checklist, None, set(),
+            target_path=target,
+            max_targets=2,
+        )
+        assert len(targets) == 2
+
+
+# ── discovery finding parser ───────────────────────────────────────
+
+
+class TestParseDiscoveryFindings:
+    def test_valid_json(self):
+        target = SweepTarget(
+            fid="a.c:foo", source="", callers_source="",
+            annotation="", priority_score=1.0, priority_reason="test",
+        )
+        raw = json.dumps({"findings": [
+            {"guard_type": "bounds", "assumed_property": "len < 256",
+             "mechanism": "overflow", "cwe_class": "CWE-120",
+             "standalone": True},
+        ]})
+        result = _parse_discovery_findings(raw, target, "assumption_mining")
+        assert len(result.weaknesses) == 1
+        assert result.weaknesses[0]["guard_type"] == "bounds"
+        assert result.weaknesses[0]["source"] == "assumption_mining"
+        assert result.source == "assumption_mining"
+
+    def test_empty_findings(self):
+        target = SweepTarget(
+            fid="a.c:foo", source="", callers_source="",
+            annotation="", priority_score=1.0, priority_reason="test",
+        )
+        raw = json.dumps({"findings": []})
+        result = _parse_discovery_findings(raw, target, "assumption_mining")
+        assert len(result.weaknesses) == 0
+
+    def test_fenced_json(self):
+        target = SweepTarget(
+            fid="a.c:foo", source="", callers_source="",
+            annotation="", priority_score=1.0, priority_reason="test",
+        )
+        raw = (
+            "Here is my analysis:\n\n```json\n"
+            + json.dumps({"findings": [
+                {"guard_type": "null_safety",
+                 "assumed_property": "ptr != NULL",
+                 "mechanism": "null deref",
+                 "cwe_class": "CWE-476", "standalone": False},
+            ]})
+            + "\n```"
+        )
+        result = _parse_discovery_findings(raw, target, "assumption_mining")
+        assert len(result.weaknesses) == 1
+        assert result.source == "assumption_mining"
+
+    def test_invalid_json(self):
+        target = SweepTarget(
+            fid="a.c:foo", source="", callers_source="",
+            annotation="", priority_score=1.0, priority_reason="test",
+        )
+        result = _parse_discovery_findings(
+            "not json", target, "assumption_mining",
+        )
+        assert len(result.weaknesses) == 0
+
+
+# ── assumption mining ──────────────────────────────────────────────
+
+
+class TestParseAssumptions:
+    def test_filters_explicit(self):
+        raw = json.dumps({"assumptions": [
+            {"property": "x > 0", "explicit": True, "consequence": "crash"},
+            {"property": "buf != NULL", "explicit": False,
+             "consequence": "null deref"},
+        ]})
+        implicit = _parse_assumptions(raw)
+        assert len(implicit) == 1
+        assert implicit[0]["property"] == "buf != NULL"
+
+    def test_all_explicit(self):
+        raw = json.dumps({"assumptions": [
+            {"property": "x > 0", "explicit": True, "consequence": "crash"},
+        ]})
+        implicit = _parse_assumptions(raw)
+        assert len(implicit) == 0
+
+    def test_empty(self):
+        raw = json.dumps({"assumptions": []})
+        assert _parse_assumptions(raw) == []
+
+    def test_invalid_json(self):
+        assert _parse_assumptions("not json") == []
+
+    def test_fenced_json(self):
+        inner = json.dumps({"assumptions": [
+            {"property": "p", "explicit": False, "consequence": "c"},
+        ]})
+        raw = f"Analysis:\n\n```json\n{inner}\n```"
+        assert len(_parse_assumptions(raw)) == 1
+
+
+class TestRunAssumptionMining:
+    def test_two_pass(self):
+        target = SweepTarget(
+            fid="a.c:process", source="void process(char *buf) { }",
+            callers_source="Caller: main.c:main\n  Signature: int main()",
+            annotation="## Function: process (a.c)",
+            priority_score=3.0, priority_reason="test",
+        )
+
+        call_count = 0
+
+        def mock_review(system: str, prompt: str) -> tuple[str, float]:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return json.dumps({"assumptions": [
+                    {"property": "buf is non-NULL",
+                     "explicit": False, "consequence": "null deref"},
+                    {"property": "buf is valid UTF-8",
+                     "explicit": True, "consequence": "encoding error"},
+                ]}), 0.01
+            return json.dumps({"findings": [
+                {"guard_type": "null_safety",
+                 "assumed_property": "buf is non-NULL",
+                 "mechanism": "main() passes buf without NULL check",
+                 "cwe_class": "CWE-476", "standalone": False},
+            ]}), 0.01
+
+        results = run_assumption_mining(
+            [target], review_fn=mock_review,
+        )
+        assert call_count == 2
+        assert len(results) == 1
+        assert len(results[0].weaknesses) == 1
+        assert results[0].weaknesses[0]["source"] == "assumption_mining"
+        assert results[0].cost_usd > 0
+
+    def test_no_implicit_skips_pass2(self):
+        target = SweepTarget(
+            fid="a.c:safe", source="int safe(int x) { return x; }",
+            callers_source="", annotation="",
+            priority_score=1.0, priority_reason="test",
+        )
+
+        call_count = 0
+
+        def mock_review(system: str, prompt: str) -> tuple[str, float]:
+            nonlocal call_count
+            call_count += 1
+            return json.dumps({"assumptions": [
+                {"property": "x is int", "explicit": True,
+                 "consequence": "type error"},
+            ]}), 0.01
+
+        results = run_assumption_mining(
+            [target], review_fn=mock_review,
+        )
+        assert call_count == 1
+        assert len(results) == 0
+
+
+# ── synthetic fixture ground-truth tests ──────────────────────────
+
+_FIXTURE_ROOT = Path(__file__).resolve().parents[1] / (
+    "corpus/tests/fixtures/discovery"
+)
+
+
+class TestAllocFixtureSeams:
+    """Verify build_seam_bundles finds ground-truth contract seams
+    in the alloc/consumer fixture pair."""
+
+    @staticmethod
+    def _alloc_checklist() -> dict:
+        return _checklist(
+            (
+                "alloc/alloc.c",
+                [
+                    {"name": "pool_alloc", "line_start": 11,
+                     "line_end": 24,
+                     "signature": "struct pool_hdr *pool_alloc("
+                                  "size_t nbytes, int raw)"},
+                    {"name": "pool_alloc_zeroed", "line_start": 26,
+                     "line_end": 29,
+                     "signature": "struct pool_hdr *pool_alloc_zeroed("
+                                  "size_t nbytes)"},
+                    {"name": "pool_free", "line_start": 31,
+                     "line_end": 35,
+                     "signature": "void pool_free("
+                                  "struct pool_hdr *h)"},
+                ],
+                [
+                    {"line": 28, "chain": ["pool_alloc"],
+                     "caller": "pool_alloc_zeroed"},
+                ],
+            ),
+            (
+                "alloc/consumer.c",
+                [
+                    {"name": "process_raw", "line_start": 17,
+                     "line_end": 26,
+                     "signature": "int process_raw("
+                                  "const char *src, size_t len)"},
+                    {"name": "fast_copy", "line_start": 28,
+                     "line_end": 35,
+                     "signature": "int fast_copy("
+                                  "const char *src, size_t len)"},
+                    {"name": "summarise", "line_start": 42,
+                     "line_end": 50,
+                     "signature": "int summarise("
+                                  "struct pool_hdr *h, "
+                                  "struct wire_hdr *out)"},
+                ],
+                [
+                    {"line": 19, "chain": ["pool_alloc"],
+                     "caller": "process_raw"},
+                    {"line": 24, "chain": ["pool_free"],
+                     "caller": "process_raw"},
+                    {"line": 31, "chain": ["pool_alloc"],
+                     "caller": "fast_copy"},
+                    {"line": 33, "chain": ["pool_free"],
+                     "caller": "fast_copy"},
+                ],
+            ),
+        )
+
+    def test_finds_cross_file_seams(self):
+        checklist = self._alloc_checklist()
+        seams = _extract_cross_file_seams(checklist)
+        fids = {(c, e) for c, e in seams}
+        assert ("alloc/consumer.c:process_raw",
+                "alloc/alloc.c:pool_alloc") in fids
+        assert ("alloc/consumer.c:fast_copy",
+                "alloc/alloc.c:pool_alloc") in fids
+
+    def test_builds_bundles_with_source(self):
+        checklist = self._alloc_checklist()
+        bundles = build_seam_bundles(
+            checklist, None, set(),
+            target_path=_FIXTURE_ROOT,
+        )
+        assert len(bundles) >= 2
+        callee_names = {b.callee_fid.split(":")[-1] for b in bundles}
+        assert "pool_alloc" in callee_names
+        for b in bundles:
+            if "pool_alloc" in b.callee_fid:
+                assert "raw" in b.callee_source
+
+
+class TestSessionFixtureStateMachine:
+    """Verify build_state_machine_bundles finds ground-truth
+    state field in the session fixture."""
+
+    @staticmethod
+    def _session_field_census() -> dict:
+        return {
+            "fields": {
+                "state": {
+                    "writes": [
+                        {"file": "session/setup.c",
+                         "func": "session_create", "line": 14,
+                         "value": "STATE_NEW"},
+                        {"file": "session/setup.c",
+                         "func": "session_auth", "line": 11,
+                         "value": "STATE_AUTH"},
+                        {"file": "session/setup.c",
+                         "func": "session_auth", "line": 18,
+                         "value": "STATE_OPEN"},
+                        {"file": "session/teardown.c",
+                         "func": "session_close", "line": 5,
+                         "value": "STATE_CLOSED"},
+                    ],
+                    "reads": [
+                        {"file": "session/setup.c",
+                         "func": "session_auth", "line": 5},
+                        {"file": "session/handler.c",
+                         "func": "session_send", "line": 3},
+                        {"file": "session/handler.c",
+                         "func": "session_recv", "line": 3},
+                        {"file": "session/teardown.c",
+                         "func": "session_close", "line": 2},
+                    ],
+                },
+            },
+        }
+
+    def test_session_field_qualifies(self):
+        census = self._session_field_census()
+        bundles = build_state_machine_bundles(
+            census, target_path=_FIXTURE_ROOT,
+        )
+        assert len(bundles) >= 1
+        field_names = {b.field_name for b in bundles}
+        assert "state" in field_names
+
+    def test_session_handlers_include_all_files(self):
+        census = self._session_field_census()
+        bundles = build_state_machine_bundles(
+            census, target_path=_FIXTURE_ROOT,
+        )
+        state_bundle = next(
+            b for b in bundles if b.field_name == "state"
+        )
+        handler_files = {h.file for h in state_bundle.handler_sites}
+        assert "session/setup.c" in handler_files
+        assert "session/handler.c" in handler_files
+        assert "session/teardown.c" in handler_files
+
+
+# ── grounding filter unit tests ──────────────────────────────────────
+
+
+class TestSourceIdentifiers:
+    def test_extracts_function_and_field_names(self):
+        src = "int pool_alloc(size_t nbytes, int raw) { h->size = nbytes; }"
+        idents = _source_identifiers(src)
+        assert "pool_alloc" in idents
+        assert "nbytes" in idents
+        assert "size" in idents
+        assert "raw" in idents
+
+    def test_excludes_c_keywords_and_noise(self):
+        src = "int void char return const struct sizeof"
+        idents = _source_identifiers(src)
+        assert "int" not in idents
+        assert "void" not in idents
+        assert "return" not in idents
+        assert "const" not in idents
+
+    def test_excludes_short_tokens(self):
+        src = "int fd; char *p; h->x = 0;"
+        idents = _source_identifiers(src)
+        assert "fd" not in idents
+        assert "p" not in idents
+
+
+class TestFilterGroundedFindings:
+    def test_keeps_grounded_finding(self):
+        findings = [
+            {
+                "assumed_property": "h->size is initialised",
+                "mechanism": "process_raw() calls pool_alloc(len, 1) "
+                             "which skips memset",
+            },
+        ]
+        idents = frozenset({"pool_alloc", "process_raw", "size", "nbytes"})
+        kept = _filter_grounded_findings(findings, idents)
+        assert len(kept) == 1
+
+    def test_drops_ungrounded_finding(self):
+        findings = [
+            {
+                "assumed_property": "buffer is valid and properly aligned",
+                "mechanism": "caller must ensure memory model guarantees "
+                             "are met",
+            },
+        ]
+        idents = frozenset({"pool_alloc", "process_raw", "size", "nbytes"})
+        kept = _filter_grounded_findings(findings, idents)
+        assert len(kept) == 0
+
+    def test_empty_idents_keeps_all(self):
+        findings = [{"assumed_property": "anything", "mechanism": "vague"}]
+        kept = _filter_grounded_findings(findings, frozenset())
+        assert len(kept) == 1
+
+    def test_mixed_grounded_and_noise(self):
+        findings = [
+            {
+                "assumed_property": "h->size is initialised",
+                "mechanism": "process_raw skips init",
+            },
+            {
+                "assumed_property": "no concurrent access",
+                "mechanism": "caller must hold lock",
+            },
+            {
+                "assumed_property": "pool_alloc returns non-NULL",
+                "mechanism": "fast_copy does not check return",
+            },
+        ]
+        idents = frozenset({
+            "pool_alloc", "process_raw", "fast_copy", "size", "nbytes",
+        })
+        kept = _filter_grounded_findings(findings, idents)
+        assert len(kept) == 2
+        props = {f["assumed_property"] for f in kept}
+        assert "no concurrent access" not in props
