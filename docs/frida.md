@@ -161,6 +161,7 @@ raptor frida --target <target> --template <name> --duration <seconds>
 | `--spawn` | Force spawn-and-attach. Implied when `--target` is an existing file path. |
 | `--unsafe-attach` | Required for templates/modes needing `PTRACE_ATTACH` or `task_for_pid`. Logged in metadata. |
 | `--follow-children` | Trace fork()/exec() children too (Frida child gating); children get the same hook script, events land in the same `events.jsonl`. |
+| `--module <name>` | Restrict memory-scan to a named module (shared library) instead of anonymous RW memory. Only meaningful with `--template memory-scan`. |
 | `--list-templates` | Print bundled template names and exit. |
 
 ### Examples
@@ -486,6 +487,14 @@ Errors and applied limits appear in the summary.
 
 ```bash
 raptor frida --target ./app --template memory-scan --duration 30
+```
+
+Pass `--module <name>` to restrict the scan to a named module's
+read-only ranges instead of anonymous RW memory — useful for
+detecting in-memory patching of a specific shared library:
+
+```bash
+raptor frida --target ./app --template memory-scan --module libtarget.so --duration 30
 ```
 
 ---

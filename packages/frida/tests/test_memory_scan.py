@@ -1,5 +1,7 @@
 """Tests for the Frida memory-scan template."""
 
+import json
+
 from packages.frida.runner import load_script_source
 
 
@@ -63,3 +65,16 @@ def test_memory_scan_is_flush_driven_and_module_ranges_are_preserved():
     assert "var scanSize = Math.min(" in source
     assert "seenMatches[matchKey]" in source
     assert "noteLimit('final_scan_incomplete', MAX_SCAN_BYTES_PER_FLUSH)" in source
+
+
+def test_memory_scan_module_slot_replaceable():
+    """The CLI --module flag replaces CONFIG.module via string substitution."""
+    source, _ = load_script_source("memory-scan", None)
+
+    marker = "module: null,"
+    assert marker in source, "CONFIG.module marker missing — --module would fail"
+
+    module_name = "libtarget.so"
+    patched = source.replace(marker, f"module: {json.dumps(module_name)},", 1)
+    assert '"libtarget.so"' in patched
+    assert marker not in patched

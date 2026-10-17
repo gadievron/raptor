@@ -51,6 +51,11 @@ def _build_parser() -> argparse.ArgumentParser:
                            "JSON (names or {fn, module} objects) or a "
                            "validation run's attack-paths.json."))
 
+    parser.add_argument("--module", metavar="NAME",
+                        help=("Restrict memory-scan to a named module "
+                              "instead of anonymous RW memory. Only "
+                              "meaningful with --template memory-scan."))
+
     dev = parser.add_mutually_exclusive_group()
     dev.add_argument("--host", metavar="HOST[:PORT]",
                      help=("Connect to a remote frida-server. Default "
@@ -134,6 +139,18 @@ def main(argv: list[str] | None = None) -> int:
     except (FileNotFoundError, ValueError) as e:
         print(f"frida: {_sft(str(e))}", file=sys.stderr)
         return 2
+
+    if args.module is not None:
+        import json
+
+        _MODULE_MARKER = "module: null,"
+        if _MODULE_MARKER not in source:
+            print("frida: --module requires a template with CONFIG.module "
+                  "(e.g. --template memory-scan)", file=sys.stderr)
+            return 2
+        source = source.replace(
+            _MODULE_MARKER, f"module: {json.dumps(args.module)},", 1,
+        )
 
     cfg = RunConfig(
         target=target,
