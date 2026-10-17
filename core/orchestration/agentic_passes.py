@@ -196,7 +196,7 @@ def _run_understand_prepass_unsafe(
         command="understand",
         target=target,
         tools=_UNDERSTAND_TOOLS,
-        budget_usd=(str(max_cost_usd) if max_cost_usd is not None
+        budget_usd=(str(max_cost_usd) if max_cost_usd
                     else _PREPASS_BUDGET_USD),
         timeout_s=_PREPASS_TIMEOUT_S,
         caller_label="agentic-understand",
@@ -412,7 +412,7 @@ def _run_validate_postpass_unsafe(
         command="validate",
         target=target,
         tools=_VALIDATE_TOOLS,
-        budget_usd=(str(max_cost_usd) if max_cost_usd is not None
+        budget_usd=(str(max_cost_usd) if max_cost_usd
                     else _POSTPASS_BUDGET_USD),
         timeout_s=_POSTPASS_TIMEOUT_S,
         caller_label="agentic-validate",

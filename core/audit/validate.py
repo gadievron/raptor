@@ -445,7 +445,7 @@ def _dispatch_validate_unsafe(
             command="validate",
             target=target_path,
             tools=_VALIDATE_TOOLS,
-            budget_usd=(str(max_cost_usd) if max_cost_usd is not None
+            budget_usd=(str(max_cost_usd) if max_cost_usd
                         else _VALIDATE_BUDGET_USD),
             timeout_s=_VALIDATE_TIMEOUT_S,
             caller_label="audit-validate",
