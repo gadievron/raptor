@@ -795,6 +795,30 @@ def _config_ollama_primary() -> Optional['ModelConfig']:
     return None
 
 
+def _config_claudecode_primary() -> Optional['ModelConfig']:
+    """First config-file Claude Code CLI entry eligible to serve as the
+    default (primary) model.
+
+    Same blind spot as ``_config_ollama_primary``: the thinking-model
+    scorer never matches a ``claudecode`` entry, so a declared
+    ``{"provider": "claudecode"}`` primary would otherwise lose to
+    autodetected Ollama in Step 3. Eligibility mirrors the Ollama hook:
+    no role, or an analysis/code role; auxiliary roles (including the
+    documented ``fallback`` safety-net entry) never become primary.
+    """
+    for entry in _get_configured_models():
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("provider", "") not in ("claudecode", "claudecode-resumable"):
+            continue
+        if (entry.get("role") or None) not in (None, "analysis", "code"):
+            continue
+        mc = _model_config_from_entry(entry)
+        if _entry_auth_resolvable(mc):
+            return mc
+    return None
+
+
 def _get_default_primary_model(
     prefer: list[str] | None = None,
     *,
@@ -819,6 +843,8 @@ def _get_default_primary_model(
        2b: a config-file Bedrock entry without an auxiliary role —
        the thinking-model scorer can't match Bedrock ids, so those
        entries get their own step (see ``_config_bedrock_primary``).
+       2c/2d: likewise a role-less Ollama or Claude Code entry
+       (``_config_ollama_primary`` / ``_config_claudecode_primary``).
     3. **Default-order autodetect** via env var: Anthropic > OpenAI
        > Gemini > Mistral > Ollama > Claude Code (subprocess,
        absolute last resort).
@@ -918,6 +944,15 @@ def _get_default_primary_model(
                 )
                 _get_default_primary_model._ollama_logged = True  # type: ignore[attr-defined]
             return ollama_primary
+
+    # Step 2d: a config-file Claude Code entry with no auxiliary role.
+    # Same reasoning as 2b/2c — the operator's declared primary must
+    # beat Step 3's autodetect (which would otherwise pick a reachable
+    # Ollama ahead of the Claude Code transport).
+    cc_primary = _config_claudecode_primary()
+    if (cc_primary is not None
+            and (prefer_set is None or cc_primary.provider in prefer_set)):
+        return cc_primary
 
     # Step 3: default-order autodetect via env vars. Skip providers
     # already tried in step 1.

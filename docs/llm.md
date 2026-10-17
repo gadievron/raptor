@@ -391,10 +391,14 @@ primary — resolvable whenever the `claude` binary is installed.
    than leaving it to the `/api/tags` probe order below. Give it an
    auxiliary role (`fallback`, `judge`, etc.) to keep it out of primary
    selection.
-4. Provider auto-detect: first configured provider in the default order
+4. A Claude Code entry gets the same treatment after Ollama: the first
+   `claudecode` or `claudecode-resumable` entry without an auxiliary role
+   (or with an `analysis`/`code` role) is the declared default. An auxiliary
+   role such as `fallback` keeps it out of primary selection.
+5. Provider auto-detect: first configured provider in the default order
    wins. For Ollama with no primary-eligible entry, this falls through
    to the probe's own preference order (see [Ollama](#ollama-offline--airgapped)).
-5. Shorthand resolution: bare tokens like `haiku`, `opus`, `sonnet` match against
+6. Shorthand resolution: bare tokens like `haiku`, `opus`, `sonnet` match against
    configured model names. Ambiguous matches raise an error.
 
 ### Fast-Tier Models

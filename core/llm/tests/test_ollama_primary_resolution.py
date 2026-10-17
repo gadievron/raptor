@@ -193,3 +193,48 @@ class TestOllamaConfigPrimary:
 
         # No cloud keys, Ollama skipped when offline → nothing resolves.
         assert picked is None
+
+
+class TestClaudeCodeConfigPrimary:
+    """A declared claudecode entry beats autodetected Ollama; a
+    fallback-role entry stays a fallback."""
+
+    @pytest.fixture(autouse=True)
+    def _claude_on_path(self, monkeypatch):
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda b: "/usr/local/bin/claude" if b == "claude" else None,
+        )
+        import core.llm.config as cfg
+        monkeypatch.setattr(cfg, "_resolve_claudecode_model", lambda: "claude-test")
+
+    @pytest.mark.parametrize("role", [None, "analysis", "code"])
+    def test_claudecode_entry_beats_autodetected_ollama(
+        self, tmp_path, monkeypatch, role,
+    ):
+        entry = {"provider": "claudecode"}
+        if role:
+            entry["role"] = role
+        _write_config(tmp_path, monkeypatch, [entry])
+        _stub_autodetect(monkeypatch, ["qwen3:8b"])
+
+        import core.llm.config as cfg
+        picked = cfg._get_default_primary_model()
+
+        assert picked is not None
+        assert picked.provider == "claudecode"
+
+    def test_fallback_role_claudecode_does_not_become_primary(
+        self, tmp_path, monkeypatch,
+    ):
+        _write_config(tmp_path, monkeypatch, [
+            {"provider": "claudecode", "role": "fallback"},
+        ])
+        _stub_autodetect(monkeypatch, ["qwen3:8b"])
+
+        import core.llm.config as cfg
+        picked = cfg._get_default_primary_model()
+
+        assert picked is not None
+        assert picked.provider == "ollama"
+        assert picked.model_name == "qwen3:8b"
