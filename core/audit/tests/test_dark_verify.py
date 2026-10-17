@@ -3928,6 +3928,7 @@ class TestAnchoredCapture:
             expected_token=self._TOKEN,
         )
 
+    @pytest.mark.slow
     def test_padding_cannot_evict_sentinel_or_report(self, tmp_path):
         """>64KiB of target-printed padding before the sentinel and
         around the ASan report pushed both into the evicted middle
