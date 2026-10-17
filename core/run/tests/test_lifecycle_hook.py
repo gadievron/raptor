@@ -279,7 +279,7 @@ class TestToolFailureFiltering(unittest.TestCase):
 
 
 class TestStopHook(unittest.TestCase):
-    """Stop mode: complete or fail single-call runs with dead tool_pid."""
+    """Stop mode: fail single-call runs with dead tool_pid + failure marker."""
 
     def test_posttoolusefailure_event_accepted(self):
         """PostToolUseFailure (explicit) is still accepted."""
@@ -297,9 +297,6 @@ class TestStopHook(unittest.TestCase):
             io.StringIO(RAPTOR_BASH_FAILURE))
         self.assertIsNotNone(result)
 
-
-class TestStopHook(unittest.TestCase):
-    """Stop mode: fail single-call runs with dead tool_pid + failure marker."""
 
     def test_unknown_stays_running_without_marker(self):
         """Dead worker + no failure marker = unknown, not completed."""

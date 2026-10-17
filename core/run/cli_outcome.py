@@ -25,7 +25,8 @@ def _address(sid):
 
 
 def _digest(value):
-    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+    from core.json import dumps_canonical
+    return hashlib.sha256(dumps_canonical(value).encode()).hexdigest()
 
 
 def _generation(context):
