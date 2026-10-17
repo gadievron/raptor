@@ -182,6 +182,13 @@ ENV_MARKER_SSH = "ssh"
 ENV_MARKERS = (ENV_MARKER_CLAUDECODE, ENV_MARKER_CODEX, ENV_MARKER_TRUSTED, ENV_MARKER_SSH)
 _ENV_MARKERS_NONE = "none"
 
+# Markers that identify an AGENT SESSION — any harness whose session
+# should never earn human-grade provenance or an operator-mark grant.
+# Wire new harness markers here; _corroboration_ok and
+# live_context_grants_operator derive from it.  _is_agent_comm uses
+# an independent comm-name predicate (must be updated separately).
+AGENT_SESSION_ENV_MARKERS = frozenset({ENV_MARKER_CLAUDECODE, ENV_MARKER_CODEX})
+
 # ``corroboration`` marker: the only recognised value. Written by the
 # storage layer when a rewrite carries over a section whose
 # interactive stamp verifiably predates CORROBORATION_ERA_START.
@@ -399,6 +406,7 @@ def _is_agent_comm(comm: str) -> bool:
     :func:`live_context_grants_operator`)."""
     return (
         comm.startswith("claude")
+        or comm.startswith("codex")
         or comm in _AGENT_RUNTIME_COMMS
         or bool(_VERSION_COMM.fullmatch(comm))
     )
@@ -485,7 +493,7 @@ def live_context_grants_operator(
     if envm is None or not valid_env_markers_value(envm):
         return False
     markers = set(envm.split(","))
-    if markers & {ENV_MARKER_CLAUDECODE, ENV_MARKER_TRUSTED}:
+    if markers & (AGENT_SESSION_ENV_MARKERS | {ENV_MARKER_TRUSTED}):
         return False
     parents = ctx.get(PARENTS_KEY)
     if parents is None or not valid_parents_value(parents):
@@ -582,7 +590,7 @@ def _corroboration_ok(
         return False
     if envm is None or not valid_env_markers_value(envm):
         return False
-    if ENV_MARKER_CLAUDECODE in envm.split(","):
+    if AGENT_SESSION_ENV_MARKERS & set(envm.split(",")):
         return False
     if parents is None or not valid_parents_value(parents):
         return False
