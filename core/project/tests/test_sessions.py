@@ -766,6 +766,7 @@ class LauncherAwarenessTest(unittest.TestCase):
             env={
                 "PATH": ":".join([str(stub_dir)] + path_dirs),
                 "HOME": str(home), "TMPDIR": str(tmpdir), "TERM": "xterm",
+                "_RAPTOR_DEP_CHECK": "0",
             },
             cwd=str(home),
         )

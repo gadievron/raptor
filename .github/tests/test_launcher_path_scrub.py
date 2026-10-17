@@ -37,6 +37,7 @@ def _run_help(path_value: str, extra_env: dict | None = None):
     env = {
         "HOME": os.environ.get("HOME", "/tmp"),
         "PATH": path_value,
+        "_RAPTOR_DEP_CHECK": "0",
     }
     if extra_env:
         env.update(extra_env)

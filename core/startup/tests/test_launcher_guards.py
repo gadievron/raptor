@@ -78,6 +78,7 @@ def _launch(
         "PATH": ":".join([str(stub_dir)] + _system_path_dirs()),
         "HOME": str(home),
         "TMPDIR": str(tmpdir),
+        "_RAPTOR_DEP_CHECK": "0",
         **(extra_env or {}),
     }
     if term is not None:
@@ -146,6 +147,7 @@ def test_version_fast_path_env_stripped(tmp_path):
         "HOME": str(tmp_path / "home"),
         "TERM": "xterm",
         "PYTHONPATH": str(payload),
+        "_RAPTOR_DEP_CHECK": "0",
     }
     (tmp_path / "home").mkdir(exist_ok=True)
 
@@ -226,6 +228,7 @@ def test_cve_launchers_sweep_python_family(tmp_path, launcher):
         "HOME": str(tmp_path),
         "PYTHONWARNINGS": "error::UserWarning",
         "PYTHONFAULTHANDLER": "1",
+        "_RAPTOR_DEP_CHECK": "0",
     }
     r = subprocess.run(
         ["bash", str(REPO_ROOT / "bin" / launcher)],

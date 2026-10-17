@@ -28,6 +28,7 @@ def _run_launcher(args: list, stdin: str = ""):
     env = {
         "HOME": os.environ.get("HOME", "/tmp"),
         "PATH": "/usr/bin:/bin",
+        "_RAPTOR_DEP_CHECK": "0",
     }
     with tempfile.TemporaryDirectory() as scratch:
         # Isolated session-scratch base (see test_launcher_path_scrub:

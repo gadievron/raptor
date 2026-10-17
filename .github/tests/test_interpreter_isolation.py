@@ -82,6 +82,7 @@ def _base_env(home: Path, **extra: str) -> dict[str, str]:
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "HOME": str(home),
         "_RAPTOR_TRUSTED": "1",
+        "_RAPTOR_DEP_CHECK": "0",
     }
     env.update(extra)
     return env

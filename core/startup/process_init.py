@@ -23,7 +23,11 @@ import os
 import signal
 import sys
 
-if not os.environ.get("CI") and not os.environ.get("RAPTOR_CI"):
+if (
+    not os.environ.get("CI")
+    and not os.environ.get("RAPTOR_CI")
+    and os.environ.get("_RAPTOR_DEP_CHECK", "1") != "0"
+):
     _REQUIRED_DEPS = ("requests", "pydantic", "openai", "yaml")
     _missing = [m for m in _REQUIRED_DEPS if importlib.util.find_spec(m) is None]
     if _missing:

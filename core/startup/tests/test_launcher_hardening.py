@@ -99,6 +99,7 @@ def _run_launcher(
         "TMPDIR": str(tmpdir),
         "TERM": "xterm",
         "_RAPTOR_TRUSTED": "1",
+        "_RAPTOR_DEP_CHECK": "0",
         **(extra_env or {}),
     }
     return subprocess.run(

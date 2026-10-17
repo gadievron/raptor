@@ -41,6 +41,7 @@ def _run_help(extra_env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     env = {
         "HOME": os.environ.get("HOME", "/tmp"),
         "PATH": "/usr/bin:/bin",
+        "_RAPTOR_DEP_CHECK": "0",
     }
     env.update(extra_env)
     return subprocess.run(
