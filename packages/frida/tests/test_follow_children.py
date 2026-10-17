@@ -27,12 +27,17 @@ class _FakeScript:
     def __init__(self):
         self.loaded = False
         self.callbacks = {}
+        self.messages = []
+        self.flush_calls = 0
 
     def on(self, event, cb):
         self.callbacks[event] = cb
 
     def load(self):
         self.loaded = True
+
+    def post(self, message):
+        self.messages.append(message)
 
 
 class _FakeSession:
@@ -127,6 +132,132 @@ class TestFollowChildren:
         assert child.gating_enabled
         assert child.scripts and child.scripts[0].loaded
         assert 777 in device.resumed
+
+    def test_final_flush_reaches_child_script(self, tmp_path, monkeypatch):
+        device = _FakeDevice()
+        original_sleep = runner.time.sleep
+        child_event_sent = False
+
+        def sleep_with_child(seconds):
+            nonlocal child_event_sent
+
+            if (
+                not child_event_sent
+                and "child-added" in device.handlers
+            ):
+                child_event_sent = True
+                device.handlers["child-added"](
+                    SimpleNamespace(pid=777)
+                )
+                deadline = time.monotonic() + 2.0
+
+                while time.monotonic() < deadline:
+                    child = device.sessions.get(777)
+                    if (
+                        child is not None
+                        and child.scripts
+                        and child.scripts[0].loaded
+                        and 777 in device.resumed
+                    ):
+                        break
+                    original_sleep(0.01)
+                else:
+                    raise AssertionError(
+                        "Child script was not loaded and resumed"
+                    )
+
+            original_sleep(seconds)
+
+        monkeypatch.setattr(runner.time, "sleep", sleep_with_child)
+
+        cfg = _cfg(tmp_path, follow_children=True)
+        cfg.script_source = "recv('raptor:flush', function () {});"
+        cfg.duration_sec = 0.15
+
+        result = run(cfg, frida_mod_override=_fake_frida(device))
+
+        assert result.ok
+        parent_script = device.sessions[1234].scripts[0]
+        child_script = device.sessions[777].scripts[0]
+
+        assert any(
+            message.get("type") == "raptor:flush"
+            and message.get("final") is True
+            for message in parent_script.messages
+        )
+        assert any(
+            message.get("type") == "raptor:flush"
+            and message.get("final") is True
+            for message in child_script.messages
+        )
+
+    def test_rpc_flush_wedge_counts_are_scoped_to_each_script(
+        self, tmp_path, monkeypatch
+    ):
+        device = _FakeDevice()
+        original_sleep = runner.time.sleep
+        child_event_sent = False
+
+        class SlowExports:
+            def __init__(self, script):
+                self.script = script
+
+            def flush(self):
+                self.script.flush_calls += 1
+                original_sleep(0.1)
+
+        monkeypatch.setattr(runner, "_FLUSH_RPC_TIMEOUT_S", 0.02)
+        monkeypatch.setattr(
+            _FakeScript, "list_exports_sync", lambda self: ["flush"],
+            raising=False,
+        )
+        monkeypatch.setattr(
+            _FakeScript,
+            "exports_sync",
+            property(lambda self: SlowExports(self)),
+            raising=False,
+        )
+
+        def sleep_with_child(seconds):
+            nonlocal child_event_sent
+
+            if (
+                not child_event_sent
+                and "child-added" in device.handlers
+            ):
+                child_event_sent = True
+                device.handlers["child-added"](
+                    SimpleNamespace(pid=777)
+                )
+                deadline = time.monotonic() + 2.0
+
+                while time.monotonic() < deadline:
+                    child = device.sessions.get(777)
+                    if (
+                        child is not None
+                        and child.scripts
+                        and child.scripts[0].loaded
+                        and 777 in device.resumed
+                    ):
+                        break
+                    original_sleep(0.01)
+                else:
+                    raise AssertionError("Child script was not ready")
+
+            original_sleep(seconds)
+
+        monkeypatch.setattr(runner.time, "sleep", sleep_with_child)
+
+        cfg = _cfg(tmp_path, follow_children=True)
+        cfg.duration_sec = 2.7
+
+        result = run(cfg, frida_mod_override=_fake_frida(device))
+
+        assert result.ok
+        parent_script = device.sessions[1234].scripts[0]
+        child_script = device.sessions[777].scripts[0]
+        assert parent_script.flush_calls == 3
+        assert child_script.flush_calls == 3
 
     def test_child_resumed_even_when_instrumentation_fails(self, tmp_path):
         device = _FakeDevice()

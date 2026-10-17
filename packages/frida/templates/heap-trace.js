@@ -499,13 +499,19 @@ function doFlush() {
 }
 
 function onFlushMsg(msg) {
+  if (typeof registerRaptorFlushListener !== 'function') {
+    recv('raptor:flush', onFlushMsg);
+  }
   if (msg !== null && typeof msg === 'object' && msg.spawned === true) {
     spawnedKnown = true;
   }
   try { doFlush(); } catch (_e) {}
+}
+if (typeof registerRaptorFlushListener === 'function') {
+  registerRaptorFlushListener(onFlushMsg);
+} else {
   recv('raptor:flush', onFlushMsg);
 }
-recv('raptor:flush', onFlushMsg);
 
 rpc.exports = {
   flush: doFlush,

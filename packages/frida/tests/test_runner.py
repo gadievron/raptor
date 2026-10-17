@@ -302,6 +302,115 @@ def test_run_spawn_resumes_after_load(tmp_path: Path):
     assert result.resolved_pid == 9999
 
 
+def test_post_flush_marks_final_message(tmp_path: Path, monkeypatch):
+    device = FakeDevice("local")
+    fake = _fake_frida(device)
+    posted = []
+
+    def capture_post(self, message):
+        posted.append(message)
+
+    monkeypatch.setattr(FakeScript, "post", capture_post, raising=False)
+    cfg = runner.RunConfig(
+        target=runner.parse_target("1234"),
+        out_dir=tmp_path,
+        script_source="recv('raptor:flush', function () {});",
+        script_origin="file:flush.js",
+        duration_sec=0.02,
+    )
+
+    result = runner.run(cfg, frida_mod_override=fake)
+
+    assert result.ok is True
+    assert posted
+    assert posted[-1]["type"] == "raptor:flush"
+    assert posted[-1]["final"] is True
+
+
+def test_flush_summary_timeout_scales_with_scan_budget():
+    source = (
+        "var __raptorFlushSummarySecondsPerFlush = 2; "
+        "var MAX_SCAN_BYTES = 12 * 1024; "
+        "var MAX_SCAN_BYTES_PER_FLUSH = 3 * 1024;"
+    )
+    assert runner._flush_summary_timeout_seconds(source) == 8.0
+    assert runner._flush_summary_timeout_seconds(
+        "var __raptorFlushSummaryRequired = true;"
+    ) == 5.0
+
+
+def test_runner_waits_for_opt_in_flush_ack_before_detach(
+    tmp_path: Path, monkeypatch,
+):
+    import json
+    import threading
+
+    device = FakeDevice("local")
+    fake = _fake_frida(device)
+    events_path = tmp_path / "events.jsonl"
+    detach_without_summary = []
+    original_detach = FakeSession.detach
+
+    def post_with_delayed_summary(self, message):
+        if message.get("type") == "raptor:flush" and message.get("final") is True:
+            def send_summary():
+                self.fire({
+                    "type": "send",
+                    "payload": {
+                        "category": "raptor",
+                        "event": "flush_summary_complete",
+                    },
+                })
+
+            timer = threading.Timer(0.1, send_summary)
+            timer.daemon = True
+            timer.start()
+
+    def inspect_detach(self):
+        summary_seen = False
+        if events_path.exists():
+            for line in events_path.read_text(encoding="utf-8").splitlines():
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                payload = record.get("payload")
+                if (
+                    isinstance(payload, dict)
+                    and payload.get("category") == "raptor"
+                    and payload.get("event") == "flush_summary_complete"
+                ):
+                    summary_seen = True
+                    break
+
+        detach_without_summary.append(not summary_seen)
+        return original_detach(self)
+
+    monkeypatch.setattr(
+        FakeScript, "post", post_with_delayed_summary, raising=False,
+    )
+    monkeypatch.setattr(FakeSession, "detach", inspect_detach)
+
+    cfg = runner.RunConfig(
+        target=runner.parse_target("1234"),
+        out_dir=tmp_path,
+        script_source=(
+            "var __raptorFlushSummaryRequired = true; "
+            "var __raptorFlushSummarySecondsPerFlush = 2; "
+            "var MAX_SCAN_BYTES = 4; "
+            "var MAX_SCAN_BYTES_PER_FLUSH = 1; "
+            "recv('raptor:flush', function () {});"
+        ),
+        script_origin="template:memory-scan",
+        duration_sec=0.02,
+    )
+
+    result = runner.run(cfg, frida_mod_override=fake)
+
+    assert result.ok is True
+    assert detach_without_summary == [False]
+
+
 class EnvCapturingFakeDevice(FakeDevice):
     """FakeDevice whose spawn accepts the env kwarg (modern bindings)."""
 
