@@ -367,9 +367,14 @@ def run(
         ),
     ] = None,
     disk_limit_pct: Annotated[
-        float,
-        typer.Option("--disk-limit", help="Max filesystem usage %.", show_default=False),
-    ] = 80.0,
+        float | None,
+        typer.Option(
+            "--disk-limit",
+            help="Hard maximum filesystem usage %. By default, abort at or "
+                 "above 80% only when less than 20 GiB remains free.",
+            show_default=False,
+        ),
+    ] = None,
     max_file_bytes: Annotated[
         int,
         typer.Option("--max-file", help="Per-file source cap in bytes.", show_default=False),

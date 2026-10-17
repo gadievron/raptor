@@ -1,14 +1,8 @@
-"""
-Disk-budget guard.
+"""Disk-budget guard for pipeline operations that can grow the filesystem.
 
-On the 712-CVE benchmark the reference project filled its disk to 95% before
-crashing mid-run. The plan's structural invariant #7: "checked at every stage
-entry; abort at 80% disk." That is this module.
-
-Uses ``shutil.disk_usage`` (stdlib) — pre-2026-05-02 used
-``psutil.disk_usage`` which has the same return shape
-(``namedtuple(total, used, free)``) but required an extra runtime
-dependency. Drop-in replacement.
+An explicit percentage is a hard ceiling. The default policy permits usage
+above 80% while at least 20 GiB remains available, avoiding false alarms on
+large filesystems without weakening an operator-supplied limit.
 """
 
 from __future__ import annotations
@@ -21,6 +15,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 DEFAULT_LIMIT_PCT = 80.0
+DEFAULT_MIN_FREE_BYTES = 20 * 1024**3
 
 
 class DiskBudgetExceeded(RuntimeError):
@@ -32,23 +27,49 @@ class DiskStatus:
     path: str
     used_pct: float
     limit_pct: float
+    free_bytes: int = 0
+    min_free_bytes: int | None = DEFAULT_MIN_FREE_BYTES
 
     @property
     def ok(self) -> bool:
-        return self.used_pct < self.limit_pct
+        return self.used_pct < self.limit_pct or (
+            self.min_free_bytes is not None
+            and self.free_bytes >= self.min_free_bytes
+        )
 
 
-def check(path: str | Path = "/", limit_pct: float = DEFAULT_LIMIT_PCT) -> DiskStatus:
+def check(
+    path: str | Path = "/",
+    limit_pct: float | None = None,
+) -> DiskStatus:
     usage = shutil.disk_usage(str(path))
     pct = 100.0 * usage.used / usage.total
-    return DiskStatus(path=str(path), used_pct=pct, limit_pct=limit_pct)
+    effective_limit_pct = DEFAULT_LIMIT_PCT if limit_pct is None else limit_pct
+    return DiskStatus(
+        path=str(path),
+        used_pct=pct,
+        limit_pct=effective_limit_pct,
+        free_bytes=usage.free,
+        min_free_bytes=DEFAULT_MIN_FREE_BYTES if limit_pct is None else None,
+    )
 
 
-def assert_ok(path: str | Path = "/", limit_pct: float = DEFAULT_LIMIT_PCT) -> None:
+def assert_ok(
+    path: str | Path = "/",
+    limit_pct: float | None = None,
+) -> None:
     status = check(path=path, limit_pct=limit_pct)
     if not status.ok:
-        msg = (
+        usage = (
             f"disk usage on {status.path} is {status.used_pct:.1f}% "
-            f"(limit {status.limit_pct:.0f}%); aborting before further work."
+            f"(limit {status.limit_pct:.0f}%)"
         )
+        if status.min_free_bytes is None:
+            msg = f"{usage}; aborting before further work."
+        else:
+            msg = (
+                f"{usage} with {status.free_bytes / 1024**3:.1f} GiB free "
+                f"(need {status.min_free_bytes / 1024**3:.0f} GiB); "
+                "aborting before further work."
+            )
         raise DiskBudgetExceeded(msg)

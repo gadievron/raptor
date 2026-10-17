@@ -103,7 +103,7 @@ class Pipeline:
     agent: AgentLoop = field(default_factory=AgentLoop)
     acquirer_factory: Any = field(default=CascadingRepoAcquirer)
     resolver: CommitResolver = field(default_factory=CommitResolver)
-    disk_limit_pct: float = disk_budget.DEFAULT_LIMIT_PCT
+    disk_limit_pct: float | None = None
     # Per-file source-blob cap for DiffBundle.files[*].before_source /
     # after_source. None = use extractor module default (currently 128 KB).
     max_file_bytes: int | None = None

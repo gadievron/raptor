@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
@@ -134,6 +135,43 @@ def test_run_pass_emits_all_six_artifacts(tmp_path, monkeypatch):
     assert (out / "CVE-2024-99001.clone.patch").exists()
     # API extraction skipped for file:// (non-GitHub) — no .github_api.patch.
     assert not list(out.glob("CVE-2024-99001.*api*.patch"))
+
+
+@pytest.mark.parametrize(("limit_args", "expected_exit_code"), [
+    ([], 0),
+    (["--disk-limit", "80"], 8),
+])
+def test_run_distinguishes_default_policy_from_explicit_limit(
+    tmp_path, monkeypatch, limit_args, expected_exit_code,
+):
+    origin, fix_sha = _make_origin(tmp_path)
+    out = tmp_path / "out"
+    _patch_agent_loop(monkeypatch, AgentOutput(
+        value=PatchTuple(
+            repository_url=f"file://{origin}",
+            fix_commit=CommitSha(fix_sha),
+            introduced=None,
+        ),
+        rationale="stub",
+    ))
+    gib = 1024**3
+    monkeypatch.setattr(
+        "cve_diff.infra.disk_budget.shutil.disk_usage",
+        lambda _path: SimpleNamespace(
+            total=100 * gib,
+            used=80 * gib,
+            free=20 * gib,
+        ),
+    )
+
+    result = CliRunner().invoke(app, [
+        "run", "CVE-2024-99008",
+        "--output-dir", str(out),
+        "--quiet",
+        *limit_args,
+    ])
+
+    assert result.exit_code == expected_exit_code, result.output
 
 
 def test_run_unsupported_exits_4(tmp_path, monkeypatch):

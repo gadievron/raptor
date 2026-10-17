@@ -133,7 +133,7 @@ class _BenchSummary:
     results: list[_CveResult] = field(default_factory=list)
 
 
-def _run_one(cve_id: str, output_dir: str, disk_limit_pct: float = 80.0,
+def _run_one(cve_id: str, output_dir: str, disk_limit_pct: float | None = None,
              max_file_bytes: int = 128 * 1024) -> _CveResult:
     """Worker entry point: :func:`_run_one_inner` plus per-CVE counter
     deltas. api_status counters are per-process globals — a worker
@@ -149,7 +149,7 @@ def _run_one(cve_id: str, output_dir: str, disk_limit_pct: float = 80.0,
     return r
 
 
-def _run_one_inner(cve_id: str, output_dir: str, disk_limit_pct: float = 80.0,
+def _run_one_inner(cve_id: str, output_dir: str, disk_limit_pct: float | None = None,
                    max_file_bytes: int = 128 * 1024) -> _CveResult:
     """Runs pipeline + dumps OSV JSON for a single CVE.
 
@@ -703,10 +703,12 @@ def bench(
         "-w",
         help="Parallel workers (ProcessPoolExecutor). 1 = sequential.",
     ),
-    disk_limit_pct: float = typer.Option(
-        80.0,
+    disk_limit_pct: float | None = typer.Option(
+        None,
         "--disk-limit-pct",
-        help="Abort threshold (filesystem-used %). Pipeline raises if disk exceeds this at any stage entry.",
+        help="Hard maximum filesystem usage %. By default, abort at or above "
+             "80% only when less than 20 GiB remains free.",
+        show_default=False,
     ),
     max_file_bytes: int = typer.Option(
         128 * 1024,
@@ -964,7 +966,7 @@ _TRANSIENT_CLASSES = frozenset({
 def _run_bench_retry_pass(
     summary: _BenchSummary,
     output_dir: str,
-    disk_limit_pct: float,
+    disk_limit_pct: float | None,
     max_file_bytes: int,
     n: int,
     flush_fn,
