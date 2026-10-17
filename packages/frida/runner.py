@@ -457,7 +457,7 @@ def _import_frida():
     except ImportError as e:
         msg = (
             "frida-python not installed. Install via: "
-            "pipx install frida-tools  (or pip install --user frida-tools)"
+            "uv tool install frida-tools"
         )
         raise FridaUnavailable(msg) from e
 

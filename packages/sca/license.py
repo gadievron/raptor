@@ -913,7 +913,7 @@ except ImportError:                                # pragma: no cover
     _DEFUSEDXML_AVAILABLE = False
     logger.warning(
         "sca.license: 'defusedxml' not installed — Maven POM license "
-        "extraction will be skipped. `pip install defusedxml` to "
+        "extraction will be skipped. `uv pip install defusedxml` to"
         "enable.",
     )
 

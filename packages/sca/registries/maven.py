@@ -41,7 +41,7 @@ except ImportError:                                  # pragma: no cover
     _DEFUSEDXML_AVAILABLE = False
     logger.warning(
         "sca.registries.maven: 'defusedxml' not installed — Maven POM "
-        "metadata fetches will be skipped. `pip install defusedxml` "
+        "metadata fetches will be skipped. `uv pip install defusedxml`"
         "to enable.",
     )
 

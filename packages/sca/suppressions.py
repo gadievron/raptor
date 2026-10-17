@@ -69,7 +69,7 @@ except ImportError:                       # pragma: no cover — env-dependent
     _HAS_YAML = False
     logger.warning(
         "sca.suppressions: 'PyYAML' not installed — suppression files "
-        "will be skipped. `pip install PyYAML` to enable."
+        "will be skipped. `uv pip install pyyaml` to enable."
     )
 
 

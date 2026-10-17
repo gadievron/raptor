@@ -23,7 +23,7 @@ plain absence):
   zero errors.
 * no opt-in (RAPTOR_HTTP2 unset): the gate must be INERT — zero
   skips, everything passes. CI runners deliberately do not install
-  h2 (requirements.txt ships the pin commented out); this leg is the
+  h2 (an optional dependency, not installed by default); this leg is the
   proof the gate costs them no relay coverage.
 
 Subset, not the whole directory: the full suite is ~2-4.5 minutes

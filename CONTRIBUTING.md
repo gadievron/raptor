@@ -14,7 +14,7 @@ package map, rule authoring, the sandbox model — see
 git clone https://github.com/gadievron/raptor.git
 cd raptor
 uv sync --locked                      # installs all deps from uv.lock
-pip install semgrep                    # required for /scan
+uv tool install semgrep                # required for /scan
 ```
 
 Run the test suite:

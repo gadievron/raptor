@@ -92,7 +92,7 @@ class GhidraBridge:
         if not pyghidra_available():
             raise GhidraSessionError(
                 "pyghidra not installed — "
-                "install via: pip install pyghidra"
+                "install via: uv pip install pyghidra"
             )
 
     def _get_session(self) -> GhidraSession:

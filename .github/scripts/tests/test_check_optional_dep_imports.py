@@ -74,7 +74,7 @@ def test_module_list_derivation(det, tmp_path):
     assert "bs4" not in mods
     # Transitively guaranteed on bare CI (instructor -> openai).
     assert "openai" not in mods
-    # Actively pinned in requirements.txt itself.
+    # Actively pinned in pyproject.toml.
     assert "requests" not in mods
 
 

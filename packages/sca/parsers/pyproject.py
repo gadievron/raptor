@@ -49,7 +49,7 @@ else:                                     # pragma: no cover — env-dependent
         logger.warning(
             "sca.parsers.pyproject: 'tomli' not installed (required on "
             "Python <3.11) — pyproject.toml files will be skipped. "
-            "`pip install tomli` to enable."
+            "`uv pip install tomli` to enable."
         )
 
 try:
@@ -62,7 +62,7 @@ except ImportError:                       # pragma: no cover — env-dependent
     logger.warning(
         "sca.parsers.pyproject: 'packaging' not installed — PEP 621/PDM "
         "string-spec rows from pyproject.toml will be skipped. Poetry "
-        "tool tables remain parsed. `pip install packaging` to enable."
+        "tool tables remain parsed. `uv pip install packaging` to enable."
     )
 
 ECOSYSTEM = "PyPI"

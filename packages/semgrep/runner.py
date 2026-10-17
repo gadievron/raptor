@@ -429,7 +429,7 @@ def run_rule(
         logger.warning(
             "semgrep %s < %s: --x-ignore-semgrepignore-files unavailable "
             "— .semgrepignore files in the scanned repo can hide findings "
-            "(upgrade: pip install --upgrade semgrep)",
+            "(upgrade: uv tool install --upgrade semgrep)",
             v, floor,
         )
 

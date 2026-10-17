@@ -65,7 +65,7 @@ except ImportError:                       # pragma: no cover — env-dependent
     _AVAILABLE = False
     logger.warning(
         "sca.parsers.pnpm_lock: 'PyYAML' not installed — pnpm-lock.yaml "
-        "files will be skipped. `pip install PyYAML` to enable."
+        "files will be skipped. `uv pip install pyyaml` to enable."
     )
 
 

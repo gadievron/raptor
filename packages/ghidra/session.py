@@ -4,7 +4,7 @@ Embeds the Ghidra JVM in-process (via JPype) for direct API access.
 Replaces the analyzeHeadless subprocess approach — faster startup,
 persistent project handles, and on-demand per-function decompilation.
 
-Requires ``pyghidra`` (bundled with Ghidra 12+, or ``pip install pyghidra``).
+Requires ``pyghidra`` (bundled with Ghidra 12+, or ``uv pip install pyghidra``).
 """
 
 from __future__ import annotations

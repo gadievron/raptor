@@ -79,7 +79,7 @@ def _get_client(timeout: float = 0):
         sys.stderr.write(
             "SAGE is not installed.\n"
             "  Run: libexec/raptor-sage-setup\n"
-            "  Or manually: pip install sage-agent-sdk httpx\n"
+            "  Or manually: uv pip install sage-agent-sdk httpx\n"
         )
         return None
     # The SDK's httpx client honours proxy env but does not special-case

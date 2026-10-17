@@ -710,7 +710,7 @@ def _detect_python_pkg(pkg_dir: Path) -> TargetInfo:
         recommended_fuzzer="atheris" if has_atheris else None,
     )
     if not has_atheris:
-        info.blockers.append("atheris not installed. Install with: pip install atheris")
+        info.blockers.append("atheris not installed. Install with: uv pip install atheris")
     info.hints.append(
         "Atheris fuzzes Python code (and Python C extensions) using libFuzzer. "
         "Pass --py-harness <file> for an operator-written TestOneInput "

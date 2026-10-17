@@ -54,7 +54,7 @@ except ImportError:                       # pragma: no cover — env-dependent
     _AVAILABLE = False
     logger.warning(
         "sca.parsers.requirements: 'packaging' not installed — requirements*.txt "
-        "files will be skipped. `pip install packaging` to enable Python SCA."
+        "files will be skipped. `uv pip install packaging` to enable Python SCA."
     )
 
 ECOSYSTEM = "PyPI"

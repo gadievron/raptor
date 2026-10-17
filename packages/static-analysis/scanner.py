@@ -1058,7 +1058,7 @@ def run_single_semgrep(
         logger.warning(
             "semgrep %s < %s: --x-ignore-semgrepignore-files unavailable "
             "— .semgrepignore files in the scanned repo can hide findings "
-            "(upgrade: pip install --upgrade semgrep)",
+            "(upgrade: uv tool install --upgrade semgrep)",
             v, floor,
         )
     cmd = semgrep_pkg.build_cmd(

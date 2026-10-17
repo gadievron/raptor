@@ -19,7 +19,7 @@ the suite fails at import/setup on 3.11 and earlier.
 
 | Tool | Required | Purpose | Install |
 |------|----------|---------|---------|
-| Semgrep | Yes | Static analysis scanning | `pip install semgrep` |
+| Semgrep | Yes | Static analysis scanning | `uv tool install semgrep` |
 | Coccinelle (spatch) | No | Semantic patch analysis | `apt install coccinelle` (>=1.3) |
 | CodeQL | No | Deep dataflow analysis | [codeql-cli-binaries](https://github.com/github/codeql-cli-binaries) |
 | Joern | No | CPG dataflow queries (`/audit`, tiered taint sweeps) | [joern.io](https://joern.io) — **v4.0.458 or newer** (first 2026 release; needs a JVM) |
@@ -28,7 +28,7 @@ the suite fails at import/setup on 3.11 and earlier.
 | LLDB | No | Crash analysis (macOS) | Pre-installed with Xcode CLT |
 | rr | No | Deterministic record-replay debugging | `apt install rr` (Linux x86_64 only) |
 | radare2 (r2) | No | Binary disassembly, call-graph extraction | [radare2.org](https://rada.re/n/) |
-| Frida | No | Dynamic instrumentation | `pip install frida-tools` |
+| Frida | No | Dynamic instrumentation | `uv tool install frida-tools` |
 | nm, objdump, readelf | No | Binary analysis (binutils) | Pre-installed on most systems |
 | gcov | No | Code coverage (part of GCC) | Bundled with `gcc` |
 | AddressSanitizer | No | Memory error detection | Built into gcc>=4.8 and clang>=3.1 |
@@ -37,8 +37,7 @@ the suite fails at import/setup on 3.11 and earlier.
 
 ## Python Packages
 
-Pinned versions are in `requirements.txt`. Install with
-`pip install -r requirements.txt`.
+Install with `uv sync --locked`.
 
 **Required (core):**
 
@@ -65,13 +64,13 @@ Pinned versions are in `requirements.txt`. Install with
 | botocore | Apache 2.0 | AWS Bedrock SigV4 signing (parent-only, not needed for bearer-token auth) |
 | beautifulsoup4 | MIT | HTML parsing (web scanning) |
 | orjson | Apache 2.0 / MIT | Faster JSON parse and serialise (transparent fallback to stdlib `json`) |
-| pwntools | MIT | Binary exploit analysis (ELF parsing, gadget search) — used if present, not in requirements.txt |
+| pwntools | MIT | Binary exploit analysis (ELF parsing, gadget search) — used if present, not in pyproject.toml |
 | r2pipe | LGPL v3 | Python bridge for radare2 (binary disassembly, call-graph extraction, `--binary-edges`) |
 | pyghidra | Apache 2.0 | Ghidra bridge — in-process analysis via pyghidra's sandboxed JVM worker |
 | frida | wxWindows | Dynamic instrumentation (Frida validation bridge, coverage bridge) |
 | jsonschema | MIT | SARIF full-schema validation and orchestrated-report contract checking |
-| atheris | Apache 2.0 | Coverage-guided Python fuzzing engine — used if present, not in requirements.txt |
-| playwright | Apache 2.0 | Browser automation for web scanning (commented in requirements.txt) |
+| atheris | Apache 2.0 | Coverage-guided Python fuzzing engine — used if present, not in pyproject.toml |
+| playwright | Apache 2.0 | Browser automation for web scanning (`[web]` optional extra) |
 | z3-solver | MIT | SMT-based constraint analysis (one-gadget feasibility, path validation) |
 | angr | BSD | Binary symbolic execution (overflow witnesses, path constraints) — Python >=3.12; conflicts with standalone z3 pin |
 | tree-sitter + grammars | MIT | Rich inventory metadata (decorators, typed params); audit mechanical witnesses (C and Go parsing) — absent grammars degrade to no-witness, never to a wrong verdict |

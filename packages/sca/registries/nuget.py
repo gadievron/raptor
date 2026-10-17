@@ -41,7 +41,7 @@ except ImportError:                                  # pragma: no cover
     _DEFUSEDXML_AVAILABLE = False
     logger.warning(
         "sca.registries.nuget: 'defusedxml' not installed — NuGet "
-        "license / metadata fetches will be skipped. `pip install "
+        "license / metadata fetches will be skipped. `uv pip install "
         "defusedxml` to enable.",
     )
 

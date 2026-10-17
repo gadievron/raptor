@@ -56,7 +56,7 @@ else:                                     # pragma: no cover — env-dependent
         logger.warning(
             "sca.parsers.pipfile: 'tomli' not installed (required on "
             "Python <3.11) — Pipfile manifests will be skipped. "
-            "`pip install tomli` to enable."
+            "`uv pip install tomli` to enable."
         )
 
 # section name → scope value (mirrors pipfile_lock's default/develop).

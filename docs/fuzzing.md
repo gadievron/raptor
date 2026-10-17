@@ -113,7 +113,7 @@ plus the Python runtime, write scoping to the run directory, resource
 rlimits, and a scrubbed (never ambient) environment.
 
 atheris is an optional dependency.  When it is not importable the detector
-still reports the target with an install hint (`pip install atheris`) and
+still reports the target with an install hint (`uv pip install atheris`) and
 the plan blocks instead of running.
 
 ### cargo-fuzz (Rust, alpha)

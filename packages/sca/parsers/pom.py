@@ -49,7 +49,7 @@ except ImportError:                       # pragma: no cover — env-dependent
     _AVAILABLE = False
     logger.warning(
         "sca.parsers.pom: 'defusedxml' not installed — pom.xml files will "
-        "be skipped. `pip install defusedxml` to enable Maven SCA coverage."
+        "be skipped. `uv pip install defusedxml` to enable Maven SCA coverage."
     )
 
 ECOSYSTEM = "Maven"

@@ -54,7 +54,7 @@ except ImportError:                       # pragma: no cover — env-dependent
     logger.warning(
         "sca.parsers.yarn_lock: 'PyYAML' not installed — Yarn Berry "
         "lockfiles will be skipped (Yarn classic still works). "
-        "`pip install PyYAML` to enable."
+        "`uv pip install pyyaml` to enable."
     )
 
 

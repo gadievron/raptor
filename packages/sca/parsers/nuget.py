@@ -77,7 +77,7 @@ except ImportError:                         # pragma: no cover — env-dependent
     _AVAILABLE = False
     logger.warning(
         "sca.parsers.nuget: 'defusedxml' not installed — .csproj / "
-        ".fsproj / .vbproj files will be skipped. `pip install "
+        ".fsproj / .vbproj files will be skipped. `uv pip install "
         "defusedxml` to enable NuGet SCA coverage.",
     )
 

@@ -59,8 +59,8 @@ the code.
 ## Prerequisites
 
 - **Claude Code** with an active subscription (Max, Pro, Team, or Enterprise) or an Anthropic API key. This is the orchestration layer for the interactive `raptor` shell -- optional if you only need the standalone CLIs, see [Running fully standalone](#running-fully-standalone-no-claude-code) below.
-- **Python 3.12+** and **Node.js 18+**.
-- **Semgrep** (`pip install semgrep`) for static analysis. CodeQL is optional but recommended.
+- **[uv](https://docs.astral.sh/uv/)** for Python dependency management, **Python 3.12+**, and **Node.js 18+**.
+- **Semgrep** (`uv tool install semgrep`) for static analysis. CodeQL is optional but recommended.
 
 For the analysis dispatch layer (the LLM that analyses individual findings), Claude Code itself handles everything by default -- no extra API keys needed. If you want multi-model analysis (e.g. Claude + GPT + Gemini) or a fully local setup, you will need to configure the other provider(s). See [Using a different LLM](#using-a-different-llm) below.
 
@@ -77,14 +77,11 @@ cd raptor
 uv sync --locked
 source .venv/bin/activate
 
-# Compatibility path during the uv migration
-# pip install -r requirements.txt
-
 # Install Claude Code (if you don't already have it)
 npm install -g @anthropic-ai/claude-code
 
 # Install Semgrep (required for scanning)
-pip install semgrep
+uv tool install semgrep
 
 # Add the launcher to your PATH -- put this in your shell profile to make it
 # permanent. Append rather than prepend, so system directories stay ahead of
@@ -311,7 +308,7 @@ Useful subcommands include `fix`, `check`, `upgrade`, `diff`, `verify`, `health`
 
 ## Z3 SMT integration
 
-RAPTOR has a two-layer Z3 integration (`pip install z3-solver`). It is optional. Everything works without it, but the results are better with it.
+RAPTOR has a two-layer Z3 integration (`uv pip install z3-solver`). It is optional. Everything works without it, but the results are better with it.
 
 **Dataflow pre-screening (CodeQL)**
 
@@ -321,7 +318,7 @@ When CodeQL produces a path result, the path constraints are checked for satisfi
 
 During binary exploit feasibility assessment, Z3 checks whether a one-gadget's register and memory constraints are satisfiable against the concrete crash state. Gadgets are ranked by actual reachability rather than heuristics, so you spend time on gadgets that can actually work.
 
-Z3 is pre-installed in the devcontainer. For manual installs: `pip install z3-solver`.
+Z3 is pre-installed in the devcontainer. For manual installs: `uv pip install z3-solver`.
 
 ---
 
@@ -630,9 +627,8 @@ See LICENSE for the full text. Review the licences for all dependencies before c
 
 ## Python Dependencies
 
-RAPTOR uses `pyproject.toml` and `uv.lock` as the source of truth for
-Python dependencies. The checked-in `requirements.txt` remains as a
-compatibility export for users who prefer `pip install`.
+Python dependencies are managed with [uv](https://docs.astral.sh/uv/).
+Install with `uv sync --locked` and activate with `source .venv/bin/activate`.
 
 Useful installs:
 
@@ -643,6 +639,3 @@ uv sync --locked --extra web                # /web scanner support
 uv sync --locked --extra "web smt llm sage" # optional stacks
 source .venv/bin/activate                   # use the installed environment
 ```
-
-Keeping `/web`, Z3, SAGE and cloud provider SDKs as optional extras avoids
-making the default RAPTOR install heavier and more brittle than it needs to be.

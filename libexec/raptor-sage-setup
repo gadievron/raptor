@@ -317,7 +317,7 @@ check_port() {
 check_sdk() {
     python3 -c "import sage_sdk" 2>/dev/null || {
         echo "raptor-sage-setup: sage-agent-sdk not importable by python3." >&2
-        echo "  Install first: pip install sage-agent-sdk httpx" >&2
+        echo "  Install first: uv pip install sage-agent-sdk httpx" >&2
         exit 3
     }
 }

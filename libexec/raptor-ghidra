@@ -946,7 +946,7 @@ def _report_import_error(e: ImportError) -> int:
     if "pyghidra" in msg.lower() or "jpype" in msg.lower():
         print(
             "error: pyghidra is not installed — install via: "
-            "pip install pyghidra (or use Ghidra 12+ which bundles it)",
+            "uv pip install pyghidra (or use Ghidra 12+ which bundles it)",
             file=sys.stderr,
         )
     else:

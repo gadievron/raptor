@@ -75,7 +75,7 @@ logger = get_logger()
 
 ATHERIS_INSTALL_HINT = (
     "atheris is not importable by this Python interpreter. "
-    "Install it with: pip install atheris"
+    "Install it with: uv pip install atheris"
 )
 
 # Bounds on the exception excerpt persisted into crash records and

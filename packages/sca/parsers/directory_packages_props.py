@@ -88,7 +88,7 @@ except ImportError:                                 # pragma: no cover
     logger.warning(
         "sca.parsers.directory_packages_props: 'defusedxml' not "
         "installed — Directory.Packages.props files will be skipped. "
-        "`pip install defusedxml` to enable NuGet CPM support.",
+        "`uv pip install defusedxml` to enable NuGet CPM support.",
     )
 
 

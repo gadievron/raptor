@@ -116,7 +116,7 @@ class GhidraServer:
             raise GhidraServerError(
                 "pyghidra is not installed — the persistent server "
                 "runs pyghidra in a sandboxed child; install via: "
-                "pip install pyghidra"
+                "uv pip install pyghidra"
             )
         self.gpr_path = Path(gpr_path)
         self.program_name = program_name

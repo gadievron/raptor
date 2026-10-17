@@ -13,7 +13,7 @@ analysis uniformly.
 
 Capability requirements:
   - radare2 in PATH (binary)
-  - r2pipe python module (pip install r2pipe)
+  - r2pipe python module (uv pip install r2pipe)
   - r2ghidra plugin for high-quality decompilation (recommended).
     Falls back to built-in pdc which is rougher but always present.
 """
@@ -622,7 +622,7 @@ class BinaryUnderstand:
             msg = (
                 "radare2 not available. Install with: "
                 "'brew install radare2' (macOS) or 'apt install radare2' (Linux). "
-                "Then: 'pip install r2pipe'."
+                "Then: 'uv pip install r2pipe'."
             )
             raise RuntimeError(msg)
 

@@ -355,4 +355,4 @@ cryptography==46.0.3
 
 Set `ANTHROPIC_API_KEY` (or equivalent) for LLM payload generation. Without it, Phase 6 uses static fallback payloads.
 
-`pip install instructor` gives more reliable structured output from the LLM. Not required but worth having.
+`uv pip install instructor` gives more reliable structured output from the LLM. Not required but worth having.

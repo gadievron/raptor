@@ -35,7 +35,7 @@ an Ollama container providing embeddings.
 ### 1. Install the SDK
 
 ```bash
-pip install sage-agent-sdk httpx
+uv pip install sage-agent-sdk httpx
 ```
 
 ### 2. Run the setup script

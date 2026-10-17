@@ -24,9 +24,7 @@ See also: [commands](commands.md), [binary analysis](binary-analysis.md),
 ### Host Install
 
 ```bash
-pipx install frida-tools         # recommended (PEP 668-safe)
-# or, in a virtualenv:
-pip install frida-tools
+uv tool install frida-tools
 ```
 
 Verify:

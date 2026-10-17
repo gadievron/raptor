@@ -547,7 +547,7 @@ constraints not visible statically.
 
 ### SMT Integration
 
-Optional Z3/SMT integration (requires `pip install z3-solver`) provides
+Optional Z3/SMT integration (requires `uv pip install z3-solver`) provides
 two capabilities:
 
 1. **One-gadget feasibility** (`packages/exploit_feasibility/smt_onegadget.py`):

@@ -185,41 +185,6 @@ def test_workflow_pytest_installs_use_the_single_source_pin() -> None:
         )
 
 
-def test_grammar_wheel_pins_match_requirements_comment_block() -> None:
-    """The grammars extra in pyproject.toml is the source of truth.
-    requirements.txt carries a commented tree-sitter block for users
-    who pip-install — it must stay in sync."""
-    import re
-    try:
-        import tomllib
-    except ModuleNotFoundError:
-        import tomli as tomllib  # type: ignore[no-redef]
-
-    pyproject = tomllib.loads(_read("pyproject.toml"))
-    grammar_pin = re.compile(r"^(tree-sitter[A-Za-z0-9-]*)==(\S+)$")
-    commented_pin = re.compile(r"^#\s*(tree-sitter[A-Za-z0-9-]*)==(\S+)$")
-    grammars = {
-        m.group(1): m.group(2)
-        for dep in pyproject["project"]["optional-dependencies"]["grammars"]
-        if (m := grammar_pin.match(dep.strip()))
-    }
-    commented = {
-        m.group(1): m.group(2)
-        for line in _read("requirements.txt").splitlines()
-        if (m := commented_pin.match(line.strip()))
-    }
-    assert grammars, "grammar pin extraction from pyproject.toml went vacuous"
-    assert commented, "requirements.txt commented-block extraction went vacuous"
-    assert grammars == commented, (
-        "pyproject.toml grammars extra and requirements.txt's commented "
-        "tree-sitter block drifted — update both together:\n"
-        f"only in pyproject.toml: {sorted(set(grammars) - set(commented))}\n"
-        f"only in requirements comment: {sorted(set(commented) - set(grammars))}\n"
-        f"version mismatches: "
-        f"{sorted(k for k in grammars.keys() & commented.keys() if grammars[k] != commented[k])}"
-    )
-
-
 def test_readme_links_to_ci_controls_doc() -> None:
     readme = _read("README.md")
     assert "## How RAPTOR checks itself" in readme
