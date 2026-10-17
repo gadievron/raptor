@@ -253,10 +253,39 @@ class TestToolFailureFiltering(unittest.TestCase):
                 )
 
 
-class TestStopHook(unittest.TestCase):
-    """Stop mode: complete or fail single-call runs with dead tool_pid."""
+    def test_posttooluse_event_rejected_by_failure_filter(self):
+        """PostToolUse (not PostToolUseFailure) must not stamp a marker."""
+        payload = json.dumps({
+            "tool_name": "Bash",
+            "hook_event_name": "PostToolUse",
+            "tool_input": {"command": "libexec/raptor-run-lifecycle start scan"},
+            "tool_response": "Process exited with code 1",
+        })
+        result = _hook_mod._tool_failure_command(io.StringIO(payload))
+        self.assertIsNone(result)
 
-    def test_completes_when_no_marker(self):
+    def test_posttoolusefailure_event_accepted(self):
+        """PostToolUseFailure (explicit) is still accepted."""
+        payload = json.dumps({
+            "tool_name": "Bash",
+            "hook_event_name": "PostToolUseFailure",
+            "tool_input": {"command": "libexec/raptor-run-lifecycle start scan"},
+        })
+        result = _hook_mod._tool_failure_command(io.StringIO(payload))
+        self.assertIsNotNone(result)
+
+    def test_legacy_no_event_name_accepted(self):
+        """Legacy payloads without hook_event_name are still accepted."""
+        result = _hook_mod._tool_failure_command(
+            io.StringIO(RAPTOR_BASH_FAILURE))
+        self.assertIsNotNone(result)
+
+
+class TestStopHook(unittest.TestCase):
+    """Stop mode: fail single-call runs with dead tool_pid + failure marker."""
+
+    def test_unknown_stays_running_without_marker(self):
+        """Dead worker + no failure marker = unknown, not completed."""
         with TemporaryDirectory() as tmp:
             out = Path(tmp) / "out"
             run = _make_running_run(out, "scan-001", "scan", tool_pid=1)
@@ -266,7 +295,7 @@ class TestStopHook(unittest.TestCase):
                  patch("core.run.metadata._pid_alive", return_value=False):
                 sys.argv = ["hook", "stop"]
                 _hook_mod.main()
-            self.assertEqual(_status(run), STATUS_COMPLETED)
+            self.assertEqual(_status(run), STATUS_RUNNING)
 
     def test_fails_when_marker_present(self):
         with TemporaryDirectory() as tmp:
@@ -296,25 +325,18 @@ class TestStopHook(unittest.TestCase):
                 _hook_mod.main()
             self.assertFalse((run / FAILURE_MARKER).exists())
 
-    def test_cleans_up_marker_on_complete(self):
-        """Marker from a previous intermediate failure is cleaned on complete."""
+    def test_no_marker_no_complete(self):
+        """No failure marker + dead worker → stays running (unknown)."""
         with TemporaryDirectory() as tmp:
             out = Path(tmp) / "out"
             run = _make_running_run(out, "agentic-001", "agentic", tool_pid=1)
-            # Stale marker that shouldn't persist
-            (run / FAILURE_MARKER).write_text("")
-            # Remove marker to simulate LLM recovery — but actually we want
-            # to test that Stop cleans it up even on the fail path.
-            # Test the complete path instead: no marker.
-            (run / FAILURE_MARKER).unlink()
             with patch.object(_hook_mod, "REPO_ROOT", Path(tmp)), \
                  patch("core.run.metadata._get_session_pid",
                        return_value=SESSION_PID), \
                  patch("core.run.metadata._pid_alive", return_value=False):
                 sys.argv = ["hook", "stop"]
                 _hook_mod.main()
-            self.assertEqual(_status(run), STATUS_COMPLETED)
-            self.assertFalse((run / FAILURE_MARKER).exists())
+            self.assertEqual(_status(run), STATUS_RUNNING)
 
     def test_skips_multi_turn_validate(self):
         with TemporaryDirectory() as tmp:
@@ -383,8 +405,8 @@ class TestStopHook(unittest.TestCase):
                 _hook_mod.main()
             self.assertEqual(_status(run), STATUS_COMPLETED)
 
-    def test_handles_no_tool_pid(self):
-        """Runs without tool_pid (pre-change) are acted on if session matches."""
+    def test_handles_no_tool_pid_stays_running(self):
+        """Runs without tool_pid and no failure marker stay running."""
         with TemporaryDirectory() as tmp:
             out = Path(tmp) / "out"
             d = out / "scan-001"
@@ -402,7 +424,7 @@ class TestStopHook(unittest.TestCase):
                        return_value=SESSION_PID):
                 sys.argv = ["hook", "stop"]
                 _hook_mod.main()
-            self.assertEqual(_status(d), STATUS_COMPLETED)
+            self.assertEqual(_status(d), STATUS_RUNNING)
 
 
 class TestSessionEndHook(unittest.TestCase):
@@ -519,17 +541,16 @@ class TestProjectDirScan(unittest.TestCase):
     """Hook scans both .active project dir and out/."""
 
     def test_finalizes_project_run_via_ledger(self):
-        """Project runs live at out/projects/<name>/<run> — TWO levels
-        below the out root, unreachable by the legacy one-level walk
-        (the pre-fix `.active` symlink discovery read a path nothing
-        creates, so orphaned project runs were never finalized). The
-        session run ledger names the run dir exactly."""
+        """Project runs with a failure marker are finalized via the
+        session run ledger (project runs live TWO levels below the out
+        root, unreachable by the legacy one-level walk)."""
         import os
         from core.project import sessions
         with TemporaryDirectory() as tmp:
             repo = Path(tmp)
             proj = repo / "out" / "projects" / "myapp"
             run = _make_running_run(proj, "scan-001", "scan", tool_pid=1)
+            (run / FAILURE_MARKER).write_text("")
             sessions_dir = repo / "sessions.d"
             with patch.object(_hook_mod, "REPO_ROOT", repo), \
                  patch.object(sessions, "SESSIONS_DIR", sessions_dir), \
@@ -550,9 +571,10 @@ class TestProjectDirScan(unittest.TestCase):
                 sessions.ledger_record_start(run, pid=SESSION_PID)
                 sys.argv = ["hook", "stop"]
                 _hook_mod.main()
-            self.assertEqual(_status(run), STATUS_COMPLETED)
+            self.assertEqual(_status(run), STATUS_FAILED)
 
     def test_scans_out_dir(self):
+        """Out-dir scan finds runs; without failure marker, stays running."""
         with TemporaryDirectory() as tmp:
             repo = Path(tmp)
             out = repo / "out"
@@ -563,7 +585,7 @@ class TestProjectDirScan(unittest.TestCase):
                  patch("core.run.metadata._pid_alive", return_value=False):
                 sys.argv = ["hook", "stop"]
                 _hook_mod.main()
-            self.assertEqual(_status(run), STATUS_COMPLETED)
+            self.assertEqual(_status(run), STATUS_RUNNING)
 
     def test_skips_hidden_dirs(self):
         with TemporaryDirectory() as tmp:

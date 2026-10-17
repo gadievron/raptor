@@ -57,6 +57,7 @@ _hook_mod = importlib.util.module_from_spec(_spec)
 _hook_mod.__file__ = str(HOOK_SCRIPT)
 _spec.loader.exec_module(_hook_mod)
 
+FAILURE_MARKER = _hook_mod.FAILURE_MARKER
 SESSION_PID = 99999
 
 #: An aged start timestamp: past the Stop path's freshness floor, so
@@ -146,15 +147,14 @@ subprocess.run(
 
 
 class TestForcedDeadWorkerWindow(unittest.TestCase):
-    """Deterministically force the Stop path's misjudged-liveness
-    window and pin the precedence outcome in both orderings.
+    """Deterministically force the Stop path's dead-worker window
+    and pin the precedence outcome in both orderings.
 
-    This is the flake's mechanism, forced: the hook session-matches a
-    running run whose recorded worker reads dead and stamps a verdict
-    while the owner is still in flight; the owner's real finaliser
-    lands afterwards. Pre-fix, the hook's unmarked ``completed`` was
-    final and the owner's ``fail_run`` was refused — a failed run read
-    Completed forever.
+    Stop only acts when a failure marker is present; without one, the
+    run is UNKNOWN (dead worker could be OOM/kill) and stays running
+    for SessionEnd or the next start_run sweep. With a marker, Stop
+    stamps ``failed`` with ``hook_finalize`` — a heuristic that the
+    owner's real finaliser can override via the recovery clause.
     """
 
     def _start_run_with_dead_worker(self, tmp: Path) -> Path:
@@ -198,24 +198,39 @@ class TestForcedDeadWorkerWindow(unittest.TestCase):
         save_json(run / RUN_METADATA_FILE, meta)
         return run
 
-    def test_hook_first_owner_fail_still_wins(self):
-        # The observed-failure ordering: hook stamps first, the
-        # owner's real fail_run lands second and must supersede.
+    def test_stop_skips_without_marker(self):
+        # No failure marker → Stop leaves the run in RUNNING.
+        # The owner's real fail_run then works on STATUS_RUNNING
+        # directly — no precedence issue.
         with TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             run = self._start_run_with_dead_worker(tmp)
 
             _run_stop_hook(tmp)
-            self.assertEqual(_status(run), STATUS_COMPLETED)
-            # The heuristic verdict is MARKED — this is what makes it
-            # recoverable at all.
-            self.assertIs(_extra(run).get("hook_finalize"), True)
+            self.assertEqual(_status(run), STATUS_RUNNING)
 
             fail_run(run, "exit code 3")
             self.assertEqual(_status(run), STATUS_FAILED)
             extra = _extra(run)
             self.assertEqual(extra.get("error"), "exit code 3")
             self.assertNotIn("hook_finalize", extra)
+
+    def test_hook_stamps_failed_with_marker_owner_complete_supersedes(self):
+        # With a failure marker: Stop stamps failed (hook_finalize),
+        # but the run was actually live and completes — the recovery
+        # clause lets the real complete_run supersede.
+        with TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            run = self._start_run_with_dead_worker(tmp)
+            (run / FAILURE_MARKER).write_text("")
+
+            _run_stop_hook(tmp)
+            self.assertEqual(_status(run), STATUS_FAILED)
+            self.assertIs(_extra(run).get("hook_finalize"), True)
+
+            complete_run(run)
+            self.assertEqual(_status(run), STATUS_COMPLETED)
+            self.assertNotIn("hook_finalize", _extra(run))
 
     def test_owner_fail_first_hook_noops(self):
         # Reverse ordering: the real verdict landed first; the hook
@@ -233,25 +248,24 @@ class TestForcedDeadWorkerWindow(unittest.TestCase):
             self.assertEqual(extra.get("error"), "exit code 3")
             self.assertNotIn("hook_finalize", extra)
 
-    def test_hook_first_owner_complete_consumes_marker(self):
-        # The benign-window variant: the hook guessed COMPLETED and the
-        # owner then really completes. The marker must be consumed so a
-        # later stray fail_run cannot use the recovery clause to flip a
-        # genuinely completed run.
+    def test_hook_fails_with_marker_owner_fail_supersedes(self):
+        # With a failure marker: Stop stamps failed (hook_finalize),
+        # then the owner's real fail_run supersedes with a different
+        # error — the recovery clause lets the real verdict win.
         with TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             run = self._start_run_with_dead_worker(tmp)
+            (run / FAILURE_MARKER).write_text("")
 
             _run_stop_hook(tmp)
-            self.assertEqual(_status(run), STATUS_COMPLETED)
+            self.assertEqual(_status(run), STATUS_FAILED)
             self.assertIs(_extra(run).get("hook_finalize"), True)
 
-            complete_run(run)
-            self.assertEqual(_status(run), STATUS_COMPLETED)
-            self.assertNotIn("hook_finalize", _extra(run))
-
-            fail_run(run, "stray late failure")
-            self.assertEqual(_status(run), STATUS_COMPLETED)
+            fail_run(run, "exit code 3")
+            self.assertEqual(_status(run), STATUS_FAILED)
+            extra = _extra(run)
+            self.assertEqual(extra.get("error"), "exit code 3")
+            self.assertNotIn("hook_finalize", extra)
 
 
 class TestPrecedenceMatrix(unittest.TestCase):
@@ -396,23 +410,34 @@ class TestStopFreshnessFloor(unittest.TestCase):
             self._stop(tmp)
             self.assertEqual(_status(run), STATUS_RUNNING)
 
-    def test_aged_run_is_finalized_with_marker(self):
+    def test_aged_run_without_marker_stays_running(self):
         with TemporaryDirectory() as tmp:
             run = _make_running_run(Path(tmp) / "out", "scan-001",
                                     tool_pid=1)
             self._stop(tmp)
-            self.assertEqual(_status(run), STATUS_COMPLETED)
+            self.assertEqual(_status(run), STATUS_RUNNING)
+
+    def test_aged_run_is_finalized_with_marker(self):
+        with TemporaryDirectory() as tmp:
+            run = _make_running_run(Path(tmp) / "out", "scan-001",
+                                    tool_pid=1)
+            (run / FAILURE_MARKER).write_text("")
+            self._stop(tmp)
+            self.assertEqual(_status(run), STATUS_FAILED)
             self.assertIs(_extra(run).get("hook_finalize"), True)
 
-    def test_unparseable_timestamp_does_not_park_the_run(self):
+    def test_unparseable_timestamp_with_marker_is_finalized(self):
         # Fail direction: a corrupt/missing/future stamp is NOT young —
-        # the hook may act, so nothing stays running forever.
+        # the hook passes the freshness gate. With a failure marker,
+        # Stop finalizes; without one, SessionEnd or start_run sweep
+        # catches the run.
         for ts in ("not-a-timestamp", None,
                    (datetime.now(timezone.utc)
                     + timedelta(hours=1)).isoformat()):
             with TemporaryDirectory() as tmp:
                 run = _make_running_run(Path(tmp) / "out", "scan-001",
                                         tool_pid=1)
+                (run / FAILURE_MARKER).write_text("")
                 meta = _meta(run)
                 if ts is None:
                     meta.pop("timestamp", None)
@@ -421,8 +446,8 @@ class TestStopFreshnessFloor(unittest.TestCase):
                 save_json(run / RUN_METADATA_FILE, meta)
                 self._stop(tmp)
                 self.assertEqual(
-                    _status(run), STATUS_COMPLETED,
-                    f"timestamp {ts!r} parked the run in running")
+                    _status(run), STATUS_FAILED,
+                    f"timestamp {ts!r} was not finalized despite marker")
 
     def test_too_young_to_judge_boundaries(self):
         fn = _hook_mod._too_young_to_judge

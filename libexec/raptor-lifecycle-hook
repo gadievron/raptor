@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # ruff: noqa: RUF100, I001
 # (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
-"""Lifecycle hooks: auto-complete/fail runs left in 'running' state.
+"""Lifecycle hooks: fail/skip runs left in 'running' state.
 
 Called by Claude Code hooks, NOT by the LLM.
 
 Modes:
-  stop          — complete orphaned single-call runs (tool_pid dead)
+  stop          — fail orphaned single-call runs (dead worker + marker)
   session-end   — fail any still-running runs (session is over)
   tool-failure  — write failure marker (PostToolUseFailure signal)
 
@@ -15,7 +15,7 @@ brackets the run.  Multi-turn commands (validate, understand) are
 LLM-managed; Stop skips them, SessionEnd catches orphans.
 
 PostToolUseFailure writes a soft marker — doesn't change status.
-Stop checks the marker: present → fail, absent → complete.
+Stop checks the marker: present → fail, absent → skip (unknown).
 The LLM's explicit complete/fail always takes priority (status is
 already not-running, so hooks skip).
 """
@@ -111,6 +111,8 @@ def _tool_failure_command(stream) -> str | None:
     except (OSError, ValueError):
         return None
     if not isinstance(payload, dict) or payload.get("tool_name") != "Bash":
+        return None
+    if payload.get("hook_event_name") not in (None, "PostToolUseFailure"):
         return None
     tool_input = payload.get("tool_input")
     command = tool_input.get("command") if isinstance(tool_input, dict) else None
@@ -243,7 +245,7 @@ def main():
     from core.json import load_json
     from core.run.metadata import (
         _get_session_pid, _session_alive_for_meta,
-        complete_run, fail_run, RUN_METADATA_FILE, STATUS_RUNNING,
+        fail_run, RUN_METADATA_FILE, STATUS_RUNNING,
         worker_liveness_for_meta,
     )
 
@@ -395,6 +397,14 @@ def main():
                     has_failure = (d / FAILURE_MARKER).exists()
                 except OSError:
                     has_failure = False
+                if not has_failure:
+                    # Dead worker without a failure marker is UNKNOWN —
+                    # a killed/OOM'd process never wrote either verdict.
+                    # Inferring Completed was wrong: the terminal guard
+                    # then refused the owner's genuine fail_run and a
+                    # failed scan read Completed forever. Leave it for
+                    # SessionEnd or the next start_run sweep.
+                    continue
                 try:
                     # ``hook_finalize`` marks this as a heuristic
                     # verdict: if the liveness inference misjudged (the
@@ -402,15 +412,9 @@ def main():
                     # finaliser overrides the stamped status — see the
                     # recovery clause in
                     # core.run.metadata._update_status, which pops the
-                    # marker and the error on override. Unmarked, a
-                    # wrong Stop-path ``completed`` was FINAL: the
-                    # terminal guard then refused the owner's genuine
-                    # fail_run and a failed scan read Completed forever.
-                    if has_failure:
-                        fail_run(d, "tool exited with error",
-                                 extra={"hook_finalize": True})
-                    else:
-                        complete_run(d, extra={"hook_finalize": True})
+                    # marker and the error on override.
+                    fail_run(d, "tool exited with error",
+                             extra={"hook_finalize": True})
                     (d / FAILURE_MARKER).unlink(missing_ok=True)
                 except (OSError, ValueError) as e:
                     # Missing/malformed .raptor-run.json or an unlink
