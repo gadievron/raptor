@@ -88,6 +88,14 @@ jobs:
           /usr/lib/llvm-21/bin/llvm-cov --version || true
           /usr/lib/llvm-21/bin/llvm-profdata --version || true
 
+      - name: Install Rust llvm-tools (profraw format match)
+        # The runner's pre-installed Rust toolchain bundles its own LLVM
+        # whose profraw format version may exceed the system LLVM's.
+        # The regex-rust driver's sysroot-first resolution
+        # (_rust_profdata_candidates) picks these up automatically.
+        run: |
+          rustup component add llvm-tools
+
       - name: Run corpus-scale drivers
         run: |
           source $VENV_PATH/bin/activate
