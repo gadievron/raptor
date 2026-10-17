@@ -2639,6 +2639,7 @@ _AGGREGATOR_PATH_PREFIXES = {
     "/groq/":         "groq",
     "/mistral/":      "mistral",
     "/openrouter/":   "openrouter",
+    "/opper/":        "opper",
     "/orcarouter/":   "orcarouter",
     "/perplexity/":   "perplexity",
     "/replicate/":    "replicate",

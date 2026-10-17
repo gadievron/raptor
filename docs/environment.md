@@ -646,6 +646,7 @@ dispatcher or aggregator route.
 | `FIREWORKS_API_KEY` | Fireworks |
 | `GROQ_API_KEY` | Groq |
 | `OPENROUTER_API_KEY` | OpenRouter |
+| `OPPER_API_KEY` | [Opper](https://opper.ai) |
 | `ORCAROUTER_API_KEY` | OrcaRouter |
 | `PERPLEXITY_API_KEY` | Perplexity |
 | `REPLICATE_API_TOKEN` | Replicate (note the `_TOKEN` suffix) |
@@ -657,6 +658,12 @@ For API Route, set `API_ROUTE_API_KEY` to your own key. Dispatcher requests to
 `https://global.api-route.com/v1/chat/completions` with Bearer authentication.
 Use a model ID from API Route's `/v1/models` catalog. This route is opt-in and
 does not change the default provider or model selection.
+
+For Opper, set `OPPER_API_KEY` to a key from https://platform.opper.ai.
+Dispatcher requests to `/opper/v3/compat/chat/completions` are forwarded to
+`https://api.opper.ai/v3/compat/chat/completions` with Bearer authentication.
+Use a model ID from Opper's `/v3/compat/models` catalog. This route is opt-in
+and does not change the default provider or model selection.
 
 For Y-API, set `YAPI_API_KEY` to your own key. Dispatcher requests to
 `/yapi/v1/chat/completions` are forwarded to
