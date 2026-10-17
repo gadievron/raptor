@@ -3,10 +3,15 @@ inherit = "core"
 
 [shell_environment_policy.set]
 BASH_DEFAULT_TIMEOUT_MS = "300000"
-RAPTOR_ENV_FILE = ".codex/raptor.env"
 RAPTOR_MAINTAIN_PROJECT_WORKING_DIR = "1"
 CODEX = "1"
+RAPTOR_CODEX_ENVIRONMENT = "1"
 _RAPTOR_TRUSTED = "1"
+
+# RAPTOR-owned operator state only; this does not grant the rest of HOME.
+# Effective only when the operator uses Codex's workspace-write sandbox.
+[sandbox_workspace_write]
+writable_roots = ["~/.raptor", "~/.local/share/raptor"]
 
 # ── Hooks ─────────────────────────────────────────────────────────
 # Defined inline rather than in hooks.json so they are discovered
@@ -14,42 +19,27 @@ _RAPTOR_TRUSTED = "1"
 # JSON path via the git common directory, not the worktree root).
 
 [[hooks.SessionStart]]
-matcher = "startup"
+matcher = "startup|resume"
 
 [[hooks.SessionStart.hooks]]
 type = "command"
-command = "_RAPTOR_TRUSTED=1 libexec/raptor-session-init"
+command = "CODEX=1 RAPTOR_CODEX_HOOK=1 _RAPTOR_TRUSTED=1 libexec/raptor-session-init"
 
 [[hooks.Stop]]
 matcher = ""
 
 [[hooks.Stop.hooks]]
 type = "command"
-command = "_RAPTOR_TRUSTED=1 libexec/raptor-lifecycle-hook codex-stop"
+command = "CODEX=1 RAPTOR_CODEX_HOOK=1 _RAPTOR_TRUSTED=1 libexec/raptor-lifecycle-hook codex-stop"
 timeout = 5
 
-# Codex does not expose the unified-exec exit code in PostToolUse.
-# Record simple POSIX RAPTOR helper exits before consuming their results.
-[[hooks.PreToolUse]]
-matcher = "^Bash$"
-
-[[hooks.PreToolUse.hooks]]
-type = "command"
-command = "_RAPTOR_TRUSTED=1 libexec/raptor-lifecycle-hook codex-before"
-timeout = 5
-
-[[hooks.PostToolUse]]
-matcher = "Bash"
-
-[[hooks.PostToolUse.hooks]]
-type = "command"
-command = "_RAPTOR_TRUSTED=1 libexec/raptor-lifecycle-hook codex-after"
-timeout = 5
+# Command rewrites can bypass native execution rules. No PreToolUse rewrite:
+# shared RAPTOR process startup restores context without changing the command.
 
 [[hooks.SessionEnd]]
 matcher = ""
 
 [[hooks.SessionEnd.hooks]]
 type = "command"
-command = "_RAPTOR_TRUSTED=1 libexec/raptor-lifecycle-hook session-end"
+command = "CODEX=1 RAPTOR_CODEX_HOOK=1 _RAPTOR_TRUSTED=1 libexec/raptor-lifecycle-hook codex-end"
 timeout = 1

@@ -163,10 +163,10 @@ The `/crash-analysis` command provides autonomous root-cause analysis for C/C++ 
 
 **Agents:**
 - `crash-analysis-agent` - Main orchestrator
-- `crash-analyzer-agent` - Deep root-cause analysis using rr traces
-- `crash-analyzer-checker-agent` - Validates analysis rigorously
-- `function-trace-generator-agent` - Creates function execution traces
-- `coverage-analysis-generator-agent` - Generates gcov coverage data
+- `crash-analyzer` - Deep root-cause analysis using rr traces
+- `crash-analysis-checker` - Validates analysis rigorously
+- `function-trace-generator` - Creates function execution traces
+- `coverage-analyzer` - Generates gcov coverage data
 
 **Skills** (in `.agents/skills/crash-analysis/`):
 - `rr-debugger` - Deterministic record-replay debugging
@@ -185,10 +185,11 @@ The `/oss-forensics` command provides evidence-backed forensic investigation for
 **Usage:** `/oss-forensics <prompt> [--max-followups 3] [--max-retries 3]`
 
 **Agents:**
-- `oss-forensics-agent` - Main orchestrator
+The main session follows `.agents/skills/oss-forensics/orchestration/SKILL.md` to orchestrate the registered specialists:
+
 - `oss-investigator-gh-archive-agent` - Queries GH Archive via BigQuery
-- `oss-investigator-gh-api-agent` - Queries live GitHub API
-- `oss-investigator-gh-recovery-agent` - Recovers deleted content (Wayback/commits)
+- `oss-investigator-github-agent` - Queries live GitHub API
+- `oss-investigator-wayback-agent` - Recovers deleted content (Wayback/commits)
 - `oss-investigator-local-git-agent` - Analyzes cloned repos for dangling commits
 - `oss-investigator-ioc-extractor-agent` - Extracts IOCs from vendor reports
 - `oss-hypothesis-former-agent` - Forms evidence-backed hypotheses
