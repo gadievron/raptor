@@ -640,6 +640,7 @@ dispatcher or aggregator route.
 | Variable | Serves |
 |----------|--------|
 | `API_ROUTE_API_KEY` | [API Route](https://www.api-route.com) |
+| `ATLASCLOUD_API_KEY` | [Atlas Cloud](https://www.atlascloud.ai) |
 | `CHEAPER_INFERENCE_API_KEY` | Cheaper Inference |
 | `COHERE_API_KEY` | Cohere |
 | `DEEPINFRA_API_KEY` | DeepInfra |

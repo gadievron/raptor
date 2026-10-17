@@ -87,6 +87,7 @@ _MODEL_STEMS: tuple[tuple[str, Family], ...] = (
 
 _AGGREGATOR_PREFIXES: tuple[str, ...] = (
     "apiroute/",
+    "atlascloud/",
     "cheaperinference/",
     "deepinfra/",
     "fireworks/",
