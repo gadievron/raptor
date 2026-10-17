@@ -75,6 +75,7 @@ cd raptor
 
 # Install Python dependencies
 uv sync --locked
+source .venv/bin/activate
 
 # Compatibility path during the uv migration
 # pip install -r requirements.txt
@@ -640,6 +641,7 @@ uv sync --locked                            # core runtime
 uv sync --locked --group dev                # tests + linting
 uv sync --locked --extra web                # /web scanner support
 uv sync --locked --extra "web smt llm sage" # optional stacks
+source .venv/bin/activate                   # use the installed environment
 ```
 
 Keeping `/web`, Z3, SAGE and cloud provider SDKs as optional extras avoids
