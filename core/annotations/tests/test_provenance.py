@@ -497,6 +497,12 @@ class TestCorroborationGrading:
         )
         assert not is_human_grade(_human_interactive(envm="claudecode"))
 
+    def test_codex_agent_session_env_marker_demotes(self):
+        assert not is_human_grade(
+            _human_interactive(envm="codex,trusted"),
+        )
+        assert not is_human_grade(_human_interactive(envm="codex"))
+
     def test_script_wrapper_in_parent_chain_demotes(self):
         assert not is_human_grade(
             _human_interactive(parents="script,bash"),
@@ -871,6 +877,13 @@ class TestLiveContextGrantsOperator:
         ctx = dict(self._BASE, envm="claudecode,trusted")
         assert not live_context_grants_operator(ctx)
 
+    def test_codex_agent_session_marker_demotes(self):
+        from core.annotations.provenance import live_context_grants_operator
+        assert not live_context_grants_operator(
+            dict(self._BASE, envm="codex,trusted"))
+        assert not live_context_grants_operator(
+            dict(self._BASE, envm="codex"))
+
     def test_trusted_dispatch_marker_demotes(self):
         # _RAPTOR_TRUSTED is the trust gate's documented sandbox
         # bypass — a dispatch knob any process can export, never an
@@ -903,6 +916,13 @@ class TestLiveContextGrantsOperator:
             dict(self._BASE, parents="bash,python3,bash,2.1.252"))
         assert not live_context_grants_operator(
             dict(self._BASE, parents="bash,claude"))
+
+    def test_codex_binary_comm_in_parents_demotes(self):
+        from core.annotations.provenance import live_context_grants_operator
+        assert not live_context_grants_operator(
+            dict(self._BASE, parents="bash,codex"))
+        assert not live_context_grants_operator(
+            dict(self._BASE, parents="bash,codex-sandbox,sshd"))
 
     @pytest.mark.parametrize(
         "runtime", ["node", "nodejs", "bun", "deno"])
