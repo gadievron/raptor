@@ -222,4 +222,6 @@ def _build_binary_checklist(target: Path, output_dir: Path) -> dict:
 
 
 if __name__ == "__main__":
-    main()
+    from core.run.cli_outcome import cli_outcome
+    with cli_outcome():
+        main()
