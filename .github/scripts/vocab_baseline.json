@@ -598,6 +598,11 @@
     "kind": "literal",
     "note": "disasm_xcheck receipt record shape (journal-row schema keys, not a name vocabulary; same class as the baselined manifest/to_dict shapes)"
   },
+  "core/audit/discovery.py::_NOISE_IDENTS": {
+    "count": 44,
+    "kind": "literal",
+    "note": "C keywords + English stop words for the assumption-mining grounding filter: findings whose mechanism text contains none of the target source's identifiers are dropped as ungrounded; this set is subtracted before comparison so common tokens don't cause false retention"
+  },
   "core/audit/discovery.py::_STATE_NAME_RE": {
     "count": 10,
     "kind": "alternation"
