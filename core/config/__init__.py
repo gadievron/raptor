@@ -682,7 +682,7 @@ class RaptorConfig:
     #
     # Extend THIS constant; do not scatter per-caller strips.
     TARGET_ENV_STRIP_SET = frozenset({
-        "CLAUDECODE", "_RAPTOR_TRUSTED",
+        "CLAUDECODE", "CODEX", "_RAPTOR_TRUSTED",
         "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN",
         "RAPTOR_ALLOW_DEGRADED_UNTRUSTED",
         # Sandbox-disable consent nonce. Deliberately NOT in
