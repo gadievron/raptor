@@ -58,6 +58,7 @@ def _make_empty_store() -> CredentialStore:
         "perplexity": None,
         "replicate": None,
         "together": None,
+        "yapi": None,
         # Cloud gateways
         "azure_openai": None,
         "azure_openai_endpoint": None,

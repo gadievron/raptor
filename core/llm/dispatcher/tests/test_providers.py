@@ -42,6 +42,7 @@ def all_providers_creds():
         "perplexity":  "pplx-perplexity-real-NOT-LEAKED",
         "replicate":   "r8-replicate-real-NOT-LEAKED",
         "together":    "together-real-NOT-LEAKED",
+        "yapi":        "yapi-real-NOT-LEAKED",
         # Cloud gateways
         "azure_openai":          "azure-real-NOT-LEAKED",
         "azure_openai_endpoint": "https://example-azure.invalid",
@@ -297,6 +298,7 @@ _BEARER_PROVIDERS = [
     ("orcarouter", "v1/chat/completions", "sk-orca-real-NOT-LEAKED"),
     ("perplexity", "chat/completions",       "pplx-perplexity-real-NOT-LEAKED"),
     ("together",   "v1/chat/completions",    "together-real-NOT-LEAKED"),
+    ("yapi",       "v1/chat/completions",    "yapi-real-NOT-LEAKED"),
 ]
 
 
@@ -507,6 +509,7 @@ class TestCredentialStoreReadsAggregatorEnvs:
             "PERPLEXITY_API_KEY": "perplexity-test",
             "REPLICATE_API_TOKEN": "replicate-test",
             "TOGETHER_API_KEY":   "together-test",
+            "YAPI_API_KEY":         "yapi-test",
             "AZURE_OPENAI_API_KEY": "azure-test",
             "AZURE_OPENAI_ENDPOINT": "https://example-azure.invalid",
         }
@@ -526,6 +529,7 @@ class TestCredentialStoreReadsAggregatorEnvs:
         assert creds.get("perplexity") == "perplexity-test"
         assert creds.get("replicate") == "replicate-test"
         assert creds.get("together") == "together-test"
+        assert creds.get("yapi") == "yapi-test"
         assert creds.get("azure_openai") == "azure-test"
         assert creds.get("azure_openai_endpoint") == "https://example-azure.invalid"
         # Each env var STAYS in os.environ — workers reach these
