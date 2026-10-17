@@ -7,3 +7,39 @@ RAPTOR_ENV_FILE = ".codex/raptor.env"
 RAPTOR_MAINTAIN_PROJECT_WORKING_DIR = "1"
 CODEX = "1"
 _RAPTOR_TRUSTED = "1"
+
+# ── Hooks ─────────────────────────────────────────────────────────
+# Defined inline rather than in hooks.json so they are discovered
+# correctly when Codex runs from a git worktree (Codex resolves the
+# JSON path via the git common directory, not the worktree root).
+
+[[hooks.SessionStart]]
+matcher = "startup"
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "_RAPTOR_TRUSTED=1 libexec/raptor-session-init"
+
+[[hooks.Stop]]
+matcher = ""
+
+[[hooks.Stop.hooks]]
+type = "command"
+command = "_RAPTOR_TRUSTED=1 libexec/raptor-lifecycle-hook stop"
+timeout = 5
+
+[[hooks.PostToolUse]]
+matcher = "Bash"
+
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = "_RAPTOR_TRUSTED=1 libexec/raptor-lifecycle-hook tool-failure"
+timeout = 5
+
+[[hooks.SessionEnd]]
+matcher = ""
+
+[[hooks.SessionEnd.hooks]]
+type = "command"
+command = "_RAPTOR_TRUSTED=1 libexec/raptor-lifecycle-hook session-end"
+timeout = 1
