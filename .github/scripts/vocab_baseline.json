@@ -1988,6 +1988,21 @@
     "kind": "literal",
     "note": "libc/POSIX call-summary axiom table (strlen/abs/min-max family) \u2014 language-runtime names, doctrine-sanctioned hardcoding; project-API summaries must come from learned vocabulary, never this table (enforced by the table comment)"
   },
+  "core/startup/codex_environment.py::_FIELDS": {
+    "count": 10,
+    "kind": "literal",
+    "note": "closed schema for the private per-session context file: the exact JSON keys written by publish() and validated by read_context(); adding or removing a field is a format change, not vocabulary growth"
+  },
+  "core/startup/codex_environment.py::allowed": {
+    "count": 10,
+    "kind": "literal",
+    "note": "closed allowlist of environment variable names the broker may return in an environment response; any name outside this set is rejected \u2014 security boundary, not a learned vocabulary"
+  },
+  "core/startup/codex_environment.py::context": {
+    "count": 10,
+    "kind": "literal",
+    "note": "closed schema matching _FIELDS: the dict literal that builds the context document for publish(); keys are the same format contract as _FIELDS"
+  },
   "core/status/__init__.py::_STATUS_ALIASES": {
     "count": 26,
     "kind": "literal"
