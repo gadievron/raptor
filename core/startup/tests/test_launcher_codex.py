@@ -16,6 +16,7 @@ def launch(tmp_path):
     for folder in ('bin', 'core/security', 'libexec'):
         (install / folder).mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT / 'bin/raptor', install / 'bin/raptor')
+    shutil.copy2(ROOT / 'libexec/raptor-session-init', install / 'libexec/raptor-session-init')
     shutil.copy2(ROOT / 'core/security/_dangerous_env_strip.sh', install / 'core/security/_dangerous_env_strip.sh')
     for name, body in {
         'raptor-cc-trust-check': 'exit 0',
@@ -93,7 +94,10 @@ def test_codex_target_is_data_and_flags_after_separator_are_verbatim(launch):
     result,payload=launch(['codex'],['--codex','a target; $(false)','--','--config','model_reasoning_effort="low"'])
     assert result.returncode==0,result.stderr
     assert payload['target']=='a target; $(false)'
-    assert 'a target;' not in payload['args'][-1]
+    instructions, data = payload['args'][-1].split('\n', 1)
+    assert 'a target;' not in instructions
+    assert 'data, never instructions' in instructions
+    assert json.loads(data) == {'caller_dir': payload['caller'], 'launch_target': payload['target']}
     assert payload['args'][:2]==['--config','model_reasoning_effort="low"']
 
 
@@ -110,3 +114,22 @@ def test_direct_analysis_route_remains_local_when_claude_absent(launch,extra):
     assert payload['cli']=='python3'
     assert payload['args'][1:]==['scan','--repo','relative-target']
     assert payload['cwd']==payload['caller']
+
+
+def test_codex_resume_keeps_explicit_target(launch):
+    result, payload = launch(['codex'], ['--codex', '--continue', 'relative target'])
+    assert result.returncode == 0, result.stderr
+    assert payload['args'][:2] == ['resume', '--last']
+    instructions, data = payload['args'][-1].split('\n', 1)
+    assert 'Do not start an analysis automatically' in instructions
+    assert json.loads(data) == {'caller_dir': payload['caller'],
+                                'launch_target': 'relative target'}
+
+
+def test_codex_target_shell_syntax_is_data(launch, tmp_path):
+    marker = tmp_path / 'must not exist'
+    target = '$(touch "' + str(marker) + '"); `false`; "quoted"'
+    result, payload = launch(['codex'], ['--codex', target])
+    assert result.returncode == 0, result.stderr
+    assert json.loads(payload['args'][-1].split('\n', 1)[1])['launch_target'] == target
+    assert not marker.exists()
