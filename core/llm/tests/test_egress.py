@@ -445,6 +445,39 @@ class TestLoopbackSafeGet:
         assert captured["url"] == "https://ollama.corp/api/tags"
 
 
+class TestLoopbackSafePost:
+    def test_loopback_bypasses_proxy_env(self, monkeypatch):
+        captured = {}
+
+        class _FakeSession:
+            def __init__(self):
+                self.trust_env = True
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def post(self, url, json=None, timeout=None):
+                captured["trust_env"] = self.trust_env
+                captured["json"] = json
+                return "session-response"
+
+        import requests
+        monkeypatch.setattr(requests, "Session", _FakeSession)
+        out = egress.loopback_safe_post(
+            "http://localhost:11434/api/show",
+            json={"model": "llama3"},
+            timeout=2,
+        )
+        assert out == "session-response"
+        assert captured == {
+            "trust_env": False,
+            "json": {"model": "llama3"},
+        }
+
+
 class TestOllamaOnlyProxiedHost:
     def test_no_proxy_augmented_without_chokepoint(self, stub_proxy,
                                                    monkeypatch):
