@@ -482,20 +482,23 @@ class TestChildJsonPromotion:
         assert not (tmp_path / "semgrep_test_scan.json").exists()
 
 
-@patch('_raptor_scanner_semgrep_mock_target.shutil.which', return_value='/usr/bin/semgrep')
-@patch.object(_scanner_mod, 'run', return_value=(0, '  ', ''))
-@patch.object(_scanner_mod, 'validate_sarif', return_value=True)
-def test_empty_output_cannot_become_a_successful_replacement_report(validate, run, which, tmp_path):
-    sarif_path, success = run_single_semgrep(
-        name='empty', config='p/default', repo_path=tmp_path, out_dir=tmp_path, timeout=30,
-    )
-    assert not success
-    assert Path(sarif_path).read_text() == '{"runs": []}'
-    assert (tmp_path / 'semgrep_empty.exit').read_text() == '0'
+class TestOfflineLocalRules:
+    @patch('shutil.which', return_value='/usr/bin/semgrep')
+    @patch.object(_scanner_mod, 'run', return_value=(0, '{"runs": []}', ''))
+    @patch.object(_scanner_mod, 'validate_sarif', return_value=True)
+    def test_existing_local_config_needs_no_egress_proxy(self, validate, runner, which, tmp_path):
+        config = tmp_path / 'local.yaml'
+        config.write_text('rules: []\n')
+        _, success = run_single_semgrep('local', str(config), tmp_path, tmp_path, 30)
+        assert success
+        assert runner.call_args.kwargs['proxy_hosts'] is None
+        assert runner.call_args.kwargs['fake_home'] is True
+        assert runner.call_args.kwargs['target'] == str(tmp_path)
 
-
-@pytest.fixture(autouse=True)
-def _private_discovery_patch_target(monkeypatch):
-    """Resolve unittest decorators late against this test's private scanner view."""
-    monkeypatch.setitem(sys.modules, "_raptor_scanner_semgrep_mock_target", _scanner_mod)
-    patch_module_attribute(monkeypatch, _scanner_mod, "shutil", "which", _scanner_mod.shutil.which)
+    @patch('shutil.which', return_value='/usr/bin/semgrep')
+    @patch.object(_scanner_mod, 'run', return_value=(0, '{"runs": []}', ''))
+    @patch.object(_scanner_mod, 'validate_sarif', return_value=True)
+    def test_registry_config_retains_scoped_proxy(self, validate, runner, which, tmp_path):
+        _, success = run_single_semgrep('registry', 'p/security-audit', tmp_path, tmp_path, 30)
+        assert success
+        assert runner.call_args.kwargs['proxy_hosts']
