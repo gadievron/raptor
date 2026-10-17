@@ -71,6 +71,7 @@ import struct
 import sys
 from pathlib import Path
 
+from core.sandbox._stream_ipc import recv_exact, send_all
 from core.sandbox._request_head import ParsedRequestLine, parse_connect_request_line
 
 # ---- wire protocol (single source of truth; the parent-side manager
@@ -180,17 +181,11 @@ def _readable_code_paths() -> "list[str]":
 
 def _recv_exact(sock: socket.socket, n: int) -> "bytes | None":
     """Read exactly *n* bytes; None on EOF (clean or mid-frame)."""
-    buf = b""
-    while len(buf) < n:
-        chunk = sock.recv(n - len(buf))
-        if not chunk:
-            return None
-        buf += chunk
-    return buf
+    return recv_exact(sock, n)
 
 
 def _send_frame(sock: socket.socket, req_id: int, payload: bytes) -> None:
-    sock.sendall(FRAME_HEADER.pack(len(payload), req_id) + payload)
+    send_all(sock, FRAME_HEADER.pack(len(payload), req_id) + payload)
 
 
 def _serve(sock: socket.socket) -> int:
