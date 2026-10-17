@@ -29,6 +29,7 @@ the sandbox so no real state is touched on any path.
 from __future__ import annotations
 
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -45,6 +46,11 @@ def _sandbox(d: str) -> dict[str, str]:
     fake_claude = fakebin / "claude"
     fake_claude.write_text("#!/bin/sh\necho FAKE-CLAUDE-RAN\nexit 97\n")
     fake_claude.chmod(0o755)
+    # The launcher refuses a python3 without RAPTOR's dependencies;
+    # resolve python3 to the interpreter running the tests.
+    python3 = fakebin / "python3"
+    python3.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
+    python3.chmod(0o755)
     work = Path(d) / "work"
     work.mkdir()
     (Path(d) / "target").mkdir()
