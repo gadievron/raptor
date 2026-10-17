@@ -21,6 +21,8 @@ SCRIPT = REPO_ROOT / "libexec" / "raptor-session-init"
 @pytest.fixture
 def session_init(monkeypatch):
     monkeypatch.setenv("_RAPTOR_TRUSTED", "1")
+    monkeypatch.delenv("CODEX", raising=False)
+    monkeypatch.delenv("RAPTOR_ENV_FILE", raising=False)
     # write_env_file() mutates os.environ["RAPTOR_DIR"] directly (its
     # production job: pin the var for the session process). Register
     # the var with monkeypatch FIRST so that in-test mutation is rolled
@@ -136,6 +138,7 @@ def _codex_session_fixtures(monkeypatch, tmp_path):
     registry = tmp_path / "registry"
     sessions_dir = registry / "sessions.d"
     monkeypatch.setenv("CODEX", "1")
+    monkeypatch.setenv("RAPTOR_CODEX_HOOK", "1")
     monkeypatch.setenv("RAPTOR_REGISTRY_HOME", str(registry))
     monkeypatch.delenv("RAPTOR_SESSION_PID", raising=False)
     monkeypatch.delenv("RAPTOR_SESSION_TOKEN", raising=False)
@@ -150,10 +153,10 @@ def _codex_session_fixtures(monkeypatch, tmp_path):
     return registry, sessions_dir, fake_identity, mock_patch
 
 
-def test_codex_session_seeds_credentials_in_env_file(
+def test_codex_session_seeds_registry_without_shared_shell_file(
     session_init, tmp_path, monkeypatch,
 ):
-    """CODEX=1 triggers session seeding; credentials land in the env file."""
+    """CODEX=1 seeds credentials but never writes a shared executable env file."""
     registry, sessions_dir, fake_identity, mock_patch = (
         _codex_session_fixtures(monkeypatch, tmp_path))
 
@@ -166,7 +169,7 @@ def test_codex_session_seeds_credentials_in_env_file(
 
     fake_pid = 99999
     with mock_patch(
-        "core.project.sessions.resolve_session_pid",
+        "core.project.sessions.resolve_codex_owner_pid",
         return_value=fake_pid,
     ), mock_patch(
         "core.project.sessions._identity_for",
@@ -175,10 +178,9 @@ def test_codex_session_seeds_credentials_in_env_file(
         session_init._seed_codex_session()
         session_init.write_env_file()
 
-    content = env_file.read_text(encoding="utf-8")
-    assert "RAPTOR_SESSION_PID=" in content
-    assert "RAPTOR_SESSION_TOKEN=" in content
-    assert str(fake_pid) in content
+    assert not env_file.exists()
+    assert session_init.os.environ["RAPTOR_SESSION_PID"] == str(fake_pid)
+    assert session_init.os.environ["RAPTOR_SESSION_TOKEN"]
     entry = sessions_dir / str(fake_pid)
     assert entry.exists()
     entry_text = entry.read_text(encoding="utf-8")
@@ -198,7 +200,7 @@ def test_codex_session_reentry_preserves_project(
 
     fake_pid = 99998
     with mock_patch(
-        "core.project.sessions.resolve_session_pid",
+        "core.project.sessions.resolve_codex_owner_pid",
         return_value=fake_pid,
     ), mock_patch(
         "core.project.sessions._identity_for",
@@ -234,7 +236,7 @@ def test_codex_session_default_registry_no_crash(
     monkeypatch.delenv("RAPTOR_REGISTRY_HOME", raising=False)
 
     with mock_patch(
-        "core.project.sessions.resolve_session_pid",
+        "core.project.sessions.resolve_codex_owner_pid",
         return_value=99997,
     ), mock_patch(
         "core.project.sessions._identity_for",
@@ -599,3 +601,19 @@ def test_codex_own_repair_preserves_token_and_project(
 def test_import_does_not_leak_test_module(session_init):
     # exec_module registers nothing in sys.modules by default; keep it so.
     assert "raptor_session_init_under_test" not in sys.modules
+
+
+def test_claude_host_with_inherited_codex_marker_keeps_native_env_file(session_init, tmp_path, monkeypatch):
+    monkeypatch.setenv('CLAUDECODE', '1')
+    monkeypatch.setenv('CODEX', '1')
+    monkeypatch.delenv('RAPTOR_CODEX_HOOK', raising=False)
+    monkeypatch.setenv('RAPTOR_SESSION_PID', '12345')
+    monkeypatch.setenv('RAPTOR_SESSION_TOKEN', 'inherited-codex-token')
+    file = tmp_path / 'claude-env'
+    monkeypatch.setenv('CLAUDE_ENV_FILE', str(file))
+    assert session_init._seed_codex_session() is None
+    session_init.write_env_file()
+    text = file.read_text()
+    assert 'RAPTOR_DIR=' in text
+    assert 'inherited-codex-token' not in text
+    assert 'RAPTOR_SESSION_PID=' not in text

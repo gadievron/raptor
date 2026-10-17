@@ -60,7 +60,8 @@ def test_codex_agents_are_valid_toml() -> None:
 def test_codex_startup_hook_uses_repo_relative_session_init() -> None:
     config = tomllib.loads(_read(ROOT / ".codex" / "config.toml"))
     env = config["shell_environment_policy"]["set"]
-    assert env["RAPTOR_ENV_FILE"] == ".codex/raptor.env"
+    assert "RAPTOR_ENV_FILE" not in env
+    assert "BASH_ENV" not in env
     assert "CLAUDE_ENV_FILE" not in env
 
     hooks = config["hooks"]["SessionStart"]
@@ -88,9 +89,20 @@ def test_active_codex_docs_do_not_point_at_retired_skill_paths() -> None:
             assert marker not in text, f"{path} still references {marker}"
 
 
-def test_codex_shell_hooks_use_explicit_adapters() -> None:
-    config = tomllib.loads(_read(ROOT / ".codex" / "config.toml"))
-    for event, mode in (("PreToolUse", "codex-before"),
-                        ("PostToolUse", "codex-after")):
-        command = config["hooks"][event][0]["hooks"][0]["command"]
-        assert command.endswith("libexec/raptor-lifecycle-hook " + mode)
+def test_codex_hooks_do_not_rewrite_or_autoapprove_shell_commands() -> None:
+    config = tomllib.loads(_read(ROOT / ".codex/config.toml"))
+    assert "PreToolUse" not in config["hooks"]
+    assert "PostToolUse" not in config["hooks"]
+    command = config["hooks"]["Stop"][0]["hooks"][0]["command"]
+    assert command.endswith("libexec/raptor-lifecycle-hook codex-stop")
+
+
+def test_documented_codex_specialists_are_registered():
+    import re
+    names = {tomllib.loads(_read(path))["name"]
+             for path in (ROOT / ".codex/agents").glob("*.toml")}
+    text = _read(ROOT / "AGENTS.md")
+    for section in text.split("**Agents:**")[1:]:
+        agents = section.split("**Skills**", 1)[0]
+        for name in re.findall(r"^- `([^`]+)` -", agents, re.M):
+            assert name in names, name
