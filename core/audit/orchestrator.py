@@ -10456,7 +10456,9 @@ def _run_audit_body(
             from .discovery import (
                 build_seam_bundles,
                 build_state_machine_bundles,
+                build_sweep_targets,
                 detect_single_threaded,
+                run_assumption_mining,
                 run_contract_discovery,
                 run_state_machine_discovery,
                 write_discovery_weaknesses,
@@ -10578,6 +10580,54 @@ def _run_audit_body(
                             "from %d fields",
                             _sm_total_w, len(_sm_results),
                         )
+
+            # Assumption mining on high-priority targets
+            _mining_targets = build_sweep_targets(
+                checklist,
+                context_map,
+                _disc_entry_points,
+                target_path=config.target_path,
+                weakness_fids=_disc_weakness_fids,
+            )
+            if _mining_targets:
+                _mining_budget = (
+                    (config.max_cost_usd or 50.0)
+                    * config.discovery_budget_fraction
+                    * 0.15
+                )
+
+                _mining_client = _run_llm_client(config)
+
+                def _mining_review_fn(
+                    system: str, prompt: str,
+                ) -> tuple[str, float]:
+                    resp = _mining_client.generate(
+                        prompt, system_prompt=system,
+                    )
+                    return resp.content, resp.cost
+
+                _mining_results = run_assumption_mining(
+                    _mining_targets,
+                    review_fn=_mining_review_fn,
+                    max_cost_usd=_mining_budget,
+                )
+                _mining_total_w = 0
+                for mr in _mining_results:
+                    if mr.weaknesses:
+                        write_discovery_weaknesses(
+                            config.out_dir,
+                            mr.seam_or_field,
+                            mr.weaknesses,
+                            run_id=_disc_run_id,
+                            cost_usd=mr.cost_usd,
+                        )
+                        _mining_total_w += len(mr.weaknesses)
+                if _mining_total_w:
+                    logger.info(
+                        "open discovery: %d assumption mining weaknesses "
+                        "from %d targets",
+                        _mining_total_w, len(_mining_results),
+                    )
         except Exception:
             logger.warning(
                 "open discovery failed", exc_info=True,
