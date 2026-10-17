@@ -762,6 +762,7 @@ the JVM-installer caveat.
 |----------|--------------------------|
 | `GOOGLE_APPLICATION_CREDENTIALS` | Required for `/oss-forensics` BigQuery; also a Vertex credential path in the LLM key table. Its absence is reported in the startup banner. |
 | `GITHUB_TOKEN` | Used by cve-diff/forensics tooling to raise GitHub API limits; forwarded to the relevant children only. |
+| `NIX_SSL_CERT_FILE` | Trust-root override stripped from caller environments. On macOS, mach-restricted seatbelt children receive the fixed root-owned system bundle at `/etc/ssl/cert.pem`; caller-supplied values are never inherited. |
 | `CLAUDE_ENV_FILE` | Claude Code harness contract (set in `.claude/settings.json` to `.claude/raptor.env`): the SessionStart hook writes `RAPTOR_DIR` and a `PATH` extension into that file so every session Bash call inherits them. Not operator-set. |
 | `CLAUDE_CODE_SUBAGENT_MODEL` | `bin/raptor` bridges it from `ANTHROPIC_MODEL` when unset (Bedrock roles entitled for only one model would otherwise 403 on subagents). An explicit operator export is never overridden. |
 | `CLAUDE_SUBAGENT_BG_SHELL_MAX_MS` | Claude Code harness knob: per-SUBAGENT background-shell kill cap in ms (harness default 3,600,000). Read by `core.run.supervisor` so `/audit` can self-bound its wall budget to conclude gracefully inside the cap (cap − 300s, default 3300s; `--no-supervisor-bound` opts out). Non-numeric/non-positive values fall back to the default. See "Running long audits" in [audit.md](audit.md). |

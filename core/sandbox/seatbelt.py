@@ -129,6 +129,47 @@ MACOS_BASE_MACH_SERVICES = (
 # profile.)
 MACOS_STRICT_MACH_SERVICES = MACOS_BASE_MACH_SERVICES
 
+# File-based TLS trust anchors for children of a mach-lookup-restricted
+# profile. With securityd/trustd out of reach, keychain-backed root
+# discovery comes back empty: `security find-certificate -a -p
+# SystemRootCertificates.keychain` returns zero certificates inside the
+# sandbox, and OCaml's ca-certs (Semgrep's osemgrep) aborts at startup
+# with "ca-certs: empty trust anchors". ca-certs reads the
+# NIX_SSL_CERT_FILE bundle before it falls back to the keychain
+# (measured live: Semgrep under the full profile starts and scans with
+# it set). The variable is not on the OpenSSL/requests trust-override
+# surface (SSL_CERT_FILE, REQUESTS_CA_BUNDLE, CURL_CA_BUNDLE), so other
+# tools' trust decisions are unchanged. The bundle is the root-owned,
+# OS-shipped /etc/ssl/cert.pem, readable under every profile's
+# /private/etc read grant.
+MACOS_FILE_TRUST_ANCHORS = "/etc/ssl/cert.pem"
+MACOS_FILE_TRUST_ANCHOR_ENV = "NIX_SSL_CERT_FILE"
+
+
+def file_trust_anchor_env(profile: str) -> dict[str, str]:
+    """Env to add to a child spawned under ``profile`` so file-based
+    trust-anchor discovery works where the keychain is unreachable.
+
+    Empty unless the profile restricts mach-lookup (the keychain
+    channel) and the system bundle exists.
+    """
+    if "(deny mach-lookup" not in profile:
+        return {}
+    if not os.path.isfile(MACOS_FILE_TRUST_ANCHORS):
+        return {}
+    return {MACOS_FILE_TRUST_ANCHOR_ENV: MACOS_FILE_TRUST_ANCHORS}
+
+
+# Spawn-layer-minted marker naming the parent's egress-proxy URL for a
+# seatbelt child behind it. `(deny network*)` denies bind/listen, so an
+# in-child core.sandbox.proxy instance cannot start (EPERM on
+# 127.0.0.1:0); in-child RAPTOR HTTP clients (core.http.EgressClient)
+# route through the parent proxy named here instead. The parent proxy
+# is the only egress the profile admits either way. Never taken from a
+# caller env: the spawn layer drops any inbound value.
+PARENT_EGRESS_PROXY_ENV = "_RAPTOR_SEATBELT_EGRESS_PROXY"
+
+
 # sysctl-read allowlist for the hardened profiles, WebKit-seeded
 # (Apple's WebProcess profile uses the same deny-with-sysctl-name-
 # allowlist pattern). Covers hardware identity (hw.*, machdep.cpu.*),
@@ -328,8 +369,10 @@ def build_profile(*,
         intent, "block introspection / IPC / capability-escape
         vectors that don't break common tools":
           * (deny process-info*) + (allow process-info* (target self))
+            + (allow process-info* (target same-sandbox))
           * (deny iokit-open)
           * (deny signal) + (allow signal (target self))
+            + (allow signal (target same-sandbox))
           * (deny nvram*)
           * mach-lookup allowlist-deny (MACOS_BASE_MACH_SERVICES)
           * (deny sysctl-read) + allow clauses for the
@@ -730,6 +773,17 @@ def build_profile(*,
             # nothing about OTHER processes.)
             parts.append("(deny process-info*)")
             parts.append("(allow process-info* (target self))")
+            # Processes inside THIS sandbox instance (the child's own
+            # descendants and their siblings) stay introspectable —
+            # the Linux PID-namespace analogue. Self-only broke every
+            # parent that watches its children: the JVM's
+            # ProcessHandleImpl.isAlive0 (CodeQL database create) reads
+            # sysctl kern.proc.pid.<child> + proc_pidinfo, both gated
+            # by this family. Measured live on 26.6: `same-sandbox`
+            # admits descendants and in-sandbox siblings, refuses a
+            # separate sandbox instance running the identical profile
+            # and every host process; proc_listallpids stays denied.
+            parts.append("(allow process-info* (target same-sandbox))")
             # iokit-open: userland driver/device access — the macOS
             # analogue of Linux's blocked device-capability escapes.
             # Empirically free (2026-08-15 probe battery: clang, make,
@@ -744,9 +798,14 @@ def build_profile(*,
             # probe run). Same clause-shape story as process-info*
             # above: the (target others)-filtered deny proved inert
             # live on 26.6.2 (SIGCONT delivered to a host process
-            # under it) — emit deny-then-allow-self instead.
+            # under it) — emit deny-then-allow-self instead. Signals
+            # within the same sandbox instance stay deliverable (same
+            # scope and measurement as the process-info allow above):
+            # self-only made kill(own_child) EPERM, breaking every
+            # supervisor that reaps or times out its workers.
             parts.append("(deny signal)")
             parts.append("(allow signal (target self))")
+            parts.append("(allow signal (target same-sandbox))")
             # NVRAM reads leak boot-args / firmware state; nothing in
             # the toolchain battery touches nvram.
             parts.append("(deny nvram*)")
@@ -863,9 +922,10 @@ def build_profile(*,
         else:
             # Same deny-then-allow-self shape as the hardened
             # baseline (the (target others) filter is inert on
-            # current macOS).
+            # current macOS), including the same-sandbox allow.
             parts.append("(deny signal)")
             parts.append("(allow signal (target self))")
+            parts.append("(allow signal (target same-sandbox))")
             parts.append("(deny nvram*)")
             _mach_names = " ".join(
                 f"(global-name {_quote_sbpl(s)})"

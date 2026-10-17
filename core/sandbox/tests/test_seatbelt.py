@@ -699,6 +699,39 @@ def test_seccomp_profile_full_emits_process_info_deny():
     assert "(deny process-info-pidfdinfo" not in p
 
 
+def test_seccomp_profile_full_allows_same_sandbox_introspection():
+    """A parent must be able to watch and signal the processes it
+    spawned inside the sandbox: self-only broke the JVM's
+    ProcessHandleImpl.isAlive0 (sysctl kern.proc.pid.<child> +
+    proc_pidinfo, both gated by process-info*) and kill(own_child).
+    `(target same-sandbox)` is the measured scope — descendants and
+    in-sandbox siblings yes, a separate sandbox instance or any host
+    process no. Each allow must FOLLOW its family deny (later allow
+    wins), and the broader `(target others)` must never appear."""
+    p = seatbelt.build_profile(seccomp_profile="full")
+    lines = [line.strip() for line in p.splitlines() if line.strip()]
+    for family in ("process-info*", "signal"):
+        allow = f"(allow {family} (target same-sandbox))"
+        assert allow in lines, allow
+        assert lines.index(allow) > lines.index(f"(deny {family})")
+    assert "(target others)" not in p
+    assert "(target children)" not in p
+
+
+def test_legacy_strict_branch_allows_same_sandbox_signal():
+    p = seatbelt.build_profile(seccomp_profile="debug",
+                               profile_name="strict")
+    lines = [line.strip() for line in p.splitlines() if line.strip()]
+    assert (lines.index("(allow signal (target same-sandbox))")
+            > lines.index("(deny signal)"))
+
+
+def test_debug_profile_omits_same_sandbox_allows():
+    """debug never denies the families, so it needs no carve-outs."""
+    p = seatbelt.build_profile(seccomp_profile="debug")
+    assert "same-sandbox" not in p
+
+
 def test_seccomp_profile_full_emits_iokit_deny():
     """`(deny iokit-open)` rides the full profile: userland driver /
     device access is the macOS analogue of Linux's blocked
@@ -1138,3 +1171,49 @@ class TestExcludeTmpBaseline:
         assert '"/private/tmp"' not in prof
         # Output stays writable — that's where TMPDIR redirects.
         assert '(subpath "/x/out")' in prof
+
+
+class TestFileTrustAnchorEnv:
+    """A mach-lookup-restricted profile closes the keychain, so
+    keychain-backed root discovery (OCaml ca-certs: Semgrep) comes back
+    empty; the spawn layer hands the child a file bundle instead."""
+
+    def test_hardened_profile_gets_bundle(self, monkeypatch, tmp_path):
+        bundle = tmp_path / "cert.pem"
+        bundle.write_text("x")
+        monkeypatch.setattr(seatbelt, "MACOS_FILE_TRUST_ANCHORS",
+                            str(bundle))
+        p = seatbelt.build_profile(seccomp_profile="full")
+        assert seatbelt.file_trust_anchor_env(p) == {
+            "NIX_SSL_CERT_FILE": str(bundle)}
+
+    def test_unrestricted_mach_gets_nothing(self, monkeypatch, tmp_path):
+        bundle = tmp_path / "cert.pem"
+        bundle.write_text("x")
+        monkeypatch.setattr(seatbelt, "MACOS_FILE_TRUST_ANCHORS",
+                            str(bundle))
+        for kw in ({}, {"seccomp_profile": "debug"},
+                   {"seccomp_profile": "full", "audit_mode": True}):
+            p = seatbelt.build_profile(**kw)
+            assert seatbelt.file_trust_anchor_env(p) == {}, kw
+
+    def test_missing_bundle_gets_nothing(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(seatbelt, "MACOS_FILE_TRUST_ANCHORS",
+                            str(tmp_path / "absent.pem"))
+        p = seatbelt.build_profile(seccomp_profile="full")
+        assert seatbelt.file_trust_anchor_env(p) == {}
+
+    def test_all_file_trust_overrides_are_dangerous(self):
+        """Every caller-controlled file trust root is stripped."""
+        from core.config import RaptorConfig
+        names = (seatbelt.MACOS_FILE_TRUST_ANCHOR_ENV,
+                 "SSL_CERT_FILE", "SSL_CERT_DIR",
+                 "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE")
+        assert all(RaptorConfig.is_dangerous_env_name(name)
+                   for name in names)
+
+    def test_bundle_readable_under_restrict_reads(self):
+        p = seatbelt.build_profile(seccomp_profile="full",
+                                   restrict_reads=True)
+        assert '"/private/etc"' in p
+        assert seatbelt.MACOS_FILE_TRUST_ANCHORS.startswith("/etc/")

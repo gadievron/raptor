@@ -984,6 +984,7 @@ class RaptorConfig:
         # the TLS and the attacker planted a CA cert).
         "REQUESTS_CA_BUNDLE",  # Python `requests` trust anchor override.
         "CURL_CA_BUNDLE",      # curl trust anchor override.
+        "NIX_SSL_CERT_FILE",   # Nix/OCaml trust anchor override.
         "SSL_CERT_FILE",       # OpenSSL-based tools' trust anchor override.
         "SSL_CERT_DIR",        # OpenSSL-based tools' trust anchor dir.
         # Allocator config — jemalloc honours these env vars. They can
