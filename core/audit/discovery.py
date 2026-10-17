@@ -71,6 +71,16 @@ def _normalise_guard_type(raw: str) -> str:
     gt = _GUARD_TYPE_ALIASES.get(gt, gt)
     return gt if gt in _GUARD_TYPES else ""
 
+
+_CONFIDENCE_VALUES = frozenset({"high", "medium", "low"})
+
+
+def _normalise_confidence(raw: str) -> str:
+    """Return canonical confidence, defaulting to ``"medium"``."""
+    c = raw.strip().lower()
+    return c if c in _CONFIDENCE_VALUES else "medium"
+
+
 # Single-character or very short names that are almost always macros,
 # aliases, or wrappers — not interesting contract surfaces.
 MIN_CALLEE_LINES = 5
@@ -586,10 +596,13 @@ lifetime | ordering | concurrency | other
 - Map to a CWE class if applicable
 - State whether the gap is a weakness (composable with other \
 conditions) or a standalone vulnerability
+- Confidence: high (strong evidence — specific code paths, concrete \
+values), medium (plausible but needs caller/build context to confirm), \
+low (speculative or depends on uncommon configurations)
 
 Respond in JSON: {{ "findings": [ {{ "guard_type": "...", \
 "assumed_property": "...", "mechanism": "...", "cwe_class": "...", \
-"standalone": true/false }} ] }}
+"standalone": true/false, "confidence": "high|medium|low" }} ] }}
 
 If the contract is sound, respond: {{ "findings": [] }}
 """
@@ -649,11 +662,13 @@ def _parse_findings(
         if not gt:
             continue
 
+        conf = _normalise_confidence(f.get("confidence", ""))
         weakness = {
             "property": f.get("assumed_property", ""),
             "guard_type": gt,
             "mechanism": f.get("mechanism", ""),
             "cwe_class": f.get("cwe_class"),
+            "confidence": conf,
             "source": "contract_perspective",
             "guarded_by": (
                 [] if f.get("standalone") else [bundle.caller_fid]
@@ -945,9 +960,12 @@ Analyse the state machine:
 4. Is there a handler that writes without checking the current value?
 5. Can an error path leave the field in an intermediate state?
 
-For each issue found, respond in JSON: {{ "findings": [ {{ \
-"guard_type": "...", "assumed_property": "...", "mechanism": "...", \
-"cwe_class": "...", "standalone": true/false }} ] }}
+For each issue, rate confidence: high (specific code paths prove the \
+issue), medium (plausible but needs runtime context), low (speculative).
+
+Respond in JSON: {{ "findings": [ {{ "guard_type": "...", \
+"assumed_property": "...", "mechanism": "...", "cwe_class": "...", \
+"standalone": true/false, "confidence": "high|medium|low" }} ] }}
 
 If the state machine is sound, respond: {{ "findings": [] }}
 """
@@ -1044,11 +1062,13 @@ def _parse_sm_findings(
         if single_threaded and any(cwe.startswith(c) for c in _RACE_CWES):
             continue
 
+        conf = _normalise_confidence(f.get("confidence", ""))
         weakness = {
             "property": f.get("assumed_property", ""),
             "guard_type": gt,
             "mechanism": f.get("mechanism", ""),
             "cwe_class": cwe or None,
+            "confidence": conf,
             "source": "state_machine",
             "guarded_by": [],
         }
@@ -1409,11 +1429,13 @@ def _parse_discovery_findings(
         if not gt:
             continue
 
+        conf = _normalise_confidence(f.get("confidence", ""))
         weakness = {
             "property": f.get("assumed_property", ""),
             "guard_type": gt,
             "mechanism": f.get("mechanism", ""),
             "cwe_class": f.get("cwe_class"),
+            "confidence": conf,
             "source": source_tag,
             "guarded_by": [],
         }
@@ -1480,6 +1502,9 @@ violates the assumption (e.g. "process_raw() calls pool_alloc(len, 1) \
 which skips memset, leaving h->size uninitialised")
 - cwe_class: the CWE ID
 - standalone: true if this finding is useful without the others
+- confidence: high (named a specific caller that concretely violates the \
+assumption), medium (plausible but the violating path needs runtime \
+confirmation), low (speculative)
 
 Do NOT report:
 - Generic concurrency or memory-model assumptions unless a specific \
@@ -1489,7 +1514,7 @@ race is identified between named functions
 
 Respond in JSON: {{ "findings": [ {{ "guard_type": "...", \
 "assumed_property": "...", "mechanism": "...", "cwe_class": "...", \
-"standalone": true/false }} ] }}
+"standalone": true/false, "confidence": "high|medium|low" }} ] }}
 
 If all assumptions are guaranteed, respond: {{ "findings": [] }}
 """

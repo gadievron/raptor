@@ -988,6 +988,21 @@ class TestExtractWeaknesses:
         assert w["assumed_by"] == "src/parse.c:parse_input"
         assert "validate_input" in w["guarded_by"]
         assert w["source"] == "structured_pass"
+        assert w["confidence"] == "medium"  # "refuted" → default
+
+    def test_confidence_propagated(self):
+        from core.audit.collector import extract_weaknesses
+
+        hyps = [{
+            "mechanism": "overflow",
+            "confidence": "high",
+            "counter": "caller validate_input() checks",
+            "counter_scope": "cross_function",
+            "guard_type": "bounds",
+            "assumed_property": "len <= 256",
+        }]
+        ws = extract_weaknesses(hyps, function="f", file="a.c")
+        assert ws[0]["confidence"] == "high"
 
     def test_local_scope_no_weakness(self):
         from core.audit.collector import extract_weaknesses

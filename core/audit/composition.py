@@ -33,6 +33,7 @@ class WeaknessRecord:
     mechanism: str
     guarded_by: tuple[str, ...]
     cwe_class: str | None = None
+    confidence: str = "medium"
     source: str = "structured_pass"
 
     @property
@@ -66,6 +67,7 @@ class ComposedHypothesis:
                 "mechanism": self.weakness.mechanism,
                 "guarded_by": list(self.weakness.guarded_by),
                 "cwe_class": self.weakness.cwe_class,
+                "confidence": self.weakness.confidence,
             },
             "path": [
                 f"{f}:{fn}" for f, fn in self.unguarded_path.chain
@@ -102,6 +104,7 @@ def build_weakness_inventory(
                 mechanism=w.get("mechanism", ""),
                 guarded_by=tuple(w.get("guarded_by") or ()),
                 cwe_class=w.get("cwe_class"),
+                confidence=w.get("confidence", "medium"),
                 source=w.get("source", "structured_pass"),
             ))
     return result

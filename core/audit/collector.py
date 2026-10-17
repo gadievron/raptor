@@ -83,12 +83,16 @@ def extract_weaknesses(
                 name = m.group(1)
                 if name not in _NOISE_NAMES and name != function:
                     guarded_by.append(name)
+        conf = str(h.get("confidence") or "").strip().lower()
+        if conf not in ("high", "medium", "low"):
+            conf = "medium"
         w: dict[str, Any] = {
             "property": assumed or mechanism[:200],
             "guard_type": guard_type,
             "assumed_by": f"{file}:{function}" if file else function,
             "guarded_by": guarded_by,
             "mechanism": mechanism[:200],
+            "confidence": conf,
             "source": "structured_pass",
         }
         h_cwe = h.get("cwe") or cwe

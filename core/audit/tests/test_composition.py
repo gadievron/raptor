@@ -328,6 +328,32 @@ class TestBuildWeaknessInventory:
         assert ws[0].function == "parse_input"
         assert ws[0].guarded_by == ("validate_input",)
         assert ws[0].cwe_class == "CWE-120"
+        assert ws[0].confidence == "medium"  # default when absent
+
+    def test_confidence_round_trips(self, tmp_path: Path):
+        from core.coverage.journal import (
+            ReviewJournalEntry, append_entry, now_iso,
+        )
+
+        entry = ReviewJournalEntry(
+            ts=now_iso(),
+            run_id="run-1",
+            file="src/parse.c",
+            function="parse_input",
+            verdict="clean",
+            source_hash="abc",
+            weaknesses=[{
+                "guard_type": "bounds",
+                "property": "length <= 256",
+                "mechanism": "CWE-120 overflow",
+                "guarded_by": ["validate_input"],
+                "confidence": "high",
+                "source": "structured_pass",
+            }],
+        )
+        append_entry(tmp_path, entry)
+        ws = build_weakness_inventory(tmp_path)
+        assert ws[0].confidence == "high"
 
     def test_skips_entries_without_guard_type(self, tmp_path: Path):
         from core.coverage.journal import (

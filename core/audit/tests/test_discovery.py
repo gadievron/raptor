@@ -21,6 +21,7 @@ from core.audit.discovery import (
     _extract_call_site_snippet,
     _extract_cross_file_seams,
     _filter_grounded_findings,
+    _normalise_confidence,
     _normalise_guard_type,
     _parse_assumptions,
     _parse_discovery_findings,
@@ -2098,13 +2099,17 @@ class TestNormaliseGuardType:
         )
         raw = json.dumps({"findings": [
             {"guard_type": "null_check", "assumed_property": "p",
-             "mechanism": "m", "cwe_class": "CWE-476", "standalone": False},
+             "mechanism": "m", "cwe_class": "CWE-476", "standalone": False,
+             "confidence": "high"},
             {"guard_type": "lifecycle", "assumed_property": "q",
-             "mechanism": "n", "cwe_class": "CWE-416", "standalone": True},
+             "mechanism": "n", "cwe_class": "CWE-416", "standalone": True,
+             "confidence": "low"},
         ]})
         result = _parse_findings(raw, bundle)
         types = [w["guard_type"] for w in result.weaknesses]
         assert types == ["null_safety", "lifetime"]
+        assert result.weaknesses[0]["confidence"] == "high"
+        assert result.weaknesses[1]["confidence"] == "low"
 
     def test_parse_sm_findings_normalises(self):
         bundle = StateMachineBundle(
@@ -2116,10 +2121,12 @@ class TestNormaliseGuardType:
         )
         raw = json.dumps({"findings": [
             {"guard_type": "init", "assumed_property": "p",
-             "mechanism": "m", "cwe_class": "CWE-908", "standalone": True},
+             "mechanism": "m", "cwe_class": "CWE-908", "standalone": True,
+             "confidence": "medium"},
         ]})
         result = _parse_sm_findings(raw, bundle)
         assert result.weaknesses[0]["guard_type"] == "validation"
+        assert result.weaknesses[0]["confidence"] == "medium"
 
     def test_parse_discovery_findings_normalises(self):
         target = SweepTarget(
@@ -2128,7 +2135,47 @@ class TestNormaliseGuardType:
         )
         raw = json.dumps({"findings": [
             {"guard_type": "type", "assumed_property": "p",
-             "mechanism": "m", "standalone": True},
+             "mechanism": "m", "standalone": True, "confidence": "high"},
         ]})
         result = _parse_discovery_findings(raw, target, source_tag="test")
         assert result.weaknesses[0]["guard_type"] == "validation"
+        assert result.weaknesses[0]["confidence"] == "high"
+
+    def test_missing_confidence_defaults_medium(self):
+        bundle = SeamBundle(
+            caller_fid="a.c:caller",
+            callee_fid="b.c:callee",
+            caller_source="void caller(void){}",
+            callee_source="void callee(void){}",
+            call_site_snippet="callee();",
+            annotation="test",
+            priority_score=1.0,
+            priority_reason="test",
+        )
+        raw = json.dumps({"findings": [
+            {"guard_type": "bounds", "assumed_property": "p",
+             "mechanism": "m", "cwe_class": "CWE-120", "standalone": True},
+        ]})
+        result = _parse_findings(raw, bundle)
+        assert result.weaknesses[0]["confidence"] == "medium"
+
+
+class TestNormaliseConfidence:
+    """Confidence normalisation validates and defaults."""
+
+    def test_valid_values(self):
+        assert _normalise_confidence("high") == "high"
+        assert _normalise_confidence("medium") == "medium"
+        assert _normalise_confidence("low") == "low"
+
+    def test_case_insensitive(self):
+        assert _normalise_confidence("HIGH") == "high"
+        assert _normalise_confidence("Low") == "low"
+
+    def test_strips_whitespace(self):
+        assert _normalise_confidence("  high  ") == "high"
+
+    def test_unknown_defaults_medium(self):
+        assert _normalise_confidence("") == "medium"
+        assert _normalise_confidence("refuted") == "medium"
+        assert _normalise_confidence("unknown") == "medium"
