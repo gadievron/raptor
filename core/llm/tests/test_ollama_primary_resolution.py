@@ -209,10 +209,11 @@ class TestClaudeCodeConfigPrimary:
         monkeypatch.setattr(cfg, "_resolve_claudecode_model", lambda: "claude-test")
 
     @pytest.mark.parametrize("role", [None, "analysis", "code"])
+    @pytest.mark.parametrize("provider", ["claudecode", "claudecode-resumable"])
     def test_claudecode_entry_beats_autodetected_ollama(
-        self, tmp_path, monkeypatch, role,
+        self, tmp_path, monkeypatch, role, provider,
     ):
-        entry = {"provider": "claudecode"}
+        entry = {"provider": provider}
         if role:
             entry["role"] = role
         _write_config(tmp_path, monkeypatch, [entry])
@@ -222,7 +223,7 @@ class TestClaudeCodeConfigPrimary:
         picked = cfg._get_default_primary_model()
 
         assert picked is not None
-        assert picked.provider == "claudecode"
+        assert picked.provider == provider
 
     def test_fallback_role_claudecode_does_not_become_primary(
         self, tmp_path, monkeypatch,
@@ -238,3 +239,20 @@ class TestClaudeCodeConfigPrimary:
         assert picked is not None
         assert picked.provider == "ollama"
         assert picked.model_name == "qwen3:8b"
+
+    def test_prefer_set_skips_claudecode_primary(
+        self, tmp_path, monkeypatch,
+    ):
+        """When the caller restricts providers via ``prefer``, a
+        claudecode config entry outside that set must not become
+        primary — the prefer guard applies to Step 2d the same way
+        it does to Steps 2b/2c."""
+        _write_config(tmp_path, monkeypatch, [
+            {"provider": "claudecode"},
+        ])
+        _stub_autodetect(monkeypatch, ["qwen3:8b"])
+
+        import core.llm.config as cfg
+        picked = cfg._get_default_primary_model(prefer=["anthropic"])
+
+        assert picked is None or picked.provider != "claudecode"

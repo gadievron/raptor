@@ -952,6 +952,11 @@ def _get_default_primary_model(
     cc_primary = _config_claudecode_primary()
     if (cc_primary is not None
             and (prefer_set is None or cc_primary.provider in prefer_set)):
+        if not getattr(_get_default_primary_model, "_cc_logged", False):
+            logger.info(
+                "Using configured Claude Code model: %s", cc_primary.model_name
+            )
+            _get_default_primary_model._cc_logged = True  # type: ignore[attr-defined]
         return cc_primary
 
     # Step 3: default-order autodetect via env vars. Skip providers
