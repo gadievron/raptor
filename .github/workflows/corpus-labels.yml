@@ -241,3 +241,30 @@ jobs:
           if grep -q "no-fixture" pin-lint.log; then
             echo "::warning::pin lint could not verify some labels (no-fixture — network unreachable?)"
           fi
+
+  # Aggregate gate — gives GitHub a single job name to anchor the
+  # workflow result on. Without this, a run where all real jobs are
+  # legitimately skipped (dedup hit) has no successful job and GitHub
+  # reports the workflow as failed/skipped, firing notification emails.
+  corpus-labels-passed:
+    name: corpus-labels-passed
+    if: always()
+    needs: [pre_check, schema-lint, pin-lint-pr, pin-lint-sweep]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verify all jobs passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          set -euo pipefail
+          echo "Job results: ${RESULTS}"
+          ok=1
+          for r in ${RESULTS}; do
+            case "$r" in
+              success|skipped) ;;
+              *) echo "::error::A corpus-labels job reported '${r}'"; ok=0 ;;
+            esac
+          done
+          [ "$ok" -eq 1 ] || exit 1
+          echo "Corpus labels passed or was legitimately skipped."

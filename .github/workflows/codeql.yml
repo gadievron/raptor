@@ -548,3 +548,30 @@ jobs:
           sarif_file: combined.sarif
           # No `category:` here — each run carries its own
           # automationDetails.id which the action honours.
+
+  # Aggregate gate — gives GitHub a single job name to anchor the
+  # workflow result on. Without this, a run where all real jobs are
+  # legitimately skipped (dedup hit) has no successful job and GitHub
+  # reports the workflow as failed/skipped, firing notification emails.
+  codeql-passed:
+    name: codeql-passed
+    if: always()
+    needs: [pre_check, changes, analyze, upload]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verify all jobs passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          set -euo pipefail
+          echo "Job results: ${RESULTS}"
+          ok=1
+          for r in ${RESULTS}; do
+            case "$r" in
+              success|skipped) ;;
+              *) echo "::error::A CodeQL job reported '${r}'"; ok=0 ;;
+            esac
+          done
+          [ "$ok" -eq 1 ] || exit 1
+          echo "CodeQL passed or was legitimately skipped."

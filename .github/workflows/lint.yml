@@ -331,3 +331,30 @@ jobs:
 
       - name: Run ReDoS idiom census
         run: python -m pytest .github/tests/test_redos_idiom_census.py -q
+
+  # Aggregate gate — gives GitHub a single job name to anchor the
+  # workflow result on. Without this, a run where all real jobs are
+  # legitimately skipped (dedup hit) has no successful job and GitHub
+  # reports the workflow as failed/skipped, firing notification emails.
+  lint-passed:
+    name: lint-passed
+    if: always()
+    needs: [pre_check, ruff-pr, ruff-tree, command-metadata, repo-invariants]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verify all jobs passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          set -euo pipefail
+          echo "Job results: ${RESULTS}"
+          ok=1
+          for r in ${RESULTS}; do
+            case "$r" in
+              success|skipped) ;;
+              *) echo "::error::A lint job reported '${r}'"; ok=0 ;;
+            esac
+          done
+          [ "$ok" -eq 1 ] || exit 1
+          echo "Lint passed or was legitimately skipped."
