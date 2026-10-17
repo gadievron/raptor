@@ -49,6 +49,12 @@ class TestBuildCCCommand:
         assert "--strict-mcp-config" not in cmd
         assert "--mcp-config" not in cmd
 
+    def test_envelope_pins_verbose_off(self):
+        # verbose=true in user settings switches json output to an
+        # event array the envelope parsers cannot read.
+        cmd = build_cc_command(CCDispatchConfig(claude_bin="claude"))
+        assert cmd[cmd.index("--settings") + 1] == '{"verbose": false}'
+
     def test_no_envelope(self):
         config = CCDispatchConfig(claude_bin="claude", capture_json_envelope=False)
         cmd = build_cc_command(config)

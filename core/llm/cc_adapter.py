@@ -627,6 +627,13 @@ def _env_cc_fallback_model() -> str | None:
     return raw or None
 
 
+# `verbose: true` in user settings turns `--output-format json` into a
+# JSON array of every turn event instead of the single result envelope
+# the parsers read. Pinning it off per call keeps the envelope shape
+# independent of the operator's settings.
+JSON_ENVELOPE_SETTINGS = ("--settings", '{"verbose": false}')
+
+
 def build_cc_command(
     config: CCDispatchConfig,
     *,
@@ -683,7 +690,7 @@ def build_cc_command(
     if config.stream_json:
         cmd.extend(["--output-format", "stream-json", "--verbose"])
     elif config.capture_json_envelope:
-        cmd.extend(["--output-format", "json"])
+        cmd.extend(["--output-format", "json", *JSON_ENVELOPE_SETTINGS])
     if config.json_schema is not None:
         cmd.extend(["--json-schema", json.dumps(config.json_schema)])
     if config.strict_mcp:

@@ -114,6 +114,16 @@ class TestProbe:
         assert got2 == "anthropic.claude-fable-5"
         assert len(calls) == 1
 
+    def test_probe_pins_verbose_off(self, monkeypatch):
+        envelope = json.dumps({
+            "type": "result", "is_error": False,
+            "modelUsage": {"claude-opus-5-5": {"outputTokens": 4}},
+        })
+        calls = self._fake_run(monkeypatch, stdout=envelope)
+        probe_cc_session_model("/usr/bin/true", use_cache=False)
+        cmd = calls[0][0]
+        assert cmd[cmd.index("--settings") + 1] == '{"verbose": false}'
+
     def test_nonzero_exit_returns_none(self, monkeypatch):
         self._fake_run(monkeypatch, returncode=1)
         assert probe_cc_session_model("/usr/bin/true") is None
