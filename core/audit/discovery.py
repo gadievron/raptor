@@ -44,6 +44,10 @@ DEFAULT_SM_MIN_HANDLERS = 3
 DEFAULT_SM_MAX_BUNDLES = 50
 HANDLER_CONTEXT_LINES = 10
 
+DEFAULT_MAX_SWEEP_TARGETS = 40
+MIN_SWEEP_LINES = 10
+MAX_CALLER_SIGNATURES = 3
+
 # Single-character or very short names that are almost always macros,
 # aliases, or wrappers — not interesting contract surfaces.
 MIN_CALLEE_LINES = 5
@@ -109,6 +113,18 @@ class DiscoveryResult:
     source: str = "contract_perspective"
     seam_or_field: str = ""
     cost_usd: float = 0.0
+
+
+@dataclass
+class SweepTarget:
+    """One high-priority function selected for multi-perspective sweep."""
+
+    fid: str
+    source: str
+    callers_source: str
+    annotation: str
+    priority_score: float
+    priority_reason: str
 
 
 # ── checklist helpers ───────────────────────────────────────────────
@@ -1084,6 +1100,548 @@ def run_state_machine_discovery(
     logger.info(
         "discovery: SM %d bundles reviewed, %d findings, $%.2f total",
         len(results), total_findings, total_cost,
+    )
+    return results
+
+
+# ── sweep target selection ─────────────────────────────────────────
+
+def _score_sweep_target(
+    fid: str,
+    info: dict[str, Any],
+    *,
+    sinks: set[str],
+    entry_reachable: set[str],
+    weakness_fids: set[str],
+    fan_in: Counter[str],
+    cross_dir_callers: set[str],
+) -> tuple[float, str]:
+    """Score a function for sweep priority."""
+    score = 0.0
+    reasons: list[str] = []
+
+    if fid in sinks or fid in entry_reachable:
+        score += 3
+        reasons.append("sink/entry-reachable")
+
+    if fid in weakness_fids:
+        score += 2
+        reasons.append("existing-weakness")
+
+    fi = fan_in[fid]
+    if fi >= 5:
+        score += 2
+        reasons.append(f"fan-in={fi}")
+
+    span = info.get("line_end", 0) - info.get("line_start", 0)
+    if span >= 50:
+        score += 1
+        reasons.append(f"complex={span}L")
+
+    func_name = fid.rsplit(":", 1)[-1] if ":" in fid else fid
+    if (_INPUT_PREFIX_RE.search(func_name)
+            and _INPUT_SUFFIX_RE.search(func_name)):
+        score += 1
+        reasons.append("input-handler-name")
+
+    if fid in cross_dir_callers:
+        score += 1
+        reasons.append("cross-dir-callers")
+
+    return score, "; ".join(reasons) if reasons else "eligible"
+
+
+def _build_cross_dir_caller_set(
+    checklist: dict[str, Any],
+) -> set[str]:
+    """Identify functions called from ≥2 directories."""
+    callers_by_dir: dict[str, set[str]] = defaultdict(set)
+    for f_entry in checklist.get("files", []):
+        fname = f_entry.get("path", "")
+        cg = f_entry.get("call_graph")
+        if not cg:
+            continue
+        caller_dir = str(Path(fname).parent)
+        calls = cg.get("calls", [])
+        if not isinstance(calls, list):
+            continue
+        for call in calls:
+            if not isinstance(call, dict):
+                continue
+            chain = call.get("chain", [])
+            if not chain:
+                continue
+            callee_name = chain[-1] if isinstance(chain, list) else chain
+            if isinstance(callee_name, str):
+                callers_by_dir[callee_name].add(caller_dir)
+
+    result: set[str] = set()
+    func_index = _build_func_index(checklist)
+    for func_name, dirs in callers_by_dir.items():
+        if len(dirs) >= 2:
+            for fid, info in func_index.items():
+                if fid.endswith(f":{func_name}"):
+                    result.add(fid)
+    return result
+
+
+def _collect_caller_signatures(
+    fid: str,
+    checklist: dict[str, Any],
+    target_path: Path,
+    max_callers: int = MAX_CALLER_SIGNATURES,
+) -> str:
+    """Collect top callers' signatures + call-site snippets."""
+    func_name = fid.rsplit(":", 1)[-1] if ":" in fid else fid
+    callers: list[tuple[str, str, str]] = []
+
+    for f_entry in checklist.get("files", []):
+        fname = f_entry.get("path", "")
+        cg = f_entry.get("call_graph")
+        if not cg:
+            continue
+        calls = cg.get("calls", [])
+        if not isinstance(calls, list):
+            continue
+        for call in calls:
+            if not isinstance(call, dict):
+                continue
+            chain = call.get("chain", [])
+            caller = call.get("caller", "")
+            if not chain or not caller:
+                continue
+            callee = chain[-1] if isinstance(chain, list) else chain
+            if callee == func_name:
+                caller_fid = f"{fname}:{caller}"
+                for item in f_entry.get("items", []):
+                    if item.get("name") == caller:
+                        sig = item.get("signature", caller)
+                        snippet = _extract_call_site_snippet(
+                            target_path / fname,
+                            func_name,
+                            item.get("line_start", 0),
+                            item.get("line_end", 0),
+                        )
+                        callers.append((caller_fid, sig, snippet))
+                        break
+
+    callers = callers[:max_callers]
+    if not callers:
+        return ""
+
+    parts: list[str] = []
+    for caller_fid, sig, snippet in callers:
+        parts.append(f"Caller: {caller_fid}")
+        parts.append(f"  Signature: {sig}")
+        if snippet:
+            parts.append(f"  Call site:\n{snippet}")
+        parts.append("")
+    return "\n".join(parts)
+
+
+def build_sweep_targets(
+    checklist: dict[str, Any],
+    context_map: dict[str, Any] | None,
+    entry_points: set[str],
+    *,
+    target_path: Path,
+    max_targets: int = DEFAULT_MAX_SWEEP_TARGETS,
+    token_budget: int = DEFAULT_TOKEN_BUDGET,
+    weakness_fids: set[str] | None = None,
+) -> list[SweepTarget]:
+    """Select high-priority functions for sweep analysis."""
+    func_index = _build_func_index(checklist)
+
+    sinks: set[str] = set()
+    if context_map:
+        from core.audit._util import extract_context_map_set
+        sinks = extract_context_map_set(context_map, "sinks")
+        entry_points = entry_points | extract_context_map_set(
+            context_map, "entry_points",
+        )
+
+    fan_in: Counter[str] = Counter()
+    for f_entry in checklist.get("files", []):
+        cg = f_entry.get("call_graph")
+        if not cg:
+            continue
+        calls = cg.get("calls", [])
+        if not isinstance(calls, list):
+            continue
+        for call in calls:
+            if not isinstance(call, dict):
+                continue
+            chain = call.get("chain", [])
+            if chain:
+                callee_name = chain[-1] if isinstance(chain, list) else chain
+                if isinstance(callee_name, str):
+                    for callee_fid in func_index:
+                        if callee_fid.endswith(f":{callee_name}"):
+                            fan_in[callee_fid] += 1
+
+    wf = weakness_fids or set()
+    cross_dir = _build_cross_dir_caller_set(checklist)
+
+    scored: list[tuple[float, int, str, dict[str, Any]]] = []
+    for fid, info in func_index.items():
+        span = info.get("line_end", 0) - info.get("line_start", 0)
+        if span < MIN_SWEEP_LINES:
+            continue
+        score, reason = _score_sweep_target(
+            fid, info,
+            sinks=sinks,
+            entry_reachable=entry_points,
+            weakness_fids=wf,
+            fan_in=fan_in,
+            cross_dir_callers=cross_dir,
+        )
+        scored.append((-score, -fan_in[fid], fid, info))
+
+    scored.sort()
+
+    targets: list[SweepTarget] = []
+    for neg_score, neg_fi, fid, info in scored[:max_targets]:
+        source = _read_function_source(target_path, info, token_budget)
+        if not source:
+            continue
+
+        callers_src = _collect_caller_signatures(
+            fid, checklist, target_path,
+        )
+
+        lang = _detect_lang(info["file"])
+        file_part, func_part = fid.rsplit(":", 1)
+        annotation = (
+            f"## Function: {func_part} ({file_part})\n\n"
+            f"```{lang}\n{source}\n```"
+        )
+
+        _, reason = _score_sweep_target(
+            fid, info,
+            sinks=sinks,
+            entry_reachable=entry_points,
+            weakness_fids=wf,
+            fan_in=fan_in,
+            cross_dir_callers=cross_dir,
+        )
+
+        targets.append(SweepTarget(
+            fid=fid,
+            source=source,
+            callers_source=callers_src,
+            annotation=annotation,
+            priority_score=-neg_score,
+            priority_reason=reason,
+        ))
+
+    logger.info(
+        "discovery: %d functions → %d sweep targets (max %d)",
+        len(func_index), len(targets), max_targets,
+    )
+    return targets
+
+
+def _parse_discovery_findings(
+    raw: str,
+    target: SweepTarget,
+    source_tag: str,
+) -> DiscoveryResult:
+    """Parse LLM JSON response into a DiscoveryResult."""
+    text = raw.strip()
+    _fence_matches = list(
+        re.finditer(r"```(?:json)?[ \t]*\n(.+?)```", text, re.DOTALL),
+    )
+    if _fence_matches:
+        text = _fence_matches[-1].group(1).strip()
+    elif text.startswith("```"):
+        lines = text.splitlines()
+        lines = [ln for ln in lines if not ln.startswith("```")]
+        text = "\n".join(lines)
+
+    result = DiscoveryResult(
+        source=source_tag,
+        seam_or_field=target.fid,
+    )
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        logger.warning(
+            "discovery: failed to parse response for %s",
+            target.fid,
+        )
+        return result
+
+    findings = parsed.get("findings", [])
+    if not isinstance(findings, list):
+        return result
+
+    file_part = target.fid.rsplit(":", 1)[0] if ":" in target.fid else ""
+    func_part = target.fid.rsplit(":", 1)[1] if ":" in target.fid else target.fid
+
+    for f in findings:
+        if not isinstance(f, dict):
+            continue
+        gt = f.get("guard_type", "")
+        if not gt:
+            continue
+
+        weakness = {
+            "property": f.get("assumed_property", ""),
+            "guard_type": gt,
+            "mechanism": f.get("mechanism", ""),
+            "cwe_class": f.get("cwe_class"),
+            "source": source_tag,
+            "guarded_by": [],
+        }
+        result.weaknesses.append(weakness)
+
+        hypothesis = {
+            "text": (
+                f"Sweep ({source_tag}): {file_part}:{func_part} — "
+                f"{gt}: {f.get('mechanism', 'unspecified')}"
+            ),
+            "source": source_tag,
+            "standalone": bool(f.get("standalone")),
+            "fid": target.fid,
+        }
+        result.hypotheses.append(hypothesis)
+
+    return result
+
+
+# ── assumption mining ──────────────────────────────────────────────
+
+ASSUMPTION_EXTRACT_TEMPLATE = """\
+{annotation}
+
+List the assumptions this function makes that are:
+- **Implicit** (not checked or asserted in the code), AND
+- **Specific** to this function's logic (reference a concrete variable, \
+field, return value, or code path — not generic properties like "pointer \
+is valid" or "no concurrent access")
+
+For each assumption, state:
+- The property assumed (reference the specific variable or field)
+- Whether the assumption is explicit (checked/asserted) or implicit \
+(unchecked)
+- The consequence if violated (cite the specific line or operation \
+that would fail)
+
+Respond in JSON: {{ "assumptions": [ {{ "property": "...", \
+"explicit": true/false, "consequence": "..." }} ] }}
+"""
+
+ASSUMPTION_VERIFY_TEMPLATE = """\
+Function `{fid}` makes these implicit assumptions:
+
+{assumptions_list}
+
+Here are the callers that invoke this function:
+
+{callers_source}
+
+For each assumption, determine whether ALL callers guarantee it.
+
+Report ONLY assumptions that are UNGUARANTEED and where you can identify \
+a CONCRETE triggering path: a specific caller that fails to establish \
+the property, with the variable or field name involved.
+
+For each finding you MUST provide:
+- guard_type: the kind of guard missing (null_check, bounds, init, type, \
+lifecycle)
+- assumed_property: the specific variable/field and what is assumed \
+(e.g. "h->size is initialised")
+- mechanism: name the specific caller function and the code path that \
+violates the assumption (e.g. "process_raw() calls pool_alloc(len, 1) \
+which skips memset, leaving h->size uninitialised")
+- cwe_class: the CWE ID
+- standalone: true if this finding is useful without the others
+
+Do NOT report:
+- Generic concurrency or memory-model assumptions unless a specific \
+race is identified between named functions
+- Properties guaranteed by the language or type system
+- Assumptions where every caller does establish the property
+
+Respond in JSON: {{ "findings": [ {{ "guard_type": "...", \
+"assumed_property": "...", "mechanism": "...", "cwe_class": "...", \
+"standalone": true/false }} ] }}
+
+If all assumptions are guaranteed, respond: {{ "findings": [] }}
+"""
+
+
+def _parse_assumptions(raw: str) -> list[dict[str, Any]]:
+    """Parse the pass-1 assumption extraction response."""
+    text = raw.strip()
+    _fence_matches = list(
+        re.finditer(r"```(?:json)?[ \t]*\n(.+?)```", text, re.DOTALL),
+    )
+    if _fence_matches:
+        text = _fence_matches[-1].group(1).strip()
+    elif text.startswith("```"):
+        lines = text.splitlines()
+        lines = [l for l in lines if not l.startswith("```")]
+        text = "\n".join(lines)
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+
+    assumptions = parsed.get("assumptions", [])
+    if not isinstance(assumptions, list):
+        return []
+
+    return [
+        a for a in assumptions
+        if isinstance(a, dict) and not a.get("explicit", True)
+    ]
+
+
+_IDENT_RE = re.compile(r"\b[a-zA-Z_][a-zA-Z0-9_]{2,}\b")
+
+_NOISE_IDENTS: frozenset[str] = frozenset({
+    "int", "void", "char", "size_t", "NULL", "return", "const",
+    "struct", "enum", "unsigned", "signed", "short", "long",
+    "static", "extern", "typedef", "sizeof", "include",
+    "true", "false", "for", "while", "break", "continue",
+    "switch", "case", "default", "goto", "volatile", "register",
+    "inline", "restrict", "the", "that", "this", "from", "with",
+    "not", "and", "but", "are", "was", "has", "have",
+})
+
+
+def _source_identifiers(source: str) -> frozenset[str]:
+    """Extract meaningful C identifiers from source text."""
+    raw = _IDENT_RE.findall(source)
+    return frozenset(raw) - _NOISE_IDENTS
+
+
+def _filter_grounded_findings(
+    weaknesses: list[dict[str, Any]],
+    source_idents: frozenset[str],
+) -> list[dict[str, Any]]:
+    """Keep only findings whose mechanism references source identifiers."""
+    if not source_idents:
+        return weaknesses
+    kept = []
+    for w in weaknesses:
+        mechanism = w.get("mechanism", "")
+        assumed = w.get("assumed_property", "")
+        text = f"{mechanism} {assumed}"
+        found = _IDENT_RE.findall(text)
+        if any(tok in source_idents for tok in found):
+            kept.append(w)
+        else:
+            logger.debug(
+                "discovery: dropped ungrounded finding: %s",
+                w.get("assumed_property", "?"),
+            )
+    return kept
+
+
+def run_assumption_mining(
+    targets: list[SweepTarget],
+    *,
+    review_fn: Callable[[str, str], tuple[str, float]],
+    max_cost_usd: float = 5.0,
+) -> list[DiscoveryResult]:
+    """Two-pass assumption mining on each target."""
+    results: list[DiscoveryResult] = []
+    total_cost = 0.0
+
+    system_extract = (
+        "You are a security auditor extracting implicit assumptions "
+        "from code. Respond only with the JSON object described in "
+        "the prompt."
+    )
+    system_verify = (
+        "You are a security auditor verifying whether implicit "
+        "assumptions are guaranteed by callers and environment. "
+        "Respond only with the JSON object described in the prompt."
+    )
+
+    for target in targets:
+        if total_cost >= max_cost_usd:
+            logger.info(
+                "discovery: assumption mining cost cap reached "
+                "($%.2f >= $%.2f)",
+                total_cost, max_cost_usd,
+            )
+            break
+
+        # Pass 1: extract assumptions
+        prompt1 = ASSUMPTION_EXTRACT_TEMPLATE.format(
+            annotation=target.annotation,
+        )
+        try:
+            response1, cost1 = review_fn(system_extract, prompt1)
+        except Exception as exc:
+            from core.llm.client import is_budget_exceeded_error
+            if is_budget_exceeded_error(exc):
+                break
+            logger.exception(
+                "discovery: assumption extract failed for %s",
+                target.fid,
+            )
+            continue
+        total_cost += cost1
+
+        implicit = _parse_assumptions(response1)
+        if not implicit:
+            continue
+
+        # Pass 2: verify implicit assumptions against callers
+        assumptions_list = "\n".join(
+            f"- {a.get('property', '?')} "
+            f"(consequence: {a.get('consequence', 'unknown')})"
+            for a in implicit
+        )
+
+        callers_src = target.callers_source or "(no caller context available)"
+
+        prompt2 = ASSUMPTION_VERIFY_TEMPLATE.format(
+            fid=target.fid,
+            assumptions_list=assumptions_list,
+            callers_source=callers_src,
+        )
+        try:
+            response2, cost2 = review_fn(system_verify, prompt2)
+        except Exception as exc:
+            from core.llm.client import is_budget_exceeded_error
+            if is_budget_exceeded_error(exc):
+                break
+            logger.exception(
+                "discovery: assumption verify failed for %s",
+                target.fid,
+            )
+            continue
+        total_cost += cost2
+
+        result = _parse_discovery_findings(
+            response2, target, "assumption_mining",
+        )
+
+        # Mechanical post-filter: drop findings that don't reference
+        # any identifier from the target source or callers.
+        if result.weaknesses:
+            all_source = (target.source or "") + "\n" + (
+                target.callers_source or ""
+            )
+            idents = _source_identifiers(all_source)
+            result.weaknesses = _filter_grounded_findings(
+                result.weaknesses, idents,
+            )
+
+        result.cost_usd = cost1 + cost2
+        results.append(result)
+
+    total_findings = sum(len(r.weaknesses) for r in results)
+    logger.info(
+        "discovery: assumption mining %d targets, %d findings, $%.2f total",
+        len(targets), total_findings, total_cost,
     )
     return results
 
