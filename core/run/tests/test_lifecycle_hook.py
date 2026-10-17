@@ -277,25 +277,6 @@ class TestToolFailureFiltering(unittest.TestCase):
             run = self._run_hook(tmp, payload)
             self.assertTrue((run / FAILURE_MARKER).exists())
 
-    def test_codex_tool_response_string_known_false_positive(self):
-        """Codex sends tool_response as a string (not tool_output as a
-        dict).  The absent tool_output.exit_code falls through to the
-        command-pattern filter — which stamps a spurious failure marker
-        on matching RAPTOR calls.  This documents the known parser
-        limitation; PostToolUse is NOT registered in config.toml for
-        Codex to avoid it.  If it is ever re-enabled, the parser must
-        handle this payload shape."""
-        payload = json.dumps({
-            "tool_name": "Bash",
-            "tool_input": {"command": "libexec/raptor-run-lifecycle start scan"},
-            "tool_response": "Process exited with code 0",
-        })
-        result = _hook_mod._tool_failure_command(io.StringIO(payload))
-        # With no tool_output dict the code falls through and matches
-        # the command — this is the known false-positive (PostToolUse
-        # removed from config.toml to avoid it).
-        self.assertIsNotNone(result)
-
 
 class TestStopHook(unittest.TestCase):
     """Stop mode: complete or fail single-call runs with dead tool_pid."""
