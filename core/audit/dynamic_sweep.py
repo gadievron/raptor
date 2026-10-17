@@ -30,6 +30,21 @@ _HARNESS_TIMEOUT_S = 10
 _COMPILE_TIMEOUT_S = 15
 _SANITIZER_FLAGS = "-fsanitize=address,undefined -fno-omit-frame-pointer -g"
 
+# glibc >= 2.39 replaced abort()'s ABORT_INSTRUCTION escalation with
+# while(1) raise(SIGABRT) — an infinite loop the kernel silently
+# ignores for namespace init (PID 1).  A SIGABRT handler that calls
+# __builtin_trap() turns the raise into a SIGILL hardware fault that
+# force_sig delivers unconditionally.  Installed via -include so it
+# runs before main() without modifying the LLM-generated harness text.
+_ABORT_TRAP_HEADER = """\
+#include <signal.h>
+static void _raptor_abort_trap(int _s){(void)_s;__builtin_trap();}
+__attribute__((constructor))
+static void _raptor_install_abort_trap(void){
+    signal(SIGABRT,_raptor_abort_trap);
+}
+"""
+
 
 @dataclass
 class DynamicSweepResult:
@@ -283,10 +298,13 @@ def _run_c_harness(
             prefix="raptor_dyn_", dir=exec_workdir()) as tmpdir:
         harness_path = Path(tmpdir) / "harness.c"
         binary_path = Path(tmpdir) / "harness"
+        abort_trap = Path(tmpdir) / "_abort_trap.h"
         harness_path.write_text(harness_code)
+        abort_trap.write_text(_ABORT_TRAP_HEADER)
 
         compile_cmd = [
             compiler, str(harness_path),
+            "-include", str(abort_trap),
             "-o", str(binary_path),
             f"-I{target_path}",
         ] + _SANITIZER_FLAGS.split()
@@ -802,27 +820,22 @@ def _get_safe_env() -> dict[str, str]:
     # unsignaled) — abort_on_error makes a genuine report die trying
     # to deliver a signal.
     #
-    # handle_segv=0 is load-bearing for HOW that death reaches the
-    # parent's waitpid. The harness runs as the init process of the
-    # sandbox's pid namespace, and the kernel discards default-action
-    # self-signals sent to a namespace init — abort()'s raise(SIGABRT)
-    # never delivers. glibc's abort() then escalates to its trap
-    # instruction, a hardware fault the kernel force-delivers even to
-    # pid 1: SIGSEGV, waitstatus-visible, signal-grade. With ASan's
-    # default handle_segv=1 that escalation fault is INTERCEPTED
-    # in-process instead: ASan prints a "SEGV" report, its own die
-    # path re-enters abort(), and glibc's staged abort falls through
-    # to its terminal _exit(127) — an exit-code death the signal-grade
-    # bar rightly refuses (observed: genuine UBSan CWE-190 hits
-    # classifying "exception" with exit 127 on glibc 2.39, where the
-    # trap stage runs with signals deliverable; glibc >= 2.40 blocks
-    # all signals before the trap, so the same interception never
-    # happens and the fault force-kills either way). Disabling the
-    # sanitizer's SEGV interception makes the escalation fault the
-    # deterministic terminator on every glibc: report on stderr +
-    # WIFSIGNALED at the parent = "sanitizer". Cost: a wild SIGSEGV
-    # in target code loses ASan's decoded SEGV report and classifies
-    # signal-only "crash" — the stronger, still-confirming stamp.
+    # The harness runs as PID 1 in the sandbox's pid namespace, and
+    # the kernel discards default-action self-signals sent to a
+    # namespace init — abort()'s raise(SIGABRT) never delivers.
+    # _ABORT_TRAP_HEADER (injected via -include at compile time)
+    # installs a SIGABRT handler that calls __builtin_trap(), turning
+    # the raise into a SIGILL hardware fault the kernel force-delivers
+    # even to PID 1.  This replaces the former reliance on glibc's
+    # abort() ABORT_INSTRUCTION escalation, which glibc >= 2.39
+    # replaced with while(1) raise(SIGABRT) — an infinite loop PID 1
+    # ignores forever.
+    #
+    # handle_segv=0 prevents the sanitizer runtime from intercepting
+    # wild SIGSEGV in target code, so those classify as signal-grade
+    # "crash" (the stronger, still-confirming stamp) rather than
+    # routing through ASan's exit path to an exit-code death the
+    # signal-grade bar rightly refuses.
     env["UBSAN_OPTIONS"] = (
         "print_stacktrace=1:halt_on_error=1:abort_on_error=1:handle_segv=0"
     )
