@@ -693,7 +693,7 @@ def _record_session_locked(project: str, pid: int,
         fields["token"] = token
     if seeded_by:
         if seeded_by in ("flag", "auto", "bookmark", "use", "create",
-                         "adopt"):
+                         "adopt", "codex-hook"):
             fields["seeded_by"] = seeded_by
         else:
             logger.warning(
@@ -703,6 +703,122 @@ def _record_session_locked(project: str, pid: int,
     except OSError:
         return None
     return pid
+
+
+def _default_startup_project() -> str:
+    """Read the ``.active`` bookmark for a new session's default project.
+
+    Returns the bookmark name when it points at an existing project
+    file, otherwise :data:`NONE_SENTINEL`. No TTY prompt, no
+    machine-project expiry — this is a non-interactive startup seam.
+
+    :exc:`~core.project.registry_home.RegistryHomeError` (a
+    ``ValueError``) propagates — a misconfigured ``RAPTOR_REGISTRY_HOME``
+    must not silently fall through to a projectless binding.
+    """
+    try:
+        link = _registry_home.active_link()
+    except _registry_home.RegistryHomeError:
+        raise
+    except Exception:  # noqa: BLE001
+        return NONE_SENTINEL
+    if not link.is_symlink():
+        return NONE_SENTINEL
+    try:
+        target = os.readlink(link)
+    except OSError:
+        return NONE_SENTINEL
+    if (not target.endswith(".json")
+            or "/" in target or "\\" in target):
+        return NONE_SENTINEL
+    name = target[:-5]
+    if not _NAME_RE.match(name):
+        return NONE_SENTINEL
+    if not (link.parent / target).is_file():
+        return NONE_SENTINEL
+    return name
+
+
+def ensure_codex_session(pid: int) -> tuple[str, str] | None:
+    """Atomically ensure a sessions.d entry for a Codex hook invocation.
+
+    Holds :func:`_ledger_lock` across the full read → identity check →
+    decision → token mint → write cycle so two concurrent hooks cannot
+    both observe no entry, mint separate tokens, and race the write —
+    the second would overwrite a project binding set after the first.
+
+    Returns ``(pid_str, token)`` on success, ``None`` on failure.
+    """
+    if not _ensure_dir():
+        return None
+    pid_str = str(pid)
+    with _ledger_lock(pid):
+        entry = _sessions_dir() / pid_str
+        fields = _parse_entry(entry)
+        if fields and _identity_matches(pid, fields):
+            token = fields.get("token", "")
+            if token:
+                return (pid_str, token)
+            # Valid entry without a token — upgrade in place,
+            # preserving project, since, and all identity fields.
+            token = mint_token()
+            fields["token"] = token
+            try:
+                content = "\n".join(
+                    f"{k}={_clean_value(str(fields[k]))}"
+                    for k in ENTRY_KEYS if fields.get(k)
+                ) + "\n"
+                _atomic_write(entry, content)
+            except OSError:
+                return None
+            return (pid_str, token)
+
+        # No valid entry — create from scratch.  Replicate the
+        # stale-identity handling from _record_session_locked: a
+        # positively-stale v2 predecessor's run ledger must not
+        # become this session's attribution history.
+        identity = _identity_for(pid)
+        if identity is None:
+            logger.warning(
+                "sessions: refusing to bind pid %d — identity "
+                "unreadable, the entry could never verify", pid)
+            return None
+        # own-repair check: is this session's env credential naming
+        # this pid with a matching token?  On a fresh Codex hook
+        # invocation the env vars are unset, so this is always False
+        # — but the logic must be correct for reentry after a crash
+        # that corrupted the identity stamp.
+        env_pid = os.environ.get(ENV_SESSION_PID, "")
+        env_tok = os.environ.get(ENV_SESSION_TOKEN, "")
+        _own_repair = (env_tok
+                       and env_pid.isascii() and env_pid.isdigit()
+                       and int(env_pid) == pid
+                       and fields.get("token") == env_tok)
+        # Strip predecessor credentials (restored below for own-repair).
+        fields.pop("token", None)
+        fields.pop("seeded_by", None)
+        if _own_repair:
+            fields["token"] = env_tok
+        fields.update(identity)
+        # Clear the predecessor's run ledger for a positively-stale
+        # v2 entry — not for v1 upgrades (no stamp, could be this
+        # same live session) and not for own-repair (this session's
+        # records).  Lock FILE stays (unlinking a held lock splits).
+        if (not _own_repair
+                and fields.get("v") == ENTRY_VERSION
+                and (_sessions_dir() / f"{pid}.run").exists()):
+            with contextlib.suppress(OSError):
+                (_sessions_dir() / f"{pid}.run").unlink(missing_ok=True)
+        token = env_tok if _own_repair else mint_token()
+        fields["token"] = token
+        fields["seeded_by"] = "codex-hook"
+        project = (fields.get("project", NONE_SENTINEL) if _own_repair
+                   else _default_startup_project())
+        try:
+            _atomic_write(entry, _entry_content(project, fields))
+        except OSError:
+            return None
+        return (pid_str, token)
 
 
 def rebind_session_if(pid: int, expected: str,

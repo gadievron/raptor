@@ -129,37 +129,407 @@ def test_claude_env_file_fallback(
     assert claude_env.exists()
 
 
+def _codex_session_fixtures(monkeypatch, tmp_path):
+    """Shared setup for Codex session tests: registry, identity mocks."""
+    from unittest.mock import patch as mock_patch
+
+    registry = tmp_path / "registry"
+    sessions_dir = registry / "sessions.d"
+    monkeypatch.setenv("CODEX", "1")
+    monkeypatch.setenv("RAPTOR_REGISTRY_HOME", str(registry))
+    monkeypatch.delenv("RAPTOR_SESSION_PID", raising=False)
+    monkeypatch.delenv("RAPTOR_SESSION_TOKEN", raising=False)
+
+    from core.project import sessions as _sessions
+    monkeypatch.setattr(_sessions, "SESSIONS_DIR", sessions_dir)
+
+    fake_identity = {
+        "starttime": "12345", "boot_id": "test-boot-id",
+        "pidns": "4026531836",
+    }
+    return registry, sessions_dir, fake_identity, mock_patch
+
+
 def test_codex_session_seeds_credentials_in_env_file(
     session_init, tmp_path, monkeypatch,
 ):
     """CODEX=1 triggers session seeding; credentials land in the env file."""
-    from unittest.mock import patch as mock_patch
+    registry, sessions_dir, fake_identity, mock_patch = (
+        _codex_session_fixtures(monkeypatch, tmp_path))
 
     root = tmp_path / "raptor"
     (root / "bin").mkdir(parents=True)
     env_file = tmp_path / "raptor.env"
-    registry = tmp_path / "registry"
     monkeypatch.setenv("RAPTOR_ENV_FILE", str(env_file))
     monkeypatch.delenv("CLAUDE_ENV_FILE", raising=False)
-    monkeypatch.setenv("CODEX", "1")
-    monkeypatch.setenv("RAPTOR_REGISTRY_HOME", str(registry))
     monkeypatch.setattr(session_init, "REPO_ROOT", root)
 
     fake_pid = 99999
     with mock_patch(
-        "core.run.metadata._find_claude_ancestor", return_value=fake_pid,
+        "core.project.sessions.resolve_session_pid",
+        return_value=fake_pid,
+    ), mock_patch(
+        "core.project.sessions._identity_for",
+        return_value=fake_identity,
     ):
+        session_init._seed_codex_session()
         session_init.write_env_file()
 
     content = env_file.read_text(encoding="utf-8")
     assert "RAPTOR_SESSION_PID=" in content
     assert "RAPTOR_SESSION_TOKEN=" in content
     assert str(fake_pid) in content
-    sessions_dir = registry / "sessions.d"
     entry = sessions_dir / str(fake_pid)
     assert entry.exists()
     entry_text = entry.read_text(encoding="utf-8")
     assert "seeded_by=codex-hook" in entry_text
+
+
+def test_codex_session_reentry_preserves_project(
+    session_init, tmp_path, monkeypatch,
+):
+    """Repeated _seed_codex_session must not destroy an existing project."""
+    registry, sessions_dir, fake_identity, mock_patch = (
+        _codex_session_fixtures(monkeypatch, tmp_path))
+
+    root = tmp_path / "raptor"
+    (root / "bin").mkdir(parents=True)
+    monkeypatch.setattr(session_init, "REPO_ROOT", root)
+
+    fake_pid = 99998
+    with mock_patch(
+        "core.project.sessions.resolve_session_pid",
+        return_value=fake_pid,
+    ), mock_patch(
+        "core.project.sessions._identity_for",
+        return_value=fake_identity,
+    ), mock_patch(
+        "core.project.sessions._identity_matches",
+        return_value=True,
+    ):
+        result1 = session_init._seed_codex_session()
+        assert result1 is not None
+        pid1, token1 = result1
+
+        from core.project.sessions import bind_session
+        bind_session("myproject", pid=fake_pid)
+
+        result2 = session_init._seed_codex_session()
+        assert result2 is not None
+        pid2, token2 = result2
+
+    assert pid1 == pid2
+    assert token1 == token2
+    from core.project.sessions import _parse_entry
+    fields = _parse_entry(sessions_dir / str(fake_pid))
+    assert fields.get("project") == "myproject"
+
+
+def test_codex_session_default_registry_no_crash(
+    session_init, tmp_path, monkeypatch,
+):
+    """Without RAPTOR_REGISTRY_HOME, the seeder must not TypeError."""
+    _, _, fake_identity, mock_patch = (
+        _codex_session_fixtures(monkeypatch, tmp_path))
+    monkeypatch.delenv("RAPTOR_REGISTRY_HOME", raising=False)
+
+    with mock_patch(
+        "core.project.sessions.resolve_session_pid",
+        return_value=99997,
+    ), mock_patch(
+        "core.project.sessions._identity_for",
+        return_value=fake_identity,
+    ):
+        result = session_init._seed_codex_session()
+    assert result is not None
+
+
+def test_codex_session_concurrent_init_same_token(
+    session_init, tmp_path, monkeypatch,
+):
+    """Two concurrent ensure_codex_session calls must yield the same token."""
+    import threading
+    registry, sessions_dir, fake_identity, mock_patch = (
+        _codex_session_fixtures(monkeypatch, tmp_path))
+
+    fake_pid = 99996
+    results = [None, None]
+
+    from core.project.sessions import ensure_codex_session
+
+    def seeder(idx):
+        results[idx] = ensure_codex_session(fake_pid)
+
+    with mock_patch(
+        "core.project.sessions._identity_for",
+        return_value=fake_identity,
+    ), mock_patch(
+        "core.project.sessions._identity_matches",
+        return_value=True,
+    ):
+        t1 = threading.Thread(target=seeder, args=(0,))
+        t2 = threading.Thread(target=seeder, args=(1,))
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+    assert results[0] is not None
+    assert results[1] is not None
+    _, tok1 = results[0]
+    _, tok2 = results[1]
+    assert tok1 == tok2, "concurrent seeders must converge on one token"
+
+
+def test_codex_session_failed_write_returns_none(
+    session_init, tmp_path, monkeypatch,
+):
+    """If the atomic write fails, ensure_codex_session returns None."""
+    _, sessions_dir, fake_identity, mock_patch = (
+        _codex_session_fixtures(monkeypatch, tmp_path))
+
+    fake_pid = 99995
+    from core.project.sessions import ensure_codex_session
+
+    with mock_patch(
+        "core.project.sessions._identity_for",
+        return_value=fake_identity,
+    ), mock_patch(
+        "core.project.sessions._atomic_write",
+        side_effect=OSError("disk full"),
+    ):
+        result = ensure_codex_session(fake_pid)
+    assert result is None
+
+
+def test_codex_session_respects_active_bookmark(
+    session_init, tmp_path, monkeypatch,
+):
+    """A fresh Codex session with an .active bookmark inherits the project."""
+    import json
+    registry, sessions_dir, fake_identity, mock_patch = (
+        _codex_session_fixtures(monkeypatch, tmp_path))
+
+    projects_dir = registry / "projects"
+    projects_dir.mkdir(parents=True)
+    proj_file = projects_dir / "myproj.json"
+    proj_file.write_text(json.dumps({"name": "myproj"}), encoding="utf-8")
+    active_link = projects_dir / ".active"
+    active_link.symlink_to("myproj.json")
+
+    fake_pid = 99994
+    from core.project.sessions import ensure_codex_session
+
+    with mock_patch(
+        "core.project.sessions._identity_for",
+        return_value=fake_identity,
+    ):
+        result = ensure_codex_session(fake_pid)
+
+    assert result is not None
+    from core.project.sessions import _parse_entry
+    fields = _parse_entry(sessions_dir / str(fake_pid))
+    assert fields.get("project") == "myproj"
+
+
+def test_codex_stale_identity_clears_predecessor_ledger(
+    session_init, tmp_path, monkeypatch,
+):
+    """A stale v2 predecessor's run ledger must not survive identity replacement."""
+    registry, sessions_dir, fake_identity, mock_patch = (
+        _codex_session_fixtures(monkeypatch, tmp_path))
+
+    fake_pid = 99993
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    # Write a stale v2 entry with a DIFFERENT starttime (predecessor).
+    old_entry = sessions_dir / str(fake_pid)
+    old_entry.write_text(
+        "v=2\nproject=oldproj\nsince=2026-01-01T00:00:00+00:00\n"
+        "starttime=00000\nboot_id=old-boot\npidns=111\n"
+        "token=oldtoken\nseeded_by=flag\n",
+        encoding="utf-8",
+    )
+    # Write a predecessor run ledger and a pin witness.
+    old_ledger = sessions_dir / f"{fake_pid}.run"
+    old_ledger.write_text("old-run-id scan /target 2026-01-01T00:00:00\n",
+                          encoding="utf-8")
+
+    from core.project.sessions import ensure_codex_session
+
+    with mock_patch(
+        "core.project.sessions._identity_for",
+        return_value=fake_identity,
+    ):
+        result = ensure_codex_session(fake_pid)
+
+    assert result is not None
+    _, token = result
+    assert token != "oldtoken"
+    # Predecessor ledger must be gone.
+    assert not old_ledger.exists(), "stale predecessor ledger survived"
+    # New entry must have fresh identity.
+    from core.project.sessions import _parse_entry
+    fields = _parse_entry(sessions_dir / str(fake_pid))
+    assert fields["starttime"] == fake_identity["starttime"]
+    assert fields.get("token") == token
+
+
+def test_codex_valid_identity_retains_ledger_and_since(
+    session_init, tmp_path, monkeypatch,
+):
+    """A valid existing entry retains its run records, token, project, since."""
+    registry, sessions_dir, fake_identity, mock_patch = (
+        _codex_session_fixtures(monkeypatch, tmp_path))
+
+    fake_pid = 99992
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    entry = sessions_dir / str(fake_pid)
+    original_since = "2026-06-15T12:00:00+00:00"
+    entry.write_text(
+        f"v=2\nproject=kept\nsince={original_since}\n"
+        f"starttime={fake_identity['starttime']}\n"
+        f"boot_id={fake_identity['boot_id']}\n"
+        f"pidns={fake_identity['pidns']}\n"
+        "token=existingtoken\nseeded_by=codex-hook\n",
+        encoding="utf-8",
+    )
+    ledger = sessions_dir / f"{fake_pid}.run"
+    ledger.write_text("run-001 scan /tgt 2026-06-15T12:01:00\n",
+                      encoding="utf-8")
+
+    from core.project.sessions import ensure_codex_session
+
+    with mock_patch(
+        "core.project.sessions._identity_matches",
+        return_value=True,
+    ):
+        result = ensure_codex_session(fake_pid)
+
+    assert result is not None
+    pid_str, token = result
+    assert token == "existingtoken"
+    assert ledger.exists(), "live session ledger must survive"
+    from core.project.sessions import _parse_entry
+    fields = _parse_entry(entry)
+    assert fields["project"] == "kept"
+    assert fields["since"] == original_since
+
+
+def test_codex_tokenless_upgrade_preserves_since_and_binding(
+    session_init, tmp_path, monkeypatch,
+):
+    """Token-only upgrade preserves since, project, and identity."""
+    registry, sessions_dir, fake_identity, mock_patch = (
+        _codex_session_fixtures(monkeypatch, tmp_path))
+
+    fake_pid = 99991
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    entry = sessions_dir / str(fake_pid)
+    original_since = "2026-03-01T09:00:00+00:00"
+    entry.write_text(
+        f"v=2\nproject=bound\nsince={original_since}\n"
+        f"starttime={fake_identity['starttime']}\n"
+        f"boot_id={fake_identity['boot_id']}\n"
+        f"pidns={fake_identity['pidns']}\n"
+        "seeded_by=codex-hook\n",
+        encoding="utf-8",
+    )
+    ledger = sessions_dir / f"{fake_pid}.run"
+    ledger.write_text("run-x scan /tgt 2026-03-01T09:01:00\n",
+                      encoding="utf-8")
+
+    from core.project.sessions import ensure_codex_session
+
+    with mock_patch(
+        "core.project.sessions._identity_matches",
+        return_value=True,
+    ):
+        result = ensure_codex_session(fake_pid)
+
+    assert result is not None
+    _, token = result
+    assert token  # got a fresh token
+    from core.project.sessions import _parse_entry
+    fields = _parse_entry(entry)
+    assert fields["project"] == "bound"
+    assert fields["since"] == original_since
+    assert ledger.exists(), "ledger must survive token-only upgrade"
+
+
+def test_codex_bookmark_invalid_name_ignored(
+    session_init, tmp_path, monkeypatch,
+):
+    """A bookmark pointing at 'invalid name.json' must not be followed."""
+    registry, sessions_dir, fake_identity, mock_patch = (
+        _codex_session_fixtures(monkeypatch, tmp_path))
+
+    projects_dir = registry / "projects"
+    projects_dir.mkdir(parents=True)
+    bad_file = projects_dir / "invalid name.json"
+    bad_file.write_text("{}", encoding="utf-8")
+    (projects_dir / ".active").symlink_to("invalid name.json")
+
+    fake_pid = 99990
+    from core.project.sessions import ensure_codex_session
+
+    with mock_patch(
+        "core.project.sessions._identity_for",
+        return_value=fake_identity,
+    ):
+        result = ensure_codex_session(fake_pid)
+
+    assert result is not None
+    from core.project.sessions import _parse_entry, NONE_SENTINEL
+    fields = _parse_entry(sessions_dir / str(fake_pid))
+    assert fields["project"] == NONE_SENTINEL
+
+
+def test_codex_bookmark_directory_ignored(
+    session_init, tmp_path, monkeypatch,
+):
+    """A bookmark pointing at a directory (not a file) must not be followed."""
+    registry, sessions_dir, fake_identity, mock_patch = (
+        _codex_session_fixtures(monkeypatch, tmp_path))
+
+    projects_dir = registry / "projects"
+    projects_dir.mkdir(parents=True)
+    (projects_dir / "dirproj.json").mkdir()  # directory, not file
+    (projects_dir / ".active").symlink_to("dirproj.json")
+
+    fake_pid = 99989
+    from core.project.sessions import ensure_codex_session
+
+    with mock_patch(
+        "core.project.sessions._identity_for",
+        return_value=fake_identity,
+    ):
+        result = ensure_codex_session(fake_pid)
+
+    assert result is not None
+    from core.project.sessions import _parse_entry, NONE_SENTINEL
+    fields = _parse_entry(sessions_dir / str(fake_pid))
+    assert fields["project"] == NONE_SENTINEL
+
+
+def test_codex_credentials_not_in_claude_env_file(
+    session_init, tmp_path, monkeypatch,
+):
+    """Without CODEX=1, credentials must not leak into the env file."""
+    root = tmp_path / "raptor"
+    (root / "bin").mkdir(parents=True)
+    env_file = tmp_path / "claude.env"
+    monkeypatch.delenv("CODEX", raising=False)
+    monkeypatch.delenv("RAPTOR_ENV_FILE", raising=False)
+    monkeypatch.setenv("CLAUDE_ENV_FILE", str(env_file))
+    monkeypatch.setattr(session_init, "REPO_ROOT", root)
+    monkeypatch.setenv("RAPTOR_SESSION_PID", "12345")
+    monkeypatch.setenv("RAPTOR_SESSION_TOKEN", "secret")
+
+    session_init.write_env_file()
+
+    content = env_file.read_text(encoding="utf-8")
+    assert "RAPTOR_SESSION_PID" not in content
+    assert "RAPTOR_SESSION_TOKEN" not in content
 
 
 def test_claude_session_does_not_seed(
@@ -179,6 +549,51 @@ def test_claude_session_does_not_seed(
     content = env_file.read_text(encoding="utf-8")
     assert "RAPTOR_SESSION_PID" not in content
     assert "RAPTOR_SESSION_TOKEN" not in content
+
+
+def test_codex_own_repair_preserves_token_and_project(
+    session_init, tmp_path, monkeypatch,
+):
+    """Own-repair (corrupt stamp, matching env credential) must preserve
+    the existing token and project — not mint a fresh token or read the
+    bookmark."""
+    registry, sessions_dir, fake_identity, mock_patch = (
+        _codex_session_fixtures(monkeypatch, tmp_path))
+
+    fake_pid = 99988
+    existing_token = "own-repair-tok-abc"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    entry = sessions_dir / str(fake_pid)
+    entry.write_text(
+        "v=2\nproject=chosen\nsince=2026-05-01T10:00:00+00:00\n"
+        "starttime=CORRUPT\nboot_id=CORRUPT\npidns=CORRUPT\n"
+        f"token={existing_token}\nseeded_by=codex-hook\n",
+        encoding="utf-8",
+    )
+    ledger = sessions_dir / f"{fake_pid}.run"
+    ledger.write_text("run-repair scan /tgt 2026-05-01T10:01:00\n",
+                      encoding="utf-8")
+
+    monkeypatch.setenv("RAPTOR_SESSION_PID", str(fake_pid))
+    monkeypatch.setenv("RAPTOR_SESSION_TOKEN", existing_token)
+
+    from core.project.sessions import ensure_codex_session
+
+    with mock_patch(
+        "core.project.sessions._identity_for",
+        return_value=fake_identity,
+    ):
+        result = ensure_codex_session(fake_pid)
+
+    assert result is not None
+    pid_str, token = result
+    assert token == existing_token, "own-repair must keep the existing token"
+    assert ledger.exists(), "own-repair must preserve the run ledger"
+    from core.project.sessions import _parse_entry
+    fields = _parse_entry(entry)
+    assert fields["project"] == "chosen", "own-repair must keep the project"
+    assert fields["starttime"] == fake_identity["starttime"], \
+        "identity stamp must be repaired"
 
 
 def test_import_does_not_leak_test_module(session_init):
