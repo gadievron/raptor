@@ -64,12 +64,8 @@ def _stderr_has_fileno() -> bool:
 
 def init() -> None:
     """One-shot process bootstrap — safe to call multiple times."""
-    from core.security.launch_scratch import restore
-    try:
-        restore()
-    except (OSError, ValueError, TypeError, UnicodeError) as exc:
-        raise SystemExit('RAPTOR: temporary directory or launch metadata unavailable or invalid; '
-                         'check TMPDIR and restart launcher sessions through bin/raptor') from exc
+    from core.startup.codex_environment import restore_for_process
+    restore_for_process()
     if not _stderr_has_fileno():
         return
     faulthandler.enable()
