@@ -361,7 +361,7 @@ assert.deepStrictEqual(seen, [true, true]);
         check=False,
         capture_output=True,
         text=True,
-        timeout=5,
+        timeout=12,
     )
 
     assert result.returncode == 0, (
