@@ -92,7 +92,9 @@ def test_active_codex_docs_do_not_point_at_retired_skill_paths() -> None:
 def test_codex_hooks_do_not_rewrite_or_autoapprove_shell_commands() -> None:
     config = tomllib.loads(_read(ROOT / ".codex/config.toml"))
     assert "PreToolUse" not in config["hooks"]
-    assert "PostToolUse" not in config["hooks"]
+    post = config["hooks"]["PostToolUse"]
+    assert post[0]["matcher"] == "Bash"
+    assert post[0]["hooks"][0]["command"].endswith("libexec/raptor-lifecycle-hook codex-outcome")
     command = config["hooks"]["Stop"][0]["hooks"][0]["command"]
     assert command.endswith("libexec/raptor-lifecycle-hook codex-stop")
 

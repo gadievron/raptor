@@ -76,263 +76,266 @@ if not (os.environ.get("CLAUDECODE")
 
 sys.path.insert(0, raptor_dir)
 import core.startup.process_init  # noqa: E402,F401
-from core.logging import configure_cli_logging  # noqa: E402
-from core.security.log_sanitisation import sanitise_for_terminal as _sft  # noqa: E402
+
+from core.run.cli_outcome import cli_outcome  # noqa: E402
+with cli_outcome():
+    from core.logging import configure_cli_logging  # noqa: E402
+    from core.security.log_sanitisation import sanitise_for_terminal as _sft  # noqa: E402
 
 
-def _die(msg: str, code: int = 1) -> None:
-    print(f"[sandbox] ERROR: {msg}", file=sys.stderr)
-    sys.exit(code)
+    def _die(msg: str, code: int = 1) -> None:
+        print(f"[sandbox] ERROR: {msg}", file=sys.stderr)
+        sys.exit(code)
 
 
-def _usage(code: int) -> None:
-    usage = (
-        "Usage: raptor-run-sandboxed [--output-dir <dir>] <binary> [args...]\n"
-        "Output dir: --output-dir flag, else OUTPUT_DIR env var, else this\n"
-        "session's live run directory (session run ledger).\n"
-        "See libexec/raptor-run-sandboxed docstring for details."
-    )
-    print(usage, file=sys.stderr)
-    sys.exit(code)
+    def _usage(code: int) -> None:
+        usage = (
+            "Usage: raptor-run-sandboxed [--output-dir <dir>] <binary> [args...]\n"
+            "Output dir: --output-dir flag, else OUTPUT_DIR env var, else this\n"
+            "session's live run directory (session run ledger).\n"
+            "See libexec/raptor-run-sandboxed docstring for details."
+        )
+        print(usage, file=sys.stderr)
+        sys.exit(code)
 
 
-# Only LEADING options belong to this wrapper — everything from the
-# first non-option argument on is the child's command line verbatim
-# (the child may take a --output-dir of its own). `--` ends option
-# parsing for child programs whose name starts with a dash — including
-# a program FILE literally named like one of these options (an
-# attacker-writable build tree can create `./--output-dir=…`); invoke
-# such programs after `--` or by absolute path, as the documented
-# invocation shapes do.
-_args = sys.argv[1:]
-_flag_output_dir: str | None = None
-while _args:
-    _arg = _args[0]
-    if _arg in ("-h", "--help"):
-        _usage(0)
-    if _arg == "--":
-        _args = _args[1:]
+    # Only LEADING options belong to this wrapper — everything from the
+    # first non-option argument on is the child's command line verbatim
+    # (the child may take a --output-dir of its own). `--` ends option
+    # parsing for child programs whose name starts with a dash — including
+    # a program FILE literally named like one of these options (an
+    # attacker-writable build tree can create `./--output-dir=…`); invoke
+    # such programs after `--` or by absolute path, as the documented
+    # invocation shapes do.
+    _args = sys.argv[1:]
+    _flag_output_dir: str | None = None
+    while _args:
+        _arg = _args[0]
+        if _arg in ("-h", "--help"):
+            _usage(0)
+        if _arg == "--":
+            _args = _args[1:]
+            break
+        if _arg == "--output-dir":
+            if len(_args) < 2:
+                _die("--output-dir requires a path argument")
+            _flag_output_dir = _args[1]
+            _args = _args[2:]
+            continue
+        if _arg.startswith("--output-dir="):
+            _flag_output_dir = _arg.split("=", 1)[1]
+            _args = _args[1:]
+            continue
         break
-    if _arg == "--output-dir":
-        if len(_args) < 2:
-            _die("--output-dir requires a path argument")
-        _flag_output_dir = _args[1]
-        _args = _args[2:]
-        continue
-    if _arg.startswith("--output-dir="):
-        _flag_output_dir = _arg.split("=", 1)[1]
-        _args = _args[1:]
-        continue
-    break
-if not _args:
-    _usage(1)
+    if not _args:
+        _usage(1)
 
-cmd = _args
+    cmd = _args
 
-# An EXPLICIT empty value is a caller mistake (a shell var that
-# didn't expand), not an absence — refuse rather than silently fall
-# through to a lower-precedence source.
-if _flag_output_dir is not None and not _flag_output_dir:
-    _die("--output-dir requires a non-empty path")
+    # An EXPLICIT empty value is a caller mistake (a shell var that
+    # didn't expand), not an absence — refuse rather than silently fall
+    # through to a lower-precedence source.
+    if _flag_output_dir is not None and not _flag_output_dir:
+        _die("--output-dir requires a non-empty path")
 
 
-def _ledger_output_dir() -> str | None:
-    """This session's live run directory, or None.
+    def _ledger_output_dir() -> str | None:
+        """This session's live run directory, or None.
 
-    Consults the session run ledger (same seam the coverage read hook
-    resolves runs through) and accepts only records whose run
-    metadata still says ``running`` AND whose recorded owning session
-    is still alive (``core.run.metadata._session_alive_for_meta`` —
-    the codebase's "status=running + dead recorded pid ⇒ crashed"
-    pattern). A hard-killed run's metadata says ``running`` forever
-    and ledger eviction only removes FINISHED records, so without the
-    liveness check a crashed newer run would shadow a live older one
-    (newest-first ordering) and steer output into the wrong run dir.
-    For a WRITE GRANT the check fails closed: an unverifiable owner
-    skips the candidate — pass ``--output-dir`` explicitly when the
-    fallback refuses. Best-effort by contract: any failure resolves
-    to None and the caller refuses.
-    """
-    try:
-        from core.json import load_json
-        from core.project.sessions import ledger_runs
-        from core.run.metadata import _session_alive_for_meta
-        for record in ledger_runs(status="running"):
-            run_dir = record.get("run_dir", "")
-            if not run_dir or not os.path.isdir(run_dir):
-                continue
-            meta = load_json(os.path.join(run_dir, ".raptor-run.json"))
-            if not isinstance(meta, dict) or meta.get("status") != "running":
-                continue
-            try:
-                if not _session_alive_for_meta(meta):
-                    continue  # crashed run — status never finalised
-            except Exception:  # noqa: BLE001 — unverifiable owner: skip, never grant
-                continue
-            return run_dir
-    except Exception:  # noqa: BLE001 — resolution is a fallback, never a crash
-        pass
-    return None
+        Consults the session run ledger (same seam the coverage read hook
+        resolves runs through) and accepts only records whose run
+        metadata still says ``running`` AND whose recorded owning session
+        is still alive (``core.run.metadata._session_alive_for_meta`` —
+        the codebase's "status=running + dead recorded pid ⇒ crashed"
+        pattern). A hard-killed run's metadata says ``running`` forever
+        and ledger eviction only removes FINISHED records, so without the
+        liveness check a crashed newer run would shadow a live older one
+        (newest-first ordering) and steer output into the wrong run dir.
+        For a WRITE GRANT the check fails closed: an unverifiable owner
+        skips the candidate — pass ``--output-dir`` explicitly when the
+        fallback refuses. Best-effort by contract: any failure resolves
+        to None and the caller refuses.
+        """
+        try:
+            from core.json import load_json
+            from core.project.sessions import ledger_runs
+            from core.run.metadata import _session_alive_for_meta
+            for record in ledger_runs(status="running"):
+                run_dir = record.get("run_dir", "")
+                if not run_dir or not os.path.isdir(run_dir):
+                    continue
+                meta = load_json(os.path.join(run_dir, ".raptor-run.json"))
+                if not isinstance(meta, dict) or meta.get("status") != "running":
+                    continue
+                try:
+                    if not _session_alive_for_meta(meta):
+                        continue  # crashed run — status never finalised
+                except Exception:  # noqa: BLE001 — unverifiable owner: skip, never grant
+                    continue
+                return run_dir
+        except Exception:  # noqa: BLE001 — resolution is a fallback, never a crash
+            pass
+        return None
 
 
-# The output dir must be explicit — the former fallback to /tmp gave
-# callers the illusion of isolation when they forgot to set it (the
-# child could still write anywhere in shared /tmp). Flag beats env
-# beats the session run ledger; validation errors below name the
-# source the value came from.
-if _flag_output_dir is not None:
-    output_dir: str | None = _flag_output_dir
-    _output_dir_source = "--output-dir"
-else:
-    output_dir = os.environ.get("OUTPUT_DIR")
-    _output_dir_source = "OUTPUT_DIR env var"
-    if output_dir is not None and not output_dir:
-        # Explicit-but-empty is a mistake (unexpanded shell var), not
-        # an absence — refuse instead of falling through.
-        _die("OUTPUT_DIR env var is set but empty; set a path or pass "
-             "--output-dir <path>")
-if not output_dir:
-    output_dir = _ledger_output_dir()
-    _output_dir_source = "session run ledger"
-    if output_dir:
-        print(f"[sandbox] output dir from this session's live run: "
-              f"{output_dir}", file=sys.stderr)
-if not output_dir:
-    _die(
-        "no writable dir for the sandboxed child: pass --output-dir <path> "
-        "(or set the OUTPUT_DIR env var; with a live run this session's "
-        "run ledger resolves it automatically)"
-    )
-
-# Validate the OUTPUT_DIR shape before handing it to Landlock.
-# Pre-fix any string went straight to `output=output_dir` —
-# a value containing newlines / NULs / shell metas would either
-# blow up Landlock with an opaque kernel error or, worse, silently
-# pass through (Landlock accepts any string but the bind-mount
-# fallback path didn't). Concrete failures the validation catches:
-#
-# * `OUTPUT_DIR=` / `--output-dir=` (explicit empty) — refused at
-#   the resolution step above; belt-and-braces here.
-# * `/nonexistent/parent/leaf` — Landlock errors with "writable
-#   path could not be opened"; caller sees a sandbox error instead
-#   of "your output dir doesn't exist".
-# * `/tmp/foo\n/etc/passwd` (newline injection from a shell var
-#   that captured user input) — Landlock open on the
-#   literal-with-newline path likely errors, but better to reject
-#   up-front with a clear message.
-# * Non-absolute path — relative to where? The mount-ns child
-#   pivots root, so `out/foo` opens under the new rootfs (which
-#   doesn't have `out/`). Reject relative paths with a hint.
-if "\x00" in output_dir or "\n" in output_dir or "\r" in output_dir:
-    _die(f"{_output_dir_source} value contains control bytes "
-         f"(NUL / newline / CR); refusing")
-if not os.path.isabs(output_dir):
-    _die(f"{_output_dir_source} value must be an absolute path "
-         f"(got {output_dir!r})")
-# Resolve & ensure parent exists. The dir itself may not exist
-# yet — Landlock will create it if absent; that's fine.
-output_dir_resolved = os.path.realpath(output_dir)
-if not os.path.isdir(os.path.dirname(output_dir_resolved)):
-    _die(
-        f"{_output_dir_source} value's parent does not exist: "
-        f"{os.path.dirname(output_dir_resolved)!r}"
-    )
-output_dir = output_dir_resolved
-
-# Resolve a relative program path against the caller's cwd BEFORE
-# sandbox assembly. The sandboxed child re-resolves paths in its own
-# mount view, so "./poc" from a cd'd shell surfaced as "bind tree is
-# unusable ... exec: file not found" — a sandbox-shaped error for a
-# path-shaped mistake. Bare names (gcc) keep their PATH lookup; only
-# slash-containing relative paths are absolutized, and a missing file
-# refuses up-front with the real reason instead of engaging the
-# sandbox. The caller's cwd is the sandbox target, so the absolutized
-# path stays inside the bind tree.
-if not os.path.isabs(cmd[0]) and os.sep in cmd[0]:
-    _resolved_prog = os.path.abspath(cmd[0])
-    if os.path.exists(_resolved_prog):
-        cmd[0] = _resolved_prog
+    # The output dir must be explicit — the former fallback to /tmp gave
+    # callers the illusion of isolation when they forgot to set it (the
+    # child could still write anywhere in shared /tmp). Flag beats env
+    # beats the session run ledger; validation errors below name the
+    # source the value came from.
+    if _flag_output_dir is not None:
+        output_dir: str | None = _flag_output_dir
+        _output_dir_source = "--output-dir"
     else:
+        output_dir = os.environ.get("OUTPUT_DIR")
+        _output_dir_source = "OUTPUT_DIR env var"
+        if output_dir is not None and not output_dir:
+            # Explicit-but-empty is a mistake (unexpanded shell var), not
+            # an absence — refuse instead of falling through.
+            _die("OUTPUT_DIR env var is set but empty; set a path or pass "
+                 "--output-dir <path>")
+    if not output_dir:
+        output_dir = _ledger_output_dir()
+        _output_dir_source = "session run ledger"
+        if output_dir:
+            print(f"[sandbox] output dir from this session's live run: "
+                  f"{output_dir}", file=sys.stderr)
+    if not output_dir:
         _die(
-            f"program path {cmd[0]!r} not found at {_resolved_prog!r} "
-            f"(relative paths resolve against the caller's cwd, "
-            f"{os.getcwd()!r}); invoke with an absolute path"
+            "no writable dir for the sandboxed child: pass --output-dir <path> "
+            "(or set the OUTPUT_DIR env var; with a live run this session's "
+            "run ledger resolves it automatically)"
         )
 
-# basicConfig sets the root logger at WARNING so unrelated modules stay
-# quiet, then we raise ONLY core.sandbox to INFO so its enforcement
-# diagnostics (network blocked, write denied, etc.) reach stderr. Without
-# this scoping, every RAPTOR module's INFO logs would flood the child's
-# stderr — and this script is what the LLM calls as a subprocess.
-# configure_cli_logging = basicConfig (stderr) + the escaping console
-# formatter, so sandbox diagnostics quoting child output cannot carry
-# raw control bytes to the caller's terminal.
-configure_cli_logging(logging.WARNING, fmt="%(message)s")
-logging.getLogger("core.sandbox").setLevel(logging.INFO)
-
-from core.sandbox import sandbox, SandboxSetupError, SANDBOX_ENGAGE_EXIT_CODE  # noqa: E402
-
-# Child wall-clock limit. 1800s default: long enough for typical
-# configure/make cycles, short enough that a wedged untrusted build
-# doesn't pin the host for hours. Too low breaks legitimate large/ASAN
-# builds (raise via RAPTOR_SANDBOX_TIMEOUT per run); too high delays
-# the fail-loud signal on a hung child — hence env-tunable, validated,
-# never unbounded.
-_timeout_raw = os.environ.get("RAPTOR_SANDBOX_TIMEOUT", "")
-if _timeout_raw:
-    if not _timeout_raw.isdigit() or int(_timeout_raw) <= 0:
+    # Validate the OUTPUT_DIR shape before handing it to Landlock.
+    # Pre-fix any string went straight to `output=output_dir` —
+    # a value containing newlines / NULs / shell metas would either
+    # blow up Landlock with an opaque kernel error or, worse, silently
+    # pass through (Landlock accepts any string but the bind-mount
+    # fallback path didn't). Concrete failures the validation catches:
+    #
+    # * `OUTPUT_DIR=` / `--output-dir=` (explicit empty) — refused at
+    #   the resolution step above; belt-and-braces here.
+    # * `/nonexistent/parent/leaf` — Landlock errors with "writable
+    #   path could not be opened"; caller sees a sandbox error instead
+    #   of "your output dir doesn't exist".
+    # * `/tmp/foo\n/etc/passwd` (newline injection from a shell var
+    #   that captured user input) — Landlock open on the
+    #   literal-with-newline path likely errors, but better to reject
+    #   up-front with a clear message.
+    # * Non-absolute path — relative to where? The mount-ns child
+    #   pivots root, so `out/foo` opens under the new rootfs (which
+    #   doesn't have `out/`). Reject relative paths with a hint.
+    if "\x00" in output_dir or "\n" in output_dir or "\r" in output_dir:
+        _die(f"{_output_dir_source} value contains control bytes "
+             f"(NUL / newline / CR); refusing")
+    if not os.path.isabs(output_dir):
+        _die(f"{_output_dir_source} value must be an absolute path "
+             f"(got {output_dir!r})")
+    # Resolve & ensure parent exists. The dir itself may not exist
+    # yet — Landlock will create it if absent; that's fine.
+    output_dir_resolved = os.path.realpath(output_dir)
+    if not os.path.isdir(os.path.dirname(output_dir_resolved)):
         _die(
-            f"RAPTOR_SANDBOX_TIMEOUT must be a positive integer "
-            f"number of seconds (got {_timeout_raw!r})"
+            f"{_output_dir_source} value's parent does not exist: "
+            f"{os.path.dirname(output_dir_resolved)!r}"
         )
-    child_timeout = int(_timeout_raw)
-else:
-    child_timeout = 1800
+    output_dir = output_dir_resolved
 
-try:
-    with sandbox(block_network=True,
-                 target=os.getcwd(),
-                 output=output_dir) as run:
-        # Run with captured stderr so _check_blocked can inspect it,
-        # but print it through so the caller sees it too.
-        result = run(cmd, capture_output=True, text=True,
-                     timeout=child_timeout)
+    # Resolve a relative program path against the caller's cwd BEFORE
+    # sandbox assembly. The sandboxed child re-resolves paths in its own
+    # mount view, so "./poc" from a cd'd shell surfaced as "bind tree is
+    # unusable ... exec: file not found" — a sandbox-shaped error for a
+    # path-shaped mistake. Bare names (gcc) keep their PATH lookup; only
+    # slash-containing relative paths are absolutized, and a missing file
+    # refuses up-front with the real reason instead of engaging the
+    # sandbox. The caller's cwd is the sandbox target, so the absolutized
+    # path stays inside the bind tree.
+    if not os.path.isabs(cmd[0]) and os.sep in cmd[0]:
+        _resolved_prog = os.path.abspath(cmd[0])
+        if os.path.exists(_resolved_prog):
+            cmd[0] = _resolved_prog
+        else:
+            _die(
+                f"program path {cmd[0]!r} not found at {_resolved_prog!r} "
+                f"(relative paths resolve against the caller's cwd, "
+                f"{os.getcwd()!r}); invoke with an absolute path"
+            )
 
-        # Pass through child output
-        if result.stdout:
-            sys.stdout.write(result.stdout)
-            sys.stdout.flush()
-        if result.stderr:
-            sys.stderr.write(result.stderr)
-            sys.stderr.flush()
+    # basicConfig sets the root logger at WARNING so unrelated modules stay
+    # quiet, then we raise ONLY core.sandbox to INFO so its enforcement
+    # diagnostics (network blocked, write denied, etc.) reach stderr. Without
+    # this scoping, every RAPTOR module's INFO logs would flood the child's
+    # stderr — and this script is what the LLM calls as a subprocess.
+    # configure_cli_logging = basicConfig (stderr) + the escaping console
+    # formatter, so sandbox diagnostics quoting child output cannot carry
+    # raw control bytes to the caller's terminal.
+    configure_cli_logging(logging.WARNING, fmt="%(message)s")
+    logging.getLogger("core.sandbox").setLevel(logging.INFO)
 
-        # Surface sandbox diagnostics for the caller
-        info = result.sandbox_info
-        # evidence/blocked summarise the sandboxed child's behaviour —
-        # triage sanitises at production today, but the sink must not
-        # depend on that (in-tree triage doctrine).
-        if info.get("crashed"):
-            print(f"[sandbox] {_sft(str(info.get('evidence', 'Process crashed')), max_len=400)}", file=sys.stderr)
-        elif info.get("resource_exceeded"):
-            print(f"[sandbox] {_sft(str(info.get('evidence', 'Resource limit exceeded')), max_len=400)}", file=sys.stderr)
-        if info.get("blocked"):
-            for item in info["blocked"]:
-                print(f"[sandbox] {_sft(str(item), max_len=400)}", file=sys.stderr)
-except SandboxSetupError as e:
-    _die(f"sandbox isolation could not engage: {e}", code=SANDBOX_ENGAGE_EXIT_CODE)
-except subprocess.TimeoutExpired as e:
-    # The run() backstop (child_timeout above) raises TimeoutExpired, not
-    # OSError — without this clause a hung child produced a raw traceback
-    # and exit 1 instead of the documented `[sandbox] ERROR` + exit 2.
-    # The exception carries whatever the child wrote before the kill;
-    # pass it through so partial output isn't discarded.
-    for stream, data in ((sys.stdout, e.output), (sys.stderr, e.stderr)):
-        if data:
-            stream.write(data if isinstance(data, str)
-                         else data.decode("utf-8", errors="replace"))
-            stream.flush()
-    _die(f"sandbox invocation failed: {e.__class__.__name__}: {e}", code=2)
-except (OSError, RuntimeError, ValueError) as e:
-    _die(f"sandbox invocation failed: {e.__class__.__name__}: {e}", code=2)
+    from core.sandbox import sandbox, SandboxSetupError, SANDBOX_ENGAGE_EXIT_CODE  # noqa: E402
 
-sys.exit(result.returncode)
+    # Child wall-clock limit. 1800s default: long enough for typical
+    # configure/make cycles, short enough that a wedged untrusted build
+    # doesn't pin the host for hours. Too low breaks legitimate large/ASAN
+    # builds (raise via RAPTOR_SANDBOX_TIMEOUT per run); too high delays
+    # the fail-loud signal on a hung child — hence env-tunable, validated,
+    # never unbounded.
+    _timeout_raw = os.environ.get("RAPTOR_SANDBOX_TIMEOUT", "")
+    if _timeout_raw:
+        if not _timeout_raw.isdigit() or int(_timeout_raw) <= 0:
+            _die(
+                f"RAPTOR_SANDBOX_TIMEOUT must be a positive integer "
+                f"number of seconds (got {_timeout_raw!r})"
+            )
+        child_timeout = int(_timeout_raw)
+    else:
+        child_timeout = 1800
+
+    try:
+        with sandbox(block_network=True,
+                     target=os.getcwd(),
+                     output=output_dir) as run:
+            # Run with captured stderr so _check_blocked can inspect it,
+            # but print it through so the caller sees it too.
+            result = run(cmd, capture_output=True, text=True,
+                         timeout=child_timeout)
+
+            # Pass through child output
+            if result.stdout:
+                sys.stdout.write(result.stdout)
+                sys.stdout.flush()
+            if result.stderr:
+                sys.stderr.write(result.stderr)
+                sys.stderr.flush()
+
+            # Surface sandbox diagnostics for the caller
+            info = result.sandbox_info
+            # evidence/blocked summarise the sandboxed child's behaviour —
+            # triage sanitises at production today, but the sink must not
+            # depend on that (in-tree triage doctrine).
+            if info.get("crashed"):
+                print(f"[sandbox] {_sft(str(info.get('evidence', 'Process crashed')), max_len=400)}", file=sys.stderr)
+            elif info.get("resource_exceeded"):
+                print(f"[sandbox] {_sft(str(info.get('evidence', 'Resource limit exceeded')), max_len=400)}", file=sys.stderr)
+            if info.get("blocked"):
+                for item in info["blocked"]:
+                    print(f"[sandbox] {_sft(str(item), max_len=400)}", file=sys.stderr)
+    except SandboxSetupError as e:
+        _die(f"sandbox isolation could not engage: {e}", code=SANDBOX_ENGAGE_EXIT_CODE)
+    except subprocess.TimeoutExpired as e:
+        # The run() backstop (child_timeout above) raises TimeoutExpired, not
+        # OSError — without this clause a hung child produced a raw traceback
+        # and exit 1 instead of the documented `[sandbox] ERROR` + exit 2.
+        # The exception carries whatever the child wrote before the kill;
+        # pass it through so partial output isn't discarded.
+        for stream, data in ((sys.stdout, e.output), (sys.stderr, e.stderr)):
+            if data:
+                stream.write(data if isinstance(data, str)
+                             else data.decode("utf-8", errors="replace"))
+                stream.flush()
+        _die(f"sandbox invocation failed: {e.__class__.__name__}: {e}", code=2)
+    except (OSError, RuntimeError, ValueError) as e:
+        _die(f"sandbox invocation failed: {e.__class__.__name__}: {e}", code=2)
+
+    sys.exit(result.returncode)
