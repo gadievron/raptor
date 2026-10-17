@@ -8,7 +8,7 @@ import tomllib
 import yaml
 
 ROOT = Path(__file__).resolve().parents[3]
-SPEC = importlib.util.spec_from_file_location('sync_codex_commands', ROOT / 'scripts/sync_codex_commands.py')
+SPEC = importlib.util.spec_from_file_location('sync_codex_commands', ROOT / '.codex/sync_commands.py')
 SYNC = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(SYNC)
 
