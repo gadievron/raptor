@@ -1081,3 +1081,35 @@ class TestSessionEndLivenessProof(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_codex_receipt_marks_only_the_recorded_run(tmp_path, monkeypatch):
+    old = _make_running_run(tmp_path / 'out', 'owned', 'scan')
+    other = _make_running_run(tmp_path / 'out', 'other', 'scan')
+    from core.run import cli_outcome
+    from core.startup import codex_environment
+    monkeypatch.setattr(cli_outcome, 'consume', lambda payload: (
+        'python3 raptor.py scan --repo /target', str(old.resolve()), ['/target']))
+    monkeypatch.setattr(codex_environment, 'restore', lambda sid: None)
+    monkeypatch.setattr(_hook_mod, 'REPO_ROOT', tmp_path)
+    monkeypatch.setattr('core.run.metadata._get_session_pid', lambda: SESSION_PID)
+    monkeypatch.setattr(sys, 'argv', ['hook', 'codex-outcome'])
+    monkeypatch.setattr(sys, 'stdin', io.StringIO('{"session_id":"test"}'))
+    _hook_mod.main()
+    assert (old / FAILURE_MARKER).exists()
+    assert not (other / FAILURE_MARKER).exists()
+
+
+def test_codex_unscoped_failure_does_not_poison_newest_run(tmp_path, monkeypatch):
+    other = _make_running_run(tmp_path / 'out', 'other', 'scan')
+    from core.run import cli_outcome
+    from core.startup import codex_environment
+    monkeypatch.setattr(cli_outcome, 'consume', lambda payload: (
+        'libexec/raptor-project-manager use missing', None, ['use', 'missing']))
+    monkeypatch.setattr(codex_environment, 'restore', lambda sid: None)
+    monkeypatch.setattr(_hook_mod, 'REPO_ROOT', tmp_path)
+    monkeypatch.setattr('core.run.metadata._get_session_pid', lambda: SESSION_PID)
+    monkeypatch.setattr(sys, 'argv', ['hook', 'codex-outcome'])
+    monkeypatch.setattr(sys, 'stdin', io.StringIO('{"session_id":"test"}'))
+    _hook_mod.main()
+    assert not (other / FAILURE_MARKER).exists()

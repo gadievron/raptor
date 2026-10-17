@@ -160,20 +160,22 @@ def warm_sage_embeddings():
 
 
 if __name__ == "__main__":
-    if _is_codex_host():
-        import json
-        from core.startup.codex_environment import publish
-        try:
-            payload = json.load(sys.stdin)
-            if (not isinstance(payload, dict)
-                    or payload.get("hook_event_name") != "SessionStart"):
-                raise ValueError("invalid SessionStart payload")
-            seeded = _seed_codex_session()
-            if seeded is None:
-                raise ValueError("session seeding failed")
-            publish(payload.get("session_id"), int(seeded[0]))
-        except (OSError, ValueError, TypeError):
-            sys.exit("RAPTOR: Codex session initialization failed; no command environment available")
-    write_env_file()
-    generate_banner()
-    warm_sage_embeddings()
+    from core.run.cli_outcome import cli_outcome
+    with cli_outcome():
+        if _is_codex_host():
+            import json
+            from core.startup.codex_environment import publish
+            try:
+                payload = json.load(sys.stdin)
+                if (not isinstance(payload, dict)
+                        or payload.get("hook_event_name") != "SessionStart"):
+                    raise ValueError("invalid SessionStart payload")
+                seeded = _seed_codex_session()
+                if seeded is None:
+                    raise ValueError("session seeding failed")
+                publish(payload.get("session_id"), int(seeded[0]))
+            except (OSError, ValueError, TypeError):
+                sys.exit("RAPTOR: Codex session initialization failed; no command environment available")
+        write_env_file()
+        generate_banner()
+        warm_sage_embeddings()
