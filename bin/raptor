@@ -728,6 +728,26 @@ fi
 
 cd "$RAPTOR_DIR" || { echo "raptor: cannot cd to $RAPTOR_DIR" >&2; exit 1; }
 
+# The launcher runs whichever python3 PATH resolves. When that is not
+# the interpreter RAPTOR was installed into (`uv sync` without
+# activating .venv), fail here with the fix instead of with a
+# ModuleNotFoundError partway into a run. find_spec locates without
+# importing; -P keeps the checkout itself off sys.path, so only installed
+# packages count.
+if ! python3 -P -c '
+import importlib.util, sys
+sys.exit(any(importlib.util.find_spec(m) is None
+             for m in ("requests", "pydantic", "openai", "yaml")))
+' 2>/dev/null; then
+    echo "raptor: $(command -v python3) is missing RAPTOR's Python dependencies" >&2
+    if [ -x "$RAPTOR_DIR/.venv/bin/python3" ]; then
+        echo "  activate the installed environment: source $RAPTOR_DIR/.venv/bin/activate" >&2
+    else
+        echo "  install them: cd $RAPTOR_DIR && uv sync --locked && source .venv/bin/activate" >&2
+    fi
+    exit 1
+fi
+
 # Pre-flight: auto-detect project, -p flag, mismatch prompt.
 # STDOUT is the machine channel (the seed sentinel; all human output —
 # the interactive mismatch menu included — arrives on stderr, and
