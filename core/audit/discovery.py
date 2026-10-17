@@ -48,6 +48,29 @@ DEFAULT_MAX_SWEEP_TARGETS = 40
 MIN_SWEEP_LINES = 10
 MAX_CALLER_SIGNATURES = 3
 
+# Canonical guard-type vocabulary — must match collector._GUARD_TYPE_VALUES
+# and the llm_review schema enum.
+_GUARD_TYPES = frozenset({
+    "bounds", "null_safety", "validation", "sanitisation",
+    "lifetime", "ordering", "concurrency", "other",
+})
+
+# LLM-emitted synonyms → canonical form.  Applied once at parse time
+# so downstream consumers never see the variant spelling.
+_GUARD_TYPE_ALIASES: dict[str, str] = {
+    "null_check": "null_safety",
+    "lifecycle": "lifetime",
+    "init": "validation",
+    "type": "validation",
+}
+
+
+def _normalise_guard_type(raw: str) -> str:
+    """Return canonical guard type, or empty string if unrecognised."""
+    gt = raw.strip().lower()
+    gt = _GUARD_TYPE_ALIASES.get(gt, gt)
+    return gt if gt in _GUARD_TYPES else ""
+
 # Single-character or very short names that are almost always macros,
 # aliases, or wrappers — not interesting contract surfaces.
 MIN_CALLEE_LINES = 5
@@ -622,7 +645,7 @@ def _parse_findings(
     for f in findings:
         if not isinstance(f, dict):
             continue
-        gt = f.get("guard_type", "")
+        gt = _normalise_guard_type(f.get("guard_type", ""))
         if not gt:
             continue
 
@@ -1013,7 +1036,7 @@ def _parse_sm_findings(
     for f in findings:
         if not isinstance(f, dict):
             continue
-        gt = f.get("guard_type", "")
+        gt = _normalise_guard_type(f.get("guard_type", ""))
         if not gt:
             continue
 
@@ -1382,7 +1405,7 @@ def _parse_discovery_findings(
     for f in findings:
         if not isinstance(f, dict):
             continue
-        gt = f.get("guard_type", "")
+        gt = _normalise_guard_type(f.get("guard_type", ""))
         if not gt:
             continue
 
@@ -1448,8 +1471,8 @@ a CONCRETE triggering path: a specific caller that fails to establish \
 the property, with the variable or field name involved.
 
 For each finding you MUST provide:
-- guard_type: the kind of guard missing (null_check, bounds, init, type, \
-lifecycle)
+- guard_type: the kind of guard missing (bounds, null_safety, validation, \
+sanitisation, lifetime, ordering, concurrency, other)
 - assumed_property: the specific variable/field and what is assumed \
 (e.g. "h->size is initialised")
 - mechanism: name the specific caller function and the code path that \

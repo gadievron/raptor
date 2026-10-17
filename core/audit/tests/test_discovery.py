@@ -13,6 +13,7 @@ from core.audit.discovery import (
     SeamBundle,
     StateMachineBundle,
     SweepTarget,
+    _GUARD_TYPES,
     _HINT_MULTI_THREADED,
     _HINT_SINGLE_THREADED,
     _build_func_index,
@@ -20,6 +21,7 @@ from core.audit.discovery import (
     _extract_call_site_snippet,
     _extract_cross_file_seams,
     _filter_grounded_findings,
+    _normalise_guard_type,
     _parse_assumptions,
     _parse_discovery_findings,
     _parse_findings,
@@ -1480,7 +1482,7 @@ class TestCwe362PostFilter:
         raw = json.dumps({"findings": [
             {"guard_type": "ordering", "assumed_property": "p",
              "mechanism": "m", "cwe_class": "CWE-362", "standalone": True},
-            {"guard_type": "uninit", "assumed_property": "q",
+            {"guard_type": "validation", "assumed_property": "q",
              "mechanism": "n", "cwe_class": "CWE-908", "standalone": True},
         ]})
         result = _parse_sm_findings(raw, bundle, single_threaded=True)
@@ -1528,7 +1530,7 @@ class TestCwe362PostFilter:
             annotation="", priority_score=1.0, priority_reason="test",
         )
         raw = json.dumps({"findings": [
-            {"guard_type": "race", "assumed_property": "p",
+            {"guard_type": "concurrency", "assumed_property": "p",
              "mechanism": "m", "cwe_class": "CWE-362", "standalone": True},
         ]})
         result = _parse_sm_findings(raw, bundle, single_threaded=False)
@@ -2056,3 +2058,77 @@ class TestFilterGroundedFindings:
         assert len(kept) == 2
         props = {f["assumed_property"] for f in kept}
         assert "no concurrent access" not in props
+
+
+class TestNormaliseGuardType:
+    """Guard-type normalisation maps LLM synonyms to canonical values."""
+
+    def test_canonical_values_pass_through(self):
+        for gt in _GUARD_TYPES:
+            assert _normalise_guard_type(gt) == gt
+
+    def test_aliases_map_to_canonical(self):
+        assert _normalise_guard_type("null_check") == "null_safety"
+        assert _normalise_guard_type("lifecycle") == "lifetime"
+        assert _normalise_guard_type("init") == "validation"
+        assert _normalise_guard_type("type") == "validation"
+
+    def test_case_insensitive(self):
+        assert _normalise_guard_type("Null_Check") == "null_safety"
+        assert _normalise_guard_type("BOUNDS") == "bounds"
+
+    def test_strips_whitespace(self):
+        assert _normalise_guard_type("  bounds  ") == "bounds"
+        assert _normalise_guard_type(" null_check ") == "null_safety"
+
+    def test_unknown_returns_empty(self):
+        assert _normalise_guard_type("made_up") == ""
+        assert _normalise_guard_type("") == ""
+
+    def test_parse_findings_normalises(self):
+        bundle = SeamBundle(
+            caller_fid="a.c:caller",
+            callee_fid="b.c:callee",
+            caller_source="void caller(void){}",
+            callee_source="void callee(void){}",
+            call_site_snippet="callee();",
+            annotation="test",
+            priority_score=1.0,
+            priority_reason="test",
+        )
+        raw = json.dumps({"findings": [
+            {"guard_type": "null_check", "assumed_property": "p",
+             "mechanism": "m", "cwe_class": "CWE-476", "standalone": False},
+            {"guard_type": "lifecycle", "assumed_property": "q",
+             "mechanism": "n", "cwe_class": "CWE-416", "standalone": True},
+        ]})
+        result = _parse_findings(raw, bundle)
+        types = [w["guard_type"] for w in result.weaknesses]
+        assert types == ["null_safety", "lifetime"]
+
+    def test_parse_sm_findings_normalises(self):
+        bundle = StateMachineBundle(
+            field_name="state",
+            handler_sites=[HandlerSite("f.c", "fn", 1, "x=1", "write", "ctx")],
+            annotation="test",
+            priority_score=1.0,
+            priority_reason="test",
+        )
+        raw = json.dumps({"findings": [
+            {"guard_type": "init", "assumed_property": "p",
+             "mechanism": "m", "cwe_class": "CWE-908", "standalone": True},
+        ]})
+        result = _parse_sm_findings(raw, bundle)
+        assert result.weaknesses[0]["guard_type"] == "validation"
+
+    def test_parse_discovery_findings_normalises(self):
+        target = SweepTarget(
+            fid="f.c:fn", source="test", callers_source="",
+            annotation="", priority_score=1.0, priority_reason="test",
+        )
+        raw = json.dumps({"findings": [
+            {"guard_type": "type", "assumed_property": "p",
+             "mechanism": "m", "standalone": True},
+        ]})
+        result = _parse_discovery_findings(raw, target, source_tag="test")
+        assert result.weaknesses[0]["guard_type"] == "validation"
