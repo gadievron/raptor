@@ -7564,6 +7564,94 @@ def _bypass_findings_to_gaps(
     return gaps
 
 
+_MAX_COMPOSITION_REVIEWS = 20
+
+
+def _build_reverse_edges(
+    call_edges: list[dict[str, Any]],
+) -> dict[tuple[str, str], set[tuple[str, str]]]:
+    """Build callee→callers index from call_edges for the composition engine."""
+    from collections import defaultdict
+
+    reverse: dict[tuple[str, str], set[tuple[str, str]]] = defaultdict(set)
+    for edge in call_edges:
+        caller_file = edge.get("caller_file", "")
+        caller_func = edge.get("caller", "")
+        callee_file = edge.get("callee_file", "")
+        callee_func = edge.get("callee", "")
+        if caller_file and caller_func and callee_file and callee_func:
+            reverse[(callee_file, callee_func)].add(
+                (caller_file, caller_func),
+            )
+    return dict(reverse)
+
+
+def _composed_hypotheses_to_gaps(
+    composed: list[Any],
+    checklist: dict[str, Any],
+    reviewed_set: set[str] | None = None,
+    *,
+    max_reviews: int = _MAX_COMPOSITION_REVIEWS,
+) -> list[dict[str, Any]]:
+    """Convert composed hypotheses to reviewable gaps with injected hypotheses.
+
+    Mirrors ``_bypass_findings_to_gaps``: resolves each weakness's
+    function to a checklist gap, deduplicates per function, and carries
+    the composition hypothesis as an injected hypothesis so the review
+    prompt investigates the composed claim concretely.
+
+    Skips functions already reviewed in the main pass (the weakness was
+    found there; re-reviewing won't add signal).  Verifiable hypotheses
+    are prioritised.
+    """
+    from .gaps import gap_for_site
+
+    gaps: list[dict[str, Any]] = []
+    seen_fids: set[str] = set()
+    seen_gaps: set[str] = set()
+    reviewed = reviewed_set or set()
+    for ch in composed:
+        if len(gaps) >= max_reviews:
+            break
+        w = ch.weakness
+        if not w.file or not w.function:
+            continue
+        fid = f"{w.file}:{w.function}"
+        if fid in seen_fids:
+            continue
+        if fid in reviewed:
+            continue
+        seen_fids.add(fid)
+
+        decl_line = _checklist_function_line(checklist, w.file, w.function)
+        if not decl_line:
+            continue
+        gap = gap_for_site(checklist, w.file, decl_line)
+        if gap is None:
+            continue
+
+        key = f"{gap['file']}:{gap['name']}"
+        if key in seen_gaps:
+            continue
+        seen_gaps.add(key)
+        gap["priority_score"] = max(
+            float(gap.get("priority_score") or 0.0), 0.85,
+        )
+        gap["from_composition"] = True
+        mechanism = ch.hypothesis_text[:400]
+        cwe = w.cwe_class or ""
+        gap["injected_hypotheses"] = [
+            {
+                "mechanism": mechanism,
+                "confidence": getattr(w, "confidence", "medium"),
+                "cwe_class": cwe,
+                "source": "composition",
+            }
+        ]
+        gaps.append(gap)
+    return gaps
+
+
 def _fail_open_adjudicated_sites(out_dir: Path | None) -> set:
     """(file, line) pairs the fail_open channel already adjudicated —
     the CWE-252 premise-split dedup: the census defers, the
@@ -10628,6 +10716,116 @@ def _run_audit_body(
                         "from %d targets",
                         _mining_total_w, len(_mining_results),
                     )
+
+            # --- Weakness composition (Phase C) ---
+            try:
+                from .composition import (
+                    build_weakness_inventory,
+                    compose_hypotheses,
+                )
+
+                _comp_inv = build_weakness_inventory(config.out_dir)
+                if _comp_inv:
+                    _comp_reverse = _build_reverse_edges(call_edges)
+                    _comp_ep = {
+                        f"{e.get('caller_file', '')}:{e.get('caller', '')}"
+                        for e in call_edges
+                    } if not _disc_entry_points else _disc_entry_points
+
+                    _comp_journal_idx: dict[str, list[dict[str, Any]]] = {}
+                    try:
+                        from core.coverage.journal import load_entries
+
+                        for _je in load_entries(config.out_dir):
+                            _jfid = f"{_je.file or ''}:{_je.function or ''}"
+                            for _jw in _je.weaknesses or []:
+                                _comp_journal_idx.setdefault(
+                                    _jfid, [],
+                                ).append(_jw)
+                    except Exception:
+                        pass
+
+                    _comp_reviewed = reviewed_set or set()
+                    _composed = compose_hypotheses(
+                        _comp_inv,
+                        _comp_reverse,
+                        _comp_ep,
+                        _comp_journal_idx,
+                        _comp_reviewed,
+                        max_hypotheses=200,
+                    )
+
+                    _comp_verifiable = [
+                        h for h in _composed if h.verifiable
+                    ]
+
+                    if _comp_verifiable:
+                        _comp_gaps = _composed_hypotheses_to_gaps(
+                            _comp_verifiable,
+                            checklist,
+                            reviewed_set=_comp_reviewed,
+                        )
+                        if _comp_gaps and not executor_stats.budget_stopped:
+                            logger.info(
+                                "composition: %d verifiable hypotheses "
+                                "from %d weaknesses, %d resolved to "
+                                "reviewable gaps",
+                                len(_comp_verifiable),
+                                len(_comp_inv),
+                                len(_comp_gaps),
+                            )
+                            _comp_graph = TaskGraph.from_workqueue(
+                                _comp_gaps, call_edges,
+                            )
+                            run_executor_sync(
+                                _comp_graph,
+                                review_fn,
+                                shared,
+                                config,
+                                result,
+                                executor_config,
+                                joern_server=joern_server,
+                                audit_log=audit_log,
+                                workqueue=workqueue,
+                                reviewed_set=reviewed_set,
+                                start_time=start_time,
+                                layer_disagreements=layer_disagreements,
+                                on_progress=on_progress,
+                                collector=collector,
+                                budget_check=lambda: _check_budget(
+                                    config, start_time, result,
+                                ),
+                                on_tick=_make_executor_on_tick(config),
+                            )
+
+                    _comp_leads = [
+                        h for h in _composed if not h.verifiable
+                    ]
+                    if _composed:
+                        _leads_path = config.out_dir / "composition-leads.json"
+                        _leads_data = [h.to_dict() for h in _comp_leads]
+                        _leads_path.write_text(json.dumps(
+                            {
+                                "total_weaknesses": len(_comp_inv),
+                                "total_composed": len(_composed),
+                                "verifiable": len(_comp_verifiable),
+                                "leads": len(_comp_leads),
+                                "items": _leads_data,
+                            },
+                            indent=2,
+                        ))
+                        logger.info(
+                            "composition: %d composed (%d verifiable, "
+                            "%d leads) from %d weakness records",
+                            len(_composed),
+                            len(_comp_verifiable),
+                            len(_comp_leads),
+                            len(_comp_inv),
+                        )
+            except Exception:
+                logger.warning(
+                    "weakness composition failed", exc_info=True,
+                )
         except Exception:
             logger.warning(
                 "open discovery failed", exc_info=True,
