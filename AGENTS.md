@@ -137,7 +137,7 @@ The coverage tracking plugin (`plugins/coverage/`) tracks which source files the
 
 When scanning untrusted repositories:
 
-- **Environment sanitisation**: `RaptorConfig.get_safe_env()` strips environment variables that tools may shell-evaluate (`TERMINAL`, `EDITOR`, `VISUAL`, `BROWSER`, `PAGER`). Always use `get_safe_env()` when spawning subprocesses.
+- **Environment sanitisation**: `RaptorConfig.get_safe_env()` uses a strict allowlist (`SAFE_ENV_ALLOWLIST`) — only ~30 explicitly named variables plus `LC_*` prefixes are kept; everything else is dropped. A secondary blocklist (`DANGEROUS_ENV_VARS`) covers `TERMINAL`, `EDITOR`, `VISUAL`, `BROWSER`, `PAGER` as belt-and-braces. Always use `get_safe_env()` when spawning subprocesses.
 - **File path injection**: Never interpolate file paths from scanned repos into shell command strings. Use list-based `subprocess` arguments.
 
 ---
