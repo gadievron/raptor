@@ -150,7 +150,7 @@ def publish(session_id, pid):
                "pid": pid, "identity": _identity(fields), "token_digest": _digest(fields),
                "registry_home": _text(os.environ.get("RAPTOR_REGISTRY_HOME")),
                "caller_dir": _text(os.environ.get("RAPTOR_CALLER_DIR")),
-               "launch_target": _text(os.environ.get("RAPTOR_LAUNCH_TARGET")),
+               "launch_target": _text(os.environ.get("RAPTOR_LAUNCH_TARGET")) or None,
                "broker_key": secrets.token_hex(32)}
     if context["registry_home"] and not Path(context["registry_home"]).is_absolute():
         raise CodexEnvironmentError("registry override must be absolute")

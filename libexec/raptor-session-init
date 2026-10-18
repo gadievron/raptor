@@ -44,6 +44,7 @@ if __name__ == "__main__" and sys.argv[1:2] in (["--codex-launch-context"], ["--
     if sys.argv[1] == "--codex-launch-config":
         # JSON basic strings are TOML basic strings for these argv values.
         # Keep Unicode literal: JSON surrogate-pair escapes are not TOML.
+        # An empty target clears inherited values; publication exposes it as null.
         for key, value in (("RAPTOR_CALLER_DIR", sys.argv[2]),
                            ("RAPTOR_LAUNCH_TARGET", sys.argv[3])):
             print(f"shell_environment_policy.set.{key}=" + json.dumps(value, ensure_ascii=False))
@@ -78,7 +79,7 @@ def codex_launch_context(session_id):
     from core.startup.codex_environment import restore
     values = restore(session_id)
     return {"caller_dir": values.get("RAPTOR_CALLER_DIR"),
-            "launch_target": values.get("RAPTOR_LAUNCH_TARGET")}
+            "launch_target": values.get("RAPTOR_LAUNCH_TARGET") or None}
 
 
 def read_codex_start_payload():

@@ -6,7 +6,26 @@ aligned regardless of the version string's length (a clone's git-describe
 string is much longer than a clean release number)."""
 
 from core.startup import banner
+from core.config import RaptorConfig
+import re
 import pytest
+
+
+@pytest.mark.parametrize('codex,prefix', [(False, '/'), (True, '$')])
+@pytest.mark.parametrize('affects', sorted({
+    dep['affects'] for dep in RaptorConfig.TOOL_DEPS.values()
+} | {group['affects'] for group in RaptorConfig.TOOL_GROUPS.values()}))
+def test_all_tool_warning_command_references(affects, codex, prefix):
+    warning = affects + ' limited — tool not found'
+    output = banner.format_banner('', 'quote', [], [warning], [], [], [], [], codex=codex)
+    expected = re.sub(r'/([a-z][a-z-]*)', lambda match: prefix + match[1], warning)
+    assert expected in output
+
+
+def test_codex_warning_preserves_paths():
+    warning = '/scan, /agentic limited — /usr/bin/true /scan/config.toml /scan.py /tmp/foo'
+    output = banner.format_banner('', 'quote', [], [warning], [], [], [], [], codex=True)
+    assert '$scan, $agentic limited — /usr/bin/true /scan/config.toml /scan.py /tmp/foo' in output
 
 
 @pytest.mark.parametrize('codex,prefix', [(False, '/'), (True, '$')])
