@@ -37,12 +37,19 @@ if not (os.environ.get("CLAUDECODE")
 # The launcher formats argv data before a Codex process/context exists.
 # Keep this stdlib-only path ahead of process_init and never shell-evaluate
 # either value. It does not seed a session or inspect target code.
-if __name__ == "__main__" and sys.argv[1:2] == ["--codex-launch-context"]:
+if __name__ == "__main__" and sys.argv[1:2] in (["--codex-launch-context"], ["--codex-launch-config"]):
     import json
     if len(sys.argv) != 4:
         sys.exit("Usage: raptor-session-init --codex-launch-context CALLER TARGET")
-    print(json.dumps({"caller_dir": sys.argv[2],
-                      "launch_target": sys.argv[3] or None}, ensure_ascii=True))
+    if sys.argv[1] == "--codex-launch-config":
+        # JSON basic strings are TOML basic strings for these argv values.
+        # Keep Unicode literal: JSON surrogate-pair escapes are not TOML.
+        for key, value in (("RAPTOR_CALLER_DIR", sys.argv[2]),
+                           ("RAPTOR_LAUNCH_TARGET", sys.argv[3])):
+            print(f"shell_environment_policy.set.{key}=" + json.dumps(value, ensure_ascii=False))
+    else:
+        print(json.dumps({"caller_dir": sys.argv[2],
+                          "launch_target": sys.argv[3] or None}, ensure_ascii=True))
     sys.exit(0)
 
 # Explicit agent-driven startup is also available when Codex misses worktree
@@ -229,4 +236,10 @@ if __name__ == "__main__":
                 sys.exit("RAPTOR: Codex session initialization failed; no command environment available")
         write_env_file()
         generate_banner()
+        if _CODEX_BOOTSTRAP:
+            # Agent-driven bootstrap output is already visible in the tool UI.
+            # Include help here so the assistant need only acknowledge success.
+            print("Quick commands: $agentic, $scan, "
+                  "$fuzz, $web — /skills to browse; "
+                  "$commands for the full RAPTOR list.")
         warm_sage_embeddings()

@@ -24,7 +24,7 @@ matcher = "startup|resume"
 
 [[hooks.SessionStart.hooks]]
 type = "command"
-command = "CODEX=1 RAPTOR_CODEX_HOOK=1 _RAPTOR_TRUSTED=1 libexec/raptor-session-init"
+command = "CODEX=1 RAPTOR_CODEX_HOOK=1 _RAPTOR_TRUSTED=1 python3 -I .codex/hooks/session_start.py"
 
 [[hooks.Stop]]
 matcher = ""
