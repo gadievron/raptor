@@ -86,7 +86,28 @@ case "$_SESSION_PID" in
     ''|*[!0-9]*) _SESSION_PID="" ;;
 esac
 if [ -n "$_SESSION_PID" ]; then
-    _LEDGER="$_REG_SESSIONS_BASE/sessions.d/$_SESSION_PID.run"
+    # Codex sessions store ledgers in a scoped sub-namespace
+    # (sessions.d/codex/<sha256(context-id)>/) — the base directory
+    # holds only legacy Claude ledgers. Keep in lock-step with the
+    # python twin (core/coverage/track_read.py).
+    _CTX_ID="${RAPTOR_CODEX_CONTEXT_ID:-}"
+    _OWN_GENERATION=""
+    if [ -n "$_CTX_ID" ]; then
+        _SESSION_TOKEN="${RAPTOR_SESSION_TOKEN:-}"
+        if [ -n "$_SESSION_TOKEN" ]; then
+            _hash2=$(python3 "$HELPER" sha256 "$_CTX_ID" "$_SESSION_TOKEN" 2>/dev/null) || exit 0
+            _SCOPE_HASH=""; _OWN_GENERATION=""
+            { IFS= read -r _SCOPE_HASH; IFS= read -r _OWN_GENERATION; } <<HASH
+$_hash2
+HASH
+        else
+            _SCOPE_HASH=$(python3 "$HELPER" sha256 "$_CTX_ID" 2>/dev/null) || exit 0
+        fi
+        [ -n "$_SCOPE_HASH" ] || exit 0
+        _LEDGER="$_REG_SESSIONS_BASE/sessions.d/codex/$_SCOPE_HASH/$_SESSION_PID.run"
+    else
+        _LEDGER="$_REG_SESSIONS_BASE/sessions.d/$_SESSION_PID.run"
+    fi
     # Size guard matching the python reader's ledger budget: an
     # over-budget ledger reads as empty there, and the two consumers
     # must not diverge on the same file.
@@ -139,7 +160,7 @@ if [ -n "$_SESSION_PID" ]; then
             # over-budget files, and prints exactly one line per key
             # (empty for a missing / refused value; control-byte
             # values read as EMPTY — a status of "running\n<pid>"
-            # otherwise shifts the three `read`s, forging the owner
+            # otherwise shifts the four `read`s, forging the owner
             # check and clearing the target filter). Any refusal
             # leaves the fields empty, failing the status/owner tests
             # below, so a hostile record skips THIS candidate —
@@ -148,22 +169,35 @@ if [ -n "$_SESSION_PID" ]; then
             # `|| true`: under `set -e` a helper failure on malformed
             # metadata must skip this candidate, not silence coverage
             # attribution for the whole session.
-            _meta3=$(python3 "$HELPER" get "$_rdir/.raptor-run.json" status session_pid target_path 2>/dev/null || true)
-            _status=""; _owner=""; _tgt=""
+            _meta5=$(python3 "$HELPER" get "$_rdir/.raptor-run.json" status session_pid target_path session_id session_generation 2>/dev/null || true)
+            _status=""; _owner=""; _tgt=""; _sid=""; _gen=""
             {
                 IFS= read -r _status || true
                 IFS= read -r _owner || true
                 IFS= read -r _tgt || true
+                IFS= read -r _sid || true
+                IFS= read -r _gen || true
             } <<META
-$_meta3
+$_meta5
 META
             [ "$_status" = "running" ] || continue
             [ "$_owner" = "$_SESSION_PID" ] || continue
+            # Codex logical ownership: two roots sharing a PID have
+            # separate ledgers (scoped above), but a stale or misrouted
+            # record must not cross-attribute — verify session_id.
+            if [ -n "$_CTX_ID" ] && [ "$_sid" != "$_CTX_ID" ]; then
+                continue
+            fi
+            # Generation isolation: a stale worker retaining a previous
+            # token must not attribute reads to a successor's run.
+            if [ -n "$_OWN_GENERATION" ] && [ -n "$_gen" ] && [ "$_gen" != "$_OWN_GENERATION" ]; then
+                continue
+            fi
             BEST_EPOCH="$_epoch"
             RUN_DIR="$_rdir/"
             PROJECT_TARGET="$_tgt"
         done < "$_LEDGER"
-        unset _st _epoch _rid _rdir _status _owner _tgt BEST_EPOCH _LEDGER
+        unset _st _epoch _rid _rdir _status _owner _tgt _sid _gen _meta5 BEST_EPOCH _LEDGER _CTX_ID _SCOPE_HASH _OWN_GENERATION _SESSION_TOKEN
     fi
     # In-session with no valid live run: attribute nothing.
     [ -z "$RUN_DIR" ] && exit 0

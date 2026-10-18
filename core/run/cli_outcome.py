@@ -44,7 +44,7 @@ def _prefix(sid, call):
 
 
 def _record(status, argv):
-    sid = os.environ['CODEX_THREAD_ID']
+    sid = os.environ.get('RAPTOR_CODEX_CONTEXT_ID') or os.environ['CODEX_THREAD_ID']
     call = os.environ['CODEX_TOOL_CALL_ID']
     context = environment.read_context(sid)
     token = os.environ.get('RAPTOR_SESSION_TOKEN', '')

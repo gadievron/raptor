@@ -242,6 +242,22 @@ def _too_young_to_judge(meta: dict) -> bool:
 
 
 def main():
+    ending = []
+    try:
+        _main(ending)
+    finally:
+        if ending:
+            # The context was validated before any run was examined. Retire
+            # only that credential after finalization; the app-server PID can
+            # continue hosting other roots. Claude never enters this branch.
+            from core.project import sessions, session_scope
+            pid, token, session_id = ending[0]
+            directory = session_scope.directory(sessions._base_sessions_dir(), session_id)
+            with session_scope.using_directory(directory):
+                sessions.end_codex_session(pid, token)
+
+
+def _main(ending):
     modes = ("stop", "session-end", "tool-failure", "codex-before",
              "codex-exit", "codex-after", "codex-stop", "codex-end", "codex-outcome")
     if len(sys.argv) < 2 or sys.argv[1] not in modes:
@@ -273,16 +289,27 @@ def main():
         event = "tool-failure"
     if event in ("codex-stop", "codex-end"):
         import io
-        import json
+        from core.json import loads
         from core.startup.codex_environment import restore
-        raw = sys.stdin.read()
+        raw = sys.stdin.read(1024 * 1024 + 1)
         try:
-            payload = json.loads(raw)
+            payload = loads(raw, max_bytes=1024 * 1024)
+            expected = "SessionEnd" if event == "codex-end" else "Stop"
+            if not isinstance(payload, dict) or payload.get("hook_event_name") != expected:
+                raise ValueError("unexpected Codex lifecycle event")
             restore(payload.get("session_id"))
         except (OSError, ValueError, TypeError):
             sys.exit("RAPTOR: lifecycle hook has no validated Codex session context")
         sys.stdin = io.StringIO(raw)
         if event == "codex-end":
+            ending.append((int(os.environ["RAPTOR_SESSION_PID"]),
+                           os.environ["RAPTOR_SESSION_TOKEN"],
+                           os.environ["RAPTOR_CODEX_CONTEXT_ID"]))
+            # Persist logical death before the bounded hook scans runs. Even
+            # if the harness times out the scan, later sweeps can distinguish
+            # this ended root from other roots in the still-live server PID.
+            from core.project.sessions import end_codex_session
+            end_codex_session(ending[0][0], ending[0][1])
             event = "session-end"
     failing_command = command if outcome_scope is not None else None
     codex_stop = event == "codex-stop"
@@ -312,6 +339,8 @@ def main():
     end_reason = None
     if event == "session-end":
         end_session_id, end_reason = _session_end_payload(sys.stdin)
+        if ending:
+            end_session_id = ending[0][2]
 
     from core.json import load_json
     from core.run.metadata import (
@@ -323,7 +352,7 @@ def main():
     # The ONE shared resolver (env credential first, claude-ancestor
     # walk second) — the hook must agree with what start_run recorded,
     # including beneath nested claude subagent processes.
-    session_pid = _get_session_pid()
+    session_pid = ending[0][0] if ending else _get_session_pid()
     if session_pid is None:
         # Pre-fix this branch returned silently. The hook is
         # registered against three Claude Code events
@@ -438,6 +467,9 @@ def main():
                 meta = {}
             if (meta.get("status") != STATUS_RUNNING
                     or meta.get("session_pid") != session_pid):
+                continue
+            from core.project.sessions import same_logical_owner
+            if not same_logical_owner(meta, session_pid):
                 continue
 
             if event == "tool-failure":
