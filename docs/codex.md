@@ -9,7 +9,20 @@ bin/raptor --codex
 ```
 
 The workspace-write sandbox is required for analyses. Use natural language or
-name a skill explicitly (`$source-command-scan`, `$source-command-project`).
+name a skill explicitly (`$scan`, `$project`).
+
+RAPTOR's Claude-style `/scan`, `/fuzz`, `/web` and `/agentic` shortcuts are not
+registered Codex slash commands. In the Codex chat composer, use:
+
+```text
+$scan /absolute/path/to/repo
+```
+
+Likewise use `$agentic`, `$fuzz` or
+`$web` with the target and options for that workflow. Type
+`/skills` to browse installed skills, or `$commands` to list
+RAPTOR workflows. Ordinary requests such as `scan /absolute/path/to/repo`
+also select the matching RAPTOR skill. These are chat inputs, not shell commands.
 
 ## Troubleshooting
 

@@ -30,8 +30,8 @@ def _frontmatter(text: str) -> dict[str, str]:
 
 def test_codex_repo_guidance_files_exist() -> None:
     assert (ROOT / "AGENTS.md").is_file()
-    assert (ROOT / ".agents" / "skills").is_symlink(), ".agents/skills should be a symlink"
-    assert (ROOT / ".agents" / "skills").is_dir(), ".agents/skills symlink target should exist"
+    assert not (ROOT / ".agents" / "skills").is_symlink()
+    assert (ROOT / ".agents" / "skills").is_dir()
     assert (ROOT / ".codex" / "config.toml").is_file()
     assert not (ROOT / ".codex" / "hooks.json").exists(), \
         "hooks.json must not exist — hooks live in config.toml (worktree discovery)"
@@ -67,7 +67,7 @@ def test_codex_startup_hook_uses_repo_relative_session_init() -> None:
     hooks = config["hooks"]["SessionStart"]
     command = hooks[0]["hooks"][0]["command"]
     assert "_RAPTOR_TRUSTED=1" in command
-    assert "libexec/raptor-session-init" in command
+    assert "python3 -I .codex/hooks/session_start.py" in command
     assert "CLAUDE_PROJECT_DIR" not in command
 
 
@@ -76,7 +76,7 @@ def test_active_codex_docs_do_not_point_at_retired_skill_paths() -> None:
         ROOT / "AGENTS.md",
         ROOT / ".codex" / "config.toml",
         *sorted((ROOT / ".codex" / "agents").glob("*.toml")),
-        *sorted((ROOT / ".agents" / "skills").glob("source-command-*/SKILL.md")),
+        *sorted((ROOT / ".agents" / "skills").glob("*/SKILL.md")),
         ROOT / ".agents" / "skills" / "code-understanding" / "SKILL.md",
         ROOT / ".agents" / "skills" / "exploitability-validation" / "SKILL.md",
         ROOT / ".agents" / "skills" / "coverage.md",
