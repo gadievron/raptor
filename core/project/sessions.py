@@ -867,7 +867,7 @@ def logical_owner_stamp() -> dict[str, str]:
 
 
 def same_logical_owner(meta: dict, pid: int | None) -> bool:
-    if pid is None or meta.get("session_pid") != pid:
+    if pid is None or str(meta.get("session_pid")) != str(pid):
         return False
     current = logical_owner_stamp()
     if meta.get("session_harness") == "codex" or current:
