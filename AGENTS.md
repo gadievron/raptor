@@ -137,6 +137,8 @@ Commands run via `python3 raptor.py` (scan, agentic, codeql, fuzz, web) manage l
 
 The coverage tracking plugin (`plugins/coverage/`) tracks which source files the LLM reads during analysis via a PostToolUse hook. Loaded automatically by the launcher. Logs file paths to a manifest in the active run directory, converted to `coverage-record.json` when the run completes. Zero overhead when no run is active.
 
+**Codex source reads:** During tracked analysis, use `libexec/raptor-read /absolute/path/to/file --start-line 1 --end-line 200` as a standalone shell tool call. This reads inside the native sandbox and lets the Codex post-tool hook authenticate file-access coverage. Default: 200 lines; maximum: 2000 lines and 32 KiB of output, from a source file up to 8 MiB. Request smaller ranges when needed and allow enough tool output tokens to receive the whole range. Pass paths as quoted argv data. Do not wrap the command, redirect it, or pipe it: compound commands, truncated output and arbitrary shell reads receive no coverage. This records file access, not a completed security review. Claude retains its native `Read` hook.
+
 ---
 
 ## SECURITY: UNTRUSTED REPOS

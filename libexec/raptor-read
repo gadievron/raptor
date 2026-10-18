@@ -1,0 +1,67 @@
+#!/usr/bin/env -S python3 -I
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
+"""Bounded source reads with native Codex coverage receipts."""
+# ─── interpreter-isolation guard (do not import; inline by design) ───
+# fmt: off
+# This launcher is an authority/consent surface: its checks
+# (invocation context, operator-approved records) run in-process,
+# and interpreter-startup hooks run BEFORE this file's first line —
+# a PYTHONPATH sitecustomize, or a .pth/usercustomize.py in the
+# user site, the latter with ZERO environment variables set — so a
+# hook can monkeypatch those checks (demonstrated against
+# detect_invocation_context). Isolated mode closes both at the
+# interpreter level: -I ignores PYTHON* variables and never enables
+# the user site, so on the shebang route (env -S python3 -I)
+# neither hook shape ever loads. This re-exec extends the closure
+# to every other route (`python3 <script>`): execv replaces the
+# process in place — same pid, fds, controlling terminal, session
+# and parent chain, so TTY and ancestry gates observe the unchanged
+# invocation context — and cannot loop, because the re-execed
+# interpreter's sys.flags.isolated is 1. __main__-gated: importing
+# this file never re-execs the importer. Honest bound
+# (docs/security.md): on the `python3 <script>` route the hook has
+# ALREADY run when this guard fires, so a hook written against the
+# guard itself can neuter it; the shebang route is isolated from
+# the first instruction, and same-user writes to RAPTOR's own files
+# or the interpreter's startup surface remain the trust edge. Repo
+# imports still work under -I: the sys.path setup below is
+# Path(__file__)-relative, never PYTHONPATH-derived.
+import os  # noqa: E402
+import sys  # noqa: E402
+if __name__ == "__main__" and not sys.flags.isolated:
+    os.execv(
+        sys.executable,
+        [sys.executable, "-I", os.path.abspath(__file__), *sys.argv[1:]],
+    )
+    # execv does not return; reached only if a startup hook neutered
+    # it in this unisolated interpreter — refuse to run the authority
+    # checks on hooked code.
+    raise SystemExit(97)
+# fmt: on
+# ─── end interpreter-isolation guard ─────────────────────────────────
+
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(REPO_ROOT))
+import core.startup.process_init  # noqa: E402,F401
+from core.coverage.codex_read import read_main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(read_main())
