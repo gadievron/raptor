@@ -163,7 +163,9 @@ def test_explicit_startup_retry_preserves_live_project_and_ledger(host, monkeypa
     monkeypatch.setattr(init, 'main', lambda: print('test startup banner'))
     script = Path(__file__).resolve().parents[3] / 'libexec/raptor-session-init'
     runpy.run_path(str(script), run_name='__main__')
-    assert 'test startup banner' in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert output.count('test startup banner') == 1
+    assert output.count('Quick commands: $agentic, $scan') == 1
     assert sessions.session_binding(pid=process.pid) == ('kept-project', 'bound')
     assert sessions._parse_entry(sessions._sessions_dir() / str(process.pid))['token'] == credential[1]
     assert ledger.read_text() == 'live run\n'

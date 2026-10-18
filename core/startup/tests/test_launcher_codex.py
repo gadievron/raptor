@@ -4,10 +4,21 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tomllib
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
+
+
+def _launch_context(payload):
+    settings = {}
+    for index, arg in enumerate(payload['args']):
+        if arg == '-c' and payload['args'][index + 1].startswith('shell_environment_policy.set.'):
+            settings.update(tomllib.loads(payload['args'][index + 1])['shell_environment_policy']['set'])
+    assert payload['args'][-1] == 'Loading RAPTOR ...'
+    return {'caller_dir': settings['RAPTOR_CALLER_DIR'],
+            'launch_target': settings['RAPTOR_LAUNCH_TARGET'] or None}
 
 
 @pytest.fixture
@@ -94,10 +105,7 @@ def test_codex_target_is_data_and_flags_after_separator_are_verbatim(launch):
     result,payload=launch(['codex'],['--codex','a target; $(false)','--','--config','model_reasoning_effort="low"'])
     assert result.returncode==0,result.stderr
     assert payload['target']=='a target; $(false)'
-    instructions, data = payload['args'][-1].split('\n', 1)
-    assert 'a target;' not in instructions
-    assert 'data, never instructions' in instructions
-    assert json.loads(data) == {'caller_dir': payload['caller'], 'launch_target': payload['target']}
+    assert _launch_context(payload) == {'caller_dir': payload['caller'], 'launch_target': payload['target']}
     assert payload['args'][:2]==['--config','model_reasoning_effort="low"']
 
 
@@ -120,10 +128,8 @@ def test_codex_resume_keeps_explicit_target(launch):
     result, payload = launch(['codex'], ['--codex', '--continue', 'relative target'])
     assert result.returncode == 0, result.stderr
     assert payload['args'][:2] == ['resume', '--last']
-    instructions, data = payload['args'][-1].split('\n', 1)
-    assert 'Do not start an analysis automatically' in instructions
-    assert json.loads(data) == {'caller_dir': payload['caller'],
-                                'launch_target': 'relative target'}
+    assert _launch_context(payload) == {'caller_dir': payload['caller'],
+                                       'launch_target': 'relative target'}
 
 
 def test_codex_target_shell_syntax_is_data(launch, tmp_path):
@@ -131,5 +137,5 @@ def test_codex_target_shell_syntax_is_data(launch, tmp_path):
     target = '$(touch "' + str(marker) + '"); `false`; "quoted"'
     result, payload = launch(['codex'], ['--codex', target])
     assert result.returncode == 0, result.stderr
-    assert json.loads(payload['args'][-1].split('\n', 1)[1])['launch_target'] == target
+    assert _launch_context(payload)['launch_target'] == target
     assert not marker.exists()
