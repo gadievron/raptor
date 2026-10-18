@@ -122,10 +122,9 @@ def _find_active_run():
     """
     session_pid = os.environ.get("RAPTOR_SESSION_PID", "")
     if not os.environ.get("RAPTOR_CODEX_CONTEXT_ID") and not os.environ.get("CLAUDECODE") and (
-            not session_pid.isdigit()) and (
             os.environ.get("RAPTOR_CODEX_ENVIRONMENT") == "1"
             or os.environ.get("CODEX_THREAD_ID") or os.environ.get("CODEX") == "1"):
-        return None, None  # recognized Codex invocation without a root or PID
+        return None, None  # recognized Codex without root — never use legacy ledger
     if os.environ.get("RAPTOR_CODEX_CONTEXT_ID") and not (
             session_pid.isascii() and session_pid.isdigit()):
         return None, None  # scoped calls never fall back to the global bookmark
