@@ -692,6 +692,7 @@ class _CodexAuthChecks(_LedgerCase):
 
 
 class PythonTwinCodexScopeTest(_CodexAuthChecks, _CodexScopeCase):
+    __test__ = True
 
     def _resolve(self):
         with patch.dict(os.environ, {
@@ -753,6 +754,7 @@ class PythonTwinCodexScopeTest(_CodexAuthChecks, _CodexScopeCase):
 
 @unittest.skipIf(sys.platform == "win32", "bash hook")
 class BashHookCodexScopeTest(_CodexAuthChecks, _CodexScopeCase):
+    __test__ = True
 
     def _fire(self, file_path, extra_env=None):
         env = {
