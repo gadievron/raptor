@@ -34,7 +34,11 @@ def context(tmp_path, monkeypatch):
     monkeypatch.setattr(codex_broker, "start", lambda session_id, pid: None)
     credential = sessions.ensure_codex_session(12345)
     assert credential
-    return credential
+    try:
+        yield credential
+    finally:
+        for key in ('CODEX', 'RAPTOR_CODEX_ENVIRONMENT'):
+            os.environ.pop(key, None)
 
 
 def test_restore_validates_then_restores_filtered_environment(context, monkeypatch):
