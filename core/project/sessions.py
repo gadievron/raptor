@@ -2056,17 +2056,6 @@ def _drain_parse(line: str) -> dict | None:
             "run_dir": m.group(3)}
 
 
-def _drain_owner_pid(resolved: str) -> int | None:
-    """The session pid whose ledger carries a RUNNING record for
-    *resolved* — the natural home for that run's drain requests (the
-    supervisor scans every ledger, but co-locating request and record
-    lets the record's lifecycle bound the request's)."""
-    for r in ledger_running_runs_all_sessions():
-        if r["run_dir"] == resolved:
-            return r["session_pid"]
-    return None
-
-
 def ledger_record_drain_request(run_dir: str | os.PathLike[str],
                                 pid: int | None = None) -> bool:
     """Durably ask the run at *run_dir* to pause at its next safe
