@@ -18,6 +18,7 @@ def context(tmp_path, monkeypatch):
     home.mkdir(mode=0o700)
     monkeypatch.setenv('HOME', str(home))
     monkeypatch.setenv('RAPTOR_REGISTRY_HOME', str(tmp_path / 'registry'))
+    monkeypatch.setenv('RAPTOR_CODEX_CONTEXT_ID', SID)
     monkeypatch.delenv('CODEX_THREAD_ID', raising=False)
     monkeypatch.delenv('CLAUDECODE', raising=False)
     for key in ('RAPTOR_SESSION_PID', 'RAPTOR_SESSION_TOKEN', 'RAPTOR_DIR',

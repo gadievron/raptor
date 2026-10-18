@@ -80,11 +80,12 @@ from pathlib import Path
 from typing import Iterator
 
 from . import registry_home as _registry_home
+from . import session_scope as _scope
 
 logger = logging.getLogger(__name__)
 
 
-def _sessions_dir() -> Path:
+def _base_sessions_dir() -> Path:
     """The sessions registry directory for THIS call.
 
     Historically a module-level ``SESSIONS_DIR`` constant computed at
@@ -106,6 +107,10 @@ def _sessions_dir() -> Path:
     return _registry_home.sessions_dir()
 
 
+def _sessions_dir() -> Path:
+    return _scope.selected_directory(_base_sessions_dir())
+
+
 def __getattr__(name: str) -> Path:
     # PEP 562: the historical constant name stays importable
     # (``from core.project.sessions import SESSIONS_DIR`` and the
@@ -113,7 +118,7 @@ def __getattr__(name: str) -> Path:
     # through the seam. Only reached when no module-dict override
     # exists — a test's setattr wins by construction.
     if name == "SESSIONS_DIR":
-        return _registry_home.sessions_dir()
+        return _sessions_dir()
     raise AttributeError(
         f"module {__name__!r} has no attribute {name!r}")
 
@@ -226,8 +231,17 @@ def _comm(pid: int) -> str | None:
 def _claude_shaped(comm: str | None) -> bool:
     """ONE comm predicate for walker, liveness, and readers."""
     return comm is not None and (
-        comm.startswith("claude") or comm.startswith("codex")
+        comm.startswith("claude") or _codex_shaped(comm)
     )
+
+
+def _codex_shaped(comm: str | None) -> bool:
+    """Native owners only; codex-linux-sandbox/exec helpers are not sessions.
+
+    Linux comm truncates binary basenames to 15 bytes. Keep the full spelling
+    too for ps-backed platforms. Claude matching remains caller-specific.
+    """
+    return comm in ("codex", "codex.exe", "codex-app-server", "codex-app-serve")
 
 
 def proc_starttime(pid: int) -> str | None:
@@ -382,6 +396,8 @@ def _identity_matches(pid: int, fields: dict[str, str]) -> bool:
     entries (off-Linux writers, read on their own platform) are accepted
     on comm-checked liveness alone — the documented weaker residual.
     """
+    if codex_session_ended(pid, fields):
+        return False
     stamp_start = fields.get("starttime")
     stamp_boot = fields.get("boot_id")
     if not stamp_start or not stamp_boot:
@@ -472,7 +488,9 @@ def resolve_session_pid() -> int | None:
     across PID namespaces and beneath nested claude processes), tree
     walk second, None outside any session."""
     pid = _env_session_pid()
-    if pid is not None:
+    if pid is not None or _scope.current_id():
+        # A shared Codex PID is not authority to choose a root. Missing or
+        # mismatched logical credentials must not fall back to ancestry.
         return pid
     try:
         return _walk_session_pid()
@@ -523,6 +541,11 @@ def _atomic_write(path: Path, content: str) -> None:
 
 def _ensure_dir() -> bool:
     try:
+        if _sessions_dir() != _base_sessions_dir():
+            from core.startup.codex_environment import _directory
+            with _directory(_sessions_dir(), create=True):
+                pass
+            return True
         # 0700: which project each session works on is operator
         # telemetry — not for other local users. chmod covers a dir
         # created looser by an older writer.
@@ -641,7 +664,8 @@ def _prepare_session_fields_locked(pid: int, entry: Path) -> tuple[dict[str, str
     """
     fields = _parse_entry(entry)
     _own_repair = False
-    have_valid_stamp = bool(fields) and _identity_matches(pid, fields)
+    ended = codex_session_ended(pid, fields)
+    have_valid_stamp = bool(fields) and not ended and _identity_matches(pid, fields)
     if not have_valid_stamp:
         identity = _identity_for(pid)
         if identity is None:
@@ -658,7 +682,8 @@ def _prepare_session_fields_locked(pid: int, entry: Path) -> tuple[dict[str, str
         env_tok = os.environ.get(ENV_SESSION_TOKEN, "")
         # Computed BEFORE the pops below — the token comparison needs
         # the old entry's value.
-        _own_repair = (env_tok and env_pid.isascii() and env_pid.isdigit()
+        _own_repair = (not ended
+                       and env_tok and env_pid.isascii() and env_pid.isdigit()
                        and int(env_pid) == pid
                        and fields.get("token") == env_tok)
         fields.pop("token", None)
@@ -761,8 +786,10 @@ def _default_startup_project() -> str:
     return name
 
 
-def ensure_codex_session(pid: int) -> tuple[str, str] | None:
+def ensure_codex_session(pid: int, *, initial_project: str | None = None) -> tuple[str, str] | None:
     """Ensure a session atomically, sharing record_session's repair rules."""
+    if initial_project is not None and initial_project != NONE_SENTINEL and not _NAME_RE.fullmatch(initial_project):
+        return None
     if not _ensure_dir():
         return None
     with _ledger_lock(pid):
@@ -775,12 +802,115 @@ def ensure_codex_session(pid: int) -> tuple[str, str] | None:
         if continuing and fields.get("token") and not repair:
             # No writes on normal reentry; preserve binding, since and ledger.
             return str(pid), token
-        project = fields.get("project", NONE_SENTINEL) if continuing else _default_startup_project()
+        project = (fields.get("project", NONE_SENTINEL) if continuing else
+                   initial_project if initial_project is not None else _default_startup_project())
         seeded_by = fields.get("seeded_by") if continuing else "codex-hook"
         if _write_session_fields_locked(project, pid, entry, fields, token, seeded_by,
                                         preserve_since=continuing) is None:
             return None
         return str(pid), token
+
+
+def end_codex_session(pid: int, token: str) -> bool:
+    """Retire only this logical owner's credential, even if its PID lives on."""
+    if not _scope.current_id():
+        return False
+    entry = _sessions_dir() / str(pid)
+    fields = _parse_entry(entry)
+    if not token or not secrets.compare_digest(token, fields.get("token", "")):
+        return False
+    # This immutable marker belongs to ONE token generation. No read/modify/
+    # write of the entry or ledger, no wait on their locks. A concurrent seed
+    # can only rotate the credential after observing this marker; a delayed
+    # marker for the old token cannot retire its successor.
+    from core.atomic_fs import write_new_text
+    marker = _retirement_path(pid, token, _sessions_dir())
+    try:
+        write_new_text(marker, "", mode=0o600)
+    except FileExistsError:
+        pass  # Idempotent; existence alone is the retirement record.
+    return True
+
+
+def _retirement_path(pid: int, token: str, directory: Path) -> Path:
+    import hashlib
+    generation = hashlib.sha256(token.encode()).hexdigest()
+    return directory / f".ended-{pid}-{generation}"
+
+
+def codex_session_ended(pid: int, fields: dict, directory: Path | None = None) -> bool:
+    directory = directory if directory is not None else _sessions_dir()
+    token = fields.get("token")
+    if directory == _base_sessions_dir() or not token:
+        return False
+    # lstat counts even a broken link as retired: malformed retirement
+    # evidence must never bring a credential back to life. Same-user private
+    # state is not a security boundary against the operator themselves.
+    try:
+        _retirement_path(pid, token, directory).lstat()
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def logical_owner_stamp() -> dict[str, str]:
+    """Extra owner fields only for Codex; legacy run metadata is unchanged."""
+    session_id = _scope.current_id()
+    if not session_id:
+        return {}
+    import hashlib
+    token = os.environ.get(ENV_SESSION_TOKEN, "")
+    if not token:
+        return {}
+    return {"session_harness": "codex", "session_id": session_id,
+            "session_generation": hashlib.sha256(token.encode()).hexdigest()}
+
+
+def same_logical_owner(meta: dict, pid: int | None) -> bool:
+    if pid is None or meta.get("session_pid") != pid:
+        return False
+    current = logical_owner_stamp()
+    if meta.get("session_harness") == "codex" or current:
+        return bool(current) and all(meta.get(key) == value for key, value in current.items())
+    return True
+
+
+@contextlib.contextmanager
+def owner_registry(meta: dict):
+    """Select a recorded owner's namespace, never a path from run metadata."""
+    if meta.get("session_harness") == "codex":
+        session_id = _scope.validate_id(meta.get("session_id"))
+        directory = _scope.directory(_base_sessions_dir(), session_id)
+    elif _scope.current_id():
+        directory = _base_sessions_dir()
+    else:
+        directory = _sessions_dir()
+    with _scope.using_directory(directory):
+        yield
+
+
+def logical_owner_liveness(meta: dict, pid: int) -> str:
+    """Validate logical credential generation before considering process life."""
+    import hashlib
+    try:
+        directory = _scope.directory(_base_sessions_dir(), _scope.validate_id(meta.get("session_id")))
+        fields = _parse_entry(directory / str(pid))
+        if not fields or codex_session_ended(pid, fields, directory):
+            return "dead"
+        digest = hashlib.sha256(fields.get("token", "").encode()).hexdigest()
+        if not secrets.compare_digest(digest, meta.get("session_generation", "")):
+            return "dead"
+        for meta_key, entry_key in (("session_start", "starttime"),
+                                    ("session_boot_id", "boot_id"),
+                                    ("session_pidns", "pidns")):
+            if meta.get(meta_key) and str(meta[meta_key]) != fields.get(entry_key):
+                return "dead"
+        state = _entry_state(pid, fields)
+        return "alive" if state == "live" else "foreign" if state in ("foreign", "unknown") else "dead"
+    except (ValueError, TypeError):
+        return "dead"
+    except OSError:
+        return "foreign"
 
 
 def resolve_codex_owner_pid() -> int | None:
@@ -799,7 +929,7 @@ def resolve_codex_owner_pid() -> int | None:
         if pid <= 1:
             return None
         comm = _comm(pid)
-        if comm is not None and comm.startswith("codex"):
+        if _codex_shaped(comm):
             return pid
     return None
 
@@ -926,6 +1056,8 @@ def _entry_state(pid: int, fields: dict[str, str]) -> str:
     namespace I can't see" — the launcher's bash prune, which runs
     where sessions run, owns v1 cleanup.
     """
+    if codex_session_ended(pid, fields):
+        return "stale"
     if _foreign_entry(fields):
         return "live" if _identity_matches(pid, fields) else "foreign"
     if fields.get("v") != ENTRY_VERSION:
@@ -1048,8 +1180,9 @@ def other_sessions(project: str, exclude_pid: int | None = None) -> list[dict]:
     """Live sessions (other than *exclude_pid*) with *project* active."""
     from core.security.log_sanitisation import sanitise_for_terminal
     out = []
-    for pid, fields in sorted(read_sessions().items()):
-        if exclude_pid is not None and pid == exclude_pid:
+    current = _sessions_dir()
+    for pid, fields, directory in all_sessions():
+        if exclude_pid is not None and pid == exclude_pid and directory == current:
             continue
         if fields.get("project") == project:
             # Entry fields are FILE CONTENT — sanitise anything that
@@ -1061,6 +1194,26 @@ def other_sessions(project: str, exclude_pid: int | None = None) -> list[dict]:
                     str(fields.get("since") or "unknown"), max_len=64),
             })
     return out
+
+
+def all_sessions(prune=True, include_stale=False):
+    """Rows retain the namespace, so equal physical PIDs never overwrite."""
+    rows = []
+    for directory in _scope.directories(_base_sessions_dir()):
+        with _scope.using_directory(directory):
+            rows.extend((pid, fields, directory) for pid, fields in
+                        sorted(read_sessions(prune, include_stale).items()))
+    return rows
+
+
+def rebind_project_sessions(old_name, new_name):
+    hits = []
+    for pid, fields, directory in all_sessions(prune=False):
+        if fields.get("v") == ENTRY_VERSION and fields.get("project") == old_name:
+            with _scope.using_directory(directory):
+                if rebind_session_if(pid, old_name, new_name):
+                    hits.append(pid)
+    return hits
 
 
 def awareness_lines(project: str, exclude_pid: int | None = None) -> list[str]:
@@ -1588,7 +1741,9 @@ def ledger_record_resume(run_dir: str | os.PathLike[str],
                          pid: int | None = None,
                          pin_project: str | None = None,
                          pin_source: str | None = None,
-                         record_pin: bool = False) -> None:
+                         record_pin: bool = False,
+                         prior_session_id: str | None = None,
+                         prior_codex: bool = False) -> None:
     """Resume wiring: append a running record to the
     RESUMING session's ledger — carrying the (verified) pin as this
     session's witness for segment 2+ when ``record_pin`` — and
@@ -1599,12 +1754,41 @@ def ledger_record_resume(run_dir: str | os.PathLike[str],
     if prior_session_pid is None:
         return
     resolved_own = pid if pid is not None else resolve_session_pid()
-    if prior_session_pid == resolved_own:
+    prior_directory = _sessions_dir()
+    if prior_codex:
+        try:
+            prior_directory = _scope.directory(_base_sessions_dir(), _scope.validate_id(prior_session_id))
+        except ValueError:
+            return
+    elif _scope.current_id():
+        prior_directory = _base_sessions_dir()
+    if prior_session_pid == resolved_own and prior_directory == _sessions_dir():
         return
-    ledger_record_finish(run_dir, "interrupted", pid=prior_session_pid)
+    with _scope.using_directory(prior_directory):
+        ledger_record_finish(run_dir, "interrupted", pid=prior_session_pid)
 
 
-def ledger_pin_witness(
+def ledger_pin_witness(run_dir, pid=None):
+    """Find the private witness, including a prior owner's logical namespace."""
+    result = _ledger_pin_witness(run_dir, pid)
+    if result[0]:
+        return result
+    current = _sessions_dir()
+    for directory in _scope.directories(_base_sessions_dir()):
+        if directory == current:
+            continue
+        with _scope.using_directory(directory):
+            # Explicitly validate each registered owner rather than allowing
+            # an ancestor walk to select an unrelated process in this scope.
+            candidates = [pid] if pid is not None else read_sessions(prune=False)
+            for owner in candidates:
+                result = _ledger_pin_witness(run_dir, owner)
+                if result[0]:
+                    return result
+    return False, None, None
+
+
+def _ledger_pin_witness(
         run_dir: str | os.PathLike[str],
         pid: int | None = None,
 ) -> tuple[bool, str | None, str | None]:
@@ -1653,6 +1837,7 @@ def ledger_pin_witness(
     return False, None, None
 
 
+@_scope.across_scopes(combine="none")
 def ledger_rewrite_pin_project(old_name: str, new_name: str) -> None:
     """Re-point pin witnesses (and any recorded runs' markers outside
     the project dir) from *old_name* to *new_name* across ALL local
@@ -1697,6 +1882,7 @@ def ledger_rewrite_pin_project(old_name: str, new_name: str) -> None:
                          stem, exc_info=True)
 
 
+@_scope.across_scopes()
 def ledger_pinned_dirs(project: str) -> list[dict]:
     """Every surviving pin WITNESS naming *project* across all local
     ledgers — regardless of whether the run RECORD survived the cap.
@@ -1733,6 +1919,7 @@ def ledger_pinned_dirs(project: str) -> list[dict]:
     return out
 
 
+@_scope.across_scopes(combine="none")
 def ledger_repair_witnesses_for_dir(run_dir, new_project: str,
                                     missing) -> None:
     """Re-point pin witnesses for *run_dir* whose project name is
@@ -1777,6 +1964,7 @@ def ledger_repair_witnesses_for_dir(run_dir, new_project: str,
                          stem, exc_info=True)
 
 
+@_scope.across_scopes()
 def ledger_runs_pinned_to(project: str) -> list[dict]:
     """Every session-ledger run record whose pin witness names
     *project* — the discovery surface for runs pinned to a project but
@@ -1808,6 +1996,7 @@ def ledger_runs_pinned_to(project: str) -> list[dict]:
     return out
 
 
+@_scope.across_scopes()
 def ledger_running_runs_all_sessions() -> list[dict]:
     """Every ``running`` run record across ALL registered live
     sessions — the box-wide observation surface for "what else is
@@ -1852,7 +2041,9 @@ def ledger_running_runs_all_sessions() -> list[dict]:
             records, _pins, _unknown = _read_ledger_full(pid)
         except Exception:  # noqa: BLE001 — observation is best-effort
             continue
-        out.extend(dict(r, session_pid=pid) for r in records
+        extra = ({"session_registry": str(_sessions_dir())}
+                 if _sessions_dir() != _base_sessions_dir() else {})
+        out.extend(dict(r, session_pid=pid, **extra) for r in records
                    if r["status"] == "running")
     return out
 
@@ -1897,7 +2088,10 @@ def ledger_record_drain_request(run_dir: str | os.PathLike[str],
                      resolved)
         return False
     if pid is None:
-        pid = _drain_owner_pid(resolved)
+        for record in ledger_running_runs_all_sessions():
+            if record["run_dir"] == resolved:
+                with _scope.using_directory(record.get("session_registry", _base_sessions_dir())):
+                    return ledger_record_drain_request(run_dir, pid=record["session_pid"])
     if pid is None:
         pid = resolve_session_pid()
     if pid is None:
@@ -1928,6 +2122,7 @@ def ledger_record_drain_request(run_dir: str | os.PathLike[str],
         return _write_ledger(pid, records, pins, kept)
 
 
+@_scope.across_scopes()
 def ledger_drain_requests(
         run_dir: str | os.PathLike[str]) -> list[dict]:
     """Every recorded drain request naming *run_dir*, across all
@@ -1962,6 +2157,7 @@ def ledger_drain_requests(
     return out
 
 
+@_scope.across_scopes(combine="sum")
 def ledger_clear_drain_requests(
         run_dir: str | os.PathLike[str]) -> int:
     """Remove every drain request naming *run_dir* (the honoring run

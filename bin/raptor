@@ -840,6 +840,12 @@ if [ -n "${RAPTOR_REGISTRY_HOME:-}" ]; then
     esac
 fi
 _sessions_dir="$_sessions_base/sessions.d"
+# A launcher starts a new harness, not a child workflow of the calling chat.
+# Never let inherited Codex context select the new Claude/Codex session.
+unset RAPTOR_CODEX_CONTEXT_ID RAPTOR_CODEX_ENVIRONMENT RAPTOR_CODEX_HOOK
+if [ -z "$USE_CODEX" ]; then
+    unset CODEX
+fi
 RAPTOR_SESSION_TOKEN=""
 if _rp mkdir -p -m 700 "$_sessions_dir" 2>/dev/null; then
     _rp chmod 700 "$_sessions_dir" 2>/dev/null || true
@@ -967,7 +973,6 @@ unset _sessions_dir _startup_out _seed_proj _seed_by
 # native configuration still controls ordinary shell environment inheritance.
 if [ -n "$USE_CODEX" ]; then
     export CODEX=1
-    export RAPTOR_MAINTAIN_PROJECT_WORKING_DIR=1
     if [ -n "$RESUME_SESSION" ] && [ -z "$RAPTOR_LAUNCH_TARGET" ]; then
         exec env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS \
             codex resume --last "${CODEX_ARGS[@]}"

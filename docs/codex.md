@@ -24,6 +24,12 @@ Likewise use `$agentic`, `$fuzz` or
 RAPTOR workflows. Ordinary requests such as `scan /absolute/path/to/repo`
 also select the matching RAPTOR skill. These are chat inputs, not shell commands.
 
+Codex project bindings and run ownership are scoped to the root session, even
+when multiple conversations share an app-server process. Subagents share their
+root's binding. See [session ownership](codex-sessions.md) for compatibility,
+locking, upgrade behavior, and validation limits. Review the changed hooks and
+restart after upgrading from PID-only Codex session state.
+
 ## Troubleshooting
 
 | Symptom | Check |

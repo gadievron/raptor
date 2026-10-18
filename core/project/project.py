@@ -1235,16 +1235,10 @@ class ProjectManager:
         block the project mutation itself."""
         try:
             from core.project import sessions
-            live = sessions.read_sessions(prune=False)
-            candidates = [pid for pid, fields in live.items()
-                          if fields.get("v") == sessions.ENTRY_VERSION
-                          and fields.get("project") == old_name]
             # Compare-and-swap per entry: only rewrite bindings that
             # STILL name the old project at write time — a session
             # that concurrently bound elsewhere keeps its choice.
-            hits = [pid for pid in candidates
-                    if sessions.rebind_session_if(pid, old_name,
-                                                  new_name)]
+            hits = sessions.rebind_project_sessions(old_name, new_name)
             if hits:
                 logger.warning(
                     "%d live session(s) were bound to '%s' — %s",

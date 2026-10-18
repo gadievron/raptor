@@ -96,7 +96,7 @@ def _is_codex_host() -> bool:
         os.environ.get("RAPTOR_CODEX_HOOK") == "1" or not os.environ.get("CLAUDECODE")))
 
 
-def _seed_codex_session() -> tuple[str, str] | None:
+def _seed_codex_session(session_id=None) -> tuple[str, str] | None:
     """Ensure a sessions.d entry for a Codex session.
 
     Delegates to ``core.project.sessions.ensure_codex_session`` which
@@ -121,7 +121,19 @@ def _seed_codex_session() -> tuple[str, str] | None:
     if pid is None:
         return None
 
-    result = ensure_codex_session(pid)
+    initial_project = None
+    if session_id is not None:
+        from core.project import sessions, session_scope
+        session_id = session_scope.validate_id(session_id)
+        # The launcher seeds its own PID before exec. Copy only its verified
+        # binding; every logical session mints a separate credential/ledger.
+        with session_scope.using_directory(sessions._base_sessions_dir()):
+            if sessions._env_session_pid() == pid:
+                fields = sessions._parse_entry(sessions._sessions_dir() / str(pid))
+                if fields.get("seeded_by") in ("flag", "auto", "bookmark"):
+                    initial_project = fields.get("project")
+        os.environ["RAPTOR_CODEX_CONTEXT_ID"] = session_id
+    result = ensure_codex_session(pid, initial_project=initial_project)
     if result is None:
         return None
 
@@ -212,6 +224,17 @@ def warm_sage_embeddings():
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--codex-subagent-context"]:
+        from core.json import loads
+        from core.startup.codex_environment import publish_alias
+        try:
+            payload = loads(sys.stdin.read(64 * 1024 + 1), max_bytes=64 * 1024)
+            if not isinstance(payload, dict) or payload.get("hook_event_name") != "SubagentStart":
+                raise ValueError("invalid SubagentStart payload")
+            publish_alias(payload.get("session_id"), payload.get("agent_id"))
+        except (OSError, ValueError, TypeError):
+            sys.exit("RAPTOR: Codex subagent owner context unavailable")
+        sys.exit(0)
     if sys.argv[1:] == ["--codex-context"]:
         import json
         try:
@@ -223,16 +246,24 @@ if __name__ == "__main__":
     from core.run.cli_outcome import cli_outcome
     with cli_outcome():
         if _is_codex_host():
-            from core.startup.codex_environment import publish
+            from core.startup.codex_environment import publish, read_context, _session_id
             try:
                 payload = read_codex_start_payload()
                 if (not isinstance(payload, dict)
                         or payload.get("hook_event_name") != "SessionStart"):
                     raise ValueError("invalid SessionStart payload")
-                seeded = _seed_codex_session()
+                session_id = _session_id(payload.get("session_id"))
+                try:
+                    # Native subagent tool shells can carry their thread ID.
+                    # A vetted alias resolves to the same root even through
+                    # the explicit bootstrap fallback; never seed a child root.
+                    session_id = read_context(session_id)["session_id"]
+                except FileNotFoundError:
+                    pass
+                seeded = _seed_codex_session(session_id)
                 if seeded is None:
                     raise ValueError("session seeding failed")
-                publish(payload.get("session_id"), int(seeded[0]))
+                publish(session_id, int(seeded[0]))
             except (OSError, ValueError, TypeError):
                 sys.exit("RAPTOR: Codex session initialization failed; no command environment available")
         write_env_file()

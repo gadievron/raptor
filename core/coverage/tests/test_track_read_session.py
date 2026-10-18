@@ -505,5 +505,122 @@ class BashHookRegistrySeamTest(_RegistrySeamCase):
                         "override-registry bookmark got no attribution")
 
 
+class _CodexScopeCase(_LedgerCase):
+    """Codex sessions store ledgers under sessions.d/codex/<hash>/,
+    not in the base sessions.d/ — the hook must resolve the scoped
+    directory when RAPTOR_CODEX_CONTEXT_ID is present."""
+
+    CTX_ID = "ctx-root-A"
+
+    def setUp(self):
+        super().setUp()
+        import hashlib
+        scope_hash = hashlib.sha256(self.CTX_ID.encode()).hexdigest()
+        self.scoped_dir = self.sessions_dir / "codex" / scope_hash
+        self.scoped_dir.mkdir(parents=True)
+
+    def _mk_codex_run(self, name, status="running", session_pid=None,
+                      ctx_id=None, target=None):
+        d = self.home / "out" / name
+        d.mkdir(parents=True, exist_ok=True)
+        meta = {"status": status,
+                "session_pid": session_pid or self.pid,
+                "session_harness": "codex",
+                "session_id": ctx_id or self.CTX_ID}
+        if target:
+            meta["target_path"] = target
+        (d / ".raptor-run.json").write_text(json.dumps(meta))
+        return d
+
+    def _codex_ledger(self, *records):
+        lines = [f"running {epoch} {d.name} {d}" for epoch, d in records]
+        (self.scoped_dir / f"{self.pid}.run").write_text(
+            "\n".join(lines) + "\n")
+
+
+class PythonTwinCodexScopeTest(_CodexScopeCase):
+
+    def _resolve(self):
+        with patch.dict(os.environ, {
+            "RAPTOR_SESSION_PID": str(self.pid),
+            "RAPTOR_CODEX_CONTEXT_ID": self.CTX_ID,
+        }), patch.object(Path, "home", staticmethod(lambda: self.home)):
+            return track_read._find_active_run()
+
+    def test_codex_session_uses_scoped_ledger(self):
+        tree = self.home / "srctree"
+        tree.mkdir()
+        run = self._mk_codex_run("scan_codex", target=str(tree))
+        self._codex_ledger((100, run))
+        run_dir, target = self._resolve()
+        self.assertEqual(run_dir, str(run))
+        self.assertEqual(target, str(tree))
+
+    def test_codex_ignores_base_ledger(self):
+        """A ledger in the base directory (written by a Claude session
+        at the same PID) must not be found by a Codex session."""
+        run = self._mk_codex_run("scan_base")
+        self._ledger((100, run))  # writes to base, not scoped
+        run_dir, _ = self._resolve()
+        self.assertIsNone(run_dir)
+
+    def test_codex_cross_root_run_not_attributed(self):
+        """A run owned by a different Codex root (different session_id)
+        but sharing this PID must not be attributed."""
+        other_ctx = "ctx-root-B"
+        run = self._mk_codex_run("scan_other", ctx_id=other_ctx)
+        self._codex_ledger((100, run))
+        run_dir, _ = self._resolve()
+        self.assertIsNone(run_dir)
+
+
+@unittest.skipIf(sys.platform == "win32", "bash hook")
+class BashHookCodexScopeTest(_CodexScopeCase):
+
+    def _fire(self, file_path, extra_env=None):
+        env = {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "HOME": str(self.home),
+            "RAPTOR_SESSION_PID": str(self.pid),
+            "RAPTOR_CODEX_CONTEXT_ID": self.CTX_ID,
+        }
+        if extra_env:
+            env.update(extra_env)
+        payload = json.dumps({"tool_input": {"file_path": str(file_path)}})
+        return subprocess.run(
+            ["bash", str(HOOK)], input=payload, capture_output=True,
+            text=True, env=env, timeout=60, check=False,
+        )
+
+    def test_codex_session_uses_scoped_ledger(self):
+        tree = self.home / "srctree"
+        tree.mkdir()
+        src = tree / "main.c"
+        src.write_text("int main(void) { return 0; }\n")
+        run = self._mk_codex_run("scan_codex", target=str(tree))
+        self._codex_ledger((100, run))
+        r = self._fire(src)
+        self.assertEqual(r.returncode, 0, (r.stdout, r.stderr))
+        manifest = run / ".reads-manifest"
+        self.assertTrue(manifest.exists(),
+                        "Codex scoped ledger got no attribution")
+        self.assertIn(str(src.resolve()),
+                      manifest.read_text(encoding="utf-8"))
+
+    def test_codex_cross_root_run_not_attributed(self):
+        tree = self.home / "srctree"
+        tree.mkdir()
+        src = tree / "a.c"
+        src.write_text("int a;\n")
+        other_ctx = "ctx-root-B"
+        run = self._mk_codex_run("scan_other", ctx_id=other_ctx,
+                                 target=str(tree))
+        self._codex_ledger((100, run))
+        r = self._fire(src)
+        self.assertEqual(r.returncode, 0, (r.stdout, r.stderr))
+        self.assertFalse((run / ".reads-manifest").exists(),
+                         "cross-root run was incorrectly attributed")
+
+
 if __name__ == "__main__":
     unittest.main()
