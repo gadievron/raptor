@@ -64,8 +64,8 @@ The root/session-tree policy follows the [Codex app-server contract](https://lea
 The hook relationship and SessionEnd behavior follow the
 [native hook contract](https://learn.chatgpt.com/docs/hooks).
 External clients must preserve this root relationship; an unmapped child thread
-does not silently inherit an arbitrary root. Native fork/resume/subagent
-behavior still needs live acceptance testing with the supported client version.
+does not silently inherit an arbitrary root. Native fork/resume/subagent behavior depends on the client version; tested
+Linux versions and observations are recorded below.
 
 Changed hook definitions require native hook review. Restart or resume after
 updating from the former PID-only Codex implementation; existing in-flight
@@ -99,8 +99,8 @@ This is attribution and isolation between cooperating RAPTOR sessions, not an
 OS security boundary against arbitrary code running as the operator. The
 existing legacy entry parser and ledger writer have not been replaced. Their
 private-registry and stable-location assumptions still apply. Registry location
-must not change during a locked operation. macOS/Windows behavior and actual
-native multi-root/fork/subagent turns require separate acceptance evidence.
+must not change during a locked operation. macOS/Windows behavior requires separate acceptance evidence. Native Linux
+client evidence is recorded below.
 
 ## Coverage tracking
 
@@ -111,12 +111,47 @@ session ledger. Under Codex they must look in the scoped sub-namespace
 directory. Without scoping, a Codex hook process looks for a ledger that does
 not exist at the base path, silently losing coverage attribution.
 
-Both twins detect a Codex context via `RAPTOR_CODEX_CONTEXT_ID` in the
-environment, compute the SHA-256 scope hash, and resolve the ledger from the
-scoped directory. A defense-in-depth check after the PID comparison verifies
-that the run metadata's `session_id` matches the current context ID, so a
-stale or misrouted record cannot cross-attribute between roots sharing a PID.
-The bash twin uses `sha256sum` (Linux) with a `shasum -a 256` (macOS) fallback.
+When `RAPTOR_CODEX_CONTEXT_ID` is present, the Bash hook delegates to
+`core.coverage.track_read` using an isolated Python interpreter. The import
+root comes from the installed hook's location, overriding inherited
+`RAPTOR_DIR`; neither cwd nor `PYTHONPATH` selects its implementation. The
+legacy Claude Bash route remains separate and retains its existing behavior.
+Without an explicit root context, `CLAUDECODE` takes precedence over inherited
+Codex flags; a separately started Claude process must not lose legacy coverage
+because its launching shell happened to be Codex. Explicit scoped credentials
+still select the root for a trusted Claude backend working within a Codex run.
+
+The shared Codex consumer uses `session_scope.directory` and the authenticated
+session resolver. Missing or invalid PID/token/context, dead owners, retired
+generations, and rotated credentials attribute nothing; there is no global
+bookmark or ancestry fallback. Candidate metadata must match the PID and all
+logical owner fields, including harness and generation. Authentication is
+rechecked after ledger lookup and after reading the hook payload, before the
+append. This prevents a delayed payload from acquiring a successor's run.
+An append already in progress at retirement can still finish in the old run;
+this is observational coverage, not an atomic revocation/append transaction.
+
+Scope, credential, context, and broker hashes use `core.hash` rather than
+external binaries. No token is passed to a hashing subprocess as an argument.
+Codex ledger reads use `core.source.read_bytes_capped`; run metadata and
+payloads use bounded `core.json` parsing. Manifest writes use
+`core.atomic_fs.open_hardened_append`, refusing symlinks and special files.
+
+## Metadata and ledger serialization
+
+Start, resume, and terminal transitions retain the run's metadata lock while
+writing their ledger mirrors. Where a project operation lock is needed, it precedes the metadata
+lock; individual ledger locks come last; cross-owner resume releases each ledger lock before acquiring
+the next. The ledger functions do not acquire the metadata lock. Barrier
+regression tests force start/interrupt, interrupt/resume, and resume/interrupt
+interleavings for both legacy Claude and Codex paths.
+
+These are serialized writer transitions, not a multi-file transaction.
+Unlocked observers can still see a brief metadata/ledger mismatch, and a crash
+between writes can leave a stale mirror. Existing ledger locks deliberately
+degrade on acquisition failure; the tests establish the normal locking path,
+not an unconditional durability guarantee on failed locks or unsupported file
+systems. Changing that shared legacy policy requires separate review.
 
 ## Separate baseline finding
 
@@ -130,12 +165,37 @@ review before changing that behavior.
 
 ## Native acceptance still required
 
-The regression tests include real same-user broker processes and concurrent
-claiming subprocesses. Their synthetic owners use native-shaped process names;
-they are not evidence of actual Codex model turns or a live Claude session.
+Linux verification on 2026-10-18 used Codex 0.163.0 and Claude Code
+2.1.299. Native Codex startup/resume, project binding across independent shell
+calls, explicit none, and scan lifecycle completed. The scan reported reduced
+coverage (eight registry packs unavailable) and sandbox/runtime warnings;
+this is not full scanner coverage evidence.
 
-Before release, use a temporary operator registry in fresh trusted native
-sessions and verify:
+A real Codex app-server, with trusted hooks and startup model turns, verified
+two root conversations sharing a PID, independent bindings, native root fork,
+parent survival, retirement of one root while another remains usable, and an
+actual command-approval denial that left its marker absent. A native subagent
+resolved to the root, and its intentionally failing RAPTOR command produced a
+consumed receipt and a failure marker only on the selected run. Both live run
+statuses stayed running, leaving terminal decisions to the workflow finalizer.
+In this client version the child Bash environment carries the child thread ID,
+while PostToolUse reports the root session ID; receipts deliberately correlate
+using the restored root context and native call ID. A regression test pins
+this observed contract.
+
+Native Claude completed project creation, binding persistence, explicit none,
+and a mechanical scan using a temporary allow rule limited to the exact test
+command. All 26 verification packs recorded exit 0 with no dropped packs. The
+initial test driver timed out before capturing that process exit. A final
+attached rerun with a sufficient Bash timeout returned exit 0; its tool result
+reported no error or interruption, and its lifecycle record was completed.
+A native resume with the temporary artifact directory explicitly granted
+verified the outputs and final none/use behavior. No persistent permission or trust files
+were edited by the tests. Non-Linux behavior remains unverified. Detailed
+evidence and driver limitations are recorded in the review handoff.
+
+Retain a temporary operator registry when repeating native acceptance; finish
+any remaining checklist items before claiming complete client parity:
 
 1. Claude: project create/use/none, a local mechanical scan, reentrant workflow
    dispatch, completion/failure, and restart/resume with the normal hooks.

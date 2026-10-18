@@ -44,6 +44,16 @@ fi
 HELPER="$(dirname "${BASH_SOURCE[0]}")/raptor-hook-json"
 [ -f "$HELPER" ] || exit 0
 
+# Codex credentials require live generation/retirement validation. Share the
+# Python consumer instead of duplicating namespace and authentication rules.
+# Anchor imports to this installed hook, never cwd or inherited RAPTOR_DIR.
+if [ -n "${RAPTOR_CODEX_CONTEXT_ID:-}" ] || { [ -z "${CLAUDECODE:-}" ] && {
+        [ "${RAPTOR_CODEX_ENVIRONMENT:-}" = "1" ] || [ -n "${CODEX_THREAD_ID:-}" ] || [ "${CODEX:-}" = "1" ]; }; }; then
+    _COVERAGE_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd -P)" || exit 0
+    RAPTOR_DIR="$_COVERAGE_ROOT" python3 -I "$_COVERAGE_ROOT/core/coverage/track_read.py" 2>/dev/null || true
+    exit 0
+fi
+
 # Operator-registry resolution — same seam contract as the python
 # side (core.project.registry_home): RAPTOR_REGISTRY_HOME relocates
 # the projects registry, the .active bookmark, and sessions.d
@@ -86,28 +96,7 @@ case "$_SESSION_PID" in
     ''|*[!0-9]*) _SESSION_PID="" ;;
 esac
 if [ -n "$_SESSION_PID" ]; then
-    # Codex sessions store ledgers in a scoped sub-namespace
-    # (sessions.d/codex/<sha256(context-id)>/) — the base directory
-    # holds only legacy Claude ledgers. Keep in lock-step with the
-    # python twin (core/coverage/track_read.py).
-    _CTX_ID="${RAPTOR_CODEX_CONTEXT_ID:-}"
-    _OWN_GENERATION=""
-    if [ -n "$_CTX_ID" ]; then
-        _SESSION_TOKEN="${RAPTOR_SESSION_TOKEN:-}"
-        if [ -n "$_SESSION_TOKEN" ]; then
-            _hash2=$(python3 "$HELPER" sha256 "$_CTX_ID" "$_SESSION_TOKEN" 2>/dev/null) || exit 0
-            _SCOPE_HASH=""; _OWN_GENERATION=""
-            { IFS= read -r _SCOPE_HASH; IFS= read -r _OWN_GENERATION; } <<HASH
-$_hash2
-HASH
-        else
-            _SCOPE_HASH=$(python3 "$HELPER" sha256 "$_CTX_ID" 2>/dev/null) || exit 0
-        fi
-        [ -n "$_SCOPE_HASH" ] || exit 0
-        _LEDGER="$_REG_SESSIONS_BASE/sessions.d/codex/$_SCOPE_HASH/$_SESSION_PID.run"
-    else
-        _LEDGER="$_REG_SESSIONS_BASE/sessions.d/$_SESSION_PID.run"
-    fi
+    _LEDGER="$_REG_SESSIONS_BASE/sessions.d/$_SESSION_PID.run"
     # Size guard matching the python reader's ledger budget: an
     # over-budget ledger reads as empty there, and the two consumers
     # must not diverge on the same file.
@@ -169,35 +158,23 @@ HASH
             # `|| true`: under `set -e` a helper failure on malformed
             # metadata must skip this candidate, not silence coverage
             # attribution for the whole session.
-            _meta5=$(python3 "$HELPER" get "$_rdir/.raptor-run.json" status session_pid target_path session_id session_generation 2>/dev/null || true)
-            _status=""; _owner=""; _tgt=""; _sid=""; _gen=""
+            _meta4=$(python3 "$HELPER" get "$_rdir/.raptor-run.json" status session_pid target_path session_id 2>/dev/null || true)
+            _status=""; _owner=""; _tgt=""; _sid=""
             {
                 IFS= read -r _status || true
                 IFS= read -r _owner || true
                 IFS= read -r _tgt || true
                 IFS= read -r _sid || true
-                IFS= read -r _gen || true
             } <<META
-$_meta5
+$_meta4
 META
             [ "$_status" = "running" ] || continue
             [ "$_owner" = "$_SESSION_PID" ] || continue
-            # Codex logical ownership: two roots sharing a PID have
-            # separate ledgers (scoped above), but a stale or misrouted
-            # record must not cross-attribute — verify session_id.
-            if [ -n "$_CTX_ID" ] && [ "$_sid" != "$_CTX_ID" ]; then
-                continue
-            fi
-            # Generation isolation: a stale worker retaining a previous
-            # token must not attribute reads to a successor's run.
-            if [ -n "$_OWN_GENERATION" ] && [ -n "$_gen" ] && [ "$_gen" != "$_OWN_GENERATION" ]; then
-                continue
-            fi
             BEST_EPOCH="$_epoch"
             RUN_DIR="$_rdir/"
             PROJECT_TARGET="$_tgt"
         done < "$_LEDGER"
-        unset _st _epoch _rid _rdir _status _owner _tgt _sid _gen _meta5 BEST_EPOCH _LEDGER _CTX_ID _SCOPE_HASH _OWN_GENERATION _SESSION_TOKEN
+        unset _st _epoch _rid _rdir _status _owner _tgt _sid _meta4 BEST_EPOCH _LEDGER
     fi
     # In-session with no valid live run: attribute nothing.
     [ -z "$RUN_DIR" ] && exit 0

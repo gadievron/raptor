@@ -180,19 +180,11 @@ def _append(manifest: str, line: str) -> None:
         os.close(fd)
 
 
-def _sha256(values: list[str]) -> None:
-    import hashlib
-    for v in values:
-        print(hashlib.sha256(v.encode()).hexdigest())
-
-
 def main(argv: list[str]) -> int:
     if len(argv) >= 3 and argv[0] == "get":
         _get(argv[1], argv[2:])
     elif len(argv) == 3 and argv[0] == "append":
         _append(argv[1], argv[2])
-    elif len(argv) >= 2 and argv[0] == "sha256":
-        _sha256(argv[1:])
     return 0
 
 
