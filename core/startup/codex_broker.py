@@ -23,6 +23,8 @@ from core.startup import codex_environment as environment
 # Resolve only this platform-owned prefix. Keep private IPC descendants
 # lexical so _directory still rejects links below the trusted temp root.
 _IPC_ROOT = Path("/tmp")
+_POLL_MIN = 0.02   # 20 ms — responsive when requests arrive
+_POLL_MAX = 0.5    # 500 ms — idle ceiling
 
 
 def _address(session_id):
@@ -33,6 +35,7 @@ def _address(session_id):
 
 def request(session_id, message):
     context = environment.read_context(session_id)
+    session_id = context['session_id']
     message = dict(message, capability=context['broker_key'])
     name = secrets.token_hex(16)
     with environment._directory(_address(session_id)) as directory:
@@ -70,12 +73,29 @@ def start(session_id, pid):
     with environment._directory(address, create=True) as directory:
         lock = _lock(directory)
         try:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                if request(session_id, {'op': 'environment'})['environment']['RAPTOR_SESSION_PID'] == str(pid):
-                    return
-                raise environment.CodexEnvironmentError('another live owner holds this context')
+            deadline = time.monotonic() + 3
+            while True:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    try:
+                        current = request(session_id, {'op': 'environment'})
+                    except (OSError, environment.CodexEnvironmentError):
+                        # A retired generation can still be closing its stable
+                        # server lock. Never unlink it or race a second broker;
+                        # retry the same inode before starting the successor.
+                        try:
+                            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            break
+                        except BlockingIOError:
+                            if time.monotonic() >= deadline:
+                                raise environment.CodexEnvironmentError('prior broker did not retire')
+                        time.sleep(0.02)
+                        continue
+                    if current['environment']['RAPTOR_SESSION_PID'] == str(pid):
+                        return
+                    raise environment.CodexEnvironmentError('another live owner holds this context')
         finally:
             os.close(lock)
     from core.config import RaptorConfig
@@ -114,9 +134,10 @@ def serve(session_id):
             return
         try:
             environment._atomic(directory, 'ready', str(os.getpid()))
+            poll = _POLL_MIN
             while True:
                 try:
-                    fields = environment._entry(pid)
+                    fields = environment._entry(pid, context['session_id'])
                     if (context['identity'] != environment._identity(fields)
                             or not secrets.compare_digest(context['token_digest'], environment._digest(fields))):
                         return
@@ -127,6 +148,7 @@ def serve(session_id):
                 names = (name for name in os.listdir(directory)
                          if len(name) == 40 and name.endswith('.request')
                          and all(c in '0123456789abcdef' for c in name[:32]))
+                served = 0
                 for index, name in enumerate(names):
                     if index >= 32:
                         break
@@ -146,13 +168,18 @@ def serve(session_id):
                                 result = {'ok': True}
                         environment._atomic(directory, name[:32] + '.response', json.dumps(result))
                         os.unlink(name, dir_fd=directory)
+                        served += 1
                     except (OSError, ValueError, TypeError, RecursionError):
                         try:
                             os.unlink(name, dir_fd=directory)
                         except FileNotFoundError:
                             pass
                         continue
-                time.sleep(0.02)
+                if served:
+                    poll = _POLL_MIN
+                else:
+                    poll = min(poll * 1.5, _POLL_MAX)
+                time.sleep(poll)
         finally:
             # Remove only protocol-owned message files while still holding the
             # stable server lock. Interrupted replies can contain credentials.
