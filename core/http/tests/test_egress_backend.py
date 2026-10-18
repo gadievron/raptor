@@ -251,6 +251,7 @@ class TestSeatbeltParentProxy:
 
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        tls.minimum_version = ssl.TLSVersion.TLSv1_2
         tls.load_cert_chain(certfile=cert, keyfile=key)
         server.socket = tls.wrap_socket(server.socket, server_side=True)
         server_thread = threading.Thread(
