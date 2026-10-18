@@ -23,7 +23,8 @@ def host(tmp_path, monkeypatch):
     monkeypatch.setenv('RAPTOR_REGISTRY_HOME', str(tmp_path / 'registry'))
     monkeypatch.delenv('CODEX_THREAD_ID', raising=False)
     monkeypatch.delitem(sessions.__dict__, 'SESSIONS_DIR', raising=False)
-    for key in ('RAPTOR_SESSION_PID', 'RAPTOR_SESSION_TOKEN', 'RAPTOR_CODEX_CONTEXT_ID'):
+    for key in ('RAPTOR_SESSION_PID', 'RAPTOR_SESSION_TOKEN',
+                'RAPTOR_CODEX_CONTEXT_ID', 'CODEX', 'RAPTOR_CODEX_ENVIRONMENT'):
         monkeypatch.delenv(key, raising=False)
     process = subprocess.Popen([sys.executable, '-c',
         'import ctypes,sys; ctypes.CDLL(None).prctl(15,b"codex",0,0,0); '
