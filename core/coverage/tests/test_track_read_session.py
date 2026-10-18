@@ -551,6 +551,8 @@ class _CodexScopeCase(_LedgerCase):
         self.assertTrue(select.select([self.owner.stdout], [], [], 3)[0])
         self.assertEqual(self.owner.stdout.readline().strip(), "ready")
         self.pid = self.owner.pid
+        # Decoy legacy ledgers must use the same registry as the consumers.
+        self.sessions_dir = self.home / "registry/sessions.d"
         registry_patch = patch.object(sessions, "SESSIONS_DIR", self.home / "registry/sessions.d", create=True)
         registry_patch.start()
         self.addCleanup(registry_patch.stop)
@@ -632,6 +634,11 @@ class _CodexAuthChecks(_LedgerCase):
         path.rename(moved)
         path.symlink_to(moved)
         self.assertFalse(self._attributed(run))
+
+    def test_string_session_pid_is_accepted(self):
+        run = self._mk_codex_run("string_pid", session_pid=str(self.pid))
+        self._codex_ledger((100, run))
+        self.assertTrue(self._attributed(run))
 
     def test_missing_token_is_not_authority(self):
         run = self._mk_codex_run("missing_token")
