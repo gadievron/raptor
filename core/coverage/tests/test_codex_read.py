@@ -382,3 +382,21 @@ def test_separate_hook_processes_share_single_use_receipt(case):
         results = list(pool.map(hook, range(2)))
     assert [(p.returncode, p.stdout, p.stderr) for p in results] == [(0, '', ''), (0, '', '')]
     assert manifest(case) == [str(case[1])]
+
+
+@pytest.mark.parametrize('style', ['single', 'double', 'escaped'])
+@pytest.mark.parametrize('relative', [
+    'app/[slug]/page.tsx', 'star*.c', 'has?.c', 'cost$price.c', 'hash#tag.c',
+    'tick`name.c', "apostrophe's.c",
+])
+def test_quoted_paths_reach_real_lifecycle_dispatch(case, monkeypatch, relative, style):
+    from core.run.tests.test_literal_command import quote_word
+    source = case[1].parent / relative
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text('int quoted_path;\n')
+    code, payload = fire(case, [str(source)])
+    assert code == 0 and len(receipts(case)) == 1
+    payload['tool_input']['command'] = 'libexec/raptor-read ' + quote_word(str(source), style)
+    lifecycle_hook(json.dumps(payload), monkeypatch)
+    assert manifest(case) == [str(source)]
+    assert receipts(case) == []
