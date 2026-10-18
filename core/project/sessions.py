@@ -833,8 +833,8 @@ def end_codex_session(pid: int, token: str) -> bool:
 
 
 def _retirement_path(pid: int, token: str, directory: Path) -> Path:
-    import hashlib
-    generation = hashlib.sha256(token.encode()).hexdigest()
+    from core.hash import sha256_string
+    generation = sha256_string(token)
     return directory / f".ended-{pid}-{generation}"
 
 
@@ -858,12 +858,12 @@ def logical_owner_stamp() -> dict[str, str]:
     session_id = _scope.current_id()
     if not session_id:
         return {}
-    import hashlib
+    from core.hash import sha256_string
     token = os.environ.get(ENV_SESSION_TOKEN, "")
     if not token:
         return {}
     return {"session_harness": "codex", "session_id": session_id,
-            "session_generation": hashlib.sha256(token.encode()).hexdigest()}
+            "session_generation": sha256_string(token)}
 
 
 def same_logical_owner(meta: dict, pid: int | None) -> bool:
@@ -891,13 +891,13 @@ def owner_registry(meta: dict):
 
 def logical_owner_liveness(meta: dict, pid: int) -> str:
     """Validate logical credential generation before considering process life."""
-    import hashlib
+    from core.hash import sha256_string
     try:
         directory = _scope.directory(_base_sessions_dir(), _scope.validate_id(meta.get("session_id")))
         fields = _parse_entry(directory / str(pid))
         if not fields or codex_session_ended(pid, fields, directory):
             return "dead"
-        digest = hashlib.sha256(fields.get("token", "").encode()).hexdigest()
+        digest = sha256_string(fields.get("token", ""))
         if not secrets.compare_digest(digest, meta.get("session_generation", "")):
             return "dead"
         for meta_key, entry_key in (("session_start", "starttime"),

@@ -1,12 +1,8 @@
-"""Track file reads for coverage — test-only Python reimplementation.
+"""Track file reads for coverage.
 
-The production hook is plugins/coverage/libexec/raptor-hook-read (bash,
-runs async via PostToolUse plugin). This module reimplements the same
-logic in Python so test_record.py can exercise coverage tracking
-in-process without shelling out to the bash hook.
-
-Not used in production. Extension list must stay in sync with the
-extension case statement in raptor-hook-read.
+The Bash hook delegates Codex reads here so credential validation and namespace
+selection have one implementation. Legacy Claude hook discovery stays in Bash;
+its Python twin remains available for regression tests.
 """
 
 import json
@@ -17,10 +13,8 @@ import sys
 from pathlib import Path
 
 if __name__ == "__main__":
-    # Script mode: the repo root must come from RAPTOR_DIR (launcher-
-    # provided) — the path-safety rule forbids deriving it from
-    # __file__. Production consumers import this module as a package
-    # (or use the bash twin) and never hit this branch.
+    # The Bash hook pins RAPTOR_DIR to its installed checkout and invokes
+    # this script with -I. Imports never depend on cwd or PYTHONPATH.
     if "RAPTOR_DIR" not in os.environ:
         sys.exit("RAPTOR_DIR is not set — cannot resolve the repo root")
     sys.path.insert(0, os.environ["RAPTOR_DIR"])
@@ -84,7 +78,8 @@ def _read_run_meta(path: Path) -> dict | None:
             raw = fh.read(_MAX_RUN_META_BYTES + 1)
         if len(raw) > _MAX_RUN_META_BYTES:
             return None  # grew past the budget mid-read
-        meta = json.loads(raw.decode("utf-8"))
+        from core.json import loads_bounded
+        meta = loads_bounded(raw, max_bytes=_MAX_RUN_META_BYTES)
     except (OSError, ValueError, RecursionError):
         # RecursionError: a within-budget nesting bomb (hundreds of
         # thousands of nested arrays fit well under the byte budget)
@@ -125,9 +120,20 @@ def _find_active_run():
     matching the bash twin (plugins/coverage/libexec/raptor-hook-read
     — keep the two in lock-step).
     """
+    if not os.environ.get("RAPTOR_CODEX_CONTEXT_ID") and not os.environ.get("CLAUDECODE") and (
+            os.environ.get("RAPTOR_CODEX_ENVIRONMENT") == "1"
+            or os.environ.get("CODEX_THREAD_ID") or os.environ.get("CODEX") == "1"):
+        return None, None  # recognized Codex invocation without a root credential
     session_pid = os.environ.get("RAPTOR_SESSION_PID", "")
-    if session_pid.isdigit():
-        return _find_session_run(int(session_pid))
+    if os.environ.get("RAPTOR_CODEX_CONTEXT_ID") and not (
+            session_pid.isascii() and session_pid.isdigit()):
+        return None, None  # scoped calls never fall back to the global bookmark
+    if session_pid.isascii() and session_pid.isdigit():
+        try:
+            return _find_session_run(int(session_pid))
+        except ValueError:
+            return None, None  # oversized decimal PID, never a global fallback
+
     return _find_global_run()
 
 
@@ -145,22 +151,26 @@ def _find_session_run(session_pid):
         base = registry_home.sessions_dir()
         ctx_id = os.environ.get("RAPTOR_CODEX_CONTEXT_ID", "")
         if ctx_id:
-            import hashlib
-            scope_hash = hashlib.sha256(ctx_id.encode()).hexdigest()
-            ledger = base / "codex" / scope_hash / f"{session_pid}.run"
-            _session_token = os.environ.get("RAPTOR_SESSION_TOKEN", "")
-            _own_generation = (hashlib.sha256(_session_token.encode()).hexdigest()
-                               if _session_token else "")
+            from core.project import sessions, session_scope
+            if sessions.resolve_session_pid() != session_pid:
+                return None, None
+            ledger = session_scope.directory(base, ctx_id) / f"{session_pid}.run"
         else:
-            _own_generation = ""
             ledger = base / f"{session_pid}.run"
-    except ValueError:
-        return None, None  # invalid override — parity: attribute nothing
+    except (ValueError, TypeError, OSError):
+        return None, None  # invalid scoped credentials never select another root
     try:
-        if ledger.stat().st_size > 512 * 1024:
-            return None, None  # over the reader budget — like sessions
-        text = ledger.read_text(encoding="utf-8")
-    except OSError:
+        if ctx_id:
+            from core.source import read_bytes_capped
+            result = read_bytes_capped(ledger, 512 * 1024)
+            if result is None or result[1]:
+                return None, None
+            text = result[0].decode("utf-8")
+        else:
+            if ledger.stat().st_size > 512 * 1024:
+                return None, None
+            text = ledger.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
         return None, None
     candidates = []
     # Split on "\n" ONLY: str.splitlines() eats "\r" as a separator,
@@ -180,7 +190,7 @@ def _find_session_run(session_pid):
             continue
         epoch, run_dir = parts[1], parts[3]
         if (not run_dir.startswith("/") or not run_dir.isprintable()
-                or not epoch.isascii() or not epoch.isdigit()):
+                or not epoch.isascii() or not epoch.isdigit() or len(epoch) > 19):
             continue
         epoch_i = int(epoch)
         if epoch_i >= 2 ** 63:
@@ -205,14 +215,8 @@ def _find_session_run(session_pid):
         # stringifies session_pid must not diverge the two consumers.
         if str(meta.get("session_pid")) != str(session_pid):
             continue  # resumed by (or belonging to) another session
-        # Codex logical ownership: two roots sharing a PID have
-        # separate ledgers (scoped above), but a stale or misrouted
-        # record must not cross-attribute — verify session_id matches.
-        if ctx_id and meta.get("session_id") != ctx_id:
+        if ctx_id and not sessions.same_logical_owner(meta, session_pid):
             continue
-        if _own_generation and meta.get("session_generation"):
-            if meta["session_generation"] != _own_generation:
-                continue
         target = meta.get("target_path")
         if not isinstance(target, str):
             target = ""  # typed corruption: attribute without a filter
@@ -225,6 +229,8 @@ def _find_session_run(session_pid):
             # divergence either way silently changes what a session's
             # reads attribute to.
             target = ""
+        if ctx_id and sessions.resolve_session_pid() != session_pid:
+            return None, None  # retired/rotated while reading the ledger
         return str(d), target
     return None, None
 
@@ -286,7 +292,7 @@ def _find_global_run():
 
 
 def main() -> None:
-    # Find active run via project symlink
+    # Resolve the session ledger (or the legacy projectless fallback).
     run_dir, target = _find_active_run()
     if not run_dir:
         return
@@ -308,12 +314,15 @@ def main() -> None:
     if len(_stdin_text) > _MAX_STDIN_BYTES:
         return
     try:
-        payload = json.loads(_stdin_text or "{}")
-    except (json.JSONDecodeError, ValueError):
+        from core.json import loads_bounded
+        payload = loads_bounded(_stdin_text or "{}", max_bytes=_MAX_STDIN_BYTES)
+    except (ValueError, RecursionError):
+        return
+    if not isinstance(payload, dict) or not isinstance(payload.get("tool_input"), dict):
         return
 
     file_path = (payload.get("tool_input") or {}).get("file_path", "")
-    if not file_path:
+    if not isinstance(file_path, str) or not file_path:
         return
 
     # Reject paths with NUL or line-terminator characters. The
@@ -367,6 +376,13 @@ def main() -> None:
         except (OSError, ValueError):
             return
 
+    if os.environ.get("RAPTOR_CODEX_CONTEXT_ID"):
+        # Payload input may have blocked since discovery. Reauthenticate and
+        # verify the selected run still belongs to this live generation.
+        current_run, _ = _find_active_run()
+        if current_run != run_dir:
+            return
+
     # Append to manifest with O_NOFOLLOW. Pre-fix `open(..., "a")`
     # followed any symlink at the manifest path — if an attacker
     # (or a careless test fixture) planted a symlink at
@@ -376,8 +392,8 @@ def main() -> None:
     # silently skip.
     try:
         manifest_path = os.path.join(run_dir, MANIFEST_NAME)
-        flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(manifest_path, flags, 0o600)
+        from core.atomic_fs import open_hardened_append
+        fd = open_hardened_append(manifest_path, mode=0o600)
         with os.fdopen(fd, "a", encoding="utf-8") as f:
             f.write(file_path + "\n")
     except OSError:

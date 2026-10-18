@@ -6,7 +6,6 @@ validates the bound live owner on every request and exits when it disappears.
 from __future__ import annotations
 
 import fcntl
-import hashlib
 import json
 import os
 import re
@@ -17,6 +16,7 @@ import subprocess
 import sys
 import time
 
+from core.hash import sha256_string
 from core.startup import codex_environment as environment
 
 
@@ -29,7 +29,7 @@ _POLL_MAX = 0.5    # 500 ms — idle ceiling
 
 def _address(session_id):
     environment._session_id(session_id)
-    key = hashlib.sha256((str(environment.ROOT) + '\0' + session_id).encode()).hexdigest()[:40]
+    key = sha256_string(str(environment.ROOT) + '\0' + session_id)[:40]
     return _IPC_ROOT.resolve(strict=True) / f'raptor-codex-env-{os.getuid()}' / key
 
 
