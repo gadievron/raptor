@@ -117,8 +117,13 @@ def format_banner(
     # Warnings: unavailable first, then limited, then other
     all_raw = tool_warnings + env_warnings + llm_warnings
     if codex:
-        # Only feature-status labels, not filesystem paths or arbitrary text.
-        all_raw = [re.sub(r"(?<!\S)/([a-z][a-z0-9-]*)(?= (?:unavailable|limited)\b)",
+        # Convert known commands throughout lists and explanatory labels.
+        # Require token boundaries so paths such as /scan/config stay intact.
+        command_reference = (
+            r"(?<![\w/])/(agentic|audit|codeql|crash-analysis|exploit|frida|"
+            r"fuzz|oss-forensics|scan|validate|web)(?=$|[\s,);:`])"
+        )
+        all_raw = [re.sub(command_reference,
                           r"$\1", warning) for warning in all_raw]
     ordered = (
         [w for w in all_raw if "unavailable" in w] +
