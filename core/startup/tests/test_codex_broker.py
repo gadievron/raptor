@@ -24,7 +24,7 @@ def host(tmp_path, monkeypatch):
     monkeypatch.delenv('CODEX_THREAD_ID', raising=False)
     monkeypatch.delitem(sessions.__dict__, 'SESSIONS_DIR', raising=False)
     for key in ('RAPTOR_SESSION_PID', 'RAPTOR_SESSION_TOKEN',
-                'RAPTOR_CODEX_CONTEXT_ID', 'CODEX', 'RAPTOR_CODEX_ENVIRONMENT'):
+                'RAPTOR_CODEX_CONTEXT_ID'):
         monkeypatch.delenv(key, raising=False)
     process = subprocess.Popen([sys.executable, '-c',
         'import ctypes,sys; ctypes.CDLL(None).prctl(15,b"codex",0,0,0); '
@@ -41,6 +41,8 @@ def host(tmp_path, monkeypatch):
     try:
         yield sid, process, credential
     finally:
+        for key in ('CODEX', 'RAPTOR_CODEX_ENVIRONMENT'):
+            os.environ.pop(key, None)
         if not process.stdin.closed:
             process.stdin.close()
         process.wait(timeout=3)
