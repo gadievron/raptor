@@ -25,7 +25,7 @@ def test_hook_is_only_banner_renderer_and_context_does_not_repeat_it(monkeypatch
     assert run.call_args.kwargs["input"] == payload
     assert run.call_args.args[0] == [sys.executable, "-I", str(ROOT / "libexec/raptor-session-init")]
     output = json.loads(capsys.readouterr().out)
-    assert output["systemMessage"] == "exact banner\n\n" + module["QUICK_COMMANDS"]
+    assert output["systemMessage"] == "\nexact banner\n\n" + module["QUICK_COMMANDS"]
     context = output["hookSpecificOutput"]["additionalContext"]
     assert "exact banner" not in context
     assert "RAPTOR_CODEX_STARTUP_COMPLETE" in context

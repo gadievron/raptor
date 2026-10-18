@@ -28,7 +28,7 @@ def main():
         sys.stderr.write("RAPTOR: startup initializer returned no banner\n")
         return 1
     print(json.dumps({
-        "systemMessage": banner + "\n\n" + QUICK_COMMANDS,
+        "systemMessage": "\n" + banner + "\n\n" + QUICK_COMMANDS,
         "hookSpecificOutput": {
             "hookEventName": "SessionStart",
             "additionalContext": (
