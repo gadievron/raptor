@@ -1379,20 +1379,19 @@ def start_run(output_dir: Path, command: str,
         # Lazy import to avoid circular core.sandbox load on metadata import.
         from core.sandbox.summary import set_active_run_dir
         save_json(output_dir / RUN_METADATA_FILE, metadata)
+        # Ledger write under the metadata lock: a concurrent reader
+        # must never see committed metadata without its ledger record.
+        if session_pid is not None:
+            from core.project.sessions import ledger_record_start
+            ledger_record_start(output_dir, pid=session_pid,
+                                pin_project=pin_project, record_pin=True,
+                                pin_source=pin_source)
     set_active_run_dir(output_dir)
     _run_target = metadata.get("target_path")
     _setup_checklist_symlink(
         output_dir,
         target=_run_target if isinstance(_run_target, str) else None,
     )
-    # Session run ledger: the record drives exact
-    # coverage-hook attribution and sibling-discovery tier 0.
-    # Best-effort by contract — never lifecycle-critical.
-    if session_pid is not None:
-        from core.project.sessions import ledger_record_start
-        ledger_record_start(output_dir, pid=session_pid,
-                            pin_project=pin_project, record_pin=True,
-                            pin_source=pin_source)
     return output_dir
 
 
@@ -2707,90 +2706,69 @@ def resume_run(output_dir: Path, note: str | None = None) -> int:
                         "session_id"):
                 metadata.pop(key, None)
         save_json(path, metadata)
-    # Re-mark as the active run so sandbox summaries and coverage
-    # tracking attach to the resumed segment.
-    from core.sandbox.summary import set_active_run_dir
-    set_active_run_dir(Path(output_dir))
-    # Ledger: the RESUMING session gains a running
-    # record (else every read in the resumed segment is unattributable)
-    # and the original owner's line is CAS-marked interrupted so its
-    # session's hook stops attributing to a run it no longer owns.
-    if session_pid is not None:
-        # Seal the pin for THIS process — segment 2+ must enjoy the
-        # same marker-rewrite immunity as the original owner. The
-        # marker is verified against the out-of-grant witness FIRST:
-        # a hostile child rewriting project (and status → resumable)
-        # during segment 1 must not be laundered into a trusted
-        # frozen pin here. Witness lookup: the RESUMING session's
-        # ledger first, then the ORIGINAL owner's (a cross-session
-        # resume otherwise found no witness and trusted the marker —
-        # the prior pid comes from the same child-writable metadata,
-        # but a FORGED pid merely yields no witness, i.e. today's
-        # posture). Neither found = the documented sessionless
-        # residual. Any restore is a fresh LOCKED read-modify-write —
-        # the earlier snapshot is stale by now, and an unlocked save
-        # would clobber concurrent status writers wholesale.
-        _restored_pin = None
-        try:
-            from core.project.sessions import ledger_pin_witness
-            from core.run.pin import freeze_run_pin, resolve_run_pin
-            _pin = resolve_run_pin(output_dir)
-            _marker_project = (_pin.project if _pin.authoritative
-                               else None)
-            _found, _witnessed, _wsource = ledger_pin_witness(output_dir)
-            _fallback = False
-            if not _found and isinstance(prior_session_pid, int) \
-                    and not isinstance(prior_session_pid, bool):
-                # The prior pid comes from CHILD-WRITABLE metadata:
-                # the lookup verifies the pid's registered identity,
-                # and its witness is used VETO-ONLY below — a steered
-                # lookup can at most suppress, never choose a project.
-                _found, _witnessed, _wsource = ledger_pin_witness(
-                    output_dir, pid=prior_session_pid)
-                _fallback = True
-            if _found and _witnessed != _marker_project:
-                if _fallback:
-                    logger.warning(
-                        "resume: run pin in %s (%r) disagrees with the "
-                        "PRIOR owner's ledger witness (%r) — freezing "
-                        "projectless (fallback witnesses veto, never "
-                        "elect); the marker may have been tampered "
-                        "with", output_dir, _marker_project, _witnessed)
-                    _witnessed, _wsource = None, "none"
-                else:
-                    logger.warning(
-                        "resume: run pin in %s (%r) disagrees with the "
-                        "session ledger witness (%r) — restoring the "
-                        "witness; the marker may have been tampered "
-                        "with", output_dir, _marker_project, _witnessed)
-                _wsource = _wsource or "session"
-                with _metadata_lock(path):
+        # Pin sealing and ledger write under the metadata lock: a
+        # concurrent terminal transition must not interleave between
+        # the resumed metadata and its ledger record.
+        if session_pid is not None:
+            _restored_pin = None
+            try:
+                from core.project.sessions import ledger_pin_witness
+                from core.run.pin import freeze_run_pin, resolve_run_pin
+                _pin = resolve_run_pin(output_dir)
+                _marker_project = (_pin.project if _pin.authoritative
+                                   else None)
+                _found, _witnessed, _wsource = ledger_pin_witness(output_dir)
+                _fallback = False
+                if not _found and isinstance(prior_session_pid, int) \
+                        and not isinstance(prior_session_pid, bool):
+                    _found, _witnessed, _wsource = ledger_pin_witness(
+                        output_dir, pid=prior_session_pid)
+                    _fallback = True
+                if _found and _witnessed != _marker_project:
+                    if _fallback:
+                        logger.warning(
+                            "resume: run pin in %s (%r) disagrees with the "
+                            "PRIOR owner's ledger witness (%r) — freezing "
+                            "projectless (fallback witnesses veto, never "
+                            "elect); the marker may have been tampered "
+                            "with", output_dir, _marker_project, _witnessed)
+                        _witnessed, _wsource = None, "none"
+                    else:
+                        logger.warning(
+                            "resume: run pin in %s (%r) disagrees with the "
+                            "session ledger witness (%r) — restoring the "
+                            "witness; the marker may have been tampered "
+                            "with", output_dir, _marker_project, _witnessed)
+                    _wsource = _wsource or "session"
+                    # Already holding _metadata_lock(path); write
+                    # directly — no nested re-acquisition needed.
                     _fresh = _load_meta(path)
                     if isinstance(_fresh, dict):
                         _fresh["project"] = _witnessed
                         _fresh["project_source"] = _wsource
                         save_json(path, _fresh)
-                freeze_run_pin(output_dir, _witnessed, _wsource)
-                _restored_pin = (_witnessed, _wsource)
-            elif _pin.authoritative:
-                freeze_run_pin(output_dir, _pin.project, _pin.source)
-                _restored_pin = (_pin.project, _pin.source)
-        except Exception:  # noqa: BLE001 — seal is best-effort
-            logger.debug("resume pin seal failed", exc_info=True)
-        from core.project.sessions import ledger_record_resume
-        prior = (prior_session_pid
-                 if isinstance(prior_session_pid, int)
-                 and not isinstance(prior_session_pid, bool) else None)
-        # Thread the verified pin so the RESUMING session's ledger
-        # carries a witness for segment 2+ — without it, this
-        # session's later completions had nothing to verify against.
-        ledger_record_resume(Path(output_dir),
-                             prior_session_pid=prior, pid=session_pid,
-                             pin_project=(_restored_pin[0]
-                                          if _restored_pin else None),
-                             pin_source=(_restored_pin[1]
-                                         if _restored_pin else None),
-                             record_pin=_restored_pin is not None)
+                    freeze_run_pin(output_dir, _witnessed, _wsource)
+                    _restored_pin = (_witnessed, _wsource)
+                elif _pin.authoritative:
+                    freeze_run_pin(output_dir, _pin.project, _pin.source)
+                    _restored_pin = (_pin.project, _pin.source)
+            except Exception:  # noqa: BLE001 — seal is best-effort
+                logger.debug("resume pin seal failed", exc_info=True)
+            from core.project.sessions import ledger_record_resume
+            prior = (prior_session_pid
+                     if isinstance(prior_session_pid, int)
+                     and not isinstance(prior_session_pid, bool) else None)
+            ledger_record_resume(Path(output_dir),
+                                 prior_session_pid=prior, pid=session_pid,
+                                 pin_project=(_restored_pin[0]
+                                              if _restored_pin else None),
+                                 pin_source=(_restored_pin[1]
+                                              if _restored_pin else None),
+                                 record_pin=_restored_pin is not None)
+    # Re-mark as the active run so sandbox summaries and coverage
+    # tracking attach to the resumed segment.
+    from core.sandbox.summary import set_active_run_dir
+    set_active_run_dir(Path(output_dir))
     return segment
 
 
@@ -3235,15 +3213,14 @@ def _update_status(output_dir: Path, status: str,
 
         save_json(path, metadata)
 
-    # CAS-mark the run's ledger record with its TRUE terminal status —
-    # in the OWNING session's ledger (metadata session_pid: a sweep in
-    # session B finalising session A's abandoned run must mark A's
-    # record, and after a resume the owner IS the resuming session).
-    if status in _TERMINAL_STATUSES:
-        owner = metadata.get("session_pid")
-        if isinstance(owner, int) and not isinstance(owner, bool):
-            from core.project.sessions import ledger_record_finish
-            ledger_record_finish(output_dir, status, pid=owner)
+        # Ledger finish under the metadata lock: a concurrent resume
+        # must not interleave between the terminal metadata and its
+        # ledger record.
+        if status in _TERMINAL_STATUSES:
+            owner = metadata.get("session_pid")
+            if isinstance(owner, int) and not isinstance(owner, bool):
+                from core.project.sessions import ledger_record_finish
+                ledger_record_finish(output_dir, status, pid=owner)
 
 
 def _apply_standard_provenance(metadata: dict[str, Any], output_dir: Path) -> None:
