@@ -3415,7 +3415,7 @@ def _run_batch_splitting_on_truncation(
             max_tokens=initial_max_tokens,
             wall_timeout=(
                 _escalated_wall_timeout(escalated)
-                if ratcheted else None
+                if ratcheted and escalated is not None else None
             ),
         )
     except _BatchLLMError as exc:
