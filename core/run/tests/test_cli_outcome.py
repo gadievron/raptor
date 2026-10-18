@@ -25,6 +25,8 @@ def context(tmp_path, monkeypatch):
     monkeypatch.setenv('RAPTOR_SESSION_TOKEN', 'credential')
     monkeypatch.delenv('CLAUDECODE', raising=False)
     monkeypatch.delenv('RAPTOR_CODEX_HOOK', raising=False)
+    from core.sandbox import summary as _summary
+    monkeypatch.setattr(_summary, '_active_run_dir', None)
     monkeypatch.setattr(sys, 'argv', [str(root / 'libexec/raptor-example'), '--out', '/run'])
     payload = {'session_id': 'session', 'tool_use_id': 'call_123', 'hook_event_name': 'PostToolUse',
                'tool_name': 'Bash', 'tool_input': {'command': 'libexec/raptor-example --out /run'}}
