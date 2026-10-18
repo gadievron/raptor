@@ -8,6 +8,7 @@ After adding, renaming, or changing command descriptions::
 """
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -27,7 +28,7 @@ def rendered(root):
         raise ValueError('No source commands found')
     for source in commands:
         metadata = yaml.safe_load(source.read_text().split('---', 2)[1])
-        name = 'source-command-' + source.stem
+        name = source.stem
         description = f"RAPTOR /{source.stem} workflow: {metadata['description'].strip()}"
         body = f'''---
 name: {name}
@@ -35,14 +36,14 @@ description: {json.dumps(description)}
 ---
 <!-- {MARKER} -->
 
-Read and follow [the maintained /{source.stem} procedure](../../commands/{source.name}).
+Read and follow [the maintained /{source.stem} procedure](../../../.claude/commands/{source.name}).
 Resolve its relative references from that source document, not this adapter.
 Load only the modes and supporting documents needed for the user's request.
 If a required capability or isolation control is unavailable, report the gap
 and stop that step.
 '''
         if source.stem == 'commands':
-            body += '''\nFor Codex, list the available `source-command-*` skills as `$source-command-<name>`
+            body += '''\nFor Codex, list the available command skills as `$<name>`
 with the source descriptions. Honor source `exclude_from_listing` metadata;
 include all other commands, including tune. Do not advertise native slash registration.
 '''
@@ -51,7 +52,7 @@ include all other commands, including tune. Do not advertise native slash regist
 with YAML `name` and `description`, rather than a bare Markdown file.
 Keep the source workflow's review and approval requirements.
 '''
-        result[Path('.claude/skills') / name / 'SKILL.md'] = body
+        result[Path('.agents/skills') / name / 'SKILL.md'] = body
     sources = {}
     for source in (root / '.claude/agents').glob('*.md'):
         header = source.read_text().split('---', 2)[1]
@@ -70,6 +71,10 @@ Keep the source workflow's review and approval requirements.
             raise ValueError(f'Duplicate native role: {name}')
         seen.add(name)
         source = sources[name]
+        if MARKER not in original:
+            # Native role instructions may be operator-maintained. Renaming
+            # command skills must not replace those instructions.
+            continue
         instructions = f'''{MARKER}
 Before doing this role's work, read .claude/agents/{source.name} relative to
 the RAPTOR repository root. That is the maintained role procedure. Follow its
@@ -91,6 +96,35 @@ and stop the affected step instead of assuming the control exists.
 def sync(root, write=False):
     expected = rendered(root)
     stale = []
+    skills = root / '.agents/skills'
+    if skills.is_symlink():
+        if skills.resolve() != (root / '.claude/skills').resolve():
+            raise ValueError('Refusing to replace an unrelated skills symlink')
+        if write:
+            # Replace only the Codex discovery link, never its shared target.
+            skills.unlink()
+            skills.mkdir()
+        else:
+            stale.append(Path('.agents/skills'))
+    command_names = {p.parent.name for p in expected if p.name == 'SKILL.md'}
+    shared = root / '.claude/skills'
+    shared_sources = [p for p in sorted(shared.glob('*'))
+                      if not p.name.startswith('source-command-') and p.name not in command_names]
+    for entry in sorted((root / '.claude/skills').rglob('SKILL.md')):
+        source = entry.parent
+        relative = source.relative_to(shared)
+        if len(relative.parts) > 1 and relative.parts[0] in command_names:
+            shared_sources.append(source)
+    for source in shared_sources:
+        relative = source.relative_to(shared)
+        link = skills / relative
+        if not link.is_symlink() or link.resolve() != source.resolve():
+            stale.append(link.relative_to(root))
+            if write:
+                if link.exists() or link.is_symlink():
+                    raise ValueError(f'Refusing to overwrite a methodology skill: {link}')
+                link.parent.mkdir(parents=True, exist_ok=True)
+                link.symlink_to(os.path.relpath(source, link.parent), target_is_directory=source.is_dir())
     for relative, content in expected.items():
         path = root / relative
         if not path.exists() or path.read_text() != content:
@@ -98,9 +132,9 @@ def sync(root, write=False):
             if write:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(content)
-    obsolete = [p.relative_to(root) for p in
-                (root / '.claude/skills').glob('source-command-*/SKILL.md')
-                if p.relative_to(root) not in expected]
+    obsolete = [p.relative_to(root) for p in skills.glob('*/SKILL.md')
+                if not p.parent.is_symlink() and MARKER in p.read_text()
+                and p.relative_to(root) not in expected]
     return stale, obsolete
 
 

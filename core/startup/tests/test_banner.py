@@ -6,6 +6,21 @@ aligned regardless of the version string's length (a clone's git-describe
 string is much longer than a clean release number)."""
 
 from core.startup import banner
+import pytest
+
+
+@pytest.mark.parametrize('codex,prefix', [(False, '/'), (True, '$')])
+def test_host_command_references_preserve_status_and_target_paths(codex, prefix):
+    output = banner.format_banner(
+        '', 'quote', [], ['/crash-analysis limited — rr not found'], [], [], [],
+        ['/oss-forensics unavailable — BigQuery not configured'],
+        'Project: corpus (/tmp) — `/project none` to clear for this session',
+        codex=codex,
+    )
+    assert f'{prefix}oss-forensics unavailable — BigQuery not configured' in output
+    assert f'{prefix}crash-analysis limited — rr not found' in output
+    assert f'`{prefix}project none` to clear for this session' in output
+    assert 'Project: corpus (/tmp)' in output
 
 
 def _version_line(text: str) -> str:
