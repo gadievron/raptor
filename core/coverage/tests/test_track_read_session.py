@@ -585,7 +585,9 @@ class _CodexScopeCase(_LedgerCase):
             "\n".join(lines) + "\n")
 
 
-class _CodexAuthChecks:
+class _CodexAuthChecks(_LedgerCase):
+    __test__ = False
+
     def _attributed(self, run):
         if hasattr(self, "_resolve"):
             return self._resolve()[0] == str(run)
