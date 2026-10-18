@@ -20,6 +20,7 @@ from core.coverage import track_read
 from core.hash import sha256_string
 from core.json import dumps_canonical, loads_bounded
 from core.run import cli_outcome as outcome
+from core.run.literal_command import literal_invocation_argv
 from core.source import open_regular_beneath
 from core.startup import codex_environment as environment
 
@@ -116,8 +117,10 @@ def consume(payload):
             or payload.get('tool_name') != 'Bash'):
         return
     inputs = payload.get('tool_input')
-    expected = outcome._expected(inputs.get('command') if isinstance(inputs, dict) else None)
-    if not expected or expected[0] != str(environment.ROOT / 'libexec/raptor-read'):
+    expected = literal_invocation_argv(
+        inputs.get('command') if isinstance(inputs, dict) else None,
+        environment.ROOT / 'libexec/raptor-read', cwd=environment.ROOT)
+    if expected is None:
         return
     # The restored root can differ from native child thread IDs. Namespace by
     # the authenticated root, exactly as the existing outcome transport does.
