@@ -37,3 +37,16 @@ restart after upgrading from PID-only Codex session state.
 | Missing or invalid startup context | Review `/hooks` and any SessionStart error. Confirm the checkout is trusted and restart. |
 | Writes denied during startup | Use workspace-write. Custom paths need explicit directory grants. |
 | Project differs after resume | Inspect current session status. Use `-p` to pin the intended project. |
+
+## Integration scope
+
+Codex is an interactive RAPTOR frontend. Some analysis stages still dispatch
+to Claude through the shared backend and require its configured authentication;
+interactive `--codex` selection does not change that backend. The separate
+Codex execution backend effort must integrate below the Python dispatcher,
+with the same lifecycle, artifact validation, budgets, and sandbox controls.
+
+Native hook trust and checkout trust are separate prerequisites. Review hooks
+through `/hooks` after their definitions change, then start or resume a session.
+Automated tests with synthetic owner processes do not replace native client
+acceptance; see [the acceptance checklist](codex-sessions.md#native-acceptance-still-required).

@@ -134,3 +134,15 @@ def test_direct_python_and_bash_dispatcher_map_to_python_argv(context):
     assert outcome._expected('python3 raptor.py scan --repo /target') == [str(root/'raptor.py'), 'scan', '--repo', '/target']
     assert outcome._expected('libexec/raptor-agentic --repo /target') == [str(root/'raptor.py'), 'agentic', '--repo', '/target']
     assert outcome._expected('libexec/raptor-openant --repo /target') == [str(root/'raptor.py'), 'openant', '--repo', '/target']
+
+
+def test_native_child_call_correlates_to_root_hook_session(context, monkeypatch):
+    """Native child Bash env has the child ID; PostToolUse reports the root ID."""
+    _, directory, payload = context
+    monkeypatch.setenv('CODEX_THREAD_ID', 'native-child')
+    monkeypatch.setenv('RAPTOR_CODEX_CONTEXT_ID', 'session')
+    with pytest.raises(SystemExit), outcome.cli_outcome():
+        sys.exit(7)
+    assert outcome.consume(dict(payload, session_id='native-child')) is None
+    assert outcome.consume(payload) is not None
+    assert not list(directory.glob('outcome-*'))
