@@ -1737,6 +1737,11 @@
     "count": 11,
     "kind": "literal"
   },
+  "core/run/metadata.py::start_run": {
+    "count": 10,
+    "kind": "literal",
+    "note": "session-identity field carry-forward: the metadata keys preserved from a prior owner when re-entering start_run on an already-running dir; a closed producer/consumer schema, not a learned vocabulary"
+  },
   "core/run/orchestrated_report_schema.py::SCHEMA": {
     "count": 12,
     "kind": "literal"
@@ -1992,11 +1997,6 @@
     "count": 10,
     "kind": "literal",
     "note": "closed schema for the private per-session context file: the exact JSON keys written by publish() and validated by read_context(); adding or removing a field is a format change, not vocabulary growth"
-  },
-  "core/startup/codex_environment.py::allowed": {
-    "count": 10,
-    "kind": "literal",
-    "note": "closed allowlist of environment variable names the broker may return in an environment response; any name outside this set is rejected \u2014 security boundary, not a learned vocabulary"
   },
   "core/startup/codex_environment.py::context": {
     "count": 10,
