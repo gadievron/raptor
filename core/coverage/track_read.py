@@ -120,11 +120,12 @@ def _find_active_run():
     matching the bash twin (plugins/coverage/libexec/raptor-hook-read
     — keep the two in lock-step).
     """
+    session_pid = os.environ.get("RAPTOR_SESSION_PID", "")
     if not os.environ.get("RAPTOR_CODEX_CONTEXT_ID") and not os.environ.get("CLAUDECODE") and (
+            not session_pid.isdigit()) and (
             os.environ.get("RAPTOR_CODEX_ENVIRONMENT") == "1"
             or os.environ.get("CODEX_THREAD_ID") or os.environ.get("CODEX") == "1"):
-        return None, None  # recognized Codex invocation without a root credential
-    session_pid = os.environ.get("RAPTOR_SESSION_PID", "")
+        return None, None  # recognized Codex invocation without a root or PID
     if os.environ.get("RAPTOR_CODEX_CONTEXT_ID") and not (
             session_pid.isascii() and session_pid.isdigit()):
         return None, None  # scoped calls never fall back to the global bookmark
