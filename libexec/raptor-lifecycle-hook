@@ -270,10 +270,16 @@ def _main(ending):
     if event == "codex-outcome":
         import io
         import json
-        from core.run.cli_outcome import consume
+        from core.run.cli_outcome import consume, _expected
         from core.startup.codex_environment import restore
         try:
             payload = json.loads(sys.stdin.read(1024 * 1024 + 1))
+            inputs = payload.get("tool_input") if isinstance(payload, dict) else None
+            expected = _expected(inputs.get("command") if isinstance(inputs, dict) else None)
+            if expected and expected[0] == str(REPO_ROOT / "libexec/raptor-read"):
+                from core.coverage.codex_read import consume as consume_read
+                consume_read(payload)
+                return
             receipt = consume(payload)
             if receipt is None:
                 return
