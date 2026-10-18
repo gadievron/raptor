@@ -8,13 +8,14 @@ against arbitrary code already running as the same OS user.
 from __future__ import annotations
 
 from contextlib import contextmanager
-import hashlib
 import os
 from pathlib import Path
 import secrets
 import re
 import stat
 import time
+
+from core.hash import sha256_bytes, sha256_string
 
 ROOT = Path(__file__).resolve().parents[2]
 _MAX_BYTES = 64 * 1024
@@ -38,7 +39,7 @@ def _session_id(value):
 def _name(session_id, pid):
     from core.json import dumps_canonical
     raw = dumps_canonical([str(ROOT), _session_id(session_id)]).encode()
-    return hashlib.sha256(raw).hexdigest() + ".json"
+    return sha256_bytes(raw) + ".json"
 
 
 @contextmanager
@@ -157,7 +158,7 @@ def _identity(fields):
 
 
 def _digest(fields):
-    return hashlib.sha256(fields["token"].encode()).hexdigest()
+    return sha256_string(fields["token"])
 
 
 def _text(value):
@@ -281,7 +282,7 @@ def read_context(session_id):
         if (not isinstance(value, dict) or set(value) != _FIELDS
                 or not isinstance(generation, str)
                 or not isinstance(value.get("broker_key"), str)
-                or not secrets.compare_digest(generation, hashlib.sha256(value["broker_key"].encode()).hexdigest())):
+                or not secrets.compare_digest(generation, sha256_string(value["broker_key"]))):
             raise CodexEnvironmentError("subagent owner generation changed")
         session_id = parent_id
     if (not isinstance(value, dict) or set(value) != _FIELDS
@@ -312,7 +313,7 @@ def publish_alias(parent_id, thread_id):
     restore(parent_id)
     alias = {"version": 1, "root": str(ROOT), "thread_id": thread_id,
              "parent_id": parent_id,
-             "generation": hashlib.sha256(context["broker_key"].encode()).hexdigest()}
+             "generation": sha256_string(context["broker_key"])}
     with _directory(_context_directory()) as directory:
         with _context_lock(directory, thread_id):
             try:
@@ -379,7 +380,7 @@ def restore(session_id):
                 or values.get("RAPTOR_DIR") != str(ROOT)
                 or values.get("RAPTOR_SESSION_PID") != str(pid)
                 or values.get("RAPTOR_CODEX_CONTEXT_ID") != value["session_id"]
-                or not secrets.compare_digest(hashlib.sha256(values.get("RAPTOR_SESSION_TOKEN", "").encode()).hexdigest(),
+                or not secrets.compare_digest(sha256_string(values.get("RAPTOR_SESSION_TOKEN", "")),
                                               value["token_digest"])):
             raise CodexEnvironmentError("broker response does not match startup")
     additions = [str(ROOT / "bin"), str(ROOT / "libexec")]

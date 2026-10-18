@@ -5,7 +5,6 @@ PostToolUse consumes only a single simple invocation with matching argv. This
 is same-user bookkeeping, not isolation against code running as the operator.
 """
 from contextlib import contextmanager
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -13,6 +12,7 @@ import re
 import shlex
 import sys
 
+from core.hash import sha256_string
 from core.startup import codex_environment as environment
 
 _ID = re.compile(r'[A-Za-z0-9_-]{1,256}')
@@ -26,7 +26,7 @@ def _address(sid):
 
 def _digest(value):
     from core.json import dumps_canonical
-    return hashlib.sha256(dumps_canonical(value).encode()).hexdigest()
+    return sha256_string(dumps_canonical(value))
 
 
 def _generation(context):
@@ -49,7 +49,7 @@ def _record(status, argv):
     context = environment.read_context(sid)
     token = os.environ.get('RAPTOR_SESSION_TOKEN', '')
     if (os.environ.get('RAPTOR_SESSION_PID') != str(context['pid'])
-            or hashlib.sha256(token.encode()).hexdigest() != context['token_digest']):
+            or sha256_string(token) != context['token_digest']):
         raise ValueError('outcome has no matching restored credential')
     from core.sandbox.summary import get_active_run_dir
     active = get_active_run_dir()

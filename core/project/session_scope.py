@@ -9,7 +9,6 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import wraps
-import hashlib
 import os
 from pathlib import Path
 import re
@@ -32,7 +31,8 @@ def current_id() -> str | None:
 def directory(base: Path, session_id: str | None = None) -> Path:
     if session_id is None:
         return base
-    key = hashlib.sha256(validate_id(session_id).encode()).hexdigest()
+    from core.hash import sha256_string
+    key = sha256_string(validate_id(session_id))
     return base / "codex" / key
 
 

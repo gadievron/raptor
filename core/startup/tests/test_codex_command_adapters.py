@@ -84,3 +84,11 @@ def test_regeneration_preserves_unmanaged_native_instructions(tmp_path):
     SYNC.sync(tmp_path, write=True)
     assert path.read_text() == original
     assert SYNC.sync(tmp_path) == ([], [])
+
+
+def test_codex_generated_adapters_never_enter_claude_skill_discovery():
+    """A current Codex adapter tree must not hide stale Claude-discovered copies."""
+    contaminated = [str(path.relative_to(ROOT))
+                    for path in (ROOT / '.claude/skills').rglob('SKILL.md')
+                    if SYNC.MARKER in path.read_text()]
+    assert not contaminated, f'Codex adapters in Claude skill discovery: {contaminated}'

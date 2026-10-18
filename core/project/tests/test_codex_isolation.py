@@ -327,3 +327,78 @@ def test_publication_keeps_generation_locked_until_broker_is_ready(registry, tmp
                 release.set()
             publishing.result(timeout=3)
             assert seeding.result(timeout=3) == (str(PID), token)
+
+
+@pytest.mark.parametrize("sid", [None, ROOT_A], ids=["claude", "codex"])
+@pytest.mark.parametrize("first,second", [
+    ("start", "interrupt"), ("interrupt", "resume"), ("resume", "interrupt"),
+])
+def test_metadata_and_ledger_transitions_serialize(registry, tmp_path, monkeypatch, sid, first, second):
+    """A blocked mirror must retain the metadata lock in BOTH harness paths.
+
+    Force a competing transition to reach that lock before releasing the first
+    mirror. This reproduces the old terminal/resume race and its reverse.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from contextlib import contextmanager
+    from threading import Event, current_thread
+    from core.run import provenance
+
+    monkeypatch.setattr(metadata, "_get_session_pid", lambda: PID)
+    monkeypatch.setattr(metadata, "_worker_stamp", lambda **kwargs: {})
+    monkeypatch.setattr(metadata, "_session_stamp", lambda pid: {})
+    monkeypatch.setattr(metadata, "_cleanup_abandoned", lambda *args: None)
+    monkeypatch.setattr(provenance, "build_start_manifest", lambda **kwargs: {"provenance": "unavailable"})
+    run = tmp_path / "serialized-run"
+    with registry(sid):
+        if first != "start":
+            metadata.start_run(run, "scan")
+        if first == "resume":
+            metadata.interrupt_run(run)
+        reached, release, contender, done = Event(), Event(), Event(), Event()
+        mirror_name = {"start": "ledger_record_start", "interrupt": "ledger_record_finish",
+                       "resume": "ledger_record_resume"}[first]
+        mirror = getattr(sessions, mirror_name)
+        lock = metadata._metadata_lock
+
+        def delayed_mirror(*args, **kwargs):
+            if current_thread().name == "first-transition":
+                reached.set()
+                assert release.wait(5), "test failed to release first mirror"
+            return mirror(*args, **kwargs)
+
+        @contextmanager
+        def observed_lock(*args, **kwargs):
+            if current_thread().name == "second-transition":
+                contender.set()
+            with lock(*args, **kwargs):
+                yield
+
+        monkeypatch.setattr(sessions, mirror_name, delayed_mirror)
+        monkeypatch.setattr(metadata, "_metadata_lock", observed_lock)
+        operations = {"start": lambda: metadata.start_run(run, "scan"),
+                      "interrupt": lambda: metadata.interrupt_run(run),
+                      "resume": lambda: metadata.resume_run(run)}
+
+        def invoke(which, name):
+            current_thread().name = name
+            try:
+                return operations[which]()
+            finally:
+                if name == "second-transition":
+                    done.set()
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            one = executor.submit(invoke, first, "first-transition")
+            try:
+                assert reached.wait(3)
+                two = executor.submit(invoke, second, "second-transition")
+                assert contender.wait(3)
+                assert not done.wait(0.1), "competing transition escaped metadata serialization"
+            finally:
+                release.set()
+            one.result(timeout=5)
+            two.result(timeout=5)
+        expected = "running" if second == "resume" else "interrupted"
+        assert load_json(run / metadata.RUN_METADATA_FILE)["status"] == expected
+        assert sessions.ledger_runs()[0]["status"] == expected
