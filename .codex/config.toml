@@ -1,0 +1,55 @@
+[shell_environment_policy]
+inherit = "core"
+
+[shell_environment_policy.set]
+BASH_DEFAULT_TIMEOUT_MS = "300000"
+RAPTOR_MAINTAIN_PROJECT_WORKING_DIR = "1"
+CODEX = "1"
+RAPTOR_CODEX_ENVIRONMENT = "1"
+_RAPTOR_TRUSTED = "1"
+
+# RAPTOR-owned operator state only; this does not grant the rest of HOME.
+# Effective only when the operator uses Codex's workspace-write sandbox.
+[sandbox_workspace_write]
+writable_roots = ["~/.raptor", "~/.local/share/raptor"]
+
+# ── Hooks ─────────────────────────────────────────────────────────
+# Codex 0.163.0 resolves both inline and JSON hook sources through the
+# git common directory in a worktree. AGENTS.md supplies an explicit
+# startup fallback when that prevents discovery; inline TOML alone does
+# not fix native worktree hook discovery.
+
+[[hooks.SessionStart]]
+matcher = "startup|resume"
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "CODEX=1 RAPTOR_CODEX_HOOK=1 _RAPTOR_TRUSTED=1 python3 -I .codex/hooks/session_start.py"
+
+[[hooks.Stop]]
+matcher = ""
+
+[[hooks.Stop.hooks]]
+type = "command"
+command = "CODEX=1 RAPTOR_CODEX_HOOK=1 _RAPTOR_TRUSTED=1 libexec/raptor-lifecycle-hook codex-stop"
+timeout = 5
+
+# Command rewrites can bypass native execution rules. No PreToolUse rewrite:
+# shared RAPTOR process startup restores context without changing the command.
+
+[[hooks.SessionEnd]]
+matcher = ""
+
+[[hooks.SessionEnd.hooks]]
+type = "command"
+command = "CODEX=1 RAPTOR_CODEX_HOOK=1 _RAPTOR_TRUSTED=1 libexec/raptor-lifecycle-hook codex-end"
+timeout = 1
+
+# Notification only: RAPTOR records its own exit outcome. No PreToolUse rewrite.
+[[hooks.PostToolUse]]
+matcher = "Bash"
+
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = "CODEX=1 RAPTOR_CODEX_HOOK=1 _RAPTOR_TRUSTED=1 libexec/raptor-lifecycle-hook codex-outcome"
+timeout = 5

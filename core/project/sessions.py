@@ -225,7 +225,9 @@ def _comm(pid: int) -> str | None:
 
 def _claude_shaped(comm: str | None) -> bool:
     """ONE comm predicate for walker, liveness, and readers."""
-    return comm is not None and comm.startswith("claude")
+    return comm is not None and (
+        comm.startswith("claude") or comm.startswith("codex")
+    )
 
 
 def proc_starttime(pid: int) -> str | None:
@@ -385,7 +387,8 @@ def _identity_matches(pid: int, fields: dict[str, str]) -> bool:
     if not stamp_start or not stamp_boot:
         return False
     if _foreign_entry(fields):
-        return False
+        from core.startup.codex_environment import attest_foreign_identity
+        return attest_foreign_identity(pid, fields)
     if not _pid_running(pid) or not _claude_shaped(_comm(pid)):
         return False
     if _sentinel_stamp(fields):
@@ -541,11 +544,11 @@ def _clean_value(value: str) -> str:
     return "".join(c for c in value if c.isprintable())
 
 
-def _entry_content(project: str, fields: dict[str, str]) -> str:
+def _entry_content(project: str, fields: dict[str, str], *, preserve_since: bool = False) -> str:
     merged = dict(fields)
     merged["v"] = ENTRY_VERSION
     merged["project"] = project
-    merged["since"] = datetime.now(timezone.utc).isoformat()
+    merged["since"] = (fields.get("since") if preserve_since else None) or datetime.now(timezone.utc).isoformat()
     lines = []
     for key in ENTRY_KEYS:
         value = merged.get(key, "")
@@ -630,12 +633,14 @@ def record_session(project: str | None, pid: int | None = None,
                                       entry)
 
 
-def _record_session_locked(project: str, pid: int,
-                           token: str | None, seeded_by: str | None,
-                           entry: Path) -> int | None:
-    """The under-lock half of record_session — *project* is never None
-    here (the removal path returns before the lock)."""
+def _prepare_session_fields_locked(pid: int, entry: Path) -> tuple[dict[str, str], bool, bool] | None:
+    """Shared identity/credential repair; caller holds the per-pid ledger lock.
+
+    The boolean records continuity of this live session's binding. A stale
+    predecessor may not keep its project, token, ledger or pin witnesses.
+    """
     fields = _parse_entry(entry)
+    _own_repair = False
     have_valid_stamp = bool(fields) and _identity_matches(pid, fields)
     if not have_valid_stamp:
         identity = _identity_for(pid)
@@ -687,20 +692,116 @@ def _record_session_locked(project: str, pid: int,
             # Caller already holds this pid's ledger lock.
             with contextlib.suppress(OSError):
                 (_sessions_dir() / f"{pid}.run").unlink(missing_ok=True)
+    return fields, bool(have_valid_stamp or _own_repair), not have_valid_stamp
+
+
+def _write_session_fields_locked(project: str, pid: int, entry: Path,
+                                  fields: dict[str, str], token: str | None,
+                                  seeded_by: str | None, *,
+                                  preserve_since: bool = False) -> int | None:
+    """Persist already-prepared fields under the same per-pid lock."""
     if token:
         fields["token"] = token
     if seeded_by:
         if seeded_by in ("flag", "auto", "bookmark", "use", "create",
-                         "adopt"):
+                         "adopt", "codex-hook"):
             fields["seeded_by"] = seeded_by
         else:
             logger.warning(
                 "sessions: dropping unknown seeded_by %r", seeded_by)
     try:
-        _atomic_write(entry, _entry_content(project, fields))
+        _atomic_write(entry, _entry_content(project, fields, preserve_since=preserve_since))
     except OSError:
         return None
     return pid
+
+
+
+def _record_session_locked(project: str, pid: int,
+                           token: str | None, seeded_by: str | None,
+                           entry: Path) -> int | None:
+    prepared = _prepare_session_fields_locked(pid, entry)
+    if prepared is None:
+        return None
+    fields, _continuing, _repair = prepared
+    return _write_session_fields_locked(project, pid, entry, fields, token, seeded_by)
+
+
+def _default_startup_project() -> str:
+    """Read the ``.active`` bookmark for a new session's default project.
+
+    Returns the bookmark name when it points at an existing project
+    file, otherwise :data:`NONE_SENTINEL`. No TTY prompt, no
+    machine-project expiry — this is a non-interactive startup seam.
+
+    :exc:`~core.project.registry_home.RegistryHomeError` (a
+    ``ValueError``) propagates — a misconfigured ``RAPTOR_REGISTRY_HOME``
+    must not silently fall through to a projectless binding.
+    """
+    try:
+        link = _registry_home.active_link()
+    except _registry_home.RegistryHomeError:
+        raise
+    except Exception:  # noqa: BLE001
+        return NONE_SENTINEL
+    if not link.is_symlink():
+        return NONE_SENTINEL
+    try:
+        target = os.readlink(link)
+    except OSError:
+        return NONE_SENTINEL
+    if (not target.endswith(".json")
+            or "/" in target or "\\" in target):
+        return NONE_SENTINEL
+    name = target[:-5]
+    if not _NAME_RE.match(name):
+        return NONE_SENTINEL
+    if not (link.parent / target).is_file():
+        return NONE_SENTINEL
+    return name
+
+
+def ensure_codex_session(pid: int) -> tuple[str, str] | None:
+    """Ensure a session atomically, sharing record_session's repair rules."""
+    if not _ensure_dir():
+        return None
+    with _ledger_lock(pid):
+        entry = _sessions_dir() / str(pid)
+        prepared = _prepare_session_fields_locked(pid, entry)
+        if prepared is None:
+            return None
+        fields, continuing, repair = prepared
+        token = fields.get("token") or mint_token()
+        if continuing and fields.get("token") and not repair:
+            # No writes on normal reentry; preserve binding, since and ledger.
+            return str(pid), token
+        project = fields.get("project", NONE_SENTINEL) if continuing else _default_startup_project()
+        seeded_by = fields.get("seeded_by") if continuing else "codex-hook"
+        if _write_session_fields_locked(project, pid, entry, fields, token, seeded_by,
+                                        preserve_since=continuing) is None:
+            return None
+        return str(pid), token
+
+
+def resolve_codex_owner_pid() -> int | None:
+    """Nearest actual Codex ancestor, independent of inherited credentials.
+
+    Startup must not attach to a different live Claude/Codex session named
+    by stale inherited RAPTOR_SESSION_* variables.
+    """
+    from core.run.metadata import _read_ppid
+    pid = os.getpid()
+    for hop in range(40):
+        try:
+            pid = os.getppid() if hop == 0 else _read_ppid(pid)
+        except (OSError, ValueError, IndexError):
+            return None
+        if pid <= 1:
+            return None
+        comm = _comm(pid)
+        if comm is not None and comm.startswith("codex"):
+            return pid
+    return None
 
 
 def rebind_session_if(pid: int, expected: str,
@@ -826,7 +927,7 @@ def _entry_state(pid: int, fields: dict[str, str]) -> str:
     where sessions run, owns v1 cleanup.
     """
     if _foreign_entry(fields):
-        return "foreign"
+        return "live" if _identity_matches(pid, fields) else "foreign"
     if fields.get("v") != ENTRY_VERSION:
         return "advisory" if _pid_running(pid) else "v1-stale"
     if _identity_matches(pid, fields):

@@ -107,4 +107,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    from core.run.cli_outcome import cli_outcome
+    with cli_outcome():
+        sys.exit(main())

@@ -1122,6 +1122,7 @@ def run_single_semgrep(
     # remaining packs still run. Local rule directories keep the longer
     # timeout because they do real scan work without network.
     is_registry_pack = config.startswith(("p/", "category/"))
+    is_local_config = Path(config).is_file() or Path(config).is_dir()
     effective_timeout = min(timeout, RaptorConfig.SEMGREP_PACK_TIMEOUT) if is_registry_pack else timeout
 
     try:
@@ -1179,7 +1180,10 @@ def run_single_semgrep(
             # The child's write grant is its work subdir, NOT out_dir
             # (see child_dir above); the fake HOME lands inside it.
             target=str(repo_path), output=str(child_dir),
-            proxy_hosts=_ph.proxy_hosts_for_semgrep(),
+            # Local/cached rules are an offline operation. Block network
+            # entirely; do not require a listening egress proxy inside an
+            # already network-isolated host such as Codex.
+            proxy_hosts=None if is_local_config else _ph.proxy_hosts_for_semgrep(),
             caller_label="scanner-semgrep",
             fake_home=True,
             readable_paths=_pack_readable or None,

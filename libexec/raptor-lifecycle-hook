@@ -3,12 +3,16 @@
 # (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """Lifecycle hooks: fail/skip runs left in 'running' state.
 
-Called by Claude Code hooks, NOT by the LLM.
+Called by Claude Code and Codex hooks, NOT by the LLM.
 
 Modes:
   stop          — fail orphaned single-call runs (dead worker + marker)
   session-end   — fail any still-running runs (session is over)
-  tool-failure  — write failure marker (PostToolUseFailure signal)
+  tool-failure  — write failure marker (Claude PostToolUseFailure)
+  codex-before  — instrument a simple POSIX RAPTOR helper invocation
+  codex-exit    — record its shell exit status (internal EXIT callback)
+  codex-after   — consume the result and mark the associated running run
+  codex-stop    — fail confirmed failures; other results remain runner-owned
 
 Stop only acts on single-call commands where tool_pid reliably
 brackets the run.  Multi-turn commands (validate, understand) are
@@ -99,6 +103,10 @@ def _tool_failure_command(stream) -> str | None:
     and require a Bash tool_input whose command INVOKES the
     ``libexec/raptor-`` dispatch surface (see the regex above).
 
+    This mode is Claude's failure-only event. Codex uses explicit
+    before/exit/after adapters because its raw tool output has no
+    reliable exit-status field.
+
     Fail direction (both-directions trade-off): unreadable, malformed,
     or non-matching stdin → NOT relevant, no marker. A spurious marker
     flips a successful run to Failed at the next Stop; a missed marker
@@ -114,6 +122,16 @@ def _tool_failure_command(stream) -> str | None:
         return None
     if payload.get("hook_event_name") not in (None, "PostToolUseFailure"):
         return None
+    # Keep the historical structured success guard for legacy callers.
+    # Codex PostToolUse is rejected above and uses its own recorder.
+    tool_output = payload.get("tool_output")
+    if isinstance(tool_output, dict):
+        ec = tool_output.get("exit_code")
+        try:
+            if ec is not None and int(ec) == 0:
+                return None
+        except (ValueError, TypeError):
+            pass
     tool_input = payload.get("tool_input")
     command = tool_input.get("command") if isinstance(tool_input, dict) else None
     if isinstance(command, str) and _RAPTOR_INVOCATION_RE.search(command):
@@ -224,15 +242,68 @@ def _too_young_to_judge(meta: dict) -> bool:
 
 
 def main():
-    if len(sys.argv) < 2 or sys.argv[1] not in ("stop", "session-end", "tool-failure"):
-        print(f"Usage: {Path(__file__).name} stop|session-end|tool-failure",
+    modes = ("stop", "session-end", "tool-failure", "codex-before",
+             "codex-exit", "codex-after", "codex-stop", "codex-end", "codex-outcome")
+    if len(sys.argv) < 2 or sys.argv[1] not in modes:
+        print(f"Usage: {Path(__file__).name} " + "|".join(modes),
               file=sys.stderr)
         sys.exit(1)
 
     event = sys.argv[1]
-
-    failing_command = None
-    if event == "tool-failure":
+    outcome_scope = None
+    if event == "codex-outcome":
+        import io
+        import json
+        from core.run.cli_outcome import consume
+        from core.startup.codex_environment import restore
+        try:
+            payload = json.loads(sys.stdin.read(1024 * 1024 + 1))
+            receipt = consume(payload)
+            if receipt is None:
+                return
+            command, recorded_run, arguments = receipt
+            outcome_scope = (recorded_run, arguments)
+            restore(payload.get("session_id"))
+        except (OSError, ValueError, TypeError, KeyError, RecursionError):
+            return
+        # Adapt proven exit evidence to the same failure-only attribution path
+        # as Claude. No tool output, permission decision or rewritten input.
+        sys.stdin = io.StringIO(json.dumps({"hook_event_name": "PostToolUseFailure",
+            "tool_name": "Bash", "tool_input": {"command": command}}))
+        event = "tool-failure"
+    if event in ("codex-stop", "codex-end"):
+        import io
+        import json
+        from core.startup.codex_environment import restore
+        raw = sys.stdin.read()
+        try:
+            payload = json.loads(raw)
+            restore(payload.get("session_id"))
+        except (OSError, ValueError, TypeError):
+            sys.exit("RAPTOR: lifecycle hook has no validated Codex session context")
+        sys.stdin = io.StringIO(raw)
+        if event == "codex-end":
+            event = "session-end"
+    failing_command = command if outcome_scope is not None else None
+    codex_stop = event == "codex-stop"
+    if codex_stop:
+        event = "stop"
+    if event.startswith("codex-"):
+        from core.run.codex_hooks import consume_result, record_exit
+        if event == "codex-before":
+            sys.exit("RAPTOR: Codex command rewriting is disabled to preserve native execution rules")
+        if event == "codex-exit":
+            if len(sys.argv) == 4:
+                record_exit(sys.argv[2], sys.argv[3])
+            return
+        result = consume_result(sys.stdin)
+        if result is None:
+            return
+        failing_command, exit_code = result
+        if exit_code == 0:
+            return
+        event = "tool-failure"
+    elif event == "tool-failure" and outcome_scope is None:
         failing_command = _tool_failure_command(sys.stdin)
         if failing_command is None:
             return
@@ -370,6 +441,17 @@ def main():
                 continue
 
             if event == "tool-failure":
+                if outcome_scope is not None:
+                    recorded_run, arguments = outcome_scope
+                    # Codex receipts never fall back to the newest unrelated
+                    # run. Require this process's active run or an exact run
+                    # directory argument (not a substring or stdout claim).
+                    resolved = d.resolve()
+                    matches = (str(resolved) == recorded_run if recorded_run is not None else any(
+                        (REPO_ROOT / arg).resolve() == resolved
+                        for arg in arguments if arg and not arg.startswith("-")))
+                    if not matches:
+                        continue
                 failure_candidates.append((d, meta))
                 continue
 
@@ -509,4 +591,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    from core.run.cli_outcome import cli_outcome
+    with cli_outcome():
+        main()
