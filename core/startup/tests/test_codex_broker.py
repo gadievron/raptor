@@ -1,5 +1,6 @@
 """Real same-user IPC with a live identity-stamped owner; no command rewrite."""
 import select
+import os
 import subprocess
 import sys
 import time
@@ -25,13 +26,14 @@ def host(tmp_path, monkeypatch):
     for key in ('RAPTOR_SESSION_PID', 'RAPTOR_SESSION_TOKEN', 'RAPTOR_CODEX_CONTEXT_ID'):
         monkeypatch.delenv(key, raising=False)
     process = subprocess.Popen([sys.executable, '-c',
-        'import ctypes,sys; ctypes.CDLL(None).prctl(15,b"codex-env-test",0,0,0); '
+        'import ctypes,sys; ctypes.CDLL(None).prctl(15,b"codex",0,0,0); '
         'print("ready",flush=True); sys.stdin.read()'],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
     assert select.select([process.stdout], [], [], 3)[0]
     assert process.stdout.readline().strip() == 'ready'
     monkeypatch.setattr(sessions, 'resolve_codex_owner_pid', lambda: process.pid)
     sid = str(uuid.uuid4())
+    monkeypatch.setenv('RAPTOR_CODEX_CONTEXT_ID', sid)
     credential = sessions.ensure_codex_session(process.pid)
     assert credential
     environment.publish(sid, process.pid)
@@ -169,3 +171,116 @@ def test_explicit_startup_retry_preserves_live_project_and_ledger(host, monkeypa
     assert sessions.session_binding(pid=process.pid) == ('kept-project', 'bound')
     assert sessions._parse_entry(sessions._sessions_dir() / str(process.pid))['token'] == credential[1]
     assert ledger.read_text() == 'live run\n'
+
+
+def test_two_roots_share_a_live_process_without_sharing_binding_or_revocation(host, monkeypatch):
+    first, process, credential = host
+    second = str(uuid.uuid4())
+    environment.restore(first)
+    sessions.bind_session('alpha')
+    monkeypatch.setenv('RAPTOR_CODEX_CONTEXT_ID', second)
+    other = sessions.ensure_codex_session(process.pid)
+    assert other and other[1] != credential[1]
+    environment.publish(second, process.pid)
+    environment.restore(second)
+    sessions.bind_session('beta')
+    environment.restore(first)
+    assert sessions.session_binding() == ('alpha', 'bound')
+    assert sessions.end_codex_session(process.pid, credential[1])
+    with pytest.raises(environment.CodexEnvironmentError):
+        environment.restore(first)
+    environment.restore(second)
+    assert sessions.session_binding() == ('beta', 'bound')
+    assert broker.request(second, {'op': 'environment'})['ok'] is True
+    assert process.poll() is None
+    assert sessions.end_codex_session(process.pid, other[1])
+
+
+def test_subagent_context_uses_root_binding_and_cannot_take_over_another_root(host, monkeypatch):
+    root, process, _credential = host
+    child = str(uuid.uuid4())
+    environment.publish_alias(root, child)
+    values = environment.restore(child)
+    assert values['RAPTOR_CODEX_CONTEXT_ID'] == root
+    sessions.bind_session('shared-root')
+    environment.restore(root)
+    assert sessions.session_binding() == ('shared-root', 'bound')
+    other = str(uuid.uuid4())
+    monkeypatch.setenv('RAPTOR_CODEX_CONTEXT_ID', other)
+    assert sessions.ensure_codex_session(process.pid)
+    environment.publish(other, process.pid)
+    with pytest.raises(environment.CodexEnvironmentError, match='another owner'):
+        environment.publish_alias(other, child)
+    with pytest.raises(environment.CodexEnvironmentError, match='another owner'):
+        environment.publish_alias(other, root)
+    environment.restore(child)
+    assert sessions.session_binding() == ('shared-root', 'bound')
+    environment.restore(other)
+    sessions.end_codex_session(process.pid, os.environ['RAPTOR_SESSION_TOKEN'])
+
+
+def test_concurrent_roots_cannot_both_claim_one_subagent(host, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from core.config import RaptorConfig
+    root, process, _credential = host
+    other, child = str(uuid.uuid4()), str(uuid.uuid4())
+    monkeypatch.setenv('RAPTOR_CODEX_CONTEXT_ID', other)
+    assert sessions.ensure_codex_session(process.pid)
+    environment.publish(other, process.pid)
+    child_env = RaptorConfig.get_safe_env()
+    child_env.update({'RAPTOR_DIR': str(environment.ROOT), 'RAPTOR_CODEX_HOOK': '1'})
+    script = '''import os,sys
+sys.path.insert(0,os.environ["RAPTOR_DIR"])
+from core.project import sessions
+from core.startup import codex_environment as environment
+sessions.resolve_codex_owner_pid=lambda: int(sys.argv[1])
+try:
+    environment.publish_alias(sys.argv[2],sys.argv[3])
+except ValueError:
+    sys.exit(1)
+'''
+    def claim(parent):
+        return subprocess.run([sys.executable, '-I', '-c', script, str(process.pid), parent, child],
+                              env=child_env, capture_output=True, text=True, timeout=10)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(claim, [root, other]))
+    assert sorted(result.returncode for result in results) == [0, 1], [r.stderr for r in results]
+    assert environment.read_context(child)['session_id'] in (root, other)
+    environment.restore(other)
+    sessions.end_codex_session(process.pid, os.environ['RAPTOR_SESSION_TOKEN'])
+
+
+def test_context_lock_refuses_fifo_and_symlink(host, tmp_path):
+    import os
+    sid, process, _credential = host
+    name = environment._name(sid, process.pid) + '.lock'
+    path = environment._context_directory() / name
+    path.unlink()
+    os.mkfifo(path, 0o600)
+    with pytest.raises(environment.CodexEnvironmentError, match='unsafe context lock'):
+        environment.publish(sid, process.pid)
+    path.unlink()
+    target = tmp_path / 'untouched'
+    target.write_text('untouched')
+    path.symlink_to(target)
+    with pytest.raises(OSError):
+        environment.publish(sid, process.pid)
+    assert target.read_text() == 'untouched'
+
+
+def test_same_process_resume_rotates_generation_and_invalidates_old_alias(host):
+    sid, process, credential = host
+    child = str(uuid.uuid4())
+    environment.publish_alias(sid, child)
+    old = environment.read_context(sid)
+    assert sessions.end_codex_session(process.pid, credential[1])
+    successor = sessions.ensure_codex_session(process.pid)
+    assert successor and successor[1] != credential[1]
+    environment.publish(sid, process.pid)
+    assert environment.read_context(sid)['broker_key'] != old['broker_key']
+    with pytest.raises(environment.CodexEnvironmentError, match='generation changed'):
+        environment.restore(child)
+    environment.restore(sid)
+    assert os.environ['RAPTOR_SESSION_TOKEN'] == successor[1]
+    environment.publish_alias(sid, child)
+    assert environment.restore(child)['RAPTOR_SESSION_TOKEN'] == successor[1]

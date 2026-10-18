@@ -136,9 +136,24 @@ def _find_session_run(session_pid):
     # RAPTOR_REGISTRY_HOME) — the bash twin applies the same override
     # in its parameter expansion. A set-but-relative override raises
     # in the seam; the twin no-ops on it, so both attribute NOTHING.
+    #
+    # Codex sessions store ledgers in a scoped sub-namespace
+    # (sessions.d/codex/<sha256(context-id)>/) — the base directory
+    # holds only legacy Claude ledgers.
     try:
         from core.project import registry_home
-        ledger = registry_home.sessions_dir() / f"{session_pid}.run"
+        base = registry_home.sessions_dir()
+        ctx_id = os.environ.get("RAPTOR_CODEX_CONTEXT_ID", "")
+        if ctx_id:
+            import hashlib
+            scope_hash = hashlib.sha256(ctx_id.encode()).hexdigest()
+            ledger = base / "codex" / scope_hash / f"{session_pid}.run"
+            _session_token = os.environ.get("RAPTOR_SESSION_TOKEN", "")
+            _own_generation = (hashlib.sha256(_session_token.encode()).hexdigest()
+                               if _session_token else "")
+        else:
+            _own_generation = ""
+            ledger = base / f"{session_pid}.run"
     except ValueError:
         return None, None  # invalid override — parity: attribute nothing
     try:
@@ -190,6 +205,14 @@ def _find_session_run(session_pid):
         # stringifies session_pid must not diverge the two consumers.
         if str(meta.get("session_pid")) != str(session_pid):
             continue  # resumed by (or belonging to) another session
+        # Codex logical ownership: two roots sharing a PID have
+        # separate ledgers (scoped above), but a stale or misrouted
+        # record must not cross-attribute — verify session_id matches.
+        if ctx_id and meta.get("session_id") != ctx_id:
+            continue
+        if _own_generation and meta.get("session_generation"):
+            if meta["session_generation"] != _own_generation:
+                continue
         target = meta.get("target_path")
         if not isinstance(target, str):
             target = ""  # typed corruption: attribute without a filter
