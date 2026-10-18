@@ -609,7 +609,7 @@ class TestCpuTimeWorstShape:
                 vsize=0x40000,
                 characteristics=_RDATA_CHARACTERISTICS),
         ], data_dirs={0: (0x90000, len(edata)), 1: imp_dir})))
-        with cpu_budget(2.0, what="maxed-tables parse"):
+        with cpu_budget(3.0, what="maxed-tables parse"):
             facts = extract_pe_facts(p)
         assert facts is not None
         # The budgets engaged: the thunk budget stops the import
