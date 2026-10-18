@@ -186,7 +186,7 @@ def serve(session_id):
             for name in os.listdir(directory):
                 protocol = (len(name) in (40, 41) and name.endswith(('.request', '.response'))
                             and all(c in '0123456789abcdef' for c in name[:32]))
-                outcome = re.fullmatch(r'outcome-[0-9a-f]{64}-[0-9]+\.json', name)
+                outcome = re.fullmatch(r'(?:outcome|read)-[0-9a-f]{64}-[0-9]+\.json', name)
                 if protocol or outcome:
                     try:
                         os.unlink(name, dir_fd=directory)

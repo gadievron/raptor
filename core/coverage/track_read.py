@@ -325,6 +325,15 @@ def main() -> None:
     if not isinstance(file_path, str) or not file_path:
         return
 
+    record_read(file_path, run_dir, target)
+
+
+def record_read(file_path: str, run_dir: str, target: str, *, canonical: bool = False) -> None:
+    """Record a delivered read against its previously selected run.
+
+    Codex ownership is revalidated before append, so delayed reads cannot
+    acquire a successor's run. This records file access, not review quality.
+    """
     # Reject paths with NUL or line-terminator characters. The
     # manifest is line-delimited, so a `file_path` containing `\n`
     # (a hostile hook payload, or a rare-but-legal filesystem entry
@@ -358,7 +367,9 @@ def main() -> None:
     # when a PARENT component is missing — recording such paths made
     # phantom manifest entries the inventory join then discarded.
     try:
-        _resolved_fp = os.path.realpath(file_path)
+        # A receipt pins the canonical name at the time bytes were read. Do
+        # not follow a replacement symlink into a different inventory file.
+        _resolved_fp = file_path if canonical else os.path.realpath(file_path)
         if not os.path.isdir(os.path.dirname(_resolved_fp) or "/"):
             return
     except (OSError, ValueError):

@@ -124,9 +124,10 @@ def test_duplicate_server_does_not_clean_live_servers_files(host):
     assert broker.request(sid, {'op': 'environment'})['ok'] is True
 
 
-def test_owner_exit_cleans_unconsumed_outcome_receipts(host):
+@pytest.mark.parametrize('kind', ['outcome', 'read'])
+def test_owner_exit_cleans_unconsumed_receipts(host, kind):
     sid, process, _credential = host
-    name = 'outcome-' + 'a' * 64 + '-2.json'
+    name = kind + '-' + 'a' * 64 + '-2.json'
     with environment._directory(broker._address(sid)) as directory:
         environment._atomic(directory, name, '{"status":7}')
     process.stdin.close()
