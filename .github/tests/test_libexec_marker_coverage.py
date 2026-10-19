@@ -159,6 +159,7 @@ PY_PROLOGUE = (
 # PYTHONPATH-dependent dev flows and pip --user dependency
 # resolution for tools that carry no context-derived authority).
 ISOLATION_SURFACES = frozenset({
+    "raptor-read",              # authenticates Codex read receipts
     "raptor-annotate",          # mints source=human provenance stamps
     "raptor-coverage-summary",  # --mark operator grant (review grade)
     "raptor-may-ask",           # sole interactivity authority for

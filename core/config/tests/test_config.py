@@ -174,6 +174,13 @@ class TestGetSafeEnv:
             "RAPTOR_REGISTRY_HOME" in RaptorConfig.TARGET_ENV_STRIP_SET
         )
 
+    def test_codex_marker_stripped_from_target_envs(self):
+        """CODEX=1 must not reach target processes — it is a one-getenv
+        fingerprint telling the scanned binary it runs inside RAPTOR.
+        CLAUDECODE and _RAPTOR_TRUSTED are already stripped; CODEX must
+        be too."""
+        assert "CODEX" in RaptorConfig.TARGET_ENV_STRIP_SET
+
     def test_redb_ceiling_override_survives_scrub(self):
         """RAPTOR_REDB_MAX_BYTES must reach scrub-spawned children:
         the RE-database ceiling is resolved per process, so stripping

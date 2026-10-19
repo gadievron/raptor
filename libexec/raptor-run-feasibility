@@ -603,4 +603,6 @@ def _enrich_with_empirical_mitigation_map(
 
 
 if __name__ == "__main__":
-    main()
+    from core.run.cli_outcome import cli_outcome
+    with cli_outcome():
+        main()

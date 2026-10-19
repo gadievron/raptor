@@ -42,4 +42,6 @@ import core.startup.process_init  # noqa: E402,F401
 from core.sandbox.calibrate_cli import _cli_main  # noqa: E402
 
 if __name__ == "__main__":
-    raise SystemExit(_cli_main())
+    from core.run.cli_outcome import cli_outcome
+    with cli_outcome():
+        raise SystemExit(_cli_main())
