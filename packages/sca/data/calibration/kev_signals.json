@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-10-13T13:09:25Z",
+    "fetched_at": "2026-10-20T10:37:40Z",
     "license": "Public Domain (US Government work)",
     "name": "CISA KEV",
     "provenance": "CISA Known Exploited Vulnerabilities Catalog. Public Domain; embedded verbatim.",
@@ -10794,6 +10794,13 @@
       "ransomware_use": true,
       "vendor": "Microsoft"
     },
+    "CVE-2025-61624": {
+      "date_added": "2026-10-16",
+      "kev": true,
+      "product": "Multiple Products",
+      "ransomware_use": false,
+      "vendor": "Fortinet"
+    },
     "CVE-2025-61757": {
       "date_added": "2025-11-21",
       "kev": true,
@@ -11011,6 +11018,13 @@
       "ransomware_use": false,
       "vendor": "Palo Alto Networks"
     },
+    "CVE-2026-0322": {
+      "date_added": "2026-10-14",
+      "kev": true,
+      "product": "PAN-OS",
+      "ransomware_use": false,
+      "vendor": "Palo Alto Networks"
+    },
     "CVE-2026-0770": {
       "date_added": "2026-07-21",
       "kev": true,
@@ -11032,12 +11046,40 @@
       "ransomware_use": false,
       "vendor": "Zammad GmbH"
     },
+    "CVE-2026-102764": {
+      "date_added": "2026-10-16",
+      "kev": true,
+      "product": "Remote Support",
+      "ransomware_use": false,
+      "vendor": "BeyondTrust"
+    },
     "CVE-2026-104286": {
       "date_added": "2026-10-01",
       "kev": true,
       "product": "FortiMail",
       "ransomware_use": false,
       "vendor": "Fortinet"
+    },
+    "CVE-2026-104935": {
+      "date_added": "2026-10-13",
+      "kev": true,
+      "product": "Connect Secure",
+      "ransomware_use": false,
+      "vendor": "Ivanti"
+    },
+    "CVE-2026-105133": {
+      "date_added": "2026-10-14",
+      "kev": true,
+      "product": "AhsayCBS",
+      "ransomware_use": false,
+      "vendor": "Ahsay"
+    },
+    "CVE-2026-105134": {
+      "date_added": "2026-10-14",
+      "kev": true,
+      "product": "AhsayCBS",
+      "ransomware_use": false,
+      "vendor": "Ahsay"
     },
     "CVE-2026-10520": {
       "date_added": "2026-06-11",
@@ -11311,6 +11353,13 @@
       "product": "Windows",
       "ransomware_use": false,
       "vendor": "Microsoft"
+    },
+    "CVE-2026-21589": {
+      "date_added": "2026-10-15",
+      "kev": true,
+      "product": "Multiple Products",
+      "ransomware_use": false,
+      "vendor": "Atlassian"
     },
     "CVE-2026-21643": {
       "date_added": "2026-04-13",
@@ -11977,6 +12026,13 @@
       "ransomware_use": false,
       "vendor": "Cisco"
     },
+    "CVE-2026-76519": {
+      "date_added": "2026-10-14",
+      "kev": true,
+      "product": "Secure Email Gateway",
+      "ransomware_use": false,
+      "vendor": "Cisco"
+    },
     "CVE-2026-8037": {
       "date_added": "2026-08-07",
       "kev": true,
@@ -12179,6 +12235,13 @@
       "product": "Switchvox",
       "ransomware_use": false,
       "vendor": "Sangoma"
+    },
+    "CVE-2026-96951": {
+      "date_added": "2026-10-13",
+      "kev": true,
+      "product": "Windows",
+      "ransomware_use": false,
+      "vendor": "Microsoft"
     }
   }
 }
