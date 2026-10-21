@@ -344,11 +344,12 @@ class TestIsClassCovered:
             ) is False
 
     def test_sarif_cache_alias_never_covers_unmapped_families(self):
-        """Gate resolution adds "sarif_cache" to the ran set for any
-        file with prior semgrep findings, and the alias normalizes it
-        to "semgrep" — with a CWE-93/470 row that would have resolved
-        a C-file suspicious clean off an unrelated prior finding.
-        Unmapped families are immune to the alias by construction."""
+        """The "sarif_cache" receipt namespace normalizes to
+        "semgrep" — with a CWE-93/470 row a cached receipt would
+        resolve a C-file suspicious clean. Unmapped families are immune
+        to the alias by construction. (Gate resolution no longer adds
+        "sarif_cache" for file-level SARIF presence at all — see
+        test_silence_admissibility.)"""
         for cwe in ("CWE-93", "CWE-470", "CWE-116", "CWE-338"):
             assert is_class_covered(
                 cwe, "", "", self.ALL_TOOLS, ran_tools={"sarif_cache"},

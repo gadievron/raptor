@@ -1,4 +1,11 @@
 # raptor: confirm-only
+# (silence from this rule never refutes: it adjudicates the
+# attribute-context sub-shape of the CWE-79 class it is dispatched
+# for — body-context and double-quoted-attribute XSS are out of its
+# scope by design, see Scope pins below — so a scanned zero-match
+# answers "not this sub-shape", never "not this class". See
+# run_semgrep_sweep's confirm-only role handling in
+# core/audit/sweep.py.)
 rules:
   # CWE-79: reflected XSS, attribute-context subset — request data
   # emitted into a single-quoted or unquoted HTML attribute with NO

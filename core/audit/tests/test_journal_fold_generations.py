@@ -94,11 +94,19 @@ def _skewed_reader(monkeypatch, dropped: str = "body_offload") -> None:
 
 
 def _incident_row(tmp_path: Path, target: Path) -> Path:
-    """One genuine stamped stub row, minted over its FULL bytes."""
+    """One genuine stamped stub row, minted over its FULL bytes.
+
+    The row carries ``clean_basis="verdict"`` — the shape every live
+    writer stamps on a reviewed clean. A PRE-FIELD offloaded clean (no
+    basis, prose not hydratable) re-reviews once by the reuse fold's
+    silence-derivation screen regardless of MAC tier, which would mask
+    the provenance behaviour this file pins (that screen is pinned in
+    test_clean_basis_reuse)."""
     run = tmp_path / "prior-run"
     run.mkdir(exist_ok=True)
     append_entry(run, _entry(
-        source_hash=_real_hash(target), body_offload=_OFFLOAD))
+        source_hash=_real_hash(target), body_offload=_OFFLOAD,
+        clean_basis="verdict"))
     return run
 
 

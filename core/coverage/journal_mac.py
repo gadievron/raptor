@@ -204,6 +204,7 @@ _GENERATION_VOCABULARY: dict[int, frozenset[str]] = {
     1: frozenset({
         "body",
         "body_offload",
+        "clean_basis",
         "confidence",
         "context_reduced",
         "cost_usd",

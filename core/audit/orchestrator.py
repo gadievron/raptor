@@ -1280,7 +1280,28 @@ class ReviewOutcome:
     # tools_dispatched (the channel did not look — coverage and
     # critique must not read the skip as a silent tool or as a bug).
     tools_skipped: set | None = field(default=None, repr=False)
-    resolution_tools: list[str] | None = None
+    # Chain step types that LOOKED but whose silence is non-probative
+    # for this claim: every outcome the channel produced here was
+    # inconclusive (vacuous SAT, capped match, unwitnessed scan, a
+    # hypothesis-keyword rule's zero-match, an undecidable invariant).
+    # Kept IN tools_dispatched — the tool did look (an inconclusive
+    # channel stays dispatched but may not refute) — and subtracted
+    # wherever silence would become a negative verdict: gate
+    # resolution's class coverage, the clean verification tier, the
+    # "[tool-refuted]" observation. A channel probative in any pass
+    # stays probative.
+    tools_inconclusive: set | None = field(default=None, repr=False)
+    # On a clean: what it was minted FROM (journaled as
+    # ``ReviewJournalEntry.clean_basis``). Empty = the producing pass's
+    # own verdict; ``gate_resolved`` / ``propagated`` = inferred from
+    # tool silence; ``sarif_clean`` = the sarif-clean gate's file-level
+    # silence; ``unknown`` = imported from a pre-field journal row;
+    # ``dark_verify_refuted`` = one executed witness did not fire. The
+    # first four (``CLEAN_BASIS_NOT_REUSABLE``) are never tool_backed
+    # and never reused across runs; ``dark_verify_refuted`` is
+    # provenance only (reusable).
+    # Stamped by the producer; replacement objects start empty.
+    clean_basis: str = ""
     semantic_confidence: str = ""
     provenance_all_trusted: bool = False
     caller_attributed: bool = False
@@ -1307,7 +1328,19 @@ class ReviewOutcome:
         dispatched = self.tools_dispatched or set()
 
         if self.status == "clean":
-            if dispatched:
+            # A clean is tool-backed only when a channel's silence was
+            # PROBATIVE: a dispatched name alone (errored, skipped,
+            # or inconclusive-only — an undecidable invariant, a
+            # vacuous SAT) is the same LLM-trusts-LLM basis that
+            # propagation refuses to build on. A clean minted FROM
+            # silence (gate resolution, propagation, the sarif-clean
+            # gate) is a verdict about the absence of evidence, and one
+            # of unknown basis (imported from a pre-field row) cannot
+            # show otherwise — neither is ever tool-backed.
+            from core.coverage.journal import CLEAN_BASIS_NOT_REUSABLE
+            if self.clean_basis in CLEAN_BASIS_NOT_REUSABLE:
+                return VerificationTier.SPECULATIVE.value
+            if probative_channels(self):
                 return VerificationTier.TOOL_BACKED.value
             return VerificationTier.SPECULATIVE.value
 
@@ -1359,6 +1392,56 @@ class ReviewOutcome:
         ):
             return VerificationTier.TOOL_BACKED.value
         return VerificationTier.LLM_ONLY.value
+
+
+def probative_channels(outcome: Any) -> set:
+    """Dispatched channels whose silence may stand as a refutation.
+
+    The dispatch record says a channel LOOKED; it does not say the
+    look could refute. Errored channels did not meaningfully run,
+    skipped ones did not look, and inconclusive-only ones looked
+    without a licensed answer — none of their silences may become a
+    negative verdict (gate resolution's class coverage, the clean
+    verification tier, the "[tool-refuted]" observation).
+    """
+    return (
+        set(getattr(outcome, "tools_dispatched", None) or ())
+        - set(getattr(outcome, "tools_errored", None) or ())
+        - set(getattr(outcome, "tools_skipped", None) or ())
+        - set(getattr(outcome, "tools_inconclusive", None) or ())
+    )
+
+
+def _fold_inconclusive_record(
+    outcome: Any,
+    *,
+    ran: set,
+    inconclusive: set,
+    errored: set | None = None,
+) -> None:
+    """Fold one validation pass's channel outcomes into
+    ``outcome.tools_inconclusive``.
+
+    Call BEFORE *ran* (the pass's dispatched-minus-skipped types) is
+    unioned into ``tools_dispatched``. A channel probative in ANY
+    pass stays probative — the same rule ``refinement.merge_outcomes``
+    applies across rounds: this pass's inconclusive types are booked
+    only when no earlier pass refuted with them, and a type this pass
+    answered probatively leaves the set.
+    """
+    inconclusive = set(inconclusive) & set(ran)
+    probative_now = set(ran) - inconclusive - set(errored or ())
+    prior_inconclusive = set(getattr(outcome, "tools_inconclusive", None) or ())
+    prior_probative = (
+        set(getattr(outcome, "tools_dispatched", None) or ())
+        - prior_inconclusive
+    )
+    merged = (
+        (prior_inconclusive - probative_now)
+        | (inconclusive - prior_probative)
+    )
+    if merged or prior_inconclusive:
+        outcome.tools_inconclusive = merged or None
 
 
 @dataclass
@@ -8716,6 +8799,10 @@ def _run_audit_body(
                     ),
                     evidence_tool="sarif:no_alerts",
                 )
+                # File-level SARIF silence, not a review: journaled so
+                # cross-run reuse re-runs this ($0) gate instead of
+                # importing a stale verdict, and never tool_backed.
+                _sc_outcome.clean_basis = "sarif_clean"
                 _sc_outcome.line = gap.get("line_start", 0)
                 try:
                     _commit_outcome(config, _sc_outcome, gap)
@@ -17833,7 +17920,14 @@ def _accumulate_observations(
                 }
             )
             _sage_store_observation(obs_text, "tool_confirmation", source)
-        elif sweep_pre_status == "finding" and outcome.status == "suspicious":
+        elif (
+            sweep_pre_status == "finding" and outcome.status == "suspicious"
+            # A refutation needs a channel whose silence was probative:
+            # a demotion with no tool, or only errored / inconclusive
+            # ones, is the G2 gate speaking, not a mechanical verdict
+            # (SAGE stores this kind as one).
+            and probative_channels(outcome)
+        ):
             obs_text = (
                 f"[tool-refuted] hypothesis '{_sanitise_observation(outcome.hypothesis or '')}' "
                 f"was not confirmed by any mechanical tool — demoted"
@@ -20625,6 +20719,7 @@ def _run_tool_chain(
     errored_types: set | None = None,
     early_exit_check: Callable[[str], bool] | None = None,
     skipped_types: set | None = None,
+    inconclusive_types: set | None = None,
 ) -> list[str]:
     """Run tools from *chain* in order, collecting all confirmations.
 
@@ -20647,6 +20742,14 @@ def _run_tool_chain(
     the smt step still run — their receipts feed the refutation
     machinery.
 
+    When *inconclusive_types* is provided, the step types whose EVERY
+    executed entry in this call came back inconclusive are collected
+    into it: the channel looked (it stays in the caller's dispatch
+    record) but its silence is non-probative — gate resolution, the
+    clean verification tier and the tool-refuted observation must not
+    read it as a refutation. One entry of a type answering
+    probatively (refuted / confirmed) keeps the type probative.
+
     When *sarif_cache* is provided, semgrep sweeps check for prior
     SARIF results before spawning a subprocess.  Cached SARIF hits
     only count as confirmation when their rule family correlates with
@@ -20655,6 +20758,16 @@ def _run_tool_chain(
     """
     effective_target = target_path_override or config.target_path
     confirmed: list[str] = []
+    # Per-type entry counts for *inconclusive_types*: every leg books
+    # its inconclusive branch through _book_inconclusive (pinned by
+    # the tripwire in test_silence_admissibility).
+    _ran_entries: dict[str, int] = {}
+    _inconclusive_hits: dict[str, int] = {}
+
+    def _book_inconclusive(step_type: str) -> None:
+        _inconclusive_hits[step_type] = (
+            _inconclusive_hits.get(step_type, 0) + 1
+        )
 
     # Inventory language hint for the audited file: the semgrep leg
     # consumes it so a content-probed unknown extension is actually
@@ -20749,6 +20862,7 @@ def _run_tool_chain(
                 continue
 
         _ran_types.add(tool_type)
+        _ran_entries[tool_type] = _ran_entries.get(tool_type, 0) + 1
 
         # Wall-clock bracket for tier diagnostics: tier-diagnostics
         # wall_time_s was declared on TierCounters but never
@@ -20838,7 +20952,9 @@ def _run_tool_chain(
                     continue
                 # keyword marks a dynamic per-hypothesis rule: only
                 # those get the identifier-consistency and
-                # negative-control gates (stock rules are curated).
+                # negative-control gates (stock rules are curated), and
+                # their scanned silence is inconclusive, never refuted
+                # (a presence regex cannot refute a class).
                 rule_keyword = tool_cfg.get("keyword") or ""
                 _sg_line_end = _checklist_line_end(
                     config, file_path, function_name,
@@ -20908,6 +21024,7 @@ def _run_tool_chain(
                         function_name,
                         (sweep.details or {}).get("reason", ""),
                     )
+                    _book_inconclusive(tool_type)
                     if tier_counters:
                         _increment_tier_dict(
                             tier_counters, "semgrep", "inconclusive",
@@ -20978,6 +21095,7 @@ def _run_tool_chain(
                     # Z3 unavailable) is NOT a refutation — it must
                     # neither confirm nor clear prior SMT
                     # confirmations from other verbs.
+                    _book_inconclusive(tool_type)
                     if tier_counters:
                         _increment_tier_dict(
                             tier_counters, "smt", "inconclusive",
@@ -21079,6 +21197,7 @@ def _run_tool_chain(
                         "api-boundary inconclusive %s:%s — %s",
                         file_path, function_name, ab_res.reason,
                     )
+                    _book_inconclusive(tool_type)
                     if tier_counters:
                         _increment_tier_dict(
                             tier_counters, "api_boundary",
@@ -21169,6 +21288,7 @@ def _run_tool_chain(
                         "fail-open inconclusive %s:%s — %s",
                         file_path, function_name, fo_res.reason,
                     )
+                    _book_inconclusive(tool_type)
                     if tier_counters:
                         _increment_tier_dict(
                             tier_counters, "fail_open",
@@ -21319,6 +21439,7 @@ def _run_tool_chain(
                         "consistency inconclusive %s:%s — %s",
                         file_path, function_name, cs_res.reason,
                     )
+                    _book_inconclusive(tool_type)
                     if tier_counters:
                         _increment_tier_dict(
                             tier_counters, "consistency",
@@ -21399,6 +21520,7 @@ def _run_tool_chain(
                         "ptr-lifecycle inconclusive %s:%s — %s",
                         file_path, function_name, pl_res.reason,
                     )
+                    _book_inconclusive(tool_type)
                     if tier_counters:
                         _increment_tier_dict(
                             tier_counters, "ptr_lifecycle",
@@ -21488,6 +21610,7 @@ def _run_tool_chain(
                         "lock-region inconclusive %s:%s — %s",
                         file_path, function_name, lr_res.reason,
                     )
+                    _book_inconclusive(tool_type)
                     if tier_counters:
                         _increment_tier_dict(
                             tier_counters, "lock_region",
@@ -21577,6 +21700,7 @@ def _run_tool_chain(
                         "resource-bounds inconclusive %s:%s — %s",
                         file_path, function_name, rb_res.reason,
                     )
+                    _book_inconclusive(tool_type)
                     if tier_counters:
                         _increment_tier_dict(
                             tier_counters, "resource_bounds",
@@ -21664,6 +21788,7 @@ def _run_tool_chain(
                         "release-order inconclusive %s:%s — %s",
                         file_path, function_name, ro_res.reason,
                     )
+                    _book_inconclusive(tool_type)
                     if tier_counters:
                         _increment_tier_dict(
                             tier_counters, "release_order",
@@ -21756,6 +21881,7 @@ def _run_tool_chain(
                         "protocol-state inconclusive %s:%s — %s",
                         file_path, function_name, ps_res.reason,
                     )
+                    _book_inconclusive(tool_type)
                     if tier_counters:
                         _increment_tier_dict(
                             tier_counters, "protocol_state",
@@ -21798,6 +21924,7 @@ def _run_tool_chain(
                         file_path, function_name,
                         inv_res.invariant, inv_res.reason,
                     )
+                    _book_inconclusive(tool_type)
                     if tier_counters:
                         _increment_tier_dict(
                             tier_counters, "smt_invariant",
@@ -22005,6 +22132,7 @@ def _run_tool_chain(
                             tier_counters, "coccinelle", "skipped",
                         )
                 elif _cc_oc == "inconclusive":
+                    _book_inconclusive(tool_type)
                     if tier_counters:
                         _increment_tier_dict(
                             tier_counters, "coccinelle", "inconclusive",
@@ -22306,6 +22434,7 @@ def _run_tool_chain(
                     if tier_counters:
                         _increment_tier_dict(tier_counters, "codeql", "errors")
                 elif _cq_oc == "inconclusive":
+                    _book_inconclusive(tool_type)
                     if tier_counters:
                         _increment_tier_dict(
                             tier_counters, "codeql", "inconclusive",
@@ -22376,8 +22505,10 @@ def _run_tool_chain(
                         skipped_types.add(tool_type)
                     if tier_counters:
                         _increment_tier_dict(tier_counters, "compiler", "skipped")
-                elif tier_counters:
-                    _increment_tier_dict(tier_counters, "compiler", "inconclusive")
+                else:
+                    _book_inconclusive(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(tier_counters, "compiler", "inconclusive")
 
 
             elif tool_type in ("joern_guard", "joern_flow"):
@@ -22512,6 +22643,7 @@ def _run_tool_chain(
                         # Inconclusive still reached the server — a
                         # completed round trip for health purposes.
                         _record_joern_outcome(config, error=False)
+                        _book_inconclusive(tool_type)
                         if tier_counters:
                             _increment_tier_dict(tier_counters, tool_type, "inconclusive")
 
@@ -22577,10 +22709,12 @@ def _run_tool_chain(
                         _increment_tier_dict(
                             tier_counters, "coccinelle_flow", "skipped",
                         )
-                elif tier_counters:
-                    _increment_tier_dict(
-                        tier_counters, "coccinelle_flow", "inconclusive",
-                    )
+                else:
+                    _book_inconclusive(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "coccinelle_flow", "inconclusive",
+                        )
 
             elif tool_type in (
                 "integer_truncation", "proto_length", "struct_field",
@@ -22654,6 +22788,7 @@ def _run_tool_chain(
                     # CWE outside the checker's scope: the checker
                     # declined — an inconclusive counted as refuted
                     # here overstated the checkers' refutation power.
+                    _book_inconclusive(tool_type)
                     if tier_counters:
                         _increment_tier_dict(
                             tier_counters, tool_type, "inconclusive",
@@ -22726,6 +22861,7 @@ def _run_tool_chain(
                         "sanwit inconclusive %s:%s — %s",
                         file_path, function_name, sw_res.reason,
                     )
+                    _book_inconclusive(tool_type)
                     if tier_counters:
                         _increment_tier_dict(
                             tier_counters, "sanwit", "inconclusive",
@@ -22803,6 +22939,7 @@ def _run_tool_chain(
                         "gadget-oracle inconclusive %s:%s — %s",
                         file_path, function_name, go_res.reason,
                     )
+                    _book_inconclusive(tool_type)
                     if tier_counters:
                         _increment_tier_dict(
                             tier_counters, "gadget_oracle",
@@ -22844,6 +22981,15 @@ def _run_tool_chain(
                 "tool_chain early-exit journal row failed",
                 exc_info=True,
             )
+
+    if inconclusive_types is not None:
+        for _t, _hits in _inconclusive_hits.items():
+            if (
+                _hits >= _ran_entries.get(_t, 0)
+                and _t not in (errored_types or ())
+                and _t not in (skipped_types or ())
+            ):
+                inconclusive_types.add(_t)
 
     return confirmed
 
@@ -23113,6 +23259,7 @@ def _sweep_validate(
         dispatched = {step.get("type") for step in chain if step.get("type")}
         errored: set = set()
         skipped: set = set()
+        inconclusive: set = set()
 
         confirmed = _run_tool_chain(
             chain,
@@ -23138,10 +23285,18 @@ def _sweep_validate(
                 and not _premise_blocks_confirm(premise_h, [c])
             ),
             skipped_types=skipped,
+            inconclusive_types=inconclusive,
         )
         # A skipped channel did not look — it must not claim class
         # coverage in the gate-resolution pass.
         dispatched -= skipped
+        # An inconclusive-only channel looked (it stays dispatched)
+        # but may not refute: booked before the union so a channel
+        # probative in an earlier pass stays probative.
+        _fold_inconclusive_record(
+            outcome, ran=dispatched, inconclusive=inconclusive,
+            errored=errored,
+        )
 
         # No Frida auto-launch here — an earlier last-resort path gated
         # on a never-set ``config._binary_path`` attribute was dead code
@@ -23444,6 +23599,10 @@ def _proactive_validate(
     ran: set = set()
     errored: set = set()
     skipped: set = set()
+    inconclusive: set = set()
+
+    def _book_inconclusive(step_type: str) -> None:
+        inconclusive.add(step_type)
 
     smt_verb = smt_verb_for_cwe(cwe) if _has_cwe_dispatch else None
     if smt_verb and "smt" not in dispatched:
@@ -23474,16 +23633,18 @@ def _proactive_validate(
                 ran.discard("smt")
                 if tier_counters:
                     _increment_tier_dict(tier_counters, "smt", "skipped")
+            elif _pv_smt_oc == "error":
+                # Count separately so the diagnostics don't overstate
+                # SMT's refutation power.
+                errored.add("smt")
+                if tier_counters:
+                    _increment_tier_dict(tier_counters, "smt", "errors")
             else:
-                # inconclusive / error — count separately so the
-                # diagnostics don't overstate SMT's refutation power.
-                if _pv_smt_oc == "error":
-                    errored.add("smt")
+                # Inconclusive: SMT looked but may not refute.
+                _book_inconclusive("smt")
                 if tier_counters:
                     _increment_tier_dict(
-                        tier_counters, "smt",
-                        "errors" if _pv_smt_oc == "error"
-                        else "inconclusive",
+                        tier_counters, "smt", "inconclusive",
                     )
         except Exception:
             logger.debug("proactive SMT failed for %s", cwe, exc_info=True)
@@ -23692,6 +23853,7 @@ def _proactive_validate(
                             tier_counters, "coccinelle", "skipped",
                         )
                 elif cocci_result.outcome == "inconclusive":
+                    _book_inconclusive("coccinelle")
                     if tier_counters:
                         _increment_tier_dict(
                             tier_counters, "coccinelle", "inconclusive",
@@ -23758,7 +23920,11 @@ def _proactive_validate(
                 _increment_tier_dict(tier_counters, "joern_xf", "errors")
 
     # Attach the dispatch record before any status-changing return so
-    # gate resolution can tell "ran and silent" from "never ran".
+    # gate resolution can tell "ran and silent" from "never ran" — and
+    # "ran with a licensed answer" from "ran inconclusive".
+    _fold_inconclusive_record(
+        outcome, ran=ran, inconclusive=inconclusive, errored=errored,
+    )
     if ran:
         outcome.tools_dispatched = (outcome.tools_dispatched or set()) | ran
     if errored:
@@ -25040,10 +25206,20 @@ def _deepen_suspicious(
                 and _is_tool_confirmed(prior_outcome.evidence_tool)
                 and not _is_tool_confirmed(outcome.evidence_tool or "")
             ):
+                # Same merge rule as refinement.merge_outcomes: a
+                # channel probative in EITHER outcome stays probative;
+                # one inconclusive in both stays non-probative.
+                _merged_inconclusive = (
+                    set(outcome.tools_inconclusive or set())
+                    | set(prior_outcome.tools_inconclusive or set())
+                ) - probative_channels(outcome) - probative_channels(
+                    prior_outcome,
+                )
                 outcome.tools_dispatched = (
                     set(outcome.tools_dispatched or set())
                     | set(prior_outcome.tools_dispatched or set())
                 )
+                outcome.tools_inconclusive = _merged_inconclusive or None
                 _stamp_evidence(outcome, prior_outcome.evidence_tool)
 
             _untally_outcome(result, prior_outcome)
@@ -26768,9 +26944,9 @@ def _resweep_zero_dispatch_suspicious(
     doctrine that tool output is the verdict has nothing to consume.
     This pass dispatches each such outcome's CWE-mapped mechanical
     chain (semgrep/coccinelle/codeql/smt/joern — $0 LLM), stamps
-    ``tools_dispatched``/``tools_errored``/``tools_skipped`` on the
-    outcome, and appends one audit-log record per outcome in the
-    sweep-record shape.
+    ``tools_dispatched``/``tools_errored``/``tools_skipped``/
+    ``tools_inconclusive`` on the outcome, and appends one audit-log
+    record per outcome in the sweep-record shape.
 
     NO verdict changes happen here. The promotion pass that runs next
     re-derives the same chain steps and flips status only through its
@@ -26888,6 +27064,7 @@ def _resweep_zero_dispatch_suspicious(
             step_start = time.monotonic()
             errored: set = set()
             skipped: set = set()
+            inconclusive: set = set()
             premise_h = _primary_hypothesis_entry(outcome, hypothesis)
             confirmed = _run_tool_chain(
                 chain,
@@ -26905,6 +27082,7 @@ def _resweep_zero_dispatch_suspicious(
                 cwe=cwe,
                 errored_types=errored,
                 skipped_types=skipped,
+                inconclusive_types=inconclusive,
                 # Promotion-site parity: exit only on a receipt the
                 # promotion pass would accept on its own.
                 early_exit_check=lambda c: (
@@ -26918,6 +27096,10 @@ def _resweep_zero_dispatch_suspicious(
             dispatched = {
                 step.get("type") for step in chain if step.get("type")
             } - skipped
+            _fold_inconclusive_record(
+                outcome, ran=dispatched, inconclusive=inconclusive,
+                errored=errored,
+            )
             outcome.tools_dispatched = (
                 (outcome.tools_dispatched or set()) | dispatched
             )
@@ -26939,6 +27121,10 @@ def _resweep_zero_dispatch_suspicious(
                 record["tools_errored"] = sorted(str(t) for t in errored)
             if skipped:
                 record["tools_skipped"] = sorted(str(t) for t in skipped)
+            if inconclusive:
+                record["tools_inconclusive"] = sorted(
+                    str(t) for t in inconclusive
+                )
             if confirmed:
                 record["confirmed"] = sorted(confirmed)
         except Exception:  # noqa: BLE001 — receipt supply, never fatal
@@ -27523,6 +27709,7 @@ def _promote_suspicious_preconditions(
             (outcome.tools_dispatched or set()) | {"precondition"}
         )
         promoted.tools_errored = outcome.tools_errored
+        promoted.tools_inconclusive = outcome.tools_inconclusive
         promoted.tools_skipped = outcome.tools_skipped
         promoted.semantic_confidence = outcome.semantic_confidence
         if promoted.review_result is not None:
@@ -28193,6 +28380,7 @@ def _hold_smt_promotion(
     )
     held.tools_dispatched = outcome.tools_dispatched
     held.tools_errored = outcome.tools_errored
+    held.tools_inconclusive = outcome.tools_inconclusive
     held.tools_skipped = outcome.tools_skipped
     held.semantic_confidence = outcome.semantic_confidence
     held.function_qualified = getattr(outcome, "function_qualified", "")
@@ -28869,6 +29057,7 @@ def _dispatch_secondary_hypotheses(
             )
             rescued.tools_dispatched = outcome.tools_dispatched
             rescued.tools_errored = outcome.tools_errored
+            rescued.tools_inconclusive = outcome.tools_inconclusive
             rescued.tools_skipped = outcome.tools_skipped
             rescued.semantic_confidence = outcome.semantic_confidence
             if rescued.review_result is not None:
@@ -29234,6 +29423,7 @@ def _adversarial_refute_pass(
             )
             cleaned.tools_dispatched = outcome.tools_dispatched
             cleaned.tools_errored = outcome.tools_errored
+            cleaned.tools_inconclusive = outcome.tools_inconclusive
             cleaned.tools_skipped = outcome.tools_skipped
             with result._lock:
                 result.outcomes[i] = cleaned
@@ -29990,6 +30180,7 @@ def _demote_absent_promotions(
         )
         demoted.tools_dispatched = outcome.tools_dispatched
         demoted.tools_errored = outcome.tools_errored
+        demoted.tools_inconclusive = outcome.tools_inconclusive
         demoted.tools_skipped = outcome.tools_skipped
         # Pure in-repo grading over constant inputs — only a partial
         # install (import failure) can legitimately fail here.
@@ -30070,6 +30261,7 @@ def _promote_outcome(
     )
     promoted.tools_dispatched = outcome.tools_dispatched
     promoted.tools_errored = outcome.tools_errored
+    promoted.tools_inconclusive = outcome.tools_inconclusive
     promoted.tools_skipped = outcome.tools_skipped
     promoted.semantic_confidence = outcome.semantic_confidence
     promoted.function_qualified = getattr(
@@ -30678,13 +30870,15 @@ def _resolve_gate_demoted(
     This pass checks whether ANY mechanical tool independently flags the
     same function.  If nothing corroborates the LLM's retracted claim:
     - If a tool that covers the class actually RAN for this function
-      (dispatch record / SARIF file hit, minus errored channels) →
-      resolved to clean (a tool looked and stayed silent — disconfirmed).
+      and answered probatively (dispatch record minus errored and
+      inconclusive channels) → resolved to clean (a tool looked and
+      stayed silent — disconfirmed).
     - Otherwise → resolved to dark (no tool ever looked, the class is
-      tool-blind, or the covering channel errored — needs concrete
-      verification). A tool that errored or timed out did NOT run:
-      converting a Joern timeout into a clean verdict is a failure
-      mode masquerading as a refutation.
+      tool-blind, or the covering channel errored or answered only
+      inconclusive — needs concrete verification). A tool that errored
+      or timed out did NOT run: converting a Joern timeout into a clean
+      verdict is a failure mode masquerading as a refutation. File-level
+      SARIF presence is not a run for this function.
 
     No LLM calls.
     """
@@ -30762,6 +30956,7 @@ def _resolve_gate_demoted(
             )
             resolved.tools_dispatched = outcome.tools_dispatched
             resolved.tools_errored = outcome.tools_errored
+            resolved.tools_inconclusive = outcome.tools_inconclusive
             resolved.tools_skipped = outcome.tools_skipped
             result.outcomes[i] = resolved
             result.suspicious -= 1
@@ -30824,23 +31019,24 @@ def _resolve_gate_demoted(
             continue
 
         # Determine if a tool covering the vulnerability class actually
-        # RAN for this function. The dispatch record comes from
-        # sweep/proactive validation; a SARIF hit for the file means a
-        # scan pass ran over it; errored channels did not run.
+        # RAN for this function with a probative answer. The dispatch
+        # record comes from sweep/proactive validation; errored
+        # channels did not run, inconclusive-only channels may not
+        # refute.
         class_covered = False
         if available_tools is not None:
             try:
                 from .tool_coverage import is_class_covered
 
+                # The dispatch record is the only coverage oracle. A
+                # prior SARIF result anywhere in the FILE (any rule, any
+                # function) used to alias to a semgrep run here — one
+                # unrelated stock-rule hit "covered" every class claim
+                # in the file and resolved it clean. File-level,
+                # rule-blind presence never covers a function claim;
+                # a correlated in-range cache hit still reaches the
+                # record as a chain confirm (sarif_cache:semgrep).
                 ran: set = set(outcome.tools_dispatched or set())
-                if sarif_cache is not None:
-                    gap = _find_gap_in_checklist(
-                        checklist or {}, outcome.file, outcome.function)
-                    _le = gap.get("line_end") if gap else None
-                    if sarif_cache.lookup(
-                        outcome.file, outcome.line or 0, _le or 0,
-                    ) is not None:
-                        ran.add("sarif_cache")
                 errored = set(outcome.tools_errored or set())
                 if errored:
                     logger.debug(
@@ -30850,6 +31046,19 @@ def _resolve_gate_demoted(
                         ",".join(sorted(errored)),
                     )
                 ran -= errored
+                # A channel that looked but answered only inconclusive
+                # (vacuous SAT, capped match, unwitnessed scan, keyword
+                # regex silence) "may not refute" — it is not a
+                # covering channel that ran silent.
+                inconclusive = set(outcome.tools_inconclusive or set())
+                if inconclusive & ran:
+                    logger.debug(
+                        "gate resolution %s:%s — channels inconclusive "
+                        "(%s), excluded from coverage",
+                        outcome.file, outcome.function,
+                        ",".join(sorted(inconclusive & ran)),
+                    )
+                ran -= inconclusive
 
                 rr = outcome.review_result or {}
                 class_covered = is_class_covered(
@@ -30897,10 +31106,11 @@ def _resolve_gate_demoted(
             )
             resolved.tools_dispatched = outcome.tools_dispatched
             resolved.tools_errored = outcome.tools_errored
+            resolved.tools_inconclusive = outcome.tools_inconclusive
             resolved.tools_skipped = outcome.tools_skipped
-            resolved.resolution_tools = sorted(
-                k for k, v in (available_tools or {}).items() if v
-            ) or None
+            # Silence-derived: journaled so cross-run reuse re-reviews
+            # it instead of importing it at $0, and never tool_backed.
+            resolved.clean_basis = "gate_resolved"
             result.outcomes[i] = resolved
             result.suspicious -= 1
             result.clean += 1
@@ -30927,6 +31137,7 @@ def _resolve_gate_demoted(
             )
             resolved.tools_dispatched = outcome.tools_dispatched
             resolved.tools_errored = outcome.tools_errored
+            resolved.tools_inconclusive = outcome.tools_inconclusive
             resolved.tools_skipped = outcome.tools_skipped
             result.outcomes[i] = resolved
             result.suspicious -= 1
@@ -31986,8 +32197,9 @@ def _smt_demotion_reason(
 def _demote_outcome(outcome: ReviewOutcome, reason: str) -> ReviewOutcome:
     """Demote a finding to suspicious with a reason prefix.
 
-    Carries the dispatch record (tools_dispatched / tools_errored) and
-    semantic confidence through the demotion — gate resolution reads
+    Carries the dispatch record (tools_dispatched / tools_errored /
+    tools_skipped / tools_inconclusive) and semantic confidence
+    through the demotion — gate resolution reads
     them off the demoted outcome to decide clean vs dark.
     """
     demoted = ReviewOutcome(
@@ -32006,6 +32218,7 @@ def _demote_outcome(outcome: ReviewOutcome, reason: str) -> ReviewOutcome:
     )
     demoted.tools_dispatched = outcome.tools_dispatched
     demoted.tools_errored = outcome.tools_errored
+    demoted.tools_inconclusive = outcome.tools_inconclusive
     demoted.tools_skipped = outcome.tools_skipped
     demoted.semantic_confidence = outcome.semantic_confidence
     demoted.provenance_all_trusted = outcome.provenance_all_trusted
@@ -33205,6 +33418,9 @@ def _run_dark_verification(
             else:
                 outcome.status = "clean"
                 outcome.evidence_tool = "dark_verify:refuted"
+                # Provenance only — the single-witness policy above is
+                # unchanged and the row stays reusable.
+                outcome.clean_basis = "dark_verify_refuted"
                 # An executed witness is ONE LLM-guessed input: it
                 # refutes its own prediction, not the hypothesis. It
                 # grades the model only when the outcome retained no

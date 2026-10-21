@@ -115,6 +115,15 @@ def outcome_from_entry(entry: Any) -> Any:
     outcome.line = entry.line_start or 0
     outcome.reused = True
     outcome.reused_from_run = origin
+    # The basis travels with the verdict, so the reused row's own
+    # re-journal never launders it into a fresh "verdict"; a clean from
+    # a pre-field row carries "unknown" (which the fold refuses), never
+    # the collector's "verdict" default.
+    if entry.verdict == "clean":
+        from core.coverage.journal import CLEAN_BASIS_UNKNOWN
+        outcome.clean_basis = (
+            getattr(entry, "clean_basis", None) or CLEAN_BASIS_UNKNOWN
+        )
     return outcome
 
 
