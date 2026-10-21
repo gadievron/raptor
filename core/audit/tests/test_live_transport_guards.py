@@ -1632,6 +1632,11 @@ class TestCompilerSurfaceFences:
             "_sweep_uaf",
             "test_in_tree_linemarker_still_refutes",
             "test_conditional_analyzer_token_in_header_cannot_refute",
+            "sweep",
+            "test_forged_refutation_is_inconclusive",
+            "test_control_still_confirms",
+            "test_quota_exhaustion_is_inconclusive",
+            "test_limit_is_inconclusive",
         }
 
 
