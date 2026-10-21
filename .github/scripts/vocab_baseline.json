@@ -937,6 +937,11 @@
     "count": 12,
     "kind": "literal"
   },
+  "core/audit/prefilter.py::_GUARD_JAVA_KEYWORDS": {
+    "count": 11,
+    "kind": "literal",
+    "note": "Java statement keywords (if/for/while/switch/catch/synchronized/return/else/do/try/finally) that the binding guard rejects as a method name before a block brace; a closed language-grammar set, not a learned API vocabulary"
+  },
   "core/audit/prefilter.py::_LIFECYCLE_OPS": {
     "count": 10,
     "kind": "literal"
