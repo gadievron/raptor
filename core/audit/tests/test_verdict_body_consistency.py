@@ -5,7 +5,7 @@ while its body ended "Verdict: clean" — the counter-hypothesis
 escalation flipped the status after the prose was generated and never
 annotated the text, leaving the operator to guess which to trust.
 Every in-review status flip (counter escalation, all-refuted
-demotion, rationale-consistency demotion) now stamps a gate marker at
+demotion) now stamps a gate marker at
 the top of the body. Also covers the loud-once fix-history skip on
 non-git targets. Hermetic — LLM stubbed.
 """
@@ -95,19 +95,26 @@ class TestBodyAnnotatedOnStatusFlips:
         assert outcome.body.startswith("[all-refuted demotion:")
         assert outcome.review_result["all_refuted_grounding"] == "local"
 
-    def test_rationale_consistency_demotion_stamps_body(self):
+    def test_rationale_consistency_check_flips_nothing(self):
+        # The rationale-consistency check never changes a verdict: a finding whose
+        # rationale reads clean stays a finding with its body as
+        # written (nothing to reconcile); the check only leaves a
+        # review_result note.
+        """A finding whose rationale reads clean must stay a finding with its
+        body exactly as written, carrying only a review_result note. If the
+        check flipped the status, body and verdict would disagree again, which
+        is the field failure this file guards against."""
+        body = (
+            "The function is safe because every index is clamped "
+            "before use."
+        )
         outcome = _review({
-            "status": "suspicious",
-            "body": (
-                "The function is safe because every index is clamped "
-                "before use."
-            ),
+            "status": "finding", "body": body,
             "hypothesis": "index overflow",
         })
-        assert outcome.status == "clean"
-        assert outcome.body.startswith(
-            "[rationale-consistency demotion:",
-        )
+        assert outcome.status == "finding"
+        assert outcome.body == body
+        assert "rationale_consistency_note" in outcome.review_result
 
     def test_unflipped_verdicts_keep_bare_body(self):
         outcome = _review({

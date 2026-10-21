@@ -141,7 +141,15 @@ which the next run re-reviews).  Known limitation: "once" holds only
 after the importing run merges into the project index — a run
 interrupted before the merge, a resume of it, or concurrent runs can
 each import the same pre-field clean again; every such import still
-re-journals `unknown`, so the basis is never laundered.
+re-journals `unknown`, so the basis is never laundered.  A clean
+minted by the retired review-time rationale-consistency gate (body
+`[rationale-consistency demotion:`, journaled `verdict`) is re-reviewed
+once in every era; a long body slimmed out of the project index is
+read back from its origin run (hash-checked), so the screen misses
+such a row when that run's journal is gone, rewritten or compacted
+(the read-back no longer matches the index stub), or unreadable.
+Cleans minted by the retired race-gate protection step carry no marker
+and cannot be told from a model clean, so they are not screened.
 
 The refutation direction is guarded the same way.  A reviewer cannot
 talk a mechanical detection away: when a detector receipt (for example
@@ -313,6 +321,34 @@ Every finding must pass these gates before it can be emitted:
 | **G5 Read-first** | Code read with the Read tool before any hypothesis is formed |
 | **G6 Assumption-trust** | For every function, identify what it trusts and what happens when violated |
 | **G7 Reachability** | Findings must be reachable -- zero callers AND binary oracle `absent` forces `dormant` |
+
+Neither the rationale-consistency check nor the speculative race gate
+moves a verdict toward `clean` on prose. The check only annotates: a
+rationale that reads clean under a `finding` (`"properly
+validated"`, `"no vulnerability"`, ...) leaves the finding as emitted;
+the only trace is a `rationale_consistency_note` in the in-memory
+review result and an INFO log line (it is not journaled).
+The row meets G2 exactly as it would without the phrase. A phrase match
+cannot tell an asserted claim from a negated, contrasted, conceded or
+attributed one, so it decides nothing. The speculative race gate never
+records `clean` off protection wording ("protected by", "serialized
+by"). Its remaining step is keyword-triggered: a `finding` whose
+hypothesis text contains a race keyword (`race condition`, `toctou`,
+`concurrent`, `data race`, `deadlock`, ...) is held at `suspicious`
+unless its evidence carries a concurrency-relevant receipt (`smt:`,
+`coccinelle:`, `semgrep:`, `codeql:`, `joern:`, `lock_region:`,
+`compiler:`, `dynamic:`, ...); a non-concurrency receipt
+(`consistency:`, `fail_open:`) does not exempt it. The trigger is the
+hypothesis wording, so it can fire on a negated mention and miss a
+paraphrased race; it only ever moves toward `suspicious`. Known
+pre-existing exceptions, where model wording still decides a verdict
+and which this rule does not cover: the all-refuted demotion grounds a
+refutation unless its counter matches a delegation phrase ("validated
+upstream" is withheld and stays `suspicious`, a paraphrase demotes to
+`clean`), and an evidence-free claim with an empty `cwe` takes its bug
+class from the hypothesis / mechanism text for coverage resolution
+(a class named in words can resolve `clean`, the same claim
+paraphrased resolves `dark`).
 
 
 ## Statuses

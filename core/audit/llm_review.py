@@ -65,13 +65,19 @@ def _rationale_consistency_should_demote(
     hypothesis: str,
     evidence_tool: str,
 ) -> bool:
-    """Return True if the rationale-consistency gate should demote to clean."""
+    """Return True if the rationale reads clean under a non-clean status.
+
+    A phrase match, not a parse: the caller only annotates on True
+    (this check never changes a verdict). The ``_should_demote`` name is
+    historical — it no longer demotes anything; read it as "rationale
+    reads clean".
+    """
     if status not in ("suspicious", "finding"):
         return False
-    # Only REAL tool evidence blocks the demotion. The raw value here
+    # Only REAL tool evidence suppresses the note. The raw value here
     # can be the LLM's own claim ("llm-claimed:semgrep" after
     # sanitization, or an unsanitized tool name) — an LLM that names a
-    # tool must not exempt itself from its own consistency gate.
+    # tool must not exempt itself from its own consistency check.
     from core.audit.evidence_grade import is_tool_evidence
     if is_tool_evidence(evidence_tool.strip()):
         return False
@@ -1421,6 +1427,36 @@ def make_review_fn(
             )
             status = "suspicious"
 
+        # Rationale-consistency note. This prose heuristic never changes
+        # a verdict — it only annotates. A phrase match over the model's
+        # own rationale (llm_review._CLEAN_PHRASES) cannot tell an
+        # asserted clean claim from a negated, contrasted, conceded or
+        # attributed one ("not properly validated", "no vulnerability,
+        # yet ..."), so it may decide nothing: the status, body and
+        # every lane the row enters stay exactly what they would be
+        # without the phrase (an evidence-free finding still meets G2,
+        # a tool-evidenced one stays a finding). The note rides only
+        # in review_result — not in the body, where a later prose
+        # reader (the --adversarial refuter among them) would read it
+        # as an argument — and no stage branches on it.
+        if status == "finding" and _rationale_consistency_should_demote(
+            status,
+            result.get("body") or "",
+            result.get("hypothesis") or "",
+            result.get("evidence_tool") or "",
+        ):
+            result["rationale_consistency_note"] = (
+                "rationale wording matches a clean phrase under a "
+                "finding verdict; verdict unchanged (phrase matches are "
+                "not adjudicated)"
+            )
+            logger.info(
+                "rationale-consistency note %s:%s: rationale wording "
+                "matches a clean phrase under a finding (verdict "
+                "unchanged)",
+                ctx["file"], ctx["function"],
+            )
+
         counter_escalated = False
         if status == "clean" and escalate_clean:
             counter = result.get("counter_hypothesis", "")
@@ -1564,28 +1600,6 @@ def make_review_fn(
                         " (overrode counter-escalation)"
                         if counter_escalated else "",
                     )
-
-        if _rationale_consistency_should_demote(
-            status,
-            result.get("body") or "",
-            result.get("hypothesis") or "",
-            result.get("evidence_tool") or "",
-        ):
-            prior = status
-            status = "clean"
-            result["status"] = status
-            result["rationale_consistency_demotion"] = True
-            result["body"] = (
-                f"[rationale-consistency demotion: the rationale below "
-                f"concludes clean while the emitted status was {prior} "
-                f"— verdict recorded as clean]\n\n"
-                + (result.get("body") or "")
-            )
-            logger.info(
-                "rationale-consistency demotion %s:%s: "
-                "rationale says clean but status was %s",
-                ctx["file"], ctx["function"], prior,
-            )
 
         raw_ev = result.get("evidence_tool") or ""
         evidence_tool = _normalize_evidence_tool(raw_ev)

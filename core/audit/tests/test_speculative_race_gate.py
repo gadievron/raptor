@@ -22,6 +22,12 @@ def _outcome(status="finding", hypothesis="", body="", evidence_tool=""):
 
 
 class TestSpeculativeRaceDemotion:
+    """finding -> suspicious for evidence-free race hypotheses; a body
+    naming a protection mechanism never moves the verdict to clean
+    (the protection-phrase tests below pin suspicious, whatever the
+    phrase's polarity — a phrase match cannot tell an asserted
+    protection from an attributed or conceded one)."""
+
     def test_non_race_hypothesis_unchanged(self):
         o = _outcome(hypothesis="buffer overflow in memcpy")
         result = _apply_speculative_race_demotion(o)
@@ -68,7 +74,10 @@ class TestSpeculativeRaceDemotion:
         result = _apply_speculative_race_demotion(o)
         assert result.status == "finding"
 
-    def test_suspicious_race_with_protection_demoted_to_clean(self):
+    def test_suspicious_race_with_protection_stays_suspicious(self):
+        """A suspicious race whose body says the buffer is protected by a mutex
+        must stay suspicious. Protection prose is not a receipt, and turning it
+        into clean would hide real races on the model's word."""
         o = _outcome(
             status="suspicious",
             hypothesis="race condition on shared buffer",
@@ -76,28 +85,35 @@ class TestSpeculativeRaceDemotion:
                  "ensures exclusive access during the copy operation.",
         )
         result = _apply_speculative_race_demotion(o)
-        assert result.status == "clean"
+        assert result.status == "suspicious"
 
-    def test_suspicious_race_with_rcu_lock_demoted_to_clean(self):
+    def test_suspicious_race_with_rcu_lock_stays_suspicious(self):
+        """A body claiming traversal under rcu_read_lock must not move a
+        suspicious race to clean. The gate cannot verify the claim, so the
+        verdict has to stay open for review."""
         o = _outcome(
             status="suspicious",
             hypothesis="data race on list traversal",
             body="The list is traversed under rcu_read_lock protection.",
         )
         result = _apply_speculative_race_demotion(o)
-        assert result.status == "clean"
+        assert result.status == "suspicious"
 
-    def test_suspicious_race_with_spin_lock_demoted_to_clean(self):
+    def test_suspicious_race_with_spin_lock_stays_suspicious(self):
+        """A body claiming accesses are serialised by a spin lock must leave a
+        suspicious race suspicious. A phrase match cannot tell a true claim
+        from a mistaken or attributed one."""
         o = _outcome(
             status="suspicious",
             hypothesis="concurrent modification",
             body="All accesses to this field are serialised by spin_lock_bh.",
         )
         result = _apply_speculative_race_demotion(o)
-        assert result.status == "clean"
+        assert result.status == "suspicious"
 
     def test_negated_protection_not_demoted(self):
-        """'not protected by' should NOT count as protection."""
+        """Protection prose of any polarity stays suspicious ('not protected
+        by' included; there is no negation window any more)."""
         o = _outcome(
             status="suspicious",
             hypothesis="race condition on shared state",
@@ -151,7 +167,10 @@ class TestSpeculativeRaceDemotion:
         result = _apply_speculative_race_demotion(o)
         assert result.status == "dormant"
 
-    def test_init_only_protection_demotes(self):
+    def test_init_only_protection_stays_suspicious(self):
+        """A body claiming the field is written only during init must not clear
+        a suspicious race. Init-only claims are unverified prose and once were
+        enough to mint a clean."""
         o = _outcome(
             status="suspicious",
             hypothesis="data race on configuration",
@@ -159,16 +178,19 @@ class TestSpeculativeRaceDemotion:
                  "before any threads are spawned.",
         )
         result = _apply_speculative_race_demotion(o)
-        assert result.status == "clean"
+        assert result.status == "suspicious"
 
-    def test_single_threaded_protection_demotes(self):
+    def test_single_threaded_protection_stays_suspicious(self):
+        """A body claiming single-threaded context must not clear a suspicious
+        race. Without this, a model assertion about threading would silently
+        drop a possible race from review."""
         o = _outcome(
             status="suspicious",
             hypothesis="concurrent access to global",
             body="The function runs in a single-threaded context during boot.",
         )
         result = _apply_speculative_race_demotion(o)
-        assert result.status == "clean"
+        assert result.status == "suspicious"
 
     def test_prefilter_lock_evidence_kept(self):
         o = _outcome(
@@ -187,7 +209,8 @@ class TestSpeculativeRaceDemotion:
         assert result.status == "finding"
 
     def test_never_atomic_negation(self):
-        """'not an atomic operation' — negation far from protection phrase."""
+        """Protection prose of any polarity stays suspicious (here a far
+        negation plus an asserted 'protected by')."""
         o = _outcome(
             status="suspicious",
             hypothesis="race condition on counter",
@@ -195,9 +218,9 @@ class TestSpeculativeRaceDemotion:
                  "However the field is protected by the socket lock.",
         )
         result = _apply_speculative_race_demotion(o)
-        # The first sentence has "not" but it's not near a protection phrase.
-        # The second sentence has a real protection phrase with no negation.
-        assert result.status == "clean"
+        # Prose naming a protection mechanism is not a receipt: the
+        # row stays suspicious whatever the phrase's polarity.
+        assert result.status == "suspicious"
 
 
 class TestRaceEvidenceAllowlist:
