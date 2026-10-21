@@ -73,8 +73,10 @@ logger = logging.getLogger(__name__)
 # file's record set contains, so pre-change cache entries must miss
 # rather than replay the old (blind) results. Bump on any _compute
 # semantics change. (v2 was previously spelled inline in the cache
-# label; the axis now lives in the shared helper's key.)
-_EXTRACTION_VERSION = 2
+# label; the axis now lives in the shared helper's key.) v3: records
+# are context-free (no path-bearing ``detail``) — v2 entries baked the
+# first-seen file's path into ``detail`` and must not be replayed.
+_EXTRACTION_VERSION = 3
 
 
 # Canonical skip set + this walker's extras. Drift-free: a new entry
@@ -166,12 +168,15 @@ def scan_target(
     ``_VENDOR_DIR_NAMES``); return per-file flagged statements.
 
     ``cache`` (a :class:`core.json.JsonCache`) caches the per-file
-    flagged-call list (line + label) keyed by file content hash —
+    context-free record list (line, rendered call, else-branch flag,
+    severity, confidence) keyed by file content hash —
     repeat scans of unchanged files skip the AST parse entirely.
-    The host-dep attribution is recomputed on retrieval (it depends
-    on ``manifests`` + ``target`` + ``path`` rather than on file
-    content), so a manifest set change doesn't invalidate the
-    per-file content cache.
+    Everything that depends on ``path`` / ``target`` / ``manifests``
+    rather than on file content — the host-dep attribution and the
+    path-bearing ``detail`` text — is rebuilt on retrieval, so
+    byte-identical files (vendored copies, or the same file in
+    another target sharing the cache) each report their own path,
+    and a manifest set change doesn't invalidate the cache.
     """
     target = target.resolve()
     manifests_list = list(manifests)
@@ -187,9 +192,11 @@ def scan_target(
 
         def _compute(text=text, path=path):
             """Parse + extract per-file flagged-statement records.
-            Returned as plain dicts so the cache can JSON-serialise
-            them. Retrieval reconstructs ``ImportTimeFinding`` with
-            the current target/manifests/path."""
+            Returned as plain context-free dicts (no path) so the
+            cache can JSON-serialise them and replay them for any
+            file with the same content. Retrieval reconstructs
+            ``ImportTimeFinding`` with the current
+            target/manifests/path."""
             try:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore", SyntaxWarning)
@@ -200,23 +207,17 @@ def scan_target(
                     path, e,
                 )
                 return []
-            recs = [{
-                    "detail": f.detail,
-                    "line": f.line,
-                    "severity": f.severity,
-                    "confidence_level": f.confidence.level,
-                    "confidence_reason": f.confidence.reason,
-                } for f in _scan_module(tree, path, target, manifests_list)]
-            return recs
+            return list(_scan_module(tree))
 
         recs = cached_per_file(
             cache, "supply_chain:py-imports", text, _compute,
             version=_EXTRACTION_VERSION,
         )
         host_dep = _project_host_dep(manifests_list, path, target)
+        rel = _rel(path, target)
         out.extend(ImportTimeFinding(
                 dependency=host_dep,
-                detail=r["detail"],
+                detail=_format_detail_text(rel, r),
                 path=path,
                 line=r["line"],
                 severity=r["severity"],
@@ -294,12 +295,23 @@ def _module_context(tree: ast.Module) -> _ModuleContext:
     )
 
 
-def _scan_module(
-    tree: ast.Module,
-    path: Path,
-    target: Path,
-    manifests: list[Manifest],
-) -> Iterable[ImportTimeFinding]:
+def _format_detail_text(rel: Path, rec: dict) -> str:
+    """Build the per-file ``detail`` text from a context-free record.
+    Kept out of the cached record: the path is a property of the file,
+    not of its content."""
+    suffix = " (else-branch of guard)" if rec["else_branch"] else ""
+    return (
+        f"`{rel}:{rec['line']}` runs `{rec['call']}` at import time"
+        f"{suffix}"
+    )
+
+
+def _scan_module(tree: ast.Module) -> Iterable[dict]:
+    """Yield one context-free record per flagged top-level call:
+    ``line``, rendered ``call``, ``else_branch``, ``severity``,
+    ``confidence_level`` / ``confidence_reason``. Nothing here may
+    depend on the file's path — records are cached by content hash
+    and replayed for every byte-identical file."""
     ctx = _module_context(tree)
     for node in tree.body:
         # Whole-statement allowlists.
@@ -308,22 +320,17 @@ def _scan_module(
         if _is_main_guard(node) or _is_type_checking_guard(node, ctx):
             for else_stmt in getattr(node, "orelse", []):
                 for call in _find_suspicious_calls(else_stmt, ctx):
-                    yield ImportTimeFinding(
-                        dependency=_project_host_dep(manifests, path, target),
-                        detail=(
-                            f"`{_rel(path, target)}:{call.lineno}` runs "
-                            f"`{_render_call(call)}` at import time "
-                            f"(else-branch of guard)"
+                    yield {
+                        "line": call.lineno,
+                        "call": _render_call(call),
+                        "else_branch": True,
+                        "severity": "medium",
+                        "confidence_level": "medium",
+                        "confidence_reason": (
+                            "suspicious call in else-branch of "
+                            "main/TYPE_CHECKING guard"
                         ),
-                        path=path,
-                        line=call.lineno,
-                        severity="medium",
-                        confidence=Confidence(
-                            "medium",
-                            reason="suspicious call in else-branch of "
-                            "main/TYPE_CHECKING guard",
-                        ),
-                    )
+                    }
             continue
         if _is_constant_assignment(node):
             continue
@@ -338,20 +345,16 @@ def _scan_module(
         # *suspicious* call so the finding's detail cites it
         # specifically.
         for call in _find_suspicious_calls(node, ctx):
-            yield ImportTimeFinding(
-                dependency=_project_host_dep(manifests, path, target),
-                detail=(
-                    f"`{_rel(path, target)}:{call.lineno}` runs "
-                    f"`{_render_call(call)}` at import time"
+            yield {
+                "line": call.lineno,
+                "call": _render_call(call),
+                "else_branch": False,
+                "severity": "medium",
+                "confidence_level": "medium",
+                "confidence_reason": (
+                    "top-level call to a suspicious module / builtin"
                 ),
-                path=path,
-                line=call.lineno,
-                severity="medium",
-                confidence=Confidence(
-                    "medium",
-                    reason="top-level call to a suspicious module / builtin",
-                ),
-            )
+            }
 
 
 def _find_suspicious_calls(

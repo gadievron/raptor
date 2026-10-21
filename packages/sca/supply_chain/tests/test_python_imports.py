@@ -487,3 +487,233 @@ def test_benign_calls_not_flagged() -> None:
 def test_bare_calls_still_flagged() -> None:
     assert _is_suspicious_call(_call("eval('1')"))
     assert _is_suspicious_call(_call("__import__('os')"))
+
+
+# ---------------------------------------------------------------------------
+# Regression: per-file cache replayed a path-bearing ``detail``
+# ---------------------------------------------------------------------------
+#
+# The per-file record cache is keyed on file CONTENT only, but ``detail``
+# embeds the file's target-relative path. Byte-identical files (two
+# vendored copies of one module, or the same file in another target
+# sharing the machine-wide cache) were served the first file's detail,
+# so the markdown report (groups by detail) and SARIF (message is the
+# only per-file locator) lost every copy after the first.
+
+_PAYLOAD = "import os\nos.system('id')\n"
+_ELSE_PAYLOAD = (
+    "import os\n"
+    "if __name__ == '__main__':\n"
+    "    pass\n"
+    "else:\n"
+    "    os.system('id')\n"
+)
+
+
+def _cache(root: Path):
+    from core.json import JsonCache
+    return JsonCache(root=root)
+
+
+def _mk(root: Path, rels: list[str], body: str = _PAYLOAD) -> None:
+    for rel in rels:
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body, encoding="utf-8")
+
+
+def _assert_details_name_own_path(findings, target: Path) -> None:
+    for f in findings:
+        rel = str(f.path.relative_to(target.resolve()))
+        assert f"`{rel}:{f.line}`" in f.detail, (
+            f"detail {f.detail!r} does not name its own file {rel!r}"
+        )
+
+
+def test_cached_identical_files_in_one_target_keep_own_detail(
+    tmp_path: Path,
+) -> None:
+    """Two byte-identical vendored files share one cache entry; each
+    finding's detail must still name its own file."""
+    tgt = tmp_path / "proj"
+    _mk(tgt, ["vendor/liba/mod.py", "vendor/libb/mod.py"])
+    findings = scan_target(tgt, [], cache=_cache(tmp_path / "cache"))
+    assert len(findings) == 2
+    _assert_details_name_own_path(findings, tgt)
+    assert len({f.detail for f in findings}) == 2
+
+
+def test_cached_identical_file_in_other_target_keeps_own_detail(
+    tmp_path: Path,
+) -> None:
+    """A file served from an entry written while scanning another target
+    must not inherit that target's path in its detail."""
+    cache = _cache(tmp_path / "cache")
+    a, b = tmp_path / "projA", tmp_path / "projB"
+    _mk(a, ["vendor/lib_a/mod.py"])
+    _mk(b, ["third_party/other/x.py"])
+    scan_target(a, [], cache=cache)              # populates the cache
+    found_b = scan_target(b, [], cache=cache)    # served from it
+    assert len(found_b) == 1
+    _assert_details_name_own_path(found_b, b)
+    assert "lib_a" not in found_b[0].detail
+
+
+def test_cached_else_branch_identical_files_keep_own_detail(
+    tmp_path: Path,
+) -> None:
+    """Else-branch-of-guard findings go through the same cache and must
+    also name their own file, keeping the else-branch suffix."""
+    tgt = tmp_path / "p"
+    _mk(tgt, ["vendor/a/m.py", "external/b/m.py"], body=_ELSE_PAYLOAD)
+    findings = scan_target(tgt, [], cache=_cache(tmp_path / "cache"))
+    assert len(findings) == 2
+    _assert_details_name_own_path(findings, tgt)
+    assert all("(else-branch of guard)" in f.detail for f in findings)
+
+
+def test_cached_and_uncached_scans_agree(tmp_path: Path) -> None:
+    """Cold cache, warm cache and no cache must produce the same
+    findings (detail included) — the cache is an optimisation only."""
+    tgt = tmp_path / "p"
+    _mk(tgt, ["vendor/a/m.py", "vendor/b/m.py"])
+    _mk(tgt, ["vendor/c/m.py", "vendor/d/m.py"], body=_ELSE_PAYLOAD)
+    cache = _cache(tmp_path / "cache")
+
+    def key(fs):
+        return sorted(
+            (str(f.path), f.line, f.detail, f.severity,
+             f.confidence.level, f.confidence.reason)
+            for f in fs
+        )
+
+    uncached = key(scan_target(tgt, []))
+    cold = key(scan_target(tgt, [], cache=cache))
+    warm = key(scan_target(tgt, [], cache=cache))
+    assert len(uncached) == 4
+    assert cold == uncached
+    assert warm == uncached
+
+
+def test_cached_records_carry_no_path(tmp_path: Path) -> None:
+    """What lands in the content-keyed cache must be context-free:
+    no target-relative path (that is per-file, not per-content)."""
+    import json
+    tgt = tmp_path / "proj"
+    _mk(tgt, ["vendor/uniquelibname/mod.py"])
+    cache_root = tmp_path / "cache"
+    scan_target(tgt, [], cache=_cache(cache_root))
+    stored = [p.read_text(encoding="utf-8")
+              for p in cache_root.rglob("*") if p.is_file()]
+    assert stored, "expected the scan to populate the cache"
+    blob = json.dumps(stored)
+    assert "uniquelibname" not in blob
+
+
+def test_stale_path_bearing_cache_entry_not_replayed(tmp_path: Path) -> None:
+    """Entries written by the pre-fix extractor (path baked into
+    ``detail``) live at TTL_FOREVER; the extraction version must have
+    moved so they miss instead of replaying another file's path."""
+    from packages.sca._file_scan_cache import file_sha256
+    from packages.sca.kinds import SCA_PREFIX
+    from core.json import TTL_FOREVER
+    tgt = tmp_path / "proj"
+    _mk(tgt, ["vendor/real/mod.py"])
+    cache = _cache(tmp_path / "cache")
+    poisoned = [{
+        "detail": "`vendor/elsewhere/x.py:2` runs `os.system()` at import time",
+        "line": 2,
+        "severity": "medium",
+        "confidence_level": "medium",
+        "confidence_reason": "top-level call to a suspicious module / builtin",
+    }]
+    for old_version in (1, 2):
+        cache.put(
+            f"{SCA_PREFIX}supply_chain:py-imports:v{old_version}:"
+            f"{file_sha256(_PAYLOAD)}",
+            poisoned, ttl_seconds=TTL_FOREVER,
+        )
+    findings = scan_target(tgt, [], cache=cache)
+    assert len(findings) == 1
+    assert "elsewhere" not in findings[0].detail
+    _assert_details_name_own_path(findings, tgt)
+
+
+def test_cached_identical_files_survive_markdown_and_sarif(
+    tmp_path: Path,
+) -> None:
+    """Impact: both copies must reach the markdown report (which
+    groups by detail) and SARIF (whose message is the only per-file
+    locator for this kind)."""
+    from packages.sca import findings as sca_findings
+    from packages.sca import report as sca_report
+    from packages.sca import sarif as sca_sarif
+    from packages.sca.supply_chain import _python_import_to_finding
+
+    tgt = tmp_path / "proj"
+    _mk(tgt, ["vendor/liba/mod.py", "vendor/libb/mod.py"])
+    found = scan_target(tgt, [], cache=_cache(tmp_path / "cache"))
+    scf = [_python_import_to_finding(f) for f in found]
+
+    groups = sca_report._group_kinded(scf)
+    md = "".join(sca_report._render_one_kinded_group(g) for g in groups)
+    assert len(groups) == 2
+    assert "vendor/liba/mod.py" in md
+    assert "vendor/libb/mod.py" in md
+
+    rows = [sca_findings._supply_chain_finding_to_row(f) for f in scf]
+    doc = sca_sarif.build_sarif(target=tgt.resolve(), rows=rows)
+    msgs = [r["message"]["text"] for r in doc["runs"][0]["results"]]
+    assert any("vendor/liba/mod.py" in m for m in msgs)
+    assert any("vendor/libb/mod.py" in m for m in msgs)
+
+
+def test_confidence_reason_distinguishes_else_branch(tmp_path: Path) -> None:
+    """The record carries the confidence reason through the cache; a
+    top-level call and an else-branch call keep distinct reasons on
+    cold, warm and uncached scans."""
+    tgt = tmp_path / "p"
+    _mk(tgt, ["vendor/top/m.py"])
+    _mk(tgt, ["vendor/guard/m.py"], body=_ELSE_PAYLOAD)
+    cache = _cache(tmp_path / "cache")
+    expected = {
+        "top": "top-level call to a suspicious module / builtin",
+        "guard": "suspicious call in else-branch of main/TYPE_CHECKING guard",
+    }
+    for found in (scan_target(tgt, []),
+                  scan_target(tgt, [], cache=cache),
+                  scan_target(tgt, [], cache=cache)):
+        got = {f.path.parent.name: f.confidence.reason for f in found}
+        assert got == expected
+
+
+def test_cached_record_detail_key_is_never_trusted(tmp_path: Path) -> None:
+    """``detail`` is always rebuilt from the file's own path, even if a
+    current-version cache entry (shared machine-wide cache, another
+    build of this extractor) carries a ``detail`` field."""
+    from packages.sca._file_scan_cache import file_sha256
+    from packages.sca.kinds import SCA_PREFIX
+    from packages.sca.supply_chain.python_imports import _EXTRACTION_VERSION
+    from core.json import TTL_FOREVER
+    tgt = tmp_path / "proj"
+    _mk(tgt, ["vendor/real/mod.py"])
+    cache = _cache(tmp_path / "cache")
+    cache.put(
+        f"{SCA_PREFIX}supply_chain:py-imports:v{_EXTRACTION_VERSION}:"
+        f"{file_sha256(_PAYLOAD)}",
+        [{
+            "detail": "`vendor/elsewhere/x.py:2` runs `os.system()` at import time",
+            "line": 2,
+            "call": "os.system()",
+            "else_branch": False,
+            "severity": "medium",
+            "confidence_level": "medium",
+            "confidence_reason": "top-level call to a suspicious module / builtin",
+        }],
+        ttl_seconds=TTL_FOREVER,
+    )
+    findings = scan_target(tgt, [], cache=cache)
+    assert len(findings) == 1
+    assert findings[0].detail == (
+        "`vendor/real/mod.py:2` runs `os.system()` at import time"
+    )

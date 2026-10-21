@@ -75,6 +75,13 @@ def cached_per_file(
     Consumers caching dataclass-shaped findings are responsible for
     flattening to dicts before passing to this helper and rebuilding
     on retrieval.
+
+    The result must also be context-free: the key carries no path or
+    target, so one entry is replayed for every byte-identical file
+    (vendored copies, the same file in another target). Anything
+    derived from the file's path — a path-bearing message, test-path
+    status, host-dep attribution — is recomputed by the consumer on
+    retrieval, never cached.
     """
     if cache is None:
         return compute()
