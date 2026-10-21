@@ -426,3 +426,21 @@ class TestRegisterDictRendering:
         bundle = analyser._build_initial_crash_prompt(ctx)
         user = next(m.content for m in bundle.messages if m.role == "user")
         assert "RAX=0xdead" in user
+
+
+class TestClarificationVerdictInstruction:
+    """The clarification prompt asks for exactly one explicit verdict
+    line, with a placeholder (not a level list) so that an echo of the
+    instruction carries no level."""
+
+    def test_clarification_prompt_requests_one_verdict_line(self):
+        from packages.autonomous.dialogue import MultiTurnAnalyser
+        from packages.autonomous.tests.test_dialogue_verdict import (
+            CLARIFY_VERDICT_INSTRUCTION,
+        )
+        bundle = MultiTurnAnalyser(llm_client=MagicMock())._build_clarification_prompt(
+            {"exploitability": "none"}, FakeCrashContext(),
+        )
+        system = next(m.content for m in bundle.messages if m.role == "system")
+        assert CLARIFY_VERDICT_INSTRUCTION in system
+        assert "<" not in CLARIFY_VERDICT_INSTRUCTION

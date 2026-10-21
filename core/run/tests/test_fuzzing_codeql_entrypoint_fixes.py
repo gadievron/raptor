@@ -172,3 +172,313 @@ class TestExploitabilityFromDeepAnalysis:
         fn = fuzzing._exploitability_from_deep_analysis
         for level in ("unknown", None, "", "critical", 0.9, ["high"], {}):
             assert fn(level) is None
+
+
+# ---------------------------------------------------------------------------
+# Multi-turn verdict -> exploit generation and crash-pattern memory
+# ---------------------------------------------------------------------------
+
+
+def _crash_loop_code():
+    """Compile raptor_fuzzing.py's real crash-analysis loop, the single
+    ``for crash in crash_pool`` statement, unmodified.
+
+    Omitted enclosing setup and why it cannot change these cases: the
+    code before the loop parses arguments, runs the fuzzing campaign,
+    collects and ranks crashes, and constructs ``crash_analyser``,
+    ``multi_turn``, ``llm_agent``, ``memory`` and the counters. The test
+    supplies those names directly: one crash in ``crash_pool``, a
+    ``crash_analyser`` stub that returns a fresh CrashContext (the
+    loop's input) and a fixed crash type, a real MultiTurnAnalyser on
+    scripted replies, a real FuzzingMemory, and an ``llm_agent`` whose
+    ``generate_exploit`` is spied. The verdict, the context write, the
+    crash-pattern record and the generation decision are all made by
+    the production loop body. The code after the loop only prints
+    totals."""
+    import ast
+    src = (_RAPTOR_ROOT / "raptor_fuzzing.py").read_text()
+    loops = [n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.For)
+             and ast.get_source_segment(src, n.target) == "crash"
+             and ast.get_source_segment(src, n.iter) == "crash_pool"]
+    assert len(loops) == 1, f"expected one crash loop, got {len(loops)}"
+    return compile(ast.Module(body=loops, type_ignores=[]),
+                   str(_RAPTOR_ROOT / "raptor_fuzzing.py"), "exec")
+
+
+_N7_REPLY = ("> ```\n\"Exploitability: LEVEL\"\n> q\nExploitability: High\n"
+             "Calling it not exploitable would be wrong.")
+
+
+class TestCrashVerdictConsumer:
+    """Runs the real crash loop (see _crash_loop_code) on real
+    MultiTurnAnalyser output and a real FuzzingMemory, spying on
+    generate_exploit and record_crash_pattern."""
+
+    KEY = "crash_pattern:SIGSEGV_parse_hdr"
+    OTHER = "crash_pattern:SIGILL_other_fn"
+
+    @staticmethod
+    def _run(tmp_path, replies=None, *, deep=None, before="unknown",
+             seed=False):
+        import contextlib
+        import io
+        import json
+        import logging
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+        from packages.autonomous.dialogue import MultiTurnAnalyser
+        from packages.autonomous.memory import FuzzingMemory
+        from packages.binary_analysis.crash_analyser import CrashContext
+        fuzzing = _import_fuzzing()
+        code = _crash_loop_code()
+        ctx = CrashContext(
+            crash_id="c1", binary_path=Path("/bin/true"),
+            input_file=Path("/dev/null"), signal="SIGSEGV",
+            function_name="parse_hdr")
+        ctx.exploitability = before
+        if deep is not None:
+            multi_turn = MagicMock()
+            multi_turn.analyse_crash_deeply.return_value = deep
+        else:
+            llm = MagicMock()
+            llm.generate.side_effect = [
+                SimpleNamespace(content=r) for r in list(replies) + ["ok"] * 3]
+            multi_turn = MultiTurnAnalyser(llm_client=llm)
+        memory = FuzzingMemory(memory_file=tmp_path / "memory.json")
+        if seed:
+            # pre-existing records: same key (2 of 3 exploitable) and an
+            # unrelated key
+            for flag in (True, True, False):
+                memory.record_crash_pattern(signal="SIGSEGV",
+                                            function="parse_hdr",
+                                            binary_hash="h", exploitable=flag)
+            memory.record_crash_pattern(signal="SIGILL", function="other_fn",
+                                        binary_hash="h", exploitable=False)
+            memory.save()
+        memory.record_crash_pattern = MagicMock(wraps=memory.record_crash_pattern)
+        agent = MagicMock()
+        agent.generate_exploit.return_value = False
+        analyser = MagicMock()
+        analyser.analyse_crash.return_value = ctx
+        analyser.classify_crash_type.return_value = "heap-buffer-overflow"
+        ns = dict(vars(fuzzing))
+        ns.update(
+            crash_pool=[SimpleNamespace(crash_id="c1", signal="SIGSEGV",
+                                        input_file=Path("/dev/null"))],
+            args=SimpleNamespace(autonomous=True, max_crashes=1,
+                                 rank_crashes=False),
+            attempted=0, seen_stack_hashes=set(), skipped_duplicates=0,
+            crash_analyser=analyser, multi_turn=multi_turn, llm_agent=agent,
+            memory=memory, binary_hash="h", analysed=0, exploitable=0,
+            exploits_generated=0, exploit_validator=None, out_dir=tmp_path)
+        logging.disable(logging.CRITICAL)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                exec(code, ns)
+        finally:
+            logging.disable(logging.NOTSET)
+        memory.save()
+        stored = json.loads((tmp_path / "memory.json").read_text())
+        return {
+            "exploitability": ns["crash_context"].exploitability,
+            "same_context": ns["crash_context"] is ctx,
+            "generate_calls": [c.args for c in agent.generate_exploit.call_args_list],
+            "exploitable_counter": ns["exploitable"],
+            "record_calls": [c.kwargs for c in
+                             memory.record_crash_pattern.call_args_list],
+            "durable": {k: v["value"] for k, v in stored["knowledge"].items()},
+            "ctx": ctx,
+        }
+
+    @staticmethod
+    def _record(exploitable):
+        return {"signal": "SIGSEGV", "function": "parse_hdr",
+                "binary_hash": "h", "exploitable": exploitable}
+
+    @classmethod
+    def _value(cls, exploitable_count, total_count, *, other=False):
+        if other:
+            return {"signal": "SIGILL", "function": "other_fn",
+                    "exploitable_count": 0, "total_count": 1}
+        return {"signal": "SIGSEGV", "function": "parse_hdr",
+                "exploitable_count": exploitable_count,
+                "total_count": total_count}
+
+    def _assert_effects(self, out, level, generated, durable, record=None):
+        assert out["same_context"]
+        assert out["exploitability"] == level
+        assert out["generate_calls"] == ([(out["ctx"],)] if generated else [])
+        assert out["exploitable_counter"] == (1 if generated else 0)
+        assert out["record_calls"] == ([] if record is None
+                                       else [self._record(record)])
+        assert out["durable"] == durable
+
+    def test_structure(self):
+        _crash_loop_code()
+
+    def test_explicit_high_despite_phrase(self, tmp_path):
+        out = self._run(tmp_path, ["Exploitability: HIGH\nCalling this not "
+                                   "exploitable would be wrong."])
+        self._assert_effects(out, "exploitable", True,
+                             {self.KEY: self._value(1, 1)}, True)
+
+    def test_medium(self, tmp_path):
+        out = self._run(tmp_path, ["Exploitability: Medium",
+                                   "Exploitability: Medium"])
+        self._assert_effects(out, "exploitable", True,
+                             {self.KEY: self._value(1, 1)}, True)
+
+    def test_bare_affirmative_upgrade(self, tmp_path):
+        out = self._run(tmp_path, ["Exploitability: None",
+                                   "Exploitability is high."])
+        self._assert_effects(out, "exploitable", True,
+                             {self.KEY: self._value(1, 1)}, True)
+
+    def test_low(self, tmp_path):
+        out = self._run(tmp_path, ["Exploitability: Low", "The write is bounded."])
+        self._assert_effects(out, "not_exploitable", False,
+                             {self.KEY: self._value(0, 1)}, False)
+
+    def test_none_abstains_with_zero_writes(self, tmp_path):
+        out = self._run(tmp_path, ["Exploitability: None", "Attacker controls "
+                                   "RIP; exploitability is high."])
+        self._assert_effects(out, "unknown", False, {})
+
+    def test_unknown_abstains_with_zero_writes(self, tmp_path):
+        out = self._run(tmp_path, ["Crash in parser.", "No idea."])
+        self._assert_effects(out, "unknown", False, {})
+
+    def test_missing_exploitability_key_abstains(self, tmp_path):
+        out = self._run(tmp_path, deep={"confidence": 0.5,
+                                        "vulnerability_type": "heap_overflow"})
+        self._assert_effects(out, "unknown", False, {})
+
+    def test_none_then_bare_low_abstains(self, tmp_path):
+        # "Exploitability is low." never revises an explicit None
+        out = self._run(tmp_path, ["Exploitability: None",
+                                   "Exploitability is low."])
+        self._assert_effects(out, "unknown", False, {})
+
+    def test_instruction_echo_keeps_abstention(self, tmp_path):
+        out = self._run(tmp_path, [
+            "Crash in parser.",
+            'End your answer with exactly one verdict line, '
+            '"Exploitability: LEVEL", where LEVEL is one of High, Medium, '
+            'Low, None.'])
+        self._assert_effects(out, "unknown", False, {})
+
+    def test_echo_and_weak_cooccurrence_abstains(self, tmp_path):
+        out = self._run(tmp_path, [
+            "This crash is likely not exploitable.",
+            'End your answer with exactly one verdict line, '
+            '"Exploitability: LEVEL", where LEVEL is one of High, Medium, '
+            'Low, None.\nA working exploit would require a high degree of '
+            'heap control.'])
+        self._assert_effects(out, "unknown", False, {})
+
+    def test_abstention_preserves_existing_records(self, tmp_path):
+        out = self._run(tmp_path, ["Exploitability: None", "Nothing to add."],
+                        seed=True)
+        self._assert_effects(out, "unknown", False, {
+            self.KEY: self._value(2, 3), self.OTHER: self._value(0, 0, other=True)})
+
+    def test_high_adds_to_existing_records(self, tmp_path):
+        out = self._run(tmp_path, ["Exploitability: High"], seed=True)
+        self._assert_effects(out, "exploitable", True, {
+            self.KEY: self._value(3, 4), self.OTHER: self._value(0, 0, other=True)},
+            True)
+
+    def test_abstention_leaves_prepopulated_context(self, tmp_path):
+        # The verdict write is skipped on abstention, so a context that
+        # already says "exploitable" still opens the generation gate
+        # (raptor_fuzzing.py creates each context with "unknown").
+        out = self._run(tmp_path, ["Exploitability: None", "Nothing to add."],
+                        before="exploitable")
+        self._assert_effects(out, "exploitable", True, {})
+
+    def test_high_overrides_prepopulated_negative(self, tmp_path):
+        out = self._run(tmp_path, ["Exploitability: High"],
+                        before="not_exploitable")
+        self._assert_effects(out, "exploitable", True,
+                             {self.KEY: self._value(1, 1)}, True)
+
+    def test_drop_exposed_syntax_after_free_none(self, tmp_path):
+        out = self._run(tmp_path, ["This crash is likely not exploitable.",
+                                   _N7_REPLY])
+        self._assert_effects(out, "unknown", False, {})
+
+    def test_drop_exposed_syntax_after_free_medium(self, tmp_path):
+        out = self._run(tmp_path, ["Heap overflow; I'd put exploitability: "
+                                   "medium for now.", _N7_REPLY])
+        self._assert_effects(out, "unknown", False, {})
+
+    def test_drop_exposed_syntax_after_explicit_none(self, tmp_path):
+        out = self._run(tmp_path, ["Exploitability: None", _N7_REPLY])
+        self._assert_effects(out, "unknown", False, {})
+
+    def test_drop_exposed_syntax_after_explicit_low(self, tmp_path):
+        out = self._run(tmp_path, ["Exploitability: Low", _N7_REPLY])
+        self._assert_effects(out, "not_exploitable", False,
+                             {self.KEY: self._value(0, 1)}, False)
+
+    _INSTR = ('End your answer with exactly one verdict line, '
+              '"Exploitability: LEVEL", where LEVEL is one of High, Medium, '
+              'Low, None.')
+
+    def test_echo_drop_capped_after_free_none(self, tmp_path):
+        out = self._run(tmp_path, ["This crash is likely not exploitable.",
+                                   self._INSTR + "\nThe attacker has high "
+                                   "control, so the exploit works."])
+        self._assert_effects(out, "unknown", False, {})
+
+    def test_echo_drop_capped_after_free_low(self, tmp_path):
+        out = self._run(tmp_path, ["Chances of a working exploit are low.",
+                                   self._INSTR + "\nThe attacker has high "
+                                   "control, so the exploit works."])
+        self._assert_effects(out, "not_exploitable", False,
+                             {self.KEY: self._value(0, 1)}, False)
+
+    def test_echo_drop_uncapped_as_received_high(self, tmp_path):
+        out = self._run(tmp_path, ["This crash is likely not exploitable.",
+                                   "Exploitability: LEVEL\nExploit "
+                                   "reliability is high."])
+        self._assert_effects(out, "exploitable", True,
+                             {self.KEY: self._value(1, 1)}, True)
+
+    def test_pure_echo_preserves_free_medium(self, tmp_path):
+        out = self._run(tmp_path, ["Heap overflow; I'd put exploitability: "
+                                   "medium for now.",
+                                   self._INSTR + "\nExploitability: LEVEL"])
+        self._assert_effects(out, "exploitable", True,
+                             {self.KEY: self._value(1, 1)}, True)
+
+    def test_negated_high_after_echo_abstains(self, tmp_path):
+        out = self._run(tmp_path, ["This crash is likely not exploitable.",
+                                   "Exploitability: LEVEL\nThe claim that "
+                                   "exploitability is high is wrong; it is "
+                                   "none."])
+        self._assert_effects(out, "unknown", False, {})
+
+    def test_unknown_turn1_capped_by_as_received(self, tmp_path):
+        # turn 1 reads no level; the sentence echo's own list makes the
+        # reply as received read none, so the rest's "high" is capped
+        out = self._run(tmp_path, ["Crash in parser.",
+                                   self._INSTR + "\nThe exploit is high "
+                                   "value."])
+        self._assert_effects(out, "unknown", False, {})
+
+    def test_unknown_turn1_as_received_high(self, tmp_path):
+        out = self._run(tmp_path, ["Crash in parser.",
+                                   "Exploitability: LEVEL\nExploit "
+                                   "reliability is high."])
+        self._assert_effects(out, "exploitable", True,
+                             {self.KEY: self._value(1, 1)}, True)
+
+    def test_pure_echo_with_crcrlf_sentence_loses_medium(self, tmp_path):
+        # accepted, equal to base: the "\r\r\n" sentence is not an echo
+        # form, so its level list reads none and abstains
+        out = self._run(tmp_path, ["Heap overflow; I'd put exploitability: "
+                                   "medium for now.",
+                                   "Exploitability: LEVEL\r\n" + self._INSTR
+                                   + "\r\r\n"])
+        self._assert_effects(out, "unknown", False, {})

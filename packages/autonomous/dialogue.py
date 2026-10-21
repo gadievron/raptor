@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from core.llm.providers import LLMProvider
+from core.source.lines import split_lines
 from core.llm.task_types import TaskType
 from core.logging import get_logger
 from core.security.prompt_defense_profiles import CONSERVATIVE
@@ -32,9 +33,11 @@ logger = get_logger()
 _HISTORY_MAX_MESSAGES = 4
 _HISTORY_MAX_CHARS_PER_MESSAGE = 300
 
-# Explicit verdict parsing for _parse_crash_analysis. Two anchored
-# shapes: "exploitability: high" / "exploitable? low" (anchor first)
-# and "high exploitability" (level first, tightly adjacent). The gap
+# In-sentence verdict regexes for the free-text fallback
+# (_parse_crash_analysis_free_text; the explicit verdict LINE is
+# _VERDICT_LINE_RE below). Two shapes: "exploitability: high" /
+# "exploitable? low" (anchor first) and "high exploitability" (level
+# first, tightly adjacent). The gap
 # class deliberately excludes letters/digits so an echo of the
 # question ("how exploitable is this? (high/medium/low/none)") does
 # not match.
@@ -46,8 +49,359 @@ _VERDICT_LEVEL_FIRST_RE = re.compile(
 )
 _VERDICT_CONFIDENCE = {"high": 0.8, "medium": 0.7, "low": 0.6, "none": 0.7}
 # Whole-response keyword co-occurrence is weak evidence — verdicts
-# recovered that way carry less confidence than an explicit line.
+# recovered that way carry less confidence than an in-sentence verdict
+# matched by the regexes above.
 _FALLBACK_CONFIDENCE_PENALTY = 0.15
+
+# Turn-2 merge helpers (see analyse_crash_deeply).
+_LEVEL_RANK = {"none": 0, "low": 1, "medium": 2, "high": 3}
+# The ONLY free-text turn-2 reply that may revise an explicit turn-1
+# line: after _normalise_bare_reply, the whole reply is "Exploitability
+# is high|medium" with an optional "." or "!" (ASCII case-insensitive
+# fullmatch; no markdown, quote or fence unwrapping); upgrade only.
+_TURN2_UPGRADE_RE = re.compile(
+    r"exploitability is (high|medium)[.!]?", re.IGNORECASE | re.ASCII,
+)
+# Spaces mapped to ASCII " " before that match (TAB, NBSP, U+2000-U+200A,
+# U+202F, U+205F, U+3000); nothing else is mapped or deleted.
+_BARE_SPACES = dict.fromkeys(
+    [0x09, 0xA0, *range(0x2000, 0x200B), 0x202F, 0x205F, 0x3000], " ")
+# Echoes of the clarification prompt's verdict-line instruction that are
+# recognised as WHOLE lines (see _drop_echo_lines). Every supported form
+# is enumerated and balanced: the label "Exploitability" bare or wrapped
+# in one markdown marker (** * __ _ `), the separator outside the marker
+# ("**Exploitability**: ") or inside it ("**Exploitability:**"), the
+# placeholder "LEVEL" bare or wrapped in one marker, and optionally the
+# whole placeholder wrapped in one balanced pair (_ECHO_WRAPS). A
+# placeholder line may follow one list bullet ("- ", "* ", "+ "). The
+# sentence line (_ECHO_SENTENCE, final period optional) may follow one
+# bullet and may be wrapped whole in straight or typographic DOUBLE
+# quotes (not single quotes). Trailing spaces/TAB are allowed. Anything
+# else is not an echo form: unbalanced markers or quotes, fence
+# delimiters ("```Exploitability: LEVEL"), trailing commentary, a level
+# value, "[LEVEL]", "Exploitability Level: LEVEL", other wordings, and
+# a sentence wrapped over several lines.
+_ECHO_MARKS = ("", "**", "*", "__", "_", "`")
+_ECHO_SEPS = (":", " :", "=", " =", " -", " \u2013", " \u2014")
+# Balanced wraps around the whole placeholder (ASCII and typographic
+# double quotes, single quotes, inline code, bold).
+_ECHO_WRAPS = (("", ""), ("`", "`"), ('"', '"'), ("\u201c", "\u201d"),
+               ("'", "'"), ("\u2018", "\u2019"), ("**", "**"))
+
+
+def _echo_placeholder_pattern() -> str:
+    labels = [re.escape(m + "exploitability" + m + sep)
+              for m in _ECHO_MARKS for sep in _ECHO_SEPS]
+    labels += [re.escape(m + "exploitability" + sep + m)
+               for m in _ECHO_MARKS if m for sep in _ECHO_SEPS]
+    values = [re.escape(m + "level" + m) for m in _ECHO_MARKS]
+    core = "(?:" + "|".join(labels) + ") ?(?:" + "|".join(values) + ")"
+    return "(?:" + "|".join(
+        re.escape(a) + core + re.escape(b) for a, b in _ECHO_WRAPS) + ")"
+
+
+_ECHO_PLACEHOLDER = _echo_placeholder_pattern()
+_ECHO_SENTENCE = (
+    r"end your answer with exactly one verdict line, " + _ECHO_PLACEHOLDER
+    + r", where level is one of high, medium, low, none\.?"
+)
+_ECHO_LINE_RES = (
+    # the placeholder alone on a line (optionally one list bullet)
+    re.compile(r" {0,3}(?:[-*+] )?" + _ECHO_PLACEHOLDER + r"\.?[ \t]*",
+               re.IGNORECASE | re.ASCII),
+    # the instruction sentence itself, bare or in balanced quotes,
+    # optionally after one list bullet, final period optional
+    re.compile(
+        r" {0,3}(?:[-*+] )?(?:" + _ECHO_SENTENCE + r"|\"" + _ECHO_SENTENCE
+        + r"\"|\u201c" + _ECHO_SENTENCE + r"\u201d)[ \t]*",
+        re.IGNORECASE | re.ASCII),
+)
+
+# Explicit verdict LINE (checked per line, on the lowercased response).
+# After optional leading markdown (bullet, table pipe, heading,
+# numbering, bold/italics — NOT a "> " blockquote, which usually quotes
+# a prior report), the label "Exploitability" optionally followed by
+# "Rating" / "Assessment" / "Level", a separator (":", "=", "-", an
+# en/em dash, "|", or ":" inside bold), then EXACTLY ONE level token,
+# optionally wrapped in markdown, followed by either
+#   - end of line (optional trailing markdown / table pipe / . ! ; :), or
+#   - a sentence boundary — ". " "! " "; " ": " or a spaced dash
+#     (" - ", " – ", " — ") — and then any text (the reason).
+# Anything else right after the level — ",", "(", "?", "/", " or ",
+# another level token, a word — makes the line free text ("High, but
+# not exploitable", "High (if ASLR disabled)", "high?",
+# "High/Medium/Low/None"). Lines inside a fenced code block (a schema
+# or template echo) never count. Every repeated class is followed by
+# a disjoint literal, so matching stays linear on long runs.
+_VERDICT_MD_PREFIX = r"(?:[\s|#*_+\-]|\d{1,3}[.)])*"
+_VERDICT_LABEL = r"exploitability(?:\s+(?:rating|assessment|level))?"
+_VERDICT_LEVEL = r"(high|medium|low|none)"
+_VERDICT_END = r"[\s*_`|.!;:]*\Z"
+_VERDICT_BOUNDARY = r"[*_`]*(?:[.!;:]|\s+(?P<dash>[-\u2013\u2014]))\s+\S"
+_VERDICT_LINE_RE = re.compile(
+    _VERDICT_MD_PREFIX + _VERDICT_LABEL
+    + r"[\s*_]*[:=|\-\u2013\u2014][\s*_`]*" + _VERDICT_LEVEL
+    + r"(?:" + _VERDICT_END + r"|" + _VERDICT_BOUNDARY + r")",
+)
+# A spaced dash followed by another level token and then end of line,
+# punctuation (. ! ; : , ( ) / |) or another spaced dash is a RANGE
+# ("Low – Medium", "None - Low."), not a verdict and its reason: the
+# line is free text. A level followed by a word stays explicit: "High -
+# None of the mitigations apply" (intended) and "Low – Medium depending
+# on ASLR", which reads low (known residual).
+_VERDICT_RANGE_TAIL_RE = re.compile(
+    r"[*_`]*(?:high|medium|low|none)[*_`]*"
+    r"(?:[ \t]*(?:[.!;:,()/|]|\Z)|\s+[-\u2013\u2014]\s)",
+)
+# Fenced code blocks (a schema or template echo) never hold a verdict.
+# Approximately CommonMark (a fence opened in a list item stays open
+# until its closer even if the item ends first): an opening fence is a
+# run of >= 3 backticks or tildes, indented <= 3 spaces or inside a
+# list item, with an optional
+# info string (no backtick in a backtick fence's info string, so a
+# one-line ```span``` is not a fence). It closes on the same character,
+# at least as long, with nothing after it; an unclosed fence runs to
+# the end of the response.
+_LIST_ITEM_RE = re.compile(r"(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)+")
+
+
+def _fence_run(text: str) -> tuple[str, int, str] | None:
+    """(fence char, run length, rest) when ``text`` starts with a run of
+    >= 3 backticks or tildes, else None."""
+    char = text[:1]
+    if char not in ("`", "~"):
+        return None
+    rest = text.lstrip(char)
+    length = len(text) - len(rest)
+    return (char, length, rest) if length >= 3 else None
+
+
+# A list-item marker (possibly empty item): ends a quote's paragraph
+# when it starts the line after the quote.
+_ITEM_MARKER_RE = re.compile(r"(?:[-*+]|\d{1,9}[.)])(?:[ \t]|\Z)")
+# Leading list-item markers of a quoted line (an item may be empty).
+_ITEM_PREFIX_RE = re.compile(r"(?:(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|\Z))+")
+# Setext heading underline: turns the open paragraph into a heading.
+_SETEXT_RE = re.compile(r"(?:=+|-+)[ \t]*\Z")
+
+
+def _is_thematic_break(body: str) -> bool:
+    """CommonMark thematic break: >= 3 of one of * - _ (spaces/tabs
+    between allowed), nothing else; ``body`` is already de-indented."""
+    marks = body.replace(" ", "").replace("\t", "")
+    return (len(marks) >= 3 and marks[0] in "*-_"
+            and marks == marks[0] * len(marks))
+
+
+def _is_atx_heading(body: str) -> bool:
+    hashes = len(body) - len(body.lstrip("#"))
+    return 1 <= hashes <= 6 and body[hashes:hashes + 1] in ("", " ", "\t")
+
+
+def _opens_fence(body: str) -> tuple[str, int] | None:
+    run = _fence_run(body)
+    if run and not (run[0] == "`" and "`" in run[2]):
+        return run[0], run[1]
+    return None
+
+
+def _interrupts_paragraph(body: str, indent: int) -> bool:
+    """True when a line (``body`` de-indented by ``indent`` columns)
+    starts a block that closes an open paragraph: a thematic break, an
+    ATX heading, a fence or a blockquote. (A list item inside the quote
+    starts an item paragraph, so it leaves a paragraph open either way;
+    after the quote, any list item ends it — see ``_explicit_verdict``.)
+    """
+    if indent > 3:
+        return False
+    return bool(_is_thematic_break(body) or _is_atx_heading(body)
+                or _opens_fence(body) or body.startswith(">"))
+
+
+def _quote_content(body: str) -> tuple[str, int]:
+    """Strip blockquote markers (each ">" plus one optional space) from
+    a quote line; return the content de-indented and its indent.
+
+    A nested ">" is accepted after ANY number of spaces (CommonMark
+    allows at most 3; with 4+ the rest is indented code). Known
+    residual: '>     > x' is read as a nested quote, which can only hide
+    a following explicit line (the parse then equals main's)."""
+    i, n = 0, len(body)
+    while i < n and body[i] == ">":
+        i += 1
+        if i < n and body[i] in (" ", "\t"):
+            i += 1
+        j = i
+        while j < n and body[j] == " ":
+            j += 1
+        if j < n and body[j] == ">":
+            i = j
+    rest = body[i:]
+    content = rest.lstrip(" ")
+    return content, len(rest) - len(content)
+
+
+def _explicit_verdict(response_lower: str) -> str | None:
+    r"""Return the level of the first explicit verdict line in a
+    lowercased response, or None when it has none.
+
+    Lines are split on "\n" only (a trailing "\r" is dropped), so NEL,
+    form feed or U+2028 inside a line never start a new line. Lines
+    inside a fenced code block or a blockquote never count — including
+    a blockquote's lazy continuation lines. Approximately as in
+    CommonMark, a line is a lazy continuation only when the quote's last
+    line left an open paragraph (not a fence, heading, thematic break,
+    setext underline or empty ">" line) and the line itself cannot end
+    it: a thematic break, ATX heading, fence, blockquote, or ANY list
+    item — even empty or numbered other than 1 (markdown-it's rule,
+    looser than CommonMark's "1." / non-empty condition).
+
+    Known residuals (decided):
+    - a quote nested in a list item ("- > ...") is not tracked for lazy
+      continuation, so its lazy line can be read as explicit;
+    - quote nesting depth is not tracked: a depth-2 unclosed fence or a
+      lone "===" decides whether the depth-1 paragraph is open;
+    - a nested ">" after 4+ spaces ('>     > x') counts as a nested
+      quote (see _quote_content) — can only hide an explicit line;
+    - a spaced-dash range followed by a word ("Low – Medium depending
+      on ASLR") reads as its first level;
+    - a retraction on a later line ("Exploitability: High" ... "Update:
+      ... not exploitable") does not override the first explicit line.
+
+    Precedence: the FIRST explicit line wins, so an earlier copied,
+    quoted-in-prose or injected verdict line beats the model's final
+    one. Explicit formatting shows format, not provenance: it is not a
+    prompt-injection defence (a model induced to print a clean verdict
+    line, e.g. by target output, is read like any other).
+    """
+    fence: tuple[str, int] | None = None
+    in_list = False
+    in_quote = False
+    quote_para = False
+    quote_fence: tuple[str, int] | None = None
+    for line in split_lines(response_lower):
+        line = line.rstrip("\r")  # every trailing CR, as before split_lines
+        expanded = line.expandtabs(4)
+        body = expanded.lstrip(" ")
+        indent = len(expanded) - len(body)
+        if fence is not None:
+            run = _fence_run(body)
+            if (run and (indent <= 3 or in_list)
+                    and run[0] == fence[0]
+                    and run[1] >= fence[1]
+                    and not run[2].strip(" \t")):
+                fence = None
+            continue
+        if not body.strip():
+            in_quote = False
+            continue
+        marker = _LIST_ITEM_RE.match(body)
+        if marker:
+            in_list = True
+        elif indent == 0:
+            in_list = False
+        if indent <= 3 and body.startswith(">"):
+            if not in_quote:
+                quote_para, quote_fence = False, None
+            in_quote = True
+            content, cindent = _quote_content(body)
+            if quote_fence is not None:
+                run = _fence_run(content)
+                if (run and cindent <= 3 and run[0] == quote_fence[0]
+                        and run[1] >= quote_fence[1]
+                        and not run[2].strip(" \t")):
+                    quote_fence = None
+                quote_para = False
+            elif not content.strip():
+                quote_para = False
+            elif quote_para and cindent <= 3 and _SETEXT_RE.match(content):
+                quote_para = False  # setext underline: now a heading
+            elif quote_para and not _interrupts_paragraph(content, cindent):
+                pass  # paragraph continues inside the quote
+            elif cindent > 3:
+                quote_para = False  # indented code inside the quote
+            elif (opened := _opens_fence(content)) is not None:
+                quote_fence, quote_para = opened, False
+            elif _is_thematic_break(content) or _is_atx_heading(content):
+                quote_para = False
+            else:
+                inner = _ITEM_PREFIX_RE.match(content)
+                rest = content[inner.end():].lstrip(" \t") if inner else content
+                quote_para = bool(rest) and not (
+                    _opens_fence(rest) or _is_atx_heading(rest)
+                    or _is_thematic_break(rest))
+            continue
+        if in_quote:
+            in_quote = False
+            if quote_para and not (
+                    _interrupts_paragraph(body, indent)
+                    or (indent <= 3 and _ITEM_MARKER_RE.match(body))):
+                in_quote = True
+                continue  # lazy continuation of the quoted paragraph
+        if marker or indent <= 3 or in_list:
+            opened = _opens_fence(body[marker.end():] if marker else body)
+            if opened:
+                fence = opened
+                continue
+        m = _VERDICT_LINE_RE.match(line)
+        if m and not (m.group("dash")
+                      and _VERDICT_RANGE_TAIL_RE.match(line, m.end() - 1)):
+            return m.group(1)
+    return None
+
+
+def _drop_echo_lines(text: str) -> str:
+    """Drop whole lines that are an allowlisted echo of the clarification
+    prompt's verdict-line instruction (_ECHO_LINE_RES: the sentence, or
+    the placeholder alone). A line is tested without at most one
+    terminal CR. Other lines — fence delimiters and quote markers
+    included — are kept verbatim, in order, never joined. Dropping a line
+    CAN change how the remaining lines parse as markdown (an echo line
+    may end a quote-opened fence), so the result must only ever reach the
+    free-text reader, never _explicit_verdict. A line ending in two or
+    more CRs is not an echo form; a kept instruction sentence then votes
+    with its own level list ("... None."), as before this rule existed
+    (accepted)."""
+    kept = [line for line in text.split("\n")  # line-model: the reply is returned verbatim minus whole echo lines (terminal CR and final newline kept); split_lines would drop both
+            if not any(r.fullmatch(line[:-1] if line.endswith("\r") else line)
+                       for r in _ECHO_LINE_RES)]
+    return "\n".join(kept)
+
+
+def _cap_after_echo_drop(turn1: str, as_received: str,
+                         reduced: str) -> tuple[str, bool]:
+    """Turn-2 level after an echo line was dropped (free-text turn 1, no
+    explicit turn-2 line), and whether it may earn the agreement boost.
+
+    ``reduced`` is the free-text read of the reply without its echo
+    lines, ``as_received`` that of the reply as received, ``turn1`` the
+    turn-1 level; "unknown" ranks below the genuine level "none".
+    Nothing readable after the drop keeps turn 1. Otherwise the level is
+    min(reduced, max(turn1, as_received)): an upper bound only — the
+    result never exceeds max(turn1, as_received), may be lower than
+    turn 1, and may exceed the as-received read through turn 1. The
+    boost needs reduced == turn1, not lowered by the cap, and supported
+    by the as-received read (reduced <= as_received)."""
+    rank = _LEVEL_RANK.get
+    if reduced not in _LEVEL_RANK:
+        return turn1, False
+    bound = max(rank(turn1, -1), rank(as_received, -1))
+    if rank(reduced) <= bound:
+        return reduced, (reduced == turn1
+                         and rank(reduced) <= rank(as_received, -1))
+    capped = [lv for lv, r in _LEVEL_RANK.items() if r == bound]
+    return (capped[0] if capped else turn1), False
+
+
+def _normalise_bare_reply(text: str) -> str | None:
+    """Whole turn-2 reply prepared for _TURN2_UPGRADE_RE, or None when it
+    holds a line break or whitespace outside the mapped set."""
+    if text.startswith("\ufeff"):
+        text = text[1:]
+    text = text.translate(_BARE_SPACES).strip(" \r\n")
+    if any(c.isspace() and c != " " for c in text):
+        return None
+    return re.sub(" +", " ", text)
 
 
 def _render_context_mapping(value: Mapping[str, Any] | str) -> str:
@@ -180,6 +534,7 @@ class MultiTurnAnalyser:
         # Parse initial response
         initial_analysis = self._parse_crash_analysis(response)
         analysis_result.update(initial_analysis)
+        initial_explicit = _explicit_verdict(response.lower()) is not None
         turns_used = 1
 
         # Turn 2: Clarify exploitability
@@ -203,19 +558,68 @@ class MultiTurnAnalyser:
                 "response": response[:200] + "...",
             })
 
-            # Update analysis with clarifications. The confidence boost
-            # is earned only when the clarification AGREES with the
-            # initial verdict — pre-fix the +0.2 was unconditional, so
-            # a turn that reversed the verdict still raised confidence.
-            refined = self._parse_crash_analysis(response)
-            refined_level = refined.get("exploitability", "unknown")
+            # Update analysis with clarifications.
+            # - The explicit check runs on the reply as received. Without
+            #   an explicit line, the level is the free-text read of the
+            #   reply minus allowlisted echo lines of the prompt's
+            #   instruction (_drop_echo_lines). After a free-text turn 1,
+            #   when a line was dropped, that read is capped by
+            #   _cap_after_echo_drop at max(turn-1 level, the read of the
+            #   reply as received): an upper bound. The instruction's own
+            #   level list does not vote in the reduced read, but it is
+            #   part of the as-received read, so an echoed sentence's
+            #   "None" can hold a genuinely higher reply at turn 1
+            #   (intended: turn 1 stands).
+            #   Dropping lines can expose explicit-line syntax; the
+            #   explicit parser only ever sees the reply as received.
+            #   Other echoes (embedded in prose, paraphrased) are ordinary
+            #   text and may read, e.g., none by co-occurrence (accepted
+            #   residual).
+            # - After a free-text turn 1, that read replaces the level.
+            #   After an explicit turn 1, only an explicit turn-2 line
+            #   does — never a free-text read (the polarity-blind "not
+            #   exploitable", an in-sentence "high exploitability" aside,
+            #   co-occurrence) — except that a whole reply equal, after
+            #   _normalise_bare_reply, to "Exploitability is high|medium"
+            #   may move the level UP. Longer prose ("Attacker controls
+            #   RIP; exploitability is high. Confidence 90%") and
+            #   annotated lines ("Exploitability: High (90% confidence)")
+            #   do not revise an explicit turn 1 (accepted residual).
+            # - The +0.2 boost is earned only when the clarification's
+            #   level is USED and AGREES with turn 1; an unused reply or
+            #   a bare upgrade earns none, and after an echo drop the
+            #   level must also be supported by the reply as received
+            #   (_cap_after_echo_drop).
             initial_level = analysis_result["exploitability"]
-            if refined_level != "unknown":
+            refined_explicit = _explicit_verdict(response.lower()) is not None
+            boost_ok = True
+            if refined_explicit:
+                refined = self._parse_crash_analysis(response)
+            else:
+                reduced = _drop_echo_lines(response)
+                refined = self._parse_crash_analysis_free_text(reduced)
+                if reduced != response and not initial_explicit:
+                    level, boost_ok = _cap_after_echo_drop(
+                        initial_level,
+                        self._parse_crash_analysis_free_text(
+                            response)["exploitability"],
+                        refined["exploitability"])
+                    refined = {"exploitability": level}
+            refined_level = refined.get("exploitability", "unknown")
+            used = refined_level != "unknown" and (
+                refined_explicit or not initial_explicit)
+            if used:
                 analysis_result["exploitability"] = refined_level
-                if refined_level == initial_level:
-                    analysis_result["confidence"] = min(
-                        1.0, analysis_result["confidence"] + 0.2,  # type: ignore[operator]
-                    )
+            elif initial_explicit and not refined_explicit:
+                bare = _normalise_bare_reply(response)
+                upgrade = bare and _TURN2_UPGRADE_RE.fullmatch(bare)
+                if upgrade and (_LEVEL_RANK[upgrade.group(1).lower()]
+                                > _LEVEL_RANK.get(initial_level, 3)):
+                    analysis_result["exploitability"] = upgrade.group(1).lower()
+            if used and boost_ok and refined_level == initial_level:
+                analysis_result["confidence"] = min(
+                    1.0, analysis_result["confidence"] + 0.2,  # type: ignore[operator]
+                )
             turns_used += 1
 
         # Turn 3: Validate with memory. The confidence boost is
@@ -442,6 +846,13 @@ class MultiTurnAnalyser:
         ``history`` carries the prior dialogue turns; they are rendered
         (defanged and bounded) into a ``dialogue-history`` block so the
         model sees what was already said.
+
+        The prompt asks for exactly one ``Exploitability: LEVEL`` line:
+        after an explicit turn-1 verdict, only an explicit turn-2 line
+        (or a bare "Exploitability is high|medium" reply, upgrade only)
+        revises the level. The placeholder is a word, not a level list,
+        so an echo of the instruction carries no level; whole-line echoes
+        are dropped before the free-text read (see _drop_echo_lines).
         """
         system = (
             "Based on the initial analysis, clarify exploitability.\n\n"
@@ -454,7 +865,9 @@ class MultiTurnAnalyser:
             "2. Can an attacker control the crash value/data?\n"
             "3. What are the constraints on exploitation?\n"
             "4. What is your confidence level (0-100%) in the exploitability assessment?\n\n"
-            "Be specific and provide clear reasoning."
+            "Be specific and provide clear reasoning. "
+            'End your answer with exactly one verdict line, "Exploitability: '
+            'LEVEL", where LEVEL is one of High, Medium, Low, None.'
         )
         blocks = []
         binary_info = getattr(crash_context, 'binary_info', None)
@@ -550,7 +963,24 @@ class MultiTurnAnalyser:
         )
 
     def _parse_crash_analysis(self, response: str) -> dict:
-        """Parse LLM response for crash analysis."""
+        """Parse LLM response for crash analysis.
+
+        An explicit verdict line (``_explicit_verdict``) sets the
+        exploitability level. Without one the result is exactly the
+        free-text read of ``_parse_crash_analysis_free_text`` — the
+        polarity-blind "not exploitable" phrase must never override an
+        explicit line ("Exploitability: HIGH" plus "calling this not
+        exploitable would be wrong" read as none before).
+        """
+        analysis = self._parse_crash_analysis_free_text(response)
+        level = _explicit_verdict(response.lower())
+        if level:
+            analysis["exploitability"] = level
+            analysis["confidence"] = _VERDICT_CONFIDENCE[level]
+        return analysis
+
+    def _parse_crash_analysis_free_text(self, response: str) -> dict:
+        """Free-text crash-analysis read (no explicit verdict line)."""
         analysis = {
             "vulnerability_type": "unknown",
             "exploitability": "unknown",
@@ -569,10 +999,14 @@ class MultiTurnAnalyser:
         elif "null pointer" in response_lower:
             analysis["vulnerability_type"] = "null_deref"
 
-        # Detect exploitability. Explicit verdict line first — pre-fix
-        # the whole response was scanned for keyword co-occurrence with
-        # 'high' checked first, so "Exploitability: LOW ... the heap
-        # address is high" parsed as high@0.8.
+        # Detect exploitability. Free-text order (unchanged from before
+        # the explicit-line rule): the "not exploitable" phrase, then the
+        # in-sentence regexes, then co-occurrence. The explicit verdict
+        # LINE is applied by _parse_crash_analysis. (Before the
+        # in-sentence regexes, the whole response was scanned for
+        # keyword co-occurrence with 'high' checked first, so
+        # "Exploitability: LOW ... the heap address is high" parsed as
+        # high@0.8.)
         if "not exploitable" in response_lower:
             analysis["exploitability"] = "none"
             analysis["confidence"] = _VERDICT_CONFIDENCE["none"]
