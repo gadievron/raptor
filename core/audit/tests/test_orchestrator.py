@@ -4461,6 +4461,11 @@ class TestSessionObservations:
             body="maybe bof", hypothesis="strcpy overflow",
             review_result={"status": "suspicious", "body": "maybe bof"},
         )
+        # A refutation is a channel that looked and answered: the
+        # record carries the probative semgrep run (an empty record —
+        # the G2 gate speaking, no tool at all — earns no
+        # "[tool-refuted]"; see test_silence_admissibility).
+        outcome.tools_dispatched = {"semgrep"}
         _accumulate_observations(
             obs_list, outcome, {"file": "a.c", "name": "vuln"},
             sweep_pre_status="finding",
@@ -5403,6 +5408,11 @@ class TestSageObservationPathway:
             body="maybe bof", hypothesis="strcpy overflow",
             review_result={"status": "suspicious", "body": "maybe"},
         )
+        # SAGE stores tool_refutation as a MECHANICAL verdict, so the
+        # demotion must carry a channel that refuted (a probative
+        # semgrep run); with no tool, or only errored/inconclusive
+        # ones, nothing is stored (see test_silence_admissibility).
+        outcome.tools_dispatched = {"semgrep"}
         gap = {"file": "a.c", "name": "vuln"}
 
         with _patch("core.audit.orchestrator._sage_store_observation") as mock_store:

@@ -2649,6 +2649,91 @@ def _context_staleness(
     return None
 
 
+#: Body prefixes a silence-derived clean starts with — a trace a
+#: PRE-FIELD row (no ``clean_basis``) can carry of that derivation:
+#: the gate-demotion markers the resolver keeps (it prepends nothing
+#: to a gate-demoted row), the marker it prepends to a resolved plain
+#: suspicious, the sarif-clean gate's body, and the in-loop
+#: suspicious-demotion gate's body (that gate, the class-blind
+#: ancestor of gate resolution, has since been removed, so only legacy
+#: rows carry it). Matched at the START of the body only: these are
+#: pipeline-written prefixes, while model prose that merely quotes a
+#: marker mid-body is a review.
+_SILENCE_CLEAN_BODY_PREFIXES = (
+    "[gate violation:",
+    "[self-contradiction:",
+    "[suspicious-resolution:",
+    "[sarif-clean gate]",
+    "[suspicious-demotion:",
+)
+#: verdict_reuse.outcome_from_entry's body prefix: a pre-field row that
+#: carries it is a reuse RE-JOURNAL, whose original basis (and body,
+#: behind the prefix or an index offload marker) is out of sight.
+_REUSED_BODY_PREFIX = "[reused:"
+
+
+def _silence_derived_clean(entry, hydrate_fn=None) -> str | None:
+    """Why a clean entry may not be imported at $0 on its basis, or
+    ``None``.
+
+    Stamped rows answer from the structured ``clean_basis``: the
+    silence-derived bases and ``unknown`` are refused
+    (``core.coverage.journal.CLEAN_BASIS_NOT_REUSABLE``). Pre-field
+    rows carry no basis; one is refused (re-review once — the fresh
+    row is stamped) when it shows any sign its basis is out of sight
+    or silence-derived:
+
+    * a reuse re-journal (``reused`` flag or ``[reused:`` body) — the
+      row it imported is hidden behind the prefix;
+    * body offloaded and not hydratable;
+    * a silence-derived body prefix (``_SILENCE_CLEAN_BODY_PREFIXES``);
+    * a dispatch record — such a row's basis cannot be told from a
+      resolution or propagation (a model clean decided in a refinement
+      round also carries one, via the merged record; re-reviewing it
+      once is the accepted cost).
+
+    A pre-field clean with none of these (e.g. a propagated clean that
+    kept the caller's own short prose) is imported once per completed
+    run; the import carries basis ``unknown`` into its re-journal
+    (``outcome_from_entry``), so the next run after that re-journal is
+    merged into the project index refuses it. Known limitation: a run
+    interrupted before its merge, a resume of it, or concurrent runs
+    can each import the same row again — but never launder it into
+    ``verdict`` (every import re-journals ``unknown``).
+    """
+    if getattr(entry, "verdict", None) != "clean":
+        return None
+    basis = getattr(entry, "clean_basis", None)
+    if basis:
+        from core.coverage.journal import CLEAN_BASIS_NOT_REUSABLE
+        if basis in CLEAN_BASIS_NOT_REUSABLE:
+            return f"silence-derived clean ({basis})"
+        return None
+    body = getattr(entry, "body", "") or ""
+    if getattr(entry, "reused", None) or body.startswith(
+            _REUSED_BODY_PREFIX):
+        return (
+            "silence-derived clean? (pre-field reuse re-journal — "
+            "original basis unknown)"
+        )
+    if not body and getattr(entry, "body_offload", None):
+        hydrated = hydrate_fn(entry) if hydrate_fn is not None else None
+        body = (getattr(hydrated, "body", "") or "") if hydrated else ""
+        if not body:
+            return (
+                "silence-derived clean? (pre-field row, body offloaded "
+                "— basis unknown)"
+            )
+    if body.startswith(_SILENCE_CLEAN_BODY_PREFIXES):
+        return "silence-derived clean (pre-field row, gate-resolution body)"
+    if getattr(entry, "tools_dispatched", None):
+        return (
+            "silence-derived clean? (pre-field row carrying a dispatch "
+            "record)"
+        )
+    return None
+
+
 def _reuse_ineligibility(
     entry,
     key: str,
@@ -2674,6 +2759,12 @@ def _reuse_ineligibility(
     * ``provisional`` — a cadence-tick promotion the producing run
       never finalized (interrupted before the confirming post-loop
       pass): unsettled, so it is re-reviewed rather than imported.
+    * ``clean_basis`` — a clean minted from tool SILENCE (gate
+      resolution, confidence propagation, the sarif-clean gate) is not
+      a review: it is re-reviewed rather than imported, so a producer
+      fix also reaches projects whose source never changes. Pre-field
+      cleans are screened (:func:`_silence_derived_clean`): traced rows
+      refused, traceless ones imported at most once per completed run.
     * model — when THIS run pins an explicit model and the entry
       records one, they must match; a verdict from a different model
       is not this run's verdict. Runs on the default/session model
@@ -2711,6 +2802,9 @@ def _reuse_ineligibility(
         # confirming post-loop pass — not a settled verdict; the
         # function re-reviews and re-earns.
         return "provisional verdict"
+    silence = _silence_derived_clean(entry, hydrate_fn)
+    if silence is not None:
+        return silence
     entry_model = getattr(entry, "model", None)
     if current_model and entry_model:
         # Compare by bare identity: the journal records the resolved
@@ -2758,6 +2852,8 @@ def _reuse_block_class(reason: str) -> str:
         return "context_reduced"
     if reason.startswith("provisional"):
         return "provisional"
+    if reason.startswith("silence-derived"):
+        return "silence_derived_clean"
     if reason.startswith("model changed"):
         return "model_changed"
     if reason.startswith("strategy set"):

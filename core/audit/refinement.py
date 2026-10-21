@@ -155,8 +155,11 @@ def merge_outcomes(original: Any, refined: Any) -> Any:
     The mechanical dispatch record (tools_dispatched / tools_errored /
     tools_skipped) survives the merge the same way: both rounds
     describe the SAME function, so the union is true whichever verdict
-    wins. Dropping it made gate resolution read "no covering channel
-    ever ran" (dark) for a function whose tools demonstrably looked —
+    wins. tools_inconclusive is not a plain union: it keeps only the
+    channels inconclusive in every round that dispatched them (a
+    channel probative in either round stays probative). Dropping it
+    made gate resolution read "no covering channel ever ran" (dark)
+    for a function whose tools demonstrably looked —
     and erased the did-not-look skips that keep phantom coverage out
     of class-coverage credit. A channel dispatched in either round did
     look, so it leaves the merged skip set.
@@ -179,18 +182,39 @@ def merge_outcomes(original: Any, refined: Any) -> Any:
             except AttributeError:
                 pass  # duck-typed outcome without the field
         merged: dict[str, set] = {}
-        for attr in ("tools_dispatched", "tools_errored", "tools_skipped"):
+        for attr in (
+            "tools_dispatched", "tools_errored", "tools_skipped",
+            "tools_inconclusive",
+        ):
             merged[attr] = (
                 set(getattr(original, attr, None) or set())
                 | set(getattr(refined, attr, None) or set())
             )
         merged["tools_skipped"] -= merged["tools_dispatched"]
+        # A channel probative in EITHER round (looked, answered, did
+        # not error) stays probative: only a channel inconclusive in
+        # every round that dispatched it may not refute.
+        for o_ in (original, refined):
+            merged["tools_inconclusive"] -= (
+                set(getattr(o_, "tools_dispatched", None) or set())
+                - set(getattr(o_, "tools_inconclusive", None) or set())
+                - set(getattr(o_, "tools_errored", None) or set())
+            )
         for attr in ("tools_dispatched", "tools_errored"):
             if merged[attr]:
                 try:
                     setattr(winner, attr, merged[attr])
                 except AttributeError:
                     pass  # duck-typed outcome without the field
+        # Corrected in both directions like tools_skipped below: the
+        # winner's own stale entry clears when the other round was
+        # probative for that channel.
+        inconclusive = merged["tools_inconclusive"]
+        if inconclusive or getattr(winner, "tools_inconclusive", None):
+            try:
+                winner.tools_inconclusive = inconclusive or None
+            except AttributeError:
+                pass  # duck-typed outcome without the field
         # tools_skipped is corrected in BOTH directions: a channel the
         # union shows dispatched must also leave the WINNER'S own
         # stale skip set (a channel left in both sets reads as looked
@@ -382,6 +406,11 @@ def _describe_tool_result(
         return f"confirmed the hypothesis ({receipt})"
     if tool in (getattr(outcome, "tools_errored", None) or set()):
         return "errored or timed out — did not meaningfully run"
+    if tool in (getattr(outcome, "tools_inconclusive", None) or set()):
+        # Looked, but every answer was inconclusive (a keyword
+        # regex's silence, a capped match, an unwitnessed scan): "no
+        # matches" would read as a refutation it cannot make.
+        return "ran inconclusive — its silence neither confirms nor refutes"
 
     if evidence_index is None:
         return "dispatched but no result captured"

@@ -64,7 +64,7 @@ full flag table.
 | `--no-validate` | Skip the /validate post-pass |
 | `--include-kinds <list>` | Item kinds beyond functions/methods (default: `top_level`, `macro`, `global`). Positive list overrides the defaults; `-kind` opts one out; `none` restricts to functions/methods |
 | `--batch-sloc-threshold <N>` | Batch functions at or under this SLOC per file into combined reviews (default: 15; 0 disables) |
-| `--no-verdict-reuse` | Disable cross-run verdict reuse (importing prior-run journal verdicts for unchanged functions) |
+| `--no-verdict-reuse` | Disable cross-run verdict reuse (importing prior-run journal verdicts for unchanged functions; cleans inferred from tool silence are re-reviewed, not imported; see Execution Model) |
 | `--schedule {cost,priority}` | Parallel review ordering: `cost` packs predicted-longest reviews first, `priority` reviews most promising first |
 | `--prior-journal <run-dir>` | Run dir whose review journal feeds prior finding-grade claims into review context (repeatable; used by `/agentic --gap-audit`) |
 | `--prior-claims <N>` | Max prior finding-grade claims injected per function (default 3; 0 disables) |
@@ -120,6 +120,28 @@ go through:
 This achieves substantially higher precision than self-critique loops:
 LLM self-refinement without tool feedback is known to *increase* false
 positives, which is why gate G3 below prohibits it.
+
+A tool's **silence** refutes only when it is admissible: the run
+completed probatively (an `inconclusive` outcome — vacuous SAT, a
+capped match, an unwitnessed scan, an undecidable invariant, a
+hypothesis-keyword rule's zero-match, a curated rule marked
+`# raptor: confirm-only` — stays in the dispatch record but is booked
+in `tools_inconclusive` and never refutes), the rule can adjudicate the
+claim, and the silence covered the function (file-level SARIF presence
+and a SARIF result with no placeable line never do).  An evidence-free
+claim with no admissible refutation resolves `dark` (exported for
+/validate), not `clean`.  A clean inferred from silence (gate
+resolution, confidence propagation, the sarif-clean gate) is journaled
+with `clean_basis`, is never graded tool-backed, and is re-reviewed
+rather than imported by cross-run verdict reuse; a clean journaled
+before `clean_basis` existed is re-reviewed when its row shows any
+sign of silence derivation or a hidden basis, and otherwise imported at
+most once per completed run (it re-journals with basis `unknown`,
+which the next run re-reviews).  Known limitation: "once" holds only
+after the importing run merges into the project index — a run
+interrupted before the merge, a resume of it, or concurrent runs can
+each import the same pre-field clean again; every such import still
+re-journals `unknown`, so the basis is never laundered.
 
 The refutation direction is guarded the same way.  A reviewer cannot
 talk a mechanical detection away: when a detector receipt (for example
@@ -416,8 +438,9 @@ In order of preference when a run may exceed an hour:
    margin and concludes **gracefully** inside it — in-flight reviews
    harvested, journal and report written, lifecycle `completed` with a
    note stating how many gaps remain.  Continue in a new run: cross-run
-   verdict reuse imports the completed verdicts at $0 and reviews only
-   the remainder.  `--no-supervisor-bound` opts out; misdetection is
+   verdict reuse imports the completed reviewed verdicts at $0 (cleans
+   inferred from tool silence re-review; see Execution Model) and
+   reviews only the remainder.  `--no-supervisor-bound` opts out; misdetection is
    safe in both directions (a false positive self-bounds gracefully; a
    false negative dies at the cap and `resume` recovers it).
 
@@ -452,7 +475,8 @@ report covers all segments (segment provenance noted in the report and
 run metadata).
 
 Guards: a **completed** run is refused — continue those in a new run
-(cross-run verdict reuse imports the verdicts at $0); a run whose
+(cross-run verdict reuse imports the reviewed verdicts at $0;
+silence-derived cleans re-review, see Execution Model); a run whose
 recorded worker is still alive is refused (it is actually in flight);
 and the **staleness gate** re-verifies every hashed journal verdict
 against the target tree — any drift refuses the resume with the drifted

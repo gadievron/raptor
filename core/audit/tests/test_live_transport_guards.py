@@ -1657,6 +1657,7 @@ class TestPhpSurfaceFences:
         assert _callers_of(calls, "run_semgrep_sweep_guarded") == {
             "test_vulnerable_snippet_confirms",
             "test_sanitized_snippet_refutes",
+            "test_attr_rule_silence_never_refutes_body_xss",
         }
 
     def test_dark_verify_interpreter_pins(self) -> None:

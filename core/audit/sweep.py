@@ -657,7 +657,12 @@ def _sarif_result_in_range(
     region = loc.get("physicalLocation", {}).get("region", {})
     rline = region.get("startLine", 0)
     if not rline:
-        return True
+        # Unplaceable (no region, startLine 0, offset-only region) is
+        # in NO function's range — the single policy _match_in_range
+        # states. Placing it everywhere let one line-less result
+        # corroborate (and attach evidence to) every function in the
+        # file.
+        return False
     if line_end:
         return line_start <= rline <= line_end
     return rline >= line_start
@@ -819,7 +824,8 @@ def run_semgrep_sweep(
             selected the pattern (from hypothesis_to_semgrep_rule_keyed).
             Enables the negative-control check — a rule that also matches
             the keyword's guarded fixture is a presence detector and is
-            capped at "inconclusive".
+            capped at "inconclusive" — and makes the rule confirm-only:
+            its scanned zero-match is "inconclusive", never "refuted".
         language: The file's canonical language when the caller already
             knows it (inventory-stamped; content-probed for extensions
             no table maps). When the probe licenses a semgrep language
@@ -1156,7 +1162,35 @@ def run_semgrep_sweep(
             )
             if expanded is not None:
                 return expanded
-            if is_confirm_only_rule(rule_config):
+            if rule_keyword and not is_confirm_only_rule(rule_config):
+                # Hypothesis-keyword rules (the per-hypothesis table
+                # and mechanical-check patterns — keyword->regex
+                # presence patterns) are confirm-only by
+                # construction: a scanned zero-match answers "not this
+                # regex", never "not this class". The signal is
+                # RAPTOR's own (the table keyword travels with the
+                # rule), not an author opt-out, so it carries none of
+                # the refutation-evasion risk the curated-path
+                # restriction on the marker guards against.
+                capped_reason = (
+                    "keyword rule: a scanned zero-match answers only "
+                    "the hypothesis-keyword regex, not the dispatched "
+                    "class — silence stays inconclusive (dark), never "
+                    "refuted"
+                )
+                logger.info(
+                    "semgrep sweep capped at inconclusive for %s:%s "
+                    "— %s",
+                    file_path, function_name, capped_reason,
+                )
+                outcome = "inconclusive"
+                witness_cov = Coverage(
+                    covered=None,
+                    tier="scanned-witness",
+                    reason=capped_reason,
+                    unknown_policy=UNKNOWN_INCONCLUSIVE,
+                )
+            elif is_confirm_only_rule(rule_config):
                 # Confirm-only rules adjudicate a sub-shape NARROWER
                 # than the class they dispatch for, so a scanned
                 # zero-match answers "not this sub-shape", never "not

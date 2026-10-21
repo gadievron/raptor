@@ -279,6 +279,7 @@ def import_validation_results(
     # is ever written back (see amendment §1 D3 + A5).
     from core.annotations import is_human_grade
     from core.annotations.storage import annotation_file_mtime, read_annotation
+    from core.coverage.journal import CLEAN_BASIS_VERDICT
 
     from .journal import (
         VALID_VERDICTS,
@@ -575,6 +576,11 @@ def import_validation_results(
             producer=(
                 (prior_entry.producer or "audit") if prior_entry
                 else "validate"
+            ),
+            # A /validate correction to clean is a ruling, not a
+            # silence inference — stamped like every live clean row.
+            clean_basis=(
+                CLEAN_BASIS_VERDICT if new_verdict == "clean" else None
             ),
         )
         try:
