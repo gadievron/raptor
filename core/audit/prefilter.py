@@ -16,9 +16,11 @@ tool results.
 from __future__ import annotations
 
 import ast
+import bisect
 import logging
 import re
 import textwrap
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -3012,6 +3014,780 @@ def _check_rust_patterns(
         result.has_dangerous_apis = True
 
 
+# php-sql-injection: monotonic over the historical rule.
+#
+# Every hit the historical rule produces (a mysql_query / mysqli_query /
+# pg_query call and a variable on a line, unless the function anywhere
+# holds prepare( / bind_param / pg_query_params) is always reported:
+# nothing here can withhold it, so a lexing disagreement with PHP can
+# only lose an ADDITIONAL hit.  Sanitised procedural calls the
+# historical rule flags stay flagged (its false positives are unchanged).
+#
+# Additions, from one lexed pass over the function, judged per sink:
+# - method/static sinks ($pdo->query, $mysqli->real_query, $db->exec,
+#   DB::select ...): their SQL argument (the first) holds an SQL-shaped
+#   literal and a variable reaches it (code, "..." interpolation, a
+#   backtick operand, or an argument list cut by a statement bound);
+# - procedural sinks the historical rule misses (other executors such as
+#   mysqli_real_query / pg_send_query / sqlsrv_query / oci_parse, any
+#   case, a variable only on a continuation line), and sinks its
+#   function-wide guard silenced but whose own statement holds no guard:
+#   a variable anywhere in the call.
+# A sink in a statement holding a prepare( / bind_param( /
+# pg_query_params( call adds nothing (call-shaped tokens, a subset of
+# main's; the narrower scope only ever makes the rule fire more than the
+# historical function-wide guard).  Main's own hits never pass through
+# this guard.
+#
+# Additions are dropped as false positives only on proof: a complete
+# argument list; for procedural executors a plain-variable connection
+# argument and variable-free extra arguments (sqlsrv bind parameters
+# excepted), for method and static sinks only the first argument is
+# read; no sink nested in the call; and a `.`-concatenated SQL argument
+# whose every operand is a variable-free literal, an ASCII PHP number, a
+# named constant (CONST, \\Ns\\CONST, self::X, Cls::X), an
+# intval/floatval/boolval call (unless the source declares or imports
+# one of those names), an (int)/(float)/(bool) cast (see
+# _php_sql_cast_operand for exactly what it inspects and the accepted
+# residuals), or $x->quote(...) on the sink's own
+# receiver when no literal piece holds a quote character or a
+# backslash.  Escape functions (*_escape_string, addslashes) never
+# prove.  Names match case-insensitively on ASCII only.
+#
+# SQL shape: a literal that STARTS with an SQL verb (select, insert,
+# update, delete, replace, truncate; drop/alter/create/show/describe/
+# explain/call/with only with their SQL object), or a WHERE comparison
+# / ORDER BY / GROUP BY fragment.
+#
+# Bounded gaps (additions only): a method sink fed by a variable built
+# elsewhere (`$pdo->query($sql)`), sprintf-built SQL without an
+# SQL-shaped literal, ->prepare("... $x") (not a sink), dynamic or
+# callback executor calls, and code a lexing disagreement hides.  The
+# lexer follows PHP for `?>`, `{$...}` interpolation and heredoc labels;
+# a `#[...]` attribute is read as PHP 8 code only when the rest of its
+# line has balanced quotes, otherwise as a PHP 7 `#` comment, which can
+# hide a method sink PHP 8 runs (an FN in the additions only).
+_PHP_SQL_SINK_RE = re.compile(
+    r'(?P<proc>\b(?:mysqli_(?:real_|multi_)?query'
+    r'|mysql_(?:unbuffered_|db_)?query|pg_(?:send_)?query|sqlsrv_query'
+    r'|db2_exec|oci_parse))\s*\('
+    r'|->\s*(?P<meth>query|exec|multi_query|real_query)\s*\('
+    r'|\bDB::(?P<stat>raw|select|insert|update|delete|statement'
+    r'|unprepared)\s*\(',
+    re.IGNORECASE | re.ASCII,
+)
+# The historical rule (pre-change main), kept verbatim: a line with one of
+# these calls and a variable is a hit unless the function anywhere holds
+# a guard token.  Its hits are always reported.
+_PHP_SQL_BASE_SINK_RE = re.compile(
+    r'\b(?:mysql_query|mysqli_query|pg_query)\s*\(',
+)
+_PHP_SQL_BASE_GUARD_RE = re.compile(r'prepare\s*\(|bind_param|pg_query_params')
+# PHP numeric literals (ASCII only; `١` or `²` are constant names to PHP)
+_PHP_SQL_NUMBER_RE = re.compile(
+    r'0[xX][0-9a-fA-F]+(?:_[0-9a-fA-F]+)*|0[bB][01]+(?:_[01]+)*'
+    r'|0[oO][0-7]+(?:_[0-7]+)*'
+    r'|[0-9]+(?:_[0-9]+)*(?:\.[0-9]+(?:_[0-9]+)*)?'
+    r'(?:[eE][+-]?[0-9]+(?:_[0-9]+)*)?',
+)
+_PHP_SQL_PREPARED_RE = re.compile(
+    r'\b(?:mysqli_|pg_|oci_)?prepare\s*\(|bind_param\s*\('
+    r'|\bpg_query_params\s*\(',
+)
+_PHP_SQL_SHAPE_RE = re.compile(
+    r'[\s(]*(?:(?:select|insert|update|delete|replace|truncate)\b'
+    r'|drop\s+(?:temporary\s+)?(?:table|database|schema|index|view'
+    r'|procedure|function|trigger|event|user)\b'
+    r'|alter\s+(?:table|database|schema|view|user)\b'
+    r'|create\s+(?:or\s+replace\s+)?(?:temporary\s+)?(?:table|index'
+    r'|unique|view|database|schema|procedure|function|trigger|event)\b'
+    r'|show\s+(?:full\s+)?(?:tables|columns|fields|databases|schemas'
+    r'|index|indexes|keys|create|grants|processlist|status|variables'
+    r'|triggers|table|warnings|errors)\b'
+    r'|call\s+[\w.]+\s*\('
+    r'|with\s+(?:recursive\s+)?\w+\s+as\s*\('
+    r'|describe\s+[\w`.]'
+    r'|explain\s+(?:select|insert|update|delete)\b)',
+    re.IGNORECASE,
+)
+_PHP_SQL_CLAUSE_RE = re.compile(
+    r'\bwhere\s+[\w.`"\[\]]+\s*(?:[=<>!]|like\b|in\b|is\b|between\b)'
+    r'|\b(?:order|group)\s+by\b',
+    re.IGNORECASE,
+)
+_PHP_SQL_INTERP_RE = re.compile(r'(?<!\\)\$(?:[A-Za-z_]|\{)|\{\$')
+# Names are matched case-insensitively on ASCII only: no Unicode case
+# folding (`ıntval`, `myſql_query` are other functions to PHP).
+_PHP_SQL_SANITISER_HEAD_RE = re.compile(
+    r'(?:(?P<recv>\$\w+(?:->\w+)*)->quote|(?:intval|floatval|boolval)\b)'
+    r'\s*\(',
+    re.IGNORECASE | re.ASCII,
+)
+_PHP_SQL_CAST_RE = re.compile(
+    r'\(\s*(?:int|integer|float|double|bool|boolean)\s*\)\s*',
+    re.IGNORECASE | re.ASCII,
+)
+# what a numeric cast may apply to: variables, properties, indexes,
+# class constants and arithmetic — no call, no `?:`/`??`, no assignment
+_PHP_SQL_CAST_OPERAND_RE = re.compile(r'[A-Za-z0-9_\s$\[\]"+*/%:>-]+')
+# inside a cast of a call expression: anything that may itself execute
+# SQL (besides _PHP_SQL_SINK_RE) refuses the proof
+_PHP_SQL_CAST_UNSAFE_RE = re.compile(
+    r'->\s*prepare\s*\(|[)\]"]\s*\(|\$\w+\s*\(|(?:->|::)\s*[{$]|\bnew\b'
+    r'|\b(?:call_user_func(?:_array)?|forward_static_call(?:_array)?'
+    r'|array_map|array_walk(?:_recursive)?|array_filter|array_reduce'
+    r'|usort|uasort|uksort|iterator_apply|fromcallable)\s*\(',
+    re.IGNORECASE | re.ASCII,
+)
+# a PHP constant: CONST, \Ns\CONST, self::X, static::X, Cls::X (never
+# `Cls::$prop`, never a call)
+_PHP_SQL_CONSTANT_RE = re.compile(
+    r'(?:\\?[A-Za-z_][A-Za-z0-9_]*(?:\\[A-Za-z_][A-Za-z0-9_]*)*::'
+    r'|\\?(?:[A-Za-z_][A-Za-z0-9_]*\\)*)[A-Z_][A-Z0-9_]*',
+)
+_PHP_SQL_PLAIN_VAR_RE = re.compile(r'\$\w+(?:->\w+)*', re.ASCII)
+# a declaration or import of an allowlisted helper name: unqualified
+# intval(...) may then be a user function (namespace X; use function).
+# Read on the raw text and on the comment-blanked code view.
+_PHP_SQL_SHADOW_FUNC_RE = re.compile(
+    r'\bfunction[\s&]*(?:intval|floatval|boolval)\s*\(',
+    re.IGNORECASE | re.ASCII,
+)
+_PHP_SQL_USE_FUNCTION_RE = re.compile(
+    r'\buse\s+function\b', re.IGNORECASE | re.ASCII,
+)
+_PHP_SQL_HELPER_NAME_RE = re.compile(
+    r'\b(?:intval|floatval|boolval)\b', re.IGNORECASE | re.ASCII,
+)
+_PHP_SQL_HEREDOC_RE = re.compile(
+    r'<<<[ \t]*(["\']?)([A-Za-z_\x80-\U0010ffff][\w\x80-\U0010ffff]*)\1'
+    r'[ \t]*\r?\n',
+)
+_PHP_SQL_NONNL_RE = re.compile(r'[^\r\n]')
+_PHP_SQL_NL_RE = re.compile(r'[\r\n]')
+_PHP_SQL_STMT_END_RE = re.compile(r'[;{}]')
+_PHP_SQL_LEX_JUMP_RE = re.compile(r'["\'`/#<?]')
+_PHP_SQL_LINE_COMMENT_END_RE = re.compile(r'[\r\n]|\?>')
+_PHP_SQL_ATTRIBUTE_RE = re.compile(r'#\[[^\]\r\n]*\]')
+_PHP_SQL_OPEN_TAG_RE = re.compile(r'<\?(?:php|=)?', re.IGNORECASE)
+_PHP_SQL_DQ_STOP_RE = {q: re.compile(r'[%s\\{$]' % q) for q in '"`'}
+_PHP_SQL_EXPR_STOP_RE = re.compile(r'[{}\'"`]')
+# literal bodies after the opening quote, up to (not incl.) the closer
+_PHP_SQL_BODY_RE = {
+    q: re.compile(r'[^%s\\]*(?:\\[\s\S][^%s\\]*)*' % (q, q))
+    for q in '"\'`'
+}
+_PHP_SQL_MAX_PAREN_DEPTH = 16
+
+# literal start -> (end, kind, content_start, content_end); kind is the
+# quote character, "h" (heredoc) or "n" (nowdoc).
+_PhpSqlLiterals = dict[int, tuple[int, str, int, int]]
+
+
+def _php_sql_label_char(ch: str) -> bool:
+    """PHP label character (heredoc identifiers): [A-Za-z0-9_\\x80-\\xff]."""
+    return ch == '_' or ch.isalnum() or ord(ch) >= 0x80
+
+
+def _php_sql_body_end(source: str, i: int, quote: str) -> int:
+    """Index of the quote closing a `"`/backtick literal whose body starts
+    at ``i`` (``len(source)`` if unclosed).
+
+    ``{$...}`` / ``${...}`` interpolation is PHP code: its braces, and the
+    literals nested inside it, are skipped as code, so a quote inside
+    the expression does not end the outer literal.  Explicit stack, one
+    pass.
+    """
+    n = len(source)
+    stack = [quote]      # open literal quotes and '{' expression levels
+    braces: list[int] = []
+    while i < n:
+        top = stack[-1]
+        if top == "'":
+            k = _PHP_SQL_BODY_RE["'"].match(source, i).end()
+            if k >= n:
+                return n
+            stack.pop()
+            i = k + 1
+            continue
+        if top != '{':
+            m = _PHP_SQL_DQ_STOP_RE[top].search(source, i)
+            if not m:
+                return n
+            k = m.start()
+            c = source[k]
+            if c == '\\':
+                i = k + 2
+            elif c == top:
+                stack.pop()
+                if not stack:
+                    return k
+                i = k + 1
+            elif source.startswith('{$', k) or source.startswith('${', k):
+                stack.append('{')
+                braces.append(1)
+                i = k + 2
+            else:
+                i = k + 1
+            continue
+        m = _PHP_SQL_EXPR_STOP_RE.search(source, i)
+        if not m:
+            return n
+        k = m.start()
+        c = source[k]
+        if c == '{':
+            braces[-1] += 1
+        elif c == '}':
+            braces[-1] -= 1
+            if braces[-1] == 0:
+                braces.pop()
+                stack.pop()
+        else:
+            stack.append(c)
+        i = k + 1
+    return n
+
+
+def _php_sql_lex(source: str) -> tuple[str, _PhpSqlLiterals]:
+    """Code view of ``source`` (same length) plus its string literals.
+
+    In the code view each literal becomes `"` followed by blanks, each
+    comment becomes blanks, and each `?>` inline-HTML block becomes `;`
+    followed by blanks (line breaks kept), so offsets map 1:1 to
+    ``source``.  `//` and `#` comments end at a line break or `?>`, as
+    in PHP; a `#[...]` attribute is blanked like a comment.  Single pass; an unterminated literal, comment or HTML block
+    runs to the end of the text.
+    """
+    n = len(source)
+    out: list[str] = []
+    lits: _PhpSqlLiterals = {}
+    i = 0
+    flat = 0  # start of the pending verbatim run
+    # line-comment end and quote counts after the last attribute, reused
+    # while lexing resumes inside the same line (keeps `#[A] #[A] ...`
+    # linear)
+    stop_at = -1
+    attr_at = -1
+    attr_line_end = -1
+    attr_counts = (0, 0, 0)
+    while i < n:
+        jump = _PHP_SQL_LEX_JUMP_RE.search(source, i)
+        if not jump:
+            break
+        i = jump.start()
+        ch = source[i]
+        end = -1
+        lead = ' '
+        lit: tuple[str, int, int] | None = None
+        if ch == "'":
+            j = _PHP_SQL_BODY_RE["'"].match(source, i + 1).end()
+            end = min(j + 1, n)
+            lit = (ch, i + 1, min(j, n))
+        elif ch in '"`':
+            j = _php_sql_body_end(source, i + 1, ch)
+            end = min(j + 1, n)
+            lit = (ch, i + 1, min(j, n))
+        elif source.startswith('<<<', i):
+            m = _PHP_SQL_HEREDOC_RE.match(source, i)
+            if m:
+                ident = m.group(2)
+                k = m.end()
+                end = n
+                cend = n
+                while k < n:
+                    stripped = k
+                    while stripped < n and source[stripped] in ' \t':
+                        stripped += 1
+                    after = stripped + len(ident)
+                    if source.startswith(ident, stripped) and (
+                        after >= n or not _php_sql_label_char(source[after])
+                    ):
+                        end, cend = after, k
+                        break
+                    nl = _PHP_SQL_NL_RE.search(source, k)
+                    if not nl:
+                        break
+                    k = nl.end()
+                lit = ('n' if m.group(1) == "'" else 'h', m.end(), cend)
+        elif source.startswith('/*', i):
+            close = source.find('*/', i + 2)
+            end = n if close < 0 else close + 2
+        elif source.startswith('//', i) or ch == '#':
+            if i >= stop_at:
+                stop = _PHP_SQL_LINE_COMMENT_END_RE.search(source, i)
+                stop_at = n if not stop else stop.start()
+            end = stop_at
+            attr = _PHP_SQL_ATTRIBUTE_RE.match(source, i, end)
+            if attr:
+                if attr_line_end != end or attr_at > attr.end():
+                    attr_counts = tuple(
+                        source.count(q, attr.end(), end) for q in '"\'`'
+                    )
+                else:
+                    attr_counts = tuple(
+                        c - source.count(q, attr_at, attr.end())
+                        for c, q in zip(attr_counts, '"\'`')
+                    )
+                attr_at, attr_line_end = attr.end(), end
+                if all(c % 2 == 0 for c in attr_counts):
+                    # PHP 8 attribute.  With an unbalanced quote after it
+                    # the line is read as a PHP 7 `#` comment instead,
+                    # which can hide a method sink PHP 8 runs (an FN in
+                    # the additions only; main's hits are unaffected)
+                    end = attr.end()
+        elif source.startswith('?>', i):
+            tag = _PHP_SQL_OPEN_TAG_RE.search(source, i + 2)
+            end = n if not tag else tag.end()
+            lead = ';'
+        if end >= 0:
+            out.append(source[flat:i])
+            blank = _PHP_SQL_NONNL_RE.sub(' ', source[i:end])
+            if lit is not None:
+                lits[i] = (end, lit[0], lit[1], lit[2])
+                lead = '"'
+            if blank:
+                blank = (lead if blank[0] == ' ' else blank[0]) + blank[1:]
+            out.append(blank)
+            i = flat = end
+            continue
+        i += 1
+    out.append(source[flat:])
+    return "".join(out), lits
+
+
+def _php_sql_close(code: str, start: int, stop: int) -> int:
+    """Index of the ``)`` closing the ``(`` just before ``start``; -1 if
+    it is not closed before ``stop``."""
+    depth = 1
+    for k in range(start, stop):
+        c = code[k]
+        if c == '(':
+            depth += 1
+        elif c == ')':
+            depth -= 1
+            if depth == 0:
+                return k
+    return -1
+
+
+def _php_sql_split(code: str, start: int, stop: int, sep: str):
+    """Split ``code[start:stop]`` at depth-0 ``sep``; stripped spans."""
+    spans = []
+    depth = 0
+    piece = start
+    for k in range(start, stop):
+        c = code[k]
+        if c in '([':
+            depth += 1
+        elif c in ')]':
+            depth -= 1
+        elif c == sep and depth == 0:
+            if sep == '.' and (
+                0 < k < stop - 1
+                and code[k - 1].isdigit() and code[k + 1].isdigit()
+            ):
+                continue
+            spans.append((piece, k))
+            piece = k + 1
+    spans.append((piece, stop))
+    out = []
+    for a, b in spans:
+        while a < b and code[a].isspace():
+            a += 1
+        while b > a and code[b - 1].isspace():
+            b -= 1
+        out.append((a, b))
+    return out
+
+
+def _php_sql_cast_operand(code: str, a: int, b: int) -> bool:
+    """``code[a:b]`` is what a numeric cast may safely apply to.
+
+    The cast yields a number whatever its operand is.  Two paths:
+    - fast path: the code view of the operand is only variables,
+      properties, indexes, constants, string literals and arithmetic
+      (``_PHP_SQL_CAST_OPERAND_RE``).  It is accepted without the scans
+      below, so string-literal bodies (blank in the code view) and
+      paren-less keywords are not inspected: a sink inside `{$...}` or a
+      heredoc within the cast, and `(int) new Q + $a`, are accepted.
+      These are accepted residuals of the additions' filter (0 in the
+      real-world PHP corpus that was measured) — main's hits are never
+      filtered.
+    - call path: an operand holding calls is accepted only if it is one
+      expression (no top-level `?:`, `??` or assignment, which would take
+      the whole SQL) and its code view holds no sink-family call, no
+      `->prepare(`, no dynamic or computed callee, no callback taker and
+      no `new`.  An unknown user executor in that position is accepted
+      (a deliberate trade-off; main never flags such executors).
+      String-literal bodies are not inspected here either:
+      `(int)f("{$db->query(...)}")` is accepted (same class as the
+      fast-path residual).
+    """
+    while a < b and code[a].isspace():
+        a += 1
+    while b > a and code[b - 1].isspace():
+        b -= 1
+    if a < b and code[a] == '(' and _php_sql_close(code, a + 1, b) == b - 1:
+        a, b = a + 1, b - 1
+    if a >= b:
+        return False
+    if _PHP_SQL_CAST_OPERAND_RE.fullmatch(code, a, b) is not None:
+        return True
+    if (
+        _PHP_SQL_SINK_RE.search(code, a, b) is not None
+        or _PHP_SQL_CAST_UNSAFE_RE.search(code, a, b) is not None
+    ):
+        return False
+    depth = 0
+    for k in range(a, b):
+        c = code[k]
+        if c in '([':
+            depth += 1
+        elif c in ')]':
+            depth -= 1
+            if depth < 0:
+                return False
+        elif depth == 0 and _PHP_SQL_CAST_OPERAND_RE.fullmatch(c) is None:
+            return False
+    return depth == 0
+
+
+def _php_sql_helper_shadowed(text: str) -> bool:
+    """``text`` declares or imports intval/floatval/boolval."""
+    if _PHP_SQL_SHADOW_FUNC_RE.search(text):
+        return True
+    pos = 0
+    while True:
+        m = _PHP_SQL_USE_FUNCTION_RE.search(text, pos)
+        if not m:
+            return False
+        end = text.find(';', m.end())
+        end = len(text) if end < 0 else end
+        if _PHP_SQL_HELPER_NAME_RE.search(text, m.end(), end):
+            return True
+        pos = end + 1
+
+
+def _php_sql_receiver(code: str, end: int, start: int) -> str | None:
+    """The plain receiver chain (`$db`, `$this->db`) ending at ``end``
+    (just before `->`), trailing whitespace dropped; None if the chain
+    holds inner whitespace or is not a plain chain."""
+    k = end
+    while k > start and code[k - 1].isspace():
+        k -= 1
+    j = k
+    while j > start and (code[j - 1].isalnum() or code[j - 1] in '_$->'):
+        j -= 1
+    m = _PHP_SQL_PLAIN_VAR_RE.match(code, j, k)
+    if m is None or m.end() != k:
+        return None
+    return code[j:k]
+
+
+def _php_sql_terms_safe(
+    code: str, lits: _PhpSqlLiterals, source: str, a: int, b: int,
+    receiver: str | None, helpers: bool, depth: int = 0,
+) -> tuple[bool, bool] | None:
+    """Check every operand of the concatenation ``code[a:b]``.
+
+    None when an operand is not provably safe; otherwise ``(quoted,
+    quote_chars)``: whether a ->quote() operand was used, and whether
+    any literal piece holds a quote character.
+    """
+    if depth > _PHP_SQL_MAX_PAREN_DEPTH or a >= b:
+        return None
+    quoted = quote_chars = False
+    for ta, tb in _php_sql_split(code, a, b, '.'):
+        if ta >= tb:
+            return None
+        # a literal's body is blank in the code view, so a term that is
+        # exactly one literal strips down to its opening `"`
+        lit = lits.get(ta)
+        if lit is not None and tb == ta + 1:
+            body = source[lit[2]:lit[3]]
+            if lit[1] == '`' or '$' in body:
+                return None
+            # a backslash may spell a quote (\x27, \047, \u{27})
+            quote_chars = quote_chars or any(q in body for q in '\'"`\\')
+            continue
+        if _PHP_SQL_NUMBER_RE.fullmatch(code, ta, tb):
+            continue
+        if _PHP_SQL_CONSTANT_RE.fullmatch(code, ta, tb):
+            # a named constant cannot carry request data (one define()d
+            # from it is out of scope, like a table prefix)
+            continue
+        m = _PHP_SQL_SANITISER_HEAD_RE.match(code, ta, tb)
+        if m and _php_sql_close(code, m.end(), tb) == tb - 1:
+            recv = m.group('recv')
+            if recv is not None:
+                # PDO::quote() is safe for its own connection's driver
+                # only: the receiver must be the sink's receiver
+                if receiver is None or "".join(recv.split()) != receiver:
+                    return None
+                quoted = True
+            elif not helpers:
+                return None  # intval & co. may be shadowed here
+            continue
+        m = _PHP_SQL_CAST_RE.match(code, ta, tb)
+        if m and _php_sql_cast_operand(code, m.end(), tb):
+            continue
+        if code[ta] == '(' and _php_sql_close(code, ta + 1, tb) == tb - 1:
+            inner = _php_sql_terms_safe(code, lits, source, ta + 1, tb - 1,
+                                        receiver, helpers, depth + 1)
+            if inner is not None:
+                quoted = quoted or inner[0]
+                quote_chars = quote_chars or inner[1]
+                continue
+        return None
+    return quoted, quote_chars
+
+
+def _php_sql_proved(
+    source: str, code: str, lits: _PhpSqlLiterals, a: int, b: int,
+    receiver: str | None = None, helpers: bool = True,
+) -> bool:
+    """Every operand of the concatenation ``code[a:b]`` is safe.
+
+    Escape functions never prove (their safety depends on the server's
+    dialect, modes and charset).  A ->quote() result is a complete
+    quoted literal, so it proves only when no literal piece holds a
+    quote character — then it cannot land inside an open SQL string.
+    """
+    checked = _php_sql_terms_safe(code, lits, source, a, b, receiver,
+                                  helpers)
+    return checked is not None and not (checked[0] and checked[1])
+
+
+# Procedural SQL executors: accepted argument shapes, by role.  "conn" is
+# a plain variable; "sql" is the statement; "opt" holds no variable;
+# "id" is a plain variable or variable-free; "bind" is bound parameters
+# (any content).  A call matching no shape is unparsed (keeps its hit).
+_PHP_SQL_PROCEDURAL_ARGS: dict[str, tuple[tuple[str, ...], ...]] = {
+    'mysqli_query': (('conn', 'sql'), ('conn', 'sql', 'opt')),
+    'mysqli_real_query': (('conn', 'sql'),),
+    'mysqli_multi_query': (('conn', 'sql'),),
+    'pg_query': (('sql',), ('conn', 'sql')),
+    'pg_send_query': (('conn', 'sql'),),
+    'mysql_query': (('sql',), ('sql', 'conn')),
+    'mysql_unbuffered_query': (('sql',), ('sql', 'conn')),
+    'mysql_db_query': (('id', 'sql'), ('id', 'sql', 'conn')),
+    'sqlsrv_query': (('conn', 'sql'), ('conn', 'sql', 'bind'),
+                     ('conn', 'sql', 'bind', 'opt')),
+    'db2_exec': (('conn', 'sql'), ('conn', 'sql', 'opt')),
+    'oci_parse': (('conn', 'sql'),),
+}
+
+
+def _php_sql_procedural_sql_arg(
+    name: str, code: str, source: str, args: list[tuple[int, int]],
+) -> tuple[int, int] | None:
+    """The SQL argument of a procedural call whose other arguments fit
+    one of its accepted shapes; else None."""
+    for roles in _PHP_SQL_PROCEDURAL_ARGS.get(name.lower(), ()):
+        if len(roles) != len(args):
+            continue
+        sql = None
+        for role, (x, y) in zip(roles, args):
+            plain = _PHP_SQL_PLAIN_VAR_RE.match(code, x, y)
+            is_plain = plain is not None and plain.end() == y
+            if role == 'sql':
+                sql = (x, y)
+            elif role == 'conn' and not is_plain:
+                break
+            elif role == 'opt' and '$' in source[x:y]:
+                break
+            elif role == 'id' and not (is_plain or '$' not in source[x:y]):
+                break
+        else:
+            return sql
+    return None
+
+
+# Failures of the additions, contained by _php_sql_injection_lines: an
+# aggregate count (read with php_sql_additions_failure_count) and one
+# warning per process.
+_php_sql_additions_failures = 0
+_php_sql_additions_warned = False
+_php_sql_additions_lock = threading.Lock()
+
+
+def php_sql_additions_failure_count() -> int:
+    """How many times the php-sql-injection additions raised and were
+    skipped (main's hits kept) in this process."""
+    return _php_sql_additions_failures
+
+
+def _php_sql_main_rule_lines(source: str, line_start: int) -> set[int]:
+    """The historical rule (pre-change main), verbatim: a line with one of
+    its three calls and a variable, unless the function anywhere holds a
+    guard token."""
+    hits: set[int] = set()
+    if not _PHP_SQL_BASE_GUARD_RE.search(source):
+        for idx, text in enumerate(source.splitlines(keepends=True)):
+            stripped = text.strip()
+            if _PHP_SQL_BASE_SINK_RE.search(stripped) and '$' in stripped:
+                hits.add(line_start + idx)
+    return hits
+
+
+def _php_sql_injection_lines(source: str, line_start: int) -> set[int]:
+    """Line numbers (``line_start``-based) with a php-sql-injection hit.
+
+    Monotonic over the historical rule: every line it flags is flagged
+    here too, unconditionally.  The lexer and the proofs only decide
+    which ADDITIONAL hits (method/static sinks, other executors, sinks
+    the function-wide guard silenced, multi-line calls) to report.  If
+    the additions raise, main's result is returned unchanged.
+    """
+    global _php_sql_additions_failures, _php_sql_additions_warned
+    hits = _php_sql_main_rule_lines(source, line_start)
+    try:
+        added = _php_sql_additions(source, line_start)
+    except Exception as exc:  # noqa: BLE001 — never cost main's hits
+        with _php_sql_additions_lock:
+            _php_sql_additions_failures += 1
+            warn = not _php_sql_additions_warned
+            _php_sql_additions_warned = True
+        # The count above is always exact; the logging is best-effort, so
+        # a failure while logging (e.g. RecursionError near the stack
+        # limit) never costs main's hits.  The warning is retried until a
+        # call returns: the failure that reserved it releases the
+        # reservation if logger.warning raises.  A logger that emits and
+        # then raises can therefore warn twice; failures arriving while
+        # the reservation is held skip the warning; and if no failure
+        # follows a failed warning, no warning is given.
+        if warn:
+            try:
+                # no source text: the exception type only
+                logger.warning(
+                    "php-sql-injection: additional sinks skipped after %s; "
+                    "the historical rule's hits are kept (further failures "
+                    "are counted, not logged)", type(exc).__name__,
+                )
+            except BaseException as log_exc:  # noqa: BLE001 — re-raised below
+                # release so a later failure retries; interrupts propagate
+                with _php_sql_additions_lock:
+                    _php_sql_additions_warned = False
+                if not isinstance(log_exc, Exception):
+                    raise
+        try:
+            logger.debug("php-sql-injection additions failed", exc_info=exc)
+        except Exception:  # noqa: BLE001 — logging must not cost main's hits
+            pass
+        return hits
+    return hits | added
+
+
+def _php_sql_additions(source: str, line_start: int) -> set[int]:
+    """Lines the lexer-based rule adds (method/static sinks, other
+    executors, sinks main's function-wide guard silenced, multi-line
+    calls).  Not guarded: _php_sql_injection_lines contains failures."""
+    lines = source.splitlines(keepends=True)
+    hits: set[int] = set()
+    starts = []
+    off = 0
+    for ln in lines:
+        starts.append(off)
+        off += len(ln)
+
+    def line_of(pos: int) -> int:
+        return line_start + bisect.bisect_right(starts, pos) - 1
+
+    code, lits = _php_sql_lex(source)
+    lit_starts = sorted(lits)
+    # intval & co. prove nothing where the source may shadow them
+    helpers = not (
+        _php_sql_helper_shadowed(source) or _php_sql_helper_shadowed(code)
+    )
+
+    def literals_in(a: int, b: int):
+        lo = bisect.bisect_left(lit_starts, a)
+        hi = bisect.bisect_left(lit_starts, b)
+        return [lits[s] for s in lit_starts[lo:hi]]
+
+    def reaches(a: int, b: int) -> bool:
+        if '$' in code[a:b]:
+            return True
+        return any(
+            kind == '`' or (
+                kind in '"h'
+                and _PHP_SQL_INTERP_RE.search(source, ca, cb) is not None
+            )
+            for _end, kind, ca, cb in literals_in(a, b)
+        )
+
+    def shaped(a: int, b: int) -> bool:
+        return any(
+            kind != '`' and (
+                _PHP_SQL_SHAPE_RE.match(source, ca, cb) is not None
+                or _PHP_SQL_CLAUSE_RE.search(source, ca, cb) is not None
+            )
+            for _end, kind, ca, cb in literals_in(a, b)
+        )
+
+    stmt = 0
+    bounds = [m.start() for m in _PHP_SQL_STMT_END_RE.finditer(code)]
+    bounds.append(len(code))
+    for stop in bounds:
+        s, e = stmt, stop
+        stmt = stop + 1
+        # per top-level sink: [line, match, close, covered, nested]
+        outer: list | None = None
+        records: list[list] = []
+        guarded: bool | None = None
+        for m in _PHP_SQL_SINK_RE.finditer(code, s, e):
+            if outer is not None and m.start() < outer[3]:
+                # a sink inside an earlier sink's arguments: the outer
+                # call is never proved
+                outer[4] = True
+                continue
+            if guarded is None:
+                # once per statement: a prepare/bind_param/pg_query_params
+                # call in the sink's own statement means no addition
+                guarded = _PHP_SQL_PREPARED_RE.search(source, s, e) is not None
+            if guarded:
+                break
+            close = _php_sql_close(code, m.end(), e)
+            covered = close + 1 if close >= 0 else e
+            outer = [line_of(m.start()), m, close, covered, False]
+            records.append(outer)
+        if guarded:
+            continue
+        for line, m, close, covered, nested in records:
+            args = (
+                _php_sql_split(code, m.end(), close, ',')
+                if close >= 0 else None
+            )
+            if m.group('proc') is not None:
+                sql = (
+                    _php_sql_procedural_sql_arg(m.group('proc'), code,
+                                                source, args)
+                    if args else None
+                )
+                proved = not nested and sql is not None and _php_sql_proved(
+                    source, code, lits, sql[0], sql[1], helpers=helpers,
+                )
+                if not proved and '$' in source[m.start():covered]:
+                    hits.add(line)
+                continue
+            receiver = (
+                _php_sql_receiver(code, m.start(), s)
+                if m.group('meth') else None
+            )
+            proved = not nested and bool(args) and _php_sql_proved(
+                source, code, lits, *args[0], receiver=receiver,
+                helpers=helpers,
+            )
+            a, b = args[0] if args else (m.end(), covered)
+            # an argument list not closed inside the statement (a
+            # closure or match block follows) counts as reaching
+            if not proved and shaped(a, b) and (
+                args is None or nested or reaches(a, b)
+            ):
+                hits.add(line)
+    return hits
+
+
 def _check_php_patterns(
     result: PrefilterResult,
     source: str,
@@ -3026,6 +3802,7 @@ def _check_php_patterns(
 
     result.has_dangerous_apis = bool(callee_names & _DANGEROUS_PHP_CALLEES)
     result.has_array_access = bool(re.search(r'\$\w+\s*\[', source))
+    sql_injection_lines = _php_sql_injection_lines(source, line_start)
 
     for i, line in enumerate(source.splitlines(), start=line_start):
         stripped = line.strip()
@@ -3088,12 +3865,7 @@ def _check_php_patterns(
                 severity="error",
             ))
 
-        if re.search(
-            r'\b(?:mysql_query|mysqli_query|pg_query)\s*\(',
-            stripped,
-        ) and re.search(r'\$', stripped) and not re.search(
-            r'prepare\s*\(|bind_param|pg_query_params', source,
-        ):
+        if i in sql_injection_lines:
             result.hits.append(PrefilterHit(
                 rule_id="php-sql-injection",
                 message=(

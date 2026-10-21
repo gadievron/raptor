@@ -605,6 +605,26 @@
    ],
    "verdict": "linear"
   },
+  "core/audit/prefilter.py\u001f_PHP_SQL_CONSTANT_RE": {
+   "digests": [
+    "60ed264f17f2"
+   ],
+   "exp": 1.0,
+   "rules": [
+    "C"
+   ],
+   "verdict": "linear"
+  },
+  "core/audit/prefilter.py\u001f_PHP_SQL_SANITISER_HEAD_RE": {
+   "digests": [
+    "6eb14c3bb7f1"
+   ],
+   "exp": 1.0,
+   "rules": [
+    "C"
+   ],
+   "verdict": "linear"
+  },
   "core/audit/prefilter.py\u001f_WRAPPER_GETATTR_LITERAL_RE": {
    "digests": [
     "65a8de21c6af"

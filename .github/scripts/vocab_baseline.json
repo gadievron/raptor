@@ -941,6 +941,11 @@
     "count": 10,
     "kind": "literal"
   },
+  "core/audit/prefilter.py::_PHP_SQL_PROCEDURAL_ARGS": {
+    "count": 11,
+    "kind": "literal",
+    "note": "argument-shape table for the procedural SQL executors php-sql-injection parses (which positional argument is the SQL, the connection, options or bound parameters); a closed PHP-runtime API surface keyed like _DANGEROUS_PHP_CALLEES, read by a parser rather than matched as a learned name vocabulary"
+  },
   "core/audit/prefilter.py::_SECURITY_SENSITIVE_NAMES": {
     "count": 22,
     "kind": "literal"
