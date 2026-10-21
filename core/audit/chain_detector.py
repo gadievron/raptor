@@ -265,6 +265,10 @@ def evaluate_chains(
                 **kwargs,
             )
             result = structured_result(response, default={})
+            # Taint at source: the chain description and every other
+            # model-returned string become outcome body / hypothesis.
+            from core.audit.evidence_grade import defang_model_fields
+            result = defang_model_fields(result)
         except Exception:
             logger.warning(
                 "chain evaluation failed for %s:%s + %s:%s",

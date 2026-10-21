@@ -350,6 +350,42 @@ class from the hypothesis / mechanism text for coverage resolution
 (a class named in words can resolve `clean`, the same claim
 paraphrased resolves `dark`).
 
+Model-authored text never carries a machine marker: provenance checks
+read bracketed markers in bodies and prompt text, some at the start
+(`[gate violation:`, `[counter-hypothesis escalation:`, `[reused:`, ...)
+and some anywhere (`[caller-contract:`, `[gadget-absence:`,
+`[self-contradiction:`, `[tool-refuted]` ...). Model text is tainted at
+its source: every string field of a parsed model / agent response is
+defanged once at the parse boundary (review, batch glance, edge
+review, chain detector, adversarial refuter, the /validate findings
+and machine-tier annotation import, the /agentic journal body, and
+the agent's `raptor-audit record --body/--hypothesis`), so a
+field later spliced into a machine marker's reason (the escalation's
+counter snippet, a rescue reason, an observation) is safe by
+construction. Defanging rewrites each registered marker to
+`[llm-claimed:<marker>` wherever it occurs; a body that still starts
+with `[` also gets a `[llm-claimed] ` lead (this also tags a body that
+opens with a markdown link, checkbox or footnote -- cosmetic). The
+registry (`evidence_grade.MACHINE_BODY_MARKERS`) is checked against the
+tree's consumer sites by a test that re-enumerates them (AST: `in`,
+`==`, `startswith`/`find`/..., anchored regexes, constants, loops and
+`any(...)`, extensionless libexec entry points) and rejects any
+case-normalised marker test. The review and edge-review boundaries
+also DROP every pipeline-owned key from a model's parsed review
+(`evidence_grade.PIPELINE_OWNED_REVIEW_KEYS`: machine flags such as
+`counter_escalated` / `all_refuted_demotion`, receipts, stage records,
+and the panel's identity / accounting keys `file` / `function` /
+`model` / `cost_usd`), so a model cannot mint a machine signal by
+emitting its key either; a batch-glance element carrying any key
+outside its closed element schema is rejected and the function gets a
+full individual review. A test enumerates every `review_result` key
+read or written (through `.review_result`, `getattr(..., "review_result")`,
+any `review_result=` keyword, and -- under `core/audit/` and
+`core/llm/multi_model/` -- locals or parameters named `review_result` /
+`rr` / `_rr` / `primary`) and fails until each is classified
+model-authored or pipeline-owned; a write it reaches but cannot resolve
+to keys fails until it is pinned by content with a justification.
+
 
 ## Statuses
 

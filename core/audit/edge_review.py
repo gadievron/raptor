@@ -590,6 +590,14 @@ def run_edge_pass(
                     empty_result={"status": "error", "body": "empty LLM response"},
                 )
                 result, cost, model = call.result, call.cost, call.model
+                # Taint at source: every model-returned string (body,
+                # caller/callee assumptions, hypothesis) is defanged
+                # once, before it is joined into the outcome body.
+                from core.audit.evidence_grade import (
+                    defang_model_fields,
+                    drop_pipeline_owned,
+                )
+                result = defang_model_fields(drop_pipeline_owned(result))
             except Exception:  # noqa: BLE001 — one edge failing must not kill the pass
                 logger.warning(
                     "edge review failed for %s", edge_key(rec), exc_info=True,
@@ -610,7 +618,9 @@ def run_edge_pass(
         status = str(result.get("status") or "error")
         if status not in ("clean", "suspicious", "finding", "error"):
             status = "error"
-        body_parts = [str(result.get("body") or "")]
+        from core.audit.evidence_grade import defang_model_body
+        # Model-authored: never opens with a machine marker.
+        body_parts = [defang_model_body(str(result.get("body") or ""))]
         for label, field in (("Caller assumptions", "caller_assumptions"),
                              ("Callee assumptions", "callee_assumptions")):
             if result.get(field):

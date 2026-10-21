@@ -77,7 +77,12 @@ def build_journal_body(
     if not parts and message:
         parts.append(f"Scanner message: {message}")
 
-    return "\n\n".join(parts)
+    # Taint at the writer: reasoning and severity are model-authored,
+    # the scanner message is rule / target text — a journal row body
+    # never carries a machine marker (``[mechanical]`` would read the
+    # row as a non-review).
+    from core.audit.evidence_grade import defang_model_body
+    return defang_model_body("\n\n".join(parts))
 
 
 def emit_finding_journal_entry(
