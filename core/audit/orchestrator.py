@@ -18487,14 +18487,20 @@ _RACE_EVIDENCE_PREFIX = ("smt:", "coccinelle:", "semgrep:", "codeql:", "joern:",
                          "lock_region:", "compiler:", "dynamic:",
                          "critique:")
 
+
 def _apply_speculative_race_demotion(outcome: ReviewOutcome) -> ReviewOutcome:
     """Demote evidence-free race hypotheses.
 
-    finding → suspicious when race keywords present but no tool evidence.
-    The former suspicious → clean step (protection-phrase matching) is
-    removed: first-match-in-full-body attribution is unreliable ("the
-    caller is protected by a lock" demoted the unprotected callee).
-    Only a verification-role refuter may move toward clean.
+    finding → suspicious when the hypothesis text contains a race keyword
+    and the evidence carries no CONCURRENCY-relevant receipt
+    (``_RACE_EVIDENCE_PREFIX``; a consistency:/fail_open receipt does not
+    exempt). The trigger is hypothesis wording. Never toward clean: a
+    body naming a protection mechanism ("protected by", "serialized by")
+    is model prose, not a receipt — a phrase match cannot tell an
+    asserted protection from an attributed ("the comment claims ...
+    protected by"), conceded ("although writers are serialized by ...")
+    or far-negated one, so the row stays suspicious (exported) and
+    end-of-run resolution decides.
     """
     hyp = (outcome.hypothesis or "").lower()
     if not any(kw in hyp for kw in _RACE_KW):
@@ -25102,15 +25108,15 @@ def _deepen_suspicious(
         )
 
         # Accept the deepen verdict when it's non-clean, OR when
-        # the clean came from a structured demotion (all-refuted or
-        # rationale-consistency) rather than a bare LLM flip-flop.
+        # the clean came from a structured demotion (all-refuted)
+        # rather than a bare LLM flip-flop. The review-time
+        # rationale-consistency check is no basis: prose heuristics
+        # never change a verdict, they only annotate.
         # A reduced-context prior is never dominated: a full-context
         # clean genuinely supersedes a clean formed with stripped
         # context (and clears the context_reduced tag).
         _rr = outcome.review_result or {}
-        _structured_demotion = bool(
-            _rr.get("all_refuted_demotion")
-        )
+        _structured_demotion = bool(_rr.get("all_refuted_demotion"))
         _referee_holds = _deepen_demotion_refereed(prior_outcome, outcome)
         _deepen_dominated = (
             outcome.status == "clean"
@@ -31843,7 +31849,7 @@ def _deepen_demotion_refereed(
 
     True when a deepen re-review's clean may NOT supersede the prior
     suspicious: the clean's only basis is the LLM's own refutation
-    (all-refuted / rationale-consistency structured demotion), the
+    (all-refuted structured demotion), the
     prior verdict is backed by a fired probe, and the deepen outcome
     carries no verification-role refuter. A fired probe's receipt is
     a tool observation; overriding it takes a verification-role
@@ -31852,9 +31858,7 @@ def _deepen_demotion_refereed(
     tool-backed floor.
     """
     _rr = outcome.review_result or {}
-    structured = bool(
-        _rr.get("all_refuted_demotion")
-    )
+    structured = bool(_rr.get("all_refuted_demotion"))
     return (
         outcome.status == "clean"
         and structured
