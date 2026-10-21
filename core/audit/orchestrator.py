@@ -17946,7 +17946,12 @@ def _accumulate_observations(
         return
     for obs in raw:
         if isinstance(obs, str) and len(obs) >= 10:
-            cleaned = _sanitise_observation(obs)
+            # Model text: it never mints `[tool-confirmed]` /
+            # `[tool-refuted]` into the subsystem-pattern prompt lines
+            # (review_fn already defangs at source; idempotent here for
+            # any other producer of review_result["observations"]).
+            from .evidence_grade import defang_model_text
+            cleaned = _sanitise_observation(defang_model_text(obs))
             if not cleaned:
                 continue
             session_observations.append({
@@ -26042,11 +26047,15 @@ def _run_phase2(result, config) -> None:
                         status, stamp = "finding", composite
                     else:
                         status, stamp = "suspicious", "chain_detector"
+                    from .evidence_grade import defang_model_body
                     chain_outcome = ReviewOutcome(
                         file=chain["bug_a"].rsplit(":", 1)[0],
                         function=bug_a_func,
                         status=status,
-                        body=chain.get("chain_description", ""),
+                        # Model-authored (chain_detector LLM): never
+                        # carries a machine marker.
+                        body=defang_model_body(
+                            chain.get("chain_description", "")),
                         hypothesis=chain.get("chain_description", ""),
                         evidence_tool=stamp,
                         review_result={

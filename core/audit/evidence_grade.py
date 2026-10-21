@@ -656,6 +656,173 @@ def sanitize_llm_evidence_tool(raw: str) -> str:
     return f"{LLM_CLAIM_PREFIX}{value}"
 
 
+#: Every machine marker a consumer tests in body text — with
+#: ``startswith`` OR ``in`` (anywhere). Enumerated by
+#: ``core/audit/tests/_marker_sites.py``; the closure test
+#: (``core/audit/tests/test_model_body_markers.py``) re-enumerates the
+#: tree's check sites on every run and fails when a body consumer reads
+#: a marker missing here.
+MACHINE_BODY_MARKERS: tuple[str, ...] = (
+    "[anti_self_refutation:",
+    "[caller-contract:",
+    "[consistency:",
+    "[counter-hypothesis escalation:",
+    "[entry-unreachability:",
+    "[gadget-absence:",
+    "[gate violation:",
+    "[guarded-sink:",
+    "[hypothesis-consistency:",
+    "[mechanical]",
+    "[precondition-verified via ",
+    "[rationale-consistency demotion:",
+    "[reused:",
+    "[sarif-clean gate]",
+    "[secondary-hypothesis-confirmed via ",
+    "[self-contradiction:",
+    "[sink-unreachability:",
+    "[smt-disproof:",
+    "[smt-infeasible:",
+    "[suspicious-demotion:",
+    "[suspicious-resolution:",
+    "[sweep promoted via ",
+    "[tool-confirmed]",
+    "[tool-refuted]",
+)
+
+#: What a known marker becomes inside model-authored text: the bracket
+#: stays readable, but no consumer matches ``[llm-claimed:<marker>``.
+LLM_MARKER_LEAD = "[llm-claimed:"
+
+#: Lead put in front of model-authored body text that still starts
+#: with ``[`` (an UNKNOWN / future bracketed marker at position 0).
+#: Same rule as ``llm-claimed:`` for evidence_tool: a model can name a
+#: marker, never mint one.
+LLM_BODY_PREFIX = "[llm-claimed] "
+
+
+#: ``review_result`` keys only PIPELINE code may set — machine flags,
+#: receipts, provenance and stage records written into the model's
+#: review dict after it is parsed. A model (or target text it echoed)
+#: emitting one of these keys would mint the machine signal
+#: (``counter_escalated: true`` -> counter-escalation floor resolves a
+#: model suspicious to clean; ``all_refuted_demotion: true`` -> a deepen
+#: bare clean dominates; ``file`` / ``function`` / ``model`` /
+#: ``cost_usd`` would override the multi-pass panel's identity and
+#: accounting, which ``_outcome_to_panel_result`` merges the review dict
+#: over). The review_fn and edge-review parse boundaries drop them from
+#: model output (:func:`drop_pipeline_owned`); batch glance rejects any
+#: element outside its closed schema, and the chain detector and refuter
+#: copy explicit fields only, so no such key reaches an outcome there.
+#: Classified by
+#: ``core/audit/tests/_review_keys.py``; the closure test fails when
+#: pipeline code reads or writes a key that is in neither set.
+PIPELINE_OWNED_REVIEW_KEYS: frozenset[str] = frozenset({
+    "adversarial_needs_evidence", "adversarial_review",
+    "aggregated_promotion", "all_refuted_demotion",
+    "all_refuted_demotion_withheld", "all_refuted_grounding",
+    "backlog_drain", "bug_a", "bug_b", "calibrated_downgrade",
+    "caller_evidence", "chain",
+    "confidence", "consistency_receipts", "context_reduced",
+    "cost_usd", "duration_s", "file", "function", "merge_decision",
+    "model", "multi_model_analyses", "prior_evidence_tools",
+    "counter_escalated", "cwe_class", "cwe_inferred", "cwe_placeholder",
+    "deepen_stranded", "deepen_unadjudicated", "demotion_referee",
+    "evidence_chain", "file_dampening", "g2_invariant_bypass",
+    "g2_invariant_bypass_tiers", "gadget_absence",
+    "ondemand_synth_blocked", "ondemand_synth_receipt",
+    "precondition_verification", "premise_blocked_confirms", "primitive",
+    "promotion_gate_demoted", "prompt_budget_event",
+    "rationale_consistency_demotion", "rationale_consistency_mismatch",
+    "reused", "reused_from_run",
+    "rationale_consistency_note", "refuted_hypothesis_confirmed",
+    "secondary_confirmations", "secondary_hypothesis_confirmed",
+    "security_impact", "smt_caller_gate", "study_receipts",
+    "synthesis_refused", "tool_evidence", "uncorrelated_tool_hits",
+})
+
+#: ``review_result`` keys the MODEL authors (review JSON schema fields,
+#: plus legacy / other-mode review fields pipeline code still reads as
+#: model claims). Pipeline stages may also rewrite some of them
+#: (status, body, hypothesis, cwe, evidence_tool) — that is not
+#: authority, the model may set them too.
+MODEL_AUTHORED_REVIEW_KEYS: frozenset[str] = frozenset({
+    "anchor", "body", "bug_class", "callees", "callers", "claim",
+    "constraints", "counter_direction", "counter_hypothesis", "cwe",
+    "dataflow_sink", "dataflow_source",
+    "dangerous_callees", "edge_verdicts", "entry_point",
+    "evasion_mechanism", "evidence_tool", "hypotheses", "hypothesis",
+    "impact", "inferred_spec", "intent_trace", "mechanism",
+    "observations", "preconditions", "reading_list", "relies_on",
+    "sanitizer_callees", "source_snippet", "spec_deviation", "status",
+    "tool_query_suggestion", "typestate_violation", "verdict_rationale",
+    "vuln_type",
+})
+
+
+def drop_pipeline_owned(result: Any) -> Any:
+    """A copy of a parsed model dict without pipeline-owned keys.
+
+    The field twin of the marker defang: a model can never set a
+    machine flag by emitting its key. Non-dicts pass through.
+    """
+    if not isinstance(result, dict):
+        return result
+    return {k: v for k, v in result.items()
+            if k not in PIPELINE_OWNED_REVIEW_KEYS}
+
+
+def defang_model_text(text: Any) -> str:
+    """Rewrite every registered machine marker in model-authored text.
+
+    Every occurrence, anywhere, of a :data:`MACHINE_BODY_MARKERS` entry
+    becomes ``[llm-claimed:<marker>`` — neither a ``startswith`` nor an
+    ``in`` consumer can match it, wherever the text is later spliced
+    (a body, a marker's reason, an observation). ``None`` becomes
+    ``""`` and a non-string value its ``str()`` form. Idempotent.
+    """
+    if text is None:
+        return ""
+    value = text if isinstance(text, str) else str(text)
+    for marker in MACHINE_BODY_MARKERS:
+        if marker in value:
+            value = value.replace(marker, LLM_MARKER_LEAD + marker[1:])
+    return value
+
+
+def defang_model_fields(obj: Any) -> Any:
+    """Taint at source: :func:`defang_model_text` over EVERY string in a
+    parsed model / agent / annotation response — nested dicts (values;
+    keys are schema), lists and tuples included — applied once at the
+    parse boundary, so every later interpolation of any field is safe
+    by construction. Non-string scalars pass through unchanged.
+    """
+    if isinstance(obj, str):
+        return defang_model_text(obj)
+    if isinstance(obj, dict):
+        return {k: defang_model_fields(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [defang_model_fields(v) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(defang_model_fields(v) for v in obj)
+    return obj
+
+
+def defang_model_body(text: Any) -> str:
+    """Neutralise machine markers in model-authored BODY text.
+
+    :func:`defang_model_text`, plus: a body that still opens with ``[``
+    (a marker the registry does not know yet), after leading
+    whitespace, gains :data:`LLM_BODY_PREFIX`. Idempotent — safe on
+    text already defanged at its parse boundary (no double prefix).
+    """
+    value = defang_model_text(text)
+    head = value.lstrip()
+    if head.startswith("[") and not head.startswith(
+            (LLM_BODY_PREFIX, LLM_MARKER_LEAD)):
+        value = f"{LLM_BODY_PREFIX}{value}"
+    return value
+
+
 _PREFILTER_PREFIX = "prefilter:"
 # The surviving outcome's provenance leads in the merge tie-break: a
 # stamp whose FIRST part is one of these is never verification.

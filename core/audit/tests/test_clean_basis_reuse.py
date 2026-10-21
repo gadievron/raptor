@@ -641,10 +641,13 @@ class TestRetiredProseCleansReReview:
         "The input is properly validated before use.",
         "Note: an older run said [rationale-consistency demotion: x] "
         "here; the cast on line 2 bounds it.",
-    ], ids=["no-marker", "mid-body"])
+        # Model-authored marker: defanged at ingestion, so it is prose.
+        "[llm-claimed] " + _RETIRED_RATIONALE_MARKER + "Validated.",
+    ], ids=["no-marker", "mid-body", "model-authored"])
     def test_controls_still_reused(self, tmp_path, body):
-        """A clean with no retired marker, or with the marker only quoted
-        mid-body, must still be reused. This stops the screen from refusing
+        """A clean with no retired marker, with the marker only quoted
+        mid-body, or with a model-authored copy of it that was defanged at
+        ingestion must still be reused. This stops the screen from refusing
         ordinary reviewed cleans on loose text matches."""
         _, sunk, why, resurfaced = _journal_then_fold(
             tmp_path, _clean(body))

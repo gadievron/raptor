@@ -1408,12 +1408,33 @@ def make_review_fn(
 
         duration = time.monotonic() - t0
 
+        # Taint at source: every string the model returned (body,
+        # hypothesis, counter_hypothesis, hypotheses[*].mechanism /
+        # counter, observations, ...) is defanged ONCE here, before any
+        # pipeline marker is built from it — the escalation marker's
+        # counter snippet, rescue/refutation reasons and observation
+        # text then interpolate safe text by construction. The body
+        # additionally gets the unknown-lead rule. Pipeline-owned keys
+        # (machine flags such as ``counter_escalated`` /
+        # ``all_refuted_demotion``, receipts, stage records) are DROPPED:
+        # a model can never set a machine flag by emitting its key.
+        if isinstance(result, dict):
+            from .evidence_grade import (
+                defang_model_body,
+                defang_model_fields,
+                drop_pipeline_owned,
+            )
+            result = defang_model_fields(drop_pipeline_owned(result))
+            if isinstance(result.get("body"), str):
+                result["body"] = defang_model_body(result["body"])
+
         # Prompt-budget disclosure: format_context_for_prompt stamps
         # ``ctx["prompt_budget_event"]`` when the assembled prompt had
         # priority-0 content elided (or was still over budget after
         # elision). Ride it on the result dict so the audit-log
         # writers (Collector.submit / _commit_outcome) persist it on
-        # this row's durable record.
+        # this row's durable record. (Pipeline-owned: written after the
+        # model dict is sanitised.)
         budget_event = ctx.get("prompt_budget_event")
         if budget_event and isinstance(result, dict):
             result["prompt_budget_event"] = budget_event

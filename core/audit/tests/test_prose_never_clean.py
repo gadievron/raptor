@@ -340,9 +340,9 @@ class TestRationaleCheckAnnotatesOnly:
         # module under core/, packages/ and libexec/): the annotation
         # cannot steer a verdict, a journal row or a reuse decision.
         """No runtime module outside the check itself may read the
-        rationale-consistency keys. If any stage read the note, the
-        annotation could quietly steer a verdict, a journal row or a reuse
-        decision."""
+        rationale-consistency keys, apart from the registry that strips them
+        from model output. If any stage read the note, the annotation could
+        quietly steer a verdict, a journal row or a reuse decision."""
         repo = Path(_orch.__file__).resolve().parents[2]
         own = Path(_lr.__file__).resolve()
         readers = []
@@ -356,6 +356,16 @@ class TestRationaleCheckAnnotatesOnly:
                     text = f.read_text()
                 except (UnicodeDecodeError, OSError):
                     continue
+                if f.name == "evidence_grade.py":
+                    # The pipeline-owned key registry names the keys so
+                    # the parse boundaries can DROP them from model
+                    # output — that is the only allowed mention.
+                    import core.audit.evidence_grade as eg
+                    for k in ("rationale_consistency_demotion",
+                              "rationale_consistency_mismatch",
+                              "rationale_consistency_note"):
+                        assert k in eg.PIPELINE_OWNED_REVIEW_KEYS
+                        text = text.replace(f'"{k}"', "", 1)
                 if "rationale_consistency" in text:
                     readers.append(str(f.relative_to(repo)))
         assert readers == []

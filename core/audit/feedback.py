@@ -299,6 +299,11 @@ def import_validation_results(
                 "corroborated": 0, "skipped": 0}
 
     findings = _extract_findings(report)
+    # Taint at source: /validate's findings document is agent-written;
+    # every string in it (reasoning, ruling reason, lesson text ...) is
+    # defanged once before any of it reaches a journal row.
+    from .evidence_grade import defang_model_body, defang_model_fields
+    findings = defang_model_fields(findings)
 
     # Evidence-tier chokepoint: /validate's findings document is
     # LLM-writable, so witness_execution records / dark_verify ruling
@@ -429,7 +434,9 @@ def import_validation_results(
             human_ann.metadata, note_mtime=human_ann_mtime,
         ):
             audit_status = human_ann.metadata.get("status", "")
-            prior_body = human_ann.body
+            # Machine-tier note (legacy LLM / agent-sourced): model
+            # text — it never carries a machine marker into the row.
+            prior_body = defang_model_body(human_ann.body)
 
         if not audit_status:
             # No prior LLM verdict AND no human note — nothing to
