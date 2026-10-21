@@ -14,10 +14,11 @@ toolchain probing (:func:`core.audit.compiler_sweep._gcc_analyzer` /
 (``_derive_include_dirs``), the diagnostics parsers (``_parse_gcc_sarif``
 / ``_parse_gcc_json`` / ``_parse_clang_text``), the per-TU timeout, and
 the CWE family map (``COMPILER_CWE_MAP``) for tagging diagnostics with
-a CWE. Importing the module-private helpers follows the existing
-precedent (:mod:`core.audit.preprocessor_view` imports
-``_derive_include_dirs`` the same way) so compiler_sweep itself stays
-byte-identical.
+a CWE — plus the shared in-source suppression witness
+(``_suppression_witness`` / ``_closure_suppression_witness`` and their
+caps) that both channels use. Importing the module-private helpers
+follows the existing precedent (:mod:`core.audit.preprocessor_view`
+imports ``_derive_include_dirs`` the same way).
 
 Design constraints (the scanned repo is UNTRUSTED — identical posture
 to compiler_sweep):
@@ -36,6 +37,13 @@ to compiler_sweep):
 * Bounded: per-TU timeout from compiler_sweep's ``_COMPILE_TIMEOUT_S``
   and a TU cap (``max_tus``).  Anything skipped by the cap is reported
   LOUDLY — no silent truncation.
+* Analyzer silence on attacker-authored source is repo-steerable
+  (``[[clang::suppress]]``, ``#ifndef __clang_analyzer__``, flag-3
+  system-header linemarkers — in the TU or a repo header). Each cleanly
+  analysed TU gets compiler_sweep's suppression witness (file + include
+  closure); a hit is recorded as a COVERAGE LIMITATION (summary clause
+  + SARIF tool-execution notification), never as a finding and never
+  as a filter on findings that still fire.
 """
 
 from __future__ import annotations
@@ -61,18 +69,24 @@ if _REPO_ROOT not in sys.path:
 
 from core.audit.compiler_sweep import (
     _COMPILE_TIMEOUT_S,
+    _MAX_CLOSURE_FILE_BYTES,
+    _MAX_PP_TEXT_BYTES,
     COMPILER_CWE_MAP,
     _clang_path,
+    _closure_suppression_witness,
     _derive_include_dirs,
     _gcc_analyzer,
     _id_matches,
     _parse_clang_text,
     _parse_gcc_json,
     _parse_gcc_sarif,
+    _suppression_witness,
+    _witness_kind,
 )
 from core.inventory.exclusions import DEFAULT_EXCLUDES, should_exclude
 from core.run.scratch import scratch_dir
 from core.sarif import emit
+from core.source import read_text_capped
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +205,11 @@ class TuDiagnostics:
     compiler: str = ""
     reason: str = ""
     diagnostics: list[dict[str, Any]] = field(default_factory=list)
+    # Coverage limitations (ok TUs only; never findings): the first
+    # in-source analyzer-suppression construct in the TU or its repo
+    # include closure, or why the closure could not be vetted.
+    suppression_witness: str = ""
+    suppression_unvetted: str = ""
 
 
 def _rel_under_target(diag_file: str, target_path: Path, tu_dir: Path) -> str | None:
@@ -217,6 +236,62 @@ def _rel_under_target(diag_file: str, target_path: Path, tu_dir: Path) -> str | 
     if not real.startswith(root + os.sep):
         return None
     return os.path.relpath(real, root).replace(os.sep, "/")
+
+
+def _suppression_vet(
+    cmd0: str,
+    compiler_name: str,
+    include_flags: list[str],
+    target_path: Path,
+    full_path: Path,
+    workdir: Path,
+    sandbox_run,
+) -> tuple[str, str]:
+    """``(witness, vet_failure)`` for one cleanly analysed TU.
+
+    Same two-step vet as compiler_sweep's refutation gate: the raw
+    single-file witness first, then the compiler's own ``-E`` output
+    over the include closure (with the analyzer's macro environment on
+    the clang path so conditional includes resolve as under
+    ``--analyze``). Override flags (``-U``/``-D``) are deliberately NOT
+    used on the analysis itself — an in-source ``#define``/``#undef``
+    defeats them; the witness cannot be defeated that way.
+    """
+    got = read_text_capped(full_path, _MAX_CLOSURE_FILE_BYTES)
+    if got is None:
+        return "", "TU unreadable"
+    text, truncated = got
+    if truncated:
+        return "", "TU exceeds the byte cap"
+    witness = _suppression_witness(text)
+    if witness:
+        return witness, ""
+    pp_cmd = [cmd0, "-E", *include_flags, str(full_path)]
+    if compiler_name == "clang":
+        pp_cmd.insert(2, "-D__clang_analyzer__=1")
+    try:
+        proc = sandbox_run(
+            pp_cmd,
+            block_network=True,
+            target=str(target_path),
+            output=str(workdir),
+            cwd=str(workdir),
+            capture_output=True,
+            text=True,
+            timeout=_COMPILE_TIMEOUT_S,
+            caller_label="compiler-scan",
+        )
+    except (subprocess.SubprocessError, OSError, ValueError, TypeError):
+        return "", "preprocessor run failed"
+    if proc.returncode != 0:
+        return "", f"preprocessor exited {proc.returncode}"
+    if not isinstance(proc.stdout, str) or not proc.stdout:
+        # Real -E output always carries at least the TU's linemarker;
+        # missing output is an unvetted closure, never an empty one.
+        return "", "preprocessor produced no output"
+    return _closure_suppression_witness(
+        proc.stdout[:_MAX_PP_TEXT_BYTES + 1], target_path, full_path,
+    )
 
 
 def analyze_tu(
@@ -341,8 +416,16 @@ def analyze_tu(
                 "compiler": compiler_name,
                 "tu": rel_path,
             })
+        try:
+            witness, unvetted = _suppression_vet(
+                cmd[0], compiler_name, include_flags, target_path,
+                full_path, workdir, sandbox_run,
+            )
+        except Exception as exc:  # noqa: BLE001 — the vet only annotates; it must never cost this TU its findings
+            witness, unvetted = "", f"suppression vet failed: {type(exc).__name__}"
         return TuDiagnostics(
             rel_path, ok=True, compiler=compiler_name, diagnostics=kept,
+            suppression_witness=witness, suppression_unvetted=unvetted,
         )
 
 
@@ -362,6 +445,12 @@ class CompilerScanResult:
     tus_failed: int = 0       # compile failure / timeout / invocation error
     tus_skipped_cap: int = 0  # dropped by the max_tus cap
     findings: list[dict[str, Any]] = field(default_factory=list)
+    # Coverage limitations on ANALYSED TUs — never findings, never a
+    # claim about the code: {"tu", "suppression_witness"} where an
+    # in-source construct can silence the analyzer, {"tu", "reason"}
+    # where the include closure could not be vetted for one.
+    suppressed_tus: list[dict[str, str]] = field(default_factory=list)
+    unvetted_tus: list[dict[str, str]] = field(default_factory=list)
 
     def summary_line(self) -> str:
         """One-line operator-facing summary (LOUD about skips)."""
@@ -377,6 +466,27 @@ class CompilerScanResult:
             parts.append(
                 f"⚠️  {self.tus_skipped_cap} TU(s) SKIPPED by the TU cap "
                 f"— raise --compiler-scan-max-tus to cover them"
+            )
+        if self.suppressed_tus:
+            # The kind labels are presentation only: every listed TU is
+            # a coverage limitation regardless of its kind.
+            kinds: dict[str, int] = {}
+            for s in self.suppressed_tus:
+                label = _witness_kind(s["suppression_witness"])[1]
+                kinds[label] = kinds.get(label, 0) + 1
+            detail = ", ".join(
+                f"{n} {label}"
+                for label, n in sorted(kinds.items(), key=lambda kv: -kv[1])
+            )
+            parts.append(
+                f"⚠️  {len(self.suppressed_tus)} TU(s) carry an in-source "
+                f"analyzer suppression or steering construct ({detail}) — "
+                f"silence there is not evidence"
+            )
+        if self.unvetted_tus:
+            parts.append(
+                f"⚠️  {len(self.unvetted_tus)} TU(s) not vetted for "
+                f"analyzer suppression — silence there is not evidence"
             )
         return "; ".join(parts)
 
@@ -458,6 +568,16 @@ def scan_target(
             logger.debug("compiler-scan: %s — %s", rel, tu.reason)
             continue
         result.tus_analyzed += 1
+        if tu.suppression_witness:
+            result.suppressed_tus.append({
+                "tu": rel, "suppression_witness": _relativise(
+                    tu.suppression_witness, target_path),
+            })
+        elif tu.suppression_unvetted:
+            result.unvetted_tus.append({
+                "tu": rel, "reason": _relativise(
+                    tu.suppression_unvetted, target_path),
+            })
         for diag in tu.diagnostics:
             # Same header pulled into many TUs repeats its diagnostics —
             # dedup on (rule, file, line).
@@ -512,10 +632,64 @@ def to_sarif(result: CompilerScanResult) -> dict[str, Any]:
             properties=res_props,
         ))
 
-    return emit.document(
-        [emit.run(
-            _TOOL_NAME, rule_index.rules(), sarif_results,
-            full_name=_TOOL_FULL_NAME,
-        )],
-        schema_uri=_SARIF_SCHEMA_URI,
+    run = emit.run(
+        _TOOL_NAME, rule_index.rules(), sarif_results,
+        full_name=_TOOL_FULL_NAME,
     )
+    # Coverage limitations ride as tool-execution notifications (the
+    # coccinelle precedent), NOT results and NOT ``artifacts``: they
+    # survive merge_sarif, never enter SarifCache's result index or
+    # its declared-coverage lane, and say only that analyzer silence
+    # on these TUs is not evidence of absence.
+    notifications = [
+        _limitation_note(
+            s["tu"], "suppression_witness",
+            f"in-source analyzer suppression ({s['suppression_witness']}) "
+            f"— analyzer silence on this TU is not evidence of absence",
+            suppression_witness=s["suppression_witness"],
+            witness_kind=_witness_kind(s["suppression_witness"])[0],
+        )
+        for s in result.suppressed_tus
+    ] + [
+        _limitation_note(
+            u["tu"], "suppression_unvetted",
+            f"include closure not vetted for analyzer suppression "
+            f"({u['reason']}) — analyzer silence on this TU is not "
+            f"evidence of absence",
+            reason=u["reason"],
+        )
+        for u in result.unvetted_tus
+    ]
+    if notifications:
+        run["invocations"] = [{
+            "executionSuccessful": True,
+            "toolExecutionNotifications": notifications,
+        }]
+    return emit.document([run], schema_uri=_SARIF_SCHEMA_URI)
+
+
+def _relativise(text: str, target_path: Path) -> str:
+    """Replace the target root in a witness / reason with a repo-relative
+    form, so SARIF and summaries carry no absolute host path."""
+    roots = {str(target_path)}
+    try:
+        roots.add(str(target_path.resolve()))
+    except OSError:
+        pass
+    for root in sorted(roots, key=len, reverse=True):
+        text = text.replace(root.rstrip(os.sep) + os.sep, "")
+    return text
+
+
+def _limitation_note(
+    tu: str, kind: str, text: str, **props: str,
+) -> dict[str, Any]:
+    """One SARIF ``notification`` recording a per-TU coverage limitation."""
+    return {
+        "level": "warning",
+        "message": {"text": text[:500]},
+        "locations": [{
+            "physicalLocation": {"artifactLocation": {"uri": tu}},
+        }],
+        "properties": {"coverage_limitation": kind, **props},
+    }

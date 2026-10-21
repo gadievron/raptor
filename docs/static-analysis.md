@@ -45,7 +45,7 @@ Semgrep pass (`--expanded-semgrep`).
 | `--build-command <cmd>` | auto | CodeQL build command override (only relevant with `--codeql`; implies a traced build) |
 | `--traced-build` | off | Opt into traced-build C/C++ CodeQL extraction — executes the repo's build system (asserts trust). Default is buildless: no repo code runs during database creation |
 | `--no-traced-build` | -- | Force buildless extraction for this run, overriding `--traced-build` and the project's `build` trust marker |
-| `--compiler-scan` | off | Run gcc `-fanalyzer` / clang `--analyze` per C/C++ translation unit as an extra scan channel (sandboxed; no repo code executes) |
+| `--compiler-scan` | off | Run gcc `-fanalyzer` / clang `--analyze` per C/C++ translation unit as an extra scan channel (sandboxed; no repo code executes). TUs whose analyzer silence is repo-steerable are reported as a coverage limitation, never as a finding — see [Compiler-scan coverage limitations](#compiler-scan-coverage-limitations) |
 | `--no-compiler-scan` | -- | Explicitly disable the compiler-analyzer channel |
 | `--compiler-scan-max-tus <n>` | 2000 | Cap on translation units analysed by `--compiler-scan` (skipped TUs are reported) |
 | `--expanded-semgrep` | off | Re-run the loaded ruleset over fidelity-3 preprocessor-expanded views of macro-heavy C/C++ TUs, line-mapped back to the originals |
@@ -232,6 +232,59 @@ summary.
 Coccinelle rules have no inline suppression mechanism. Unwanted
 findings can be excluded via `--exclude-dir` globs.
 
+
+### Compiler-scan coverage limitations
+
+`--compiler-scan` treats analyzer silence on a TU as evidence only when nothing in the TU or its repo headers can steer the
+analyzer. Otherwise the TU is counted as analysed but listed as a coverage limitation: one summary clause (with the
+witness kind, e.g. `` `_Pragma` operator, payload not checked``, `analyzer-conditional code`, `` `suppress` attribute``,
+`unverifiable attribute list`) and one SARIF `toolExecutionNotification` per TU (`properties.witness_kind`). The kind is a
+label only; it never changes the result. Findings that clang still reports are always kept.
+
+- **Reported as "carry an in-source analyzer suppression or steering construct":** `suppress` / `__suppress__` in a
+  `[[...]]`, `<:<:...:>:>` or `__attribute__((...))` list (any position, any nesting, across lines), any `_Pragma(`
+  operator, `#ifndef __clang_analyzer__`-style analyzer-conditional code, diagnostic-ignore and system-header pragmas, and
+  system-header line markers — in the TU or a repo header, including token-pasted forms visible in the `-E` output.
+- **Reported as "not vetted":** a `#line` / linemarker whose presumed name leaves the tree (a relative name is resolved
+  against the TU directory, matching how diagnostic paths are attributed), cannot be resolved, cannot be decoded, or looks
+  like a Windows path (a drive prefix or any backslash — a conservative policy; backslashes are legal POSIX characters);
+  a relative include marker; missing, empty or unparseable `-E` output; a TU or header over the size caps; a symlinked TU;
+  more than 20,000 distinct linemarker names reaching the attribution checks in one TU (measured on real code: at most
+  813, a C++ TU including ten standard-library headers); a linemarker name that must be resolved on the filesystem and is
+  longer than 4,096 characters, resolves through more than 256 path components or follows more than 40 symbolic links;
+  more than 250,000 filesystem operations (each lstat, each readlink and each component of a followed link's target) in
+  one TU; or a vet still running after its 60 s per-TU deadline (measured on 4,405 real `clang -E` closures: at most
+  181 characters, 22 components, 2 links per name and 21,825 operations per TU). These reasons give counts and the `-E`
+  line number, never the name. Containment is decided as on a POSIX filesystem (clang runs on POSIX here); Windows paths
+  and case-insensitive matching are not supported.
+- **Accepted false positives** (they only add a limitation): `suppress` as an attribute argument or in a string on an
+  attribute line; an attribute list the scan cannot verify (unbalanced, unclosed, nested deeper than 4096, or a literal
+  running to end of file after an opener); Obj-C message expressions such as `[[obj suppress:1] x]`; any `_Pragma`, even a
+  harmless one — on brotli 29 of 32 TUs carry `_Pragma` portability macros in compiler branches inactive under clang; a
+  C++ raw-string line starting `# <digit>` in `-E` output.
+- **Not detected (residuals):** a suppression assembled by token pasting that leaves no text in the sources or the `-E`
+  output (e.g. `#define CA __clang_ ## analyzer__` / `#if CA`); clang lexing beyond the scanner's model; a nameless or
+  in-tree `#line` relabel (the scan keeps the finding, but the audit sweep may refute); a self-include with
+  `_Pragma("clang system_header")`.
+- **Witness text:** the witness quoted in the summary and SARIF is source or `-E` text with the target root removed;
+  linemarker and other directive lines inside a quoted attribute list are replaced by a space, so a toolchain header path
+  never appears. A path literal written in the scanned source itself is quoted as written.
+- **Untested paths:** the gcc `-fanalyzer` path was never executed (on gcc, `#ifndef __clang_analyzer__` may be reported
+  although gcc does not define it); all measurements used an unsandboxed runner, not the real seatbelt sandbox.
+- **Cost (observed, Apple clang 21, unsandboxed runner, 3 runs, median; host load 12–60):** end to end, brotli (32 TUs)
+  9.4 s → 11.0 s (about 1.2×); a 22-TU C tree 0.59 s → 1.00 s (+0.4 s); a synthetic 200-TU × 30-header workload 2.0 s
+  → 7.1 s (about 3.5×: one extra `-E` run per TU plus about 14 s of summed witness time across the 4 worker threads).
+  The witness function alone on a synthetic 14 MB preprocessed closure: 0.13 s → about 3.2 s. Measured maxima for the
+  tested shapes near the 64M-character `-E` cap (host load 22–110, so times are indicative; not proven bounds): about
+  1.8 GB peak process memory per TU on two-character or CRLF lines (one-character lines: about 950 MB), mostly the
+  per-line splits of the pre-existing and layer-1 walks; one TU including 31 headers of 2 MB short lines through real
+  clang, about 90–120 s, mostly the layer-2 token scan and per-header scans. The scan runs 4 workers, so about 7.2 GB
+  plus process overhead with four such TUs in flight. Linemarker-name resolution is bounded by the per-name and per-TU
+  limits above, symlink expansion included: a chain of 1,000 links named by 200 `#line` markers ends "not vetted" in
+  about 0.4 s end to end. The pre-existing closure check, which runs before these limits, is not covered by them: a long
+  symlink chain named by absolute `#line` paths is slow there, as it is on main. The 60 s deadline is cooperative: it is
+  checked between steps and cannot interrupt a blocked system call, filesystem latency, or the uninstrumented linear
+  scans of the `-E` text.
 
 ## Output
 
