@@ -16,14 +16,21 @@ tool results.
 from __future__ import annotations
 
 import ast
+import bisect
 import logging
 import re
 import textwrap
-from dataclasses import dataclass, field
+import threading
+from dataclasses import dataclass, field, fields
+from functools import cached_property
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from core.audit.source_view import sanitized_view
+from core.audit.source_view import (
+    SanitizedView,
+    sanitized_view,
+    sanitized_view_with_status,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -2240,6 +2247,1077 @@ def _is_simple_accessor(source: str, lang: str) -> bool:
     return not _accessor_ref_refused(returned)
 
 
+# ── Suppressor-guard views ───────────────────────────────────────────
+#
+# A guard that switches a rule OFF ("a sanitizer is visible, so no
+# hit") is a suppression receipt and must be earned against code: a
+# comment, a trailing comment or a string literal that merely NAMES the
+# sanitizer ("// TODO: basename") would otherwise silence the rule.
+# Suppressor guards therefore read the shared view through
+# ``sanitized_view_with_status`` (comments and strings blanked) and
+# CANNOT VOUCH when it reports ``ambiguous`` (the lexer had to guess:
+# an unterminated multi-line literal, a PHP 7 ``#[`` comment, ...) —
+# the hit is kept.  Sink matching and the positive context checks that
+# KEEP a hit stay on raw text.
+#
+# Some sanitizer evidence is string data by nature — a ``".."``
+# needle of a containment check, a ``$1`` placeholder in a query, an
+# XML feature URI.  Those guards (_LiteralGuard) look at one argument
+# POSITION of the sanitizing call on the code view — the needle /
+# query / feature-name argument — and accept it only when that
+# argument is a CONSTANT expression (string literals joined by
+# ``+``/``.``, PHP arrays of literals) whose literal text, read from
+# the comments-only view (``keep_strings=True``), is the evidence
+# itself (a named separator constant may join a needle literal).  A
+# path-traversal needle must be that literal, in the call.  Only a Go
+# query variable and a Java feature-name constant may stand in for the
+# literal, under the single-assignment rule (_SingleAssignment): the
+# function writes the NAME exactly once (a preceding zero declaration
+# aside), with a plain constant, in its body directly or through
+# unconditional blocks (try / finally / synchronized / bare), before
+# the call — any other write shape or position cannot vouch.  A log message spelling the token is not the
+# call, and a path literal such as ``'../uploads/' . $f`` flowing into
+# some other argument is data, not a sanitizer (_literal_guard_holds).
+#
+# Perl guards stay on raw text: the hash-comment scanner does not
+# model perl quote constructs (``qr/#/`` would blank a live sanitizer
+# later on the line), see the source_view module docstring.
+
+class _GuardViews:
+    """Lazily built suppressor-guard views of one function's source.
+
+    ``code`` blanks comments and strings, ``keep`` blanks comments only
+    (both from the shared ``sanitized_view_with_status``, called with
+    the file path and the prefilter's language id); ``code_lines``
+    aligns ``code`` with the per-line loops; ``vouch`` is False when
+    the lexer reported ambiguity, and every guard then keeps the hit
+    (``sees``/``line_sees``/``feeds`` return False).  Built on first
+    use, so a function with no candidate sink pays nothing.
+    """
+
+    def __init__(self, result: PrefilterResult, source: str) -> None:
+        self._result = result
+        self._source = source
+        self._feeds: dict[str, bool] = {}
+
+    def _view(self, keep_strings: bool) -> SanitizedView:
+        return sanitized_view_with_status(
+            self._source, self._result.file,
+            language=self._result.language or None,
+            keep_strings=keep_strings,
+        )
+
+    @cached_property
+    def _code(self) -> SanitizedView:
+        return self._view(False)
+
+    @cached_property
+    def _keep(self) -> SanitizedView:
+        return self._view(True)
+
+    @property
+    def code(self) -> str:
+        return self._code.text
+
+    @property
+    def keep(self) -> str:
+        return self._keep.text
+
+    @property
+    def vouch(self) -> bool:
+        """False when the lexer had to guess (``ambiguous``): a guard on
+        this view cannot vouch for a sanitizer and must keep the hit."""
+        return not self._code.ambiguous
+
+    def sees(self, pattern: str) -> bool:
+        """A vouched code-view match of *pattern* anywhere in the function."""
+        return self.vouch and re.search(pattern, self.code) is not None
+
+    def line_sees(self, pattern: str, k: int) -> bool:
+        """A vouched code-view match of *pattern* on source line *k*."""
+        return self.vouch and re.search(pattern, self.code_lines[k]) is not None
+
+    @cached_property
+    def code_lines(self) -> list[str]:
+        return _guard_view_lines(self._source, self.code)
+
+    def feeds(self, guard: _LiteralGuard) -> bool:
+        """Memoised :func:`_literal_guard_holds` over this function."""
+        if guard.name not in self._feeds:
+            self._feeds[guard.name] = (
+                self.vouch and not self._keep.ambiguous
+                and _literal_guard_holds(self.code, self.keep, guard)
+            )
+        return self._feeds[guard.name]
+
+
+class _NoVouchViews:
+    """Guard views that never vouch: the fallback after a view failure.
+
+    Same interface as :class:`_GuardViews`, built from the raw source
+    with plain string operations only (no lexer): ``vouch`` is False and
+    ``sees``/``line_sees``/``feeds`` return False, so no view-based guard can
+    suppress and every rule falls back to main's raw-text decision.
+    ``code``/``keep`` are the raw source and ``code_lines`` its stripped
+    lines (the per-line loops' model), for consumers that read them as
+    an input to a vouch-gated test.
+    """
+
+    vouch = False
+
+    def __init__(self, source: str) -> None:
+        self._source = source
+
+    @property
+    def code(self) -> str:
+        return self._source
+
+    @property
+    def keep(self) -> str:
+        return self._source
+
+    def sees(self, pattern: str) -> bool:
+        return False
+
+    def line_sees(self, pattern: str, k: int) -> bool:
+        return False
+
+    def feeds(self, guard: _LiteralGuard) -> bool:
+        return False
+
+    @cached_property
+    def code_lines(self) -> list[str]:
+        return [
+            seg.splitlines()[0].strip()
+            for seg in self._source.splitlines(keepends=True)  # line-model: same per-line model as _guard_view_lines
+        ]
+
+
+# Recoveries made by _with_guard_views: one count per checker run whose
+# first attempt raised and whose never-vouching re-run returned (read
+# with guard_view_failure_count), and one warning per process.
+_guard_view_failures = 0
+_guard_view_warned = False
+_guard_view_lock = threading.Lock()
+
+
+def guard_view_failure_count() -> int:
+    """How many checker runs RECOVERED in this process: the attempt with
+    guard views raised and the re-run without view-based suppression
+    returned.  A recovery does not prove the failure came from a view (a
+    non-view failure that does not repeat is counted too); a failure the
+    re-run repeats propagates and is not counted."""
+    return _guard_view_failures
+
+
+def _note_guard_view_failure(exc: Exception) -> None:
+    """Count a recovered checker run and warn once (exception type only,
+    never source text).  Best-effort: a failure here is swallowed, so
+    reporting can never cost the recovered result."""
+    global _guard_view_failures, _guard_view_warned
+    try:
+        with _guard_view_lock:
+            _guard_view_failures += 1
+            warn = not _guard_view_warned
+            _guard_view_warned = True
+        if warn:
+            logger.warning(
+                "prefilter: a checker attempt with guard views failed "
+                "(%s); its rules re-ran without view-based suppression "
+                "and that run returned, so main's hits are kept (further "
+                "recoveries are counted, not logged)", type(exc).__name__,
+            )
+        logger.debug("prefilter guard-view attempt failed",
+                     exc_info=(type(exc), exc, exc.__traceback__))
+    except Exception:  # noqa: BLE001 — reporting must not cost the hits
+        pass
+
+
+_RESULT_STATE_FIELDS = tuple(
+    f.name for f in fields(PrefilterResult) if f.name != "hits")
+
+
+def _with_guard_views(
+    result: PrefilterResult, source: str,
+    body: Callable[[Any], None],
+) -> None:
+    """Run a checker *body* with lexer-backed guard views; if anything in
+    that attempt raises (the view build, a guard helper, an index into
+    the views, or a view failure the PHP prepare pointer held and
+    re-raised), roll the attempt back and re-run *body* with
+    :class:`_NoVouchViews`.  Only when the re-run returns is the
+    recovery counted and warned (:func:`_note_guard_view_failure`); a
+    failure in the re-run propagates uncounted, as main's own raw-text
+    code would.  KeyboardInterrupt and SystemExit are not caught.
+
+    Rollback restores exactly the tail of ``result.hits`` appended by the
+    attempt and the ``_RESULT_STATE_FIELDS`` (shallow).  It does not
+    undo in-place changes to pre-existing hits or external counters:
+    php-sql-injection's additions-failure counter counts every attempt in
+    which the additions themselves raised (a view failure does not reach it).
+
+    The boundary costs stack depth: near the recursion limit the re-run
+    raises 1 to 3 frames earlier than main on the measured checkers
+    (CPython 3.14).
+    """
+    mark = len(result.hits)
+    state = {name: getattr(result, name) for name in _RESULT_STATE_FIELDS}
+    try:
+        body(_GuardViews(result, source))
+        return
+    except Exception as exc:  # noqa: BLE001 — never cost main's hits
+        first = exc
+        del result.hits[mark:]
+        for name, value in state.items():
+            setattr(result, name, value)
+    body(_NoVouchViews(source))
+    _note_guard_view_failure(first)
+
+
+def _guard_view_lines(source: str, view: str) -> list[str]:
+    """Slices of *view* aligned 1:1 with ``line.strip()`` per source line.
+
+    Aligned by character offset over ``source.splitlines`` (the line
+    model every per-line loop here iterates), so a terminator that
+    splitlines honours but the view blanks as string data (``\\x0c``,
+    ``\\r``) cannot shift the guard onto another line.
+    """
+    out: list[str] = []
+    off = 0
+    for seg in source.splitlines(keepends=True):  # line-model: offset walk pairing the view with the per-line loops' splitlines model
+        line = seg.splitlines()[0]
+        lead = len(line) - len(line.lstrip())
+        out.append(view[off + lead:off + lead + len(line.strip())])
+        off += len(seg)
+    return out
+
+
+@dataclass(frozen=True)
+class _LiteralGuard:
+    """A sanitizer whose evidence is a constant string argument.
+
+    ``call_re`` matches the call up to and including ``(``;
+    ``positions`` are the 0-based argument indexes that carry the
+    evidence; ``evidence`` judges the literal texts of a constant
+    argument; ``fixed`` pins other arguments to one of a set of literal
+    code texts (``setFeature(F, true)`` — ``false`` re-enables the
+    feature).  ``bind`` is empty when the evidence must be a literal in
+    the call; otherwise (``"go"``/``"java"``) a bare NAME may stand for
+    it under the single-assignment rule (_SingleAssignment).  ``php``
+    admits the PHP ``array(...)`` construct (any case) in a constant.
+    """
+
+    name: str
+    call_re: re.Pattern[str]
+    positions: tuple[int, ...]
+    evidence: Callable[[list[str]], bool]
+    fixed: tuple[tuple[int, frozenset[str]], ...] = ()
+    bind: str = ""
+    php: bool = False
+
+
+_GUARD_OPEN = "([{"
+_GUARD_CLOSE = ")]}"
+# A string literal on the code view: contents are blanked (a CR inside
+# one becomes a space, a newline stays), the quotes stay.  A Java text
+# block reads as `""` + `"<text>"` + `""` — the same literal text.
+_GUARD_LIT_RE = re.compile(r'(["\'`])[ \t\r\n\f\v]*\1')
+# What may remain of a constant argument once its literals (and named
+# separator constants) are cut; CR/FF/VT included for CRLF sources.
+_GUARD_CONST_RE = re.compile(r'[ \t\r\n\f\v+.,()\[\]]*')
+# PHP only: the `array(...)` construct — the keyword (any case) directly
+# followed, after optional blanks, by `(`.
+_GUARD_CONST_PHP_RE = re.compile(
+    r'(?:[ \t\r\n\f\v+.,()\[\]]|\b(?i:array)\b(?=[ \t\r\n\f\v]*\())*')
+_GUARD_ARRAY_CALL_RE = re.compile(r'[ \t\r\n\f\v]*\(')
+_GUARD_WORD_RE = re.compile(r'[\w$]+')
+_GUARD_NAME_ONLY_RE = re.compile(r'\$?[A-Za-z_]\w*')
+# A platform path-separator constant joined to a needle literal
+# (`'..' . DIRECTORY_SEPARATOR`, `".." + string(os.PathSeparator)`,
+# `'..' + path.sep`): a known one-character separator, so it adds
+# nothing a literal separator would not.
+_GUARD_SEP_RE = re.compile(
+    r'string\s*\(\s*(?:os\.PathSeparator|filepath\.Separator)\s*\)'
+    r'|(?:DIRECTORY_SEPARATOR|os\.PathSeparator|filepath\.Separator'
+    r'|path\.sep)\b'
+)
+
+
+def _guard_bracket_pairs(code: str) -> dict[int, int]:
+    """Opening index -> matching closing index for ``()[]{}`` on *code*."""
+    pairs: dict[int, int] = {}
+    stack: list[int] = []
+    for m in re.finditer(r'[()\[\]{}]', code):
+        if m.group() in _GUARD_OPEN:
+            stack.append(m.start())
+        elif stack:
+            pairs[stack.pop()] = m.start()
+    return pairs
+
+
+def _guard_call_args(
+    code: str, pairs: dict[int, int], open_idx: int, upto: int,
+) -> tuple[list[tuple[int, int]], int]:
+    """``[start, end)`` of arguments 0..*upto* of the call opened at *open_idx*.
+
+    Splits on top-level commas, jumping over nested brackets, so the
+    cost is the top-level length of the argument list (bounded at 4000
+    chars when the call is unbalanced).  Also returns the chars scanned.
+    """
+    stop = pairs.get(open_idx, min(len(code), open_idx + 4001))
+    args: list[tuple[int, int]] = []
+    k = start = open_idx + 1
+    while k < stop and len(args) <= upto:
+        c = code[k]
+        if c in _GUARD_OPEN and k in pairs:
+            k = pairs[k] + 1
+            continue
+        if c == ",":
+            args.append((start, k))
+            start = k + 1
+        k += 1
+    if len(args) <= upto:
+        args.append((start, min(k, stop)))
+    return args, k - open_idx
+
+
+def _guard_constant_literals(
+    code: str, keep: str, start: int, end: int, php: bool = False,
+) -> tuple[list[str] | None, int]:
+    """Literal texts of a constant expression ``code[start:end]``, else None.
+
+    Constant: string literals joined by ``+``/``.``, optionally in a
+    PHP ``array(...)``/``[...]`` (*php*: the ``array`` keyword, any case,
+    counts only when ``(`` follows it; in other languages ``array`` is
+    an ordinary identifier), plus named separator constants
+    (_GUARD_SEP_RE); any other identifier, call or interpolation (a JS
+    ``${...}`` stays code) disqualifies it.  Also returns the chars
+    scanned (charged to the caller's budget).
+    """
+    cuts: list[tuple[int, int]] = []
+    skip = start
+    # Early exit on the first word that is neither the PHP ``array(``
+    # construct nor part of a separator constant: string contents are
+    # blanked, so any word here is code (a nested call is rejected
+    # without a full scan).
+    for w in _GUARD_WORD_RE.finditer(code, start, end):
+        if w.start() < skip:
+            continue
+        if php and w.group().lower() == "array" and (
+            _GUARD_ARRAY_CALL_RE.match(code, w.end(), end) is not None
+        ):
+            continue
+        sep = _GUARD_SEP_RE.match(code, w.start(), end)
+        if sep is None:
+            return None, w.end() - start
+        cuts.append((sep.start(), sep.end()))
+        skip = sep.end()
+    if cuts:
+        text = "".join(
+            code[a:b] for a, b in zip(
+                [start] + [cb for _, cb in cuts], [ca for ca, _ in cuts] + [end])
+        )
+    else:
+        text = code[start:end]
+    # literals are one quote + blanks + the same quote (contents are
+    # blanked), so cutting them is one C-level substitution
+    if not (_GUARD_CONST_PHP_RE if php else _GUARD_CONST_RE).fullmatch(
+            _GUARD_LIT_RE.sub("", text)):
+        return None, end - start
+    lits = [
+        keep[m.start() + 1:m.end() - 1]
+        for m in _GUARD_LIT_RE.finditer(code, start, end)
+    ]
+    return (lits or None), end - start
+
+
+def _guard_rhs_end(code: str, pairs: dict[int, int], start: int) -> int:
+    """End of the expression starting at *start* (an assignment's RHS).
+
+    Stops at a top-level ``;``, ``,`` or closer, or at a top-level
+    newline unless the expression continues with ``+``/``.`` across it;
+    literals (which may span lines) and nested brackets are skipped.
+    Bounded at 4000 chars.
+    """
+    stop = min(len(code), start + 4000)
+    k = start
+    while k < stop:
+        c = code[k]
+        if c in _GUARD_OPEN and k in pairs:
+            k = pairs[k] + 1
+            continue
+        if c in "\"'`":
+            m = _GUARD_LIT_RE.match(code, k)
+            if m:
+                k = m.end()
+                continue
+        if c in ";," or c in _GUARD_CLOSE:
+            return k
+        if c == "\n":
+            before = code[start:k].rstrip()
+            after = code[k:stop].lstrip()
+            if not (before.endswith(("+", ".")) or after.startswith(("+", "."))):
+                return k
+        k += 1
+    return stop
+
+
+# Single-assignment rule (_SingleAssignment) — write shapes on the code
+# view.  An assignment operator after the NAME: plain `=`/`:=` (group
+# empty) or any compound form; never `==`, `=>`, `!=`, `<=`, `>=`.  Go
+# keeps the operator on the NAME's line (a newline ends a Go
+# statement); Java may wrap before it.
+# Both are only ever `.match`ed right after a NAME; the leading
+# lookbehind pins the run start so a scanning use cannot restart inside
+# a whitespace run (ReDoS scan-restart census).
+_GUARD_ASSIGN_OP_RE = re.compile(
+    r'(?<![ \t])[ \t]*((?:[-+*/%.&|^]|\?\?|\|\||&&|<<|>>>?|\*\*)?):?=(?![=>])')
+_GUARD_ASSIGN_OP_NL_RE = re.compile(
+    r'(?<![ \t\r\n])[ \t\r\n]*((?:[-+*/%.&|^]|\?\?|\|\||&&|<<|>>>?|\*\*)?)'
+    r':?=(?![=>])')
+_GUARD_INCDEC_AFTER_RE = re.compile(r'[ \t]*(?:\+\+|--)')
+# foreach/for binding after the NAME: Java `T NAME : xs`, JS `NAME of`,
+# `NAME in`; a Go `case NAME:` / label reads the same way (write).
+_GUARD_FOR_AFTER_RE = re.compile(r'[ \t]*(?::(?![:=])|(?:of|in)\b)')
+# Maximal runs of left-hand-side material: names, member dots,
+# brackets, (blanked) literal quotes, and commas that may end their
+# line (a Go LHS wraps after a comma).  Built once per window; a NAME
+# whose run ends at an assignment operator and continues with `,` or a
+# closer is in a destructuring / multi-assign left-hand side.
+_GUARD_LHS_RUN_RE = re.compile(
+    r'(?:[\w$ \t.\[\](){}"\'`]|,[ \t]*(?:\r?\n[ \t]*)?)+')
+_GUARD_LHS_START_RE = re.compile(r'[ \t]*[,\])}]')
+_GUARD_LHS_ASSIGN_RE = re.compile(r':?=(?![=>])')
+_GUARD_LHS_PLAIN_RE = re.compile(
+    r'(?:[ \t]*,[ \t]*(?:\r?\n[ \t]*)?[\w$]+)*[ \t]*')
+_GUARD_DECL_BEFORE_RE = re.compile(r'(?:^|[^\w$])(?:var|const)[ \t]+$')
+_GUARD_DECL_TAIL_RE = re.compile(r'(?:[ \t]+[\w.\[\]*]+)?[ \t]*=(?![=>])')
+# Zero declarations (no initializer, or null / zero / empty): Go
+# `var NAME TYPE` [`= nil|0|""`], Java `[final] String NAME` [`= null|0|""`].
+_GUARD_GO_ZERO_TAIL_RE = re.compile(
+    r'[ \t]+[\w.\[\]*]+[ \t]*(?:=[ \t]*(?:nil|0|"")[ \t]*)?(?:;|\r?\n|$)')
+_GUARD_JAVA_DECL_BEFORE_RE = re.compile(
+    r'(?:^|[^\w$.])(?:final[ \t\r\n]+)?String[ \t\r\n]+$')
+_GUARD_JAVA_ZERO_TAIL_RE = re.compile(
+    r'[ \t\r\n]*(?:=[ \t\r\n]*(?:null|0|"")[ \t\r\n]*)?;')
+# what may precede the vouching write on its statement: declaration
+# words, then (multi-assign) earlier names of the list.
+_GUARD_STMT_PREFIX_RE = re.compile(
+    r'[ \t\r\n\f\v]*(?:(?:var|const|final|static|private|public|protected'
+    r'|String)[ \t\r\n\f\v]+)*((?:[\w$]+[ \t]*,[ \t]*(?:\r?\n[ \t]*)?)*)')
+_GUARD_MAX_OCCURRENCES = 512
+# Tests switch this on: _in_catch then verifies its ancestry
+# precondition with a parent walk (not part of the production cost).
+_GUARD_DEBUG_ANCESTRY = False
+_GUARD_WORD_AT_RE = re.compile(r'[A-Za-z_]\w*')
+_GUARD_THROWS_TAIL = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.,<> \t\r\n")
+_GUARD_JAVA_NAME_RE = re.compile(r'(\bnew[ \t\r\n]+)?\b([A-Za-z_]\w*)[ \t\r\n]*$')
+_GUARD_JAVA_KEYWORDS = frozenset({
+    "if", "for", "while", "switch", "catch", "synchronized", "return",
+    "else", "do", "try", "finally",
+})
+
+
+def _guard_match_close(code: str, i: int, stop: int) -> int:
+    """Index of the bracket closing ``code[i]`` before *stop*, else -1."""
+    opener = code[i]
+    closer = {"(": ")", "[": "]", "{": "}"}[opener]
+    depth = 0
+    for k in range(i, stop):
+        c = code[k]
+        if c == opener:
+            depth += 1
+        elif c == closer:
+            depth -= 1
+            if depth == 0:
+                return k
+    return -1
+
+
+def _guard_go_named_header(code: str, i: int, brace: int) -> bool:
+    """``code[i:brace]`` (just after ``func``) is a named declaration.
+
+    ``[(receiver)] Name [[type params]] (params) [results]``, any of it
+    wrapped over lines; results may hold ``(...)``, ``[...]``, ``*``,
+    ``.``, ``<-`` and ``interface{…}``/``struct{…}``.  A ``func(`` literal
+    has no name after its parameter list.
+    """
+    def skip(k: int) -> int:
+        while k < brace and code[k] in " \t\r\n":
+            k += 1
+        return k
+
+    k = skip(i)
+    if k < brace and code[k] == "(":
+        j = _guard_match_close(code, k, brace)
+        if j < 0:
+            return False
+        k = skip(j + 1)
+    m = _GUARD_WORD_AT_RE.match(code, k, brace)
+    if m is None:
+        return False
+    k = skip(m.end())
+    if k < brace and code[k] == "[":
+        j = _guard_match_close(code, k, brace)
+        if j < 0:
+            return False
+        k = skip(j + 1)
+    if k >= brace or code[k] != "(":
+        return False
+    j = _guard_match_close(code, k, brace)
+    if j < 0:
+        return False
+    k = j + 1
+    while k < brace:
+        c = code[k]
+        if c in " \t\r\n*.,<-":
+            k += 1
+        elif c in "([":
+            j = _guard_match_close(code, k, brace)
+            if j < 0:
+                return False
+            k = j + 1
+        else:
+            m = _GUARD_WORD_AT_RE.match(code, k, brace)
+            if m is None:
+                return False
+            k = m.end()
+            if m.group() in ("interface", "struct"):
+                k = skip(k)
+                if k < brace and code[k] == "{":
+                    j = _guard_match_close(code, k, brace)
+                    if j < 0:
+                        return False
+                    k = j + 1
+    return k == brace
+
+
+class _SingleAssignment:
+    """Canonical binding rule: a NAME vouches only through ONE write.
+
+    A bare NAME argument stands for a constant only when the function
+    window contains exactly one write to it — any operator (`=`, `:=`,
+    `+=`, `.=`, `??=`, `||=`, `&&=`, ...; Java may wrap before the
+    operator), an increment, a destructuring or multi-assign position
+    (the left-hand side may wrap after a comma), a for/foreach binding,
+    `&NAME` (by-reference / address taken), a `var`/`const`
+    declaration, or any occurrence before that write (a parameter, an
+    earlier use) — and that write is a plain `NAME = <constant>` (also
+    `:=`, `var|const NAME [TYPE] =`, Java `[final] String NAME =`, or
+    an element of `a, NAME := x, <constant>`) that precedes the call
+    and starts its own statement (no `if (c)`, `case:`, `&&`, `->`
+    before it).  A zero declaration that precedes it (Go `var NAME T`
+    [`= nil|0|""`], Java `[final] String NAME` [`= null|0|""`]) is not a
+    second write.  The write sits in a named function or method body,
+    directly or through UNCONDITIONAL blocks only (Java `try`,
+    try-with-resources, `finally`, `synchronized`, a bare `{}` block;
+    a Go bare block); a branch, loop, switch, `catch`, lambda,
+    anonymous class or closure on the way disqualifies it.  The call
+    follows the write inside that function body and not inside a
+    `catch` block.  Member accesses (`obj.NAME`, `$this->NAME`) are
+    other variables.  Everything else cannot vouch.  Cost: names,
+    braces, statement terminators and LHS runs are indexed once per
+    window, classification stops at the second write, RHS element
+    lists of a multi-assign are split once, and the two brace walks
+    (write -> function body, call -> nearest catch) are memoised for
+    every brace they pass, so each brace is classified at most once
+    per walk kind: O(B + Q) walk steps for B braces and Q queries
+    (``ops`` counts them; the tests bound it).
+    """
+
+    def __init__(
+        self, code: str, pairs: dict[int, int], names: set[str],
+        lang: str, calls: list[int],
+    ) -> None:
+        self._code = code
+        self._pairs = pairs
+        self._lang = lang
+        self._assign_op = (
+            _GUARD_ASSIGN_OP_RE if lang == "go" else _GUARD_ASSIGN_OP_NL_RE)
+        self._term = ";{}\n" if lang == "go" else ";{}"
+        self._terms_list: list[int] | None = None
+        self._runs: tuple[list[int], list[int]] | None = None
+        self._occ: dict[str, list[int]] = {n: [] for n in names}
+        names_re = re.compile(
+            r'(?<![\w$])(?:'
+            + "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True))
+            + r')(?![\w$])')
+        for m in names_re.finditer(code):
+            rows = self._occ[m.group()]
+            if len(rows) > _GUARD_MAX_OCCURRENCES:
+                continue
+            a = m.start()
+            before = code[max(0, a - 2):a]
+            if before.endswith(".") or before == "->" or before == "::":
+                continue
+            rows.append(a)
+        self._brace_close: dict[int, int] = {}
+        self._brace_parent: dict[int, int] = {}
+        self._enclosing = self._enclosing_braces(sorted(
+            {p for rows in self._occ.values() for p in rows} | set(calls)))
+        self._rhs_lists: dict[int, list[tuple[int, int]]] = {}
+        self._writes: dict[str, tuple[int, int, int, int] | None] = {}
+        # memoised brace walks (path compression; the brace tree, the
+        # code and the language never change after __init__)
+        self._body_memo: dict[int, int | None] = {}
+        self._catch_memo: dict[int, int] = {}
+        # operation counts: parent edges walked, classifier calls, memo
+        # stores (tests bound them; the debug ancestry check is excluded)
+        self.ops = {"edges": 0, "classify": 0, "stores": 0}
+        self.cost = 0
+
+    def _enclosing_braces(self, positions: list[int]) -> dict[int, int]:
+        """Position -> index of its innermost enclosing ``{`` (-1 none).
+
+        ``{}`` are paired on their own stack, so a stray ``(`` or ``[``
+        left visible by the lexer cannot unbalance the block structure.
+        Also records every ``{``'s close and parent.
+        """
+        out: dict[int, int] = {}
+        stack: list[int] = []
+        it = iter(positions)
+        nxt = next(it, None)
+        for m in re.finditer(r'[{}]', self._code):
+            while nxt is not None and nxt < m.start():
+                out[nxt] = stack[-1] if stack else -1
+                nxt = next(it, None)
+            if m.group() == "{":
+                self._brace_parent[m.start()] = stack[-1] if stack else -1
+                stack.append(m.start())
+            elif stack:
+                self._brace_close[stack.pop()] = m.start()
+        while nxt is not None:
+            out[nxt] = stack[-1] if stack else -1
+            nxt = next(it, None)
+        return out
+
+    def _java_head(self, brace: int) -> tuple[str, str]:
+        """(head text before *brace*, keyword/name before its ``(…)``)."""
+        self.ops["classify"] += 1
+        head = self._code[max(0, brace - 400):brace].rstrip()
+        t = head.rfind("throws")
+        if (
+            t > 0 and not (head[t - 1].isalnum() or head[t - 1] == "_")
+            and head[t + 6:t + 7] in (" ", "\t", "\r", "\n")
+            and all(c in _GUARD_THROWS_TAIL for c in head[t + 6:])
+        ):
+            head = head[:t].rstrip()
+        if not head.endswith(")"):
+            return head, ""
+        depth, k = 0, len(head) - 1
+        while k >= 0:
+            if head[k] == ")":
+                depth += 1
+            elif head[k] == "(":
+                depth -= 1
+                if depth == 0:
+                    break
+            k -= 1
+        if k <= 0:
+            return head, ""
+        m = _GUARD_JAVA_NAME_RE.search(head, 0, k)
+        if m is None:
+            return head, ""
+        return head, ("new " if m.group(1) else "") + m.group(2)
+
+    def _is_function_body(self, brace: int) -> bool:
+        """``{`` at *brace* opens a named function/method body.
+
+        Go: the nearest line-start ``func`` before it heads a named
+        declaration ending exactly at *brace* (receiver, type parameters
+        and wrapped lines allowed; a ``func(`` literal is a closure).
+        Java: it follows ``Name(...)`` [``throws …``] where Name is not a
+        control keyword and not ``new X(...)`` (an anonymous class);
+        ``-> {`` is a lambda.
+        """
+        code = self._code
+        self.ops["classify"] += 1
+        if self._lang == "go":
+            lo = max(0, brace - 4000)
+            k = brace
+            for _ in range(64):
+                f = code.rfind("func", lo, k)
+                if f < 0:
+                    return False
+                k = f
+                after = code[f + 4:f + 5]
+                if f > 0 and (code[f - 1].isalnum() or code[f - 1] in "_$"):
+                    continue
+                if not (after.isspace() or after == "("):
+                    continue
+                if code[code.rfind("\n", 0, f) + 1:f].strip():
+                    continue
+                return _guard_go_named_header(code, f + 4, brace)
+            return False
+        head, name = self._java_head(brace)
+        return bool(
+            head.endswith(")") and name
+            and name not in _GUARD_JAVA_KEYWORDS and not name.startswith("new ")
+        )
+
+    def _is_unconditional(self, brace: int) -> bool:
+        """``{`` at *brace* opens a block that always runs to its end
+        once entered from the enclosing block: Java `try`, `try (…)`,
+        `finally`, `synchronized (…)` or a bare block; a Go bare block
+        (``{`` first on its line)."""
+        code = self._code
+        self.ops["classify"] += 1
+        if self._lang == "go":
+            return not code[code.rfind("\n", 0, brace) + 1:brace].strip()
+        head, name = self._java_head(brace)
+        if not head or head[-1] in ";{}":
+            return True
+        word = re.search(r'\b(try|finally)$', head)
+        if word:
+            return True
+        return head.endswith(")") and name in ("synchronized", "try")
+
+    @property
+    def _terms(self) -> list[int]:
+        """Statement-terminator offsets, built once on first use."""
+        if self._terms_list is None:
+            self._terms_list = [
+                m.start() for m in
+                re.finditer("[" + re.escape(self._term) + "]", self._code)]
+        return self._terms_list
+
+    def _lhs_write(self, b: int) -> tuple[bool, int] | None:
+        """NAME ending at *b* in a destructuring / multi-assign LHS."""
+        if self._runs is None:
+            runs = list(_GUARD_LHS_RUN_RE.finditer(self._code))
+            self._runs = ([m.start() for m in runs], [m.end() for m in runs])
+        starts, ends = self._runs
+        i = bisect.bisect_right(starts, b) - 1
+        if i < 0 or ends[i] <= b:
+            return None
+        e = ends[i]
+        m = _GUARD_LHS_ASSIGN_RE.match(self._code, e)
+        if m is None or not _GUARD_LHS_START_RE.match(self._code, b, e):
+            return None
+        plain = _GUARD_LHS_PLAIN_RE.fullmatch(self._code, b, e)
+        return (True, m.end()) if plain else (False, -1)
+
+    def _classify(self, a: int, name: str) -> object:
+        """None for a read; "zero" for a zero declaration; else
+        (vouching shape, RHS start or -1)."""
+        code = self._code
+        b = a + len(name)
+        prev = code[max(0, a - 3):a]
+        if prev.endswith(("++", "--")) or (
+            prev.endswith("&") and not prev.endswith("&&")
+        ):
+            return False, -1
+        if self._lang == "go":
+            if _GUARD_DECL_BEFORE_RE.search(code, max(0, a - 16), a):
+                if (
+                    code[max(0, a - 16):a].rstrip().endswith("var")
+                    and _GUARD_GO_ZERO_TAIL_RE.match(code, b)
+                ):
+                    return "zero"
+                m = _GUARD_DECL_TAIL_RE.match(code, b)
+                return (True, m.end()) if m else (False, -1)
+        elif _GUARD_JAVA_DECL_BEFORE_RE.search(code, max(0, a - 24), a) and (
+            _GUARD_JAVA_ZERO_TAIL_RE.match(code, b)
+        ):
+            return "zero"
+        m = self._assign_op.match(code, b)
+        if m:
+            return (True, m.end()) if not m.group(1) else (False, -1)
+        if _GUARD_INCDEC_AFTER_RE.match(code, b):
+            return False, -1
+        lhs = self._lhs_write(b)
+        if lhs is not None:
+            return lhs
+        if _GUARD_FOR_AFTER_RE.match(code, b):
+            return False, -1
+        pre = code[max(0, a - 8):a]
+        if re.search(r'(?:\bas|=>)[ \t]*$', pre):
+            return False, -1
+        return None
+
+    def _statement_index(self, a: int) -> int | None:
+        """Index of NAME in its statement's LHS list (0 for a plain
+        write); None when anything but declaration words / earlier list
+        names precedes it on the statement."""
+        code = self._code
+        i = bisect.bisect_left(self._terms, a) - 1
+        # a Go newline after a trailing comma continues the statement
+        # (a wrapped multi-assign left-hand side)
+        for _ in range(64):
+            if i < 0 or code[self._terms[i]] != "\n":
+                break
+            k = self._terms[i] - 1
+            while k >= 0 and code[k] in " \t\r":
+                k -= 1
+            if k < 0 or code[k] != ",":
+                break
+            i -= 1
+        start = self._terms[i] + 1 if i >= 0 else 0
+        m = _GUARD_STMT_PREFIX_RE.fullmatch(code, start, a)
+        if m is None:
+            return None
+        return m.group(1).count(",")
+
+    def _rhs_element(self, rhs: int, index: int) -> tuple[int, int] | None:
+        spans = self._rhs_lists.get(rhs)
+        if spans is None:
+            spans = []
+            k = rhs
+            while True:
+                end = _guard_rhs_end(self._code, self._pairs, k)
+                self.cost += end - k + 1
+                spans.append((k, end))
+                if end >= len(self._code) or self._code[end] != ",":
+                    break
+                k = end + 1
+            self._rhs_lists[rhs] = spans
+        return spans[index] if index < len(spans) else None
+
+    def _body_of(self, brace: int) -> int | None:
+        """The function body reached from *brace* through unconditional
+        blocks only, else None.
+
+        Every brace on one walk reaches the same answer (each step's
+        tests depend only on that brace, and the parent map is fixed),
+        so the answer is stored for all of them: each brace is
+        classified at most once per instance.
+        """
+        memo = self._body_memo
+        path: list[int] = []
+        result: int | None = None
+        while brace >= 0:
+            if brace in memo:
+                result = memo[brace]
+                break
+            path.append(brace)
+            if self._is_function_body(brace):
+                result = brace
+                break
+            if not self._is_unconditional(brace):
+                result = None
+                break
+            brace = self._brace_parent.get(brace, -1)
+            self.ops["edges"] += 1
+        for b in path:
+            memo[b] = result
+        self.ops["stores"] += len(path)
+        return result
+
+    def _nearest_catch(self, brace: int) -> int:
+        """The innermost ``catch`` block brace enclosing *brace* (itself
+        included), else -1; memoised for every brace on the walk."""
+        memo = self._catch_memo
+        path: list[int] = []
+        result = -1
+        while brace >= 0:
+            if brace in memo:
+                result = memo[brace]
+                break
+            path.append(brace)
+            if self._java_head(brace)[1] == "catch":
+                result = brace
+                break
+            brace = self._brace_parent.get(brace, -1)
+            self.ops["edges"] += 1
+        for b in path:
+            memo[b] = result
+        self.ops["stores"] += len(path)
+        return result
+
+    def _is_ancestor(self, outer: int, brace: int) -> bool:
+        """*outer* is *brace* or encloses it (debug check only)."""
+        while brace >= 0:
+            if brace == outer:
+                return True
+            brace = self._brace_parent.get(brace, -1)
+        return False
+
+    def _single_write(self, name: str) -> tuple[int, int, int, int] | None:
+        """(write offset, function body brace, RHS span) of NAME's single
+        vouching write, independent of the call; memoised."""
+        if name in self._writes:
+            return self._writes[name]
+        found = None
+        rows = self._occ.get(name) or []
+        if len(rows) > _GUARD_MAX_OCCURRENCES:
+            # a constant used this often is not a reviewable binding;
+            # classifying every use would cost a scan per occurrence
+            self._writes[name] = None
+            return None
+        writes = []
+        zeros = []
+        for a in rows:
+            kind = self._classify(a, name)
+            if kind == "zero":
+                zeros.append(a)
+            elif kind is not None:
+                writes.append((a, kind))
+                if len(writes) > 1:
+                    break
+        if len(writes) == 1:
+            a, (vouching, rhs) = writes[0]
+            first = next((r for r in rows if r not in zeros), -1)
+            brace = self._enclosing.get(a, -1)
+            if (
+                vouching and first == a and brace >= 0
+                and all(z < a for z in zeros)
+            ):
+                index = self._statement_index(a)
+                body = self._body_of(brace) if index is not None else None
+                if body is not None:
+                    span = self._rhs_element(rhs, index)
+                    if span is not None:
+                        found = (a, body, span[0], span[1])
+        self._writes[name] = found
+        return found
+
+    def _in_catch(self, call: int, body: int) -> bool:
+        """A ``catch`` block lies strictly between *call* and *body*.
+
+        Precondition (established by constant_rhs): *body* encloses the
+        call's innermost brace — body < write < call < close(body), and
+        _enclosing/_brace_close come from the same ``{}`` stack, so body
+        is open at the call.  Enclosing braces are totally ordered by
+        nesting and an inner one opens later, so a catch lies strictly
+        inside *body* on that chain exactly when the innermost enclosing
+        catch opens after *body*.
+        """
+        if self._lang != "java":
+            return False
+        brace = self._enclosing.get(call, -1)
+        if _GUARD_DEBUG_ANCESTRY and not self._is_ancestor(body, brace):
+            raise AssertionError(f"body {body} does not enclose call {call}")
+        return self._nearest_catch(brace) > body
+
+    def constant_rhs(self, name: str, call: int) -> tuple[int, int] | None:
+        """RHS span of NAME's single vouching write reaching *call*."""
+        w = self._single_write(name)
+        if w is None:
+            return None
+        a, body, ra, rb = w
+        if not a < call < self._brace_close.get(body, len(self._code)):
+            return None
+        if self._in_catch(call, body):
+            return None
+        return ra, rb
+
+
+def _literal_guard_holds(code: str, keep: str, guard: _LiteralGuard) -> bool:
+    """True when a *guard* call's evidence argument is constant evidence.
+
+    *code* is the comments+strings blanked view, *keep* the
+    comments-only view of the same text (equal length).  The argument
+    at one of ``guard.positions`` must be a constant expression whose
+    literal texts satisfy ``guard.evidence``; for a guard with ``bind``
+    it may also be a bare NAME whose single vouching write
+    (_SingleAssignment) assigns such a constant.  Linear in the text:
+    brackets are paired once, nested calls are jumped over, names are
+    indexed in one pass, and every argument/RHS scan is charged to a
+    2N+8000 budget whose exhaustion keeps the hit.  The binding brace
+    walks take O(B + Q) steps (B braces, Q bare-NAME queries); each
+    step classifies one brace from a bounded look-back (400 chars,
+    4000 for a Go header), so the whole is linear in the text with
+    that constant.
+    """
+    if not guard.call_re.search(code):
+        return False
+    pairs = _guard_bracket_pairs(code)
+    upto = max(guard.positions + tuple(i for i, _ in guard.fixed))
+    budget = 2 * len(code) + 8000
+    pending: list[tuple[int, str]] = []  # (call offset, bare NAME)
+    for m in guard.call_re.finditer(code):
+        args, scanned = _guard_call_args(code, pairs, m.end() - 1, upto)
+        budget -= scanned
+        if budget < 0:
+            return False
+        if any(
+            i >= len(args) or code[args[i][0]:args[i][1]].strip() not in allowed
+            for i, allowed in guard.fixed
+        ):
+            continue
+        for pos in guard.positions:
+            if pos >= len(args):
+                continue
+            a, b = args[pos]
+            lits, scanned = _guard_constant_literals(
+                code, keep, a, b, guard.php)
+            budget -= scanned
+            if budget < 0:
+                return False
+            if lits is not None:
+                if guard.evidence(lits):
+                    return True
+                continue
+            name = code[a:b].strip()
+            if guard.bind and _GUARD_NAME_ONLY_RE.fullmatch(name):
+                pending.append((m.start(), name))
+    if not pending:
+        return False
+    single = _SingleAssignment(
+        code, pairs, {n for _, n in pending}, guard.bind,
+        [c for c, _ in pending])
+    for call, name in pending:
+        span = single.constant_rhs(name, call)
+        budget -= single.cost
+        single.cost = 0
+        if budget < 0:
+            return False
+        if span is None:
+            continue
+        lits, scanned = _guard_constant_literals(code, keep, *span, guard.php)
+        budget -= scanned
+        if lits is not None and guard.evidence(lits):
+            return True
+    return False
+
+
+# The literal IS the sanitizer evidence: a bare traversal needle
+# (`..`, `../`, `..\`) for containment/strip checks — a literal in the
+# call, never a variable; a `$N` placeholder in one literal of the
+# query text (never assembled from pieces like `"$" + "1"`); the XML
+# feature name (which may be split across a constant concatenation,
+# even mid-token).
+_GUARD_TRAVERSAL_RE = re.compile(r'(?:/|\\{1,2})?\.\.(?:/|\\{1,2})?')
+_GUARD_PLACEHOLDER_RE = re.compile(r'\$\d')
+
+
+def _is_traversal_needle(lits: list[str]) -> bool:
+    return any(_GUARD_TRAVERSAL_RE.fullmatch(t) for t in lits)
+
+
+def _has_placeholder(lits: list[str]) -> bool:
+    return any(_GUARD_PLACEHOLDER_RE.search(t) for t in lits)
+
+
+_PHP_STR_REPLACE_GUARD = _LiteralGuard(
+    "php-str_replace", re.compile(r'\bstr_replace\s*\('), (0,),
+    _is_traversal_needle, php=True,
+)
+_GO_CONTAINS_GUARD = _LiteralGuard(
+    "go-strings.Contains", re.compile(r'\bstrings\.Contains\w*\s*\('), (1,),
+    _is_traversal_needle,
+)
+_JS_INCLUDES_GUARD = _LiteralGuard(
+    "js-includes", re.compile(r'\bincludes\s*\('), (0,),
+    _is_traversal_needle,
+)
+# Query text is argument 0 (Query/Exec/Prepare) or 1 (the *Context
+# variants after ctx, sqlx Get/Select after dest); a query variable may
+# vouch under the single-assignment rule (Go statements end at `;`,
+# braces and newlines; the body is a named `func`).
+_GO_SQL_GUARD = _LiteralGuard(
+    "go-sql-placeholder",
+    re.compile(r'\.(?:Query|QueryRow|Exec|Prepare|Get|Select)\w*\s*\('),
+    (0, 1), _has_placeholder, bind="go",
+)
+# A feature-name constant may vouch under the single-assignment rule
+# (Java statements end at `;` and braces, not newlines).
+_JAVA_SET_FEATURE_GUARD = _LiteralGuard(
+    "java-setFeature", re.compile(r'\bsetFeature\s*\('), (0,),
+    lambda lits: "disallow-doctype-decl" in "".join(lits),
+    fixed=((1, frozenset({"true", "Boolean.TRUE"})),), bind="java",
+)
 
 
 # Convention for the per-language pattern checks below: same-line
@@ -2260,8 +3338,14 @@ def _check_c_patterns(
     callees: list[dict[str, Any]] | None,
     *,
     extra_dangerous: frozenset = frozenset(),
+    views: _GuardViews | _NoVouchViews | None = None,
 ) -> None:
     """Check C/C++ source for known vulnerability patterns."""
+    if views is None:
+        _with_guard_views(result, source, lambda v: _check_c_patterns(
+            result, source, line_start, _callers, callees,
+            extra_dangerous=extra_dangerous, views=v))
+        return
     callee_names = set()
     if callees:
         callee_names = {c.get("name", "") for c in callees}
@@ -2284,7 +3368,8 @@ def _check_c_patterns(
 
     result.has_array_access = bool(re.search(r'\b\w+\s*\[', source))
 
-    for i, line in enumerate(source.splitlines(), start=line_start):
+    for k, line in enumerate(source.splitlines()):
+        i = line_start + k
         stripped = line.strip()
 
         if re.search(r'\bstrcpy\s*\(', stripped):
@@ -2353,8 +3438,9 @@ def _check_c_patterns(
                 severity="warning",
             ))
 
-        if re.search(r'\batoi\s*\(|\batol\s*\(', stripped) and not re.search(
-            r'if\s*\(', stripped,
+        if re.search(r'\batoi\s*\(|\batol\s*\(', stripped) and not (
+            views.line_sees(r'if\s*\(', k)
+            and re.search(r'if\s*\(', stripped)  # baseline guard, verbatim (main)
         ):
                 result.hits.append(PrefilterHit(
                     rule_id="atoi-unchecked",
@@ -2375,10 +3461,10 @@ def _check_c_patterns(
             ))
 
     _check_c_assign_in_cond(result, source, line_start)
-    _check_c_missing_bounds(result, source, line_start)
-    _check_c_use_after_free(result, source, line_start)
+    _check_c_missing_bounds(result, source, line_start, views)
+    _check_c_use_after_free(result, source, line_start, views)
     _check_c_toctou(result, source, line_start)
-    _check_c_post_loop_oob(result, source, line_start)
+    _check_c_post_loop_oob(result, source, line_start, views)
 
 
 _ASSIGN_IN_COND_RE = re.compile(
@@ -2424,8 +3510,13 @@ def _check_c_missing_bounds(
     result: PrefilterResult,
     source: str,
     line_start: int,
+    views: _GuardViews | _NoVouchViews,
 ) -> None:
-    """Check for array access on function parameters without bounds checks."""
+    """Check for array access on function parameters without bounds checks.
+
+    The bounds-check search (the suppressor) reads the comment/string-
+    blanked view: ``/* caller ensures i < len */`` is not a check.
+    """
     lines = source.splitlines()
 
     params_with_index_access = set()
@@ -2436,16 +3527,21 @@ def _check_c_missing_bounds(
                 params_with_index_access.add((index_var, i))
 
     for var, access_line in params_with_index_access:
+        check_re = (
+            rf'\b{re.escape(var)}\s*(?:[<>]=?)\s*\w+|'
+            rf'\b\w+\s*(?:[<>]=?)\s*{re.escape(var)}|'
+            rf'if\s*\(.{{0,1000}}{re.escape(var)}'
+        )
+        # baseline guard, verbatim (main): any raw line of the window
+        base_check = any(re.search(check_re, line) for line in lines)
         has_check = False
-        for line in lines:
-            if re.search(
-                rf'\b{re.escape(var)}\s*(?:[<>]=?)\s*\w+|'
-                rf'\b\w+\s*(?:[<>]=?)\s*{re.escape(var)}|'
-                rf'if\s*\(.{{0,1000}}{re.escape(var)}',
-                line,
-            ):
-                has_check = True
-                break
+        # an ambiguous view cannot vouch for a check: keep the hit; and
+        # the view never sees a check the baseline does not (monotone)
+        if base_check and views.vouch:
+            for line in views.code.splitlines():  # line-model: any-line search, line identity unused
+                if re.search(check_re, line):
+                    has_check = True
+                    break
 
         if not has_check:
             result.hits.append(PrefilterHit(
@@ -2463,11 +3559,14 @@ def _check_c_use_after_free(
     result: PrefilterResult,
     source: str,
     line_start: int,
+    views: _GuardViews | _NoVouchViews,
 ) -> None:
     """Detect potential use-after-free and double-free within a function.
 
     Tracks which pointer variables are passed to free(), then checks
-    whether they are dereferenced or freed again afterwards.
+    whether they are dereferenced or freed again afterwards.  The
+    reassignment that clears a freed pointer (a suppressor) is judged
+    on the blanked view's line: ``// p = NULL`` clears nothing.
     """
     lines = source.splitlines()
     freed_vars: dict[str, int] = {}
@@ -2509,10 +3608,13 @@ def _check_c_use_after_free(
             # `var <= x`, `var += x` is `!`/`<`/`+` — comparisons and
             # compound ops cleared the freed set and hid the
             # use-after-free / double-free that followed.
-            if re.search(
-                rf'\b{re.escape(var)}\s*(?<![!<>+\-*/&|^%=])=(?!=)\s*',
-                stripped,
-            ) and not re.search(r'\bfree\s*\(', stripped):
+            code_line = views.code_lines[i - line_start]
+            clear_re = rf'\b{re.escape(var)}\s*(?<![!<>+\-*/&|^%=])=(?!=)\s*'
+            if views.vouch and re.search(
+                clear_re, code_line,
+            ) and not re.search(r'\bfree\s*\(', code_line) and re.search(
+                clear_re, stripped,
+            ) and not re.search(r'\bfree\s*\(', stripped):  # baseline guard, verbatim (main)
                 del freed_vars[var]
 
 
@@ -2566,12 +3668,15 @@ def _check_c_post_loop_oob(
     result: PrefilterResult,
     source: str,
     line_start: int,
+    views: _GuardViews | _NoVouchViews,
 ) -> None:
     """Detect post-loop out-of-bounds writes.
 
     Looks for loops with `index < capacity` guards where the index
     variable is used in a write after the loop body.  The index can
     equal the capacity when the loop exits, making `buf[index]` OOB.
+    The post-loop bounds check that clears the index (a suppressor) is
+    judged on the blanked view's line.
     """
     lines = source.splitlines()
     loop_re = re.compile(
@@ -2614,14 +3719,16 @@ def _check_c_post_loop_oob(
 
         if loop_index_var and not in_loop:
             idx_esc = re.escape(loop_index_var)
-            if re.search(
+            reset_re = (
                 rf'\bif\b(?:(?!\b{idx_esc}\b).){{0,64}}'
                 rf'\b{idx_esc}\b.{{0,200}}<|'
                 rf'\bif\b(?:(?!\b{idx_esc}\b).){{0,64}}'
                 rf'\b{idx_esc}\b.{{0,200}}>|'
-                rf'\bif\b[^<\n]{{0,64}}<.{{0,200}}\b{idx_esc}\b',
-                stripped,
-            ):
+                rf'\bif\b[^<\n]{{0,64}}<.{{0,200}}\b{idx_esc}\b'
+            )
+            if views.vouch and re.search(
+                reset_re, views.code_lines[i - line_start],
+            ) and re.search(reset_re, stripped):  # baseline guard, verbatim (main)
                 loop_index_var = None
                 loop_cap_var = None
                 loop_line = None
@@ -2652,21 +3759,33 @@ def _check_python_patterns(
     line_start: int,
     _callers: list[dict[str, Any]] | None,
     callees: list[dict[str, Any]] | None,
+    *,
+    views: _GuardViews | _NoVouchViews | None = None,
 ) -> None:
     """Check Python source for known vulnerability patterns."""
+    if views is None:
+        _with_guard_views(result, source, lambda v: _check_python_patterns(
+            result, source, line_start, _callers, callees, views=v))
+        return
     callee_names = set()
     if callees:
         callee_names = {c.get("name", "") for c in callees}
 
     result.has_dangerous_apis = bool(callee_names & _DANGEROUS_PY_APIS)
 
-    for i, line in enumerate(source.splitlines(), start=line_start):
+    for k, line in enumerate(source.splitlines()):
+        i = line_start + k
         stripped = line.strip()
 
-        if re.search(r'\bos\.path\.join\b', stripped) and not re.search(
-            r'os\.path\.realpath|os\.path\.abspath|'
-            r'\.startswith\(|resolve\(\)',
-            source,
+        if re.search(r'\bos\.path\.join\b', stripped) and not (
+            views.sees(
+                r'os\.path\.realpath|os\.path\.abspath|'
+                r'\.startswith\(|resolve\(\)',
+            ) and re.search(  # baseline guard, verbatim (main)
+                r'os\.path\.realpath|os\.path\.abspath|'
+                r'\.startswith\(|resolve\(\)',
+                source,
+            )
         ):
             result.hits.append(PrefilterHit(
                 rule_id="path-join-no-containment",
@@ -2682,9 +3801,13 @@ def _check_python_patterns(
                 and re.search(
                     r'os\.path\.join|user|request|param|filename', source,
                 )
-                and not re.search(
-                    r'os\.path\.realpath|\.startswith\(|resolve\(\)',
-                    source,
+                and not (
+                    views.sees(
+                        r'os\.path\.realpath|\.startswith\(|resolve\(\)',
+                    ) and re.search(  # baseline guard, verbatim (main)
+                        r'os\.path\.realpath|\.startswith\(|resolve\(\)',
+                        source,
+                    )
                 )):
                     result.hits.append(PrefilterHit(
                         rule_id="open-user-controlled-path",
@@ -2722,8 +3845,11 @@ def _check_python_patterns(
                 severity="error",
             ))
 
-        if re.search(r'\byaml\.load\s*\(', stripped) and not re.search(
-            r'Loader\s*=\s*yaml\.SafeLoader', stripped,
+        if re.search(r'\byaml\.load\s*\(', stripped) and not (
+            views.line_sees(r'Loader\s*=\s*yaml\.SafeLoader', k)
+            and re.search(  # baseline guard, verbatim (main)
+                r'Loader\s*=\s*yaml\.SafeLoader', stripped,
+            )
         ):
                 result.hits.append(PrefilterHit(
                     rule_id="yaml-unsafe-load",
@@ -2739,8 +3865,14 @@ def _check_go_patterns(
     line_start: int,
     _callers: list[dict[str, Any]] | None,
     callees: list[dict[str, Any]] | None,
+    *,
+    views: _GuardViews | _NoVouchViews | None = None,
 ) -> None:
     """Check Go source for known vulnerability patterns."""
+    if views is None:
+        _with_guard_views(result, source, lambda v: _check_go_patterns(
+            result, source, line_start, _callers, callees, views=v))
+        return
     callee_names = set()
     if callees:
         callee_names = {c.get("name", "") for c in callees}
@@ -2786,7 +3918,10 @@ def _check_go_patterns(
                     r'fmt\.Sprintf|"\s*\+\s*\w|\w\s*\+\s*"',
                     source,
                 )
-                and not re.search(r'\$\d+', source)
+                and not (
+                    views.feeds(_GO_SQL_GUARD)
+                    and re.search(r'\$\d+', source)  # baseline guard, verbatim (main)
+                )
             )
         ):
                 result.hits.append(PrefilterHit(
@@ -2821,10 +3956,15 @@ def _check_go_patterns(
             r'user|request|param|filename|r\.\w+|'
             r'c\.Param|c\.Query|chi\.|mux\.',
             source,
-        ) and not re.search(
-            r'filepath\.Clean|filepath\.Abs|'
-            r'strings\.Contains.{0,1000}\.\.|path\.Clean',
-            source,
+        ) and not (
+            (
+                views.sees(r'filepath\.Clean|filepath\.Abs|path\.Clean')
+                or views.feeds(_GO_CONTAINS_GUARD)
+            ) and re.search(  # baseline guard, verbatim (main)
+                r'filepath\.Clean|filepath\.Abs|'
+                r'strings\.Contains.{0,1000}\.\.|path\.Clean',
+                source,
+            )
         ):
             result.hits.append(PrefilterHit(
                 rule_id="go-path-traversal",
@@ -3012,22 +4152,850 @@ def _check_rust_patterns(
         result.has_dangerous_apis = True
 
 
+# php-sql-injection: monotonic over the historical rule.
+#
+# Every hit the historical rule produces (a mysql_query / mysqli_query /
+# pg_query call and a variable on a line, unless the function anywhere
+# holds prepare( / bind_param / pg_query_params) is always reported:
+# nothing here can withhold it, so a lexing disagreement with PHP can
+# only lose an ADDITIONAL hit.  Sanitised procedural calls the
+# historical rule flags stay flagged (its false positives are unchanged).
+#
+# Additions, from one lexed pass over the function, judged per sink:
+# - method/static sinks ($pdo->query, $mysqli->real_query, $db->exec,
+#   DB::select ...): their SQL argument (the first) holds an SQL-shaped
+#   literal and a variable reaches it (code, "..." interpolation, a
+#   backtick operand, or an argument list cut by a statement bound);
+# - procedural sinks the historical rule misses (other executors such as
+#   mysqli_real_query / pg_send_query / sqlsrv_query / oci_parse, any
+#   case, a variable only on a continuation line), and sinks its
+#   function-wide guard silenced but whose own statement holds no guard:
+#   a variable anywhere in the call.
+# A sink in a statement holding a prepare( / bind_param( /
+# pg_query_params( call adds nothing (call-shaped tokens, a subset of
+# main's; the narrower scope only ever makes the rule fire more than the
+# historical function-wide guard).  Main's own hits never pass through
+# this guard.
+#
+# Additions are dropped as false positives only on proof: a complete
+# argument list; for procedural executors a plain-variable connection
+# argument and variable-free extra arguments (sqlsrv bind parameters
+# excepted), for method and static sinks only the first argument is
+# read; no sink nested in the call; and a `.`-concatenated SQL argument
+# whose every operand is a variable-free literal, an ASCII PHP number, a
+# named constant (CONST, \\Ns\\CONST, self::X, Cls::X), an
+# intval/floatval/boolval call (unless the source declares or imports
+# one of those names), an (int)/(float)/(bool) cast (see
+# _php_sql_cast_operand for exactly what it inspects and the accepted
+# residuals), or $x->quote(...) on the sink's own
+# receiver when no literal piece holds a quote character or a
+# backslash.  Escape functions (*_escape_string, addslashes) never
+# prove.  Names match case-insensitively on ASCII only.
+#
+# SQL shape: a literal that STARTS with an SQL verb (select, insert,
+# update, delete, replace, truncate; drop/alter/create/show/describe/
+# explain/call/with only with their SQL object), or a WHERE comparison
+# / ORDER BY / GROUP BY fragment.
+#
+# Bounded gaps (additions only): a method sink fed by a variable built
+# elsewhere (`$pdo->query($sql)`), sprintf-built SQL without an
+# SQL-shaped literal, ->prepare("... $x") (not a sink), dynamic or
+# callback executor calls, and code a lexing disagreement hides.  The
+# lexer follows PHP for `?>`, `{$...}` interpolation and heredoc labels;
+# a `#[...]` attribute is read as PHP 8 code only when the rest of its
+# line has balanced quotes, otherwise as a PHP 7 `#` comment, which can
+# hide a method sink PHP 8 runs (an FN in the additions only).
+_PHP_SQL_SINK_RE = re.compile(
+    r'(?P<proc>\b(?:mysqli_(?:real_|multi_)?query'
+    r'|mysql_(?:unbuffered_|db_)?query|pg_(?:send_)?query|sqlsrv_query'
+    r'|db2_exec|oci_parse))\s*\('
+    r'|->\s*(?P<meth>query|exec|multi_query|real_query)\s*\('
+    r'|\bDB::(?P<stat>raw|select|insert|update|delete|statement'
+    r'|unprepared)\s*\(',
+    re.IGNORECASE | re.ASCII,
+)
+# The historical rule (pre-change main), kept verbatim: a line with one of
+# these calls and a variable is a hit unless the function anywhere holds
+# a guard token.  Its hits are always reported.
+_PHP_SQL_BASE_SINK_RE = re.compile(
+    r'\b(?:mysql_query|mysqli_query|pg_query)\s*\(',
+)
+_PHP_SQL_BASE_GUARD_RE = re.compile(r'prepare\s*\(|bind_param|pg_query_params')
+# PHP numeric literals (ASCII only; `١` or `²` are constant names to PHP)
+_PHP_SQL_NUMBER_RE = re.compile(
+    r'0[xX][0-9a-fA-F]+(?:_[0-9a-fA-F]+)*|0[bB][01]+(?:_[01]+)*'
+    r'|0[oO][0-7]+(?:_[0-7]+)*'
+    r'|[0-9]+(?:_[0-9]+)*(?:\.[0-9]+(?:_[0-9]+)*)?'
+    r'(?:[eE][+-]?[0-9]+(?:_[0-9]+)*)?',
+)
+_PHP_SQL_PREPARED_RE = re.compile(
+    r'\b(?:mysqli_|pg_|oci_)?prepare\s*\(|bind_param\s*\('
+    r'|\bpg_query_params\s*\(',
+)
+_PHP_SQL_SHAPE_RE = re.compile(
+    r'[\s(]*(?:(?:select|insert|update|delete|replace|truncate)\b'
+    r'|drop\s+(?:temporary\s+)?(?:table|database|schema|index|view'
+    r'|procedure|function|trigger|event|user)\b'
+    r'|alter\s+(?:table|database|schema|view|user)\b'
+    r'|create\s+(?:or\s+replace\s+)?(?:temporary\s+)?(?:table|index'
+    r'|unique|view|database|schema|procedure|function|trigger|event)\b'
+    r'|show\s+(?:full\s+)?(?:tables|columns|fields|databases|schemas'
+    r'|index|indexes|keys|create|grants|processlist|status|variables'
+    r'|triggers|table|warnings|errors)\b'
+    r'|call\s+[\w.]+\s*\('
+    r'|with\s+(?:recursive\s+)?\w+\s+as\s*\('
+    r'|describe\s+[\w`.]'
+    r'|explain\s+(?:select|insert|update|delete)\b)',
+    re.IGNORECASE,
+)
+_PHP_SQL_CLAUSE_RE = re.compile(
+    r'\bwhere\s+[\w.`"\[\]]+\s*(?:[=<>!]|like\b|in\b|is\b|between\b)'
+    r'|\b(?:order|group)\s+by\b',
+    re.IGNORECASE,
+)
+_PHP_SQL_INTERP_RE = re.compile(r'(?<!\\)\$(?:[A-Za-z_]|\{)|\{\$')
+# Names are matched case-insensitively on ASCII only: no Unicode case
+# folding (`ıntval`, `myſql_query` are other functions to PHP).
+_PHP_SQL_SANITISER_HEAD_RE = re.compile(
+    r'(?:(?P<recv>\$\w+(?:->\w+)*)->quote|(?:intval|floatval|boolval)\b)'
+    r'\s*\(',
+    re.IGNORECASE | re.ASCII,
+)
+_PHP_SQL_CAST_RE = re.compile(
+    r'\(\s*(?:int|integer|float|double|bool|boolean)\s*\)\s*',
+    re.IGNORECASE | re.ASCII,
+)
+# what a numeric cast may apply to: variables, properties, indexes,
+# class constants and arithmetic — no call, no `?:`/`??`, no assignment
+_PHP_SQL_CAST_OPERAND_RE = re.compile(r'[A-Za-z0-9_\s$\[\]"+*/%:>-]+')
+# inside a cast of a call expression: anything that may itself execute
+# SQL (besides _PHP_SQL_SINK_RE) refuses the proof
+_PHP_SQL_CAST_UNSAFE_RE = re.compile(
+    r'->\s*prepare\s*\(|[)\]"]\s*\(|\$\w+\s*\(|(?:->|::)\s*[{$]|\bnew\b'
+    r'|\b(?:call_user_func(?:_array)?|forward_static_call(?:_array)?'
+    r'|array_map|array_walk(?:_recursive)?|array_filter|array_reduce'
+    r'|usort|uasort|uksort|iterator_apply|fromcallable)\s*\(',
+    re.IGNORECASE | re.ASCII,
+)
+# a PHP constant: CONST, \Ns\CONST, self::X, static::X, Cls::X (never
+# `Cls::$prop`, never a call)
+_PHP_SQL_CONSTANT_RE = re.compile(
+    r'(?:\\?[A-Za-z_][A-Za-z0-9_]*(?:\\[A-Za-z_][A-Za-z0-9_]*)*::'
+    r'|\\?(?:[A-Za-z_][A-Za-z0-9_]*\\)*)[A-Z_][A-Z0-9_]*',
+)
+_PHP_SQL_PLAIN_VAR_RE = re.compile(r'\$\w+(?:->\w+)*', re.ASCII)
+# a declaration or import of an allowlisted helper name: unqualified
+# intval(...) may then be a user function (namespace X; use function).
+# Read on the raw text and on the comment-blanked code view.
+_PHP_SQL_SHADOW_FUNC_RE = re.compile(
+    r'\bfunction[\s&]*(?:intval|floatval|boolval)\s*\(',
+    re.IGNORECASE | re.ASCII,
+)
+_PHP_SQL_USE_FUNCTION_RE = re.compile(
+    r'\buse\s+function\b', re.IGNORECASE | re.ASCII,
+)
+_PHP_SQL_HELPER_NAME_RE = re.compile(
+    r'\b(?:intval|floatval|boolval)\b', re.IGNORECASE | re.ASCII,
+)
+_PHP_SQL_HEREDOC_RE = re.compile(
+    r'<<<[ \t]*(["\']?)([A-Za-z_\x80-\U0010ffff][\w\x80-\U0010ffff]*)\1'
+    r'[ \t]*\r?\n',
+)
+_PHP_SQL_NONNL_RE = re.compile(r'[^\r\n]')
+_PHP_SQL_NL_RE = re.compile(r'[\r\n]')
+_PHP_SQL_STMT_END_RE = re.compile(r'[;{}]')
+_PHP_SQL_LEX_JUMP_RE = re.compile(r'["\'`/#<?]')
+_PHP_SQL_LINE_COMMENT_END_RE = re.compile(r'[\r\n]|\?>')
+_PHP_SQL_ATTRIBUTE_RE = re.compile(r'#\[[^\]\r\n]*\]')
+_PHP_SQL_OPEN_TAG_RE = re.compile(r'<\?(?:php|=)?', re.IGNORECASE)
+_PHP_SQL_DQ_STOP_RE = {q: re.compile(r'[%s\\{$]' % q) for q in '"`'}
+_PHP_SQL_EXPR_STOP_RE = re.compile(r'[{}\'"`]')
+# literal bodies after the opening quote, up to (not incl.) the closer
+_PHP_SQL_BODY_RE = {
+    q: re.compile(r'[^%s\\]*(?:\\[\s\S][^%s\\]*)*' % (q, q))
+    for q in '"\'`'
+}
+_PHP_SQL_MAX_PAREN_DEPTH = 16
+
+# literal start -> (end, kind, content_start, content_end); kind is the
+# quote character, "h" (heredoc) or "n" (nowdoc).
+_PhpSqlLiterals = dict[int, tuple[int, str, int, int]]
+
+
+def _php_sql_label_char(ch: str) -> bool:
+    """PHP label character (heredoc identifiers): [A-Za-z0-9_\\x80-\\xff]."""
+    return ch == '_' or ch.isalnum() or ord(ch) >= 0x80
+
+
+def _php_sql_body_end(source: str, i: int, quote: str) -> int:
+    """Index of the quote closing a `"`/backtick literal whose body starts
+    at ``i`` (``len(source)`` if unclosed).
+
+    ``{$...}`` / ``${...}`` interpolation is PHP code: its braces, and the
+    literals nested inside it, are skipped as code, so a quote inside
+    the expression does not end the outer literal.  Explicit stack, one
+    pass.
+    """
+    n = len(source)
+    stack = [quote]      # open literal quotes and '{' expression levels
+    braces: list[int] = []
+    while i < n:
+        top = stack[-1]
+        if top == "'":
+            k = _PHP_SQL_BODY_RE["'"].match(source, i).end()
+            if k >= n:
+                return n
+            stack.pop()
+            i = k + 1
+            continue
+        if top != '{':
+            m = _PHP_SQL_DQ_STOP_RE[top].search(source, i)
+            if not m:
+                return n
+            k = m.start()
+            c = source[k]
+            if c == '\\':
+                i = k + 2
+            elif c == top:
+                stack.pop()
+                if not stack:
+                    return k
+                i = k + 1
+            elif source.startswith('{$', k) or source.startswith('${', k):
+                stack.append('{')
+                braces.append(1)
+                i = k + 2
+            else:
+                i = k + 1
+            continue
+        m = _PHP_SQL_EXPR_STOP_RE.search(source, i)
+        if not m:
+            return n
+        k = m.start()
+        c = source[k]
+        if c == '{':
+            braces[-1] += 1
+        elif c == '}':
+            braces[-1] -= 1
+            if braces[-1] == 0:
+                braces.pop()
+                stack.pop()
+        else:
+            stack.append(c)
+        i = k + 1
+    return n
+
+
+def _php_sql_lex(source: str) -> tuple[str, _PhpSqlLiterals]:
+    """Code view of ``source`` (same length) plus its string literals.
+
+    In the code view each literal becomes `"` followed by blanks, each
+    comment becomes blanks, and each `?>` inline-HTML block becomes `;`
+    followed by blanks (line breaks kept), so offsets map 1:1 to
+    ``source``.  `//` and `#` comments end at a line break or `?>`, as
+    in PHP; a `#[...]` attribute is blanked like a comment.  Single pass; an unterminated literal, comment or HTML block
+    runs to the end of the text.
+    """
+    n = len(source)
+    out: list[str] = []
+    lits: _PhpSqlLiterals = {}
+    i = 0
+    flat = 0  # start of the pending verbatim run
+    # line-comment end and quote counts after the last attribute, reused
+    # while lexing resumes inside the same line (keeps `#[A] #[A] ...`
+    # linear)
+    stop_at = -1
+    attr_at = -1
+    attr_line_end = -1
+    attr_counts = (0, 0, 0)
+    while i < n:
+        jump = _PHP_SQL_LEX_JUMP_RE.search(source, i)
+        if not jump:
+            break
+        i = jump.start()
+        ch = source[i]
+        end = -1
+        lead = ' '
+        lit: tuple[str, int, int] | None = None
+        if ch == "'":
+            j = _PHP_SQL_BODY_RE["'"].match(source, i + 1).end()
+            end = min(j + 1, n)
+            lit = (ch, i + 1, min(j, n))
+        elif ch in '"`':
+            j = _php_sql_body_end(source, i + 1, ch)
+            end = min(j + 1, n)
+            lit = (ch, i + 1, min(j, n))
+        elif source.startswith('<<<', i):
+            m = _PHP_SQL_HEREDOC_RE.match(source, i)
+            if m:
+                ident = m.group(2)
+                k = m.end()
+                end = n
+                cend = n
+                while k < n:
+                    stripped = k
+                    while stripped < n and source[stripped] in ' \t':
+                        stripped += 1
+                    after = stripped + len(ident)
+                    if source.startswith(ident, stripped) and (
+                        after >= n or not _php_sql_label_char(source[after])
+                    ):
+                        end, cend = after, k
+                        break
+                    nl = _PHP_SQL_NL_RE.search(source, k)
+                    if not nl:
+                        break
+                    k = nl.end()
+                lit = ('n' if m.group(1) == "'" else 'h', m.end(), cend)
+        elif source.startswith('/*', i):
+            close = source.find('*/', i + 2)
+            end = n if close < 0 else close + 2
+        elif source.startswith('//', i) or ch == '#':
+            if i >= stop_at:
+                stop = _PHP_SQL_LINE_COMMENT_END_RE.search(source, i)
+                stop_at = n if not stop else stop.start()
+            end = stop_at
+            attr = _PHP_SQL_ATTRIBUTE_RE.match(source, i, end)
+            if attr:
+                if attr_line_end != end or attr_at > attr.end():
+                    attr_counts = tuple(
+                        source.count(q, attr.end(), end) for q in '"\'`'
+                    )
+                else:
+                    attr_counts = tuple(
+                        c - source.count(q, attr_at, attr.end())
+                        for c, q in zip(attr_counts, '"\'`')
+                    )
+                attr_at, attr_line_end = attr.end(), end
+                if all(c % 2 == 0 for c in attr_counts):
+                    # PHP 8 attribute.  With an unbalanced quote after it
+                    # the line is read as a PHP 7 `#` comment instead,
+                    # which can hide a method sink PHP 8 runs (an FN in
+                    # the additions only; main's hits are unaffected)
+                    end = attr.end()
+        elif source.startswith('?>', i):
+            tag = _PHP_SQL_OPEN_TAG_RE.search(source, i + 2)
+            end = n if not tag else tag.end()
+            lead = ';'
+        if end >= 0:
+            out.append(source[flat:i])
+            blank = _PHP_SQL_NONNL_RE.sub(' ', source[i:end])
+            if lit is not None:
+                lits[i] = (end, lit[0], lit[1], lit[2])
+                lead = '"'
+            if blank:
+                blank = (lead if blank[0] == ' ' else blank[0]) + blank[1:]
+            out.append(blank)
+            i = flat = end
+            continue
+        i += 1
+    out.append(source[flat:])
+    return "".join(out), lits
+
+
+def _php_sql_close(code: str, start: int, stop: int) -> int:
+    """Index of the ``)`` closing the ``(`` just before ``start``; -1 if
+    it is not closed before ``stop``."""
+    depth = 1
+    for k in range(start, stop):
+        c = code[k]
+        if c == '(':
+            depth += 1
+        elif c == ')':
+            depth -= 1
+            if depth == 0:
+                return k
+    return -1
+
+
+def _php_sql_split(code: str, start: int, stop: int, sep: str):
+    """Split ``code[start:stop]`` at depth-0 ``sep``; stripped spans."""
+    spans = []
+    depth = 0
+    piece = start
+    for k in range(start, stop):
+        c = code[k]
+        if c in '([':
+            depth += 1
+        elif c in ')]':
+            depth -= 1
+        elif c == sep and depth == 0:
+            if sep == '.' and (
+                0 < k < stop - 1
+                and code[k - 1].isdigit() and code[k + 1].isdigit()
+            ):
+                continue
+            spans.append((piece, k))
+            piece = k + 1
+    spans.append((piece, stop))
+    out = []
+    for a, b in spans:
+        while a < b and code[a].isspace():
+            a += 1
+        while b > a and code[b - 1].isspace():
+            b -= 1
+        out.append((a, b))
+    return out
+
+
+def _php_sql_cast_operand(code: str, a: int, b: int) -> bool:
+    """``code[a:b]`` is what a numeric cast may safely apply to.
+
+    The cast yields a number whatever its operand is.  Two paths:
+    - fast path: the code view of the operand is only variables,
+      properties, indexes, constants, string literals and arithmetic
+      (``_PHP_SQL_CAST_OPERAND_RE``).  It is accepted without the scans
+      below, so string-literal bodies (blank in the code view) and
+      paren-less keywords are not inspected: a sink inside `{$...}` or a
+      heredoc within the cast, and `(int) new Q + $a`, are accepted.
+      These are accepted residuals of the additions' filter (0 in the
+      real-world PHP corpus that was measured) — main's hits are never
+      filtered.
+    - call path: an operand holding calls is accepted only if it is one
+      expression (no top-level `?:`, `??` or assignment, which would take
+      the whole SQL) and its code view holds no sink-family call, no
+      `->prepare(`, no dynamic or computed callee, no callback taker and
+      no `new`.  An unknown user executor in that position is accepted
+      (a deliberate trade-off; main never flags such executors).
+      String-literal bodies are not inspected here either:
+      `(int)f("{$db->query(...)}")` is accepted (same class as the
+      fast-path residual).
+    """
+    while a < b and code[a].isspace():
+        a += 1
+    while b > a and code[b - 1].isspace():
+        b -= 1
+    if a < b and code[a] == '(' and _php_sql_close(code, a + 1, b) == b - 1:
+        a, b = a + 1, b - 1
+    if a >= b:
+        return False
+    if _PHP_SQL_CAST_OPERAND_RE.fullmatch(code, a, b) is not None:
+        return True
+    if (
+        _PHP_SQL_SINK_RE.search(code, a, b) is not None
+        or _PHP_SQL_CAST_UNSAFE_RE.search(code, a, b) is not None
+    ):
+        return False
+    depth = 0
+    for k in range(a, b):
+        c = code[k]
+        if c in '([':
+            depth += 1
+        elif c in ')]':
+            depth -= 1
+            if depth < 0:
+                return False
+        elif depth == 0 and _PHP_SQL_CAST_OPERAND_RE.fullmatch(c) is None:
+            return False
+    return depth == 0
+
+
+def _php_sql_helper_shadowed(text: str) -> bool:
+    """``text`` declares or imports intval/floatval/boolval."""
+    if _PHP_SQL_SHADOW_FUNC_RE.search(text):
+        return True
+    pos = 0
+    while True:
+        m = _PHP_SQL_USE_FUNCTION_RE.search(text, pos)
+        if not m:
+            return False
+        end = text.find(';', m.end())
+        end = len(text) if end < 0 else end
+        if _PHP_SQL_HELPER_NAME_RE.search(text, m.end(), end):
+            return True
+        pos = end + 1
+
+
+def _php_sql_receiver(code: str, end: int, start: int) -> str | None:
+    """The plain receiver chain (`$db`, `$this->db`) ending at ``end``
+    (just before `->`), trailing whitespace dropped; None if the chain
+    holds inner whitespace or is not a plain chain."""
+    k = end
+    while k > start and code[k - 1].isspace():
+        k -= 1
+    j = k
+    while j > start and (code[j - 1].isalnum() or code[j - 1] in '_$->'):
+        j -= 1
+    m = _PHP_SQL_PLAIN_VAR_RE.match(code, j, k)
+    if m is None or m.end() != k:
+        return None
+    return code[j:k]
+
+
+def _php_sql_terms_safe(
+    code: str, lits: _PhpSqlLiterals, source: str, a: int, b: int,
+    receiver: str | None, helpers: bool, depth: int = 0,
+) -> tuple[bool, bool] | None:
+    """Check every operand of the concatenation ``code[a:b]``.
+
+    None when an operand is not provably safe; otherwise ``(quoted,
+    quote_chars)``: whether a ->quote() operand was used, and whether
+    any literal piece holds a quote character.
+    """
+    if depth > _PHP_SQL_MAX_PAREN_DEPTH or a >= b:
+        return None
+    quoted = quote_chars = False
+    for ta, tb in _php_sql_split(code, a, b, '.'):
+        if ta >= tb:
+            return None
+        # a literal's body is blank in the code view, so a term that is
+        # exactly one literal strips down to its opening `"`
+        lit = lits.get(ta)
+        if lit is not None and tb == ta + 1:
+            body = source[lit[2]:lit[3]]
+            if lit[1] == '`' or '$' in body:
+                return None
+            # a backslash may spell a quote (\x27, \047, \u{27})
+            quote_chars = quote_chars or any(q in body for q in '\'"`\\')
+            continue
+        if _PHP_SQL_NUMBER_RE.fullmatch(code, ta, tb):
+            continue
+        if _PHP_SQL_CONSTANT_RE.fullmatch(code, ta, tb):
+            # a named constant cannot carry request data (one define()d
+            # from it is out of scope, like a table prefix)
+            continue
+        m = _PHP_SQL_SANITISER_HEAD_RE.match(code, ta, tb)
+        if m and _php_sql_close(code, m.end(), tb) == tb - 1:
+            recv = m.group('recv')
+            if recv is not None:
+                # PDO::quote() is safe for its own connection's driver
+                # only: the receiver must be the sink's receiver
+                if receiver is None or "".join(recv.split()) != receiver:
+                    return None
+                quoted = True
+            elif not helpers:
+                return None  # intval & co. may be shadowed here
+            continue
+        m = _PHP_SQL_CAST_RE.match(code, ta, tb)
+        if m and _php_sql_cast_operand(code, m.end(), tb):
+            continue
+        if code[ta] == '(' and _php_sql_close(code, ta + 1, tb) == tb - 1:
+            inner = _php_sql_terms_safe(code, lits, source, ta + 1, tb - 1,
+                                        receiver, helpers, depth + 1)
+            if inner is not None:
+                quoted = quoted or inner[0]
+                quote_chars = quote_chars or inner[1]
+                continue
+        return None
+    return quoted, quote_chars
+
+
+def _php_sql_proved(
+    source: str, code: str, lits: _PhpSqlLiterals, a: int, b: int,
+    receiver: str | None = None, helpers: bool = True,
+) -> bool:
+    """Every operand of the concatenation ``code[a:b]`` is safe.
+
+    Escape functions never prove (their safety depends on the server's
+    dialect, modes and charset).  A ->quote() result is a complete
+    quoted literal, so it proves only when no literal piece holds a
+    quote character — then it cannot land inside an open SQL string.
+    """
+    checked = _php_sql_terms_safe(code, lits, source, a, b, receiver,
+                                  helpers)
+    return checked is not None and not (checked[0] and checked[1])
+
+
+# Procedural SQL executors: accepted argument shapes, by role.  "conn" is
+# a plain variable; "sql" is the statement; "opt" holds no variable;
+# "id" is a plain variable or variable-free; "bind" is bound parameters
+# (any content).  A call matching no shape is unparsed (keeps its hit).
+_PHP_SQL_PROCEDURAL_ARGS: dict[str, tuple[tuple[str, ...], ...]] = {
+    'mysqli_query': (('conn', 'sql'), ('conn', 'sql', 'opt')),
+    'mysqli_real_query': (('conn', 'sql'),),
+    'mysqli_multi_query': (('conn', 'sql'),),
+    'pg_query': (('sql',), ('conn', 'sql')),
+    'pg_send_query': (('conn', 'sql'),),
+    'mysql_query': (('sql',), ('sql', 'conn')),
+    'mysql_unbuffered_query': (('sql',), ('sql', 'conn')),
+    'mysql_db_query': (('id', 'sql'), ('id', 'sql', 'conn')),
+    'sqlsrv_query': (('conn', 'sql'), ('conn', 'sql', 'bind'),
+                     ('conn', 'sql', 'bind', 'opt')),
+    'db2_exec': (('conn', 'sql'), ('conn', 'sql', 'opt')),
+    'oci_parse': (('conn', 'sql'),),
+}
+
+
+def _php_sql_procedural_sql_arg(
+    name: str, code: str, source: str, args: list[tuple[int, int]],
+) -> tuple[int, int] | None:
+    """The SQL argument of a procedural call whose other arguments fit
+    one of its accepted shapes; else None."""
+    for roles in _PHP_SQL_PROCEDURAL_ARGS.get(name.lower(), ()):
+        if len(roles) != len(args):
+            continue
+        sql = None
+        for role, (x, y) in zip(roles, args):
+            plain = _PHP_SQL_PLAIN_VAR_RE.match(code, x, y)
+            is_plain = plain is not None and plain.end() == y
+            if role == 'sql':
+                sql = (x, y)
+            elif role == 'conn' and not is_plain:
+                break
+            elif role == 'opt' and '$' in source[x:y]:
+                break
+            elif role == 'id' and not (is_plain or '$' not in source[x:y]):
+                break
+        else:
+            return sql
+    return None
+
+
+# Failures of the additions, contained by _php_sql_injection_lines: an
+# aggregate count (read with php_sql_additions_failure_count) and one
+# warning per process.
+_php_sql_additions_failures = 0
+_php_sql_additions_warned = False
+_php_sql_additions_lock = threading.Lock()
+
+
+def php_sql_additions_failure_count() -> int:
+    """How many times the php-sql-injection additions raised and were
+    skipped (main's hits kept) in this process."""
+    return _php_sql_additions_failures
+
+
+def _php_sql_main_rule_lines(source: str, line_start: int) -> set[int]:
+    """The historical rule (pre-change main), verbatim: a line with one of
+    its three calls and a variable, unless the function anywhere holds a
+    guard token."""
+    hits: set[int] = set()
+    if not _PHP_SQL_BASE_GUARD_RE.search(source):
+        for idx, text in enumerate(source.splitlines(keepends=True)):
+            stripped = text.strip()
+            if _PHP_SQL_BASE_SINK_RE.search(stripped) and '$' in stripped:
+                hits.add(line_start + idx)
+    return hits
+
+
+def _php_sql_injection_lines(
+    source: str, line_start: int, *,
+    guard_view: Callable[[], str | None] = lambda: None,
+) -> set[int]:
+    """Line numbers (``line_start``-based) with a php-sql-injection hit.
+
+    Monotonic over the historical rule: every line it flags is flagged
+    here too, unconditionally.  The lexer and the proofs only decide
+    which ADDITIONAL hits (method/static sinks, other executors, sinks
+    the function-wide guard silenced, multi-line calls) to report.  If
+    the additions raise (``guard_view`` included), main's result is
+    returned unchanged.
+
+    The per-statement prepared-statement guard only withholds an
+    ADDITION, and it is a suppressor of it: ``prepare(`` must be code in
+    this rule's blanked view AND in ``guard_view()`` (the shared
+    sanitized view, same offsets, which also blanks inline HTML; called
+    lazily), which returns None when that view is ambiguous — the guard
+    then cannot vouch and the addition stands.  The historical rule's
+    own function-wide guard above stays verbatim on raw text.  The
+    default (no shared view) never vouches, so the guard can only make
+    the rule fire more.
+    """
+    global _php_sql_additions_failures, _php_sql_additions_warned
+    hits = _php_sql_main_rule_lines(source, line_start)
+    try:
+        added = _php_sql_additions(source, line_start, guard_view=guard_view)
+    except Exception as exc:  # noqa: BLE001 — never cost main's hits
+        with _php_sql_additions_lock:
+            _php_sql_additions_failures += 1
+            warn = not _php_sql_additions_warned
+            _php_sql_additions_warned = True
+        # The count above is always exact; the logging is best-effort, so
+        # a failure while logging (e.g. RecursionError near the stack
+        # limit) never costs main's hits.  The warning is retried until a
+        # call returns: the failure that reserved it releases the
+        # reservation if logger.warning raises.  A logger that emits and
+        # then raises can therefore warn twice; failures arriving while
+        # the reservation is held skip the warning; and if no failure
+        # follows a failed warning, no warning is given.
+        if warn:
+            try:
+                # no source text: the exception type only
+                logger.warning(
+                    "php-sql-injection: additional sinks skipped after %s; "
+                    "the historical rule's hits are kept (further failures "
+                    "are counted, not logged)", type(exc).__name__,
+                )
+            except BaseException as log_exc:  # noqa: BLE001 — re-raised below
+                # release so a later failure retries; interrupts propagate
+                with _php_sql_additions_lock:
+                    _php_sql_additions_warned = False
+                if not isinstance(log_exc, Exception):
+                    raise
+        try:
+            logger.debug("php-sql-injection additions failed", exc_info=exc)
+        except Exception:  # noqa: BLE001 — logging must not cost main's hits
+            pass
+        return hits
+    return hits | added
+
+
+def _php_sql_additions(
+    source: str, line_start: int, *,
+    guard_view: Callable[[], str | None] = lambda: None,
+) -> set[int]:
+    """Lines the lexer-based rule adds (method/static sinks, other
+    executors, sinks main's function-wide guard silenced, multi-line
+    calls).  Not guarded: _php_sql_injection_lines contains failures,
+    including any raised by ``guard_view`` (the prepare pointer's
+    shared view, called lazily from here)."""
+    lines = source.splitlines(keepends=True)
+    hits: set[int] = set()
+    starts = []
+    off = 0
+    for ln in lines:
+        starts.append(off)
+        off += len(ln)
+
+    def line_of(pos: int) -> int:
+        return line_start + bisect.bisect_right(starts, pos) - 1
+
+    code, lits = _php_sql_lex(source)
+    lit_starts = sorted(lits)
+    # intval & co. prove nothing where the source may shadow them
+    helpers = not (
+        _php_sql_helper_shadowed(source) or _php_sql_helper_shadowed(code)
+    )
+
+    def literals_in(a: int, b: int):
+        lo = bisect.bisect_left(lit_starts, a)
+        hi = bisect.bisect_left(lit_starts, b)
+        return [lits[s] for s in lit_starts[lo:hi]]
+
+    def reaches(a: int, b: int) -> bool:
+        if '$' in code[a:b]:
+            return True
+        return any(
+            kind == '`' or (
+                kind in '"h'
+                and _PHP_SQL_INTERP_RE.search(source, ca, cb) is not None
+            )
+            for _end, kind, ca, cb in literals_in(a, b)
+        )
+
+    def shaped(a: int, b: int) -> bool:
+        return any(
+            kind != '`' and (
+                _PHP_SQL_SHAPE_RE.match(source, ca, cb) is not None
+                or _PHP_SQL_CLAUSE_RE.search(source, ca, cb) is not None
+            )
+            for _end, kind, ca, cb in literals_in(a, b)
+        )
+
+    stmt = 0
+    bounds = [m.start() for m in _PHP_SQL_STMT_END_RE.finditer(code)]
+    bounds.append(len(code))
+    for stop in bounds:
+        s, e = stmt, stop
+        stmt = stop + 1
+        # per top-level sink: [line, match, close, covered, nested]
+        outer: list | None = None
+        records: list[list] = []
+        guarded: bool | None = None
+        for m in _PHP_SQL_SINK_RE.finditer(code, s, e):
+            if outer is not None and m.start() < outer[3]:
+                # a sink inside an earlier sink's arguments: the outer
+                # call is never proved
+                outer[4] = True
+                continue
+            if guarded is None:
+                # once per statement: a prepare/bind_param/pg_query_params
+                # call in the sink's own statement means no addition
+                view = (
+                    guard_view()
+                    if _PHP_SQL_PREPARED_RE.search(code, s, e) else None
+                )
+                guarded = view is not None and (
+                    _PHP_SQL_PREPARED_RE.search(view, s, e) is not None
+                    # the additions' raw statement guard, verbatim:
+                    # never withhold an addition it makes (monotone)
+                    and _PHP_SQL_PREPARED_RE.search(source, s, e) is not None
+                )
+            if guarded:
+                break
+            close = _php_sql_close(code, m.end(), e)
+            covered = close + 1 if close >= 0 else e
+            outer = [line_of(m.start()), m, close, covered, False]
+            records.append(outer)
+        if guarded:
+            continue
+        for line, m, close, covered, nested in records:
+            args = (
+                _php_sql_split(code, m.end(), close, ',')
+                if close >= 0 else None
+            )
+            if m.group('proc') is not None:
+                sql = (
+                    _php_sql_procedural_sql_arg(m.group('proc'), code,
+                                                source, args)
+                    if args else None
+                )
+                proved = not nested and sql is not None and _php_sql_proved(
+                    source, code, lits, sql[0], sql[1], helpers=helpers,
+                )
+                if not proved and '$' in source[m.start():covered]:
+                    hits.add(line)
+                continue
+            receiver = (
+                _php_sql_receiver(code, m.start(), s)
+                if m.group('meth') else None
+            )
+            proved = not nested and bool(args) and _php_sql_proved(
+                source, code, lits, *args[0], receiver=receiver,
+                helpers=helpers,
+            )
+            a, b = args[0] if args else (m.end(), covered)
+            # an argument list not closed inside the statement (a
+            # closure or match block follows) counts as reaching
+            if not proved and shaped(a, b) and (
+                args is None or nested or reaches(a, b)
+            ):
+                hits.add(line)
+    return hits
+
+
 def _check_php_patterns(
     result: PrefilterResult,
     source: str,
     line_start: int,
     _callers: list[dict[str, Any]] | None,
     callees: list[dict[str, Any]] | None,
+    *,
+    views: _GuardViews | _NoVouchViews | None = None,
 ) -> None:
     """Check PHP source for known vulnerability patterns."""
+    if views is None:
+        _with_guard_views(result, source, lambda v: _check_php_patterns(
+            result, source, line_start, _callers, callees, views=v))
+        return
     callee_names = set()
     if callees:
         callee_names = {c.get("name", "") for c in callees}
 
     result.has_dangerous_apis = bool(callee_names & _DANGEROUS_PHP_CALLEES)
     result.has_array_access = bool(re.search(r'\$\w+\s*\[', source))
+    # The prepare pointer asks for the shared view inside the
+    # php-sql-injection fail-safe; a view failure there would only
+    # drop the additions.
+    # It is held instead (a fresh holder per attempt) and re-raised as
+    # soon as php-sql returns, so it reaches _with_guard_views, whose
+    # never-vouching re-run keeps the additions.
+    view_error: list[Exception] = []
 
-    for i, line in enumerate(source.splitlines(), start=line_start):
+    def guard_view() -> str | None:
+        try:
+            return views.code if views.vouch else None
+        except Exception as exc:  # noqa: BLE001 — re-raised below
+            view_error.append(exc)
+            return None
+
+    sql_injection_lines = _php_sql_injection_lines(
+        source, line_start, guard_view=guard_view,
+    )
+    if view_error:
+        raise view_error[0]
+    for k, line in enumerate(source.splitlines()):
+        i = line_start + k
         stripped = line.strip()
 
         if re.search(
@@ -3088,12 +5056,7 @@ def _check_php_patterns(
                 severity="error",
             ))
 
-        if re.search(
-            r'\b(?:mysql_query|mysqli_query|pg_query)\s*\(',
-            stripped,
-        ) and re.search(r'\$', stripped) and not re.search(
-            r'prepare\s*\(|bind_param|pg_query_params', source,
-        ):
+        if i in sql_injection_lines:
             result.hits.append(PrefilterHit(
                 rule_id="php-sql-injection",
                 message=(
@@ -3134,9 +5097,14 @@ def _check_php_patterns(
             r'\b(?:file_get_contents|file_put_contents|fopen|'
             r'readfile|unlink|rename)\s*\(\s*\$',
             stripped,
-        ) and not re.search(
-            r'realpath|basename|str_replace.{0,1000}\.\.',
-            source,
+        ) and not (
+            (
+                views.sees(r'realpath|basename')
+                or views.feeds(_PHP_STR_REPLACE_GUARD)
+            ) and re.search(  # baseline guard, verbatim (main)
+                r'realpath|basename|str_replace.{0,1000}\.\.',
+                source,
+            )
         ):
             result.hits.append(PrefilterHit(
                 rule_id="php-path-traversal",
@@ -3165,8 +5133,14 @@ def _check_java_patterns(
     line_start: int,
     _callers: list[dict[str, Any]] | None,
     callees: list[dict[str, Any]] | None,
+    *,
+    views: _GuardViews | _NoVouchViews | None = None,
 ) -> None:
     """Check Java source for known vulnerability patterns."""
+    if views is None:
+        _with_guard_views(result, source, lambda v: _check_java_patterns(
+            result, source, line_start, _callers, callees, views=v))
+        return
     callee_names = set()
     if callees:
         callee_names = {c.get("name", "") for c in callees}
@@ -3260,11 +5234,19 @@ def _check_java_patterns(
         if re.search(
             r'XMLInputFactory|SAXParser|DocumentBuilder',
             stripped,
-        ) and not re.search(
-            r'FEATURE_SECURE_PROCESSING|'
-            r'disallow-doctype-decl|'
-            r'setExpandEntityReferences.{0,1000}false',
-            source,
+        ) and not (
+            (
+                views.sees(
+                    r'FEATURE_SECURE_PROCESSING|'
+                    r'setExpandEntityReferences.{0,1000}false',
+                )
+                or views.feeds(_JAVA_SET_FEATURE_GUARD)
+            ) and re.search(  # baseline guard, verbatim (main)
+                r'FEATURE_SECURE_PROCESSING|'
+                r'disallow-doctype-decl|'
+                r'setExpandEntityReferences.{0,1000}false',
+                source,
+            )
         ):
             result.hits.append(PrefilterHit(
                 rule_id="java-xxe",
@@ -3305,8 +5287,14 @@ def _check_js_patterns(
     line_start: int,
     _callers: list[dict[str, Any]] | None,
     callees: list[dict[str, Any]] | None,
+    *,
+    views: _GuardViews | _NoVouchViews | None = None,
 ) -> None:
     """Check JavaScript/TypeScript source for known vulnerability patterns."""
+    if views is None:
+        _with_guard_views(result, source, lambda v: _check_js_patterns(
+            result, source, line_start, _callers, callees, views=v))
+        return
     callee_names = set()
     if callees:
         callee_names = {c.get("name", "") for c in callees}
@@ -3397,10 +5385,15 @@ def _check_js_patterns(
         ) and re.search(
             r'req\.|params\.|query\.|body\.|headers\.',
             source,
-        ) and not re.search(
-            r'path\.(?:resolve|normalize|basename)|'
-            r'sanitize|includes.{0,1000}\.\.',
-            source,
+        ) and not (
+            (
+                views.sees(r'path\.(?:resolve|normalize|basename)|sanitize')
+                or views.feeds(_JS_INCLUDES_GUARD)
+            ) and re.search(  # baseline guard, verbatim (main)
+                r'path\.(?:resolve|normalize|basename)|'
+                r'sanitize|includes.{0,1000}\.\.',
+                source,
+            )
         ):
             result.hits.append(PrefilterHit(
                 rule_id="js-path-traversal",
