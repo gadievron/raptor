@@ -230,8 +230,14 @@ class TestJsAmbiguousSlashRefusal:
         assert _refused(src, "javascript")
 
     def test_char_class_after_paren_gate_discriminating_fixture(self):
-        # Gate-discriminating shape: a char class right after `)` —
-        # the one context ONLY the ambiguous-slash gate covers (no
+        # Gate-discriminating shape: a char class right after a `)`
+        # whose `(` the lexer never saw — since the view tracks parens
+        # on its forward scan, a matched `)` (e.g. an `if (x)` head)
+        # is resolved exactly and its regex body no longer mints
+        # comment state, so the undecidable spelling left is the
+        # unmatched `)` (reported by the view as
+        # `js-regex-after-paren`). That is the one context ONLY the
+        # ambiguous-slash gate covers (no
         # backslash for the backslash gate, no pointer-arith spelling,
         # no other refusal applies). With the gate regressed this
         # shape SKIPS and the one-planted-line suppression primitive
@@ -240,7 +246,7 @@ class TestJsAmbiguousSlashRefusal:
         # regression.
         src = (
             "const wrap = (c) => {\n"
-            "  if (x) /[//]y/.test(c); fs.unlinkSync(c);\n"
+            "  x) /[//]y/.test(c); fs.unlinkSync(c);\n"
             "  return helper(c);\n"
             "}"
         )
@@ -254,7 +260,7 @@ class TestJsAmbiguousSlashRefusal:
         import core.audit.prefilter as pf
         src = (
             "const wrap = (c) => {\n"
-            "  if (x) /[//]y/.test(c); fs.unlinkSync(c);\n"
+            "  x) /[//]y/.test(c); fs.unlinkSync(c);\n"
             "  return helper(c);\n"
             "}"
         )
