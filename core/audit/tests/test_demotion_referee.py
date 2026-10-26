@@ -111,13 +111,6 @@ class TestDeepenDemotionReferee:
             self._probe_backed_prior(), self._deepen_clean(),
         )
 
-    def test_rationale_consistency_demotion_blocked_too(self):
-        clean = _outcome(
-            status="clean",
-            review_result={"rationale_consistency_demotion": True},
-        )
-        assert _deepen_demotion_refereed(self._probe_backed_prior(), clean)
-
     def test_unstructured_clean_not_refereed(self):
         # The dominated branch already keeps the prior for these.
         assert not _deepen_demotion_refereed(

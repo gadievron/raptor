@@ -244,6 +244,7 @@ _GENERATION_VOCABULARY: dict[int, frozenset[str]] = {
         "strategy_id",
         "study_receipts",
         "token_budget",
+        "resolution_tools",
         "tools_dispatched",
         "tools_skipped",
         "ts",

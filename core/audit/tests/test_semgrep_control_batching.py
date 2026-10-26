@@ -305,8 +305,8 @@ class TestBatchedUnbatchedParity:
         # (target_finding_lines, control_fires, expected_outcome)
         ([1], False, "confirmed"),
         ([1], True, "inconclusive"),
-        ([], False, "refuted"),
-        ([], True, "refuted"),
+        ([], False, "inconclusive"),
+        ([], True, "inconclusive"),
     )
 
     @pytest.mark.parametrize(

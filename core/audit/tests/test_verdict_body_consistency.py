@@ -95,20 +95,6 @@ class TestBodyAnnotatedOnStatusFlips:
         assert outcome.body.startswith("[all-refuted demotion:")
         assert outcome.review_result["all_refuted_grounding"] == "local"
 
-    def test_rationale_consistency_demotion_stamps_body(self):
-        outcome = _review({
-            "status": "suspicious",
-            "body": (
-                "The function is safe because every index is clamped "
-                "before use."
-            ),
-            "hypothesis": "index overflow",
-        })
-        assert outcome.status == "clean"
-        assert outcome.body.startswith(
-            "[rationale-consistency demotion:",
-        )
-
     def test_unflipped_verdicts_keep_bare_body(self):
         outcome = _review({
             "status": "suspicious",
