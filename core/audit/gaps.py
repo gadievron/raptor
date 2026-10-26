@@ -203,6 +203,7 @@ def compute_gaps(
     own_run_reuse: bool = False,
     reuse_stats: dict | None = None,
     seed_rereview_keys: set | None = None,
+    current_tools: frozenset[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Compute the list of unreviewed functions.
 
@@ -509,6 +510,7 @@ def compute_gaps(
         own_run_reuse=own_run_reuse,
         domain_ctx=domain_ctx,
         reuse_stats=reuse_stats,
+        current_tools=current_tools,
     )
     # Seed-forced re-review (--seed-rereview): drop the suppression
     # the folds just granted for every resolved seed key, AFTER all
@@ -2344,6 +2346,7 @@ def _fold_journal_into_covered(
     own_run_reuse: bool = False,
     domain_ctx: dict | None = None,
     reuse_stats: dict | None = None,
+    current_tools: frozenset[str] | None = None,
 ) -> None:
     """Fold review-journal entries into the covered-function set so
     LLM-reviewed functions suppress gaps mid-run.
@@ -2426,6 +2429,7 @@ def _fold_journal_into_covered(
                     # Slim-tier stubs hydrate from THIS run's sidecar
                     # for the context-staleness relevance diff.
                     sidecar_dir=out_dir,
+                    current_tools=current_tools,
                 )
             else:
                 from .journal import load_entries
@@ -2476,6 +2480,7 @@ def _fold_journal_into_covered(
                     # disabled, but keeps the call shape identical to
                     # the own-run fold).
                     sidecar_dir=out_dir,
+                    current_tools=current_tools,
                 )
         except Exception as exc:
             from core.coverage.journal import JournalIncomplete
@@ -2505,6 +2510,7 @@ def _fold_journal_into_covered(
                 current_model=current_model,
                 domain_ctx=domain_ctx,
                 reuse_stats=reuse_stats,
+                current_tools=current_tools,
             )
         except Exception:
             logger.warning(
@@ -2659,6 +2665,7 @@ def _reuse_ineligibility(
     recorded_strategies: list | None = None,
     hydrate_fn=None,
     matched_span: tuple[int, int | None] | None = None,
+    current_tools: frozenset[str] | None = None,
 ) -> str | None:
     """Why a hash-verified prior entry may NOT be imported as a
     reused verdict. ``None`` when it is eligible.
@@ -2716,6 +2723,15 @@ def _reuse_ineligibility(
     _body = getattr(entry, "body", "") or ""
     if _body.startswith("[rationale-consistency demotion:"):
         return "heuristic-derived clean"
+    # Silence-derived resolutions: valid only when the run-level tool
+    # set hasn't changed.  New entries carry ``resolution_tools``;
+    # legacy entries (field absent) re-review unconditionally.
+    _rt = getattr(entry, "resolution_tools", None)
+    if _body.startswith("[suspicious-resolution:"):
+        if _rt is None:
+            return "legacy silence-derived resolution"
+        if current_tools is not None and frozenset(_rt) != current_tools:
+            return "resolution tool coverage changed"
     entry_model = getattr(entry, "model", None)
     if current_model and entry_model:
         # Compare by bare identity: the journal records the resolved
@@ -2771,6 +2787,8 @@ def _reuse_block_class(reason: str) -> str:
         return "context_offloaded"
     if reason.startswith("heuristic-derived"):
         return "heuristic_derived"
+    if reason.startswith(("legacy silence-derived", "resolution tool coverage")):
+        return "resolution_stale"
     return "domain_model_context"
 
 
@@ -2861,6 +2879,7 @@ def _fold_project_index(
     current_model: str | None = None,
     domain_ctx: dict | None = None,
     reuse_stats: dict | None = None,
+    current_tools: frozenset[str] | None = None,
 ) -> None:
     """Fold the project journal index into ``covered``, hash-aware.
 
@@ -2969,6 +2988,7 @@ def _fold_project_index(
         reuse_stats=reuse_stats,
         strategy_backfill=strategy_backfill,
         known_run_ids=known_run_ids,
+        current_tools=current_tools,
     )
 
 
@@ -3023,6 +3043,7 @@ def _verify_entries_fold(
     strategy_backfill=None,
     known_run_ids: set[str] | None = None,
     sidecar_dir: Path | None = None,
+    current_tools: frozenset[str] | None = None,
 ) -> None:
     """Hash-verify journal *entries* and fold them into ``covered``.
 
@@ -3570,6 +3591,7 @@ def _verify_entries_fold(
                     recorded_strategies=recorded_strategies,
                     hydrate_fn=hydrate_fn,
                     matched_span=verified_span,
+                    current_tools=current_tools,
                 )
                 if reason is not None:
                     cls = _reuse_block_class(reason)

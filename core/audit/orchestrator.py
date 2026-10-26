@@ -1280,6 +1280,7 @@ class ReviewOutcome:
     # tools_dispatched (the channel did not look — coverage and
     # critique must not read the skip as a silent tool or as a bug).
     tools_skipped: set | None = field(default=None, repr=False)
+    resolution_tools: list[str] | None = None
     semantic_confidence: str = ""
     provenance_all_trusted: bool = False
     caller_attributed: bool = False
@@ -5924,6 +5925,9 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
         own_run_reuse=_same_run_reuse,
         reuse_stats=reuse_blocked_stats,
         seed_rereview_keys=_seed_rereview_keys,
+        current_tools=frozenset(
+            k for k, v in (tool_capabilities or {}).items() if v
+        ) or None,
     )
 
     _joern_last_activity = (
@@ -30894,6 +30898,9 @@ def _resolve_gate_demoted(
             resolved.tools_dispatched = outcome.tools_dispatched
             resolved.tools_errored = outcome.tools_errored
             resolved.tools_skipped = outcome.tools_skipped
+            resolved.resolution_tools = sorted(
+                k for k, v in (available_tools or {}).items() if v
+            ) or None
             result.outcomes[i] = resolved
             result.suspicious -= 1
             result.clean += 1

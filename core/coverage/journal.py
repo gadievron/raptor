@@ -502,6 +502,12 @@ class ReviewJournalEntry:
     # read as coverage or as a silently-refuting run) and from
     # tools that errored. Additive; absent on rows without a skip.
     tools_skipped: list[str] | None = None
+    # Sorted channel names whose silence backed a ``_resolve_gate_
+    # demoted`` clean: the run-level available-tool keyset at
+    # resolution time.  At replay, a changed keyset invalidates the
+    # silence (a new channel may have produced evidence the old run
+    # lacked).  ``None`` on non-resolution entries and legacy rows.
+    resolution_tools: list[str] | None = None
     weaknesses: list[dict] | None = None
     token_budget: int | None = None
     cost_usd: float | None = None
@@ -2710,6 +2716,7 @@ def _entry_from_validated(
         evidence_tools=raw.get("evidence_tools", []),
         tools_dispatched=raw.get("tools_dispatched", []),
         tools_skipped=raw.get("tools_skipped"),
+        resolution_tools=raw.get("resolution_tools"),
         weaknesses=raw.get("weaknesses"),
         token_budget=raw.get("token_budget"),
         cost_usd=raw.get("cost_usd"),
