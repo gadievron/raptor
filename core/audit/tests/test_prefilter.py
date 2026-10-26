@@ -1338,8 +1338,10 @@ class TestPhpSqlInjectionLexing:
     @pytest.mark.parametrize("body", [
         # no variable anywhere on the line
         '  pg_query("SELECT 1");',
-        # escaped `\$` is not interpolation
+        # escaped `\$` is not interpolation (odd backslash count)
         "  return $pdo->query(\"SELECT * FROM u WHERE n='\\$name'\");",
+        # triple backslash: one escaped pair + one real escape = no interp
+        "  return $pdo->query(\"SELECT * FROM u WHERE n='\\\\\\$name'\");",
         '  return $db->query("SELECT * FROM u WHERE p = " . floatval($p));',
         '  return $db->query("SELECT * FROM u WHERE b = " . boolval($b));',
         '  return $db->query("SELECT * FROM u WHERE id = " . INTVAL($id));',
@@ -1461,6 +1463,19 @@ class TestPhpSqlInjectionCanonical:
          2),
         ('  $h = `ls /*`; $r = $pdo->query("SELECT * FROM t WHERE id=" . $id);',
          2),
+        # even-length backslash sequences: PHP interpolates $id after them
+        ('  $r = $pdo->query("SELECT * FROM u WHERE n=\\\\$id");', 2),
+        ('  $r = $pdo->query("SELECT * FROM u WHERE n=\\\\\\\\$id");', 2),
+        # braceless if body: prepare() in the condition shares the
+        # statement but must not suppress the sink in the body
+        ('  if ($s = $db->prepare("x"))\n    $r = mysqli_query($c, $sql);', 3),
+        ('  while ($s = $db->prepare("x"))\n'
+         '    $r = $pdo->query("SELECT * FROM u WHERE id=" . $id);', 3),
+        ('  for ($i = $db->prepare("x"); $i; $i = 0)\n'
+         '    $r = $pdo->query("SELECT * FROM u WHERE id=" . $id);', 3),
+        # prepare() inside a string literal must not trigger the guard
+        ('  $x = "prepare("; $r = $pdo->query('
+         '"SELECT * FROM u WHERE id=" . $id);', 2),
     ])
     def test_kept(self, tmp_path, body, line):
         """Any operand the filter cannot prove safe keeps the hit."""

@@ -3115,7 +3115,7 @@ _PHP_SQL_CLAUSE_RE = re.compile(
     r'|\b(?:order|group)\s+by\b',
     re.IGNORECASE,
 )
-_PHP_SQL_INTERP_RE = re.compile(r'(?<!\\)\$(?:[A-Za-z_]|\{)|\{\$')
+_PHP_SQL_INTERP_RE = re.compile(r'(?:^|[^\\])(?:\\\\)*\$(?:[A-Za-z_]|\{)|\{\$')
 # Names are matched case-insensitively on ASCII only: no Unicode case
 # folding (`ıntval`, `myſql_query` are other functions to PHP).
 _PHP_SQL_SANITISER_HEAD_RE = re.compile(
@@ -3711,7 +3711,7 @@ def _php_sql_additions(source: str, line_start: int) -> set[int]:
         return any(
             kind == '`' or (
                 kind in '"h'
-                and _PHP_SQL_INTERP_RE.search(source, ca, cb) is not None
+                and _PHP_SQL_INTERP_RE.search(source[ca:cb]) is not None
             )
             for _end, kind, ca, cb in literals_in(a, b)
         )
@@ -3743,13 +3743,31 @@ def _php_sql_additions(source: str, line_start: int) -> set[int]:
                 continue
             if guarded is None:
                 # once per statement: a prepare/bind_param/pg_query_params
-                # call in the sink's own statement means no addition
-                guarded = _PHP_SQL_PREPARED_RE.search(source, s, e) is not None
+                # call at depth 0 in the code view means no addition.
+                # Depth 0 excludes prepare() inside an if/while condition,
+                # which shares a statement with a braceless body.
+                guarded = False
+                for _pm in _PHP_SQL_PREPARED_RE.finditer(code, s, e):
+                    _d = 0
+                    for _k in range(s, _pm.start()):
+                        if code[_k] == '(':
+                            _d += 1
+                        elif code[_k] == ')':
+                            _d -= 1
+                    if _d == 0:
+                        guarded = True
+                        break
             if guarded:
                 break
             close = _php_sql_close(code, m.end(), e)
             covered = close + 1 if close >= 0 else e
             outer = [line_of(m.start()), m, close, covered, False]
+            # per-sink: prepare/bind_param/pg_query_params inside
+            # this sink's own arguments — the value comes from a
+            # prepared statement, not raw SQL
+            if (close >= 0
+                    and _PHP_SQL_PREPARED_RE.search(code, m.end(), close)):
+                continue
             records.append(outer)
         if guarded:
             continue
