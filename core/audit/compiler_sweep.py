@@ -29,19 +29,25 @@ registered in :mod:`core.audit.evidence_grade`.
 
 from __future__ import annotations
 
+import bisect
+import contextvars
 import copy
 import json
 import logging
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import threading
+import time
+from array import array
 from dataclasses import dataclass
 from pathlib import Path
 
 from core.source import open_regular, read_text_capped
+from core.source.lines import split_lines
 from typing import Any
 
 from core.json import load_json
@@ -518,7 +524,7 @@ _DIAG_SUPPRESSION_RE = re.compile(
 )
 
 
-def _suppression_witness(source_text: str) -> str:
+def _base_suppression_witness(source_text: str) -> str:
     """First diagnostic-suppression construct in one file, or ''."""
     from .source_view import sanitized_view
     m = _DIAG_SUPPRESSION_RE.search(sanitized_view(source_text, "tu.c"))
@@ -590,7 +596,7 @@ def _repo_authored(name: str, target_resolved: Path) -> bool:
         return True
 
 
-def _closure_suppression_witness(
+def _base_closure_suppression_witness(
     pp_text: str,
     target_path: Path,
     full_path: Path,
@@ -654,7 +660,7 @@ def _closure_suppression_witness(
         text, truncated = got
         if truncated:
             return "", f"closure file {fname} exceeds the byte cap"
-        w = _suppression_witness(text)
+        w = _base_suppression_witness(text)
         if w:
             return f"{w} (in {fname})", ""
         # Attribution laundering: a plain linemarker in a repo file
@@ -673,6 +679,1105 @@ def _closure_suppression_witness(
                     f"{lm.group(1) or '<empty>'} — suppression "
                     f"attribution unverifiable"
                 )
+    return "", ""
+
+
+# ---------------------------------------------------------------------------
+# Additive suppression checks (monotonic over the base witness above)
+# ---------------------------------------------------------------------------
+# The two functions the callers use are the BASE implementation (kept
+# verbatim above as ``_base_suppression_witness`` /
+# ``_base_closure_suppression_witness``) OR a set of additive checks.
+# The additive checks may only ADD a witness or a vet failure — they
+# never run when the base already found one and can never clear one —
+# so for the sweep every change moves refuted → inconclusive (the
+# FN-safe direction), never the other way. They are deliberately
+# simple, line-local and linear:
+#
+# * line splices (backslash-newline) are joined and the base re-run;
+# * an attribute-list opener — ``[[`` / ``<:<:`` / ``<:[`` / ``[<:``
+#   or ``__attribute[__]((`` — followed later on the same line, or on
+#   one of the next ``_ADD_ATTR_CARRY_LINES`` (8) lines while the list
+#   is still open, by the word ``suppress`` / ``__suppress__``, on the
+#   sanitized view for repo files and on the raw -E text for the
+#   closure. Lists this line-local check misses (a nested ``))`` /
+#   ``]]`` in an argument, a ``suppress`` more than 8 lines on) are
+#   covered by layer 2 (``_attr_token_scan``) below;
+# * directives after any C directive whitespace (space, tab, FF, VT,
+#   comments) and the ``%:`` digraph: system-header / diagnostic-ignore
+#   pragmas and flag-3 linemarkers are witnesses; a ``#line`` /
+#   linemarker whose name is not a provable plain literal (macro
+#   operand, invalid escape — names are decoded with C escape
+#   semantics, ``\x`` taking every hex digit) or names a path outside
+#   the tree fails the vet;
+# * in -E output, linemarker names are decoded the same way; a
+#   column-0 linemarker that does not parse fails the vet; a flagless
+#   (rename) marker that moves a REPO region to a path outside the
+#   tree fails the vet; missing/empty output fails the vet.
+#
+# Accepted false positives (each only adds a witness or a vet failure):
+# ``suppress`` as an attribute ARGUMENT or inside a string on such a
+# line (``cleanup(suppress)``, ``deprecated("… suppress …")``), and a
+# C++ raw string whose line starts ``# <digit>`` in -E output (reads
+# as an unparseable linemarker → unvetted). Inherited from the base
+# (unchanged here): ANY ``_Pragma(`` is a witness, including portability
+# macros such as ``_Pragma("inline=forced")``. All only withhold a
+# refutation / annotate a TU.
+#
+# The witness remains ADVISORY and incomplete: it is a text scan, so a
+# suppression the preprocessor assembles without leaving text in the
+# sources or the -E output (``__clang_analyzer__`` built by token
+# pasting in ``#if``), clang lexing beyond layer 2's model, nameless or
+# in-tree ``#line`` relabelling (the sweep may still refute there; the
+# scan keeps the finding), and a self-include with
+# ``_Pragma("clang system_header")`` are not detected. The gcc
+# ``-fanalyzer`` path is untested. Cost: each check is a linear pass over
+# size-capped input; name resolution is bounded by the limits below.
+
+_ADD_SPLICE_RE = re.compile(r"\\[ \t\f\v]*\r?\n")
+_ADD_ATTR_OPEN_RE = re.compile(
+    r"(?:\[|<:)[ \t\f\v]*(?:\[|<:)"
+    r"|\b__attribute(?:__)?[ \t\f\v]*\([ \t\f\v]*\(",
+)
+_ADD_ATTR_CLOSE_RE = re.compile(r"(?:\]|:>)[ \t\f\v]*(?:\]|:>)|\)[ \t\f\v]*\)")
+_ADD_SUPPRESS_RE = re.compile(r"\b(?:__)?suppress(?:__)?\b")
+# Applied per line with .match — never MULTILINE over whole text.
+_ADD_DIRECTIVE_RE = re.compile(r"[ \t\f\v]*(?:#|%:)[ \t\f\v]*(pragma\b|line\b|[0-9])")
+_ADD_PRAGMA_RE = re.compile(
+    r"(?:GCC|clang)[ \t\f\v]+(?:diagnostic[ \t\f\v]+ignored|system_header)\b",
+)
+_ADD_ATTR_CARRY_LINES = 8
+_DIRECTIVE_WS = " \t\f\v"
+_ASCII_DIGITS = frozenset("0123456789")
+_C_SIMPLE_ESCAPES = {
+    "'": 0x27, '"': 0x22, "?": 0x3F, "\\": 0x5C, "a": 0x07, "b": 0x08,
+    "f": 0x0C, "n": 0x0A, "r": 0x0D, "t": 0x09, "v": 0x0B,
+    "e": 0x1B, "E": 0x1B,  # GNU extension, accepted by gcc and clang
+}
+_HEX = frozenset("0123456789abcdefABCDEF")
+_OCT = frozenset("01234567")
+
+
+def _decode_c_string(token: str) -> str | None:
+    """Decode a plain ``"..."`` literal with C escape semantics, or None
+    when it is not a terminated plain literal or uses an escape this
+    decoder cannot prove (UCNs, unknown escapes, values over 0xFF, NUL)."""
+    if len(token) < 2 or token[0] != '"' or token[-1] != '"':
+        return None
+    body = token[1:-1]
+    out = bytearray()
+    i, n = 0, len(body)
+    while i < n:
+        c = body[i]
+        if c == '"' or c == "\n":
+            return None
+        if c != "\\":
+            out += c.encode("utf-8", "surrogateescape")
+            i += 1
+            continue
+        i += 1
+        if i >= n:
+            return None
+        c = body[i]
+        if c in _C_SIMPLE_ESCAPES:
+            out.append(_C_SIMPLE_ESCAPES[c])
+            i += 1
+        elif c in _OCT:
+            j = i
+            while j < n and j < i + 3 and body[j] in _OCT:
+                j += 1
+            value = int(body[i:j], 8)
+            if value > 0xFF:
+                return None
+            out.append(value)
+            i = j
+        elif c == "x":
+            j = i + 1
+            while j < n and body[j] in _HEX:
+                j += 1
+            if j == i + 1:
+                return None
+            value = int(body[i + 1:j], 16)
+            if value > 0xFF:
+                return None
+            out.append(value)
+            i = j
+        else:
+            return None
+    if 0 in out:
+        return None
+    return os.fsdecode(bytes(out))
+
+
+def _skip_ws(s: str, i: int) -> int:
+    while i < len(s) and s[i] in _DIRECTIVE_WS:
+        i += 1
+    return i
+
+
+def _parse_marker_operands(
+    s: str, flags_view: str | None = None,
+) -> tuple[str, list[str]] | None:
+    """Operands of a linemarker / ``#line`` starting at ``line`` or the
+    line number. ``("", [])`` = nameless; None = not provable."""
+    i = 0
+    if s.startswith("line"):
+        i = _skip_ws(s, 4)
+    j = i
+    while j < len(s) and s[j] in _ASCII_DIGITS:
+        j += 1
+    if j == i:
+        return None
+    i = _skip_ws(s, j)
+    if i >= len(s) or not s[i:].strip(_DIRECTIVE_WS + "\r"):
+        return "", []
+    if s[i] != '"':
+        return None
+    j = i + 1
+    while j < len(s) and s[j] != '"':
+        j += 2 if s[j] == "\\" else 1
+    if j >= len(s):
+        return None
+    name = _decode_c_string(s[i:j + 1])
+    if name is None:
+        return None
+    tail = (flags_view if flags_view is not None else s)[j + 1:]
+    flags = tail.split()
+    if not all(f and set(f) <= _ASCII_DIGITS for f in flags):
+        return None
+    return name, flags
+
+
+def _add_repo_authored(name: str, target_resolved: Path) -> bool:
+    """``_repo_authored`` with the resolution done by the bounded
+    resolver (same answer whenever no limit trips)."""
+    if not name or name.startswith("<"):
+        return False
+    p = Path(name)
+    if not p.is_absolute():
+        return True
+    try:
+        return _resolve_bounded(p).is_relative_to(target_resolved)
+    except (OSError, ValueError):  # e.g. embedded NUL — unattributable
+        return True
+
+
+def _attr_line_witness(line: str, carry: int) -> tuple[str, int]:
+    """``(witness, carry)`` for one line: carry > 0 means an attribute
+    list opened on an earlier line is still open."""
+    if carry:
+        start = scan_from = 0
+    else:
+        m = _ADD_ATTR_OPEN_RE.search(line)
+        if not m:
+            return "", 0
+        start, scan_from = m.start(), m.end()
+    s = _ADD_SUPPRESS_RE.search(line, scan_from)
+    if s:
+        return " ".join(line[start:s.end()].split())[:200], 0
+    if _ADD_ATTR_CLOSE_RE.search(line, scan_from):
+        return "", 0
+    return "", (carry - 1 if carry else _ADD_ATTR_CARRY_LINES)
+
+
+@dataclass
+class _SrcDirectives:
+    witness: str
+    # (decoded name, or None when unprovable; directive text)
+    linemarkers: list[tuple[str | None, str]]
+
+
+def _additive_file_scan(source_text: str) -> _SrcDirectives:
+    """Additive witness + source linemarkers for one repo file."""
+    from .source_view import sanitized_view
+    spliced = _ADD_SPLICE_RE.sub("", source_text)
+    if spliced != source_text:
+        w = _base_suppression_witness(spliced)
+        if w:
+            return _SrcDirectives(w, [])
+    view = sanitized_view(spliced, "tu.c")
+    # line-model: \n-only split pairs raw and sanitized lines column for
+    # column; each line is only prefix-matched (.match) and its operands
+    # parsed with \r stripped, so a CRLF trailing \r cannot change a result.
+    vlines = view.split("\n")  # line-model: see above (column-aligned pair)
+    rlines = spliced.split("\n")  # line-model: see above (column-aligned pair)
+    if len(vlines) != len(rlines):  # defensive: keep columns aligned
+        rlines = vlines
+    witness = ""
+    carry = 0
+    linemarkers: list[tuple[str | None, str]] = []
+    for vline, rline in zip(vlines, rlines):
+        if not witness:
+            w, carry = _attr_line_witness(vline, carry)
+            if w:
+                witness = w
+        m = _ADD_DIRECTIVE_RE.match(vline)
+        if not m:
+            continue
+        text = vline[m.start():].strip()[:200]
+        if m.group(1) == "pragma":
+            rest = vline[m.end():].lstrip(_DIRECTIVE_WS)
+            if not witness and _ADD_PRAGMA_RE.match(rest):
+                witness = text
+            continue
+        parsed = _parse_marker_operands(
+            rline[m.start(1):], flags_view=vline[m.start(1):],
+        )
+        if parsed is None:
+            linemarkers.append((None, rline[m.start():].strip()[:200]))
+            continue
+        name, flags = parsed
+        linemarkers.append((name, rline[m.start():].strip()[:200]))
+        if not witness and "3" in flags:
+            witness = rline[m.start():].strip()[:200]
+    return _SrcDirectives(witness, linemarkers)
+
+
+# ---------------------------------------------------------------------------
+# Layer 2: further additive checks (presumed names, attribute lists)
+# ---------------------------------------------------------------------------
+# The composite witness is base, else layer 1 (the checks above), else
+# layer 2. A non-clean base or layer-1 result is returned unchanged, so
+# both earlier floors hold by construction; layer 2 can only ADD a witness
+# or a vet failure (for the sweep: refuted -> inconclusive). That property
+# keeps earlier results compatible; it does NOT by itself make layer 2
+# detect what it promises — the direct layer-2 tests do that.
+#
+# Presumed names. A ``#line`` / linemarker file name is a PRESUMED
+# filename: a label clang reports, not a path clang resolves. Layer 2
+# applies compiler-scan's consumer policy (``_rel_under_target`` resolves
+# a relative diagnostic path against the TU directory and drops it when
+# it lands outside the target): a relative name is resolved against the
+# TU directory, an absolute one is checked as is, and a name that cannot
+# be resolved, or that looks like a Windows path (conservative
+# Windows-like-name policy: a drive prefix or ANY backslash — backslashes
+# are legal POSIX filename characters, so this may over-report), fails
+# the vet instead of counting as "in tree". An include-ENTRY marker
+# (flag 1) with a RELATIVE name means the compiler was given a relative
+# TU or ``-I`` path; such a name is resolved against the compiler's cwd,
+# not the vetting process's, so its provenance is unverifiable and it
+# fails the vet.
+#
+# Attribute lists (``_attr_token_scan``). A single forward scan over
+# one master regex: string / char literals (any encoding prefix; they end
+# at an unescaped quote or at a newline, as in C), ``//`` and ``/* */``
+# comments and C++ raw strings (``R"d( … )d"``; raw strings do not nest,
+# only the outer ``)d"`` terminates) are skipped; a raw-string prefix only
+# counts at a token start (identifiers include every non-ASCII code point,
+# so ``a<U+0301>R"("`` is an identifier followed by a plain string). In
+# -E text column-0 ``#`` lines are directives and are skipped; in raw
+# source, directive bodies (``#define``) are scanned. Openers: ``[[``,
+# ``[<:``, ``<:[``, ``<:<:`` (an ambiguous ``<::`` is read as an opener —
+# the conservative reading) and ``__attribute[__]((``. Inside a list a
+# typed stack matches ``( [ { <: <%`` with their closers (``]``/``:>`` and
+# ``}``/``%>`` interchangeable); the list ends when the stack empties and
+# scanning resumes for further openers. The identifier ``suppress`` /
+# ``__suppress__`` ANYWHERE in a list (arguments included) is a witness.
+# Input the scan cannot verify is reported as a witness, never as absence:
+# a mismatched closer, a list still open at end of input, nesting deeper
+# than ``_L2_MAX_DEPTH``, or a literal / comment that runs to end of input
+# while a list is open or with an opener in the swallowed text. Trigraphs
+# (enabled in clang only by ``-trigraphs`` / strict ISO modes) are handled
+# conservatively: if the text contains any trigraph, it is scanned a
+# second time with trigraphs translated and both readings count.
+#
+# Linear time. Every master-regex alternative is anchored to its first
+# character; a failed attempt at a position costs O(1) except the opener
+# alternatives, whose ``[ \t\f\v\n]*`` run can only be re-scanned from the
+# single ``[`` / ``<:`` / ``(`` immediately before it, so each character
+# is examined O(1) times by failed attempts. A matched literal / comment
+# is skipped by one forward regex match or ``str.find`` and the scan jumps
+# past it; a raw-string delimiter is bounded at 16 characters; a runaway
+# literal ends the scan. The stack is bounded by ``_L2_MAX_DEPTH``; hits
+# are yielded lazily (O(1) memory); witness snippets are sliced to at
+# most 400 characters. Inputs are already capped by the callers
+# (``_MAX_CLOSURE_FILE_BYTES`` per file, ``_MAX_PP_TEXT_BYTES`` per -E
+# text), and a capped / truncated read fails the vet (base) — layer 2
+# repeats that verdict rather than scanning a partial file.
+
+_L2_MAX_DEPTH = 4096
+_L2_UNICODE_DIRECTIVE_RE = re.compile(
+    r"[ \t\f\v]*[  　][ \t\f\v  　]*"
+    r"(?:#|%:)[ \t\f\v]*(pragma\b|line\b|[0-9])",
+)
+_WINDOWS_LIKE_NAME_RE = re.compile(r"^[A-Za-z]:|\\")
+_TOK_RE = re.compile(
+    r"(?P<dir>^\#[^\n]*)"
+    r"|(?P<lc>//)|(?P<bc>/\*)"
+    r"|(?P<raw>(?:u8|[uUL])?R\")"
+    r"|(?P<str>(?:u8|[uUL])?\")|(?P<chr>(?:u8|[uUL])?')"
+    r"|(?P<open>\[[ \t\f\v\n]*(?:\[|<:)|<:[ \t\f\v\n]*(?:<:|\[)"
+    r"|\b__attribute(?:__)?[ \t\f\v\n]*\([ \t\f\v\n]*\()"
+    r"|(?P<sup>\b(?:__)?suppress(?:__)?\b)"
+    r"|(?P<dig><:(?!:(?![:>]))|:>|<%|%>)"
+    r"|(?P<del>[()\[\]{}])"
+    r"|(?P<id>[A-Za-z_$0-9\x80-\U0010ffff]+(?:'[A-Za-z0-9_]+)*)",
+    re.MULTILINE,
+)
+_STR_BODY_RE = re.compile(r'(?:[^"\\\n]|\\.)*"?')
+_CHR_BODY_RE = re.compile(r"(?:[^'\\\n]|\\.)*'?")
+_RAW_DELIM_RE = re.compile(r'([^ ()\\\t\v\f\n"]{0,16})\(')
+_L2_CLOSER = {"(": ")", "[": "]", "{": "}", "<:": "]", "<%": "}"}
+_L2_CLOSE_NORM = {")": ")", "]": "]", ":>": "]", "}": "}", "%>": "}"}
+_TRIGRAPHS = {"=": "#", "(": "[", ")": "]", "/": "\\", "'": "^",
+              "<": "{", ">": "}", "!": "|", "-": "~"}
+_TRIGRAPH_RE = re.compile(r"\?\?([=()/'<>!-])")
+
+
+def _attr_token_scan(text: str, *, preprocessed: bool):
+    """Yield ``(offset, witness)`` for every attribute list in *text*
+    that names ``suppress`` or cannot be verified. Trigraphs, when
+    present, are scanned under both readings; offsets are always
+    offsets into *text*."""
+    yield from _attr_token_scan_one(text, preprocessed=preprocessed)
+    if _TRIGRAPH_RE.search(text):
+        # Sparse offset map: the translated offset of each trigraph's
+        # replacement character (one entry per trigraph). A translated
+        # offset ``at`` lies after ``k`` replacements, k = the number of
+        # entries < at, and each one shortened the text by two.
+        shifts = array("q")
+
+        def translate(m: re.Match) -> str:
+            shifts.append(m.start() - 2 * len(shifts))
+            return _TRIGRAPHS[m.group(1)]
+
+        translated = _TRIGRAPH_RE.sub(translate, text)
+        for at, w in _attr_token_scan_one(translated, preprocessed=preprocessed):
+            yield at + 2 * bisect.bisect_left(shifts, at), w
+
+
+def _witness_snippet(text: str, start: int, end: int, preprocessed: bool) -> str:
+    """Up to 400 characters of list text from *start*, whitespace
+    collapsed. In -E text, column-0 directive lines (the scanner's
+    ``dir`` token: linemarkers, which carry toolchain and host paths, and
+    surviving pragmas) are not list text: each becomes one space, before
+    the window is cut."""
+    if not preprocessed:
+        return " ".join(text[start:min(end, start + 400)].split())
+    out: list[str] = []
+    kept, pos = 0, start
+    while pos < end and kept < 400:
+        nl = text.find("\n", pos, end)
+        stop = end if nl < 0 else nl
+        if pos > start and text.startswith("#", pos):
+            out.append(" ")
+        else:
+            seg = text[pos:min(stop, pos + 400 - kept)]
+            out.append(seg)
+            kept += len(seg)
+        out.append("\n")
+        pos = stop + 1
+    return " ".join("".join(out).split())
+
+
+def _attr_token_scan_one(text: str, *, preprocessed: bool):
+    n = len(text)
+    pos = 0
+    stack: list[str] | None = None
+    list_start = 0
+
+    def hit(at: int, end: int, why: str = "") -> tuple[int, str]:
+        snippet = _witness_snippet(text, list_start, end, preprocessed)
+        return at, snippet[:200] + (f" … ({why})" if why else "")
+
+    while pos < n:
+        m = _TOK_RE.search(text, pos)
+        if m is None:
+            break
+        kind = m.lastgroup
+        start, end = m.start(), m.end()
+        if kind == "dir":
+            pos = end if preprocessed else start + 1
+            continue
+        if kind in ("lc", "bc", "raw", "str", "chr"):
+            runaway = False
+            if kind == "lc":
+                nl = text.find("\n", end)
+                stop = n if nl < 0 else nl
+            elif kind == "bc":
+                close = text.find("*/", end)
+                stop, runaway = (n, True) if close < 0 else (close + 2, False)
+            elif kind == "raw":
+                dm = _RAW_DELIM_RE.match(text, end)
+                if dm is None:            # `R` then an ordinary string
+                    stop = _STR_BODY_RE.match(text, end).end()
+                else:
+                    term = ")" + dm.group(1) + '"'
+                    close = text.find(term, dm.end())
+                    stop, runaway = ((n, True) if close < 0
+                                     else (close + len(term), False))
+            else:
+                body = _STR_BODY_RE if kind == "str" else _CHR_BODY_RE
+                stop = body.match(text, end).end()
+            if runaway:
+                if stack is None and _ADD_ATTR_OPEN_RE.search(text, end) is None:
+                    return
+                if stack is None:
+                    list_start = start
+                yield hit(start, start + 200,
+                          "unverifiable: literal or comment runs to end of input")
+                return
+            pos = max(stop, end)
+            continue
+        pos = end
+        if stack is None:
+            if kind == "open":
+                stack = [")", ")"] if m.group(0).endswith("(") else ["]", "]"]
+                list_start = start
+            continue
+        if kind == "sup":
+            yield hit(start, end)
+            stack = None
+            continue
+        if kind == "open":
+            stack.extend([")", ")"] if m.group(0).endswith("(") else ["]", "]"])
+        elif kind in ("del", "dig"):
+            tok = m.group(0)
+            if tok in _L2_CLOSER:
+                stack.append(_L2_CLOSER[tok])
+            elif not stack or stack[-1] != _L2_CLOSE_NORM[tok]:
+                yield hit(start, end, "unbalanced attribute list")
+                stack = None
+                continue
+            else:
+                stack.pop()
+                if not stack:
+                    stack = None
+                continue
+        else:
+            continue
+        if len(stack) > _L2_MAX_DEPTH:
+            yield hit(start, end, "attribute list nesting exceeds the scan limit")
+            stack = None
+    if stack is not None:
+        yield hit(n, n, "attribute list still open at end of input")
+
+
+def _presumed_name_outside(name: str, tu_dir: Path, target_resolved: Path) -> str:
+    """Why a PRESUMED file name leaves the tree under the consumer
+    policy (relative = TU-directory relative), or ''."""
+    if not name or name.startswith("<"):
+        return ""
+    if _WINDOWS_LIKE_NAME_RE.search(name):
+        return f"names a Windows-like path {name!r}"
+    p = Path(name)
+    try:
+        real = _resolve_bounded(p if p.is_absolute() else tu_dir / p)
+    except (OSError, ValueError, RuntimeError):
+        return f"names unresolvable path {name!r}"
+    if real.is_relative_to(target_resolved):
+        return ""
+    return f"re-attributes lines to {name}"
+
+
+@dataclass
+class _L2File:
+    witness: str
+    # (decoded presumed name, or None when unprovable; directive text)
+    linemarkers: list[tuple[str | None, str]]
+
+
+def _l2_file_scan(source_text: str) -> _L2File:
+    """Layer-2 witness and source linemarkers of one repo file."""
+    from .source_view import sanitized_view
+    spliced = _ADD_SPLICE_RE.sub("", source_text)
+    witness = next((w for _at, w in _attr_token_scan(
+        spliced, preprocessed=False)), "")
+    view = sanitized_view(spliced, "tu.c")
+    vlines, rlines = split_lines(view), split_lines(spliced)
+    if len(vlines) != len(rlines):
+        rlines = vlines
+    markers: list[tuple[str | None, str]] = []
+    for vline, rline in zip(vlines, rlines):
+        m = _ADD_DIRECTIVE_RE.match(vline) or _L2_UNICODE_DIRECTIVE_RE.match(vline)
+        if not m:
+            continue
+        text = rline[m.start():].strip()[:200]
+        if m.group(1) == "pragma":
+            if not witness and _ADD_PRAGMA_RE.match(
+                    vline[m.end():].lstrip(_DIRECTIVE_WS + "  　")):
+                witness = text
+            continue
+        parsed = _parse_marker_operands(
+            rline[m.start(1):], flags_view=vline[m.start(1):])
+        if parsed is None:
+            markers.append((None, text))
+            continue
+        markers.append((parsed[0], text))
+        if not witness and "3" in parsed[1]:
+            witness = text
+    return _L2File(witness, markers)
+
+
+# Linemarker-name classification, shared by the layer-1 and layer-2 walks.
+# Inputs: ``_add_repo_authored(name, target_resolved)`` depends on the name,
+# the resolved target and the filesystem; ``_presumed_name_outside(name,
+# tu_dir, target_resolved)`` on the name, the TU directory, the resolved
+# target and the filesystem. Within one walk the target and TU directory are
+# fixed, so each predicate is memoised per call keyed by the exact name, in a
+# SEPARATE store per predicate. Stability policy: the tree is assumed static
+# during one scan; a filesystem change during a call may be seen stale, in
+# either direction; nothing is cached across calls.
+#
+# Quota: every DISTINCT name string that reaches either predicate in one
+# call counts once — marker names, the current file's name, the TU's own
+# name, names in repo-file ``#line`` directives and the owners of reported
+# attribute lists. The quota is checked before any resolution or cache
+# insertion; repeated names cost nothing. Over the quota the walk stops and
+# the closure is reported "not vetted" (sweep: inconclusive). Legitimate
+# TUs measured: at most 813 distinct names (a C++ TU including ten
+# standard-library headers); brotli, Go cgo and the repo's own C fixtures
+# at most 251.
+#
+# Resolution work: the quota bounds how many names are classified, not the
+# work per name. Names are resolved by ``_bounded_realpath`` (the POSIX
+# realpath semantics of Python 3.13+), which charges every ``os.lstat``,
+# every ``os.readlink`` and every component of a spliced symlink target,
+# BEFORE doing it, to ONE per-TU budget (``_MAX_RESOLVE_OPS_PER_TU``
+# operations) shared by the layer-1 and layer-2 walks of that TU, and
+# follows at most ``_MAX_SYMLINK_HOPS`` links per name (the next one trips).
+# Every name about to be resolved (a memo miss; repeats cost nothing) is
+# first checked against a per-name limit: ``_MAX_RESOLVED_NAME_CHARS``
+# characters of name and ``_MAX_RESOLVED_NAME_PARTS`` components of the path
+# resolved (TU directory included for a relative name). The target root is
+# resolved by the same function, so containment compares like with like. A
+# cooperative per-TU deadline (``_VET_DEADLINE_SECONDS``, monotonic clock)
+# is checked at walk entry, before every filesystem operation, in the
+# layer-2 marker, hit and repo-file loops and before a "vetted" result is
+# accepted; it cannot interrupt a blocked system call or the uninstrumented
+# scans (the -E line split, the attribute token scan), which are linear in
+# capped input. Over any limit the walk stops and the closure is "not
+# vetted"; a witness or vet failure found earlier (base, then layer 1) still
+# wins. The base check (main's, unchanged) runs before these limits and is
+# not covered by them: a long symlink chain named by absolute paths is as
+# slow there as on main. Limit reasons carry counts and the -E line number
+# only, never path text. Measured on 4,405 real clang -E closures: names at
+# most 181 characters and 22 components, at most 21,825 filesystem
+# operations per TU, at most 2 symlink hops per name; each limit is at least
+# 10x that. Containment is decided for POSIX filesystems as clang reports
+# them; Windows paths and case-insensitive matching are not supported
+# (Windows-like names fail the vet).
+_MAX_DISTINCT_MARKER_NAMES = 20_000
+_MAX_RESOLVED_NAME_CHARS = 4096
+_MAX_RESOLVED_NAME_PARTS = 256
+_MAX_RESOLVE_OPS_PER_TU = 250_000
+_MAX_SYMLINK_HOPS = 40
+_VET_DEADLINE_SECONDS = 60
+_vet_clock = time.monotonic
+
+
+class _VetLimitExceeded(Exception):
+    """A closure walk hit a work limit: the closure is "not vetted"."""
+
+
+class _DistinctNameQuotaExceeded(_VetLimitExceeded):
+    """A closure walk met more distinct linemarker names than the quota."""
+
+
+class _ResolveBudget:
+    """Filesystem operations and wall-clock time for one TU's closure
+    vet, shared by the layer-1 and layer-2 walks. ``where`` locates the
+    name being classified (an -E line number, never path text)."""
+
+    def __init__(self) -> None:
+        self.spent = 0
+        self.where = ""
+        self.deadline = _vet_clock() + _VET_DEADLINE_SECONDS
+
+    def tick(self, site: str) -> None:
+        """Raise once the per-TU deadline has passed (*site* names the
+        check, for diagnostics and tests)."""
+        if _vet_clock() >= self.deadline:
+            raise _VetLimitExceeded(
+                f"closure vet exceeded its {_VET_DEADLINE_SECONDS} s deadline "
+                f"— suppression attribution unverified")
+
+    def op(self, kind: str, n: int = 1) -> None:
+        """Admit *n* filesystem operations of *kind* (``lstat``,
+        ``readlink``, ``target``) or raise; called before the work."""
+        self.tick("resolve")
+        if self.spent + n > _MAX_RESOLVE_OPS_PER_TU:
+            raise _VetLimitExceeded(
+                f"linemarker-name resolution budget exhausted (more than "
+                f"{_MAX_RESOLVE_OPS_PER_TU} filesystem operations in the "
+                f"closure{self.where}) — suppression attribution unverified")
+        self.spent += n
+
+    def charge(self, name: str, path: Path) -> None:
+        """Per-name limits for resolving *path* (for marker *name*);
+        called before the resolve, never after."""
+        if len(name) > _MAX_RESOLVED_NAME_CHARS:
+            raise _VetLimitExceeded(
+                f"linemarker name of {len(name)} characters{self.where} "
+                f"exceeds the resolution limit ({_MAX_RESOLVED_NAME_CHARS} "
+                f"characters) — suppression attribution unverified")
+        parts = len(path.parts)
+        if parts > _MAX_RESOLVED_NAME_PARTS:
+            raise _VetLimitExceeded(
+                f"linemarker name{self.where} resolves through {parts} path "
+                f"components, over the resolution limit "
+                f"({_MAX_RESOLVED_NAME_PARTS} path components) — suppression "
+                f"attribution unverified")
+
+
+def _bounded_realpath(filename: str, budget: _ResolveBudget) -> str:
+    """``os.path.realpath(filename, strict=False)`` on POSIX, with every
+    lstat, readlink and spliced target component charged to *budget*
+    before it happens and at most ``_MAX_SYMLINK_HOPS`` links followed.
+    Raises ``_VetLimitExceeded`` when a limit trips (the only divergence
+    from ``os.path.realpath``).
+
+    The equivalence is with the Python 3.13+ ``os.path.realpath``, whose
+    loop handling this mirrors. On Python 3.12 the stdlib resolves names
+    that pass through a symlink loop differently; in every such case
+    measured, this function's result places the name inside the
+    repository, so its region is scanned rather than trusted."""
+    sep = "/"
+    rest = filename.split(sep)[::-1]
+    part_count = len(rest)
+    path = sep if filename.startswith(sep) else os.getcwd()
+    # symlink path -> fully resolved target (None while being resolved:
+    # meeting it again is a loop, left unresolved as realpath does)
+    seen: dict[str, str | None] = {}
+    hops = 0
+    while part_count:
+        name = rest.pop()
+        if name is None:
+            seen[rest.pop()] = path
+            continue
+        part_count -= 1
+        if not name or name == ".":
+            continue
+        if name == "..":
+            path = path[:path.rindex(sep)] or sep
+            continue
+        newpath = path + name if path == sep else path + sep + name
+        budget.op("lstat")
+        try:
+            if not stat.S_ISLNK(os.lstat(newpath).st_mode):
+                path = newpath
+                continue
+            if newpath in seen:
+                cached = seen[newpath]
+                path = newpath if cached is None else cached
+                continue
+            budget.op("readlink")
+            target = os.readlink(newpath)
+        except OSError:
+            path = newpath
+            continue
+        hops += 1
+        if hops > _MAX_SYMLINK_HOPS:
+            raise _VetLimitExceeded(
+                f"linemarker name{budget.where} resolves through more than "
+                f"{_MAX_SYMLINK_HOPS} symbolic links — suppression attribution "
+                f"unverified")
+        target_parts = target.split(sep)[::-1]
+        budget.op("target", len(target_parts))
+        if target.startswith(sep):
+            path = sep
+        seen[newpath] = None
+        rest.append(newpath)
+        rest.append(None)
+        rest.extend(target_parts)
+        part_count += len(target_parts)
+    return path
+
+
+# The budget of the classifier currently calling a predicate (per thread).
+_ACTIVE_BUDGET: contextvars.ContextVar[_ResolveBudget | None] = (
+    contextvars.ContextVar("compiler_sweep_resolve_budget", default=None))
+
+
+def _resolve_bounded(path: Path) -> Path:
+    """``path.resolve()`` through ``_bounded_realpath``, charged to the
+    calling classifier's budget (a fresh budget outside a walk)."""
+    budget = _ACTIVE_BUDGET.get() or _ResolveBudget()
+    return Path(_bounded_realpath(str(path), budget))
+
+
+def _repo_resolve_arg(name: str) -> Path | None:
+    """The path ``_add_repo_authored`` resolves, or None when it resolves
+    nothing (mirrors ``_repo_authored``)."""
+    if not name or name.startswith("<"):
+        return None
+    p = Path(name)
+    return p if p.is_absolute() else None
+
+
+def _outside_resolve_arg(name: str, tu_dir: Path) -> Path | None:
+    """The path ``_presumed_name_outside`` resolves, or None when it
+    resolves nothing."""
+    if not name or name.startswith("<") or _WINDOWS_LIKE_NAME_RE.search(name):
+        return None
+    p = Path(name)
+    return p if p.is_absolute() else tu_dir / p
+
+
+class _NameClassifier:
+    def __init__(self, target_resolved: Path, tu_dir: Path,
+                 budget: _ResolveBudget | None = None) -> None:
+        self._target = target_resolved
+        self._tu_dir = tu_dir
+        self._budget = budget if budget is not None else _ResolveBudget()
+        self.budget = self._budget
+        self._seen: set[str] = set()
+        self._authored: dict[str, bool] = {}
+        self._outside: dict[str, str] = {}
+
+    def _admit(self, name: str) -> None:
+        if name in self._seen:
+            return
+        if len(self._seen) >= _MAX_DISTINCT_MARKER_NAMES:
+            raise _DistinctNameQuotaExceeded(
+                f"more than {_MAX_DISTINCT_MARKER_NAMES} distinct linemarker "
+                f"names in the closure — suppression attribution unverified")
+        self._seen.add(name)
+
+    def repo(self, name: str) -> bool:
+        self._admit(name)
+        if name not in self._authored:
+            arg = _repo_resolve_arg(name)
+            if arg is not None:
+                self._budget.charge(name, arg)
+            token = _ACTIVE_BUDGET.set(self._budget)
+            try:
+                self._authored[name] = _add_repo_authored(name, self._target)
+            finally:
+                _ACTIVE_BUDGET.reset(token)
+        return self._authored[name]
+
+    def outside(self, name: str) -> str:
+        self._admit(name)
+        if name not in self._outside:
+            arg = _outside_resolve_arg(name, self._tu_dir)
+            if arg is not None:
+                self._budget.charge(name, arg)
+            token = _ACTIVE_BUDGET.set(self._budget)
+            try:
+                self._outside[name] = _presumed_name_outside(
+                    name, self._tu_dir, self._target)
+            finally:
+                _ACTIVE_BUDGET.reset(token)
+        return self._outside[name]
+
+
+def _l2_closure(
+    pp_text: str,
+    target_path: Path,
+    full_path: Path,
+    budget: _ResolveBudget | None = None,
+) -> tuple[str, str]:
+    """Layer-2 checks over the -E closure (runs on a base- and
+    layer-1-clean closure only; see ``_closure_suppression_witness``)."""
+    try:
+        return _l2_closure_walk(pp_text, target_path, full_path, budget)
+    except _VetLimitExceeded as exc:
+        return "", str(exc)
+
+
+@dataclass
+class _L2Owners:
+    """Owner of every -E offset, stored at owner CHANGE points only:
+    ``names[i]`` owns the lines starting at or after ``starts[i]`` up to
+    the next change. ``starts[0] == 0`` (the TU file); a marker's new
+    owner takes effect at the start of the line after the marker line."""
+    starts: array
+    names: list[str]
+
+    def at(self, offset: int) -> str:
+        return self.names[bisect.bisect_right(self.starts, offset) - 1]
+
+
+def _l2_marker_pass(
+    pp_text: str, full_path: Path, names: _NameClassifier,
+) -> tuple[_L2Owners, dict[str, None], str]:
+    """Walk the -E linemarkers: ``(owners, repo include entries, vet
+    failure)``. Only lines starting with ``#`` can change the owner, so
+    the walk jumps between them with ``str.find`` (no per-line list and
+    no per-line Python work)."""
+    current = str(full_path)
+    repo = names.repo
+    budget = names.budget
+    repo_files: dict[str, None] = {current: None}
+    owners = _L2Owners(array("q", [0]), [current])
+    canonical: dict[str, str] = {current: current}
+    n = len(pp_text)
+    nxt = pp_text.find("\n#")
+    pos = 0 if pp_text.startswith("#") else (-1 if nxt < 0 else nxt + 1)
+    lineno, counted = 1, 0
+    while pos >= 0:
+        budget.tick("markers")
+        lineno += pp_text.count("\n", counted, pos)
+        counted = pos
+        budget.where = f" at -E line {lineno}"
+        nl = pp_text.find("\n", pos)
+        end = n if nl < 0 else nl
+        # line-model: a line is pp_text[pos:end] and starts with "#";
+        # offsets count raw chars (paired with _attr_token_scan offsets);
+        # \r stripped below
+        line = pp_text[pos:end].rstrip("\r")
+        m = _ADD_DIRECTIVE_RE.match(line)
+        if m and m.group(1) != "pragma":
+            parsed = _parse_marker_operands(line[m.start(1):])
+            if parsed is None or not parsed[0]:
+                return owners, repo_files, (
+                    f"unparseable linemarker in preprocessed output "
+                    f"({line[:120]!r}) — closure attribution unverifiable")
+            name, flags = parsed
+            if ("1" in flags and not name.startswith("<")
+                    and not Path(name).is_absolute()):
+                return owners, repo_files, (
+                    f"relative include marker {name!r} in preprocessed "
+                    f"output — resolved against the compiler's cwd, "
+                    f"provenance unverifiable")
+            if ("1" not in flags and "2" not in flags and name != current
+                    and not name.startswith("<") and repo(current)):
+                why = names.outside(name)
+                if why:
+                    return owners, repo_files, (
+                        f"linemarker in {current} {why} — suppression "
+                        f"attribution unverifiable")
+            if "1" in flags and repo(name):
+                repo_files.setdefault(name)
+            if name != current:
+                name = canonical.setdefault(name, name)
+                owners.starts.append(end + 1)
+                owners.names.append(name)
+            current = name
+        if nl < 0:
+            break
+        nxt = pp_text.find("\n#", nl)
+        pos = -1 if nxt < 0 else nxt + 1
+    return owners, repo_files, ""
+
+
+def _l2_closure_walk(
+    pp_text: str,
+    target_path: Path,
+    full_path: Path,
+    budget: _ResolveBudget | None = None,
+) -> tuple[str, str]:
+    budget = budget if budget is not None else _ResolveBudget()
+    budget.tick("entry")
+    budget.where = " resolving the target root"
+    try:
+        target_resolved = Path(_bounded_realpath(str(target_path), budget))
+    except OSError:
+        return "", "target path unresolvable"
+    if len(pp_text) > _MAX_PP_TEXT_BYTES:
+        return "", "preprocessed output exceeds the scan cap"
+    names = _NameClassifier(target_resolved, full_path.parent, budget)
+    repo = names.repo
+    owners, repo_files, failure = _l2_marker_pass(pp_text, full_path, names)
+    if failure:
+        return "", failure
+    lineno, counted = 1, 0
+    for at, w in _attr_token_scan(pp_text, preprocessed=True):
+        budget.tick("hits")
+        if at < counted:              # the second (trigraph) reading restarts
+            lineno, counted = 1, 0
+        lineno += pp_text.count("\n", counted, at)
+        counted = at
+        budget.where = f" at -E line {lineno}"
+        owner = owners.at(at)
+        if repo(owner):
+            return f"{w} (in {owner})", ""
+    if len(repo_files) > _MAX_CLOSURE_FILES:
+        return "", (f"{len(repo_files)} repo files in the include closure "
+                    f"exceed the vet cap ({_MAX_CLOSURE_FILES})")
+    for k, fname in enumerate(repo_files, 1):
+        budget.tick("files")
+        got = read_text_capped(Path(fname), _MAX_CLOSURE_FILE_BYTES)
+        if got is None:
+            return "", f"closure file {fname} unreadable"
+        text, truncated = got
+        if truncated:
+            return "", f"closure file {fname} exceeds the byte cap"
+        scan = _l2_file_scan(text)
+        if scan.witness:
+            return f"{scan.witness} (in {fname})", ""
+        for j, (named, dtext) in enumerate(scan.linemarkers, 1):
+            budget.tick("files")
+            budget.where = f" in repo include file {k}, directive {j}"
+            if named is None:
+                return "", (f"linemarker in {fname} has unverifiable operands "
+                            f"({dtext[:120]!r}) — suppression attribution "
+                            f"unverifiable")
+            why = names.outside(named) if named else ""
+            if why:
+                return "", (f"linemarker in {fname} {why} — suppression "
+                            f"attribution unverifiable")
+    budget.tick("accept")
+    return "", ""
+
+
+def _has_flag3_tail(witness: str) -> bool:
+    """A linemarker-shaped witness (``# N "name" flags``) whose flags
+    include 3. Split-based, no regex (linear on any input)."""
+    tail = witness.rpartition('"')[2].split()
+    return bool(tail) and all(t.isdigit() for t in tail) and "3" in tail
+
+
+# Presentation only: never changes a witness or a verdict.
+_WITNESS_KINDS = (
+    ("unverifiable_attribute_list", "unverifiable attribute list",
+     lambda w: " … (" in w),
+    ("pragma_operator", "`_Pragma` operator, payload not checked",
+     lambda w: w.startswith("_Pragma")),
+    ("analyzer_conditional", "analyzer-conditional code (`__clang_analyzer__`)",
+     lambda w: w.startswith("__clang_analyzer__")),
+    ("diagnostic_pragma", "diagnostic-ignore pragma",
+     lambda w: "diagnostic" in w and "ignored" in w),
+    ("system_header", "system-header pragma or line marker",
+     lambda w: "system_header" in w or _has_flag3_tail(w)),
+    ("suppress_attribute", "`suppress` attribute",
+     lambda w: bool(_ADD_SUPPRESS_RE.search(w))),
+)
+
+
+def _witness_kind(witness: str) -> tuple[str, str]:
+    """``(kind, label)`` of a witness string, for operator-facing text."""
+    head = witness.split(" (in ")[0]
+    for kind, label, pred in _WITNESS_KINDS:
+        if pred(head):
+            return kind, label
+    return "other", "other suppression construct"
+
+
+def _suppression_witness(source_text: str) -> str:
+    """First diagnostic-suppression construct in one file, or ''.
+
+    The base witness, else layer 1, else layer 2: never fewer witnesses
+    than the base, and every base or layer-1 witness returned unchanged."""
+    return (_base_suppression_witness(source_text)
+            or _additive_file_scan(source_text).witness
+            or _l2_file_scan(source_text).witness)
+
+
+def _closure_suppression_witness(
+    pp_text: str,
+    target_path: Path,
+    full_path: Path,
+) -> tuple[str, str]:
+    """Suppression witness over the TU's preprocessed closure.
+
+    Returns ``(witness, vet_failure)`` exactly like the base
+    implementation, which runs first and wins: a base witness or vet
+    failure is returned unchanged, then a layer-1 one; only a closure
+    both call clean gets layer 2, which may add a witness or a vet
+    failure."""
+    base = _base_closure_suppression_witness(pp_text, target_path, full_path)
+    if base[0] or base[1]:
+        return base
+    budget = _ResolveBudget()        # one resolution budget per TU
+    layer1 = _additive_closure(pp_text, target_path, full_path, budget)
+    if layer1[0] or layer1[1]:
+        return layer1
+    return _l2_closure(pp_text, target_path, full_path, budget)
+
+
+def _additive_closure(
+    pp_text: str,
+    target_path: Path,
+    full_path: Path,
+    budget: _ResolveBudget | None = None,
+) -> tuple[str, str]:
+    try:
+        return _additive_closure_walk(pp_text, target_path, full_path, budget)
+    except _VetLimitExceeded as exc:
+        return "", str(exc)
+
+
+def _additive_closure_walk(
+    pp_text: str,
+    target_path: Path,
+    full_path: Path,
+    budget: _ResolveBudget | None = None,
+) -> tuple[str, str]:
+    budget = budget if budget is not None else _ResolveBudget()
+    budget.tick("entry")
+    budget.where = " resolving the target root"
+    try:
+        target_resolved = Path(_bounded_realpath(str(target_path), budget))
+    except OSError:
+        return "", "target path unresolvable"
+    if not pp_text.strip():
+        # Real -E output always carries at least the TU's linemarker.
+        return "", "preprocessed output empty"
+    current = str(full_path)
+    repo_files: dict[str, None] = {str(full_path): None}
+    carry = 0
+    # Per-call memo + distinct-name quota + resolution limits (see
+    # _NameClassifier): the walk asks for repo authorship on every -E line.
+    repo = _NameClassifier(target_resolved, full_path.parent, budget).repo
+    budget.where = " at -E line 1"
+
+    for lineno, line in enumerate(pp_text.split("\n"), 1):  # line-model: each element is rstrip("\r")-ed on the next line
+        line = line.rstrip("\r")
+        if line.startswith("#"):
+            budget.where = f" at -E line {lineno}"
+            m = _ADD_DIRECTIVE_RE.match(line)
+            if m and m.group(1) != "pragma":
+                parsed = _parse_marker_operands(line[m.start(1):])
+                if parsed is None or not parsed[0]:
+                    return "", (
+                        f"unparseable linemarker in preprocessed output "
+                        f"({line[:120]!r}) — closure attribution "
+                        f"unverifiable"
+                    )
+                name, flags = parsed
+                if ("1" not in flags and "2" not in flags
+                        and name != current and not name.startswith("<")
+                        and repo(current) and not repo(name)):
+                    return "", (
+                        f"linemarker re-attributes repo lines from "
+                        f"{current} to {name} — suppression attribution "
+                        f"unverifiable"
+                    )
+                if "1" in flags and repo(name):
+                    repo_files.setdefault(name)
+                current = name
+                carry = 0
+                continue
+        if not repo(current):
+            carry = 0
+            continue
+        w, carry = _attr_line_witness(line, carry)
+        if w:
+            return f"{w} (in {current})", ""
+    if len(repo_files) > _MAX_CLOSURE_FILES:
+        return "", (
+            f"{len(repo_files)} repo files in the include closure "
+            f"exceed the vet cap ({_MAX_CLOSURE_FILES})"
+        )
+    for k, fname in enumerate(repo_files, 1):
+        budget.tick("files")
+        got = read_text_capped(Path(fname), _MAX_CLOSURE_FILE_BYTES)
+        if got is None:
+            return "", f"closure file {fname} unreadable"
+        text, truncated = got
+        if truncated:
+            return "", f"closure file {fname} exceeds the byte cap"
+        w = _base_suppression_witness(text)
+        scan = _additive_file_scan(text)
+        w = w or scan.witness
+        if w:
+            return f"{w} (in {fname})", ""
+        for j, (named, dtext) in enumerate(scan.linemarkers, 1):
+            budget.where = f" in repo include file {k}, directive {j}"
+            if named is None:
+                return "", (
+                    f"linemarker in {fname} has unverifiable operands "
+                    f"({dtext[:120]!r}) — suppression attribution "
+                    f"unverifiable"
+                )
+            if named and not repo(named):
+                return "", (
+                    f"linemarker in {fname} re-attributes lines to "
+                    f"{named} — suppression attribution unverifiable"
+                )
+    budget.tick("accept")
     return "", ""
 
 
