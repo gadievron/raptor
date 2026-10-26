@@ -1,8 +1,8 @@
 {
   "_source": {
-    "fetched_at": "2026-10-13T13:09:25Z",
+    "fetched_at": "2026-10-20T10:37:41Z",
     "license": "Metasploit Framework is BSD-3-Clause. We embed only module-path references + booleans (a public fact about the framework's contents); no MSF code is stored.",
-    "modules_scanned": 7207,
+    "modules_scanned": 7214,
     "name": "Metasploit Framework module metadata",
     "provenance": "rapid7/metasploit-framework modules_metadata_base.json. We extract the CVE→module-path mapping; framework code itself is not redistributed.",
     "url": "https://raw.githubusercontent.com/rapid7/metasploit-framework/HEAD/db/modules_metadata_base.json"
@@ -17994,6 +17994,12 @@
         "exploit_multi/http/wp_time_capsule_file_upload_rce"
       ]
     },
+    "CVE-2024-9264": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/grafana_sql_expressions_rce_cve_2024_9264"
+      ]
+    },
     "CVE-2024-9474": {
       "has_msf_module": true,
       "module_paths": [
@@ -19153,6 +19159,12 @@
         "exploit_multi/http/opencats_installer_rce"
       ]
     },
+    "CVE-2026-27960": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_linux/http/opencti_notifier_rce"
+      ]
+    },
     "CVE-2026-27966": {
       "has_msf_module": true,
       "module_paths": [
@@ -19267,6 +19279,12 @@
         "exploit_multi/http/wp_plugin_pix_unauth_rce_cve_2026_3891"
       ]
     },
+    "CVE-2026-39980": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_linux/http/opencti_notifier_rce"
+      ]
+    },
     "CVE-2026-41264": {
       "has_msf_module": true,
       "module_paths": [
@@ -19373,6 +19391,12 @@
       "has_msf_module": true,
       "module_paths": [
         "exploit_multi/http/gogs_rebase_rce"
+      ]
+    },
+    "CVE-2026-53959": {
+      "has_msf_module": true,
+      "module_paths": [
+        "auxiliary_gather/4gaboards_users_info_disclosure_cve_2026_53959"
       ]
     },
     "CVE-2026-56274": {
@@ -19483,6 +19507,12 @@
       "has_msf_module": true,
       "module_paths": [
         "exploit_multi/http/langflow_unauth_rce_cve_2026_9198"
+      ]
+    },
+    "CVE-2026-93674": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/langflow_auth_command_injection_cve_2026_93674"
       ]
     },
     "CVE-2026-93680": {
