@@ -569,20 +569,19 @@ class MultiTurnAnalyser:
         elif "null pointer" in response_lower:
             analysis["vulnerability_type"] = "null_deref"
 
-        # Detect exploitability. Explicit verdict line first — pre-fix
-        # the whole response was scanned for keyword co-occurrence with
-        # 'high' checked first, so "Exploitability: LOW ... the heap
-        # address is high" parsed as high@0.8.
-        if "not exploitable" in response_lower:
-            analysis["exploitability"] = "none"
-            analysis["confidence"] = _VERDICT_CONFIDENCE["none"]
-            return analysis
+        # Detect exploitability. Explicit verdict line outranks free-text
+        # substring: "Exploitability: HIGH … not exploitable in isolation"
+        # must parse as high, not none.
         m = (_VERDICT_ANCHOR_FIRST_RE.search(response_lower)
              or _VERDICT_LEVEL_FIRST_RE.search(response_lower))
         if m:
             level = m.group(1)
             analysis["exploitability"] = level
             analysis["confidence"] = _VERDICT_CONFIDENCE[level]
+            return analysis
+        if "not exploitable" in response_lower:
+            analysis["exploitability"] = "none"
+            analysis["confidence"] = _VERDICT_CONFIDENCE["none"]
             return analysis
 
         # Fallback: whole-response keyword co-occurrence. Weak evidence
