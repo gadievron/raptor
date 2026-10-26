@@ -2711,6 +2711,11 @@ def _reuse_ineligibility(
         # confirming post-loop pass — not a settled verdict; the
         # function re-reviews and re-earns.
         return "provisional verdict"
+    # Legacy rationale-consistency demotions (gate removed — unreliable
+    # phrase-matching on LLM body text).  Always re-review.
+    _body = getattr(entry, "body", "") or ""
+    if _body.startswith("[rationale-consistency demotion:"):
+        return "heuristic-derived clean"
     entry_model = getattr(entry, "model", None)
     if current_model and entry_model:
         # Compare by bare identity: the journal records the resolved
@@ -2764,6 +2769,8 @@ def _reuse_block_class(reason: str) -> str:
         return "strategy_changed"
     if reason.startswith("context offloaded"):
         return "context_offloaded"
+    if reason.startswith("heuristic-derived"):
+        return "heuristic_derived"
     return "domain_model_context"
 
 

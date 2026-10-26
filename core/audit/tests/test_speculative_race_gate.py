@@ -68,7 +68,7 @@ class TestSpeculativeRaceDemotion:
         result = _apply_speculative_race_demotion(o)
         assert result.status == "finding"
 
-    def test_suspicious_race_with_protection_demoted_to_clean(self):
+    def test_suspicious_race_with_protection_stays_suspicious(self):
         o = _outcome(
             status="suspicious",
             hypothesis="race condition on shared buffer",
@@ -76,33 +76,22 @@ class TestSpeculativeRaceDemotion:
                  "ensures exclusive access during the copy operation.",
         )
         result = _apply_speculative_race_demotion(o)
-        assert result.status == "clean"
+        assert result.status == "suspicious"
 
-    def test_suspicious_race_with_rcu_lock_demoted_to_clean(self):
+    def test_suspicious_race_with_rcu_lock_stays_suspicious(self):
         o = _outcome(
             status="suspicious",
             hypothesis="data race on list traversal",
             body="The list is traversed under rcu_read_lock protection.",
         )
         result = _apply_speculative_race_demotion(o)
-        assert result.status == "clean"
+        assert result.status == "suspicious"
 
-    def test_suspicious_race_with_spin_lock_demoted_to_clean(self):
+    def test_suspicious_race_with_spin_lock_stays_suspicious(self):
         o = _outcome(
             status="suspicious",
             hypothesis="concurrent modification",
             body="All accesses to this field are serialised by spin_lock_bh.",
-        )
-        result = _apply_speculative_race_demotion(o)
-        assert result.status == "clean"
-
-    def test_negated_protection_not_demoted(self):
-        """'not protected by' should NOT count as protection."""
-        o = _outcome(
-            status="suspicious",
-            hypothesis="race condition on shared state",
-            body="The shared state is not protected by any lock. "
-                 "Concurrent access from multiple threads is possible.",
         )
         result = _apply_speculative_race_demotion(o)
         assert result.status == "suspicious"
@@ -151,7 +140,7 @@ class TestSpeculativeRaceDemotion:
         result = _apply_speculative_race_demotion(o)
         assert result.status == "dormant"
 
-    def test_init_only_protection_demotes(self):
+    def test_init_only_protection_stays_suspicious(self):
         o = _outcome(
             status="suspicious",
             hypothesis="data race on configuration",
@@ -159,16 +148,16 @@ class TestSpeculativeRaceDemotion:
                  "before any threads are spawned.",
         )
         result = _apply_speculative_race_demotion(o)
-        assert result.status == "clean"
+        assert result.status == "suspicious"
 
-    def test_single_threaded_protection_demotes(self):
+    def test_single_threaded_protection_stays_suspicious(self):
         o = _outcome(
             status="suspicious",
             hypothesis="concurrent access to global",
             body="The function runs in a single-threaded context during boot.",
         )
         result = _apply_speculative_race_demotion(o)
-        assert result.status == "clean"
+        assert result.status == "suspicious"
 
     def test_prefilter_lock_evidence_kept(self):
         o = _outcome(
@@ -186,8 +175,8 @@ class TestSpeculativeRaceDemotion:
         result = _apply_speculative_race_demotion(o)
         assert result.status == "finding"
 
-    def test_never_atomic_negation(self):
-        """'not an atomic operation' — negation far from protection phrase."""
+    def test_never_atomic_negation_stays_suspicious(self):
+        """Protection-phrase body matching is removed — stays suspicious."""
         o = _outcome(
             status="suspicious",
             hypothesis="race condition on counter",
@@ -195,9 +184,7 @@ class TestSpeculativeRaceDemotion:
                  "However the field is protected by the socket lock.",
         )
         result = _apply_speculative_race_demotion(o)
-        # The first sentence has "not" but it's not near a protection phrase.
-        # The second sentence has a real protection phrase with no negation.
-        assert result.status == "clean"
+        assert result.status == "suspicious"
 
 
 class TestRaceEvidenceAllowlist:

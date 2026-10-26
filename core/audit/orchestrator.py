@@ -18389,32 +18389,19 @@ _RACE_EVIDENCE_PREFIX = ("smt:", "coccinelle:", "semgrep:", "codeql:", "joern:",
                          "lock_region:", "compiler:", "dynamic:",
                          "critique:")
 
-_PROTECTION_RE = re.compile(
-    r"\b(?:protected\s+by|under\s+lock|held\s+(?:by\s+)?lock|rcu_read_lock"
-    r"|single[_-]threaded|init[_-]only|seriali[sz]ed\s+by"
-    r"|mutex[_\s]held|spin_lock|sequential[_\s]init)\b",
-    re.IGNORECASE,
-)
-
-_NEGATION_BEFORE_RE = re.compile(
-    r"\b(?:not|no|without|lacks?|missing|absent|never)\b",
-    re.IGNORECASE,
-)
-
-
 def _apply_speculative_race_demotion(outcome: ReviewOutcome) -> ReviewOutcome:
     """Demote evidence-free race hypotheses.
 
     finding → suspicious when race keywords present but no tool evidence.
-    suspicious → clean when the body names a concrete protection mechanism
-    (negation-aware: "not protected by" does NOT count).
+    The former suspicious → clean step (protection-phrase matching) is
+    removed: first-match-in-full-body attribution is unreliable ("the
+    caller is protected by a lock" demoted the unprotected callee).
+    Only a verification-role refuter may move toward clean.
     """
     hyp = (outcome.hypothesis or "").lower()
     if not any(kw in hyp for kw in _RACE_KW):
         return outcome
 
-    # Multi-tool confirmations are '+'-joined (e.g. "smt:x+lock_region:y")
-    # — test each component, not just the string head.
     ev_parts = [p for p in (outcome.evidence_tool or "").split("+") if p]
     if any(part.startswith(_RACE_EVIDENCE_PREFIX) for part in ev_parts):
         return outcome
@@ -18428,20 +18415,6 @@ def _apply_speculative_race_demotion(outcome: ReviewOutcome) -> ReviewOutcome:
             key,
         )
         outcome.status = "suspicious"
-
-    if outcome.status == "suspicious":
-        body = (outcome.body or "").lower()
-        m = _PROTECTION_RE.search(body)
-        if m:
-            before = body[max(0, m.start() - 30):m.start()]
-            if not _NEGATION_BEFORE_RE.search(before):
-                logger.info(
-                    "speculative race gate: %s demoted suspicious → clean "
-                    "(protection mechanism: %s)",
-                    key,
-                    m.group(0),
-                )
-                outcome.status = "clean"
 
     return outcome
 
@@ -24967,7 +24940,6 @@ def _deepen_suspicious(
         _rr = outcome.review_result or {}
         _structured_demotion = bool(
             _rr.get("all_refuted_demotion")
-            or _rr.get("rationale_consistency_demotion")
         )
         _referee_holds = _deepen_demotion_refereed(prior_outcome, outcome)
         _deepen_dominated = (
@@ -30857,11 +30829,14 @@ def _resolve_gate_demoted(
                 from .tool_coverage import is_class_covered
 
                 ran: set = set(outcome.tools_dispatched or set())
-                if (
-                    sarif_cache is not None
-                    and sarif_cache.lookup(outcome.file) is not None
-                ):
-                    ran.add("sarif_cache")
+                if sarif_cache is not None:
+                    gap = _find_gap_in_checklist(
+                        checklist or {}, outcome.file, outcome.function)
+                    _le = gap.get("line_end") if gap else None
+                    if sarif_cache.lookup(
+                        outcome.file, outcome.line or 0, _le or 0,
+                    ) is not None:
+                        ran.add("sarif_cache")
                 errored = set(outcome.tools_errored or set())
                 if errored:
                     logger.debug(
@@ -31661,7 +31636,6 @@ def _deepen_demotion_refereed(
     _rr = outcome.review_result or {}
     structured = bool(
         _rr.get("all_refuted_demotion")
-        or _rr.get("rationale_consistency_demotion")
     )
     return (
         outcome.status == "clean"

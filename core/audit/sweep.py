@@ -657,7 +657,7 @@ def _sarif_result_in_range(
     region = loc.get("physicalLocation", {}).get("region", {})
     rline = region.get("startLine", 0)
     if not rline:
-        return True
+        return False
     if line_end:
         return line_start <= rline <= line_end
     return rline >= line_start
@@ -1156,27 +1156,21 @@ def run_semgrep_sweep(
             )
             if expanded is not None:
                 return expanded
-            if is_confirm_only_rule(rule_config):
-                # Confirm-only rules adjudicate a sub-shape NARROWER
-                # than the class they dispatch for, so a scanned
-                # zero-match answers "not this sub-shape", never "not
-                # this class" — booking refuted here would let every
-                # documented FN mode of such a rule discard real bugs
-                # through the tool-refutes-then-drop doctrine. Both
-                # directions weighed at this site: mapping silence to
-                # inconclusive forfeits mechanical refutations from
-                # these rules (more human review on the correct-code
-                # direction) in exchange for never converting a shape
-                # miss into a class refutation. Rules whose claim
-                # spans their whole dispatched class omit the marker
-                # and keep the scanned-witness refutation above.
-                # (Placed after the expanded second pass so the
-                # macro-view rescue still runs first — an
-                # inconclusive lead for marked rules, a CONFIRM
-                # rescue only for unmarked ones, which return before
-                # reaching this branch.)
+            if is_confirm_only_rule(rule_config) or rule_keyword:
+                # Partial-scope rules: confirm-only curated rules and
+                # dynamic keyword-presence rules both adjudicate a
+                # sub-shape narrower than the dispatched class. A
+                # scanned zero-match answers "not this sub-shape",
+                # never "not this class". The negative control already
+                # caps keyword rules that MATCH their fixture at
+                # inconclusive (line ~1056); capping zero-match here
+                # closes the asymmetry.
+                _which = (
+                    "confirm-only rule" if is_confirm_only_rule(rule_config)
+                    else f"keyword-presence rule ({rule_keyword!r})"
+                )
                 capped_reason = (
-                    "confirm-only rule: a scanned zero-match answers "
+                    f"{_which}: a scanned zero-match answers "
                     "only the rule's sub-shape, not the dispatched "
                     "class — silence stays inconclusive (dark), "
                     "never refuted"

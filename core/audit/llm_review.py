@@ -45,52 +45,6 @@ REVIEW_TIMEOUT_S = 480
 SHORT_CALL_TIMEOUT_S = 120
 
 
-_CLEAN_PHRASES = (
-    "no vulnerability", "no security issue", "correctly bounded",
-    "properly validated", "safely handled", "no exploitable",
-    "function is safe", "function is clean", "no bug",
-    "all checks are present", "all paths are guarded",
-)
-
-_QUALIFIER_PHRASES = (
-    "except", "but", "however", "unless",
-    "with the exception", "apart from",
-    "other than", "excluding",
-)
-
-
-def _rationale_consistency_should_demote(
-    status: str,
-    body: str,
-    hypothesis: str,
-    evidence_tool: str,
-) -> bool:
-    """Return True if the rationale-consistency gate should demote to clean."""
-    if status not in ("suspicious", "finding"):
-        return False
-    # Only REAL tool evidence blocks the demotion. The raw value here
-    # can be the LLM's own claim ("llm-claimed:semgrep" after
-    # sanitization, or an unsanitized tool name) — an LLM that names a
-    # tool must not exempt itself from its own consistency gate.
-    from core.audit.evidence_grade import is_tool_evidence
-    if is_tool_evidence(evidence_tool.strip()):
-        return False
-
-    rationale = body.lower()
-    for p in _CLEAN_PHRASES:
-        idx = rationale.find(p)
-        if idx < 0:
-            continue
-        after = rationale[idx + len(p):idx + len(p) + 60]
-        if not any(q in after for q in _QUALIFIER_PHRASES):
-            hyp_text = hypothesis.lower()
-            if not any(
-                w in hyp_text
-                for w in ("however", "but", "despite", "although", "yet")
-            ):
-                return True
-    return False
-
 _STATUS_FULL = {
     "type": "string",
     "enum": ["clean", "suspicious", "finding", "dormant"],
@@ -1564,28 +1518,6 @@ def make_review_fn(
                         " (overrode counter-escalation)"
                         if counter_escalated else "",
                     )
-
-        if _rationale_consistency_should_demote(
-            status,
-            result.get("body") or "",
-            result.get("hypothesis") or "",
-            result.get("evidence_tool") or "",
-        ):
-            prior = status
-            status = "clean"
-            result["status"] = status
-            result["rationale_consistency_demotion"] = True
-            result["body"] = (
-                f"[rationale-consistency demotion: the rationale below "
-                f"concludes clean while the emitted status was {prior} "
-                f"— verdict recorded as clean]\n\n"
-                + (result.get("body") or "")
-            )
-            logger.info(
-                "rationale-consistency demotion %s:%s: "
-                "rationale says clean but status was %s",
-                ctx["file"], ctx["function"], prior,
-            )
 
         raw_ev = result.get("evidence_tool") or ""
         evidence_tool = _normalize_evidence_tool(raw_ev)

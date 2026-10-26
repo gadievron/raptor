@@ -1,3 +1,4 @@
+# raptor: confirm-only
 rules:
   # CWE-79: reflected XSS, attribute-context subset — request data
   # emitted into a single-quoted or unquoted HTML attribute with NO
