@@ -1139,6 +1139,13 @@
    "exp": 1.0,
    "verdict": "linear"
   },
+  "core/audit/prefilter.py\u001f_PHP_SQL_CLAUSE_RE": {
+   "digests": [
+    "5f04e4016a95"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
   "core/audit/prefilter.py\u001f_WRAPPER_CALL_RE": {
    "digests": [
     "7c659687fa94"
