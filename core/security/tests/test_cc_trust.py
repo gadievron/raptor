@@ -1258,6 +1258,7 @@ class TestEnvNameRespelling:
             "APP-LOG-LEVEL": "debug",  # dash-bearing but benign
         }) is False
 
+    @pytest.mark.slow
     @pytest.mark.skipif(
         __import__("shutil").which("npm") is None,
         reason="npm not installed — live consumer probe unavailable",
