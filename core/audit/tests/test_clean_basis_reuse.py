@@ -833,6 +833,7 @@ class TestOriginReadBackIsLinear:
                      reuse_sink={}, reuse_stats={})
         assert len(reads) == 2
 
+    @pytest.mark.slow
     def test_read_back_adds_bounded_fold_time(self, tmp_path, monkeypatch):
         """End to end, folding thousands of slimmed stubs with the read-back on
         must stay within a small constant factor of folding with it off. This
