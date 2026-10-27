@@ -69,10 +69,11 @@ renders one reading can still blank code that the other reading has
 as code and a quote in it can open a string), and the PHP single-line
 fallback (``php-unterminated-string``, e.g. plain text with an
 apostrophe before the first ``<?``). A detector that must never lose
-a sink should re-check the raw text when ``ambiguous`` is True.  No
-in-repo caller uses :func:`sanitized_view_with_status` yet: the
-existing callers (including the prefilter suppressor views) call
-:func:`sanitized_view` and never see ``ambiguous``.  Codes:
+a sink should re-check the raw text when ``ambiguous`` is True.  The
+prefilter's suppressor guards (``_GuardViews`` in
+core/audit/prefilter.py) consume :func:`sanitized_view_with_status`
+and fail open — keep the hit — when ``ambiguous`` is True; the other
+callers use :func:`sanitized_view`.  Codes:
 
 - ``php-hash-bracket`` — ``#[…]`` that does not parse as a PHP 8
   attribute group (it may span lines; a comment opener or ``?>`` inside
@@ -163,7 +164,10 @@ needs its own grammar (out of scope for this scanner).
 literals stay verbatim while comments still blank.  Consumers whose
 refusal logic must SEE string prose (the prefilter's trivial-wrapper
 judged view — over-inclusion there only costs a review) read this
-mode; the preprocessor-dead blanking is skipped in it because that
+mode, as do the prefilter's string-data suppressor guards (a ``".."``
+needle or ``$1`` placeholder counts only as the constant evidence
+argument of the sanitizing call, located on the fully-blanked twin);
+the preprocessor-dead blanking is skipped in it because that
 detection is only sound over a fully-blanked view (kept string data
 spelling ``#if 0`` would otherwise mint a fake dead region — the
 swallow direction).
@@ -376,8 +380,8 @@ def sanitized_view_with_status(
     style consumers (a guard that switches a detector OFF when it sees
     text) must fail open — not suppress — when ``ambiguous`` is True;
     detector-style consumers that must never lose a sink should
-    re-check the raw text then. No in-repo caller uses this function
-    yet; the existing callers use :func:`sanitized_view`.
+    re-check the raw text then. The prefilter's suppressor guards are
+    the in-repo caller (they fail open when ``ambiguous``).
     """
     reasons: set[str] = set()
     text = _build_view(source, file_path, language, keep_strings, reasons)
