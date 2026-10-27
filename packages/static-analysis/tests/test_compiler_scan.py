@@ -409,19 +409,30 @@ def _clang_only(monkeypatch):
 
 @functools.lru_cache(maxsize=1)
 def _clang_has_gnu_suppress() -> bool:
-    """True when the host clang accepts ``__attribute__((suppress))``."""
+    """True when ``clang --analyze`` honours ``__attribute__((suppress))``."""
     clang = compiler_sweep._clang_path()
     if clang is None:
         return False
+    import tempfile
+    probe = Path(tempfile.mkdtemp()) / "probe_suppress.c"
     try:
+        probe.write_text(
+            "__attribute__((suppress))\n"
+            "int f(void){ int *p = 0; return *p; }\n",
+        )
         r = subprocess.run(
-            [clang, "-fsyntax-only", "-xc", "-Werror", "-"],
-            input="__attribute__((suppress)) int x;\n",
-            capture_output=True, text=True, timeout=30,
+            [clang, "--analyze", "--analyzer-output", "text", str(probe)],
+            capture_output=True, timeout=60,
         )
         return r.returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         return False
+    finally:
+        try:
+            probe.unlink(missing_ok=True)
+            probe.parent.rmdir()
+        except OSError:
+            pass
 
 
 _NEEDS_GNU_SUPPRESS = frozenset({
