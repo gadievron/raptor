@@ -312,6 +312,92 @@ def run_bump(
                 and result.verdict != _VERDICT_BLOCK):
             result.verdict = _VERDICT_BLOCK
             result.verdict_label = _VERDICT_LABEL[_VERDICT_BLOCK]
+        # Policy override: ``block_on_missing_wheels`` checks
+        # whether the project's lockfile has native-extension deps
+        # with pre-built wheels for the target cpython ABI. A
+        # Python FROM-image bump that crosses a minor version
+        # without wheel coverage breaks the build.
+        if (policy.thresholds.block_on_missing_wheels
+                and cand.kind == "from_image"
+                and _is_python_image(cand.locator)
+                and result.verdict != _VERDICT_BLOCK):
+            delta = _cpython_minor_delta(
+                cand.current_version, cand.target_version,
+            )
+            if delta is not None:
+                _, tgt_minor = delta
+                lockfile = target / "uv.lock"
+                if lockfile.is_file():
+                    missing = _lockfile_native_packages_missing_wheels(
+                        lockfile, target_minor=tgt_minor,
+                    )
+                    if missing:
+                        result.verdict = _VERDICT_BLOCK
+                        result.verdict_label = _VERDICT_LABEL[_VERDICT_BLOCK]
+                        from ..models import (
+                            Confidence,
+                            Dependency,
+                            PinStyle,
+                            SupplyChainFinding,
+                        )
+                        from ..kinds import BUMP_ID_PREFIX
+                        names = ", ".join(
+                            f"{n} {v}" for n, v in missing[:10]
+                        )
+                        if len(missing) > 10:
+                            names += f" (+{len(missing) - 10} more)"
+                        result.bump_supply_chain_findings.append(
+                            SupplyChainFinding(
+                                finding_id=(
+                                    f"{BUMP_ID_PREFIX}missing_wheels:"
+                                    f"cp3{tgt_minor}"
+                                ),
+                                kind="missing_wheels",
+                                dependency=Dependency(
+                                    ecosystem="PyPI",
+                                    name="(lockfile)",
+                                    version=f"cp3{tgt_minor}",
+                                    declared_in=lockfile,
+                                    scope="main",
+                                    is_lockfile=True,
+                                    pin_style=PinStyle.EXACT,
+                                    direct=True,
+                                    purl="pkg:pypi/cpython",
+                                    parser_confidence=Confidence(
+                                        "high",
+                                        reason="lockfile wheel scan",
+                                    ),
+                                ),
+                                detail=(
+                                    f"{len(missing)} native-extension "
+                                    f"dep(s) lack cp3{tgt_minor} wheels: "
+                                    f"{names}"
+                                ),
+                                evidence={
+                                    "target_abi": f"cp3{tgt_minor}",
+                                    "missing": [
+                                        {"name": n, "version": v}
+                                        for n, v in missing
+                                    ],
+                                },
+                                severity="high",
+                                confidence=Confidence(
+                                    "high",
+                                    reason=(
+                                        "lockfile wheel filenames are "
+                                        "authoritative"
+                                    ),
+                                ),
+                            )
+                        )
+                        logger.info(
+                            "sca.bump: blocked %s → %s: %d native-"
+                            "extension dep(s) lack cp3%d wheels",
+                            cand.current_version,
+                            cand.target_version,
+                            len(missing),
+                            tgt_minor,
+                        )
         if apply and result.verdict == _VERDICT_CLEAN:
             if cand.kind == "git_submodule":
                 # Submodule SHAs live in git's object database,
@@ -1874,6 +1960,75 @@ def _same_major_pin(current: str, target: str) -> bool:
     if len(cur) != 1:
         return False
     return cur[0] == tgt[0]
+
+
+_PYTHON_REPOS = frozenset({
+    "library/python",
+    "python",
+    "docker.io/library/python",
+})
+
+
+def _is_python_image(locator: str) -> bool:
+    """True if ``locator`` names a Python official base image."""
+    return locator.split("/", 1)[-1] in _PYTHON_REPOS or locator in _PYTHON_REPOS
+
+
+def _cpython_minor_delta(
+    current: str, target: str,
+) -> tuple[int, int] | None:
+    """If ``current`` → ``target`` crosses a cpython minor, return
+    ``(current_minor, target_minor)``.  Otherwise ``None``."""
+    from core.upstream_latest._version_filter import (
+        parse_stable_with_variant,
+    )
+    cur = parse_stable_with_variant(current)
+    tgt = parse_stable_with_variant(target)
+    if cur is None or tgt is None:
+        return None
+    cur_tuple, _ = cur
+    tgt_tuple, _ = tgt
+    if not cur_tuple or not tgt_tuple:
+        return None
+    if cur_tuple[0] != tgt_tuple[0]:
+        return None
+    cur_minor = cur_tuple[1] if len(cur_tuple) > 1 else 0
+    tgt_minor = tgt_tuple[1] if len(tgt_tuple) > 1 else 0
+    if cur_minor == tgt_minor:
+        return None
+    return (cur_minor, tgt_minor)
+
+
+def _lockfile_native_packages_missing_wheels(
+    lockfile: Path, *, target_minor: int,
+) -> list[tuple[str, str]]:
+    """Parse ``uv.lock`` and return ``(name, version)`` pairs for
+    native-extension packages that lack a wheel for ``cp3{target_minor}``."""
+    import tomllib
+    try:
+        with open(lockfile, "rb") as f:
+            lock = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError):
+        return []
+    target_tag = f"cp3{target_minor}"
+    missing: list[tuple[str, str]] = []
+    for pkg in lock.get("package", []):
+        wheels = pkg.get("wheels")
+        if not wheels:
+            continue
+        fnames = [w.get("url", "").rsplit("/", 1)[-1] for w in wheels]
+        has_cpython = any(
+            re.search(r"cp3\d+", fn) for fn in fnames
+        )
+        if not has_cpython:
+            continue
+        has_pure = any("py3-none-any" in fn for fn in fnames)
+        if has_pure:
+            continue
+        has_target = any(target_tag in fn for fn in fnames)
+        if not has_target:
+            missing.append((pkg["name"], pkg.get("version", "?")))
+    return missing
 
 
 def _read_target_text(path: Path, target: Path) -> str | None:

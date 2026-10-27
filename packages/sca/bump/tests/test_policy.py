@@ -524,6 +524,24 @@ def test_block_on_minor_skew_negative_ignored(tmp_path: Path) -> None:
     assert policy.thresholds.block_on_minor_skew == 0
 
 
+def test_block_on_missing_wheels_default_enabled() -> None:
+    assert BumpPolicy().thresholds.block_on_missing_wheels is True
+
+
+def test_block_on_missing_wheels_loaded_from_yaml(tmp_path: Path) -> None:
+    _write_policy(tmp_path,
+                   "thresholds:\n  block_on_missing_wheels: false\n")
+    policy = load_policy(tmp_path, trust_repo=True)
+    assert policy.thresholds.block_on_missing_wheels is False
+
+
+def test_block_on_missing_wheels_true_from_yaml(tmp_path: Path) -> None:
+    _write_policy(tmp_path,
+                   "thresholds:\n  block_on_missing_wheels: true\n")
+    policy = load_policy(tmp_path, trust_repo=True)
+    assert policy.thresholds.block_on_missing_wheels is True
+
+
 def test_path_match_leading_doublestar_anchors_at_root() -> None:
     """``**/tests/**`` must match a ROOT-LEVEL ``tests/`` directory —
     the shared --exclude matcher anchors a leading ``**/`` at the root

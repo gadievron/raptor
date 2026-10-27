@@ -21,6 +21,12 @@ thresholds:
   # not auto-applied.
   block_on_minor_skew: 2
 
+  # Block Python FROM-image bumps that cross a cpython minor when
+  # the lockfile's native-extension deps lack pre-built wheels for
+  # the new ABI. Prevents the bot from auto-applying a bump that
+  # would force sdist compilation (requiring gcc/Rust in the image).
+  block_on_missing_wheels: true
+
 skip:
   # Test fixtures / corpora pin versions deliberately (often old or
   # specific) as part of the test contract — auto-bumping them corrupts

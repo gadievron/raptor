@@ -2675,3 +2675,136 @@ def test_walkers_refuse_escaping_symlinks(tmp_path: Path) -> None:
     assert workflows == []
     assert _find_dockerfiles(repo) == []
     assert _find_gha_workflows(repo) == []
+
+
+# ---------------------------------------------------------------------------
+# Wheel-availability gate helpers
+# ---------------------------------------------------------------------------
+
+class TestIsPythonImage:
+    def test_official_library_python(self):
+        from packages.sca.bump.orchestrator import _is_python_image
+        assert _is_python_image("docker.io/library/python") is True
+
+    def test_short_library_python(self):
+        from packages.sca.bump.orchestrator import _is_python_image
+        assert _is_python_image("library/python") is True
+
+    def test_bare_python(self):
+        from packages.sca.bump.orchestrator import _is_python_image
+        assert _is_python_image("python") is True
+
+    def test_node_image(self):
+        from packages.sca.bump.orchestrator import _is_python_image
+        assert _is_python_image("docker.io/library/node") is False
+
+    def test_custom_python_repo(self):
+        from packages.sca.bump.orchestrator import _is_python_image
+        assert _is_python_image("ghcr.io/myorg/python") is False
+
+
+class TestCpythonMinorDelta:
+    def test_minor_bump(self):
+        from packages.sca.bump.orchestrator import _cpython_minor_delta
+        assert _cpython_minor_delta(
+            "3.14.8-slim-bookworm", "3.15.1-slim-bookworm",
+        ) == (14, 15)
+
+    def test_patch_only(self):
+        from packages.sca.bump.orchestrator import _cpython_minor_delta
+        assert _cpython_minor_delta(
+            "3.14.5-slim", "3.14.8-slim",
+        ) is None
+
+    def test_different_major(self):
+        from packages.sca.bump.orchestrator import _cpython_minor_delta
+        assert _cpython_minor_delta("2.7.18", "3.14.8") is None
+
+    def test_unparseable(self):
+        from packages.sca.bump.orchestrator import _cpython_minor_delta
+        assert _cpython_minor_delta("latest", "3.15") is None
+
+
+_LOCKFILE_WITH_NATIVE = """\
+version = 1
+
+[[package]]
+name = "jiter"
+version = "0.14.0"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://example.com/jiter-0.14.0-cp314-cp314-linux_x86_64.whl" },
+]
+
+[[package]]
+name = "pydantic-core"
+version = "2.50.1"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://example.com/pydantic_core-2.50.1-cp314-cp314-linux_x86_64.whl" },
+    { url = "https://example.com/pydantic_core-2.50.1-cp315-cp315-linux_x86_64.whl" },
+]
+
+[[package]]
+name = "requests"
+version = "2.32.3"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://example.com/requests-2.32.3-py3-none-any.whl" },
+]
+"""
+
+
+class TestLockfileNativePackagesMissingWheels:
+    def test_detects_missing_cp315(self, tmp_path: Path):
+        from packages.sca.bump.orchestrator import (
+            _lockfile_native_packages_missing_wheels,
+        )
+        lockfile = tmp_path / "uv.lock"
+        lockfile.write_text(_LOCKFILE_WITH_NATIVE)
+        missing = _lockfile_native_packages_missing_wheels(
+            lockfile, target_minor=15,
+        )
+        assert missing == [("jiter", "0.14.0")]
+
+    def test_all_covered(self, tmp_path: Path):
+        from packages.sca.bump.orchestrator import (
+            _lockfile_native_packages_missing_wheels,
+        )
+        lockfile = tmp_path / "uv.lock"
+        lockfile.write_text(_LOCKFILE_WITH_NATIVE)
+        missing = _lockfile_native_packages_missing_wheels(
+            lockfile, target_minor=14,
+        )
+        assert missing == []
+
+    def test_missing_lockfile(self, tmp_path: Path):
+        from packages.sca.bump.orchestrator import (
+            _lockfile_native_packages_missing_wheels,
+        )
+        lockfile = tmp_path / "uv.lock"
+        missing = _lockfile_native_packages_missing_wheels(
+            lockfile, target_minor=15,
+        )
+        assert missing == []
+
+    def test_pure_python_packages_ignored(self, tmp_path: Path):
+        from packages.sca.bump.orchestrator import (
+            _lockfile_native_packages_missing_wheels,
+        )
+        lockfile = tmp_path / "uv.lock"
+        lockfile.write_text("""\
+version = 1
+
+[[package]]
+name = "requests"
+version = "2.32.3"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://example.com/requests-2.32.3-py3-none-any.whl" },
+]
+""")
+        missing = _lockfile_native_packages_missing_wheels(
+            lockfile, target_minor=15,
+        )
+        assert missing == []

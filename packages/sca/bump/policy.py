@@ -121,6 +121,7 @@ class Thresholds:
     # ``_is_major_bump``'s zero-major rule); unparseable inputs
     # (``latest``, branch refs) skip the gate.
     block_on_minor_skew: int = 0
+    block_on_missing_wheels: bool = True
 
 
 @dataclass
@@ -249,12 +250,14 @@ def load_policy(target: Path, *, trust_repo: bool = False) -> BumpPolicy:
                 rapid_release_days=rrd,
                 block_on_major=th.block_on_major,
                 block_on_minor_skew=th.block_on_minor_skew,
+                block_on_missing_wheels=th.block_on_missing_wheels,
             )
         if isinstance(bom, bool):
             th = Thresholds(
                 rapid_release_days=th.rapid_release_days,
                 block_on_major=bom,
                 block_on_minor_skew=th.block_on_minor_skew,
+                block_on_missing_wheels=th.block_on_missing_wheels,
             )
         # ``block_on_minor_skew: 0`` is the documented "disabled"
         # value; treat 0 as a valid explicit-off rather than
@@ -265,6 +268,15 @@ def load_policy(target: Path, *, trust_repo: bool = False) -> BumpPolicy:
                 rapid_release_days=th.rapid_release_days,
                 block_on_major=th.block_on_major,
                 block_on_minor_skew=bms,
+                block_on_missing_wheels=th.block_on_missing_wheels,
+            )
+        bmw = raw_th.get("block_on_missing_wheels")
+        if isinstance(bmw, bool):
+            th = Thresholds(
+                rapid_release_days=th.rapid_release_days,
+                block_on_major=th.block_on_major,
+                block_on_minor_skew=th.block_on_minor_skew,
+                block_on_missing_wheels=bmw,
             )
 
     # ``binary_capability_delta`` is the top-level toggle name in

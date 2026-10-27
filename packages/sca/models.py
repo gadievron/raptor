@@ -591,6 +591,7 @@ SupplyChainKind = Literal[
     "branch_protection_missing_signed_commits",
     "slopsquat_suspect",
     "commit_provenance_drift",
+    "missing_wheels",
 ]
 
 
