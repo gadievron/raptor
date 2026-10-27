@@ -42,7 +42,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PYTHON_VERSION: '3.15'
+  PYTHON_VERSION: '3.14'
   # Same CI hang net as tests.yml: dump every Python stack if a single
   # test runs >120s, then let it continue.
   PYTEST_ADDOPTS: "-o faulthandler_timeout=120"

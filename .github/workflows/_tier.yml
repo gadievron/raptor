@@ -41,7 +41,7 @@ on:
         description: Runner-path Python (must track the image's base).
         required: false
         type: string
-        default: "3.15"
+        default: "3.14"
       timeout_minutes:
         description: Per-job timeout in minutes. Heavier tiers (codeql, llm_analysis) override the 20 default.
         required: false
