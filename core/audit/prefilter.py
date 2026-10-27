@@ -4915,6 +4915,18 @@ def _php_sql_additions(
                         guarded = True
                         break
                 if guarded:
+                    # more ) than ( means this fragment inherited an
+                    # open paren from a prior fragment (for-header
+                    # split by semicolons) — apparent depth 0 is wrong
+                    _bal = 0
+                    for _k in range(s, e):
+                        if code[_k] == '(':
+                            _bal += 1
+                        elif code[_k] == ')':
+                            _bal -= 1
+                    if _bal < 0:
+                        guarded = False
+                if guarded:
                     view = guard_view()
                     if view is None:
                         guarded = False

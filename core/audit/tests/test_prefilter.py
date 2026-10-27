@@ -1519,6 +1519,8 @@ class TestPhpSqlInjectionCanonical:
          '    $r = $pdo->query("SELECT * FROM u WHERE id=" . $id);', 3),
         ('  for ($i = $db->prepare("x"); $i; $i = 0)\n'
          '    $r = $pdo->query("SELECT * FROM u WHERE id=" . $id);', 3),
+        ('  for ($i = 0; $i < $n; $s = $db->prepare($q))\n'
+         '    $r = mysqli_query($c, $sql);', 3),
         # prepare() inside a string literal must not trigger the guard
         ('  $x = "prepare("; $r = $pdo->query('
          '"SELECT * FROM u WHERE id=" . $id);', 2),
