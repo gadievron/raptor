@@ -45,7 +45,7 @@ Semgrep pass (`--expanded-semgrep`).
 | `--build-command <cmd>` | auto | CodeQL build command override (only relevant with `--codeql`; implies a traced build) |
 | `--traced-build` | off | Opt into traced-build C/C++ CodeQL extraction — executes the repo's build system (asserts trust). Default is buildless: no repo code runs during database creation |
 | `--no-traced-build` | -- | Force buildless extraction for this run, overriding `--traced-build` and the project's `build` trust marker |
-| `--compiler-scan` | off | Run gcc `-fanalyzer` / clang `--analyze` per C/C++ translation unit as an extra scan channel (sandboxed; no repo code executes) |
+| `--compiler-scan` | off | Run gcc `-fanalyzer` / clang `--analyze` per C/C++ translation unit as an extra scan channel (sandboxed; no repo code executes). TUs whose analyzer silence is repo-steerable are reported as a coverage limitation, never as a finding — see [Compiler-scan coverage limitations](#compiler-scan-coverage-limitations) |
 | `--no-compiler-scan` | -- | Explicitly disable the compiler-analyzer channel |
 | `--compiler-scan-max-tus <n>` | 2000 | Cap on translation units analysed by `--compiler-scan` (skipped TUs are reported) |
 | `--expanded-semgrep` | off | Re-run the loaded ruleset over fidelity-3 preprocessor-expanded views of macro-heavy C/C++ TUs, line-mapped back to the originals |
@@ -232,6 +232,20 @@ summary.
 Coccinelle rules have no inline suppression mechanism. Unwanted
 findings can be excluded via `--exclude-dir` globs.
 
+
+### Compiler-scan coverage limitations
+
+`--compiler-scan` treats analyzer silence on a TU as evidence only
+when nothing in the TU or its repo headers can steer the analyzer.
+TUs where the source carries a steering construct — `[[clang::suppress]]`
+(any spelling or position in the attribute list), `_Pragma(`,
+`#ifndef __clang_analyzer__`, diagnostic-ignore pragmas, system-header
+line markers — are listed as coverage limitations in the summary and as
+SARIF `toolExecutionNotification` entries, never as findings.  TUs whose
+include closure cannot be fully vetted (unresolvable `#line` names,
+missing or truncated `-E` output, resolution limits) are listed
+separately as "not vetted".  Findings that clang still reports on a
+flagged TU are always kept — the annotation is additive.
 
 ## Output
 

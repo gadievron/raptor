@@ -2134,9 +2134,11 @@ def run_compiler_scan_stage(
 
     summary = result.summary_line()
     logger.info("%s; SARIF at %s", summary, sarif_path)
-    if result.tus_skipped_cap or result.tus_failed:
-        # Cap skips and failed TUs must reach the operator without
-        # log-level spelunking — same posture as the failed-pack line.
+    if (result.tus_skipped_cap or result.tus_failed
+            or result.suppressed_tus or result.unvetted_tus):
+        # Cap skips, failed TUs and suppression-limited TUs must reach
+        # the operator without log-level spelunking — same posture as
+        # the failed-pack line.
         print(f"⚠️  {summary}", file=sys.stderr)
     return [str(sarif_path)]
 

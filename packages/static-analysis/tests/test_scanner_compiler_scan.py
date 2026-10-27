@@ -179,3 +179,34 @@ def test_agentic_forwards_compiler_scan_flags():
     assert 'semgrep_cmd.append("--compiler-scan")' in src
     assert "args.compiler_scan and not args.no_compiler_scan" in src
     assert '"--compiler-scan-max-tus",' in src
+
+
+def test_stage_reports_suppressed_tus_on_stderr(tmp_path, monkeypatch, capsys):
+    """A suppression-limited scan must print its summary to stderr and
+    write the notification into compiler.sarif, so the operator sees
+    it without reading logs."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "main.c").write_text("int main(void){return 0;}\n")
+    out = tmp_path / "out"
+    out.mkdir()
+
+    cs = _load_cs()
+    monkeypatch.setattr(
+        cs, "scan_target",
+        lambda *a, **k: cs.CompilerScanResult(
+            ok=True, tus_total=1, tus_analyzed=1,
+            suppressed_tus=[{
+                "tu": "main.c", "suppression_witness": "__clang_analyzer__",
+            }],
+        ),
+    )
+    paths = _scanner.run_compiler_scan_stage(repo, out)
+    assert len(paths) == 1
+    err = capsys.readouterr().err
+    assert "suppression" in err
+    assert "0 finding(s) from 1/1 TU(s)" in err
+    sarif = json.loads((out / "compiler.sarif").read_text(encoding="utf-8"))
+    run = sarif["runs"][0]
+    assert run["results"] == []
+    assert run["invocations"][0]["toolExecutionNotifications"]
