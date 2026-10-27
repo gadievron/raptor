@@ -229,6 +229,7 @@ class TestImportScriptCompilesOnBothGenerations:
     def test_compiles_without_comment_type_enum(self, tmp_path):
         _compile_import_script(tmp_path, new_api=False)
 
+    @pytest.mark.slow
     def test_compiles_with_comment_type_enum_only(self, tmp_path):
         _compile_import_script(tmp_path, new_api=True)
 

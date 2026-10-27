@@ -1680,6 +1680,7 @@ class TestPhpSqlInjectionTiming:
         ref = self._timed(tmp_path, source, monkeypatch, stub=True)
         assert rule <= 3 * ref + 0.5, (len(line), rule, ref)
 
+    @pytest.mark.slow
     def test_multi_megabyte_function(self, tmp_path, monkeypatch):
         """A multi-megabyte function with every lexer construct finishes in
         bounded time (no per-line rescans of the function)."""

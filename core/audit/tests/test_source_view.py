@@ -2867,6 +2867,7 @@ class TestLineTerminatorLinearTime:
             _js(src)
             assert time.monotonic() - start < 30.0, repr(lt)
 
+    @pytest.mark.slow
     def test_repeated_regex_openers_on_one_line(self):
         # Guards against catastrophic (super-linear) blowup, not speed.
         import time
@@ -2976,6 +2977,7 @@ class TestJsRegexCandidateBoundaryCells:
         assert st.reasons == () and "run(c);" in st.text
 
 
+    @pytest.mark.slow
     def test_repeated_regex_openers_inside_a_template(self):
         # Guards against catastrophic (super-linear) blowup, not speed.
         import time
