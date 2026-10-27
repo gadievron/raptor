@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-10-20T10:37:40Z",
+    "fetched_at": "2026-10-27T11:15:03Z",
     "license": "Public Domain (US Government work)",
     "name": "CISA KEV",
     "provenance": "CISA Known Exploited Vulnerabilities Catalog. Public Domain; embedded verbatim.",
@@ -11088,6 +11088,48 @@
       "ransomware_use": false,
       "vendor": "Ivanti"
     },
+    "CVE-2026-106931": {
+      "date_added": "2026-10-20",
+      "kev": true,
+      "product": "SiteGuard Server Edition",
+      "ransomware_use": false,
+      "vendor": "EG Secure Solutions"
+    },
+    "CVE-2026-109618": {
+      "date_added": "2026-10-26",
+      "kev": true,
+      "product": "PHP",
+      "ransomware_use": false,
+      "vendor": "PHP Group"
+    },
+    "CVE-2026-109619": {
+      "date_added": "2026-10-26",
+      "kev": true,
+      "product": "PHP",
+      "ransomware_use": false,
+      "vendor": "PHP Group"
+    },
+    "CVE-2026-110447": {
+      "date_added": "2026-10-23",
+      "kev": true,
+      "product": "Collabora Online – Built-in CODE Server",
+      "ransomware_use": false,
+      "vendor": "Collabora"
+    },
+    "CVE-2026-110936": {
+      "date_added": "2026-10-20",
+      "kev": true,
+      "product": "Software Center",
+      "ransomware_use": false,
+      "vendor": "Siemens"
+    },
+    "CVE-2026-114625": {
+      "date_added": "2026-10-23",
+      "kev": true,
+      "product": "VeloCloud Orchestrator",
+      "ransomware_use": false,
+      "vendor": "Arista"
+    },
     "CVE-2026-11645": {
       "date_added": "2026-06-09",
       "kev": true,
@@ -12235,6 +12277,34 @@
       "product": "Switchvox",
       "ransomware_use": false,
       "vendor": "Sangoma"
+    },
+    "CVE-2026-96652": {
+      "date_added": "2026-10-20",
+      "kev": true,
+      "product": "Media Server",
+      "ransomware_use": false,
+      "vendor": "Plex"
+    },
+    "CVE-2026-96654": {
+      "date_added": "2026-10-20",
+      "kev": true,
+      "product": "Media Server",
+      "ransomware_use": false,
+      "vendor": "Plex"
+    },
+    "CVE-2026-96655": {
+      "date_added": "2026-10-20",
+      "kev": true,
+      "product": "Media Server",
+      "ransomware_use": false,
+      "vendor": "Plex"
+    },
+    "CVE-2026-96656": {
+      "date_added": "2026-10-20",
+      "kev": true,
+      "product": "Media Server",
+      "ransomware_use": false,
+      "vendor": "Plex"
     },
     "CVE-2026-96951": {
       "date_added": "2026-10-13",
