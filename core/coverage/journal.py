@@ -39,6 +39,29 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 JOURNAL_FILENAME = "review-journal.jsonl"
+
+#: ``ReviewJournalEntry.clean_basis`` values — what a clean was minted
+#: from. Only the bases in :data:`CLEAN_BASIS_NOT_REUSABLE` (silence-
+#: derived, or unknown) are refused by cross-run reuse and never graded
+#: tool_backed; ``verdict`` and ``dark_verify_refuted`` stay reusable.
+CLEAN_BASIS_GATE_RESOLVED = "gate_resolved"
+CLEAN_BASIS_PROPAGATED = "propagated"
+CLEAN_BASIS_SARIF_CLEAN = "sarif_clean"
+CLEAN_BASIS_DARK_VERIFY_REFUTED = "dark_verify_refuted"
+CLEAN_BASIS_VERDICT = "verdict"
+#: The basis of a clean imported from a PRE-FIELD row is unknowable;
+#: carried as this value so the reused row's re-journal never mints a
+#: fresh ``verdict`` for it (basis laundering).
+CLEAN_BASIS_UNKNOWN = "unknown"
+CLEAN_BASIS_SILENCE: frozenset[str] = frozenset({
+    CLEAN_BASIS_GATE_RESOLVED, CLEAN_BASIS_PROPAGATED,
+    CLEAN_BASIS_SARIF_CLEAN,
+})
+#: Bases cross-run reuse refuses (re-review) and evidence grading never
+#: calls tool_backed: the silence-derived ones plus "unknown".
+CLEAN_BASIS_NOT_REUSABLE: frozenset[str] = (
+    CLEAN_BASIS_SILENCE | {CLEAN_BASIS_UNKNOWN}
+)
 INDEX_FILENAME = "review-journal-index.json"
 INDEX_SCHEMA_VERSION = 1
 
@@ -602,6 +625,27 @@ class ReviewJournalEntry:
     # fold verifies before granting verdict-reuse authority; see
     # core.coverage.journal_mac. Additive; absent on pre-MAC rows.
     integrity: str | None = None
+    # ``clean_basis``: on ``verdict == "clean"`` rows, what the clean
+    # was minted FROM. ``verdict`` — the producing pass decided it (a
+    # review, a structural gate, a /validate correction);
+    # ``gate_resolved`` — end-of-run gate resolution read a covering
+    # channel's silence; ``propagated`` — inherited from another
+    # function's clean via confidence propagation; ``sarif_clean`` —
+    # the sarif-clean gate read a file's zero-alert SARIF;
+    # ``dark_verify_refuted`` — one executed witness failed to fire;
+    # ``unknown`` — imported from a pre-field row whose basis cannot be
+    # known. The three silence bases (:data:`CLEAN_BASIS_SILENCE`) are
+    # verdicts about tool SILENCE, not reviews: with ``unknown``
+    # (:data:`CLEAN_BASIS_NOT_REUSABLE`) cross-run verdict reuse refuses
+    # them (re-review) and evidence grading never calls them
+    # tool_backed.
+    # A structured field, not a body prefix — the project-index write
+    # boundary offloads long clean bodies, so prose cannot carry it.
+    # Additive; absent on non-clean and pre-field rows (pre-field
+    # cleans are screened by the reuse fold: traced rows refused,
+    # traceless ones imported at most once per completed run, each
+    # import re-journaling as ``unknown``).
+    clean_basis: str | None = None
     # ``body_offload``: pointer stamped by ``journal compact
     # --slim-clean`` on clean/dormant STUB rows whose fat prose/context
     # fields (body, hypotheses, invariants_available,
@@ -2741,6 +2785,7 @@ def _entry_from_validated(
         domain_slice_hash=raw.get("domain_slice_hash"),
         integrity=raw.get("integrity"),
         body_offload=raw.get("body_offload"),
+        clean_basis=raw.get("clean_basis"),
         schema_version=version,
     )
 

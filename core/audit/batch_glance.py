@@ -17,6 +17,7 @@ from typing import Any, TYPE_CHECKING
 from core.orchestration.llm_json import strip_json_fences
 from core.security.prompt_framing import with_audit_framing
 
+from .evidence_grade import defang_model_body, defang_model_fields
 from .orchestrator import OrchestratorConfig, ReviewOutcome
 
 if TYPE_CHECKING:
@@ -190,7 +191,8 @@ def parse_batch_response(
                 item.get("status"),
             )
             continue
-        accepted.append(item)
+        # Taint at source: every model-returned string in the element.
+        accepted.append(defang_model_fields(item))
     return accepted
 
 
@@ -380,7 +382,8 @@ def make_batch_review_fn(
                     file=ctx["file"],
                     function=ctx["function"],
                     status=status,
-                    body=r.get("body", ""),
+                    # Model-authored: never opens with a machine marker.
+                    body=defang_model_body(r.get("body", "")),
                     cost_usd=per_cost,
                     model=model,
                     duration_s=duration / len(contexts),

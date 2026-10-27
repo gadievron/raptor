@@ -279,6 +279,7 @@ def import_validation_results(
     # is ever written back (see amendment §1 D3 + A5).
     from core.annotations import is_human_grade
     from core.annotations.storage import annotation_file_mtime, read_annotation
+    from core.coverage.journal import CLEAN_BASIS_VERDICT
 
     from .journal import (
         VALID_VERDICTS,
@@ -298,6 +299,11 @@ def import_validation_results(
                 "corroborated": 0, "skipped": 0}
 
     findings = _extract_findings(report)
+    # Taint at source: /validate's findings document is agent-written;
+    # every string in it (reasoning, ruling reason, lesson text ...) is
+    # defanged once before any of it reaches a journal row.
+    from .evidence_grade import defang_model_body, defang_model_fields
+    findings = defang_model_fields(findings)
 
     # Evidence-tier chokepoint: /validate's findings document is
     # LLM-writable, so witness_execution records / dark_verify ruling
@@ -428,7 +434,9 @@ def import_validation_results(
             human_ann.metadata, note_mtime=human_ann_mtime,
         ):
             audit_status = human_ann.metadata.get("status", "")
-            prior_body = human_ann.body
+            # Machine-tier note (legacy LLM / agent-sourced): model
+            # text — it never carries a machine marker into the row.
+            prior_body = defang_model_body(human_ann.body)
 
         if not audit_status:
             # No prior LLM verdict AND no human note — nothing to
@@ -575,6 +583,11 @@ def import_validation_results(
             producer=(
                 (prior_entry.producer or "audit") if prior_entry
                 else "validate"
+            ),
+            # A /validate correction to clean is a ruling, not a
+            # silence inference — stamped like every live clean row.
+            clean_basis=(
+                CLEAN_BASIS_VERDICT if new_verdict == "clean" else None
             ),
         )
         try:

@@ -305,6 +305,10 @@ class TestBatchedUnbatchedParity:
         # (target_finding_lines, control_fires, expected_outcome)
         ([1], False, "confirmed"),
         ([1], True, "inconclusive"),
+        # A keyword (dynamic per-hypothesis) rule's scanned zero-match
+        # is inconclusive on BOTH paths — keyword rules are
+        # confirm-only (their silence answers the regex, never the
+        # class); the parity is what this class pins.
         ([], False, "inconclusive"),
         ([], True, "inconclusive"),
     )

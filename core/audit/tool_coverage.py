@@ -218,8 +218,10 @@ def _extract_cwes(
 
 # Chain step types / evidence namespaces → the coverage map's tool
 # vocabulary. Joern sub-channels and the coccinelle flow templates all
-# count as their parent tool; a SARIF-cache hit means a semgrep scan
-# ran over the file.
+# count as their parent tool; the sarif_cache receipt namespace (a
+# correlated, in-range cache confirm the semgrep leg books as
+# ``sarif_cache:semgrep``) is semgrep. File-level SARIF presence is
+# never a ran channel — gate resolution reads the dispatch record only.
 _CHANNEL_ALIASES: dict[str, str] = {
     "coccinelle_flow": "coccinelle",
     "joern_guard": "joern",
@@ -263,7 +265,8 @@ def is_class_covered(
     have found it but didn't", when in fact no tool ever looked.
 
     ``ran_tools`` is the function's dispatched-tool record (chain step
-    types, evidence receipts, or a SARIF-cache file hit), normalized
+    types or evidence receipts, minus errored and inconclusive-only
+    channels), normalized
     via :func:`normalize_ran_channels`. Tools marked unavailable in
     ``available_tools`` are discarded from the ran set (a stale
     dispatch record cannot claim coverage for a dead tool).
@@ -320,7 +323,7 @@ def _semgrep_silence_withheld(cwe: str) -> bool:
     disarms it. Curated semgrep legs made semgrep receipts systematic
     on their languages; for these classes that silence therefore stays
     DARK (the witness stays armed) instead of resolving clean. Only
-    the semgrep channel (including the sarif_cache alias) is withheld,
+    the semgrep channel (including sarif_cache receipts) is withheld,
     and only the silence direction: semgrep CONFIRMS still stamp
     receipts through the chain, and every other channel's row
     semantics are unchanged.

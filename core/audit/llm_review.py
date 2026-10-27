@@ -45,6 +45,58 @@ REVIEW_TIMEOUT_S = 480
 SHORT_CALL_TIMEOUT_S = 120
 
 
+_CLEAN_PHRASES = (
+    "no vulnerability", "no security issue", "correctly bounded",
+    "properly validated", "safely handled", "no exploitable",
+    "function is safe", "function is clean", "no bug",
+    "all checks are present", "all paths are guarded",
+)
+
+_QUALIFIER_PHRASES = (
+    "except", "but", "however", "unless",
+    "with the exception", "apart from",
+    "other than", "excluding",
+)
+
+
+def _rationale_consistency_should_demote(
+    status: str,
+    body: str,
+    hypothesis: str,
+    evidence_tool: str,
+) -> bool:
+    """Return True if the rationale reads clean under a non-clean status.
+
+    A phrase match, not a parse: the caller only annotates on True
+    (this check never changes a verdict). The ``_should_demote`` name is
+    historical — it no longer demotes anything; read it as "rationale
+    reads clean".
+    """
+    if status not in ("suspicious", "finding"):
+        return False
+    # Only REAL tool evidence suppresses the note. The raw value here
+    # can be the LLM's own claim ("llm-claimed:semgrep" after
+    # sanitization, or an unsanitized tool name) — an LLM that names a
+    # tool must not exempt itself from its own consistency check.
+    from core.audit.evidence_grade import is_tool_evidence
+    if is_tool_evidence(evidence_tool.strip()):
+        return False
+
+    rationale = body.lower()
+    for p in _CLEAN_PHRASES:
+        idx = rationale.find(p)
+        if idx < 0:
+            continue
+        after = rationale[idx + len(p):idx + len(p) + 60]
+        if not any(q in after for q in _QUALIFIER_PHRASES):
+            hyp_text = hypothesis.lower()
+            if not any(
+                w in hyp_text
+                for w in ("however", "but", "despite", "although", "yet")
+            ):
+                return True
+    return False
+
 _STATUS_FULL = {
     "type": "string",
     "enum": ["clean", "suspicious", "finding", "dormant"],
@@ -1356,12 +1408,33 @@ def make_review_fn(
 
         duration = time.monotonic() - t0
 
+        # Taint at source: every string the model returned (body,
+        # hypothesis, counter_hypothesis, hypotheses[*].mechanism /
+        # counter, observations, ...) is defanged ONCE here, before any
+        # pipeline marker is built from it — the escalation marker's
+        # counter snippet, rescue/refutation reasons and observation
+        # text then interpolate safe text by construction. The body
+        # additionally gets the unknown-lead rule. Pipeline-owned keys
+        # (machine flags such as ``counter_escalated`` /
+        # ``all_refuted_demotion``, receipts, stage records) are DROPPED:
+        # a model can never set a machine flag by emitting its key.
+        if isinstance(result, dict):
+            from .evidence_grade import (
+                defang_model_body,
+                defang_model_fields,
+                drop_pipeline_owned,
+            )
+            result = defang_model_fields(drop_pipeline_owned(result))
+            if isinstance(result.get("body"), str):
+                result["body"] = defang_model_body(result["body"])
+
         # Prompt-budget disclosure: format_context_for_prompt stamps
         # ``ctx["prompt_budget_event"]`` when the assembled prompt had
         # priority-0 content elided (or was still over budget after
         # elision). Ride it on the result dict so the audit-log
         # writers (Collector.submit / _commit_outcome) persist it on
-        # this row's durable record.
+        # this row's durable record. (Pipeline-owned: written after the
+        # model dict is sanitised.)
         budget_event = ctx.get("prompt_budget_event")
         if budget_event and isinstance(result, dict):
             result["prompt_budget_event"] = budget_event
@@ -1374,6 +1447,36 @@ def make_review_fn(
                 status, ctx["file"], ctx["function"],
             )
             status = "suspicious"
+
+        # Rationale-consistency note. This prose heuristic never changes
+        # a verdict — it only annotates. A phrase match over the model's
+        # own rationale (llm_review._CLEAN_PHRASES) cannot tell an
+        # asserted clean claim from a negated, contrasted, conceded or
+        # attributed one ("not properly validated", "no vulnerability,
+        # yet ..."), so it may decide nothing: the status, body and
+        # every lane the row enters stay exactly what they would be
+        # without the phrase (an evidence-free finding still meets G2,
+        # a tool-evidenced one stays a finding). The note rides only
+        # in review_result — not in the body, where a later prose
+        # reader (the --adversarial refuter among them) would read it
+        # as an argument — and no stage branches on it.
+        if status == "finding" and _rationale_consistency_should_demote(
+            status,
+            result.get("body") or "",
+            result.get("hypothesis") or "",
+            result.get("evidence_tool") or "",
+        ):
+            result["rationale_consistency_note"] = (
+                "rationale wording matches a clean phrase under a "
+                "finding verdict; verdict unchanged (phrase matches are "
+                "not adjudicated)"
+            )
+            logger.info(
+                "rationale-consistency note %s:%s: rationale wording "
+                "matches a clean phrase under a finding (verdict "
+                "unchanged)",
+                ctx["file"], ctx["function"],
+            )
 
         counter_escalated = False
         if status == "clean" and escalate_clean:

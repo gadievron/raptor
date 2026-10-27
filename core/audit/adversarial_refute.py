@@ -172,6 +172,11 @@ def parse_refutation(raw: Any) -> RefutationResult | None:
     """
     if not isinstance(raw, dict):
         return None
+    # Taint at source: every model-returned string (the audit orchestrator
+    # splices counter_argument / defeating_mechanism / settling_evidence
+    # into its own markers) is defanged once here.
+    from .evidence_grade import defang_model_fields
+    raw = defang_model_fields(raw)
     verdict = str(raw.get("verdict", "")).strip().lower()
     if verdict not in _VALID_VERDICTS:
         return None

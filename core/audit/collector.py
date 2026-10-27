@@ -15,6 +15,8 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
 
+from core.coverage.journal import CLEAN_BASIS_VERDICT
+
 from .journal import (
     ReviewJournalEntry,
     append_entry,
@@ -648,6 +650,14 @@ def append_journal_for_outcome(
             if outcome.status == "error" else None
         ),
         weaknesses=weaknesses,
+        # What a clean was minted from (see ReviewJournalEntry). Every
+        # clean row carries it — an absent basis marks a pre-field row,
+        # which the reuse fold screens (traced rows refused, traceless
+        # ones imported at most once per completed run).
+        clean_basis=(
+            (getattr(outcome, "clean_basis", "") or CLEAN_BASIS_VERDICT)
+            if outcome.status == "clean" else None
+        ),
     )
     try:
         append_entry(out_dir, entry)

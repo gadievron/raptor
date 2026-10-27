@@ -621,6 +621,16 @@
     "count": 14,
     "kind": "literal"
   },
+  "core/audit/evidence_grade.py::MODEL_AUTHORED_REVIEW_KEYS": {
+    "count": 35,
+    "kind": "literal",
+    "note": "closed schema-key manifest: the review_result keys the review model authors (the review JSON schema fields plus legacy / other-mode fields pipeline code reads as model claims); a closure test (core/audit/tests/test_model_body_markers.py::TestReviewKeyClosure) fails when pipeline code reads a review_result key in neither this set nor PIPELINE_OWNED_REVIEW_KEYS \u2014 persistence/schema keys, not a learned name vocabulary"
+  },
+  "core/audit/evidence_grade.py::PIPELINE_OWNED_REVIEW_KEYS": {
+    "count": 56,
+    "kind": "literal",
+    "note": "closed schema-key manifest: the review_result keys only pipeline code may set (machine flags, receipts, stage records, panel identity/accounting); the review and edge-review parse boundaries drop them from model output so a model cannot mint a machine signal by emitting the key; kept in lockstep with the code by the same closure test \u2014 persistence/schema keys, not a learned name vocabulary"
+  },
   "core/audit/evidence_grade.py::_CLASSIFIER_FALLBACK_VERIFICATION": {
     "count": 12,
     "kind": "literal"

@@ -111,6 +111,23 @@ class TestDeepenDemotionReferee:
             self._probe_backed_prior(), self._deepen_clean(),
         )
 
+    def test_retired_rationale_flag_is_no_structured_basis(self):
+        # The review-time rationale-consistency gate no longer records
+        # clean, so its retired flag is no structured basis: a clean
+        # carrying it is a bare LLM clean, and the dominated branch
+        # (not the referee) keeps the prior.
+        """The rationale-consistency gate no longer records clean, so its
+        retired flag must not count as a structured basis for the referee. A
+        clean carrying it is a bare model clean that the dominated branch
+        handles by keeping the tool-backed prior."""
+        clean = _outcome(
+            status="clean",
+            review_result={"rationale_consistency_demotion": True},
+        )
+        assert not _deepen_demotion_refereed(
+            self._probe_backed_prior(), clean,
+        )
+
     def test_unstructured_clean_not_refereed(self):
         # The dominated branch already keeps the prior for these.
         assert not _deepen_demotion_refereed(

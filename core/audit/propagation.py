@@ -1320,6 +1320,10 @@ def propagate_confidence(
             for o in outcomes:
                 if o.file == d.file and o.function == d.function:
                     o.status = "clean"
+                    # Inherited from OTHER functions' cleans, not
+                    # reviewed: journaled so cross-run reuse
+                    # re-reviews it, and never graded tool_backed.
+                    o.clean_basis = "propagated"
                     break
 
         all_demotions.extend(round_demotions)

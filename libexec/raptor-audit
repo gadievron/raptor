@@ -346,6 +346,18 @@ def cmd_record(args: argparse.Namespace) -> int:
         load_audit_log,
         load_verified_audit_log,
     )
+    from core.audit.evidence_grade import defang_model_body, defang_model_text
+
+    # Agent-authored text: the recording agent never mints a machine
+    # marker into its own journal row (a `[mechanical]` lead would read
+    # the row as a non-review; registered `in` markers would survive
+    # into re-imported outcomes). Defanged once at this boundary into
+    # locals — the argparse namespace is left as parsed.
+    rec_body = defang_model_body(args.body) if args.body else args.body
+    rec_hypothesis = (
+        defang_model_text(args.hypothesis) if args.hypothesis
+        else args.hypothesis
+    )
 
     out_dir = Path(args.out)
     target_path = Path(args.target) if args.target else _guess_target(out_dir)
@@ -472,7 +484,7 @@ def cmd_record(args: argparse.Namespace) -> int:
 
     # G1: HYPOTHESIS-FIRST — findings/suspicious/dormant require hypothesis
     if (args.status in ("finding", "suspicious", "dormant")
-            and not args.hypothesis):
+            and not rec_hypothesis):
         print(
             f"error [G1 HYPOTHESIS-FIRST]: --status {args.status} "
             "requires --hypothesis (testable claim, e.g. "
@@ -482,7 +494,7 @@ def cmd_record(args: argparse.Namespace) -> int:
         return 1
 
     # G4: EVIDENCE-IN-ANNOTATION — findings/suspicious/dormant require body
-    if args.status in ("finding", "suspicious", "dormant") and not args.body:
+    if args.status in ("finding", "suspicious", "dormant") and not rec_body:
         print(
             "error [G4 EVIDENCE-IN-ANNOTATION]: --status finding/suspicious "
             "requires --body (tool names + results).",
@@ -779,8 +791,8 @@ def cmd_record(args: argparse.Namespace) -> int:
         ) or ""
 
     hypotheses_list = []
-    if args.hypothesis:
-        hypotheses_list = [{"claim": args.hypothesis, "status": args.status}]
+    if rec_hypothesis:
+        hypotheses_list = [{"claim": rec_hypothesis, "status": args.status}]
 
     # Run attribution uses the same identity the graded export
     # compares receipts against — the RESOLVED basename. Unresolved,
@@ -806,7 +818,7 @@ def cmd_record(args: argparse.Namespace) -> int:
         cwe=args.cwe,
         strategies=strategies,
         hypotheses=hypotheses_list,
-        body=args.body or "",
+        body=rec_body or "",
         evidence_tools=[et_normalised] if et_normalised else [],
         producer="audit",
     )
@@ -833,8 +845,8 @@ def cmd_record(args: argparse.Namespace) -> int:
         audit_event["cwe"] = args.cwe
     if et_normalised:
         audit_event["evidence_tool"] = et_normalised
-    if args.hypothesis:
-        audit_event["hypothesis"] = args.hypothesis
+    if rec_hypothesis:
+        audit_event["hypothesis"] = rec_hypothesis
     if args.vuln_type:
         audit_event["vuln_type"] = args.vuln_type
     if related_to:
@@ -851,12 +863,12 @@ def cmd_record(args: argparse.Namespace) -> int:
             function_name=args.function,
             line=line_start,
             title=f"{args.vuln_type or 'novel'}: {args.function}",
-            description=args.body or "",
+            description=rec_body or "",
             cwe=args.cwe or args.vuln_type,
             tool_evidence=(
                 [{"tool": et_normalised}] if et_normalised else None
             ),
-            hypothesis=args.hypothesis,
+            hypothesis=rec_hypothesis,
             target_path=target_path,
         )
 

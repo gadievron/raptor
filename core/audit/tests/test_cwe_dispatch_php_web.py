@@ -76,6 +76,11 @@ _WEB_FAMILIES: dict[str, tuple[str, str, str]] = {
 _NON_PHP_PATHS = ("main.c", "main.cpp", "app.py", "lib.js", "pkg/mod.go",
                   "App.java", "a.rb", "")
 
+# Rules that adjudicate a sub-shape narrower than their dispatched
+# class carry the `# raptor: confirm-only` header: php/attr-xss.yaml
+# claims the attribute-context subset of CWE-79 only.
+_CONFIRM_ONLY = frozenset({"CWE-79"})
+
 
 class TestDispatchEntries:
     @pytest.mark.parametrize("cwe", sorted(_WEB_FAMILIES))
@@ -95,6 +100,17 @@ class TestDispatchEntries:
     @pytest.mark.parametrize("cwe", sorted(_WEB_FAMILIES))
     def test_rule_file_exists_on_disk(self, cwe: str):
         assert (_RULES_DIR / _WEB_FAMILIES[cwe][0]).is_file()
+
+    @pytest.mark.parametrize("cwe", sorted(_WEB_FAMILIES))
+    def test_confirm_only_marker_matches_rule_scope(self, cwe: str):
+        """Only the sub-shape rule is confirm-only; the rules whose
+        claim spans their whole dispatched class keep scanned-witness
+        refutation semantics."""
+        from core.audit.sweep import is_confirm_only_rule
+
+        assert is_confirm_only_rule(
+            str(_RULES_DIR / _WEB_FAMILIES[cwe][0]),
+        ) is (cwe in _CONFIRM_ONLY)
 
 
 class TestLanguageGate:
@@ -219,6 +235,51 @@ class TestLiveAdjudication:
             function_name="f",
             rule_config=rule,
         )
-        assert result.outcome == "refuted", (
-            f"{cwe}: {result.outcome} {result.errors}"
+        if cwe in _CONFIRM_ONLY:
+            # Sub-shape rule: correct code is silent and the silence
+            # is inconclusive (dark), never a class refutation.
+            assert result.outcome == "inconclusive", (
+                f"{cwe}: {result.outcome} {result.errors}"
+            )
+            assert "confirm-only" in (result.details or {}).get(
+                "reason", "",
+            )
+        else:
+            assert result.outcome == "refuted", (
+                f"{cwe}: {result.outcome} {result.errors}"
+            )
+
+    @pytest.mark.parametrize("snippet", [
+        'echo "<p>" . $_GET["n"] . "</p>";',
+        'return "<p>" . $_GET["name"];',
+        'printf("<p>%s</p>", $_GET["n"]);',
+        'echo "<h1>Hello {$_GET["n"]}</h1>";',
+        "echo '<a href=\"' . $_GET['u'] . '\">x</a>';",
+    ], ids=["echo_concat", "return_concat", "printf", "interpolation",
+            "double_quoted_attr"])
+    def test_attr_rule_silence_never_refutes_body_xss(
+        self, snippet: str, tmp_path: Path,
+    ):
+        """The incapability that earned php/attr-xss.yaml its marker:
+        genuinely vulnerable CWE-79 shapes outside its attribute
+        sub-shape are silent — and that silence used to book a
+        probative class refutation (resolved clean at gate
+        resolution). Now inconclusive."""
+        from core.audit.tests._live_transport import (
+            run_semgrep_sweep_guarded,
         )
+
+        (tmp_path / "app.php").write_text(
+            "<?php\nfunction f() {\n    " + snippet + "\n}\n")
+        result = run_semgrep_sweep_guarded(
+            target_path=tmp_path,
+            file_path="app.php",
+            function_name="f",
+            rule_config=resolve_semgrep_rule_for_cwe("CWE-79", "app.php"),
+            line_start=2,
+            line_end=4,
+        )
+        assert result.outcome == "inconclusive", (
+            f"{result.outcome} {result.errors}"
+        )
+        assert not result.matches

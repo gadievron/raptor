@@ -2655,6 +2655,228 @@ def _context_staleness(
     return None
 
 
+#: Body prefixes a silence-derived clean starts with — a trace a
+#: PRE-FIELD row (no ``clean_basis``) can carry of that derivation:
+#: the gate-demotion markers the resolver keeps (it prepends nothing
+#: to a gate-demoted row), the marker it prepends to a resolved plain
+#: suspicious, the sarif-clean gate's body, and the in-loop
+#: suspicious-demotion gate's body (that gate, the class-blind
+#: ancestor of gate resolution, has since been removed, so only legacy
+#: rows carry it). Matched at the START of the body only: these are
+#: pipeline-written prefixes, while model prose that merely quotes a
+#: marker mid-body is a review.
+_SILENCE_CLEAN_BODY_PREFIXES = (
+    "[gate violation:",
+    "[self-contradiction:",
+    "[suspicious-resolution:",
+    "[sarif-clean gate]",
+    "[suspicious-demotion:",
+)
+#: verdict_reuse.outcome_from_entry's body prefix: a pre-field row that
+#: carries it is a reuse RE-JOURNAL, whose original basis (and body,
+#: behind the prefix or an index offload marker) is out of sight.
+_REUSED_BODY_PREFIX = "[reused:"
+
+
+#: Body prefixes of cleans minted by gates that no longer exist because
+#: they read a verdict off the model's prose: the review-time
+#: rationale-consistency demotion recorded ``clean`` on a phrase match
+#: and stamped this marker. Such a row is journaled ``verdict`` (or
+#: pre-field) like a reviewed clean; refused once so the function is
+#: re-reviewed — the fresh row never carries the marker. Matched at
+#: the start of the body, after any ``[reused:`` re-journal lead.
+_RETIRED_PROSE_CLEAN_BODY_PREFIXES = (
+    "[rationale-consistency demotion:",
+)
+
+
+#: Origin-run row cache — NOT a module global. ``_verify_entries_fold``
+#: creates one dict per fold and passes it down explicitly
+#: (``origin_cache``): ``run_path -> (fingerprint, {(file, function,
+#: ts): entry})``. The fold is synchronous and eager, so the cache dies
+#: with the fold's frame; nested or overlapping folds each own theirs.
+#: Within a cache the fingerprint — (name, dev, ino, size, mtime_ns) of
+#: every journal shard, the journal loader's own sealed-shard identity —
+#: makes the journal indexed at most once per content state (a fold over
+#: N stubs of one run indexes it once, not N times) and re-indexed after
+#: an append, a rewrite, a replaced file or a new shard. A direct caller
+#: that passes no cache gets no retention: one index build per call.
+#: Peak memory is the origin journals one fold touches.
+#:
+#: What is authenticated: the fingerprint only decides WHEN to re-read;
+#: the read-back body is accepted only when the origin row's offloaded
+#: fields (body, hypotheses, invariants_available,
+#: domain_concepts_available) hash to the index stub's MAC-covered
+#: pointer. Retired-prose eligibility reads the stub's verdict (index
+#: row) and that body (its ``[reused:`` leads and marker), so every
+#: input is authenticated; a stale or mutated origin can only make the
+#: read-back miss (the stub is then reused), never serve other content.
+
+
+def _origin_journal_fingerprint(run_dir: Path) -> tuple:
+    from core.coverage.journal import journal_shard_paths
+    fp = []
+    for shard in journal_shard_paths(run_dir):
+        try:
+            st = shard.stat()
+        except OSError:
+            continue
+        fp.append((shard.name, st.st_dev, st.st_ino, st.st_size,
+                   st.st_mtime_ns))
+    return tuple(fp)
+
+
+def _origin_run_body(entry, origin_cache: dict | None = None) -> str:
+    """Body of a project-index stub, read back from its ORIGIN run.
+
+    The index write boundary offloads clean bodies >= 512 B to a stub
+    with no sidecar route (``journal._slim_index_row``), so a body
+    marker is out of sight in the cross-run fold. The producing run
+    journal keeps the row whole (or behind its own sidecar); it is
+    accepted only when its offloaded fields hash to the stub's
+    pointer, so a foreign or edited run dir cannot steer the result.
+    ``""`` when the origin run is gone or does not match.
+
+    ``origin_cache`` is the caller's row cache (see the note above);
+    ``None`` indexes the origin journal afresh and retains nothing.
+    """
+    from core.coverage.journal import load_entries
+    from core.coverage.journal_sidecar import (
+        OFFLOAD_FIELDS, fields_sha256, hydrate_entry, offload_pointer,
+    )
+    ptr = offload_pointer(entry)
+    run_path = getattr(entry, "run_path", None)
+    if ptr is None or ptr.get("sidecar") != "" or not run_path:
+        return ""
+    try:
+        run_dir = Path(run_path)
+        if not run_dir.is_dir():
+            return ""
+        fingerprint = _origin_journal_fingerprint(run_dir)
+        if not fingerprint:
+            return ""
+        cached = (origin_cache.get(run_path)
+                  if origin_cache is not None else None)
+        if cached is None or cached[0] != fingerprint:
+            cached = (fingerprint, {
+                (e.file, e.function, e.ts): e
+                for e in load_entries(run_dir)})
+            if origin_cache is not None:
+                origin_cache[run_path] = cached
+        origin = cached[1].get((entry.file, entry.function, entry.ts))
+        if origin is None:
+            return ""
+        whole = hydrate_entry(run_dir, origin)
+        if whole is None:
+            return ""
+        extracted = {
+            f: getattr(whole, f) for f in OFFLOAD_FIELDS
+            if getattr(whole, f, None)}
+        if fields_sha256(extracted) != ptr.get("sha256"):
+            return ""
+        return whole.body or ""
+    except Exception:  # noqa: BLE001 — run-dir content; reuse fold must not die
+        logger.debug("origin-run body read failed", exc_info=True)
+        return ""
+
+
+def _retired_prose_clean(
+    entry, hydrate_fn=None, origin_cache: dict | None = None,
+) -> str | None:
+    """Reason a clean was minted by a retired prose gate, or ``None``."""
+    body = getattr(entry, "body", "") or ""
+    if not body and getattr(entry, "body_offload", None):
+        hydrated = hydrate_fn(entry) if hydrate_fn is not None else None
+        body = (getattr(hydrated, "body", "") or "") if hydrated else ""
+        if not body:
+            body = _origin_run_body(entry, origin_cache)
+    lead = body
+    while lead.startswith(_REUSED_BODY_PREFIX):
+        end = lead.find("]")
+        if end < 0:
+            break
+        lead = lead[end + 1:].lstrip()
+    if lead.startswith(_RETIRED_PROSE_CLEAN_BODY_PREFIXES):
+        return (
+            "prose-minted clean (retired rationale-consistency gate) "
+            "— re-review once"
+        )
+    return None
+
+
+def _silence_derived_clean(
+    entry, hydrate_fn=None, origin_cache: dict | None = None,
+) -> str | None:
+    """Why a clean entry may not be imported at $0 on its basis, or
+    ``None``.
+
+    First, in every era: a clean minted by a RETIRED prose gate
+    (``_RETIRED_PROSE_CLEAN_BODY_PREFIXES``) is refused once whatever
+    its basis — those rows were journaled ``verdict``.
+
+    Stamped rows answer from the structured ``clean_basis``: the
+    silence-derived bases and ``unknown`` are refused
+    (``core.coverage.journal.CLEAN_BASIS_NOT_REUSABLE``). Pre-field
+    rows carry no basis; one is refused (re-review once — the fresh
+    row is stamped) when it shows any sign its basis is out of sight
+    or silence-derived:
+
+    * a reuse re-journal (``reused`` flag or ``[reused:`` body) — the
+      row it imported is hidden behind the prefix;
+    * body offloaded and not hydratable;
+    * a silence-derived body prefix (``_SILENCE_CLEAN_BODY_PREFIXES``);
+    * a dispatch record — such a row's basis cannot be told from a
+      resolution or propagation (a model clean decided in a refinement
+      round also carries one, via the merged record; re-reviewing it
+      once is the accepted cost).
+
+    A pre-field clean with none of these (e.g. a propagated clean that
+    kept the caller's own short prose) is imported once per completed
+    run; the import carries basis ``unknown`` into its re-journal
+    (``outcome_from_entry``), so the next run after that re-journal is
+    merged into the project index refuses it. Known limitation: a run
+    interrupted before its merge, a resume of it, or concurrent runs
+    can each import the same row again — but never launder it into
+    ``verdict`` (every import re-journals ``unknown``).
+    """
+    if getattr(entry, "verdict", None) != "clean":
+        return None
+    retired = _retired_prose_clean(entry, hydrate_fn, origin_cache)
+    if retired is not None:
+        # Before the basis check: these rows were journaled with the
+        # collector's default ``verdict`` basis.
+        return retired
+    basis = getattr(entry, "clean_basis", None)
+    if basis:
+        from core.coverage.journal import CLEAN_BASIS_NOT_REUSABLE
+        if basis in CLEAN_BASIS_NOT_REUSABLE:
+            return f"silence-derived clean ({basis})"
+        return None
+    body = getattr(entry, "body", "") or ""
+    if getattr(entry, "reused", None) or body.startswith(
+            _REUSED_BODY_PREFIX):
+        return (
+            "silence-derived clean? (pre-field reuse re-journal — "
+            "original basis unknown)"
+        )
+    if not body and getattr(entry, "body_offload", None):
+        hydrated = hydrate_fn(entry) if hydrate_fn is not None else None
+        body = (getattr(hydrated, "body", "") or "") if hydrated else ""
+        if not body:
+            return (
+                "silence-derived clean? (pre-field row, body offloaded "
+                "— basis unknown)"
+            )
+    if body.startswith(_SILENCE_CLEAN_BODY_PREFIXES):
+        return "silence-derived clean (pre-field row, gate-resolution body)"
+    if getattr(entry, "tools_dispatched", None):
+        return (
+            "silence-derived clean? (pre-field row carrying a dispatch "
+            "record)"
+        )
+    return None
+
+
 def _reuse_ineligibility(
     entry,
     key: str,
@@ -2665,7 +2887,7 @@ def _reuse_ineligibility(
     recorded_strategies: list | None = None,
     hydrate_fn=None,
     matched_span: tuple[int, int | None] | None = None,
-    current_tools: frozenset[str] | None = None,
+    origin_cache: dict | None = None,
 ) -> str | None:
     """Why a hash-verified prior entry may NOT be imported as a
     reused verdict. ``None`` when it is eligible.
@@ -2681,6 +2903,12 @@ def _reuse_ineligibility(
     * ``provisional`` — a cadence-tick promotion the producing run
       never finalized (interrupted before the confirming post-loop
       pass): unsettled, so it is re-reviewed rather than imported.
+    * ``clean_basis`` — a clean minted from tool SILENCE (gate
+      resolution, confidence propagation, the sarif-clean gate) is not
+      a review: it is re-reviewed rather than imported, so a producer
+      fix also reaches projects whose source never changes. Pre-field
+      cleans are screened (:func:`_silence_derived_clean`): traced rows
+      refused, traceless ones imported at most once per completed run.
     * model — when THIS run pins an explicit model and the entry
       records one, they must match; a verdict from a different model
       is not this run's verdict. Runs on the default/session model
@@ -2718,20 +2946,9 @@ def _reuse_ineligibility(
         # confirming post-loop pass — not a settled verdict; the
         # function re-reviews and re-earns.
         return "provisional verdict"
-    # Legacy rationale-consistency demotions (gate removed — unreliable
-    # phrase-matching on LLM body text).  Always re-review.
-    _body = getattr(entry, "body", "") or ""
-    if _body.startswith("[rationale-consistency demotion:"):
-        return "heuristic-derived clean"
-    # Silence-derived resolutions: valid only when the run-level tool
-    # set hasn't changed.  New entries carry ``resolution_tools``;
-    # legacy entries (field absent) re-review unconditionally.
-    _rt = getattr(entry, "resolution_tools", None)
-    if _body.startswith("[suspicious-resolution:"):
-        if _rt is None:
-            return "legacy silence-derived resolution"
-        if current_tools is not None and frozenset(_rt) != current_tools:
-            return "resolution tool coverage changed"
+    silence = _silence_derived_clean(entry, hydrate_fn, origin_cache)
+    if silence is not None:
+        return silence
     entry_model = getattr(entry, "model", None)
     if current_model and entry_model:
         # Compare by bare identity: the journal records the resolved
@@ -2779,6 +2996,10 @@ def _reuse_block_class(reason: str) -> str:
         return "context_reduced"
     if reason.startswith("provisional"):
         return "provisional"
+    if reason.startswith("silence-derived"):
+        return "silence_derived_clean"
+    if reason.startswith("prose-minted clean"):
+        return "retired_prose_clean"
     if reason.startswith("model changed"):
         return "model_changed"
     if reason.startswith("strategy set"):
@@ -3104,6 +3325,11 @@ def _verify_entries_fold(
 
     from .context import fallback_span_end
     from .journal import is_agent_mark, is_function_grade, is_mechanical_echo
+
+    # Fold-local origin-run row cache (see the note above
+    # ``_origin_journal_fingerprint``): created here, passed down
+    # explicitly, released with this frame.
+    origin_cache: dict = {}
 
     def _hydrate_from_sidecar(entry: Any) -> Any:
         # None on any resolution failure — the staleness gate then
@@ -3591,7 +3817,7 @@ def _verify_entries_fold(
                     recorded_strategies=recorded_strategies,
                     hydrate_fn=hydrate_fn,
                     matched_span=verified_span,
-                    current_tools=current_tools,
+                    origin_cache=origin_cache,
                 )
                 if reason is not None:
                     cls = _reuse_block_class(reason)

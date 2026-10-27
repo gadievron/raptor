@@ -64,7 +64,7 @@ full flag table.
 | `--no-validate` | Skip the /validate post-pass |
 | `--include-kinds <list>` | Item kinds beyond functions/methods (default: `top_level`, `macro`, `global`). Positive list overrides the defaults; `-kind` opts one out; `none` restricts to functions/methods |
 | `--batch-sloc-threshold <N>` | Batch functions at or under this SLOC per file into combined reviews (default: 15; 0 disables) |
-| `--no-verdict-reuse` | Disable cross-run verdict reuse (importing prior-run journal verdicts for unchanged functions) |
+| `--no-verdict-reuse` | Disable cross-run verdict reuse (importing prior-run journal verdicts for unchanged functions; cleans inferred from tool silence are re-reviewed, not imported; see Execution Model) |
 | `--schedule {cost,priority}` | Parallel review ordering: `cost` packs predicted-longest reviews first, `priority` reviews most promising first |
 | `--prior-journal <run-dir>` | Run dir whose review journal feeds prior finding-grade claims into review context (repeatable; used by `/agentic --gap-audit`) |
 | `--prior-claims <N>` | Max prior finding-grade claims injected per function (default 3; 0 disables) |
@@ -120,6 +120,36 @@ go through:
 This achieves substantially higher precision than self-critique loops:
 LLM self-refinement without tool feedback is known to *increase* false
 positives, which is why gate G3 below prohibits it.
+
+A tool's **silence** refutes only when it is admissible: the run
+completed probatively (an `inconclusive` outcome — vacuous SAT, a
+capped match, an unwitnessed scan, an undecidable invariant, a
+hypothesis-keyword rule's zero-match, a curated rule marked
+`# raptor: confirm-only` — stays in the dispatch record but is booked
+in `tools_inconclusive` and never refutes), the rule can adjudicate the
+claim, and the silence covered the function (file-level SARIF presence
+and a SARIF result with no placeable line never do).  An evidence-free
+claim with no admissible refutation resolves `dark` (exported for
+/validate), not `clean`.  A clean inferred from silence (gate
+resolution, confidence propagation, the sarif-clean gate) is journaled
+with `clean_basis`, is never graded tool-backed, and is re-reviewed
+rather than imported by cross-run verdict reuse; a clean journaled
+before `clean_basis` existed is re-reviewed when its row shows any
+sign of silence derivation or a hidden basis, and otherwise imported at
+most once per completed run (it re-journals with basis `unknown`,
+which the next run re-reviews).  Known limitation: "once" holds only
+after the importing run merges into the project index — a run
+interrupted before the merge, a resume of it, or concurrent runs can
+each import the same pre-field clean again; every such import still
+re-journals `unknown`, so the basis is never laundered.  A clean
+minted by the retired review-time rationale-consistency gate (body
+`[rationale-consistency demotion:`, journaled `verdict`) is re-reviewed
+once in every era; a long body slimmed out of the project index is
+read back from its origin run (hash-checked), so the screen misses
+such a row when that run's journal is gone, rewritten or compacted
+(the read-back no longer matches the index stub), or unreadable.
+Cleans minted by the retired race-gate protection step carry no marker
+and cannot be told from a model clean, so they are not screened.
 
 The refutation direction is guarded the same way.  A reviewer cannot
 talk a mechanical detection away: when a detector receipt (for example
@@ -292,6 +322,70 @@ Every finding must pass these gates before it can be emitted:
 | **G6 Assumption-trust** | For every function, identify what it trusts and what happens when violated |
 | **G7 Reachability** | Findings must be reachable -- zero callers AND binary oracle `absent` forces `dormant` |
 
+Neither the rationale-consistency check nor the speculative race gate
+moves a verdict toward `clean` on prose. The check only annotates: a
+rationale that reads clean under a `finding` (`"properly
+validated"`, `"no vulnerability"`, ...) leaves the finding as emitted;
+the only trace is a `rationale_consistency_note` in the in-memory
+review result and an INFO log line (it is not journaled).
+The row meets G2 exactly as it would without the phrase. A phrase match
+cannot tell an asserted claim from a negated, contrasted, conceded or
+attributed one, so it decides nothing. The speculative race gate never
+records `clean` off protection wording ("protected by", "serialized
+by"). Its remaining step is keyword-triggered: a `finding` whose
+hypothesis text contains a race keyword (`race condition`, `toctou`,
+`concurrent`, `data race`, `deadlock`, ...) is held at `suspicious`
+unless its evidence carries a concurrency-relevant receipt (`smt:`,
+`coccinelle:`, `semgrep:`, `codeql:`, `joern:`, `lock_region:`,
+`compiler:`, `dynamic:`, ...); a non-concurrency receipt
+(`consistency:`, `fail_open:`) does not exempt it. The trigger is the
+hypothesis wording, so it can fire on a negated mention and miss a
+paraphrased race; it only ever moves toward `suspicious`. Known
+pre-existing exceptions, where model wording still decides a verdict
+and which this rule does not cover: the all-refuted demotion grounds a
+refutation unless its counter matches a delegation phrase ("validated
+upstream" is withheld and stays `suspicious`, a paraphrase demotes to
+`clean`), and an evidence-free claim with an empty `cwe` takes its bug
+class from the hypothesis / mechanism text for coverage resolution
+(a class named in words can resolve `clean`, the same claim
+paraphrased resolves `dark`).
+
+Model-authored text never carries a machine marker: provenance checks
+read bracketed markers in bodies and prompt text, some at the start
+(`[gate violation:`, `[counter-hypothesis escalation:`, `[reused:`, ...)
+and some anywhere (`[caller-contract:`, `[gadget-absence:`,
+`[self-contradiction:`, `[tool-refuted]` ...). Model text is tainted at
+its source: every string field of a parsed model / agent response is
+defanged once at the parse boundary (review, batch glance, edge
+review, chain detector, adversarial refuter, the /validate findings
+and machine-tier annotation import, the /agentic journal body, and
+the agent's `raptor-audit record --body/--hypothesis`), so a
+field later spliced into a machine marker's reason (the escalation's
+counter snippet, a rescue reason, an observation) is safe by
+construction. Defanging rewrites each registered marker to
+`[llm-claimed:<marker>` wherever it occurs; a body that still starts
+with `[` also gets a `[llm-claimed] ` lead (this also tags a body that
+opens with a markdown link, checkbox or footnote -- cosmetic). The
+registry (`evidence_grade.MACHINE_BODY_MARKERS`) is checked against the
+tree's consumer sites by a test that re-enumerates them (AST: `in`,
+`==`, `startswith`/`find`/..., anchored regexes, constants, loops and
+`any(...)`, extensionless libexec entry points) and rejects any
+case-normalised marker test. The review and edge-review boundaries
+also DROP every pipeline-owned key from a model's parsed review
+(`evidence_grade.PIPELINE_OWNED_REVIEW_KEYS`: machine flags such as
+`counter_escalated` / `all_refuted_demotion`, receipts, stage records,
+and the panel's identity / accounting keys `file` / `function` /
+`model` / `cost_usd`), so a model cannot mint a machine signal by
+emitting its key either; a batch-glance element carrying any key
+outside its closed element schema is rejected and the function gets a
+full individual review. A test enumerates every `review_result` key
+read or written (through `.review_result`, `getattr(..., "review_result")`,
+any `review_result=` keyword, and -- under `core/audit/` and
+`core/llm/multi_model/` -- locals or parameters named `review_result` /
+`rr` / `_rr` / `primary`) and fails until each is classified
+model-authored or pipeline-owned; a write it reaches but cannot resolve
+to keys fails until it is pinned by content with a justification.
+
 
 ## Statuses
 
@@ -416,8 +510,9 @@ In order of preference when a run may exceed an hour:
    margin and concludes **gracefully** inside it — in-flight reviews
    harvested, journal and report written, lifecycle `completed` with a
    note stating how many gaps remain.  Continue in a new run: cross-run
-   verdict reuse imports the completed verdicts at $0 and reviews only
-   the remainder.  `--no-supervisor-bound` opts out; misdetection is
+   verdict reuse imports the completed reviewed verdicts at $0 (cleans
+   inferred from tool silence re-review; see Execution Model) and
+   reviews only the remainder.  `--no-supervisor-bound` opts out; misdetection is
    safe in both directions (a false positive self-bounds gracefully; a
    false negative dies at the cap and `resume` recovers it).
 
@@ -452,7 +547,8 @@ report covers all segments (segment provenance noted in the report and
 run metadata).
 
 Guards: a **completed** run is refused — continue those in a new run
-(cross-run verdict reuse imports the verdicts at $0); a run whose
+(cross-run verdict reuse imports the reviewed verdicts at $0;
+silence-derived cleans re-review, see Execution Model); a run whose
 recorded worker is still alive is refused (it is actually in flight);
 and the **staleness gate** re-verifies every hashed journal verdict
 against the target tree — any drift refuses the resume with the drifted
