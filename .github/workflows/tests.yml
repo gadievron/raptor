@@ -24,7 +24,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PYTHON_VERSION: '3.14'
+  PYTHON_VERSION: '3.15'
   VENV_PATH: .venv
   # CI-only hang net: dump every worker's Python stack if any single
   # test runs >120s, then let it continue (the dump is the signal, not
