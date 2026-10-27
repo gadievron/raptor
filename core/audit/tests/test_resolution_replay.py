@@ -1,8 +1,9 @@
-"""Tests for resolution-replay validation in _reuse_ineligibility.
+"""Tests for silence-derived clean screening in _reuse_ineligibility.
 
 Covers:
- - heuristic-derived clean screen (rationale-consistency body prefix)
- - silence-derived resolution replay gated by resolution_tools
+ - retired prose-clean screen (rationale-consistency body prefix)
+ - silence-derived clean screen via clean_basis field
+ - pre-field row body heuristics (no clean_basis)
  - _reuse_block_class mapping for the new reason strings
 """
 
@@ -20,13 +21,13 @@ def _entry(**kwargs):
         provisional=None,
         model=None,
         body="",
-        resolution_tools=None,
+        clean_basis=None,
     )
     defaults.update(kwargs)
     return SimpleNamespace(**defaults)
 
 
-class TestHeuristicDerivedCleanScreen:
+class TestRetiredProseCleanScreen:
     def test_rationale_consistency_prefix_refused(self):
         entry = _entry(
             body="[rationale-consistency demotion: the rationale below "
@@ -37,7 +38,8 @@ class TestHeuristicDerivedCleanScreen:
             entry, "a.c:f",
             current_strategies_fn=None, current_model=None,
         )
-        assert reason == "heuristic-derived clean"
+        assert reason is not None
+        assert "prose-minted clean" in reason
 
     def test_normal_clean_not_refused(self):
         entry = _entry(body="No issue found in this function.")
@@ -47,86 +49,118 @@ class TestHeuristicDerivedCleanScreen:
         )
         assert reason is None
 
-    def test_block_class_heuristic_derived(self):
-        assert _reuse_block_class("heuristic-derived clean") == "heuristic_derived"
+    def test_block_class_retired_prose(self):
+        assert _reuse_block_class(
+            "prose-minted clean (retired rationale-consistency gate) "
+            "— re-review once"
+        ) == "retired_prose_clean"
 
 
-class TestSilenceDerivedResolutionReplay:
-    def test_legacy_resolution_no_tools_refused(self):
+class TestSilenceDerivedCleanBasis:
+    def test_gate_resolved_refused(self):
+        entry = _entry(clean_basis="gate_resolved")
+        reason = _reuse_ineligibility(
+            entry, "a.c:f",
+            current_strategies_fn=None, current_model=None,
+        )
+        assert reason == "silence-derived clean (gate_resolved)"
+
+    def test_propagated_refused(self):
+        entry = _entry(clean_basis="propagated")
+        reason = _reuse_ineligibility(
+            entry, "a.c:f",
+            current_strategies_fn=None, current_model=None,
+        )
+        assert reason == "silence-derived clean (propagated)"
+
+    def test_sarif_clean_refused(self):
+        entry = _entry(clean_basis="sarif_clean")
+        reason = _reuse_ineligibility(
+            entry, "a.c:f",
+            current_strategies_fn=None, current_model=None,
+        )
+        assert reason == "silence-derived clean (sarif_clean)"
+
+    def test_unknown_refused(self):
+        entry = _entry(clean_basis="unknown")
+        reason = _reuse_ineligibility(
+            entry, "a.c:f",
+            current_strategies_fn=None, current_model=None,
+        )
+        assert reason == "silence-derived clean (unknown)"
+
+    def test_verdict_basis_accepted(self):
+        entry = _entry(clean_basis="verdict")
+        reason = _reuse_ineligibility(
+            entry, "a.c:f",
+            current_strategies_fn=None, current_model=None,
+        )
+        assert reason is None
+
+    def test_dark_verify_refuted_accepted(self):
+        entry = _entry(clean_basis="dark_verify_refuted")
+        reason = _reuse_ineligibility(
+            entry, "a.c:f",
+            current_strategies_fn=None, current_model=None,
+        )
+        assert reason is None
+
+    def test_block_class_silence_derived(self):
+        assert _reuse_block_class(
+            "silence-derived clean (gate_resolved)"
+        ) == "silence_derived_clean"
+
+
+class TestPreFieldSilenceHeuristics:
+    def test_silence_body_prefix_refused(self):
         entry = _entry(
             body="[suspicious-resolution: silent sweep, no corroboration]",
-            resolution_tools=None,
         )
         reason = _reuse_ineligibility(
             entry, "a.c:f",
             current_strategies_fn=None, current_model=None,
         )
-        assert reason == "legacy silence-derived resolution"
+        assert reason is not None
+        assert "silence-derived" in reason
 
-    def test_resolution_with_matching_tools_accepted(self):
+    def test_reuse_re_journal_refused(self):
         entry = _entry(
-            body="[suspicious-resolution: silent sweep]",
-            resolution_tools=["joern", "semgrep"],
+            body="[reused: abc123] The function is safe.",
         )
         reason = _reuse_ineligibility(
             entry, "a.c:f",
             current_strategies_fn=None, current_model=None,
-            current_tools=frozenset(["joern", "semgrep"]),
         )
-        assert reason is None
+        assert reason is not None
+        assert "reuse re-journal" in reason
 
-    def test_resolution_with_changed_tools_refused(self):
+    def test_dispatch_record_refused(self):
         entry = _entry(
-            body="[suspicious-resolution: silent sweep]",
-            resolution_tools=["semgrep"],
+            body="Normal clean body.",
+            tools_dispatched=["semgrep"],
         )
         reason = _reuse_ineligibility(
             entry, "a.c:f",
             current_strategies_fn=None, current_model=None,
-            current_tools=frozenset(["joern", "semgrep"]),
         )
-        assert reason == "resolution tool coverage changed"
+        assert reason is not None
+        assert "dispatch record" in reason
 
-    def test_resolution_with_fewer_tools_refused(self):
-        entry = _entry(
-            body="[suspicious-resolution: silent sweep]",
-            resolution_tools=["joern", "semgrep"],
-        )
-        reason = _reuse_ineligibility(
-            entry, "a.c:f",
-            current_strategies_fn=None, current_model=None,
-            current_tools=frozenset(["semgrep"]),
-        )
-        assert reason == "resolution tool coverage changed"
-
-    def test_resolution_tools_none_current_tools_passes(self):
-        """When current_tools is None (unknown), skip the tool check."""
-        entry = _entry(
-            body="[suspicious-resolution: silent sweep]",
-            resolution_tools=["semgrep"],
-        )
-        reason = _reuse_ineligibility(
-            entry, "a.c:f",
-            current_strategies_fn=None, current_model=None,
-            current_tools=None,
-        )
-        assert reason is None
-
-    def test_non_resolution_body_unaffected(self):
-        entry = _entry(
-            body="Normal review body.",
-            resolution_tools=None,
-        )
+    def test_plain_clean_accepted(self):
+        entry = _entry(body="Normal review body.")
         reason = _reuse_ineligibility(
             entry, "a.c:f",
             current_strategies_fn=None, current_model=None,
         )
         assert reason is None
 
-    def test_block_class_legacy_resolution(self):
-        assert _reuse_block_class(
-            "legacy silence-derived resolution") == "resolution_stale"
-
-    def test_block_class_tool_coverage_changed(self):
-        assert _reuse_block_class(
-            "resolution tool coverage changed") == "resolution_stale"
+    def test_non_clean_verdict_skips_silence_screen(self):
+        entry = _entry(
+            verdict="finding",
+            body="[suspicious-resolution: silent sweep]",
+        )
+        reason = _reuse_ineligibility(
+            entry, "a.c:f",
+            current_strategies_fn=None, current_model=None,
+        )
+        assert reason is None
