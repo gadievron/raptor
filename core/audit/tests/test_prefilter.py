@@ -1641,21 +1641,34 @@ class TestPhpSqlInjectionTiming:
         return time.perf_counter() - t0
 
     @pytest.mark.parametrize("line", [
-        "$a; " + 'mysqli_query($c, "x" . intval($i)) . ' * 4000,
-        "$a; " + "mysqli_query(" * 4000,
-        "$a" + '; mysqli_query($c, "x" . intval($i))' * 4000,
-        '$pdo->query(' + '"a" . ' * 20000 + '$x)',
-        '$a->query("select x where " . $b' + ')->query(' * 4000,
-        'mysqli_query($c, "x"' + ' . (' * 4000 + '$a' + ')' * 4000 + ');',
-        'mysqli_query($c, "\'"' + ' . mysqli_real_escape_string(' * 4000,
-        'mysqli_query($c, "x" . ' + '(' * 3000 + 'intval($a)' + ')' * 3000
-        + ');',
-        "#[A] " * 20000 + "mysqli_query($c, $id);",
-        '$x = "' + '{$a["' * 20000 + '"]}' * 20000 + '"; mysqli_query($c, $id);',
-        "$a; " + '// x ?><?php mysqli_query($c, "x"); ' * 4000,
-        'mysqli_query($c, "\'"' + ' . mysqli_real_escape_string($c, $n)'
-        ' . "\'\'"' * 4000 + ' . "\'");',
-        "$a; mysqli_query($c, 'x'); " + "a" * 100000 + "query(",
+        pytest.param("$a; " + 'mysqli_query($c, "x" . intval($i)) . ' * 4000,
+                     id="repeated_concat"),
+        pytest.param("$a; " + "mysqli_query(" * 4000,
+                     id="unclosed_parens"),
+        pytest.param("$a" + '; mysqli_query($c, "x" . intval($i))' * 4000,
+                     id="repeated_calls"),
+        pytest.param('$pdo->query(' + '"a" . ' * 20000 + '$x)',
+                     id="long_dot_chain"),
+        pytest.param('$a->query("select x where " . $b' + ')->query(' * 4000,
+                     id="chained_methods"),
+        pytest.param('mysqli_query($c, "x"' + ' . (' * 4000 + '$a' + ')' * 4000 + ');',
+                     id="nested_parens"),
+        pytest.param('mysqli_query($c, "\'"' + ' . mysqli_real_escape_string(' * 4000,
+                     id="repeated_escape"),
+        pytest.param('mysqli_query($c, "x" . ' + '(' * 3000 + 'intval($a)' + ')' * 3000
+                     + ');',
+                     id="deep_nesting"),
+        pytest.param("#[A] " * 20000 + "mysqli_query($c, $id);",
+                     id="attribute_flood"),
+        pytest.param('$x = "' + '{$a["' * 20000 + '"]}' * 20000 + '"; mysqli_query($c, $id);',
+                     id="interpolation_flood"),
+        pytest.param("$a; " + '// x ?><?php mysqli_query($c, "x"); ' * 4000,
+                     id="tag_reopens"),
+        pytest.param('mysqli_query($c, "\'"' + ' . mysqli_real_escape_string($c, $n)'
+                     ' . "\'\'"' * 4000 + ' . "\'");',
+                     id="escape_concat_chain"),
+        pytest.param("$a; mysqli_query($c, 'x'); " + "a" * 100000 + "query(",
+                     id="trailing_noise"),
     ])
     def test_hostile_line(self, tmp_path, monkeypatch, line):
         """Hostile lines cost at most a small multiple of the PHP prefilter
