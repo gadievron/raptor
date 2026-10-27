@@ -4900,28 +4900,49 @@ def _php_sql_additions(
                 continue
             if guarded is None:
                 # once per statement: a prepare/bind_param/pg_query_params
-                # call in the sink's own statement means no addition
-                view = (
-                    guard_view()
-                    if _PHP_SQL_PREPARED_RE.search(code, s, e) else None
-                )
-                guarded = view is not None and (
-                    _PHP_SQL_PREPARED_RE.search(view, s, e) is not None
-                    # the additions' raw statement guard, verbatim:
-                    # never withhold an addition it makes (monotone)
-                    and _PHP_SQL_PREPARED_RE.search(source, s, e) is not None
-                )
+                # call at depth 0 in the code view means no addition.
+                # Depth 0 excludes prepare() inside an if/while condition,
+                # which shares a statement with a braceless body.
+                guarded = False
+                for _pm in _PHP_SQL_PREPARED_RE.finditer(code, s, e):
+                    _d = 0
+                    for _k in range(s, _pm.start()):
+                        if code[_k] == '(':
+                            _d += 1
+                        elif code[_k] == ')':
+                            _d -= 1
+                    if _d == 0:
+                        guarded = True
+                        break
+                if guarded:
+                    view = guard_view()
+                    if view is None:
+                        guarded = False
+                    else:
+                        guarded = (
+                            _PHP_SQL_PREPARED_RE.search(view, s, e)
+                            is not None
+                            and _PHP_SQL_PREPARED_RE.search(source, s, e)
+                            is not None
+                        )
             if guarded:
                 break
             close = _php_sql_close(code, m.end(), e)
             covered = close + 1 if close >= 0 else e
             outer = [line_of(m.start()), m, close, covered, False]
             # per-sink: prepare/bind_param/pg_query_params inside
-            # this sink's own arguments — the value comes from a
-            # prepared statement, not raw SQL
-            if (close >= 0
-                    and _PHP_SQL_PREPARED_RE.search(code, m.end(), close)):
-                continue
+            # this sink's own arguments — the guard view must confirm
+            if close >= 0:
+                _ps = _PHP_SQL_PREPARED_RE.search(code, m.end(), close)
+                if _ps is not None:
+                    _psv = guard_view()
+                    if _psv is not None and (
+                        _PHP_SQL_PREPARED_RE.search(
+                            _psv, m.end(), close) is not None
+                        and _PHP_SQL_PREPARED_RE.search(
+                            source, m.end(), close) is not None
+                    ):
+                        continue
             records.append(outer)
         if guarded:
             continue
