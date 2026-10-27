@@ -110,6 +110,8 @@ NON_BODY_SITES = {
         "Cargo.toml section header",
     ("packages/web/external_validators.py", "[REDACTED]"):
         "redaction placeholder compare",
+    ("core/analysis/java_source_summaries.py", "[A-Za-z_]\\w*"):
+        "regex character class from api_boundary._IDENT resolved cross-file",
 }
 
 SITES, NORMALISED_SITES = scan(repo_sources(_REPO))
