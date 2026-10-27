@@ -407,6 +407,32 @@ def _clang_only(monkeypatch):
     monkeypatch.setattr(_cs, "_gcc_analyzer", lambda: None)
 
 
+@functools.lru_cache(maxsize=1)
+def _clang_has_gnu_suppress() -> bool:
+    """True when the host clang accepts ``__attribute__((suppress))``."""
+    clang = compiler_sweep._clang_path()
+    if clang is None:
+        return False
+    try:
+        r = subprocess.run(
+            [clang, "-fsyntax-only", "-xc", "-Werror", "-"],
+            input="__attribute__((suppress)) int x;\n",
+            capture_output=True, text=True, timeout=30,
+        )
+        return r.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+_NEEDS_GNU_SUPPRESS = frozenset({
+    "rawstr_ff.cpp", "rawstr_u2028.cpp", "splice.c",
+    "hex3.c",
+    "nested_parens.c", "struct_sizeof.c", "pasted_name.c",
+    "pragma_in_args.c",
+    "gnu_dunder", "gnu_second", "gnu_second_via_header",
+})
+
+
 def _scan_snippet(tmp_path, source: str):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -658,6 +684,8 @@ def test_attribute_list_spellings_carry_limitation(
     """Each spelling silences clang end to end and must produce a
     limitation, including the pasted form only visible in analyzer-
     environment -E output."""
+    if case in _NEEDS_GNU_SUPPRESS and not _clang_has_gnu_suppress():
+        pytest.skip("clang does not support __attribute__((suppress))")
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "t.c").write_text(_ATTR_LIST_TUS[case])
@@ -866,6 +894,8 @@ def _scan_files(tmp_path, files):
 def test_e2e_suppressed_spellings(tmp_path, sandbox_spy, _clang_only, name):
     """Digraph, pasted, raw-string-adjacent and spliced attribute
     spellings silence clang end to end and must produce a limitation."""
+    if name in _NEEDS_GNU_SUPPRESS and not _clang_has_gnu_suppress():
+        pytest.skip("clang does not support __attribute__((suppress))")
     result = _scan_files(tmp_path, {name: _E2E_SUPPRESSED[name]})
     assert result.tus_analyzed == 1
     assert _null_findings(result) == []  # really silenced
@@ -880,6 +910,8 @@ def test_e2e_laundering_line_is_unvetted(
 ):
     """A #line that relabels repo code as a system header drops clang's
     finding; the TU must be reported as unvetted."""
+    if name in _NEEDS_GNU_SUPPRESS and not _clang_has_gnu_suppress():
+        pytest.skip("clang does not support __attribute__((suppress))")
     result = _scan_files(tmp_path, {name: _E2E_UNVETTED[name]})
     assert result.tus_analyzed == 1
     # The finding was re-attributed to a system path (dropped) — the
@@ -935,6 +967,8 @@ def test_layer2_escaping_relabel_is_unvetted(tmp_path, sandbox_spy, _clang_only,
 
 @pytest.mark.parametrize("name", sorted(_LAYER2_SUPPRESSED))
 def test_layer2_suppression_is_annotated(tmp_path, sandbox_spy, _clang_only, name):
+    if name in _NEEDS_GNU_SUPPRESS and not _clang_has_gnu_suppress():
+        pytest.skip("clang does not support __attribute__((suppress))")
     result = _scan_files(tmp_path, {name: _LAYER2_SUPPRESSED[name]})
     assert _null_findings(result) == []          # clang really was silenced
     assert [s["tu"] for s in result.suppressed_tus] == [name], result.summary_line()
