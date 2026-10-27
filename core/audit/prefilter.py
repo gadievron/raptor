@@ -24,7 +24,7 @@ import threading
 from dataclasses import dataclass, field, fields
 from functools import cached_property
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from core.audit.source_view import (
     SanitizedView,
@@ -2998,7 +2998,9 @@ class _SingleAssignment:
         plain = _GUARD_LHS_PLAIN_RE.fullmatch(self._code, b, e)
         return (True, m.end()) if plain else (False, -1)
 
-    def _classify(self, a: int, name: str) -> object:
+    def _classify(
+        self, a: int, name: str,
+    ) -> tuple[bool, int] | Literal["zero"] | None:
         """None for a read; "zero" for a zero declaration; else
         (vouching shape, RHS start or -1)."""
         code = self._code
@@ -3165,7 +3167,7 @@ class _SingleAssignment:
             ):
                 index = self._statement_index(a)
                 body = self._body_of(brace) if index is not None else None
-                if body is not None:
+                if body is not None and index is not None:
                     span = self._rhs_element(rhs, index)
                     if span is not None:
                         found = (a, body, span[0], span[1])
@@ -4342,7 +4344,8 @@ def _php_sql_body_end(source: str, i: int, quote: str) -> int:
     while i < n:
         top = stack[-1]
         if top == "'":
-            k = _PHP_SQL_BODY_RE["'"].match(source, i).end()
+            # Pattern matches empty string — match always succeeds.
+            k = _PHP_SQL_BODY_RE["'"].match(source, i).end()  # type: ignore[union-attr]
             if k >= n:
                 return n
             stack.pop()
@@ -4407,7 +4410,7 @@ def _php_sql_lex(source: str) -> tuple[str, _PhpSqlLiterals]:
     stop_at = -1
     attr_at = -1
     attr_line_end = -1
-    attr_counts = (0, 0, 0)
+    attr_counts: tuple[int, ...] = (0, 0, 0)
     while i < n:
         jump = _PHP_SQL_LEX_JUMP_RE.search(source, i)
         if not jump:
@@ -4418,7 +4421,8 @@ def _php_sql_lex(source: str) -> tuple[str, _PhpSqlLiterals]:
         lead = ' '
         lit: tuple[str, int, int] | None = None
         if ch == "'":
-            j = _PHP_SQL_BODY_RE["'"].match(source, i + 1).end()
+            # Pattern matches empty string — match always succeeds.
+            j = _PHP_SQL_BODY_RE["'"].match(source, i + 1).end()  # type: ignore[union-attr]
             end = min(j + 1, n)
             lit = (ch, i + 1, min(j, n))
         elif ch in '"`':
@@ -4508,7 +4512,9 @@ def _php_sql_close(code: str, start: int, stop: int) -> int:
     return -1
 
 
-def _php_sql_split(code: str, start: int, stop: int, sep: str):
+def _php_sql_split(
+    code: str, start: int, stop: int, sep: str,
+) -> list[tuple[int, int]]:
     """Split ``code[start:stop]`` at depth-0 ``sep``; stripped spans."""
     spans = []
     depth = 0
@@ -4979,9 +4985,11 @@ def _php_sql_additions(
                 _php_sql_receiver(code, m.start(), s)
                 if m.group('meth') else None
             )
-            proved = not nested and bool(args) and _php_sql_proved(
-                source, code, lits, *args[0], receiver=receiver,
-                helpers=helpers,
+            proved = not nested and args is not None and bool(args) and (
+                _php_sql_proved(
+                    source, code, lits, *args[0], receiver=receiver,
+                    helpers=helpers,
+                )
             )
             a, b = args[0] if args else (m.end(), covered)
             # an argument list not closed inside the statement (a

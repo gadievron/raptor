@@ -697,11 +697,12 @@ def _scan_c_family(
             # reported as ambiguous, the safe side).
             bound = min(n, i + _PHP_ATTR_SPAN_CAP)
             nxt_attr = source.find("#[", i + 2, bound)
-            close = _php_attribute_close(
+            attr_close = _php_attribute_close(
                 source, i, bound if nxt_attr < 0 else nxt_attr)
-            if close is not None and _php_attr_follow_ok(
-                    source, close, ctx, min(n, close + _PHP_ATTR_SPAN_CAP)):
-                last_attr = (close, ctx)
+            if attr_close is not None and _php_attr_follow_ok(
+                    source, attr_close, ctx,
+                    min(n, attr_close + _PHP_ATTR_SPAN_CAP)):
+                last_attr = (attr_close, ctx)
                 i += 1
             else:
                 flag("php-hash-bracket")
@@ -1549,15 +1550,16 @@ def _php_inline_html(
             continue
         # bare `<?`
         flag("php-short-open-tag")
-        close = source.find("?>", m.end())
+        close_pos = source.find("?>", m.end())
         if reopen_from < 0 or (reopen is not None
                                and reopen.start() < m.end()):
             reopen = _PHP_OPEN_TAG_RE.search(source, m.end())
             reopen_from = m.end()
-        if reopen is not None and (close < 0 or reopen.start() < close):
+        if reopen is not None and (close_pos < 0
+                                   or reopen.start() < close_pos):
             verbatim(m.start(), reopen.start())
             return reopen.start()
-        end = n if close < 0 else close + 2
+        end = n if close_pos < 0 else close_pos + 2
         verbatim(m.start(), end)
         if end >= n:
             return n
@@ -1967,9 +1969,10 @@ def _php_attribute_close(source: str, i: int, line_end: int) -> int | None:
             return None
         j = m.end()
         if j < line_end and source[j] == "(":
-            j = _php_balanced_end(source, j, line_end, attr=True)
-            if j is None:
+            bal = _php_balanced_end(source, j, line_end, attr=True)
+            if bal is None:
                 return None
+            j = bal
             while j < line_end and source[j] in " \t\r\n":
                 j += 1
         if j < line_end and source[j] == ",":

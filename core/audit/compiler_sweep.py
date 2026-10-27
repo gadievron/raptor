@@ -1100,7 +1100,8 @@ def _attr_token_scan_one(text: str, *, preprocessed: bool):
             elif kind == "raw":
                 dm = _RAW_DELIM_RE.match(text, end)
                 if dm is None:            # `R` then an ordinary string
-                    stop = _STR_BODY_RE.match(text, end).end()
+                    # Pattern matches empty string — match always succeeds.
+                    stop = _STR_BODY_RE.match(text, end).end()  # type: ignore[union-attr]
                 else:
                     term = ")" + dm.group(1) + '"'
                     close = text.find(term, dm.end())
@@ -1108,7 +1109,8 @@ def _attr_token_scan_one(text: str, *, preprocessed: bool):
                                      else (close + len(term), False))
             else:
                 body = _STR_BODY_RE if kind == "str" else _CHR_BODY_RE
-                stop = body.match(text, end).end()
+                # Pattern matches empty string — match always succeeds.
+                stop = body.match(text, end).end()  # type: ignore[union-attr]
             if runaway:
                 if stack is None and _ADD_ATTR_OPEN_RE.search(text, end) is None:
                     return
@@ -1378,7 +1380,7 @@ def _bounded_realpath(filename: str, budget: _ResolveBudget) -> str:
             path = sep
         seen[newpath] = None
         rest.append(newpath)
-        rest.append(None)
+        rest.append(None)  # type: ignore[arg-type]  # sentinel for seen[] bookkeeping
         rest.extend(target_parts)
         part_count += len(target_parts)
     return path
