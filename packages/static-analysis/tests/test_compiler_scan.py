@@ -425,11 +425,13 @@ def _clang_has_gnu_suppress() -> bool:
 
 
 _NEEDS_GNU_SUPPRESS = frozenset({
-    "rawstr_ff.cpp", "rawstr_u2028.cpp", "splice.c",
+    "annot_paste.c", "rawstr_ff.cpp", "rawstr_u2028.cpp", "splice.c",
     "hex3.c",
     "nested_parens.c", "struct_sizeof.c", "pasted_name.c",
     "pragma_in_args.c",
+    "nodiscard_first", "dunder", "Clang_scope", "clang_dunder_scope",
     "gnu_dunder", "gnu_second", "gnu_second_via_header",
+    "pasted_under_analyzer",
 })
 
 
