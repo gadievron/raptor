@@ -1452,6 +1452,7 @@ class TestMonotonicOverBase:
                 assert compiler_sweep._suppression_witness(x) == b, repr(x)
         assert base_hits > 1000  # the generator exercises the base
 
+    @pytest.mark.slow
     def test_closure_superset_of_base_generated(self, tmp_path):
         """On generated closures, a non-clean base result is returned
         unchanged, so the closure vet never clears what main flagged."""
@@ -2196,6 +2197,7 @@ class TestHistoricalOracle:
            '#line 1 "/usr/include/z.h"', "/*", "*/", "//", '"', "'", 'R"(', ')"',
            "\\\n", "\n", " ", "int x;", "#if 0", "#endif", "(", ")", "[", "]")
 
+    @pytest.mark.slow
     def test_live_base_equals_oracle_exactly(self, tmp_path):
         import random
         o = _load_oracle()
