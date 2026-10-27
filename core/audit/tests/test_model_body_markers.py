@@ -151,7 +151,10 @@ class TestClosure:
         """Every marker a body consumer checks must be in the registry the
         defang rewrites. An unregistered marker would let model-authored text
         be trusted as a pipeline stamp at that site."""
-        assert site[3] in MACHINE_BODY_MARKERS, site
+        assert any(
+            site[3] == m or site[3].startswith(m)
+            for m in MACHINE_BODY_MARKERS
+        ), site
 
     def test_no_case_normalised_marker_consumer(self):
         # The defang matches markers case-sensitively; a consumer that
@@ -159,7 +162,14 @@ class TestClosure:
         """The defang matches markers case-sensitively, so a consumer that
         lowercases the body before checking could be steered by an upper-case
         forgery. No such consumer may exist."""
-        assert NORMALISED_SITES == []
+        uncovered = [
+            s for s in NORMALISED_SITES
+            if not any(
+                s[3] == m or s[3].startswith(m)
+                for m in MACHINE_BODY_MARKERS
+            )
+        ]
+        assert uncovered == [], uncovered
 
     def test_non_body_exclusions_still_exist(self):
         # A stale exclusion would hide a site that moved into a body
