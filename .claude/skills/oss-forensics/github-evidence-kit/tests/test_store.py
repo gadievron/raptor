@@ -358,3 +358,56 @@ class TestCollisionLoudness:
             store.add(self._event("same event"))
         assert not caplog.records
         assert len(store) == 1
+
+
+# =============================================================================
+# CORROBORATION GAPS
+# =============================================================================
+
+
+class TestCorroborationGaps:
+    """EvidenceStore.corroboration_gaps() surfaces single-sourced commits."""
+
+    @staticmethod
+    def _commit(eid, sha, source):
+        from src.schema.observations import CommitObservation, CommitAuthor
+        from src.schema.common import VerificationInfo
+        now = datetime.now(timezone.utc)
+        author = CommitAuthor(name="T", email="t@t.com", date=now)
+        return CommitObservation(
+            evidence_id=eid,
+            observed_when=now,
+            observed_by=source,
+            observed_what="commit",
+            verification=VerificationInfo(source=source),
+            sha=sha,
+            message="m",
+            author=author,
+            committer=author,
+        )
+
+    def test_dual_sourced_commit_has_no_gap(self):
+        store = EvidenceStore([
+            self._commit("commit-aaa", "a" * 40, EvidenceSource.GITHUB),
+            self._commit("commit-git-aaa", "a" * 40, EvidenceSource.GIT),
+        ])
+        assert store.corroboration_gaps() == []
+
+    def test_single_sourced_commit_is_a_gap(self):
+        store = EvidenceStore([
+            self._commit("commit-bbb", "b" * 40, EvidenceSource.GITHUB),
+        ])
+        gaps = store.corroboration_gaps()
+        assert len(gaps) == 1
+        assert gaps[0]["sha"] == "b" * 40
+        assert gaps[0]["sources"] == ["github"]
+
+    def test_mixed_store(self):
+        store = EvidenceStore([
+            self._commit("commit-aaa", "a" * 40, EvidenceSource.GITHUB),
+            self._commit("commit-git-aaa", "a" * 40, EvidenceSource.GIT),
+            self._commit("commit-bbb", "b" * 40, EvidenceSource.GITHUB),
+        ])
+        gaps = store.corroboration_gaps()
+        assert len(gaps) == 1
+        assert gaps[0]["sha"] == "b" * 40

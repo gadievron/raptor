@@ -147,6 +147,23 @@ class ConsistencyVerifier:
                 all_errors.extend(f"[{evidence_id}] {e}" for e in result.errors)
             all_warnings.extend(f"[{evidence_id}] {w}" for w in result.warnings)
 
+        from collections import defaultdict
+        commits_by_sha: dict[str, set[EvidenceSource]] = defaultdict(set)
+        for e in evidence_list:
+            if getattr(e, "observation_type", None) == "commit":
+                sha = getattr(e, "sha", None)
+                if sha:
+                    commits_by_sha[sha].add(e.verification.source)
+        single_sourced = [
+            sha for sha, sources in commits_by_sha.items()
+            if len(sources) < 2
+        ]
+        if single_sourced:
+            all_warnings.append(
+                f"[corroboration] {len(single_sourced)} commit(s) observed "
+                f"by only one source — cross-source corroboration missing"
+            )
+
         return VerificationResult(is_valid=all_valid, errors=all_errors, warnings=all_warnings)
 
     def _verify_event(self, event: Event) -> VerificationResult:

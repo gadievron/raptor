@@ -234,6 +234,7 @@ class GitClient:
         since: str | None = None,
         until: str | None = None,
         limit: int = 100,
+        all_refs: bool = False,
     ) -> list[dict[str, Any]]:
         """Get commit log."""
         args = ["log", f"--max-count={limit}", "--format=%H|%an|%ae|%aI|%s"]
@@ -241,7 +242,10 @@ class GitClient:
             args.append(f"--since={since}")
         if until:
             args.append(f"--until={until}")
-        args.extend(["--end-of-options", _validate_ref(ref)])
+        if all_refs:
+            args.append("--all")
+        else:
+            args.extend(["--end-of-options", _validate_ref(ref)])
 
         output = self._run(*args)
         commits = []

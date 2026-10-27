@@ -88,3 +88,42 @@ def test_store_verify_all_carries_warnings(monkeypatch):
     assert any(m.startswith("[warning]") for m in messages), (
         "store.verify_all() must not return (True, []) for a skipped check"
     )
+
+
+# =============================================================================
+# SINGLE-SOURCE CORROBORATION WARNING
+# =============================================================================
+
+
+def _commit(eid, sha, source):
+    from src.schema.observations import CommitObservation, CommitAuthor
+    now = datetime(2024, 1, 15, 10, 30, tzinfo=timezone.utc)
+    author = CommitAuthor(name="T", email="t@t.com", date=now)
+    return CommitObservation(
+        evidence_id=eid,
+        observed_when=now,
+        observed_by=source,
+        observed_what="commit",
+        verification=VerificationInfo(source=source),
+        sha=sha,
+        message="m",
+        author=author,
+        committer=author,
+    )
+
+
+def test_verify_all_warns_on_single_sourced_commits():
+    verifier = ConsistencyVerifier(gharchive_client=_NoCredentialsClient())
+    result = verifier.verify_all([
+        _commit("commit-aaa", "a" * 40, EvidenceSource.GIT),
+    ])
+    assert any("[corroboration]" in w for w in result.warnings)
+
+
+def test_verify_all_no_corroboration_warning_when_dual_sourced():
+    verifier = ConsistencyVerifier(gharchive_client=_NoCredentialsClient())
+    result = verifier.verify_all([
+        _commit("commit-aaa", "a" * 40, EvidenceSource.GIT),
+        _commit("commit-api-aaa", "a" * 40, EvidenceSource.GITHUB),
+    ])
+    assert not any("[corroboration]" in w for w in result.warnings)

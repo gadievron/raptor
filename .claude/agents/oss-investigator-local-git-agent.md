@@ -43,9 +43,10 @@ libexec/raptor-clone-repo https://github.com/owner/repo.git {workdir}/repos/repo
 
 `--mirror` gets all refs including those not normally fetched. If the URL is rejected by the allowlist, report that to the orchestrator rather than cloning by other means.
 
-### 3. Find Dangling Commits
+### 2.5. Collect Target Commits
 
-Dangling commits are forensic gold - they reveal force-pushed or deleted history:
+After cloning, enumerate the investigation-relevant commits from the local
+history and persist them for cross-source corroboration with API evidence:
 
 ```python
 from src.collectors import LocalGitCollector
@@ -54,7 +55,39 @@ from src import EvidenceStore
 collector = LocalGitCollector(f"{workdir}/repos/repo.git")
 store = EvidenceStore.load(f"{workdir}/evidence.json")
 
-# Find dangling commits
+# Collect commits across all refs (adjust since/until to the
+# investigation's date range; omit both for the most recent commits)
+commits = collector.collect_log_commits(
+    all_refs=True,
+    since=<date_range_start>,  # from research question, or None
+    until=<date_range_end>,    # from research question, or None
+    limit=200,
+)
+store.add_all(commits)
+
+if not commits:
+    print("WARNING: mirror cloned but zero git commit records persisted")
+
+store.save(f"{workdir}/evidence.json")
+```
+
+Adjust `since`/`until` and `limit` based on the research question's date range.
+If no date range is given, use `limit=200` to collect the most recent commits.
+
+### 3. Find Dangling Commits
+
+Dangling commits are forensic gold — they reveal force-pushed or deleted
+history.  Regular reachable commits are already collected in step 2.5;
+this step focuses on UNREACHABLE commits only:
+
+```python
+from src.collectors import LocalGitCollector
+from src import EvidenceStore
+
+collector = LocalGitCollector(f"{workdir}/repos/repo.git")
+store = EvidenceStore.load(f"{workdir}/evidence.json")
+
+# Find dangling commits (unreachable from any ref)
 dangling = collector.collect_dangling_commits()
 for commit in dangling:
     print(f"Found dangling: {commit.sha[:8]} - {commit.message}")

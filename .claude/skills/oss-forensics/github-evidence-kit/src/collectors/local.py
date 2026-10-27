@@ -61,6 +61,33 @@ class LocalGitCollector:
             is_dangling=False,
         )
 
+    def collect_log_commits(
+        self,
+        ref: str = "HEAD",
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 100,
+        all_refs: bool = False,
+    ) -> list[CommitObservation]:
+        """Collect commits from git log for cross-source corroboration.
+
+        Enumerates commits reachable from *ref* (or all refs when
+        *all_refs* is set) and returns full ``CommitObservation``
+        records.  Individual commits that fail to parse are skipped
+        silently so one corrupt object does not abort the batch.
+        """
+        log_entries = self.client.get_log(
+            ref=ref, since=since, until=until, limit=limit,
+            all_refs=all_refs,
+        )
+        commits: list[CommitObservation] = []
+        for entry in log_entries:
+            try:
+                commits.append(self.collect_commit(entry["sha"]))
+            except Exception:
+                continue
+        return commits
+
     def collect_dangling_commits(self) -> list[CommitObservation]:
         """Collect dangling commits (commits not reachable from any ref)."""
         # This is a placeholder for future implementation using git fsck

@@ -259,6 +259,33 @@ class EvidenceStore:
             "by_source": source_counts,
         }
 
+    def corroboration_gaps(self) -> list[dict]:
+        """Identify commit observations lacking cross-source corroboration.
+
+        Groups ``CommitObservation`` records by ``sha`` and returns
+        those observed by only one evidence source.  The report
+        generator and verifier use this to flag single-sourced commits
+        whose provenance an attacker could forge undetected.
+        """
+        from collections import defaultdict
+        commits_by_sha: dict[str, list] = defaultdict(list)
+        for e in self._evidence:
+            if getattr(e, "observation_type", None) == "commit":
+                sha = getattr(e, "sha", None)
+                if sha:
+                    commits_by_sha[sha].append(e)
+
+        gaps = []
+        for sha, records in commits_by_sha.items():
+            sources = {r.verification.source for r in records}
+            if len(sources) < 2:
+                gaps.append({
+                    "sha": sha,
+                    "sources": [s.value for s in sources],
+                    "count": len(records),
+                })
+        return gaps
+
     def verify_all(self) -> tuple[bool, list[str]]:
         """Verify all evidence against their original sources.
 
