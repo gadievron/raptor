@@ -42,7 +42,7 @@ def repo_sources(root: Path) -> dict[str, str]:
         base = root / sub
         if not base.is_dir():
             continue
-        for f in base.rglob("*"):
+        for f in sorted(base.rglob("*")):
             if not f.is_file() or "tests" in f.parts:
                 continue
             if f.suffix == ".py":

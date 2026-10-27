@@ -110,8 +110,6 @@ NON_BODY_SITES = {
         "Cargo.toml section header",
     ("packages/web/external_validators.py", "[REDACTED]"):
         "redaction placeholder compare",
-    ("core/analysis/java_source_summaries.py", "[A-Za-z_]\\w*"):
-        "regex character class from api_boundary._IDENT resolved cross-file",
 }
 
 SITES, NORMALISED_SITES = scan(repo_sources(_REPO))
@@ -1417,6 +1415,7 @@ def _scan_tree(tmp_path, rel, src):
             sorted((s.qualname, s.shape, s.digest) for s in unresolved))
 
 
+@pytest.mark.slow
 class TestReviewKeyScannerWrites:
     """Every modelled write that reaches a review_result is either
     resolved to its exact keys or reported as an unresolved site (file,
