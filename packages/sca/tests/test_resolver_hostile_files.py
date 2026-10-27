@@ -232,6 +232,7 @@ _COPYING_RESOLVERS = [
 ]
 
 
+@pytest.mark.wall_budget(seconds=15)
 @pytest.mark.parametrize(
     ("mod_name", "cls_name", "fnames"), _COPYING_RESOLVERS,
     ids=[m.rsplit(".", 1)[1] for m, _, _ in _COPYING_RESOLVERS],
