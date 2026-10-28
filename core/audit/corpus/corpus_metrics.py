@@ -158,15 +158,19 @@ def status_matches(expected: str, actual: str) -> bool:
     below finding at the pin) accepts ``finding`` for the symmetric
     reason — the suspicious/finding split is verification-depth
     noise; ``clean`` is the miss it exists to catch.
+
+    ``dark`` (unverified hypothesis, no tool coverage for the class)
+    is below the reporting threshold — it matches ``clean`` and
+    ``dormant`` the same way dormant does.
     """
     if expected == "finding":
         return actual in ("finding", "suspicious")
     if expected == "suspicious":
         return actual in ("suspicious", "finding")
     if expected == "clean":
-        return actual in ("clean", "dormant")
+        return actual in ("clean", "dormant", "dark")
     if expected == "dormant":
-        return actual in ("dormant", "clean")
+        return actual in ("dormant", "clean", "dark")
     return False
 
 

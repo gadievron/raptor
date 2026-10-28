@@ -1423,7 +1423,7 @@ def _status_matches(
     from .corpus_metrics import status_matches
 
     if probe and expected == "dormant":
-        return actual in ("dormant", "clean", "finding")
+        return actual in ("dormant", "clean", "dark", "finding")
     return status_matches(expected, actual)
 
 
@@ -2987,9 +2987,12 @@ def _run_ensemble_audit(
 
                 if not use_max:
                     higher = sec_r if sec_rank >= bf_rank else bf_r
+                    lower = bf_r if sec_rank >= bf_rank else sec_r
                     winner = dict(higher)
                     if winner["actual"] == "finding":
                         winner["actual"] = "suspicious"
+                    elif winner["actual"] == "suspicious":
+                        winner["actual"] = lower["actual"]
                     winner["ensemble_source"] = "disagree_demoted"
                     winner["security_actual"] = sec_r["actual"]
                     winner["bug_first_actual"] = bf_r["actual"]

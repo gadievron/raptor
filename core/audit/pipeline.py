@@ -133,7 +133,7 @@ class AuditPipelineOpts:
     edges: bool = False
     # Cross-scope discovery (contract perspective): post-structured-pass
     # analysis that finds contract mismatches across module boundaries.
-    open_discovery: bool = False
+    open_discovery: bool = True
     discovery_budget_fraction: float = 0.20
     # Mid-run journal checkpoint tri-state: True/False = explicit
     # per-run choice (--no-journal-checkpoint sets False); None =

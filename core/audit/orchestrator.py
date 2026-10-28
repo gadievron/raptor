@@ -940,7 +940,7 @@ class OrchestratorConfig:
     # function loop, and fold tier-2 edge contracts into caller
     # reviews. Default off.
     edges: bool = False
-    open_discovery: bool = False
+    open_discovery: bool = True
     discovery_budget_fraction: float = 0.20
     # Mid-run journal checkpoint (core.coverage.journal_checkpoint):
     # when the journal's largest shard crosses the retained-size
@@ -13563,6 +13563,11 @@ def _commit_outcome(
     )
 
     outcome.verification_tier = outcome.compute_tier()
+
+    if gap.get("from_composition"):
+        if outcome.review_result is None:
+            outcome.review_result = {}
+        outcome.review_result["from_composition"] = True
 
     line_start = gap.get("line_start", 0)
     entry: dict[str, Any] = {
@@ -30897,7 +30902,6 @@ def _resolve_gate_demoted(
 
     No LLM calls.
     """
-    joern_up = bool((available_tools or {}).get("joern"))
     from .promotion_alarm import is_reuse_exempt
 
     for i, outcome in enumerate(result.outcomes):
@@ -30985,12 +30989,6 @@ def _resolve_gate_demoted(
             )
             continue
         if not gate_demoted:
-            # Replacement for the removed in-loop suspicious-demotion
-            # gate: evidence-free suspicious outcomes resolve here,
-            # class- and error-aware, only when Joern was available
-            # (matching the old gate's activation condition).
-            if not joern_up:
-                continue
             if _is_verification_evidence_for_gate(outcome):
                 continue
 
@@ -31136,10 +31134,13 @@ def _resolve_gate_demoted(
                 outcome.function,
             )
         else:
+            rr = outcome.review_result or {}
+            is_composition = rr.get("from_composition", False)
+            dark_status = "dormant" if is_composition else "dark"
             resolved = ReviewOutcome(
                 file=outcome.file,
                 function=outcome.function,
-                status="dark",
+                status=dark_status,
                 body=marker + outcome.body,
                 hypothesis=outcome.hypothesis,
                 hypotheses=outcome.hypotheses,
@@ -31158,10 +31159,12 @@ def _resolve_gate_demoted(
             result.suspicious -= 1
             result.dormant += 1
             logger.info(
-                "gate-resolved %s:%s → dark "
-                "(no mechanical corroboration, no covering channel ran)",
+                "gate-resolved %s:%s → %s "
+                "(no mechanical corroboration, no covering channel ran%s)",
                 outcome.file,
                 outcome.function,
+                dark_status,
+                ", open-discovery item demoted" if is_composition else "",
             )
 
 

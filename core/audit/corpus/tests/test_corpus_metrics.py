@@ -333,6 +333,14 @@ class TestStatusMatches:
         assert not status_matches("suspicious", "clean")
         assert not status_matches("suspicious", "dormant")
 
+    def test_dark_matches_clean_and_dormant(self):
+        assert status_matches("clean", "dark")
+        assert status_matches("dormant", "dark")
+
+    def test_dark_never_matches_finding(self):
+        assert not status_matches("finding", "dark")
+        assert not status_matches("suspicious", "dark")
+
 
 class TestComputeAttribution:
     def test_respects_runner_annotation(self):

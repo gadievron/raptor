@@ -2189,7 +2189,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         adversarial=args.adversarial,
         rank_gaps=getattr(args, "rank_gaps", False),
         edges=args.edges,
-        open_discovery=getattr(args, "open_discovery", False),
+        open_discovery=not getattr(args, "no_open_discovery", False),
         **({"discovery_budget_fraction": args.discovery_budget}
            if getattr(args, "discovery_budget", None) is not None else {}),
         max_propagation_depth=args.max_propagation_depth,
@@ -3563,7 +3563,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
         ),
         verdict_reuse=bool(run_cfg.get("verdict_reuse", True)),
         edges=bool(run_cfg.get("edges")),
-        open_discovery=bool(run_cfg.get("open_discovery")),
+        open_discovery=bool(run_cfg.get("open_discovery", True)),
         pre_scan=bool(run_cfg.get("pre_scan")),
         caller_contract_context=bool(
             run_cfg.get("caller_contract_context", True)),
@@ -3843,7 +3843,7 @@ def _run_config_from_args(
         "adversarial": args.adversarial,
         "rank_gaps": getattr(args, "rank_gaps", False),
         "edges": args.edges,
-        "open_discovery": getattr(args, "open_discovery", False),
+        "open_discovery": not getattr(args, "no_open_discovery", False),
         "max_propagation_depth": args.max_propagation_depth,
         "subsystem_depth": args.subsystem_depth,
         "validate": not args.no_validate,
@@ -4633,10 +4633,10 @@ def main() -> int:
                             "contract units, tier-2 on-path edges "
                             "folded into caller reviews (flag-gated "
                             "beta)")
-    p_run.add_argument("--open-discovery", action="store_true",
-                       help="Post-review cross-scope contract "
-                            "analysis: examine cross-module seams "
-                            "for contract mismatches (opt-in)")
+    p_run.add_argument("--no-open-discovery", action="store_true",
+                       help="Disable cross-scope contract discovery "
+                            "(on by default): skips cross-module seam "
+                            "analysis and weakness composition")
     p_run.add_argument("--discovery-budget", type=float, default=None,
                        metavar="FRACTION",
                        help="Fraction of the LLM cost cap reserved "

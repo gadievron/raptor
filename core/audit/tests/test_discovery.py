@@ -925,7 +925,7 @@ class TestOrchestratorHookImport:
         cfg = OrchestratorConfig.__dataclass_fields__
         assert "open_discovery" in cfg
         assert "discovery_budget_fraction" in cfg
-        assert cfg["open_discovery"].default is False
+        assert cfg["open_discovery"].default is True
         assert cfg["discovery_budget_fraction"].default == 0.20
 
     def test_pipeline_opts_fields_exist(self):
@@ -944,7 +944,7 @@ class TestCLIArgParsing:
             ["python3", "libexec/raptor-audit", "run", "--help"],
             capture_output=True, text=True, cwd=_REPO_ROOT,
         )
-        assert "--open-discovery" in result.stdout
+        assert "--no-open-discovery" in result.stdout
 
     def test_discovery_budget_flag(self):
         import subprocess
