@@ -690,6 +690,7 @@ _ATTR_LIST_TUS = {
 }
 
 
+@pytest.mark.wall_budget(seconds=15)
 @pytest.mark.parametrize("case", sorted(_ATTR_LIST_TUS))
 def test_attribute_list_spellings_carry_limitation(
     tmp_path, sandbox_spy, _clang_only, case,
