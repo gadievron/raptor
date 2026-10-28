@@ -450,3 +450,33 @@ class TestLineModelDesync:
         assert extract_nosemgrep(src, 4) is None
         got = extract_nosemgrep(src, 3)
         assert got is not None and got["comment_line"] == 2
+
+
+class TestNosemgrepFindingSurvivesAnnotation:
+    """Evasion regression: a finding on a # nosemgrep-marked line must
+    survive annotate_sarif — the annotation records the suppression
+    attempt but never removes the finding (--disable-nosem means
+    semgrep already ignored the comment)."""
+
+    def test_finding_survives_with_annotation(self, tmp_path):
+        src = tmp_path / "a.py"
+        src.write_text("x = eval(input())  # nosemgrep: python.eval\n")
+        sarif = {
+            "runs": [{
+                "tool": {"driver": {"name": "Semgrep OSS"}},
+                "results": [{
+                    "ruleId": "python.eval",
+                    "locations": [{"physicalLocation": {
+                        "artifactLocation": {"uri": "a.py"},
+                        "region": {"startLine": 1},
+                    }}],
+                }],
+            }],
+        }
+        count = annotate_sarif(sarif, str(tmp_path))
+        assert count == 1
+        results = sarif["runs"][0]["results"]
+        assert len(results) == 1, "finding must not be removed"
+        props = results[0].get("properties", {})
+        assert props["nosemgrep"]["suppressed"] is True
+        assert "python.eval" in props["nosemgrep"]["rule_ids"]

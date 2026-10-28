@@ -12,6 +12,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 
@@ -278,3 +280,40 @@ class TestCodeqlCliFlag:
         monkeypatch.setattr(RaptorConfig, "CODEQL_CURATED_ENABLED", True)
         enabled = self._run_workflow(self._make_args())
         assert enabled is True
+
+
+# ---------------------------------------------------------------------------
+# Evasion regression: every shipped query must be structurally valid
+# ---------------------------------------------------------------------------
+
+def _curated_ql_files():
+    """Collect all .ql files under engine/codeql/queries/."""
+    from core.config import RaptorConfig
+    root = Path(RaptorConfig.CODEQL_QUERIES_DIR)
+    return sorted(root.rglob("*.ql"))
+
+
+class TestCuratedQueryStructure:
+    """Each curated .ql file must contain a select clause — a file
+    that fails this is either empty, truncated, or not a query."""
+
+    @pytest.fixture(autouse=True)
+    def _queries(self):
+        self.queries = _curated_ql_files()
+        if not self.queries:
+            pytest.skip("no curated queries on disk")
+
+    def test_at_least_one_query_per_language(self):
+        langs = {q.parent.name for q in self.queries}
+        assert "cpp" in langs
+        assert "java" in langs
+
+    @pytest.mark.parametrize(
+        "ql", _curated_ql_files(),
+        ids=lambda p: f"{p.parent.name}/{p.name}",
+    )
+    def test_query_has_select_clause(self, ql):
+        text = ql.read_text()
+        assert "\nselect" in text.lower() or text.lower().startswith("select"), (
+            f"{ql.name} has no select clause"
+        )
