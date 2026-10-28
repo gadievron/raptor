@@ -26,6 +26,7 @@ class FakeOutcome:
     cost_usd: float = 0.01
     model: str = "test-model"
     review_result: dict[str, Any] | None = None
+    clean_basis: str = ""
 
 
 @dataclass
@@ -250,6 +251,21 @@ class TestExportFindings:
         assert len(dark) == 1
         assert dark[0]["needs_validation"] is True
 
+    def test_gate_resolved_clean_counted(self):
+        """Suspicious outcomes resolved to clean by tool silence must
+        appear in the stats so consumers know coverage was reduced."""
+        outcomes = [
+            FakeOutcome(status="finding", review_result={"hypothesis": "a"}),
+            FakeOutcome(status="clean", clean_basis="gate_resolved",
+                        review_result={}),
+            FakeOutcome(status="clean", clean_basis="sarif_clean",
+                        review_result={}),
+            FakeOutcome(status="clean", review_result={}),
+        ]
+        export = export_findings(outcomes)
+        assert export["stats"]["total"] == 1
+        assert export["stats"]["gate_resolved_clean"] == 1
+
     def test_stats_by_confidence(self):
         outcomes = [
             FakeOutcome(
@@ -344,6 +360,22 @@ class TestFormatFindingsSummary:
         text = format_findings_summary(export)
         assert "Dark" in text
         assert "/validate" in text
+
+    def test_gate_resolved_clean_surfaced_in_summary(self):
+        export = {
+            "findings": [],
+            "stats": {
+                "total": 2,
+                "high_confidence": 1,
+                "medium_confidence": 0,
+                "low_confidence": 1,
+                "dark": 0,
+                "gate_resolved_clean": 3,
+            },
+        }
+        text = format_findings_summary(export)
+        assert "Gate-resolved clean" in text
+        assert "3" in text
 
 class TestCallerEvidenceClamp:
     _RECORD = {

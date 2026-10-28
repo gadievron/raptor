@@ -551,6 +551,7 @@ def export_findings(
             logger.debug("promotion alarm export sweep failed", exc_info=True)
 
     findings: list[dict[str, Any]] = []
+    gate_resolved_clean = 0
     for outcome in outcomes:
         status = getattr(outcome, "status", "clean")
         # "dark" is exported alongside finding/suspicious: it is the
@@ -559,6 +560,8 @@ def export_findings(
         # to the operator and to /validate, the one pipeline built to
         # judge tool-blind findings.
         if status not in ("finding", "suspicious", "dark"):
+            if getattr(outcome, "clean_basis", "") == "gate_resolved":
+                gate_resolved_clean += 1
             continue
 
         file_path = getattr(outcome, "file", "")
@@ -587,6 +590,7 @@ def export_findings(
             "dark": sum(
                 1 for f in findings if f["status"] == "dark"
             ),
+            "gate_resolved_clean": gate_resolved_clean,
         },
     }
 
@@ -637,6 +641,13 @@ def format_findings_summary(export: dict[str, Any]) -> str:
         lines.append(
             f"Dark (tool-blind, needs concrete verification): {dark} "
             f"— route to /validate"
+        )
+
+    gate_clean = stats.get("gate_resolved_clean", 0)
+    if gate_clean:
+        lines.append(
+            f"Gate-resolved clean (suspicious dismissed by tool silence): "
+            f"{gate_clean}"
         )
 
     chains = export.get("attack_chains", [])
