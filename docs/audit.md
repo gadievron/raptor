@@ -72,6 +72,7 @@ full flag table.
 | `--seed-rereview` | Schedule a fresh review for seeds resolving to already-covered checklist functions (default off: such seeds record as `no_matching_gap` misses) — see [Hypothesis seeds](#hypothesis-seeds) |
 | `--dynamic` / `--no-dynamic` | Enable/disable dynamic validation (Frida observation / target execution) for confirmed findings |
 | `--binary <path>` / `--binary-auto` / `--no-binary-oracle` | Binary-oracle reachability enrichment of the inventory |
+| `--no-open-discovery` | Disable open discovery (LLM-driven hypothesis generation beyond the checklist — see [Open Discovery](#open-discovery)) |
 | `--no-vendored-triage` | Disable the vendored/generated-code triage tier (corroborated generated files → skip tier, uncorroborated banners / vendored paths / generated-shape structure → glance tier; every decision leaves a `suppressions.jsonl` record and the run summary counts them) |
 | `--no-auto-siblings` | Binary targets only: skip the automatic sibling-consistency pass (default: on for binary targets; source targets never run it) — see [Hypothesis seeds](#hypothesis-seeds). Also accepted by `resume` for a single segment |
 | `--annotations-dir <dir>` | Annotations directory (default: project-level `annotations/`, falling back to `<out>/annotations`) |
@@ -94,7 +95,7 @@ full flag table.
    c. Generate mechanical tests (Semgrep/Coccinelle/CodeQL/SMT rules)
    d. Run tests via tool chain dispatch → evaluate results
    e. Record journal entry (what was tested, tool evidence)
-   f. Record status (clean / suspicious / finding / error / dormant)
+   f. Record status (clean / suspicious / finding / error / dormant / dark)
    g. If pattern has variants: generate codebase-wide checker (Mode 2)
 6. Joern CPG builds in background, drains when ready for dataflow re-review
 7. Constraint propagation across related functions
@@ -396,11 +397,48 @@ Each reviewed function gets exactly one status:
 | `clean` | Reviewed, no concern found |
 | `suspicious` | Concern identified but not tool-confirmed |
 | `finding` | Tool-confirmed, reachable vulnerability |
+| `dark` | Suspicious claim with no tool coverage — the hypothesis is plausible but no available tool could verify or refute it.  Exported for `/validate` |
 | `dormant` | Real bug but currently unreachable (dead code, no callers) |
 | `error` | Review blocked (e.g. parse failure, tool error) |
 
 A `dormant` bug becomes a `finding` when reachability changes.  `dormant`
 is not `clean` -- the bug is real, it just can't be triggered today.
+
+`dark` is distinct from `suspicious`: a `suspicious` item has tool
+evidence that was inconclusive; a `dark` item has none at all because
+the claim fell outside the tool menu's coverage.  Open-discovery items
+without tool evidence resolve to `dormant` instead — see [Open
+Discovery](#open-discovery).
+
+
+## Open Discovery
+
+Open discovery (default on; disable with `--no-open-discovery`) extends
+the audit beyond the static checklist.  The baseline pipeline reviews
+only functions in the gap inventory; open discovery adds three
+LLM-driven perspectives that generate hypotheses the checklist cannot:
+
+1. **Cross-scope contracts** — boundary mismatches, caller/callee
+   contract violations, cross-module assumptions.
+2. **Architectural negative space** — controls, checks, or invariants
+   that *should* exist but don't.
+3. **Unconstrained sweep** — a free-form pass with no CWE or strategy
+   constraint, looking for anything the structured strategies miss.
+
+Hypotheses feed a composition engine that walks call-graph edges to
+pair individual weaknesses into composite vulnerabilities.  Verifiable
+compositions go through the same tool-grounded verification as
+checklist items; non-verifiable ones are exported as
+`composition-leads.json`.
+
+Discovery-generated hypotheses that lack tool evidence resolve to
+`dormant` (below the reporting threshold) rather than `dark`.
+Checklist hypotheses without tool evidence still resolve to `dark`
+(exported for `/validate`).
+
+With multi-model consensus (`--model` x2+), disagreements where one
+model calls suspicious and the other clean — with no mechanical
+evidence — resolve to the lower status rather than the higher.
 
 
 ## Checker Synthesis (Mode 2)
