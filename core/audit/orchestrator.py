@@ -30989,7 +30989,10 @@ def _resolve_gate_demoted(
             )
             continue
         if not gate_demoted:
-            continue
+            if not bool((available_tools or {}).get("joern")):
+                continue
+            if _is_verification_evidence_for_gate(outcome):
+                continue
 
         if _has_mechanical_corroboration(
             outcome, config, sarif_cache, checklist,
