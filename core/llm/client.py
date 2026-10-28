@@ -2298,6 +2298,12 @@ class LLMClient:
             for (p, a, r, role), n in items
         ]
 
+    # Bump when post-LLM analysis semantics change (gate policy,
+    # resolution logic, evidence grading) so cached verdicts from the
+    # prior interpretation are not replayed.  Same convention as
+    # _STRUCTURED_CACHE_VERSION and the SCA/reach/binary-oracle caches.
+    _CACHE_VERSION = 1
+
     def _get_cache_key(
         self, prompt: str, system_prompt: str | None, model: str,
         kwargs: dict[str, Any] | None = None,
@@ -2315,8 +2321,8 @@ class LLMClient:
         """
         from core.json import dumps_canonical
         content = dumps_canonical(
-            [model, system_prompt or "", prompt,
-             self._kwargs_for_cache_key(kwargs)],
+            [f"v{self._CACHE_VERSION}", model, system_prompt or "",
+             prompt, self._kwargs_for_cache_key(kwargs)],
         )
         return sha256_string(content)
 

@@ -100,6 +100,20 @@ def test_own_write_round_trips(tmp_path: Path) -> None:
     assert cache_integrity.extract_token(data)
 
 
+def test_version_bump_invalidates_cache_key(tmp_path: Path) -> None:
+    """Bumping _CACHE_VERSION must change the digest so stale entries
+    from a prior analysis version are never replayed."""
+    client = make_test_client(tmp_path)
+    key_v1 = client._get_cache_key("p", "s", "m")
+    original = client._CACHE_VERSION
+    try:
+        client._CACHE_VERSION = original + 1
+        key_v2 = client._get_cache_key("p", "s", "m")
+    finally:
+        client._CACHE_VERSION = original
+    assert key_v1 != key_v2
+
+
 # ---------------------------------------------------------------------------
 # Structured cache
 # ---------------------------------------------------------------------------
