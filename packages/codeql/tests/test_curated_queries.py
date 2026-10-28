@@ -287,10 +287,17 @@ class TestCodeqlCliFlag:
 # ---------------------------------------------------------------------------
 
 def _curated_ql_files():
-    """Collect all .ql files under engine/codeql/queries/."""
-    from core.config import RaptorConfig
-    root = Path(RaptorConfig.CODEQL_QUERIES_DIR)
-    return sorted(root.rglob("*.ql"))
+    """Collect all .ql files under engine/codeql/queries/.
+
+    Called at parametrize time (module collection), so must not crash
+    if the import chain is unavailable in an xdist worker.
+    """
+    try:
+        from core.config import RaptorConfig
+        root = Path(RaptorConfig.CODEQL_QUERIES_DIR)
+        return sorted(root.rglob("*.ql"))
+    except Exception:
+        return []
 
 
 class TestCuratedQueryStructure:
