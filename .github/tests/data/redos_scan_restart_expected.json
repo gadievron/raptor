@@ -154,7 +154,7 @@
    "digests": [
     "7bac92ef17b0"
    ],
-   "exp": 1.06,
+   "exp": 1.07,
    "verdict": "linear"
   },
   "core/audit/auth_witnesses.py\u001f_GETTER_DECL_RE": {
@@ -175,7 +175,7 @@
    "digests": [
     "c8f8ffc78d2c"
    ],
-   "exp": 1.06,
+   "exp": 1.07,
    "verdict": "linear"
   },
   "core/audit/binary_layer0.py\u001f_CALLEE_RE": {
@@ -357,7 +357,7 @@
    "digests": [
     "469705e1436b"
    ],
-   "exp": 1.02,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/audit/compiler_sweep.py\u001f_PP_SUPPRESSION_RE": {
@@ -413,7 +413,7 @@
    "digests": [
     "c173a0fff31c"
    ],
-   "exp": 1.0,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/audit/condition_classifier.py\u001f_RESOURCE_RE": {
@@ -427,7 +427,7 @@
    "digests": [
     "f527a6acff01"
    ],
-   "exp": 1.0,
+   "exp": 0.99,
    "verdict": "linear"
   },
   "core/audit/condition_smt.py\u001f\\b(\\w+)\\s*(?:,\\s*\\w+\\s*)?(?::?=)\\s*strco": {
@@ -511,7 +511,7 @@
    "digests": [
     "be592db3fa7b"
    ],
-   "exp": 1.04,
+   "exp": 1.07,
    "verdict": "linear"
   },
   "core/audit/condition_smt.py\u001f_GO_ATOI_RE": {
@@ -617,7 +617,7 @@
    "digests": [
     "a56ab90d3d8a"
    ],
-   "exp": 1.07,
+   "exp": 1.06,
    "verdict": "linear"
   },
   "core/audit/condition_smt.py\u001fwrapper_re": {
@@ -715,14 +715,14 @@
    "digests": [
     "c7576fa032bf"
    ],
-   "exp": 2.0,
+   "exp": 2.01,
    "verdict": "adjudicated"
   },
   "core/audit/dark_verify/_resolve.py\u001f_PY_EXT_SUFFIX_GLOBS[3]": {
    "digests": [
     "9337696cf86c"
    ],
-   "exp": 2.0,
+   "exp": 1.99,
    "verdict": "adjudicated"
   },
   "core/audit/decompiler_sanitise.py\u001f_CLASS_MEMBER_RE": {
@@ -813,7 +813,7 @@
    "digests": [
     "7ebd359a4d82"
    ],
-   "exp": 1.06,
+   "exp": 1.07,
    "verdict": "linear"
   },
   "core/audit/integer_truncation_checker.py\u001f_ALLOC_RE": {
@@ -855,7 +855,7 @@
    "digests": [
     "f7b4a925ef64"
    ],
-   "exp": 1.07,
+   "exp": 1.03,
    "verdict": "linear"
   },
   "core/audit/joern_verify.py\u001f[`'\\\"]?\\b([A-Za-z_][A-Za-z0-9_]*)[`'\\\"]?": {
@@ -996,7 +996,7 @@
    "digests": [
     "e1f4089e2628"
    ],
-   "exp": 1.02,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/audit/parser_shape.py\u001f_ERROR_PATH_RE": {
@@ -1101,14 +1101,14 @@
    "digests": [
     "89e3b1ffe284"
    ],
-   "exp": 1.01,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/audit/prefilter.py\u001f=~\\s*s/(?:\\\\.|[^/\\\\\\n$])*\\$(?:\\\\.|[^/\\\\\\": {
    "digests": [
     "b43f78d16024"
    ],
-   "exp": 1.0,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/audit/prefilter.py\u001f\\b(\\w+)\\s*\\[(\\w+)\\]": {
@@ -1156,6 +1156,13 @@
   "core/audit/prefilter.py\u001f_PHP_SQL_CLAUSE_RE": {
    "digests": [
     "5f04e4016a95"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/prefilter.py\u001f_PHP_SQL_INTERP_RE": {
+   "digests": [
+    "3e9e3f138e35"
    ],
    "exp": 1.0,
    "verdict": "linear"
@@ -1269,7 +1276,7 @@
    "digests": [
     "6791b0fd26a9"
    ],
-   "exp": 1.06,
+   "exp": 1.07,
    "verdict": "linear"
   },
   "core/audit/ptr_lifecycle.py\u001f_RCU_DEREF_RE": {
@@ -1311,7 +1318,7 @@
    "digests": [
     "87a22b640da8"
    ],
-   "exp": 1.02,
+   "exp": 1.03,
    "verdict": "linear"
   },
   "core/audit/release_order.py\u001f[\\w\\*\\s]\\b([A-Za-z_]\\w*)\\s*[,)]": {
@@ -1437,7 +1444,7 @@
    "digests": [
     "2b45a83c9d10"
    ],
-   "exp": 1.01,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/audit/sibling_analysis.py\u001f_NULL_GUARD_RE": {
@@ -1451,7 +1458,7 @@
    "digests": [
     "2cde3d41b296"
    ],
-   "exp": 1.01,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/audit/spec_inference.py\u001fvar_match": {
@@ -1599,7 +1606,7 @@
    "digests": [
     "a99a1964e15b"
    ],
-   "exp": 1.02,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/binary/glibc_versions.py\u001f_SEARCH_RE": {
@@ -1641,7 +1648,7 @@
    "digests": [
     "8fe688d1a940"
    ],
-   "exp": 1.0,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/concepts/study.py\u001f\\b(struct\\s+\\w+|[A-Za-z_]\\w{3,}_[A-Za-z_": {
@@ -1676,7 +1683,7 @@
    "digests": [
     "e082325c8dd4"
    ],
-   "exp": 1.04,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/dataflow/injection_prescreen.py\u001f_PY_STRICT_SUB": {
@@ -1697,7 +1704,7 @@
    "digests": [
     "5d3943e2b96d"
    ],
-   "exp": 1.01,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/dataflow/smt_barrier.py\u001f\\bfunction\\s*(?:\\*\\s*)?(?:\\w+\\s*)?\\(|=>\\": {
@@ -1886,7 +1893,7 @@
    "digests": [
     "39a9efa70ae9"
    ],
-   "exp": 1.0,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/inventory/macro_resolve.py\u001f_ENUMERATOR_NAME_RE": {
@@ -1921,42 +1928,42 @@
    "digests": [
     "5f33a892b9ad"
    ],
-   "exp": 2.01,
+   "exp": 1.99,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[2]": {
    "digests": [
     "74f670123f14"
    ],
-   "exp": 2.02,
+   "exp": 2.0,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[3]": {
    "digests": [
     "0fb08c380bf3"
    ],
-   "exp": 2.01,
+   "exp": 2.0,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[4]": {
    "digests": [
     "70e776e25c31"
    ],
-   "exp": 2.01,
+   "exp": 1.99,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[5]": {
    "digests": [
     "88e933d23e53"
    ],
-   "exp": 2.01,
+   "exp": 1.99,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[6]": {
    "digests": [
     "29eb48db7b62"
    ],
-   "exp": 2.01,
+   "exp": 1.99,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[7]": {
@@ -1970,7 +1977,7 @@
    "digests": [
     "439e5df59d15"
    ],
-   "exp": 1.02,
+   "exp": 1.05,
    "verdict": "linear"
   },
   "core/license/detector.py\u001f_ANDOR_SPLIT_RE_CI": {
@@ -2077,7 +2084,7 @@
    "digests": [
     "036baa0ec248"
    ],
-   "exp": 0.98,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/oci/auth.py\u001f_WWW_AUTH_PARAM_RE": {
@@ -2364,7 +2371,7 @@
    "digests": [
     "13f45e410764"
    ],
-   "exp": 1.0,
+   "exp": 0.88,
    "verdict": "linear"
   },
   "packages/autonomous/dialogue.py\u001fcode_block_match": {
@@ -2583,7 +2590,7 @@
    "digests": [
     "db21eb0cc688"
    ],
-   "exp": 2.01,
+   "exp": 2.0,
    "verdict": "adjudicated"
   },
   "packages/ghidra/ebpf_probe.py\u001fPROBE_OBJECTS[70]": {
@@ -2772,14 +2779,14 @@
    "digests": [
     "e20a6500fcbb"
    ],
-   "exp": 1.01,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "packages/sca/supply_chain/gha_secret_flow.py\u001findir_re": {
    "digests": [
     "9af72d7b56ad"
    ],
-   "exp": 1.0,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "packages/sca/update.py\u001fparts": {

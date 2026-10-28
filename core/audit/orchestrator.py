@@ -30989,8 +30989,7 @@ def _resolve_gate_demoted(
             )
             continue
         if not gate_demoted:
-            if _is_verification_evidence_for_gate(outcome):
-                continue
+            continue
 
         if _has_mechanical_corroboration(
             outcome, config, sarif_cache, checklist,
