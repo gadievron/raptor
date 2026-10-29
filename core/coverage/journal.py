@@ -2786,6 +2786,7 @@ def _entry_from_validated(
         domain_slice_hash=raw.get("domain_slice_hash"),
         integrity=raw.get("integrity"),
         body_offload=raw.get("body_offload"),
+        from_composition=raw.get("from_composition"),
         clean_basis=raw.get("clean_basis"),
         schema_version=version,
     )
