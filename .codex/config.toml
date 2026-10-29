@@ -12,6 +12,8 @@ _RAPTOR_TRUSTED = "1"
 writable_roots = ["~/.raptor", "~/.local/share/raptor"]
 
 # ── Hooks ─────────────────────────────────────────────────────────
+# Hooks run with the session cwd, which may be a checkout subdirectory.
+# Resolve and enter the current git root before invoking reviewed scripts.
 # Codex 0.163.0 resolves both inline and JSON hook sources through the
 # git common directory in a worktree. AGENTS.md supplies an explicit
 # startup fallback when that prevents discovery; inline TOML alone does
@@ -22,14 +24,14 @@ matcher = "startup|resume|fork|clear"
 
 [[hooks.SessionStart.hooks]]
 type = "command"
-command = "CODEX=1 RAPTOR_CODEX_HOOK=1 _RAPTOR_TRUSTED=1 python3 -I .codex/hooks/session_start.py"
+command = 'cd -- "$(git rev-parse --show-toplevel)" && CODEX=1 RAPTOR_CODEX_HOOK=1 _RAPTOR_TRUSTED=1 python3 -I .codex/hooks/session_start.py'
 
 [[hooks.Stop]]
 matcher = ""
 
 [[hooks.Stop.hooks]]
 type = "command"
-command = "CODEX=1 RAPTOR_CODEX_HOOK=1 _RAPTOR_TRUSTED=1 libexec/raptor-lifecycle-hook codex-stop"
+command = 'cd -- "$(git rev-parse --show-toplevel)" && CODEX=1 RAPTOR_CODEX_HOOK=1 _RAPTOR_TRUSTED=1 libexec/raptor-lifecycle-hook codex-stop'
 timeout = 5
 
 [[hooks.SubagentStart]]
@@ -37,7 +39,7 @@ matcher = ""
 
 [[hooks.SubagentStart.hooks]]
 type = "command"
-command = "CODEX=1 RAPTOR_CODEX_HOOK=1 _RAPTOR_TRUSTED=1 python3 -I libexec/raptor-session-init --codex-subagent-context"
+command = 'cd -- "$(git rev-parse --show-toplevel)" && CODEX=1 RAPTOR_CODEX_HOOK=1 _RAPTOR_TRUSTED=1 python3 -I libexec/raptor-session-init --codex-subagent-context'
 
 # Command rewrites can bypass native execution rules. No PreToolUse rewrite:
 # shared RAPTOR process startup restores context without changing the command.
@@ -47,7 +49,7 @@ matcher = ""
 
 [[hooks.SessionEnd.hooks]]
 type = "command"
-command = "CODEX=1 RAPTOR_CODEX_HOOK=1 _RAPTOR_TRUSTED=1 libexec/raptor-lifecycle-hook codex-end"
+command = 'cd -- "$(git rev-parse --show-toplevel)" && CODEX=1 RAPTOR_CODEX_HOOK=1 _RAPTOR_TRUSTED=1 libexec/raptor-lifecycle-hook codex-end'
 timeout = 3
 
 # Notification only: RAPTOR records its own exit outcome. No PreToolUse rewrite.
@@ -56,5 +58,5 @@ matcher = "Bash"
 
 [[hooks.PostToolUse.hooks]]
 type = "command"
-command = "CODEX=1 RAPTOR_CODEX_HOOK=1 _RAPTOR_TRUSTED=1 libexec/raptor-lifecycle-hook codex-outcome"
+command = 'cd -- "$(git rev-parse --show-toplevel)" && CODEX=1 RAPTOR_CODEX_HOOK=1 _RAPTOR_TRUSTED=1 libexec/raptor-lifecycle-hook codex-outcome'
 timeout = 5
