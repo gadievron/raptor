@@ -181,6 +181,12 @@ class TestGetSafeEnv:
         be too."""
         assert "CODEX" in RaptorConfig.TARGET_ENV_STRIP_SET
 
+    def test_codex_hook_root_is_host_only_and_stripped_from_targets(self, monkeypatch):
+        """The launcher anchor reveals the installation path to a target."""
+        monkeypatch.setenv("RAPTOR_CODEX_HOOK_ROOT", "/operator/raptor-checkout")
+        assert "RAPTOR_CODEX_HOOK_ROOT" in RaptorConfig.TARGET_ENV_STRIP_SET
+        assert "RAPTOR_CODEX_HOOK_ROOT" not in RaptorConfig.get_safe_env()
+
     def test_redb_ceiling_override_survives_scrub(self):
         """RAPTOR_REDB_MAX_BYTES must reach scrub-spawned children:
         the RE-database ceiling is resolved per process, so stripping
