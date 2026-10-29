@@ -99,7 +99,10 @@ def start(session_id, pid):
         finally:
             os.close(lock)
     from core.config import RaptorConfig
-    child_env = RaptorConfig.get_safe_env()
+    from core.startup.codex_operator_environment import snapshot
+    # This is a trusted RAPTOR service, never a target-code subprocess.
+    child_env = RaptorConfig.get_llm_env()
+    child_env.update(snapshot())
     child_env.update({'RAPTOR_DIR': str(environment.ROOT), '_RAPTOR_TRUSTED': '1',
                       'RAPTOR_CODEX_HOOK': '1'})
     script = environment.ROOT / 'libexec/raptor-codex-env-broker'
@@ -120,6 +123,8 @@ def start(session_id, pid):
 
 
 def serve(session_id):
+    from core.startup.codex_operator_environment import snapshot
+    operator_environment = snapshot()
     context = environment.read_context(session_id)
     pid = context['pid']
     os.environ.pop('RAPTOR_REGISTRY_HOME', None)
@@ -159,7 +164,10 @@ def serve(session_id):
                                 and secrets.compare_digest(value['capability'], context['broker_key'])):
                             del value['capability']
                             if value == {'op': 'environment'}:
-                                result = {'ok': True, 'environment': environment.overlay(context, fields)}
+                                result = {'ok': True,
+                                    'environment_version': environment.BROKER_ENVIRONMENT_VERSION,
+                                    'environment': {
+                                    **operator_environment, **environment.overlay(context, fields)}}
                             elif (set(value) == {'op', 'pid', 'token', 'identity'}
                                   and value['op'] == 'identity' and value['pid'] == pid
                                   and value['identity'] == environment._identity(fields)

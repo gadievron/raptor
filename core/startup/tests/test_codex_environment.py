@@ -2,6 +2,7 @@
 import json
 import os
 import runpy
+from unittest.mock import patch
 
 import pytest
 
@@ -31,7 +32,23 @@ def context(tmp_path, monkeypatch):
         fields.get(key) == value for key, value in identity.items()))
     monkeypatch.setattr(sessions, 'resolve_codex_owner_pid', lambda: 12345)
     from core.startup import codex_broker
-    monkeypatch.setattr(codex_broker, "start", lambda session_id, pid: None)
+    from core.startup.codex_operator_environment import snapshot
+    operator_values = {}
+    def start(session_id, pid):
+        operator_values[session_id] = snapshot()
+    def request(session_id, message):
+        value = bridge.read_context(session_id)
+        registry = value['registry_home']
+        with patch.dict(os.environ):
+            if registry is not None:
+                os.environ['RAPTOR_REGISTRY_HOME'] = registry
+            fields = bridge._entry(value['pid'], value['session_id'])
+        return {'ok': True, 'environment_version': bridge.BROKER_ENVIRONMENT_VERSION,
+                'environment': {
+            **operator_values[value['session_id']],
+            **bridge.overlay(value, fields)}}
+    monkeypatch.setattr(codex_broker, "start", start)
+    monkeypatch.setattr(codex_broker, "request", request)
     credential = sessions.ensure_codex_session(12345)
     assert credential
     try:
@@ -72,10 +89,13 @@ def test_binding_switch_and_explicit_none_survive_restore(context):
 
 
 def test_other_session_and_installation_cannot_select_context(context, monkeypatch):
+    from core.startup import codex_broker
     bridge.publish(SID, 12345)
     with pytest.raises(FileNotFoundError):
         bridge.restore(OTHER)
     monkeypatch.setattr(sessions, 'resolve_codex_owner_pid', lambda: 54321)
+    monkeypatch.setattr(codex_broker, 'request', lambda *args: (_ for _ in ()).throw(
+        FileNotFoundError('no broker for this installation')))
     with pytest.raises(FileNotFoundError):
         bridge.restore(SID)
 
@@ -239,4 +259,34 @@ def test_private_ipc_symlink_is_still_rejected(tmp_path, monkeypatch):
         with bridge._directory(broker._address(SID), create=True):
             pass
     assert not list(elsewhere.iterdir())
+
+
+@pytest.mark.parametrize('bad_key', ['BASH_ENV', 'PYTHONPATH', 'RAPTOR_LLM_TOKEN_FD',
+                                    'RAPTOR_CC_MODEL=extra'])
+def test_broker_cannot_restore_unapproved_operator_values(context, monkeypatch, bad_key):
+    from core.startup import codex_broker
+    bridge.publish(SID, 12345)
+    reply = {**bridge.overlay(bridge.read_context(SID), bridge._entry(12345, SID)),
+             bad_key: 'must-not-install', 'RAPTOR_OUT_DIR': '/must-not-install'}
+    monkeypatch.setattr(codex_broker, 'request', lambda *args: {
+        'ok': True, 'environment_version': bridge.BROKER_ENVIRONMENT_VERSION,
+        'environment': reply})
+    monkeypatch.delenv(bad_key, raising=False)
+    monkeypatch.delenv('RAPTOR_OUT_DIR', raising=False)
+    with pytest.raises(bridge.CodexEnvironmentError, match='broker response'):
+        bridge.restore(SID)
+    assert bad_key not in os.environ
+    assert 'RAPTOR_OUT_DIR' not in os.environ
+
+
+def test_old_broker_requires_restart_before_changing_environment(context, monkeypatch):
+    from core.startup import codex_broker
+    bridge.publish(SID, 12345)
+    monkeypatch.setenv('RAPTOR_OUT_DIR', '/unchanged')
+    monkeypatch.setattr(codex_broker, 'request', lambda *args: {
+        'ok': True, 'environment': bridge.overlay(
+            bridge.read_context(SID), bridge._entry(12345, SID))})
+    with pytest.raises(bridge.CodexEnvironmentError, match='session restart'):
+        bridge.restore(SID)
+    assert os.environ['RAPTOR_OUT_DIR'] == '/unchanged'
 
