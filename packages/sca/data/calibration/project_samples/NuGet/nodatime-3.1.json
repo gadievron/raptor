@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-09-01T11:30:22Z",
+    "fetched_at": "2026-10-29T21:59:41Z",
     "git_ref": "3.1.9",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of nodatime-3.1",
@@ -57,7 +57,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:nuget/SharpCompress@0.29.0",
-      "raptor_risk_estimate": 20.802326942185207,
+      "raptor_risk_estimate": 20.57798867728469,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -65,19 +65,19 @@
           "reason": "namespace prefix matches package id"
         },
         "evidence": [
-          "src/NodaTime.TzdbCompiler/Tzdb/FileSource.cs:4"
+          "src/NodaTime.TzdbCompiler/Tzdb/FileSource.cs:5"
         ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40089723899999996,
+        "epss_multiplier": 0.440637609,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 20.802326942185207,
+        "exposure_multiplier": 0.45,
+        "final": 20.57798867728469,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,

@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-09-01T11:30:18Z",
+    "fetched_at": "2026-10-29T21:59:17Z",
     "git_ref": "12.5.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of drush-12",
@@ -45,7 +45,7 @@
       "dep_version": "10.1.4",
       "direct": true,
       "ecosystem": "Packagist",
-      "epss": 0.00408,
+      "epss": 0.00414,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -61,7 +61,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core-recommended@10.1.4",
-      "raptor_risk_estimate": 12.49753104477,
+      "raptor_risk_estimate": 12.360821977482749,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -69,7 +69,7 @@
           "reason": "vendor `Drupal\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -79,14 +79,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 69.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.401382024,
+        "epss_multiplier": 0.441101502,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 12.49753104477,
+        "exposure_multiplier": 0.45,
+        "final": 12.360821977482749,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -138,7 +138,7 @@
       "dep_version": "10.1.4",
       "direct": true,
       "ecosystem": "Packagist",
-      "epss": 0.00327,
+      "epss": 0.00336,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -154,7 +154,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core-recommended@10.1.4",
-      "raptor_risk_estimate": 9.7706043342675,
+      "raptor_risk_estimate": 9.665829986075998,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -162,7 +162,7 @@
           "reason": "vendor `Drupal\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -172,14 +172,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 54.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400968681,
+        "epss_multiplier": 0.440743248,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 9.7706043342675,
+        "exposure_multiplier": 0.45,
+        "final": 9.665829986075998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -232,7 +232,7 @@
       "dep_version": "10.1.4",
       "direct": true,
       "ecosystem": "Packagist",
-      "epss": 0.00904,
+      "epss": 0.0093,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -248,7 +248,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core-recommended@10.1.4",
-      "raptor_risk_estimate": 17.862047595419998,
+      "raptor_risk_estimate": 17.6502761698725,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -256,7 +256,7 @@
           "reason": "vendor `Drupal\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -266,14 +266,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40391311199999996,
+        "epss_multiplier": 0.44347148999999997,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 17.862047595419998,
+        "exposure_multiplier": 0.45,
+        "final": 17.6502761698725,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -325,7 +325,7 @@
       "dep_version": "10.1.4",
       "direct": true,
       "ecosystem": "Packagist",
-      "epss": 0.00956,
+      "epss": 0.00983,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -341,7 +341,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core-recommended@10.1.4",
-      "raptor_risk_estimate": 17.873782301130003,
+      "raptor_risk_estimate": 17.659964704929752,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -349,7 +349,7 @@
           "reason": "vendor `Drupal\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -359,14 +359,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.404178468,
+        "epss_multiplier": 0.443714919,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 17.873782301130003,
+        "exposure_multiplier": 0.45,
+        "final": 17.659964704929752,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -436,7 +436,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core-recommended@10.1.4",
-      "raptor_risk_estimate": 25.49134280660845,
+      "raptor_risk_estimate": 29.946541530637095,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -444,7 +444,7 @@
           "reason": "vendor `Drupal\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -454,14 +454,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 63.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44659970699999996,
-        "exploit_evidence_multiplier": 1.5839,
-        "exposure_multiplier": 0.5,
-        "final": 25.49134280660845,
+        "epss_multiplier": 0.48177251699999996,
+        "exploit_evidence_multiplier": 1.7423,
+        "exposure_multiplier": 0.45,
+        "final": 29.946541530637095,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -514,7 +514,7 @@
       "dep_version": "10.1.4",
       "direct": true,
       "ecosystem": "Packagist",
-      "epss": 0.00803,
+      "epss": 0.00826,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -530,7 +530,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core-recommended@10.1.4",
-      "raptor_risk_estimate": 17.8392551862525,
+      "raptor_risk_estimate": 17.6312647048545,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -538,7 +538,7 @@
           "reason": "vendor `Drupal\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -548,14 +548,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.403397709,
+        "epss_multiplier": 0.442993818,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 17.8392551862525,
+        "exposure_multiplier": 0.45,
+        "final": 17.6312647048545,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -598,7 +598,7 @@
       "dep_version": "10.1.4",
       "direct": false,
       "ecosystem": "Packagist",
-      "epss": 0.00324,
+      "epss": 0.00347,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -614,7 +614,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 5.066045855219999,
+      "raptor_risk_estimate": 5.513735003619148,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -622,7 +622,7 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -632,14 +632,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400953372,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.440793771,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 5.066045855219999,
+        "exposure_multiplier": 0.45,
+        "final": 5.513735003619148,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -682,7 +682,7 @@
       "dep_version": "10.1.4",
       "direct": false,
       "ecosystem": "Packagist",
-      "epss": 0.00227,
+      "epss": 0.00243,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -698,7 +698,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 5.059791643934999,
+      "raptor_risk_estimate": 5.50775997175635,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -706,7 +706,7 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -716,14 +716,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400458381,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.44031609899999996,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 5.059791643934999,
+        "exposure_multiplier": 0.45,
+        "final": 5.50775997175635,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -766,7 +766,7 @@
       "dep_version": "10.1.4",
       "direct": false,
       "ecosystem": "Packagist",
-      "epss": 0.0026,
+      "epss": 0.00278,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -782,7 +782,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 5.061919365299999,
+      "raptor_risk_estimate": 5.5097707997871,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -790,7 +790,7 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -800,14 +800,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40062678,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.440476854,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 5.061919365299999,
+        "exposure_multiplier": 0.45,
+        "final": 5.5097707997871,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -838,7 +838,7 @@
           "11.2.0"
         ],
         "id": "DRUPAL-CORE-2026-005",
-        "modified": "2026-07-20T08:41:25.769823+00:00",
+        "modified": "2026-09-10T03:45:13.619969+00:00",
         "published": "2026-06-17T18:56:50+00:00",
         "references": [
           "https://www.drupal.org/sa-core-2026-005"
@@ -867,7 +867,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 5.067915670964999,
+      "raptor_risk_estimate": 5.51407971699585,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -875,7 +875,7 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -885,14 +885,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401101359,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.440821329,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 5.067915670964999,
+        "exposure_multiplier": 0.45,
+        "final": 5.51407971699585,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -923,7 +923,7 @@
           "11.2.0"
         ],
         "id": "DRUPAL-CORE-2026-006",
-        "modified": "2026-07-20T08:41:35.732327+00:00",
+        "modified": "2026-09-10T03:45:21.445306+00:00",
         "published": "2026-06-17T18:57:02+00:00",
         "references": [
           "https://www.drupal.org/sa-core-2026-006"
@@ -952,7 +952,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 5.067915670964999,
+      "raptor_risk_estimate": 5.51407971699585,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -960,7 +960,7 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -970,14 +970,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401101359,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.440821329,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 5.067915670964999,
+        "exposure_multiplier": 0.45,
+        "final": 5.51407971699585,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1008,7 +1008,7 @@
           "11.2.0"
         ],
         "id": "DRUPAL-CORE-2026-007",
-        "modified": "2026-07-20T08:41:20.581103+00:00",
+        "modified": "2026-09-10T03:45:20.385208+00:00",
         "published": "2026-06-17T18:57:37+00:00",
         "references": [
           "https://www.drupal.org/sa-core-2026-007"
@@ -1037,7 +1037,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 5.067013001294998,
+      "raptor_risk_estimate": 5.513275385783549,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1045,7 +1045,7 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -1055,14 +1055,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401029917,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.44075702699999997,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 5.067013001294998,
+        "exposure_multiplier": 0.45,
+        "final": 5.513275385783549,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1093,7 +1093,7 @@
           "11.2.0"
         ],
         "id": "DRUPAL-CORE-2026-008",
-        "modified": "2026-07-20T08:41:26.938185+00:00",
+        "modified": "2026-09-10T03:45:13.576652+00:00",
         "published": "2026-06-17T18:57:49+00:00",
         "references": [
           "https://www.drupal.org/sa-core-2026-008"
@@ -1122,7 +1122,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 5.0594047855049995,
+      "raptor_risk_estimate": 5.5064960227084505,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1130,7 +1130,7 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -1140,14 +1140,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400427763,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.44021505299999997,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 5.0594047855049995,
+        "exposure_multiplier": 0.45,
+        "final": 5.5064960227084505,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1178,7 +1178,7 @@
           "11.2.0"
         ],
         "id": "DRUPAL-CORE-2026-009",
-        "modified": "2026-07-20T08:41:19.806155+00:00",
+        "modified": "2026-09-10T03:45:21.172288+00:00",
         "published": "2026-06-17T18:58:02+00:00",
         "references": [
           "https://www.drupal.org/sa-core-2026-009"
@@ -1207,7 +1207,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 5.062757558564998,
+      "raptor_risk_estimate": 5.5094835386398495,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1215,7 +1215,7 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -1225,14 +1225,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400693119,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.440453889,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 5.062757558564998,
+        "exposure_multiplier": 0.45,
+        "final": 5.5094835386398495,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1262,7 +1262,7 @@
           "11.3.0"
         ],
         "id": "DRUPAL-CORE-2026-010",
-        "modified": "2026-07-15T20:45:04.893268+00:00",
+        "modified": "2026-07-15T20:56:45.570199+00:00",
         "published": "2026-07-15T19:50:24+00:00",
         "references": [
           "https://www.drupal.org/sa-core-2026-010"
@@ -1275,7 +1275,7 @@
       "dep_version": "10.1.4",
       "direct": false,
       "ecosystem": "Packagist",
-      "epss": 0.00122,
+      "epss": 0.00196,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1291,7 +1291,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 5.053021621409999,
+      "raptor_risk_estimate": 5.5050597169722,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1299,7 +1299,7 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -1309,14 +1309,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399922566,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.440100228,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 5.053021621409999,
+        "exposure_multiplier": 0.45,
+        "final": 5.5050597169722,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1346,7 +1346,7 @@
           "11.3.0"
         ],
         "id": "DRUPAL-CORE-2026-012",
-        "modified": "2026-07-15T20:45:04.895006+00:00",
+        "modified": "2026-07-15T20:56:45.672035+00:00",
         "published": "2026-07-15T19:52:26+00:00",
         "references": [
           "https://www.drupal.org/sa-core-2026-012"
@@ -1359,7 +1359,7 @@
       "dep_version": "10.1.4",
       "direct": false,
       "ecosystem": "Packagist",
-      "epss": 0.00133,
+      "epss": 0.00226,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1375,7 +1375,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 5.053730861865,
+      "raptor_risk_estimate": 5.5067832838556985,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1383,7 +1383,7 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -1393,14 +1393,178 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399978699,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.44023801799999995,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 5.053730861865,
+        "exposure_multiplier": 0.45,
+        "final": 5.5067832838556985,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-108097"
+        ],
+        "fixed_versions": [
+          "10.6.19",
+          "11.3.19",
+          "11.4.10",
+          "12.0.0-beta2"
+        ],
+        "id": "DRUPAL-CORE-2026-014",
+        "modified": "2026-10-14T19:09:54+00:00",
+        "published": "2026-10-14T16:10:00+00:00",
+        "references": [
+          "https://www.drupal.org/sa-core-2026-014"
+        ],
+        "severity": null,
+        "summary": ""
+      },
+      "cvss_score": null,
+      "dep_name": "drupal/core",
+      "dep_version": "10.1.4",
+      "direct": false,
+      "ecosystem": "Packagist",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:DRUPAL-CORE-2026-014",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:composer/drupal/core@10.1.4",
+      "raptor_risk_estimate": 8.3664105525,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "`use Drupal\\Core\\...` found in non-test source"
+        },
+        "evidence": [
+          "src/Boot/DrupalBoot8.php:7",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
+          "... (+180 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.66885,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 8.3664105525,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-108515"
+        ],
+        "fixed_versions": [
+          "10.6.19",
+          "11.3.19",
+          "11.4.10",
+          "12.0.0-beta2"
+        ],
+        "id": "DRUPAL-CORE-2026-015",
+        "modified": "2026-10-14T18:11:06.211689+00:00",
+        "published": "2026-10-14T17:25:19+00:00",
+        "references": [
+          "https://www.drupal.org/sa-core-2026-015"
+        ],
+        "severity": null,
+        "summary": ""
+      },
+      "cvss_score": null,
+      "dep_name": "drupal/core",
+      "dep_version": "10.1.4",
+      "direct": false,
+      "ecosystem": "Packagist",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:DRUPAL-CORE-2026-015",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:composer/drupal/core@10.1.4",
+      "raptor_risk_estimate": 8.3664105525,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "`use Drupal\\Core\\...` found in non-test source"
+        },
+        "evidence": [
+          "src/Boot/DrupalBoot8.php:7",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
+          "... (+180 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.66885,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 8.3664105525,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1453,7 +1617,7 @@
       "dep_version": "10.1.4",
       "direct": false,
       "ecosystem": "Packagist",
-      "epss": 0.00574,
+      "epss": 0.00595,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1469,7 +1633,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 5.717435576028748,
+      "raptor_risk_estimate": 6.218981051088093,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1477,7 +1641,7 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -1487,14 +1651,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 45.0,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.402229122,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.44193283499999997,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 5.717435576028748,
+        "exposure_multiplier": 0.45,
+        "final": 6.218981051088093,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1546,7 +1710,7 @@
       "dep_version": "10.1.4",
       "direct": false,
       "ecosystem": "Packagist",
-      "epss": 0.00299,
+      "epss": 0.00311,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1562,7 +1726,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 7.723261766269874,
+      "raptor_risk_estimate": 8.4052917531224,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1570,7 +1734,7 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -1580,14 +1744,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 61.0,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400825797,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.440628423,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 7.723261766269874,
+        "exposure_multiplier": 0.45,
+        "final": 8.4052917531224,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1636,7 +1800,7 @@
       "dep_version": "10.1.4",
       "direct": false,
       "ecosystem": "Packagist",
-      "epss": 0.00375,
+      "epss": 0.00385,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1652,7 +1816,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 7.4772678740156255,
+      "raptor_risk_estimate": 8.135979327798921,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1660,7 +1824,7 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -1670,14 +1834,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40121362499999996,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.440968305,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 7.4772678740156255,
+        "exposure_multiplier": 0.45,
+        "final": 8.135979327798921,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1734,7 +1898,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 8.268975749999997,
+      "raptor_risk_estimate": 8.3664105525,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1742,7 +1906,7 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -1752,14 +1916,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.65445,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.66885,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 8.268975749999997,
+        "exposure_multiplier": 0.45,
+        "final": 8.3664105525,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1811,7 +1975,7 @@
       "dep_version": "10.1.4",
       "direct": false,
       "ecosystem": "Packagist",
-      "epss": 0.00408,
+      "epss": 0.00414,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1827,7 +1991,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 8.748271731338999,
+      "raptor_risk_estimate": 9.517832922661716,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1835,7 +1999,7 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -1845,14 +2009,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 69.0,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401382024,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.441101502,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 8.748271731338999,
+        "exposure_multiplier": 0.45,
+        "final": 9.517832922661716,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1904,7 +2068,7 @@
       "dep_version": "10.1.4",
       "direct": false,
       "ecosystem": "Packagist",
-      "epss": 0.00327,
+      "epss": 0.00336,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1920,7 +2084,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 6.839423033987248,
+      "raptor_risk_estimate": 7.442689089278519,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1928,7 +2092,7 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -1938,14 +2102,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 54.0,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400968681,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.440743248,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 6.839423033987248,
+        "exposure_multiplier": 0.45,
+        "final": 7.442689089278519,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1998,7 +2162,7 @@
       "dep_version": "10.1.4",
       "direct": false,
       "ecosystem": "Packagist",
-      "epss": 0.00904,
+      "epss": 0.0093,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2014,7 +2178,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 12.503433316793998,
+      "raptor_risk_estimate": 13.590712650801827,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2022,7 +2186,7 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -2032,14 +2196,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40391311199999996,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.44347148999999997,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 12.503433316793998,
+        "exposure_multiplier": 0.45,
+        "final": 13.590712650801827,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2072,7 +2236,7 @@
           "11.3.7"
         ],
         "id": "GHSA-f3cj-mjqm-fhvj",
-        "modified": "2026-06-05T18:42:12.797816+00:00",
+        "modified": "2026-09-10T03:51:05.381765+00:00",
         "published": "2026-05-20T00:31:42+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2026-6365",
@@ -2091,7 +2255,7 @@
       "dep_version": "10.1.4",
       "direct": false,
       "ecosystem": "Packagist",
-      "epss": 0.00238,
+      "epss": 0.00219,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2107,7 +2271,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 7.717263848694748,
+      "raptor_risk_estimate": 8.397231205330563,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2115,7 +2279,7 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -2125,14 +2289,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 61.0,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400514514,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.440205867,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 7.717263848694748,
+        "exposure_multiplier": 0.45,
+        "final": 8.397231205330563,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2167,7 +2331,7 @@
           "11.3.10"
         ],
         "id": "GHSA-ghwc-95x2-682j",
-        "modified": "2026-06-18T20:26:07.761498+00:00",
+        "modified": "2026-09-10T03:51:05.869506+00:00",
         "published": "2026-05-20T21:31:32+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2026-9082",
@@ -2186,7 +2350,7 @@
       "dep_version": "10.1.4",
       "direct": false,
       "ecosystem": "Packagist",
-      "epss": 0.87892,
+      "epss": 0.89381,
       "exploit_evidence": {
         "edb_ids": [
           52608
@@ -2206,7 +2370,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 46.109284329124776,
+      "raptor_risk_estimate": 50.326633988443525,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2214,7 +2378,7 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -2224,15 +2388,15 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.847812876,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.8497269329999999,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 46.109284329124776,
-        "kev_multiplier": 1.7569,
+        "exposure_multiplier": 0.45,
+        "final": 50.326633988443525,
+        "kev_multiplier": 1.9326,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
         "ssvc_automatable_multiplier": 1.0,
@@ -2283,7 +2447,7 @@
       "dep_version": "10.1.4",
       "direct": false,
       "ecosystem": "Packagist",
-      "epss": 0.00956,
+      "epss": 0.00983,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2299,7 +2463,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 12.511647610791,
+      "raptor_risk_estimate": 13.59817282279591,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2307,7 +2471,7 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -2317,14 +2481,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.404178468,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.443714919,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 12.511647610791,
+        "exposure_multiplier": 0.45,
+        "final": 13.59817282279591,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2378,7 +2542,7 @@
       "dep_version": "10.1.4",
       "direct": false,
       "ecosystem": "Packagist",
-      "epss": 0.00487,
+      "epss": 0.00502,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2394,7 +2558,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 6.853349937467248,
+      "raptor_risk_estimate": 7.455564133898263,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2402,7 +2566,7 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -2412,14 +2576,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 54.0,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401785161,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.44150568599999995,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 6.853349937467248,
+        "exposure_multiplier": 0.45,
+        "final": 7.455564133898263,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2472,7 +2636,7 @@
       "dep_version": "10.1.4",
       "direct": false,
       "ecosystem": "Packagist",
-      "epss": 0.00261,
+      "epss": 0.0028,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2488,7 +2652,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 7.466426166514874,
+      "raptor_risk_estimate": 8.12708141376285,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2496,7 +2660,7 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -2506,14 +2670,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40063188299999997,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.44048603999999997,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 7.466426166514874,
+        "exposure_multiplier": 0.45,
+        "final": 8.12708141376285,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2583,7 +2747,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 17.84393996462591,
+      "raptor_risk_estimate": 23.05883697859057,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2591,7 +2755,7 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -2601,14 +2765,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 63.0,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.44659970699999996,
-        "exploit_evidence_multiplier": 1.5839,
-        "exposure_multiplier": 0.5,
-        "final": 17.84393996462591,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.48177251699999996,
+        "exploit_evidence_multiplier": 1.7423,
+        "exposure_multiplier": 0.45,
+        "final": 23.05883697859057,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2661,7 +2825,7 @@
       "dep_version": "10.1.4",
       "direct": false,
       "ecosystem": "Packagist",
-      "epss": 0.00803,
+      "epss": 0.00826,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2677,7 +2841,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 12.487478630376751,
+      "raptor_risk_estimate": 13.576073822737966,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2685,7 +2849,7 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -2695,14 +2859,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.403397709,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.442993818,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 12.487478630376751,
+        "exposure_multiplier": 0.45,
+        "final": 13.576073822737966,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2754,7 +2918,7 @@
       "dep_version": "10.1.4",
       "direct": false,
       "ecosystem": "Packagist",
-      "epss": 0.00305,
+      "epss": 0.00317,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2770,7 +2934,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 6.710887564670624,
+      "raptor_risk_estimate": 7.303415153674735,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2778,7 +2942,7 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -2788,14 +2952,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 53.0,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40085641499999997,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.440655981,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 6.710887564670624,
+        "exposure_multiplier": 0.45,
+        "final": 7.303415153674735,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2828,7 +2992,7 @@
           "11.3.7"
         ],
         "id": "GHSA-xmjc-63pr-2mpg",
-        "modified": "2026-06-05T18:42:20.611283+00:00",
+        "modified": "2026-09-10T03:51:07.261847+00:00",
         "published": "2026-05-20T00:31:42+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2026-6366",
@@ -2863,7 +3027,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 8.366954616231748,
+      "raptor_risk_estimate": 9.102592157258403,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2871,7 +3035,7 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -2881,14 +3045,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 65.99999999999999,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401336097,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.44103260699999997,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 8.366954616231748,
+        "exposure_multiplier": 0.45,
+        "final": 9.102592157258403,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2938,7 +3102,7 @@
       "dep_version": "10.1.4",
       "direct": false,
       "ecosystem": "Packagist",
-      "epss": 0.00457,
+      "epss": 0.00476,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2954,7 +3118,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 9.514914782034374,
+      "raptor_risk_estimate": 10.352149389784122,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2962,7 +3126,7 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Boot/DrupalBoot8.php:6",
+          "src/Boot/DrupalBoot8.php:7",
           "src/Commands/core/TwigCommands.php:8",
           "src/Boot/DrupalBoot8.php:9",
           "src/Commands/core/SiteInstallCommands.php:13",
@@ -2972,14 +3136,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 75.0,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401632071,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.44138626799999997,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 9.514914782034374,
+        "exposure_multiplier": 0.45,
+        "final": 10.352149389784122,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3009,7 +3173,7 @@
           "7.14.2"
         ],
         "id": "GHSA-94pj-82f3-465w",
-        "modified": "2026-08-07T08:11:56.728720+00:00",
+        "modified": "2026-09-10T03:51:11.108946+00:00",
         "published": "2026-07-20T21:46:02+00:00",
         "references": [
           "https://github.com/guzzle/guzzle/security/advisories/GHSA-94pj-82f3-465w",
@@ -3030,7 +3194,7 @@
       "dep_version": "7.7.1",
       "direct": true,
       "ecosystem": "Packagist",
-      "epss": 0.00233,
+      "epss": 0.00372,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3046,7 +3210,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/guzzlehttp/guzzle@7.7.1",
-      "raptor_risk_estimate": 9.57819502233375,
+      "raptor_risk_estimate": 9.4903921881765,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3061,14 +3225,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400488999,
+        "epss_multiplier": 0.440908596,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 9.57819502233375,
+        "exposure_multiplier": 0.45,
+        "final": 9.4903921881765,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3097,7 +3261,7 @@
           "7.12.1"
         ],
         "id": "GHSA-cwxw-98qj-8qjx",
-        "modified": "2026-08-05T22:01:01.401314+00:00",
+        "modified": "2026-09-10T03:50:49.287156+00:00",
         "published": "2026-06-19T14:37:29+00:00",
         "references": [
           "https://github.com/guzzle/guzzle/security/advisories/GHSA-cwxw-98qj-8qjx",
@@ -3134,7 +3298,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/guzzlehttp/guzzle@7.7.1",
-      "raptor_risk_estimate": 10.478860044442499,
+      "raptor_risk_estimate": 10.368293734545748,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3149,14 +3313,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 57.99999999999999,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400376733,
+        "epss_multiplier": 0.440169123,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 10.478860044442499,
+        "exposure_multiplier": 0.45,
+        "final": 10.368293734545748,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3185,7 +3349,7 @@
           "7.15.1"
         ],
         "id": "GHSA-f283-ghqc-fg79",
-        "modified": "2026-08-07T08:11:57.605659+00:00",
+        "modified": "2026-09-10T03:50:51.710471+00:00",
         "published": "2026-07-20T23:27:02+00:00",
         "references": [
           "https://github.com/guzzle/guzzle/security/advisories/GHSA-f283-ghqc-fg79",
@@ -3206,7 +3370,7 @@
       "dep_version": "7.7.1",
       "direct": true,
       "ecosystem": "Packagist",
-      "epss": 0.00247,
+      "epss": 0.00418,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3222,7 +3386,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/guzzlehttp/guzzle@7.7.1",
-      "raptor_risk_estimate": 9.57990364706625,
+      "raptor_risk_estimate": 9.494939867897248,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3237,14 +3401,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400560441,
+        "epss_multiplier": 0.44111987399999997,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 9.57990364706625,
+        "exposure_multiplier": 0.45,
+        "final": 9.494939867897248,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3275,7 +3439,7 @@
           "8.0.1"
         ],
         "id": "GHSA-f7vp-7xgx-4w4r",
-        "modified": "2026-08-05T08:56:56.815076+00:00",
+        "modified": "2026-09-10T03:51:13.889147+00:00",
         "published": "2026-08-03T21:05:26+00:00",
         "references": [
           "https://github.com/guzzle/guzzle/security/advisories/GHSA-f7vp-7xgx-4w4r",
@@ -3296,7 +3460,7 @@
       "dep_version": "7.7.1",
       "direct": true,
       "ecosystem": "Packagist",
-      "epss": 0.00137,
+      "epss": 0.00199,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3312,7 +3476,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/guzzlehttp/guzzle@7.7.1",
-      "raptor_risk_estimate": 11.732473924518747,
+      "raptor_risk_estimate": 11.618184571036872,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3327,14 +3491,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.39999911099999996,
+        "epss_multiplier": 0.440114007,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 11.732473924518747,
+        "exposure_multiplier": 0.45,
+        "final": 11.618184571036872,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3364,7 +3528,7 @@
           "7.12.3"
         ],
         "id": "GHSA-g446-98w2-8p5w",
-        "modified": "2026-07-22T20:59:38.335955+00:00",
+        "modified": "2026-09-10T03:50:51.915343+00:00",
         "published": "2026-07-20T22:00:09+00:00",
         "references": [
           "https://github.com/guzzle/guzzle/security/advisories/GHSA-g446-98w2-8p5w",
@@ -3401,7 +3565,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/guzzlehttp/guzzle@7.7.1",
-      "raptor_risk_estimate": 8.48672799295875,
+      "raptor_risk_estimate": 8.398035691849122,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3416,14 +3580,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 47.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400152201,
+        "epss_multiplier": 0.43996703099999995,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 8.48672799295875,
+        "exposure_multiplier": 0.45,
+        "final": 8.398035691849122,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3452,7 +3616,7 @@
           "7.15.1"
         ],
         "id": "GHSA-h95v-h523-3mw8",
-        "modified": "2026-08-07T08:11:56.059105+00:00",
+        "modified": "2026-09-10T03:50:52.523072+00:00",
         "published": "2026-07-20T23:28:36+00:00",
         "references": [
           "https://github.com/guzzle/guzzle/security/advisories/GHSA-h95v-h523-3mw8",
@@ -3473,7 +3637,7 @@
       "dep_version": "7.7.1",
       "direct": true,
       "ecosystem": "Packagist",
-      "epss": 0.00252,
+      "epss": 0.00372,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3489,7 +3653,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/guzzlehttp/guzzle@7.7.1",
-      "raptor_risk_estimate": 10.665100346055,
+      "raptor_risk_estimate": 10.5647762094795,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3504,14 +3668,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40058595599999997,
+        "epss_multiplier": 0.440908596,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 10.665100346055,
+        "exposure_multiplier": 0.45,
+        "final": 10.5647762094795,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3543,7 +3707,7 @@
           "8.0.1"
         ],
         "id": "GHSA-v5mv-p594-2x33",
-        "modified": "2026-08-05T08:56:57.301561+00:00",
+        "modified": "2026-09-10T03:51:14.592158+00:00",
         "published": "2026-08-03T21:07:26+00:00",
         "references": [
           "https://github.com/guzzle/guzzle/security/advisories/GHSA-v5mv-p594-2x33",
@@ -3564,7 +3728,7 @@
       "dep_version": "7.7.1",
       "direct": true,
       "ecosystem": "Packagist",
-      "epss": 0.00213,
+      "epss": 0.0037,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3580,7 +3744,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/guzzlehttp/guzzle@7.7.1",
-      "raptor_risk_estimate": 13.00857164811,
+      "raptor_risk_estimate": 12.89233964781,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3595,14 +3759,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 72.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400386939,
+        "epss_multiplier": 0.44089941,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 13.00857164811,
+        "exposure_multiplier": 0.45,
+        "final": 12.89233964781,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3631,7 +3795,7 @@
           "7.15.1"
         ],
         "id": "GHSA-wm3w-8rrp-j577",
-        "modified": "2026-08-07T08:11:59.668690+00:00",
+        "modified": "2026-09-10T03:51:12.418606+00:00",
         "published": "2026-07-20T23:27:49+00:00",
         "references": [
           "https://github.com/guzzle/guzzle/security/advisories/GHSA-wm3w-8rrp-j577",
@@ -3652,7 +3816,7 @@
       "dep_version": "7.7.1",
       "direct": true,
       "ecosystem": "Packagist",
-      "epss": 0.00229,
+      "epss": 0.00366,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3668,7 +3832,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/guzzlehttp/guzzle@7.7.1",
-      "raptor_risk_estimate": 10.66197554314125,
+      "raptor_risk_estimate": 10.56411588190725,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3683,14 +3847,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400468587,
+        "epss_multiplier": 0.440881038,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 10.66197554314125,
+        "exposure_multiplier": 0.45,
+        "final": 10.56411588190725,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3720,7 +3884,7 @@
           "7.12.1"
         ],
         "id": "GHSA-wpwq-4j6v-78m3",
-        "modified": "2026-06-22T18:29:21.271364+00:00",
+        "modified": "2026-09-10T03:50:50.904385+00:00",
         "published": "2026-06-19T14:17:59+00:00",
         "references": [
           "https://github.com/guzzle/guzzle/security/advisories/GHSA-wpwq-4j6v-78m3",
@@ -3754,7 +3918,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/guzzlehttp/guzzle@7.7.1",
-      "raptor_risk_estimate": 10.650970802445,
+      "raptor_risk_estimate": 10.540123980115501,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3769,14 +3933,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400055244,
+        "epss_multiplier": 0.439879764,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 10.650970802445,
+        "exposure_multiplier": 0.45,
+        "final": 10.540123980115501,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3805,7 +3969,7 @@
           "2.10.2"
         ],
         "id": "GHSA-34xg-wgjx-8xph",
-        "modified": "2026-07-15T22:00:51.200600+00:00",
+        "modified": "2026-09-10T03:51:07.670836+00:00",
         "published": "2026-06-11T13:04:53+00:00",
         "references": [
           "https://github.com/guzzle/psr7/security/advisories/GHSA-34xg-wgjx-8xph",
@@ -3841,7 +4005,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/guzzlehttp/psr7@2.5.1",
-      "raptor_risk_estimate": 6.701746422351749,
+      "raptor_risk_estimate": 7.294356373396207,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3856,14 +4020,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 53.0,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400310394,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.440109414,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 6.701746422351749,
+        "exposure_multiplier": 0.45,
+        "final": 7.294356373396207,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3929,7 +4093,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/guzzlehttp/psr7@2.5.1",
-      "raptor_risk_estimate": 5.31887424640425,
+      "raptor_risk_estimate": 5.787612008572433,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3944,14 +4108,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 42.00000000000001,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400917651,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.440655981,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 5.31887424640425,
+        "exposure_multiplier": 0.45,
+        "final": 5.787612008572433,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3981,7 +4145,7 @@
           "2.10.2"
         ],
         "id": "GHSA-hq7v-mx3g-29hw",
-        "modified": "2026-07-15T22:00:52.614570+00:00",
+        "modified": "2026-09-10T03:50:49.920925+00:00",
         "published": "2026-06-11T13:04:47+00:00",
         "references": [
           "https://github.com/guzzle/psr7/security/advisories/GHSA-hq7v-mx3g-29hw",
@@ -4017,7 +4181,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/guzzlehttp/psr7@2.5.1",
-      "raptor_risk_estimate": 6.701062972458748,
+      "raptor_risk_estimate": 7.293747379764037,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4032,14 +4196,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 53.0,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40026956999999996,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.44007267,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 6.701062972458748,
+        "exposure_multiplier": 0.45,
+        "final": 7.293747379764037,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4068,7 +4232,7 @@
           "2.12.1"
         ],
         "id": "GHSA-vm85-hxw5-5432",
-        "modified": "2026-06-22T18:29:21.124935+00:00",
+        "modified": "2026-09-10T03:51:09.646537+00:00",
         "published": "2026-06-19T14:35:57+00:00",
         "references": [
           "https://github.com/guzzle/psr7/security/advisories/GHSA-vm85-hxw5-5432",
@@ -4102,7 +4266,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/guzzlehttp/psr7@2.5.1",
-      "raptor_risk_estimate": 6.071904716093998,
+      "raptor_risk_estimate": 6.6083467686528605,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4117,14 +4281,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 48.0,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400468587,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.440251797,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 6.071904716093998,
+        "exposure_multiplier": 0.45,
+        "final": 6.6083467686528605,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4177,7 +4341,7 @@
       "dep_version": "9.6.13",
       "direct": true,
       "ecosystem": "Packagist",
-      "epss": 0.00348,
+      "epss": 0.00384,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4193,7 +4357,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/phpunit/phpunit@9.6.13",
-      "raptor_risk_estimate": 9.578153103850223,
+      "raptor_risk_estimate": 9.926464759444919,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -4211,17 +4375,17 @@
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 78.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.401075844,
+        "epss_multiplier": 0.44096371199999995,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 9.578153103850223,
+        "exposure_multiplier": 0.45,
+        "final": 9.926464759444919,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
+        "reachability_multiplier": 0.71062,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -4268,7 +4432,7 @@
       "dep_version": "v0.11.21",
       "direct": true,
       "ecosystem": "Packagist",
-      "epss": 0.00291,
+      "epss": 0.00322,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4284,7 +4448,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/psy/psysh@v0.11.21",
-      "raptor_risk_estimate": 20.796501524074777,
+      "raptor_risk_estimate": 20.5799191351044,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4295,20 +4459,20 @@
           "src/Commands/core/CliCommands.php:16",
           "src/Commands/core/CliCommands.php:17",
           "src/Psysh/DrushCommand.php:10",
-          "src/Psysh/DrushHelpCommand.php:6",
-          "src/Psysh/Shell.php:6"
+          "src/Psysh/DrushHelpCommand.php:7",
+          "src/Psysh/Shell.php:7"
         ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 67.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400784973,
+        "epss_multiplier": 0.44067894599999996,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 20.796501524074777,
+        "exposure_multiplier": 0.45,
+        "final": 20.5799191351044,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4338,7 +4502,7 @@
           "4.0.2"
         ],
         "id": "GHSA-hmqg-cxww-wqhq",
-        "modified": "2026-08-06T21:45:58.159695+00:00",
+        "modified": "2026-08-06T21:56:03.572757+00:00",
         "published": "2026-08-06T21:31:34+00:00",
         "references": [
           "https://github.com/PHPCSStandards/PHP_CodeSniffer/security/advisories/GHSA-hmqg-cxww-wqhq",
@@ -4359,7 +4523,7 @@
       "dep_version": "3.7.2",
       "direct": true,
       "ecosystem": "Packagist",
-      "epss": 0.00701,
+      "epss": 0.01063,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4375,7 +4539,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/squizlabs/php_codesniffer@3.7.2",
-      "raptor_risk_estimate": 9.00442986027853,
+      "raptor_risk_estimate": 9.355856071801881,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -4386,17 +4550,17 @@
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 73.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40287720299999996,
+        "epss_multiplier": 0.444082359,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 9.00442986027853,
+        "exposure_multiplier": 0.45,
+        "final": 9.355856071801881,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
+        "reachability_multiplier": 0.71062,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -4423,7 +4587,7 @@
           "7.3.7"
         ],
         "id": "GHSA-3rg7-wf37-54rm",
-        "modified": "2026-02-04T03:01:05.453147+00:00",
+        "modified": "2026-09-10T03:50:30.521562+00:00",
         "published": "2025-11-12T21:50:37+00:00",
         "references": [
           "https://github.com/symfony/symfony/security/advisories/GHSA-3rg7-wf37-54rm",
@@ -4444,7 +4608,7 @@
       "dep_version": "v6.3.4",
       "direct": false,
       "ecosystem": "Packagist",
-      "epss": 0.01325,
+      "epss": 0.01408,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4460,7 +4624,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/symfony/http-foundation@v6.3.4",
-      "raptor_risk_estimate": 9.363320794340625,
+      "raptor_risk_estimate": 10.173812569794718,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4478,14 +4642,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 73.0,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.406061475,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.44566694399999995,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 9.363320794340625,
+        "exposure_multiplier": 0.45,
+        "final": 10.173812569794718,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4536,7 +4700,7 @@
       "dep_version": "v6.3.4",
       "direct": false,
       "ecosystem": "Packagist",
-      "epss": 0.00553,
+      "epss": 0.00587,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4552,7 +4716,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/symfony/http-foundation@v6.3.4",
-      "raptor_risk_estimate": 3.9376284877728733,
+      "raptor_risk_estimate": 4.28383074248254,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4570,14 +4734,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 31.0,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.402121959,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.441896091,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 3.9376284877728733,
+        "exposure_multiplier": 0.45,
+        "final": 4.28383074248254,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4585,6 +4749,99 @@
         "version_match_confidence": 0.95
       },
       "severity": "low",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-108082"
+        ],
+        "cwe_ids": [
+          "CWE-1333"
+        ],
+        "fixed_versions": [
+          "6.4.46",
+          "7.4.19",
+          "8.1.7",
+          "5.4.54"
+        ],
+        "id": "GHSA-r925-mgvr-h9cc",
+        "modified": "2026-10-27T19:15:22.507345+00:00",
+        "published": "2026-10-27T19:01:39+00:00",
+        "references": [
+          "https://github.com/symfony/symfony/security/advisories/GHSA-r925-mgvr-h9cc",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-108082",
+          "https://github.com/symfony/symfony/pull/66048",
+          "https://github.com/symfony/symfony/pull/66491",
+          "https://github.com/symfony/symfony/commit/343a1772ce6ac03e48b228d2d7168d19750e3f36"
+        ],
+        "severity": {
+          "score": 8.7,
+          "severity": "high",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N"
+        },
+        "summary": "Symfony: ReDoS in HeaderUtils::split() Reachable Through the Cache-Control Request Header"
+      },
+      "cvss_score": 8.7,
+      "dep_name": "symfony/http-foundation",
+      "dep_version": "v6.3.4",
+      "direct": false,
+      "ecosystem": "Packagist",
+      "epss": 0.0048,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:Packagist:symfony/http-foundation:v6.3.4:GHSA-r925-mgvr-h9cc",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:composer/symfony/http-foundation@v6.3.4",
+      "raptor_risk_estimate": 12.008993126545798,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "doctum-config.php:10",
+          "src/Commands/core/PhpCommands.php:12",
+          "src/Commands/core/TwigCommands.php:19",
+          "drush.php:8",
+          "src/Boot/DrupalBoot.php:8",
+          "... (+261 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 86.99999999999999,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.44140463999999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 12.008993126545798,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 1,
@@ -4608,7 +4865,7 @@
           "8.0.12"
         ],
         "id": "GHSA-qpmx-3rfj-7rhv",
-        "modified": "2026-06-09T16:59:22.618616+00:00",
+        "modified": "2026-09-10T03:50:47.380398+00:00",
         "published": "2026-05-27T20:42:07+00:00",
         "references": [
           "https://github.com/symfony/symfony/security/advisories/GHSA-qpmx-3rfj-7rhv",
@@ -4645,7 +4902,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/symfony/mime@v6.3.3",
-      "raptor_risk_estimate": 9.023589492587249,
+      "raptor_risk_estimate": 9.8124760359497,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4663,14 +4920,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 71.0,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.402351594,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.44194661399999996,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 9.023589492587249,
+        "exposure_multiplier": 0.45,
+        "final": 9.8124760359497,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4701,7 +4958,7 @@
           "8.0.12"
         ],
         "id": "GHSA-vqc8-7275-q272",
-        "modified": "2026-06-09T16:59:21.647273+00:00",
+        "modified": "2026-09-10T03:51:07.338405+00:00",
         "published": "2026-05-27T21:09:12+00:00",
         "references": [
           "https://github.com/symfony/symfony/security/advisories/GHSA-vqc8-7275-q272",
@@ -4738,7 +4995,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/symfony/mime@v6.3.3",
-      "raptor_risk_estimate": 6.211119089988751,
+      "raptor_risk_estimate": 6.757351675619739,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4756,14 +5013,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 49.00000000000001,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40129017,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.44099127,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 6.211119089988751,
+        "exposure_multiplier": 0.45,
+        "final": 6.757351675619739,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4791,7 +5048,7 @@
           "1.38.1"
         ],
         "id": "GHSA-2xf4-cg6j-vhgq",
-        "modified": "2026-06-09T16:59:22.846151+00:00",
+        "modified": "2026-09-10T03:51:04.192819+00:00",
         "published": "2026-05-28T19:52:36+00:00",
         "references": [
           "https://github.com/symfony/polyfill/security/advisories/GHSA-2xf4-cg6j-vhgq",
@@ -4828,7 +5085,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/symfony/polyfill-intl-idn@v1.27.0",
-      "raptor_risk_estimate": 3.4288945689757493,
+      "raptor_risk_estimate": 3.729178156124767,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4846,14 +5103,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 27.0,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.402045414,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.44167103399999996,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 3.4288945689757493,
+        "exposure_multiplier": 0.45,
+        "final": 3.729178156124767,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4883,7 +5140,7 @@
           "7.1.7"
         ],
         "id": "GHSA-qq5c-677p-737q",
-        "modified": "2025-03-07T13:40:26.737075+00:00",
+        "modified": "2026-09-10T03:50:21.051244+00:00",
         "published": "2024-11-06T15:22:55+00:00",
         "references": [
           "https://github.com/symfony/symfony/security/advisories/GHSA-qq5c-677p-737q",
@@ -4904,7 +5161,7 @@
       "dep_version": "v6.3.4",
       "direct": false,
       "ecosystem": "Packagist",
-      "epss": 0.00425,
+      "epss": 0.00428,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4920,7 +5177,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/symfony/process@v6.3.4",
-      "raptor_risk_estimate": 10.90599964006875,
+      "raptor_risk_estimate": 11.86453556353989,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4938,14 +5195,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 86.0,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401468775,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.441165804,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 10.90599964006875,
+        "exposure_multiplier": 0.45,
+        "final": 11.86453556353989,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4977,7 +5234,7 @@
           "8.0.12"
         ],
         "id": "GHSA-72xp-p242-47p9",
-        "modified": "2026-06-09T16:59:21.884312+00:00",
+        "modified": "2026-09-10T03:50:45.964420+00:00",
         "published": "2026-05-27T16:55:16+00:00",
         "references": [
           "https://github.com/symfony/symfony/security/advisories/GHSA-72xp-p242-47p9",
@@ -5010,7 +5267,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/symfony/routing@v6.3.3",
-      "raptor_risk_estimate": 5.0675932889399995,
+      "raptor_risk_estimate": 5.5137924558486,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -5028,14 +5285,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401075844,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.440798364,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 5.0675932889399995,
+        "exposure_multiplier": 0.45,
+        "final": 5.5137924558486,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -5067,7 +5324,7 @@
           "8.0.13"
         ],
         "id": "GHSA-h5x3-xfc9-m39h",
-        "modified": "2026-06-15T17:45:11.613578+00:00",
+        "modified": "2026-09-10T03:50:49.835469+00:00",
         "published": "2026-06-15T17:33:46+00:00",
         "references": [
           "https://github.com/symfony/symfony/security/advisories/GHSA-h5x3-xfc9-m39h",
@@ -5104,7 +5361,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/symfony/routing@v6.3.3",
-      "raptor_risk_estimate": 8.7415984234215,
+      "raptor_risk_estimate": 9.511291986338835,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -5122,14 +5379,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 69.0,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401075844,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.440798364,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 8.7415984234215,
+        "exposure_multiplier": 0.45,
+        "final": 9.511291986338835,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -5196,7 +5453,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/symfony/validator@v6.3.4",
-      "raptor_risk_estimate": 3.9327315048131237,
+      "raptor_risk_estimate": 4.277953379409807,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -5214,14 +5471,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 31.0,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40162186499999997,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.441289815,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 3.9327315048131237,
+        "exposure_multiplier": 0.45,
+        "final": 4.277953379409807,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -5232,6 +5489,99 @@
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-109413"
+        ],
+        "cwe_ids": [
+          "CWE-674"
+        ],
+        "fixed_versions": [
+          "5.4.54",
+          "6.4.45",
+          "7.4.18",
+          "8.1.6"
+        ],
+        "id": "GHSA-2v3c-qxhr-7vpv",
+        "modified": "2026-10-27T19:15:22.509637+00:00",
+        "published": "2026-10-27T19:01:50+00:00",
+        "references": [
+          "https://github.com/symfony/symfony/security/advisories/GHSA-2v3c-qxhr-7vpv",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-109413",
+          "https://github.com/symfony/symfony/pull/65688",
+          "https://github.com/symfony/symfony/commit/116287c3b5bc057e7a0420d2e52d384e14ea9417",
+          "https://github.com/symfony/symfony/commit/2a8bf9c58d862b0c76a35ce288d1ba6a27223aad"
+        ],
+        "severity": {
+          "score": 8.7,
+          "severity": "high",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N"
+        },
+        "summary": "Symfony: Unbounded Recursion in the YAML Inline Lexer Lets a Single Document Crash the Process"
+      },
+      "cvss_score": 8.7,
+      "dep_name": "symfony/yaml",
+      "dep_version": "v6.3.3",
+      "direct": true,
+      "ecosystem": "Packagist",
+      "epss": 0.00395,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:Packagist:symfony/yaml:v6.3.3:GHSA-2v3c-qxhr-7vpv",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:composer/symfony/yaml@v6.3.3",
+      "raptor_risk_estimate": 15.58230083847562,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "doctum-config.php:10",
+          "src/Commands/core/PhpCommands.php:12",
+          "src/Commands/core/TwigCommands.php:19",
+          "drush.php:8",
+          "src/Boot/DrupalBoot.php:8",
+          "... (+261 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 86.99999999999999,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.441014235,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 15.58230083847562,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
       "version_match_confidence": {
         "level": "high",
         "numeric": 0.95
@@ -5252,7 +5602,7 @@
           "8.0.12"
         ],
         "id": "GHSA-4qpc-3hr4-r2p4",
-        "modified": "2026-06-08T18:44:23.598458+00:00",
+        "modified": "2026-09-10T03:50:45.630970+00:00",
         "published": "2026-05-27T21:33:50+00:00",
         "references": [
           "https://github.com/symfony/symfony/security/advisories/GHSA-4qpc-3hr4-r2p4",
@@ -5289,7 +5639,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/symfony/yaml@v6.3.3",
-      "raptor_risk_estimate": 4.907498169554999,
+      "raptor_risk_estimate": 4.850441653684499,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -5307,14 +5657,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 27.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40279045199999997,
+        "epss_multiplier": 0.442341612,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 4.907498169554999,
+        "exposure_multiplier": 0.45,
+        "final": 4.850441653684499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -5345,7 +5695,7 @@
           "8.0.12"
         ],
         "id": "GHSA-9frc-8383-795m",
-        "modified": "2026-06-08T18:44:23.766020+00:00",
+        "modified": "2026-09-10T03:51:05.233135+00:00",
         "published": "2026-05-27T21:34:35+00:00",
         "references": [
           "https://github.com/symfony/symfony/security/advisories/GHSA-9frc-8383-795m",
@@ -5382,7 +5732,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/symfony/yaml@v6.3.3",
-      "raptor_risk_estimate": 4.907498169554999,
+      "raptor_risk_estimate": 4.850441653684499,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -5400,14 +5750,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 27.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40279045199999997,
+        "epss_multiplier": 0.442341612,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 4.907498169554999,
+        "exposure_multiplier": 0.45,
+        "final": 4.850441653684499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -5440,7 +5790,7 @@
           "8.0.12"
         ],
         "id": "GHSA-c2p3-7m5p-cv8x",
-        "modified": "2026-06-08T18:44:23.204680+00:00",
+        "modified": "2026-09-10T03:50:46.737351+00:00",
         "published": "2026-05-27T21:33:07+00:00",
         "references": [
           "https://github.com/symfony/symfony/security/advisories/GHSA-c2p3-7m5p-cv8x",
@@ -5477,7 +5827,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/symfony/yaml@v6.3.3",
-      "raptor_risk_estimate": 4.9041407910374994,
+      "raptor_risk_estimate": 4.84772199944625,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -5495,14 +5845,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 27.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40251489,
+        "epss_multiplier": 0.44209359,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 4.9041407910374994,
+        "exposure_multiplier": 0.45,
+        "final": 4.84772199944625,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -5530,7 +5880,7 @@
           "3.26.0"
         ],
         "id": "GHSA-2g2g-8p8h-fgwm",
-        "modified": "2026-06-05T22:00:13.670880+00:00",
+        "modified": "2026-09-10T03:51:07.469938+00:00",
         "published": "2026-06-05T21:46:26+00:00",
         "references": [
           "https://github.com/twigphp/Twig/security/advisories/GHSA-2g2g-8p8h-fgwm",
@@ -5563,7 +5913,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 3.435992801023393,
+      "raptor_risk_estimate": 3.916047379700669,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -5574,17 +5924,17 @@
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400805385,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.440554935,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 3.435992801023393,
+        "exposure_multiplier": 0.45,
+        "final": 3.916047379700669,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
+        "reachability_multiplier": 0.71062,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -5609,7 +5959,7 @@
           "3.26.0"
         ],
         "id": "GHSA-4j38-f5cw-54h7",
-        "modified": "2026-05-23T18:29:19.441502+00:00",
+        "modified": "2026-09-10T03:50:45.504087+00:00",
         "published": "2026-05-21T21:21:35+00:00",
         "references": [
           "https://github.com/twigphp/Twig/security/advisories/GHSA-4j38-f5cw-54h7",
@@ -5645,7 +5995,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 9.877655867267489,
+      "raptor_risk_estimate": 11.257697735884879,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -5656,17 +6006,17 @@
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 13.0,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400805385,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.440554935,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 9.877655867267489,
+        "exposure_multiplier": 0.45,
+        "final": 11.257697735884879,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
+        "reachability_multiplier": 0.71062,
         "ssvc_automatable_multiplier": 1.0,
         "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
@@ -5693,7 +6043,7 @@
           "3.27.0"
         ],
         "id": "GHSA-529h-vh3j-85hq",
-        "modified": "2026-07-01T19:00:17.398843+00:00",
+        "modified": "2026-09-10T03:51:10.402023+00:00",
         "published": "2026-07-01T18:55:49+00:00",
         "references": [
           "https://github.com/twigphp/Twig/security/advisories/GHSA-529h-vh3j-85hq",
@@ -5728,7 +6078,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 7.479659314932124,
+      "raptor_risk_estimate": 8.523352522186144,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -5739,17 +6089,17 @@
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 86.99999999999999,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401147286,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.44086266599999996,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 7.479659314932124,
+        "exposure_multiplier": 0.45,
+        "final": 8.523352522186144,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
+        "reachability_multiplier": 0.71062,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -5775,7 +6125,7 @@
           "3.27.0"
         ],
         "id": "GHSA-5v5v-ww74-355v",
-        "modified": "2026-06-30T19:00:30.967381+00:00",
+        "modified": "2026-09-10T03:50:48.434648+00:00",
         "published": "2026-06-30T18:42:49+00:00",
         "references": [
           "https://github.com/twigphp/Twig/security/advisories/GHSA-5v5v-ww74-355v",
@@ -5808,7 +6158,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 3.4413736323348925,
+      "raptor_risk_estimate": 3.921069064205555,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -5819,17 +6169,17 @@
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401433054,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.44111987399999997,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 3.4413736323348925,
+        "exposure_multiplier": 0.45,
+        "final": 3.921069064205555,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
+        "reachability_multiplier": 0.71062,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -5892,7 +6242,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 1.8931645284570568,
+      "raptor_risk_estimate": 2.1569697149888336,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -5903,17 +6253,17 @@
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 22.000000000000004,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401519805,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.441197955,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 1.8931645284570568,
+        "exposure_multiplier": 0.45,
+        "final": 2.1569697149888336,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
+        "reachability_multiplier": 0.71062,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -5978,7 +6328,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 7.3529853823492015,
+      "raptor_risk_estimate": 8.369663918314144,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -5989,17 +6339,17 @@
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 85.0,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.403632447,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.443099457,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 7.3529853823492015,
+        "exposure_multiplier": 0.45,
+        "final": 8.369663918314144,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
+        "reachability_multiplier": 0.71062,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -6024,7 +6374,7 @@
           "3.26.0"
         ],
         "id": "GHSA-7fxw-r6jv-74c8",
-        "modified": "2026-05-22T22:44:48.214102+00:00",
+        "modified": "2026-09-10T03:50:46.108878+00:00",
         "published": "2026-05-21T21:28:28+00:00",
         "references": [
           "https://github.com/twigphp/Twig/security/advisories/GHSA-7fxw-r6jv-74c8",
@@ -6061,7 +6411,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 4.99348055791886,
+      "raptor_risk_estimate": 5.688806072685573,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -6072,17 +6422,17 @@
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 57.99999999999999,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40171371899999997,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.441372489,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 4.99348055791886,
+        "exposure_multiplier": 0.45,
+        "final": 5.688806072685573,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
+        "reachability_multiplier": 0.71062,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -6107,7 +6457,7 @@
           "3.26.0"
         ],
         "id": "GHSA-7p85-w9px-jpjp",
-        "modified": "2026-05-23T18:29:19.113512+00:00",
+        "modified": "2026-09-10T03:50:46.236628+00:00",
         "published": "2026-05-21T21:24:53+00:00",
         "references": [
           "https://github.com/twigphp/Twig/security/advisories/GHSA-7p85-w9px-jpjp",
@@ -6143,7 +6493,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 8.028655620835483,
+      "raptor_risk_estimate": 9.142114537269316,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -6154,17 +6504,17 @@
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 93.0,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.402810864,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.442359984,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 8.028655620835483,
+        "exposure_multiplier": 0.45,
+        "final": 9.142114537269316,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
+        "reachability_multiplier": 0.71062,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -6190,7 +6540,7 @@
           "3.27.0"
         ],
         "id": "GHSA-8x9c-rmqh-456c",
-        "modified": "2026-06-30T19:00:30.973132+00:00",
+        "modified": "2026-09-10T03:51:08.226754+00:00",
         "published": "2026-06-30T18:43:23+00:00",
         "references": [
           "https://github.com/twigphp/Twig/security/advisories/GHSA-8x9c-rmqh-456c",
@@ -6223,7 +6573,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 3.4391425559374404,
+      "raptor_risk_estimate": 3.918986902337675,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -6234,17 +6584,17 @@
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40117280099999997,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.440885631,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 3.4391425559374404,
+        "exposure_multiplier": 0.45,
+        "final": 3.918986902337675,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
+        "reachability_multiplier": 0.71062,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -6270,7 +6620,7 @@
           "3.27.0"
         ],
         "id": "GHSA-h8vq-8gpg-mhcg",
-        "modified": "2026-06-30T19:00:30.980660+00:00",
+        "modified": "2026-09-10T03:50:49.791061+00:00",
         "published": "2026-06-30T18:43:45+00:00",
         "references": [
           "https://github.com/twigphp/Twig/security/advisories/GHSA-h8vq-8gpg-mhcg",
@@ -6303,7 +6653,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 3.4408924197785784,
+      "raptor_risk_estimate": 3.9206199704693456,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -6314,17 +6664,17 @@
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401376921,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.441069351,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 3.4408924197785784,
+        "exposure_multiplier": 0.45,
+        "final": 3.9206199704693456,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
+        "reachability_multiplier": 0.71062,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -6371,7 +6721,7 @@
       "dep_version": "v3.6.1",
       "direct": false,
       "ecosystem": "Packagist",
-      "epss": 0.00429,
+      "epss": 0.00425,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6387,7 +6737,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 1.893020164690163,
+      "raptor_risk_estimate": 2.156745168120729,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -6398,17 +6748,17 @@
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 22.000000000000004,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40148918699999997,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.441152025,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 1.893020164690163,
+        "exposure_multiplier": 0.45,
+        "final": 2.156745168120729,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
+        "reachability_multiplier": 0.71062,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -6433,7 +6783,7 @@
           "3.27.0"
         ],
         "id": "GHSA-p42q-9prx-q5wq",
-        "modified": "2026-06-30T18:45:32.144230+00:00",
+        "modified": "2026-09-10T03:51:09.244982+00:00",
         "published": "2026-06-30T18:41:30+00:00",
         "references": [
           "https://github.com/twigphp/Twig/security/advisories/GHSA-p42q-9prx-q5wq",
@@ -6466,7 +6816,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 3.444217161076741,
+      "raptor_risk_estimate": 3.9237227999195197,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -6477,17 +6827,17 @@
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401764749,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.441418419,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 3.444217161076741,
+        "exposure_multiplier": 0.45,
+        "final": 3.9237227999195197,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
+        "reachability_multiplier": 0.71062,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -6512,7 +6862,7 @@
           "3.26.0"
         ],
         "id": "GHSA-pr2w-4gpj-cpq4",
-        "modified": "2026-06-05T22:00:13.631647+00:00",
+        "modified": "2026-09-10T03:51:09.316002+00:00",
         "published": "2026-06-05T21:47:11+00:00",
         "references": [
           "https://github.com/twigphp/Twig/security/advisories/GHSA-pr2w-4gpj-cpq4",
@@ -6545,7 +6895,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 3.440673686798436,
+      "raptor_risk_estimate": 3.9204158369528863,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -6556,17 +6906,17 @@
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40135140599999997,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.44104638599999996,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 3.440673686798436,
+        "exposure_multiplier": 0.45,
+        "final": 3.9204158369528863,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
+        "reachability_multiplier": 0.71062,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -6591,7 +6941,7 @@
           "3.26.0"
         ],
         "id": "GHSA-vcc8-phrv-43wj",
-        "modified": "2026-05-23T18:29:18.155884+00:00",
+        "modified": "2026-09-10T03:50:47.571128+00:00",
         "published": "2026-05-21T21:25:55+00:00",
         "references": [
           "https://github.com/twigphp/Twig/security/advisories/GHSA-vcc8-phrv-43wj",
@@ -6627,7 +6977,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 1.8047230312022189,
+      "raptor_risk_estimate": 2.056696499035066,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -6638,17 +6988,17 @@
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 21.000000000000004,
         "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40098909299999996,
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.440720283,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 1.8047230312022189,
+        "exposure_multiplier": 0.45,
+        "final": 2.056696499035066,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
+        "reachability_multiplier": 0.71062,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },

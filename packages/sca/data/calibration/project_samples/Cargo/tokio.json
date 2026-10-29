@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-09-01T11:16:52Z",
+    "fetched_at": "2026-10-29T21:47:03Z",
     "git_ref": "tokio-1.35.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of tokio",
@@ -39,7 +39,7 @@
       "dep_version": "0.3.0",
       "direct": true,
       "ecosystem": "Cargo",
-      "epss": 0.00334,
+      "epss": 0.00341,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -55,34 +55,28 @@
         "numeric": 0.95
       },
       "purl": "pkg:cargo/futures-util@0.3.0",
-      "raptor_risk_estimate": 9.9524280021375,
+      "raptor_risk_estimate": 5.978779502777737,
       "reachability": {
         "confidence": {
           "level": "high",
           "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
+          "reason": "crate imported but the 1 OSV-listed affected symbol(s) are not called from non-test Rust source"
         },
-        "evidence": [
-          "tokio/tests/tcp_connect.rs:177",
-          "tokio-test/tests/stream_mock.rs:1",
-          "tokio-util/src/task/spawn_pinned.rs:1",
-          "tokio-util/tests/compat.rs:6",
-          "tokio-util/tests/io_sink_writer.rs:4"
-        ],
-        "verdict": "imported"
+        "evidence": [],
+        "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 55.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.401004402,
+        "epss_multiplier": 0.44076621299999996,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 9.9524280021375,
+        "exposure_multiplier": 0.45,
+        "final": 5.978779502777737,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
+        "reachability_multiplier": 0.60727,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -109,7 +103,7 @@
           "0.8.11"
         ],
         "id": "GHSA-r8w9-5wcg-vfj7",
-        "modified": "2026-02-04T03:50:24.995209+00:00",
+        "modified": "2026-09-10T03:50:10.693636+00:00",
         "published": "2024-03-04T20:44:35+00:00",
         "references": [
           "https://github.com/tokio-rs/mio/security/advisories/GHSA-r8w9-5wcg-vfj7",
@@ -130,7 +124,7 @@
       "dep_version": "0.8.9",
       "direct": true,
       "ecosystem": "Cargo",
-      "epss": 0.00889,
+      "epss": 0.00881,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -146,35 +140,28 @@
         "numeric": 0.95
       },
       "purl": "pkg:cargo/mio@0.8.9",
-      "raptor_risk_estimate": 27.89090133036072,
+      "raptor_risk_estimate": 16.73117699812411,
       "reachability": {
         "confidence": {
           "level": "high",
           "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
+          "reason": "crate imported but the 1 OSV-listed affected symbol(s) are not called from non-test Rust source"
         },
-        "evidence": [
-          "tokio/src/io/async_fd.rs:5",
-          "tokio/src/io/poll_evented.rs:5",
-          "tokio/src/io/bsd/poll_aio.rs:6",
-          "tokio/src/io/bsd/poll_aio.rs:7",
-          "tokio/src/io/bsd/poll_aio.rs:8",
-          "... (+8 more)"
-        ],
-        "verdict": "imported"
+        "evidence": [],
+        "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.403836567,
+        "epss_multiplier": 0.443246433,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 27.89090133036072,
+        "exposure_multiplier": 0.45,
+        "final": 16.73117699812411,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
+        "reachability_multiplier": 0.60727,
         "ssvc_automatable_multiplier": 1.331,
         "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
@@ -202,7 +189,7 @@
           "0.8.6"
         ],
         "id": "GHSA-cq8v-f236-94qc",
-        "modified": "2026-04-22T20:32:45.162648+00:00",
+        "modified": "2026-09-10T03:50:43.958966+00:00",
         "published": "2026-04-14T01:03:36+00:00",
         "references": [
           "https://github.com/rust-random/rand/pull/1763",
@@ -233,113 +220,28 @@
         "numeric": 0.95
       },
       "purl": "pkg:cargo/rand@0.8.0",
-      "raptor_risk_estimate": 11.812822499999998,
+      "raptor_risk_estimate": 6.5982729041775,
       "reachability": {
         "confidence": {
           "level": "high",
           "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
+          "reason": "crate imported but the 2 OSV-listed affected symbol(s) are not called from non-test Rust source"
         },
-        "evidence": [
-          "tokio/tests/sync_broadcast.rs:568",
-          "tokio/tests/time_pause.rs:4",
-          "tokio/tests/time_pause.rs:5"
-        ],
-        "verdict": "imported"
+        "evidence": [],
+        "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.66885,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 11.812822499999998,
+        "exposure_multiplier": 0.45,
+        "final": 6.5982729041775,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null,
-      "transitive_depth": 0,
-      "version_match_confidence": {
-        "level": "high",
-        "numeric": 0.95
-      }
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "GHSA-cq8v-f236-94qc"
-        ],
-        "fixed_versions": [
-          "0.8.6",
-          "0.9.3",
-          "0.10.1"
-        ],
-        "id": "RUSTSEC-2026-0097",
-        "informational": "unsound",
-        "modified": "2026-07-17T16:00:04.554426+00:00",
-        "published": "2026-04-09T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/rand",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0097.html",
-          "https://github.com/rust-random/rand/pull/1763"
-        ],
-        "severity": null,
-        "summary": "Rand is unsound with a custom logger using `rand::rng()`"
-      },
-      "cvss_score": null,
-      "dep_name": "rand",
-      "dep_version": "0.8.0",
-      "direct": true,
-      "ecosystem": "Cargo",
-      "epss": null,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "exposure_factor": 0.0,
-      "finding_id": "sca:vuln:Cargo:rand:0.8.0:RUSTSEC-2026-0097",
-      "in_kev": false,
-      "parser_confidence": {
-        "level": "high",
-        "numeric": 0.95
-      },
-      "purl": "pkg:cargo/rand@0.8.0",
-      "raptor_risk_estimate": 11.812822499999998,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
-        },
-        "evidence": [
-          "tokio/tests/sync_broadcast.rs:568",
-          "tokio/tests/time_pause.rs:4",
-          "tokio/tests/time_pause.rs:5"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 11.812822499999998,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
+        "reachability_multiplier": 0.60727,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -366,7 +268,7 @@
           "0.8.6"
         ],
         "id": "GHSA-cq8v-f236-94qc",
-        "modified": "2026-04-22T20:32:45.162648+00:00",
+        "modified": "2026-09-10T03:50:43.958966+00:00",
         "published": "2026-04-14T01:03:36+00:00",
         "references": [
           "https://github.com/rust-random/rand/pull/1763",
@@ -397,113 +299,28 @@
         "numeric": 0.95
       },
       "purl": "pkg:cargo/rand@0.8.3",
-      "raptor_risk_estimate": 11.812822499999998,
+      "raptor_risk_estimate": 6.5982729041775,
       "reachability": {
         "confidence": {
           "level": "high",
           "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
+          "reason": "crate imported but the 2 OSV-listed affected symbol(s) are not called from non-test Rust source"
         },
-        "evidence": [
-          "tokio/tests/sync_broadcast.rs:568",
-          "tokio/tests/time_pause.rs:4",
-          "tokio/tests/time_pause.rs:5"
-        ],
-        "verdict": "imported"
+        "evidence": [],
+        "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.66885,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 11.812822499999998,
+        "exposure_multiplier": 0.45,
+        "final": 6.5982729041775,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null,
-      "transitive_depth": 0,
-      "version_match_confidence": {
-        "level": "high",
-        "numeric": 0.95
-      }
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "GHSA-cq8v-f236-94qc"
-        ],
-        "fixed_versions": [
-          "0.8.6",
-          "0.9.3",
-          "0.10.1"
-        ],
-        "id": "RUSTSEC-2026-0097",
-        "informational": "unsound",
-        "modified": "2026-07-17T16:00:04.554426+00:00",
-        "published": "2026-04-09T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/rand",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0097.html",
-          "https://github.com/rust-random/rand/pull/1763"
-        ],
-        "severity": null,
-        "summary": "Rand is unsound with a custom logger using `rand::rng()`"
-      },
-      "cvss_score": null,
-      "dep_name": "rand",
-      "dep_version": "0.8.3",
-      "direct": true,
-      "ecosystem": "Cargo",
-      "epss": null,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "exposure_factor": 0.0,
-      "finding_id": "sca:vuln:Cargo:rand:0.8.3:RUSTSEC-2026-0097",
-      "in_kev": false,
-      "parser_confidence": {
-        "level": "high",
-        "numeric": 0.95
-      },
-      "purl": "pkg:cargo/rand@0.8.3",
-      "raptor_risk_estimate": 11.812822499999998,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
-        },
-        "evidence": [
-          "tokio/tests/sync_broadcast.rs:568",
-          "tokio/tests/time_pause.rs:4",
-          "tokio/tests/time_pause.rs:5"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 11.812822499999998,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
+        "reachability_multiplier": 0.60727,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -530,7 +347,7 @@
           "0.8.6"
         ],
         "id": "GHSA-cq8v-f236-94qc",
-        "modified": "2026-04-22T20:32:45.162648+00:00",
+        "modified": "2026-09-10T03:50:43.958966+00:00",
         "published": "2026-04-14T01:03:36+00:00",
         "references": [
           "https://github.com/rust-random/rand/pull/1763",
@@ -561,113 +378,28 @@
         "numeric": 0.95
       },
       "purl": "pkg:cargo/rand@0.8",
-      "raptor_risk_estimate": 11.812822499999998,
+      "raptor_risk_estimate": 6.5982729041775,
       "reachability": {
         "confidence": {
           "level": "high",
           "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
+          "reason": "crate imported but the 2 OSV-listed affected symbol(s) are not called from non-test Rust source"
         },
-        "evidence": [
-          "tokio/tests/sync_broadcast.rs:568",
-          "tokio/tests/time_pause.rs:4",
-          "tokio/tests/time_pause.rs:5"
-        ],
-        "verdict": "imported"
+        "evidence": [],
+        "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.66885,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 11.812822499999998,
+        "exposure_multiplier": 0.45,
+        "final": 6.5982729041775,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null,
-      "transitive_depth": 0,
-      "version_match_confidence": {
-        "level": "high",
-        "numeric": 0.95
-      }
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "GHSA-cq8v-f236-94qc"
-        ],
-        "fixed_versions": [
-          "0.8.6",
-          "0.9.3",
-          "0.10.1"
-        ],
-        "id": "RUSTSEC-2026-0097",
-        "informational": "unsound",
-        "modified": "2026-07-17T16:00:04.554426+00:00",
-        "published": "2026-04-09T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/rand",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0097.html",
-          "https://github.com/rust-random/rand/pull/1763"
-        ],
-        "severity": null,
-        "summary": "Rand is unsound with a custom logger using `rand::rng()`"
-      },
-      "cvss_score": null,
-      "dep_name": "rand",
-      "dep_version": "0.8",
-      "direct": true,
-      "ecosystem": "Cargo",
-      "epss": null,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "exposure_factor": 0.0,
-      "finding_id": "sca:vuln:Cargo:rand:0.8:RUSTSEC-2026-0097",
-      "in_kev": false,
-      "parser_confidence": {
-        "level": "high",
-        "numeric": 0.95
-      },
-      "purl": "pkg:cargo/rand@0.8",
-      "raptor_risk_estimate": 11.812822499999998,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
-        },
-        "evidence": [
-          "tokio/tests/sync_broadcast.rs:568",
-          "tokio/tests/time_pause.rs:4",
-          "tokio/tests/time_pause.rs:5"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 11.812822499999998,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
+        "reachability_multiplier": 0.60727,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -718,7 +450,7 @@
       "dep_version": "1.0.0",
       "direct": true,
       "ecosystem": "Cargo",
-      "epss": 0.00836,
+      "epss": 0.00833,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -734,35 +466,28 @@
         "numeric": 0.95
       },
       "purl": "pkg:cargo/tokio@1.0.0",
-      "raptor_risk_estimate": 10.744443167864999,
+      "raptor_risk_estimate": 6.446481594486102,
       "reachability": {
         "confidence": {
           "level": "high",
           "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
+          "reason": "crate imported but the 6 OSV-listed affected symbol(s) are not called from non-test Rust source"
         },
-        "evidence": [
-          "stress-test/examples/simple_echo_tcp.rs:4",
-          "tests-build/src/lib.rs:2",
-          "tests-integration/tests/process_stdio.rs:4",
-          "tests-integration/tests/process_stdio.rs:5",
-          "tests-integration/tests/process_stdio.rs:6",
-          "... (+366 more)"
-        ],
-        "verdict": "imported"
+        "evidence": [],
+        "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.403566108,
+        "epss_multiplier": 0.44302596899999996,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 10.744443167864999,
+        "exposure_multiplier": 0.45,
+        "final": 6.446481594486102,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
+        "reachability_multiplier": 0.60727,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -786,7 +511,7 @@
           "1.18.5"
         ],
         "id": "GHSA-4q83-7cq4-p6wg",
-        "modified": "2026-02-04T04:36:59.278362+00:00",
+        "modified": "2026-09-10T03:49:56.588581+00:00",
         "published": "2023-02-04T00:30:37+00:00",
         "references": [
           "https://github.com/tokio-rs/tokio/issues/5372",
@@ -817,35 +542,28 @@
         "numeric": 0.95
       },
       "purl": "pkg:cargo/tokio@1.0.0",
-      "raptor_risk_estimate": 11.812822499999998,
+      "raptor_risk_estimate": 6.5982729041775,
       "reachability": {
         "confidence": {
           "level": "high",
           "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
+          "reason": "crate imported but the 6 OSV-listed affected symbol(s) are not called from non-test Rust source"
         },
-        "evidence": [
-          "stress-test/examples/simple_echo_tcp.rs:4",
-          "tests-build/src/lib.rs:2",
-          "tests-integration/tests/process_stdio.rs:4",
-          "tests-integration/tests/process_stdio.rs:5",
-          "tests-integration/tests/process_stdio.rs:6",
-          "... (+366 more)"
-        ],
-        "verdict": "imported"
+        "evidence": [],
+        "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.66885,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 11.812822499999998,
+        "exposure_multiplier": 0.45,
+        "final": 6.5982729041775,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
+        "reachability_multiplier": 0.60727,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -893,7 +611,7 @@
       "dep_version": "1.0.0",
       "direct": true,
       "ecosystem": "Cargo",
-      "epss": 0.01162,
+      "epss": 0.01239,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -909,213 +627,32 @@
         "numeric": 0.95
       },
       "purl": "pkg:cargo/tokio@1.0.0",
-      "raptor_risk_estimate": 14.8116515604075,
+      "raptor_risk_estimate": 8.887506345667871,
       "reachability": {
         "confidence": {
           "level": "high",
           "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
+          "reason": "crate imported but the 6 OSV-listed affected symbol(s) are not called from non-test Rust source"
         },
-        "evidence": [
-          "stress-test/examples/simple_echo_tcp.rs:4",
-          "tests-build/src/lib.rs:2",
-          "tests-integration/tests/process_stdio.rs:4",
-          "tests-integration/tests/process_stdio.rs:5",
-          "tests-integration/tests/process_stdio.rs:6",
-          "... (+366 more)"
-        ],
-        "verdict": "imported"
+        "evidence": [],
+        "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.405229686,
+        "epss_multiplier": 0.444890727,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 14.8116515604075,
+        "exposure_multiplier": 0.45,
+        "final": 8.887506345667871,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
+        "reachability_multiplier": 0.60727,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
       "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null,
-      "transitive_depth": 0,
-      "version_match_confidence": {
-        "level": "high",
-        "numeric": 0.95
-      }
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "RUSTSEC-2025-0023"
-        ],
-        "cwe_ids": [
-          "CWE-664"
-        ],
-        "fixed_versions": [
-          "1.44.2",
-          "1.38.2",
-          "1.43.1"
-        ],
-        "id": "GHSA-rr8g-9fpq-6wmg",
-        "modified": "2026-02-04T03:38:08.652126+00:00",
-        "published": "2025-04-07T21:12:50+00:00",
-        "references": [
-          "https://github.com/tokio-rs/tokio/pull/7232",
-          "https://github.com/tokio-rs/tokio",
-          "https://rustsec.org/advisories/RUSTSEC-2025-0023.html"
-        ],
-        "severity": {
-          "score": 2.7,
-          "severity": "low",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:N/SC:N/SI:N/SA:N/E:U"
-        },
-        "summary": "Tokio broadcast channel calls clone in parallel, but does not require `Sync`"
-      },
-      "cvss_score": 2.7,
-      "dep_name": "tokio",
-      "dep_version": "1.0.0",
-      "direct": true,
-      "ecosystem": "Cargo",
-      "epss": null,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "exposure_factor": 0.0,
-      "finding_id": "sca:vuln:Cargo:tokio:1.0.0:GHSA-rr8g-9fpq-6wmg",
-      "in_kev": false,
-      "parser_confidence": {
-        "level": "high",
-        "numeric": 0.95
-      },
-      "purl": "pkg:cargo/tokio@1.0.0",
-      "raptor_risk_estimate": 7.9736551874999995,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
-        },
-        "evidence": [
-          "stress-test/examples/simple_echo_tcp.rs:4",
-          "tests-build/src/lib.rs:2",
-          "tests-integration/tests/process_stdio.rs:4",
-          "tests-integration/tests/process_stdio.rs:5",
-          "tests-integration/tests/process_stdio.rs:6",
-          "... (+366 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 27.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 7.9736551874999995,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "low",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null,
-      "transitive_depth": 0,
-      "version_match_confidence": {
-        "level": "high",
-        "numeric": 0.95
-      }
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "GHSA-4q83-7cq4-p6wg"
-        ],
-        "fixed_versions": [
-          "1.18.5",
-          "1.20.4",
-          "1.24.2"
-        ],
-        "id": "RUSTSEC-2023-0005",
-        "informational": "unsound",
-        "modified": "2023-11-08T04:15:17.465753+00:00",
-        "published": "2023-01-11T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/tokio",
-          "https://rustsec.org/advisories/RUSTSEC-2023-0005.html",
-          "https://github.com/tokio-rs/tokio/issues/5372"
-        ],
-        "severity": null,
-        "summary": "`tokio::io::ReadHalf<T>::unsplit` is Unsound"
-      },
-      "cvss_score": null,
-      "dep_name": "tokio",
-      "dep_version": "1.0.0",
-      "direct": true,
-      "ecosystem": "Cargo",
-      "epss": null,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "exposure_factor": 0.0,
-      "finding_id": "sca:vuln:Cargo:tokio:1.0.0:RUSTSEC-2023-0005",
-      "in_kev": false,
-      "parser_confidence": {
-        "level": "high",
-        "numeric": 0.95
-      },
-      "purl": "pkg:cargo/tokio@1.0.0",
-      "raptor_risk_estimate": 11.812822499999998,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
-        },
-        "evidence": [
-          "stress-test/examples/simple_echo_tcp.rs:4",
-          "tests-build/src/lib.rs:2",
-          "tests-integration/tests/process_stdio.rs:4",
-          "tests-integration/tests/process_stdio.rs:5",
-          "tests-integration/tests/process_stdio.rs:6",
-          "... (+366 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 11.812822499999998,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -1168,35 +705,104 @@
         "numeric": 0.95
       },
       "purl": "pkg:cargo/tokio@1.0.0",
-      "raptor_risk_estimate": 11.812822499999998,
+      "raptor_risk_estimate": 6.5982729041775,
       "reachability": {
         "confidence": {
           "level": "high",
           "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
+          "reason": "crate imported but the 6 OSV-listed affected symbol(s) are not called from non-test Rust source"
         },
-        "evidence": [
-          "stress-test/examples/simple_echo_tcp.rs:4",
-          "tests-build/src/lib.rs:2",
-          "tests-integration/tests/process_stdio.rs:4",
-          "tests-integration/tests/process_stdio.rs:5",
-          "tests-integration/tests/process_stdio.rs:6",
-          "... (+366 more)"
-        ],
-        "verdict": "imported"
+        "evidence": [],
+        "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.66885,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 11.812822499999998,
+        "exposure_multiplier": 0.45,
+        "final": 6.5982729041775,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
+        "reachability_multiplier": 0.60727,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "1.51.6",
+          "1.53.3"
+        ],
+        "id": "RUSTSEC-2026-0386",
+        "informational": "unsound",
+        "modified": "2026-10-23T14:45:03.847864+00:00",
+        "published": "2026-10-13T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/tokio",
+          "https://rustsec.org/advisories/RUSTSEC-2026-0386.html",
+          "https://github.com/tokio-rs/tokio/pull/8587",
+          "https://github.com/tokio-rs/tokio/issues/8538",
+          "https://github.com/tokio-rs/tokio/issues/8539"
+        ],
+        "severity": null,
+        "summary": "`AsyncFd::new` and related constructors violate I/O safety"
+      },
+      "cvss_score": null,
+      "dep_name": "tokio",
+      "dep_version": "1.0.0",
+      "direct": true,
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:Cargo:tokio:1.0.0:RUSTSEC-2026-0386",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:cargo/tokio@1.0.0",
+      "raptor_risk_estimate": 6.5982729041775,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "crate imported but the 6 OSV-listed affected symbol(s) are not called from non-test Rust source"
+        },
+        "evidence": [],
+        "verdict": "not_function_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.66885,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 6.5982729041775,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.60727,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -1220,7 +826,7 @@
           "1.18.5"
         ],
         "id": "GHSA-4q83-7cq4-p6wg",
-        "modified": "2026-02-04T04:36:59.278362+00:00",
+        "modified": "2026-09-10T03:49:56.588581+00:00",
         "published": "2023-02-04T00:30:37+00:00",
         "references": [
           "https://github.com/tokio-rs/tokio/issues/5372",
@@ -1251,35 +857,28 @@
         "numeric": 0.95
       },
       "purl": "pkg:cargo/tokio@1.15.0",
-      "raptor_risk_estimate": 11.812822499999998,
+      "raptor_risk_estimate": 6.5982729041775,
       "reachability": {
         "confidence": {
           "level": "high",
           "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
+          "reason": "crate imported but the 4 OSV-listed affected symbol(s) are not called from non-test Rust source"
         },
-        "evidence": [
-          "stress-test/examples/simple_echo_tcp.rs:4",
-          "tests-build/src/lib.rs:2",
-          "tests-integration/tests/process_stdio.rs:4",
-          "tests-integration/tests/process_stdio.rs:5",
-          "tests-integration/tests/process_stdio.rs:6",
-          "... (+366 more)"
-        ],
-        "verdict": "imported"
+        "evidence": [],
+        "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.66885,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 11.812822499999998,
+        "exposure_multiplier": 0.45,
+        "final": 6.5982729041775,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
+        "reachability_multiplier": 0.60727,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -1307,7 +906,7 @@
           "1.23.1"
         ],
         "id": "GHSA-7rrj-xr53-82p7",
-        "modified": "2026-02-04T03:57:46.454817+00:00",
+        "modified": "2026-09-10T03:49:51.032327+00:00",
         "published": "2023-01-06T21:40:58+00:00",
         "references": [
           "https://github.com/tokio-rs/tokio/security/advisories/GHSA-7rrj-xr53-82p7",
@@ -1328,7 +927,7 @@
       "dep_version": "1.15.0",
       "direct": true,
       "ecosystem": "Cargo",
-      "epss": 0.00569,
+      "epss": 0.0059,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1344,209 +943,28 @@
         "numeric": 0.95
       },
       "purl": "pkg:cargo/tokio@1.15.0",
-      "raptor_risk_estimate": 9.800696393572498,
+      "raptor_risk_estimate": 5.885305515090022,
       "reachability": {
         "confidence": {
           "level": "high",
           "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
+          "reason": "crate imported but the 4 OSV-listed affected symbol(s) are not called from non-test Rust source"
         },
-        "evidence": [
-          "stress-test/examples/simple_echo_tcp.rs:4",
-          "tests-build/src/lib.rs:2",
-          "tests-integration/tests/process_stdio.rs:4",
-          "tests-integration/tests/process_stdio.rs:5",
-          "tests-integration/tests/process_stdio.rs:6",
-          "... (+366 more)"
-        ],
-        "verdict": "imported"
+        "evidence": [],
+        "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 54.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40220360699999996,
+        "epss_multiplier": 0.44190987,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 9.800696393572498,
+        "exposure_multiplier": 0.45,
+        "final": 5.885305515090022,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null,
-      "transitive_depth": 0,
-      "version_match_confidence": {
-        "level": "high",
-        "numeric": 0.95
-      }
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "RUSTSEC-2025-0023"
-        ],
-        "cwe_ids": [
-          "CWE-664"
-        ],
-        "fixed_versions": [
-          "1.44.2",
-          "1.38.2",
-          "1.43.1"
-        ],
-        "id": "GHSA-rr8g-9fpq-6wmg",
-        "modified": "2026-02-04T03:38:08.652126+00:00",
-        "published": "2025-04-07T21:12:50+00:00",
-        "references": [
-          "https://github.com/tokio-rs/tokio/pull/7232",
-          "https://github.com/tokio-rs/tokio",
-          "https://rustsec.org/advisories/RUSTSEC-2025-0023.html"
-        ],
-        "severity": {
-          "score": 2.7,
-          "severity": "low",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:N/SC:N/SI:N/SA:N/E:U"
-        },
-        "summary": "Tokio broadcast channel calls clone in parallel, but does not require `Sync`"
-      },
-      "cvss_score": 2.7,
-      "dep_name": "tokio",
-      "dep_version": "1.15.0",
-      "direct": true,
-      "ecosystem": "Cargo",
-      "epss": null,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "exposure_factor": 0.0,
-      "finding_id": "sca:vuln:Cargo:tokio:1.15.0:GHSA-rr8g-9fpq-6wmg",
-      "in_kev": false,
-      "parser_confidence": {
-        "level": "high",
-        "numeric": 0.95
-      },
-      "purl": "pkg:cargo/tokio@1.15.0",
-      "raptor_risk_estimate": 7.9736551874999995,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
-        },
-        "evidence": [
-          "stress-test/examples/simple_echo_tcp.rs:4",
-          "tests-build/src/lib.rs:2",
-          "tests-integration/tests/process_stdio.rs:4",
-          "tests-integration/tests/process_stdio.rs:5",
-          "tests-integration/tests/process_stdio.rs:6",
-          "... (+366 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 27.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 7.9736551874999995,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "low",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null,
-      "transitive_depth": 0,
-      "version_match_confidence": {
-        "level": "high",
-        "numeric": 0.95
-      }
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "GHSA-4q83-7cq4-p6wg"
-        ],
-        "fixed_versions": [
-          "1.18.5",
-          "1.20.4",
-          "1.24.2"
-        ],
-        "id": "RUSTSEC-2023-0005",
-        "informational": "unsound",
-        "modified": "2023-11-08T04:15:17.465753+00:00",
-        "published": "2023-01-11T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/tokio",
-          "https://rustsec.org/advisories/RUSTSEC-2023-0005.html",
-          "https://github.com/tokio-rs/tokio/issues/5372"
-        ],
-        "severity": null,
-        "summary": "`tokio::io::ReadHalf<T>::unsplit` is Unsound"
-      },
-      "cvss_score": null,
-      "dep_name": "tokio",
-      "dep_version": "1.15.0",
-      "direct": true,
-      "ecosystem": "Cargo",
-      "epss": null,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "exposure_factor": 0.0,
-      "finding_id": "sca:vuln:Cargo:tokio:1.15.0:RUSTSEC-2023-0005",
-      "in_kev": false,
-      "parser_confidence": {
-        "level": "high",
-        "numeric": 0.95
-      },
-      "purl": "pkg:cargo/tokio@1.15.0",
-      "raptor_risk_estimate": 11.812822499999998,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
-        },
-        "evidence": [
-          "stress-test/examples/simple_echo_tcp.rs:4",
-          "tests-build/src/lib.rs:2",
-          "tests-integration/tests/process_stdio.rs:4",
-          "tests-integration/tests/process_stdio.rs:5",
-          "tests-integration/tests/process_stdio.rs:6",
-          "... (+366 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 11.812822499999998,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
+        "reachability_multiplier": 0.60727,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -1603,35 +1021,104 @@
         "numeric": 0.95
       },
       "purl": "pkg:cargo/tokio@1.15.0",
-      "raptor_risk_estimate": 11.812822499999998,
+      "raptor_risk_estimate": 6.5982729041775,
       "reachability": {
         "confidence": {
           "level": "high",
           "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
+          "reason": "crate imported but the 4 OSV-listed affected symbol(s) are not called from non-test Rust source"
         },
-        "evidence": [
-          "stress-test/examples/simple_echo_tcp.rs:4",
-          "tests-build/src/lib.rs:2",
-          "tests-integration/tests/process_stdio.rs:4",
-          "tests-integration/tests/process_stdio.rs:5",
-          "tests-integration/tests/process_stdio.rs:6",
-          "... (+366 more)"
-        ],
-        "verdict": "imported"
+        "evidence": [],
+        "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.66885,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 11.812822499999998,
+        "exposure_multiplier": 0.45,
+        "final": 6.5982729041775,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
+        "reachability_multiplier": 0.60727,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "1.51.6",
+          "1.53.3"
+        ],
+        "id": "RUSTSEC-2026-0386",
+        "informational": "unsound",
+        "modified": "2026-10-23T14:45:03.847864+00:00",
+        "published": "2026-10-13T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/tokio",
+          "https://rustsec.org/advisories/RUSTSEC-2026-0386.html",
+          "https://github.com/tokio-rs/tokio/pull/8587",
+          "https://github.com/tokio-rs/tokio/issues/8538",
+          "https://github.com/tokio-rs/tokio/issues/8539"
+        ],
+        "severity": null,
+        "summary": "`AsyncFd::new` and related constructors violate I/O safety"
+      },
+      "cvss_score": null,
+      "dep_name": "tokio",
+      "dep_version": "1.15.0",
+      "direct": true,
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:Cargo:tokio:1.15.0:RUSTSEC-2026-0386",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:cargo/tokio@1.15.0",
+      "raptor_risk_estimate": 6.5982729041775,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "crate imported but the 4 OSV-listed affected symbol(s) are not called from non-test Rust source"
+        },
+        "evidence": [],
+        "verdict": "not_function_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.66885,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 6.5982729041775,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.60727,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -1682,7 +1169,7 @@
       "dep_version": "1.2.0",
       "direct": true,
       "ecosystem": "Cargo",
-      "epss": 0.00836,
+      "epss": 0.00833,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1698,35 +1185,28 @@
         "numeric": 0.95
       },
       "purl": "pkg:cargo/tokio@1.2.0",
-      "raptor_risk_estimate": 10.744443167864999,
+      "raptor_risk_estimate": 6.446481594486102,
       "reachability": {
         "confidence": {
           "level": "high",
           "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
+          "reason": "crate imported but the 6 OSV-listed affected symbol(s) are not called from non-test Rust source"
         },
-        "evidence": [
-          "stress-test/examples/simple_echo_tcp.rs:4",
-          "tests-build/src/lib.rs:2",
-          "tests-integration/tests/process_stdio.rs:4",
-          "tests-integration/tests/process_stdio.rs:5",
-          "tests-integration/tests/process_stdio.rs:6",
-          "... (+366 more)"
-        ],
-        "verdict": "imported"
+        "evidence": [],
+        "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.403566108,
+        "epss_multiplier": 0.44302596899999996,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 10.744443167864999,
+        "exposure_multiplier": 0.45,
+        "final": 6.446481594486102,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
+        "reachability_multiplier": 0.60727,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -1750,7 +1230,7 @@
           "1.18.5"
         ],
         "id": "GHSA-4q83-7cq4-p6wg",
-        "modified": "2026-02-04T04:36:59.278362+00:00",
+        "modified": "2026-09-10T03:49:56.588581+00:00",
         "published": "2023-02-04T00:30:37+00:00",
         "references": [
           "https://github.com/tokio-rs/tokio/issues/5372",
@@ -1781,35 +1261,28 @@
         "numeric": 0.95
       },
       "purl": "pkg:cargo/tokio@1.2.0",
-      "raptor_risk_estimate": 11.812822499999998,
+      "raptor_risk_estimate": 6.5982729041775,
       "reachability": {
         "confidence": {
           "level": "high",
           "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
+          "reason": "crate imported but the 6 OSV-listed affected symbol(s) are not called from non-test Rust source"
         },
-        "evidence": [
-          "stress-test/examples/simple_echo_tcp.rs:4",
-          "tests-build/src/lib.rs:2",
-          "tests-integration/tests/process_stdio.rs:4",
-          "tests-integration/tests/process_stdio.rs:5",
-          "tests-integration/tests/process_stdio.rs:6",
-          "... (+366 more)"
-        ],
-        "verdict": "imported"
+        "evidence": [],
+        "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.66885,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 11.812822499999998,
+        "exposure_multiplier": 0.45,
+        "final": 6.5982729041775,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
+        "reachability_multiplier": 0.60727,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -1857,7 +1330,7 @@
       "dep_version": "1.2.0",
       "direct": true,
       "ecosystem": "Cargo",
-      "epss": 0.01162,
+      "epss": 0.01239,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1873,213 +1346,32 @@
         "numeric": 0.95
       },
       "purl": "pkg:cargo/tokio@1.2.0",
-      "raptor_risk_estimate": 14.8116515604075,
+      "raptor_risk_estimate": 8.887506345667871,
       "reachability": {
         "confidence": {
           "level": "high",
           "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
+          "reason": "crate imported but the 6 OSV-listed affected symbol(s) are not called from non-test Rust source"
         },
-        "evidence": [
-          "stress-test/examples/simple_echo_tcp.rs:4",
-          "tests-build/src/lib.rs:2",
-          "tests-integration/tests/process_stdio.rs:4",
-          "tests-integration/tests/process_stdio.rs:5",
-          "tests-integration/tests/process_stdio.rs:6",
-          "... (+366 more)"
-        ],
-        "verdict": "imported"
+        "evidence": [],
+        "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.405229686,
+        "epss_multiplier": 0.444890727,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 14.8116515604075,
+        "exposure_multiplier": 0.45,
+        "final": 8.887506345667871,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
+        "reachability_multiplier": 0.60727,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
       "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null,
-      "transitive_depth": 0,
-      "version_match_confidence": {
-        "level": "high",
-        "numeric": 0.95
-      }
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "RUSTSEC-2025-0023"
-        ],
-        "cwe_ids": [
-          "CWE-664"
-        ],
-        "fixed_versions": [
-          "1.44.2",
-          "1.38.2",
-          "1.43.1"
-        ],
-        "id": "GHSA-rr8g-9fpq-6wmg",
-        "modified": "2026-02-04T03:38:08.652126+00:00",
-        "published": "2025-04-07T21:12:50+00:00",
-        "references": [
-          "https://github.com/tokio-rs/tokio/pull/7232",
-          "https://github.com/tokio-rs/tokio",
-          "https://rustsec.org/advisories/RUSTSEC-2025-0023.html"
-        ],
-        "severity": {
-          "score": 2.7,
-          "severity": "low",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:N/SC:N/SI:N/SA:N/E:U"
-        },
-        "summary": "Tokio broadcast channel calls clone in parallel, but does not require `Sync`"
-      },
-      "cvss_score": 2.7,
-      "dep_name": "tokio",
-      "dep_version": "1.2.0",
-      "direct": true,
-      "ecosystem": "Cargo",
-      "epss": null,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "exposure_factor": 0.0,
-      "finding_id": "sca:vuln:Cargo:tokio:1.2.0:GHSA-rr8g-9fpq-6wmg",
-      "in_kev": false,
-      "parser_confidence": {
-        "level": "high",
-        "numeric": 0.95
-      },
-      "purl": "pkg:cargo/tokio@1.2.0",
-      "raptor_risk_estimate": 7.9736551874999995,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
-        },
-        "evidence": [
-          "stress-test/examples/simple_echo_tcp.rs:4",
-          "tests-build/src/lib.rs:2",
-          "tests-integration/tests/process_stdio.rs:4",
-          "tests-integration/tests/process_stdio.rs:5",
-          "tests-integration/tests/process_stdio.rs:6",
-          "... (+366 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 27.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 7.9736551874999995,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "low",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null,
-      "transitive_depth": 0,
-      "version_match_confidence": {
-        "level": "high",
-        "numeric": 0.95
-      }
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "GHSA-4q83-7cq4-p6wg"
-        ],
-        "fixed_versions": [
-          "1.18.5",
-          "1.20.4",
-          "1.24.2"
-        ],
-        "id": "RUSTSEC-2023-0005",
-        "informational": "unsound",
-        "modified": "2023-11-08T04:15:17.465753+00:00",
-        "published": "2023-01-11T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/tokio",
-          "https://rustsec.org/advisories/RUSTSEC-2023-0005.html",
-          "https://github.com/tokio-rs/tokio/issues/5372"
-        ],
-        "severity": null,
-        "summary": "`tokio::io::ReadHalf<T>::unsplit` is Unsound"
-      },
-      "cvss_score": null,
-      "dep_name": "tokio",
-      "dep_version": "1.2.0",
-      "direct": true,
-      "ecosystem": "Cargo",
-      "epss": null,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "exposure_factor": 0.0,
-      "finding_id": "sca:vuln:Cargo:tokio:1.2.0:RUSTSEC-2023-0005",
-      "in_kev": false,
-      "parser_confidence": {
-        "level": "high",
-        "numeric": 0.95
-      },
-      "purl": "pkg:cargo/tokio@1.2.0",
-      "raptor_risk_estimate": 11.812822499999998,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
-        },
-        "evidence": [
-          "stress-test/examples/simple_echo_tcp.rs:4",
-          "tests-build/src/lib.rs:2",
-          "tests-integration/tests/process_stdio.rs:4",
-          "tests-integration/tests/process_stdio.rs:5",
-          "tests-integration/tests/process_stdio.rs:6",
-          "... (+366 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 11.812822499999998,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -2132,35 +1424,28 @@
         "numeric": 0.95
       },
       "purl": "pkg:cargo/tokio@1.2.0",
-      "raptor_risk_estimate": 11.812822499999998,
+      "raptor_risk_estimate": 6.5982729041775,
       "reachability": {
         "confidence": {
           "level": "high",
           "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
+          "reason": "crate imported but the 6 OSV-listed affected symbol(s) are not called from non-test Rust source"
         },
-        "evidence": [
-          "stress-test/examples/simple_echo_tcp.rs:4",
-          "tests-build/src/lib.rs:2",
-          "tests-integration/tests/process_stdio.rs:4",
-          "tests-integration/tests/process_stdio.rs:5",
-          "tests-integration/tests/process_stdio.rs:6",
-          "... (+366 more)"
-        ],
-        "verdict": "imported"
+        "evidence": [],
+        "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.66885,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 11.812822499999998,
+        "exposure_multiplier": 0.45,
+        "final": 6.5982729041775,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
+        "reachability_multiplier": 0.60727,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -2175,35 +1460,28 @@
     },
     {
       "advisory": {
-        "aliases": [
-          "RUSTSEC-2025-0023"
-        ],
-        "cwe_ids": [
-          "CWE-664"
-        ],
+        "aliases": [],
         "fixed_versions": [
-          "1.44.2",
-          "1.38.2",
-          "1.43.1"
+          "1.51.6",
+          "1.53.3"
         ],
-        "id": "GHSA-rr8g-9fpq-6wmg",
-        "modified": "2026-02-04T03:38:08.652126+00:00",
-        "published": "2025-04-07T21:12:50+00:00",
+        "id": "RUSTSEC-2026-0386",
+        "informational": "unsound",
+        "modified": "2026-10-23T14:45:03.847864+00:00",
+        "published": "2026-10-13T12:00:00+00:00",
         "references": [
-          "https://github.com/tokio-rs/tokio/pull/7232",
-          "https://github.com/tokio-rs/tokio",
-          "https://rustsec.org/advisories/RUSTSEC-2025-0023.html"
+          "https://crates.io/crates/tokio",
+          "https://rustsec.org/advisories/RUSTSEC-2026-0386.html",
+          "https://github.com/tokio-rs/tokio/pull/8587",
+          "https://github.com/tokio-rs/tokio/issues/8538",
+          "https://github.com/tokio-rs/tokio/issues/8539"
         ],
-        "severity": {
-          "score": 2.7,
-          "severity": "low",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:N/SC:N/SI:N/SA:N/E:U"
-        },
-        "summary": "Tokio broadcast channel calls clone in parallel, but does not require `Sync`"
+        "severity": null,
+        "summary": "`AsyncFd::new` and related constructors violate I/O safety"
       },
-      "cvss_score": 2.7,
+      "cvss_score": null,
       "dep_name": "tokio",
-      "dep_version": "1.28.0",
+      "dep_version": "1.2.0",
       "direct": true,
       "ecosystem": "Cargo",
       "epss": null,
@@ -2215,46 +1493,39 @@
         "msf_modules": []
       },
       "exposure_factor": 0.0,
-      "finding_id": "sca:vuln:Cargo:tokio:1.28.0:GHSA-rr8g-9fpq-6wmg",
+      "finding_id": "sca:vuln:Cargo:tokio:1.2.0:RUSTSEC-2026-0386",
       "in_kev": false,
       "parser_confidence": {
         "level": "high",
         "numeric": 0.95
       },
-      "purl": "pkg:cargo/tokio@1.28.0",
-      "raptor_risk_estimate": 7.9736551874999995,
+      "purl": "pkg:cargo/tokio@1.2.0",
+      "raptor_risk_estimate": 6.5982729041775,
       "reachability": {
         "confidence": {
           "level": "high",
           "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
+          "reason": "crate imported but the 6 OSV-listed affected symbol(s) are not called from non-test Rust source"
         },
-        "evidence": [
-          "stress-test/examples/simple_echo_tcp.rs:4",
-          "tests-build/src/lib.rs:2",
-          "tests-integration/tests/process_stdio.rs:4",
-          "tests-integration/tests/process_stdio.rs:5",
-          "tests-integration/tests/process_stdio.rs:6",
-          "... (+366 more)"
-        ],
-        "verdict": "imported"
+        "evidence": [],
+        "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 27.0,
-        "cvss_source": "numeric",
+        "calibration_status": "needs_retune",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.66885,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 7.9736551874999995,
+        "exposure_multiplier": 0.45,
+        "final": 6.5982729041775,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
+        "reachability_multiplier": 0.60727,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "low",
+      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -2307,35 +1578,104 @@
         "numeric": 0.95
       },
       "purl": "pkg:cargo/tokio@1.28.0",
-      "raptor_risk_estimate": 11.812822499999998,
+      "raptor_risk_estimate": 6.5982729041775,
       "reachability": {
         "confidence": {
           "level": "high",
           "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
+          "reason": "crate imported but the 4 OSV-listed affected symbol(s) are not called from non-test Rust source"
         },
-        "evidence": [
-          "stress-test/examples/simple_echo_tcp.rs:4",
-          "tests-build/src/lib.rs:2",
-          "tests-integration/tests/process_stdio.rs:4",
-          "tests-integration/tests/process_stdio.rs:5",
-          "tests-integration/tests/process_stdio.rs:6",
-          "... (+366 more)"
-        ],
-        "verdict": "imported"
+        "evidence": [],
+        "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.66885,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 11.812822499999998,
+        "exposure_multiplier": 0.45,
+        "final": 6.5982729041775,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
+        "reachability_multiplier": 0.60727,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "1.51.6",
+          "1.53.3"
+        ],
+        "id": "RUSTSEC-2026-0386",
+        "informational": "unsound",
+        "modified": "2026-10-23T14:45:03.847864+00:00",
+        "published": "2026-10-13T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/tokio",
+          "https://rustsec.org/advisories/RUSTSEC-2026-0386.html",
+          "https://github.com/tokio-rs/tokio/pull/8587",
+          "https://github.com/tokio-rs/tokio/issues/8538",
+          "https://github.com/tokio-rs/tokio/issues/8539"
+        ],
+        "severity": null,
+        "summary": "`AsyncFd::new` and related constructors violate I/O safety"
+      },
+      "cvss_score": null,
+      "dep_name": "tokio",
+      "dep_version": "1.28.0",
+      "direct": true,
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:Cargo:tokio:1.28.0:RUSTSEC-2026-0386",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:cargo/tokio@1.28.0",
+      "raptor_risk_estimate": 6.5982729041775,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "crate imported but the 4 OSV-listed affected symbol(s) are not called from non-test Rust source"
+        },
+        "evidence": [],
+        "verdict": "not_function_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.66885,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 6.5982729041775,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.60727,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -2386,7 +1726,7 @@
       "dep_version": "1.5.0",
       "direct": true,
       "ecosystem": "Cargo",
-      "epss": 0.00836,
+      "epss": 0.00833,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2402,35 +1742,28 @@
         "numeric": 0.95
       },
       "purl": "pkg:cargo/tokio@1.5.0",
-      "raptor_risk_estimate": 10.744443167864999,
+      "raptor_risk_estimate": 6.446481594486102,
       "reachability": {
         "confidence": {
           "level": "high",
           "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
+          "reason": "crate imported but the 6 OSV-listed affected symbol(s) are not called from non-test Rust source"
         },
-        "evidence": [
-          "stress-test/examples/simple_echo_tcp.rs:4",
-          "tests-build/src/lib.rs:2",
-          "tests-integration/tests/process_stdio.rs:4",
-          "tests-integration/tests/process_stdio.rs:5",
-          "tests-integration/tests/process_stdio.rs:6",
-          "... (+366 more)"
-        ],
-        "verdict": "imported"
+        "evidence": [],
+        "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.403566108,
+        "epss_multiplier": 0.44302596899999996,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 10.744443167864999,
+        "exposure_multiplier": 0.45,
+        "final": 6.446481594486102,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
+        "reachability_multiplier": 0.60727,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -2454,7 +1787,7 @@
           "1.18.5"
         ],
         "id": "GHSA-4q83-7cq4-p6wg",
-        "modified": "2026-02-04T04:36:59.278362+00:00",
+        "modified": "2026-09-10T03:49:56.588581+00:00",
         "published": "2023-02-04T00:30:37+00:00",
         "references": [
           "https://github.com/tokio-rs/tokio/issues/5372",
@@ -2485,35 +1818,28 @@
         "numeric": 0.95
       },
       "purl": "pkg:cargo/tokio@1.5.0",
-      "raptor_risk_estimate": 11.812822499999998,
+      "raptor_risk_estimate": 6.5982729041775,
       "reachability": {
         "confidence": {
           "level": "high",
           "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
+          "reason": "crate imported but the 6 OSV-listed affected symbol(s) are not called from non-test Rust source"
         },
-        "evidence": [
-          "stress-test/examples/simple_echo_tcp.rs:4",
-          "tests-build/src/lib.rs:2",
-          "tests-integration/tests/process_stdio.rs:4",
-          "tests-integration/tests/process_stdio.rs:5",
-          "tests-integration/tests/process_stdio.rs:6",
-          "... (+366 more)"
-        ],
-        "verdict": "imported"
+        "evidence": [],
+        "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.66885,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 11.812822499999998,
+        "exposure_multiplier": 0.45,
+        "final": 6.5982729041775,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
+        "reachability_multiplier": 0.60727,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -2561,7 +1887,7 @@
       "dep_version": "1.5.0",
       "direct": true,
       "ecosystem": "Cargo",
-      "epss": 0.01162,
+      "epss": 0.01239,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2577,213 +1903,32 @@
         "numeric": 0.95
       },
       "purl": "pkg:cargo/tokio@1.5.0",
-      "raptor_risk_estimate": 14.8116515604075,
+      "raptor_risk_estimate": 8.887506345667871,
       "reachability": {
         "confidence": {
           "level": "high",
           "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
+          "reason": "crate imported but the 6 OSV-listed affected symbol(s) are not called from non-test Rust source"
         },
-        "evidence": [
-          "stress-test/examples/simple_echo_tcp.rs:4",
-          "tests-build/src/lib.rs:2",
-          "tests-integration/tests/process_stdio.rs:4",
-          "tests-integration/tests/process_stdio.rs:5",
-          "tests-integration/tests/process_stdio.rs:6",
-          "... (+366 more)"
-        ],
-        "verdict": "imported"
+        "evidence": [],
+        "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.405229686,
+        "epss_multiplier": 0.444890727,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 14.8116515604075,
+        "exposure_multiplier": 0.45,
+        "final": 8.887506345667871,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
+        "reachability_multiplier": 0.60727,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
       "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null,
-      "transitive_depth": 0,
-      "version_match_confidence": {
-        "level": "high",
-        "numeric": 0.95
-      }
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "RUSTSEC-2025-0023"
-        ],
-        "cwe_ids": [
-          "CWE-664"
-        ],
-        "fixed_versions": [
-          "1.44.2",
-          "1.38.2",
-          "1.43.1"
-        ],
-        "id": "GHSA-rr8g-9fpq-6wmg",
-        "modified": "2026-02-04T03:38:08.652126+00:00",
-        "published": "2025-04-07T21:12:50+00:00",
-        "references": [
-          "https://github.com/tokio-rs/tokio/pull/7232",
-          "https://github.com/tokio-rs/tokio",
-          "https://rustsec.org/advisories/RUSTSEC-2025-0023.html"
-        ],
-        "severity": {
-          "score": 2.7,
-          "severity": "low",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:N/SC:N/SI:N/SA:N/E:U"
-        },
-        "summary": "Tokio broadcast channel calls clone in parallel, but does not require `Sync`"
-      },
-      "cvss_score": 2.7,
-      "dep_name": "tokio",
-      "dep_version": "1.5.0",
-      "direct": true,
-      "ecosystem": "Cargo",
-      "epss": null,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "exposure_factor": 0.0,
-      "finding_id": "sca:vuln:Cargo:tokio:1.5.0:GHSA-rr8g-9fpq-6wmg",
-      "in_kev": false,
-      "parser_confidence": {
-        "level": "high",
-        "numeric": 0.95
-      },
-      "purl": "pkg:cargo/tokio@1.5.0",
-      "raptor_risk_estimate": 7.9736551874999995,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
-        },
-        "evidence": [
-          "stress-test/examples/simple_echo_tcp.rs:4",
-          "tests-build/src/lib.rs:2",
-          "tests-integration/tests/process_stdio.rs:4",
-          "tests-integration/tests/process_stdio.rs:5",
-          "tests-integration/tests/process_stdio.rs:6",
-          "... (+366 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 27.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 7.9736551874999995,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "low",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null,
-      "transitive_depth": 0,
-      "version_match_confidence": {
-        "level": "high",
-        "numeric": 0.95
-      }
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "GHSA-4q83-7cq4-p6wg"
-        ],
-        "fixed_versions": [
-          "1.18.5",
-          "1.20.4",
-          "1.24.2"
-        ],
-        "id": "RUSTSEC-2023-0005",
-        "informational": "unsound",
-        "modified": "2023-11-08T04:15:17.465753+00:00",
-        "published": "2023-01-11T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/tokio",
-          "https://rustsec.org/advisories/RUSTSEC-2023-0005.html",
-          "https://github.com/tokio-rs/tokio/issues/5372"
-        ],
-        "severity": null,
-        "summary": "`tokio::io::ReadHalf<T>::unsplit` is Unsound"
-      },
-      "cvss_score": null,
-      "dep_name": "tokio",
-      "dep_version": "1.5.0",
-      "direct": true,
-      "ecosystem": "Cargo",
-      "epss": null,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "exposure_factor": 0.0,
-      "finding_id": "sca:vuln:Cargo:tokio:1.5.0:RUSTSEC-2023-0005",
-      "in_kev": false,
-      "parser_confidence": {
-        "level": "high",
-        "numeric": 0.95
-      },
-      "purl": "pkg:cargo/tokio@1.5.0",
-      "raptor_risk_estimate": 11.812822499999998,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
-        },
-        "evidence": [
-          "stress-test/examples/simple_echo_tcp.rs:4",
-          "tests-build/src/lib.rs:2",
-          "tests-integration/tests/process_stdio.rs:4",
-          "tests-integration/tests/process_stdio.rs:5",
-          "tests-integration/tests/process_stdio.rs:6",
-          "... (+366 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 11.812822499999998,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -2836,35 +1981,104 @@
         "numeric": 0.95
       },
       "purl": "pkg:cargo/tokio@1.5.0",
-      "raptor_risk_estimate": 11.812822499999998,
+      "raptor_risk_estimate": 6.5982729041775,
       "reachability": {
         "confidence": {
           "level": "high",
           "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
+          "reason": "crate imported but the 6 OSV-listed affected symbol(s) are not called from non-test Rust source"
         },
-        "evidence": [
-          "stress-test/examples/simple_echo_tcp.rs:4",
-          "tests-build/src/lib.rs:2",
-          "tests-integration/tests/process_stdio.rs:4",
-          "tests-integration/tests/process_stdio.rs:5",
-          "tests-integration/tests/process_stdio.rs:6",
-          "... (+366 more)"
-        ],
-        "verdict": "imported"
+        "evidence": [],
+        "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.66885,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 11.812822499999998,
+        "exposure_multiplier": 0.45,
+        "final": 6.5982729041775,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
+        "reachability_multiplier": 0.60727,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "1.51.6",
+          "1.53.3"
+        ],
+        "id": "RUSTSEC-2026-0386",
+        "informational": "unsound",
+        "modified": "2026-10-23T14:45:03.847864+00:00",
+        "published": "2026-10-13T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/tokio",
+          "https://rustsec.org/advisories/RUSTSEC-2026-0386.html",
+          "https://github.com/tokio-rs/tokio/pull/8587",
+          "https://github.com/tokio-rs/tokio/issues/8538",
+          "https://github.com/tokio-rs/tokio/issues/8539"
+        ],
+        "severity": null,
+        "summary": "`AsyncFd::new` and related constructors violate I/O safety"
+      },
+      "cvss_score": null,
+      "dep_name": "tokio",
+      "dep_version": "1.5.0",
+      "direct": true,
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:Cargo:tokio:1.5.0:RUSTSEC-2026-0386",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:cargo/tokio@1.5.0",
+      "raptor_risk_estimate": 6.5982729041775,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "crate imported but the 6 OSV-listed affected symbol(s) are not called from non-test Rust source"
+        },
+        "evidence": [],
+        "verdict": "not_function_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.66885,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 6.5982729041775,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.60727,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -2887,12 +2101,12 @@
           "0.3.20"
         ],
         "id": "RUSTSEC-2025-0055",
-        "modified": "2025-09-02T11:42:15.974613+00:00",
+        "modified": "2026-10-12T18:00:11.495445+00:00",
         "published": "2025-08-29T12:00:00+00:00",
         "references": [
           "https://crates.io/crates/tracing-subscriber",
           "https://rustsec.org/advisories/RUSTSEC-2025-0055.html",
-          "https://github.com/advisories/GHSA-xwfj-jgwm-7wp5"
+          "https://github.com/tokio-rs/tracing/pull/3368"
         ],
         "severity": null,
         "summary": "Logging user input may result in poisoning logs with ANSI escape sequences"
@@ -2902,7 +2116,7 @@
       "dep_version": "0.3.1",
       "direct": true,
       "ecosystem": "Cargo",
-      "epss": 0.00325,
+      "epss": 0.00341,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2918,7 +2132,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:cargo/tracing-subscriber@0.3.1",
-      "raptor_risk_estimate": 4.910435998434638,
+      "raptor_risk_estimate": 5.088214815652064,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2931,17 +2145,17 @@
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400958475,
+        "epss_multiplier": 0.44076621299999996,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 4.910435998434638,
+        "exposure_multiplier": 0.45,
+        "final": 5.088214815652064,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
+        "reachability_multiplier": 0.71062,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
