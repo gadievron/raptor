@@ -70,7 +70,7 @@ def _drive_connect(s: socket.socket, target: str) -> int:
     try:
         s.sendall((f"CONNECT {target} HTTP/1.1\r\n"
                    f"Host: {target}\r\n\r\n").encode("latin-1"))
-    except (BrokenPipeError, ConnectionResetError):
+    except OSError:
         pass
     buf = b""
     try:
