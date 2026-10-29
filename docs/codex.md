@@ -11,6 +11,14 @@ bin/raptor --codex
 The workspace-write sandbox is required for analyses. Use natural language or
 name a skill explicitly (`$scan`, `$project`).
 
+RAPTOR commands recover operator configuration, output settings, provider
+credentials and routing from the private session broker. Ordinary shell
+commands retain Codex's core environment filter. Credentials are not placed in
+launcher arguments or persistent startup context; target subprocesses retain
+RAPTOR's existing credential stripping. Restart Codex after upgrading the
+broker so it captures the operator's current environment. Custom output and
+credential-file locations still need the appropriate native sandbox grants.
+
 RAPTOR's Claude-style `/scan`, `/fuzz`, `/web` and `/agentic` shortcuts are not
 registered Codex slash commands. In the Codex chat composer, use:
 
