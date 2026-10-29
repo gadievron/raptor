@@ -1919,7 +1919,7 @@ def build_workflow_bundles(
     half_budget = token_budget // 2
     forward = _build_forward_index(call_edges)
 
-    scored: list[tuple[float, str, list[SideEffectSite], list[str]]] = []
+    scored: list[tuple[float, str, list[SideEffectSite], list[str], str]] = []
 
     for ep_fid in entry_points:
         if ep_fid not in func_index:
