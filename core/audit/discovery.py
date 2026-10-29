@@ -39,6 +39,35 @@ _STATE_NAME_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Side-effect call-site patterns.  A call site whose callee name
+# matches one of these regexes is a side-effect along a workflow path.
+# Each tuple: (compiled_re, category_tag).
+_SIDE_EFFECT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    # DB writes — ORM/driver patterns
+    (re.compile(
+        r"\b(?:save|create|insert|update|delete|remove|commit|execute|"
+        r"executemany|bulk_create|bulk_update|add_all|flush|merge|"
+        r"run_in_transaction)\b",
+    ), "db_write"),
+    # Network — outbound HTTP / RPC / socket sends
+    # (delete is in db_write above — ambiguous between HTTP/DB/file;
+    # db_write wins by pattern order, so it is not repeated here)
+    (re.compile(
+        r"\b(?:post|put|patch|send|sendto|sendmsg|sendall|"
+        r"urlopen|fetch|aiohttp|grpc_call|publish|enqueue)\b",
+    ), "network"),
+    # File mutations
+    (re.compile(
+        r"\b(?:write|writelines|truncate|rename|replace|unlink|"
+        r"rmtree|makedirs|mkdir|copy2?|move|shutil)\b",
+    ), "file_write"),
+    # External API / payment / email
+    (re.compile(
+        r"\b(?:charge|refund|capture|transfer|payout|"
+        r"send_mail|send_email|smtp|sendgrid)\b",
+    ), "external_api"),
+]
+
 DEFAULT_SM_MIN_FILES = 2
 DEFAULT_SM_MIN_HANDLERS = 3
 DEFAULT_SM_MAX_BUNDLES = 50
@@ -47,6 +76,10 @@ HANDLER_CONTEXT_LINES = 10
 DEFAULT_MAX_SWEEP_TARGETS = 40
 MIN_SWEEP_LINES = 10
 MAX_CALLER_SIGNATURES = 3
+
+DEFAULT_MAX_WORKFLOWS = 30
+MIN_WORKFLOW_SIDE_EFFECTS = 2
+MAX_WORKFLOW_HOP_DEPTH = 12
 
 # Canonical guard-type vocabulary — must match collector._GUARD_TYPE_VALUES
 # and the llm_review schema enum.
@@ -155,6 +188,31 @@ class SweepTarget:
     fid: str
     source: str
     callers_source: str
+    annotation: str
+    priority_score: float
+    priority_reason: str
+
+
+@dataclass
+class SideEffectSite:
+    """One side-effect call site along a workflow path."""
+
+    fid: str
+    callee_name: str
+    category: str  # db_write | network | file_write | external_api
+    line: int
+    snippet: str
+
+
+@dataclass
+class WorkflowBundle:
+    """An entry-point-to-completion path with side effects, for LLM review."""
+
+    entry_fid: str
+    side_effects: list[SideEffectSite]
+    path_fids: list[str]
+    entry_source: str
+    side_effect_sources: list[str]
     annotation: str
     priority_score: float
     priority_reason: str
@@ -1690,6 +1748,445 @@ def run_assumption_mining(
     logger.info(
         "discovery: assumption mining %d targets, %d findings, $%.2f total",
         len(targets), total_findings, total_cost,
+    )
+    return results
+
+
+# ── workflow extraction (A3) ──────────────────────────────────────
+
+def _detect_side_effects(
+    fid: str,
+    func_info: dict[str, Any],
+    target_path: Path,
+) -> list[SideEffectSite]:
+    """Scan a function's source for side-effect call sites."""
+    full_path = target_path / func_info["file"]
+    from core.audit.context import _read_target_text
+    text = _read_target_text(full_path)
+    if not text:
+        return []
+
+    from core.source.lines import split_lines
+
+    lines = split_lines(text)
+    start = max(0, func_info["line_start"] - 1)
+    end = func_info.get("line_end") or len(lines)
+
+    hits: list[SideEffectSite] = []
+    for i in range(start, min(end, len(lines))):
+        line = lines[i]
+        for pattern, category in _SIDE_EFFECT_PATTERNS:
+            m = pattern.search(line)
+            if m:
+                abs_line = i + 1
+                ctx_start = max(0, i - 1)
+                ctx_end = min(len(lines), i + 2)
+                snippet = "\n".join(
+                    f"{j + 1}: {lines[j]}"
+                    for j in range(ctx_start, ctx_end)
+                )
+                hits.append(SideEffectSite(
+                    fid=fid,
+                    callee_name=m.group(0),
+                    category=category,
+                    line=abs_line,
+                    snippet=snippet,
+                ))
+                break  # one category per line
+    return hits
+
+
+def _build_forward_index(
+    call_edges: list[dict[str, Any]],
+) -> dict[tuple[str, str], list[tuple[str, str]]]:
+    """Build a caller→callees forward adjacency from call_edges."""
+    forward: dict[tuple[str, str], list[tuple[str, str]]] = defaultdict(list)
+    for edge in call_edges:
+        cf = edge.get("caller_file", "")
+        cn = edge.get("caller", "")
+        ef = edge.get("callee_file", "")
+        en = edge.get("callee", "")
+        if cf and cn and ef and en:
+            forward[(cf, cn)].append((ef, en))
+    return forward
+
+
+def _walk_forward_callees(
+    fid: str,
+    forward: dict[tuple[str, str], list[tuple[str, str]]],
+    func_index: dict[str, dict[str, Any]],
+    max_depth: int = MAX_WORKFLOW_HOP_DEPTH,
+) -> list[str]:
+    """BFS walk forward from *fid* through the call graph.
+
+    Returns FIDs in visitation order (breadth-first), excluding the
+    starting *fid*.  Only includes callees that exist in the func_index.
+
+    *forward* is the pre-built adjacency from ``_build_forward_index``.
+    """
+    visited: set[str] = {fid}
+    queue: list[tuple[str, int]] = [(fid, 0)]
+    result: list[str] = []
+    head = 0
+    while head < len(queue):
+        current, depth = queue[head]
+        head += 1
+        if depth >= max_depth:
+            continue
+        c_file, c_func = (
+            current.rsplit(":", 1) if ":" in current else ("", current)
+        )
+        for callee_file, callee_func in forward.get((c_file, c_func), []):
+            callee_fid = f"{callee_file}:{callee_func}"
+            if callee_fid in visited:
+                continue
+            if callee_fid not in func_index:
+                continue
+            visited.add(callee_fid)
+            result.append(callee_fid)
+            queue.append((callee_fid, depth + 1))
+    return result
+
+
+def _score_workflow(
+    entry_fid: str,
+    side_effects: list[SideEffectSite],
+    *,
+    sinks: set[str],
+    weakness_fids: set[str],
+) -> tuple[float, str]:
+    """Score a workflow for priority."""
+    score = 0.0
+    reasons: list[str] = []
+
+    n_effects = len(side_effects)
+    if n_effects >= 4:
+        score += 3
+        reasons.append(f"{n_effects}-side-effects")
+    elif n_effects >= 2:
+        score += 1
+        reasons.append(f"{n_effects}-side-effects")
+
+    categories = {se.category for se in side_effects}
+    if len(categories) >= 2:
+        score += 2
+        reasons.append(f"mixed-categories({','.join(sorted(categories))})")
+
+    se_fids = {se.fid for se in side_effects}
+    if se_fids & sinks:
+        score += 2
+        reasons.append("sink-on-path")
+
+    if se_fids & weakness_fids:
+        score += 1
+        reasons.append("weakness-on-path")
+
+    return score, "; ".join(reasons) if reasons else "eligible"
+
+
+def build_workflow_bundles(
+    checklist: dict[str, Any],
+    context_map: dict[str, Any] | None,
+    entry_points: set[str],
+    call_edges: list[dict[str, Any]],
+    *,
+    target_path: Path,
+    max_workflows: int = DEFAULT_MAX_WORKFLOWS,
+    token_budget: int = DEFAULT_TOKEN_BUDGET,
+    weakness_fids: set[str] | None = None,
+) -> list[WorkflowBundle]:
+    """Build workflow bundles from entry points and their call-graph paths.
+
+    For each entry point, walks the call graph forward, detects
+    side-effect sites, and packages the entry + side-effect functions
+    for LLM review.
+    """
+    func_index = _build_func_index(checklist)
+
+    sinks: set[str] = set()
+    if context_map:
+        from core.audit._util import extract_context_map_set
+        sinks = extract_context_map_set(context_map, "sinks")
+        entry_points = entry_points | extract_context_map_set(
+            context_map, "entry_points",
+        )
+
+    if not entry_points:
+        logger.info("discovery: no entry points for workflow extraction")
+        return []
+
+    wf = weakness_fids or set()
+    half_budget = token_budget // 2
+    forward = _build_forward_index(call_edges)
+
+    scored: list[tuple[float, str, list[SideEffectSite], list[str]]] = []
+
+    for ep_fid in entry_points:
+        if ep_fid not in func_index:
+            continue
+
+        reachable = _walk_forward_callees(
+            ep_fid, forward, func_index,
+        )
+
+        all_effects: list[SideEffectSite] = []
+        for r_fid in [ep_fid] + reachable:
+            info = func_index.get(r_fid)
+            if not info:
+                continue
+            effects = _detect_side_effects(r_fid, info, target_path)
+            all_effects.extend(effects)
+
+        if len(all_effects) < MIN_WORKFLOW_SIDE_EFFECTS:
+            continue
+
+        # Deduplicate path_fids while preserving order
+        seen_path: set[str] = set()
+        path_fids: list[str] = []
+        for pf in [ep_fid] + [se.fid for se in all_effects]:
+            if pf not in seen_path:
+                seen_path.add(pf)
+                path_fids.append(pf)
+
+        score, reason = _score_workflow(
+            ep_fid, all_effects, sinks=sinks, weakness_fids=wf,
+        )
+        scored.append((score, ep_fid, all_effects, path_fids, reason))
+
+    scored.sort(key=lambda t: -t[0])
+
+    bundles: list[WorkflowBundle] = []
+    for score_val, ep_fid, effects, path_fids, reason in scored[
+        :max_workflows
+    ]:
+        ep_info = func_index[ep_fid]
+        ep_source = _read_function_source(target_path, ep_info, half_budget)
+        if not ep_source:
+            continue
+
+        # Build fid→source mapping so annotation can index correctly
+        se_source_map: dict[str, str] = {}
+        se_sources: list[str] = []
+        se_budget_each = max(
+            500, (token_budget - estimate_tokens(ep_source)) // max(len(effects), 1),
+        )
+        seen_se_fids: set[str] = set()
+        for se in effects:
+            if se.fid in seen_se_fids or se.fid == ep_fid:
+                continue
+            seen_se_fids.add(se.fid)
+            se_info = func_index.get(se.fid)
+            if not se_info:
+                continue
+            se_src = _read_function_source(target_path, se_info, se_budget_each)
+            if se_src:
+                se_source_map[se.fid] = se_src
+                se_sources.append(se_src)
+
+        annotation = _render_workflow_annotation(
+            ep_fid, ep_info, ep_source, effects, se_source_map, func_index,
+        )
+        bundles.append(WorkflowBundle(
+            entry_fid=ep_fid,
+            side_effects=effects,
+            path_fids=path_fids,
+            entry_source=ep_source,
+            side_effect_sources=se_sources,
+            annotation=annotation,
+            priority_score=score_val,
+            priority_reason=reason,
+        ))
+
+    logger.info(
+        "discovery: %d entry points → %d workflow bundles (max %d)",
+        len(entry_points), len(bundles), max_workflows,
+    )
+    return bundles
+
+
+def _render_workflow_annotation(
+    entry_fid: str,
+    entry_info: dict[str, Any],
+    entry_source: str,
+    effects: list[SideEffectSite],
+    se_source_map: dict[str, str],
+    func_index: dict[str, dict[str, Any]],
+) -> str:
+    """Render the structural annotation for a workflow bundle.
+
+    *se_source_map* maps side-effect fid → source text (built in
+    ``build_workflow_bundles`` with insertion-order tracking).
+    """
+    lang = _detect_lang(entry_info["file"])
+
+    effect_summary = []
+    for i, se in enumerate(effects, 1):
+        effect_summary.append(
+            f"  {i}. [{se.category}] {se.fid} L{se.line}: "
+            f"`{se.callee_name}(…)`"
+        )
+
+    parts = [
+        f"## Workflow analysis: {entry_fid}",
+        "",
+        f"**Entry point** ({entry_info['file']}, "
+        f"line {entry_info['line_start']}).",
+        "",
+        "**Side effects along this path (in call-graph order):**",
+        *effect_summary,
+        "",
+        "### Entry point source",
+        f"```{lang}",
+        entry_source,
+        "```",
+    ]
+
+    rendered: set[str] = set()
+    for se in effects:
+        if se.fid in rendered or se.fid == entry_fid:
+            continue
+        rendered.add(se.fid)
+        src = se_source_map.get(se.fid)
+        if src:
+            parts.extend([
+                "",
+                f"### Side-effect function: {se.fid}",
+                f"```{lang}",
+                src,
+                "```",
+            ])
+
+    return "\n".join(parts)
+
+
+# ── workflow perspective prompt (B1b) ────────────────────────────
+
+WORKFLOW_PROMPT_TEMPLATE = """\
+You are examining a request-handling workflow from entry point to \
+completion.
+
+{annotation}
+
+Analyse this workflow for ordering and error-handling weaknesses:
+
+1. Are the side effects in the correct order?  What happens if step N \
+fails AFTER step N-1 has already committed?  Is there rollback or \
+compensation?
+2. Is this operation idempotent?  What happens on retry — duplicate \
+writes, double charges, repeated notifications?
+3. Are there TOCTOU gaps between a check (auth, validation, existence) \
+and the action that depends on it?
+4. Does the error path maintain the same invariants as the success \
+path?  When an exception fires mid-workflow, what state is the system \
+left in?
+5. Are there preconditions checked at the entry that later side \
+effects silently depend on without re-checking?
+
+For each weakness you find:
+
+- guard_type: ordering | validation | concurrency | lifetime | other
+- assumed_property: what the workflow assumes (e.g. "step 2 only runs \
+after step 1 succeeds", "auth check at entry covers all side effects")
+- mechanism: the specific failure scenario with function names and \
+line numbers
+- cwe_class: the CWE ID (e.g. CWE-367 for TOCTOU, CWE-662 for \
+ordering)
+- standalone: true if exploitable without composing with other \
+weaknesses
+- confidence: high (concrete failure path with named functions), \
+medium (plausible but needs runtime confirmation), low (speculative)
+
+Respond in JSON: {{ "findings": [ {{ "guard_type": "...", \
+"assumed_property": "...", "mechanism": "...", "cwe_class": "...", \
+"standalone": true/false, "confidence": "high|medium|low" }} ] }}
+
+If no weaknesses are found, respond: {{ "findings": [] }}
+"""
+
+
+def run_workflow_discovery(
+    bundles: list[WorkflowBundle],
+    *,
+    review_fn: Callable[[str, str], tuple[str, float]],
+    max_cost_usd: float = 5.0,
+) -> list[DiscoveryResult]:
+    """Run the workflow perspective prompt on each bundle.
+
+    Same contract as ``run_contract_discovery``: the caller provides
+    ``review_fn(system, user) -> (text, cost)`` and a cost cap.
+    """
+    results: list[DiscoveryResult] = []
+    total_cost = 0.0
+
+    system = (
+        "You are a security auditor analysing request-handling "
+        "workflows for ordering, error-handling, and state-consistency "
+        "weaknesses. Respond only with the JSON object described in "
+        "the prompt."
+    )
+
+    for bundle in bundles:
+        if total_cost >= max_cost_usd:
+            logger.info(
+                "discovery: workflow cost cap reached ($%.2f >= $%.2f), "
+                "stopping after %d/%d bundles",
+                total_cost, max_cost_usd, len(results), len(bundles),
+            )
+            break
+
+        prompt = WORKFLOW_PROMPT_TEMPLATE.format(
+            annotation=bundle.annotation,
+        )
+        try:
+            response, cost = review_fn(system, prompt)
+        except Exception as exc:
+            from core.llm.client import is_budget_exceeded_error
+            if is_budget_exceeded_error(exc):
+                logger.info(
+                    "discovery: workflow budget exhausted after "
+                    "%d/%d bundles",
+                    len(results), len(bundles),
+                )
+                break
+            logger.exception(
+                "discovery: LLM call failed for workflow %s",
+                bundle.entry_fid,
+            )
+            continue
+
+        # Reuse sweep target parser — same output schema
+        target_proxy = SweepTarget(
+            fid=bundle.entry_fid,
+            source="",
+            callers_source="",
+            annotation="",
+            priority_score=0,
+            priority_reason="",
+        )
+        result = _parse_discovery_findings(
+            response, target_proxy, "workflow_perspective",
+        )
+
+        # Grounding filter: drop findings that reference no identifier
+        # from the bundle source (same gate as contract/assumption).
+        if result.weaknesses:
+            all_source = (bundle.entry_source or "") + "\n" + "\n".join(
+                bundle.side_effect_sources,
+            )
+            idents = _source_identifiers(all_source)
+            result.weaknesses = _filter_grounded_findings(
+                result.weaknesses, idents,
+            )
+
+        result.cost_usd = cost
+        total_cost += cost
+        results.append(result)
+
+    total_findings = sum(len(r.weaknesses) for r in results)
+    logger.info(
+        "discovery: workflow perspective %d bundles, %d findings, "
+        "$%.2f total",
+        len(results), total_findings, total_cost,
     )
     return results
 

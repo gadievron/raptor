@@ -10640,10 +10640,12 @@ def _run_audit_body(
                 build_seam_bundles,
                 build_state_machine_bundles,
                 build_sweep_targets,
+                build_workflow_bundles,
                 detect_single_threaded,
                 run_assumption_mining,
                 run_contract_discovery,
                 run_state_machine_discovery,
+                run_workflow_discovery,
                 write_discovery_weaknesses,
             )
 
@@ -10767,6 +10769,62 @@ def _run_audit_body(
                             "from %d fields",
                             _sm_total_w, len(_sm_results),
                         )
+
+            # Workflow perspective discovery (B1b)
+            _wf_bundles = build_workflow_bundles(
+                checklist,
+                context_map,
+                _disc_entry_points,
+                call_edges,
+                target_path=config.target_path,
+                weakness_fids=_disc_weakness_fids,
+            )
+            if _wf_bundles:
+                _wf_budget = (
+                    (config.max_cost_usd or 50.0)
+                    * config.discovery_budget_fraction
+                    * _disc_prompt_share
+                    * 0.3
+                )
+                if not _disc_bundles:
+                    _wf_budget = (
+                        (config.max_cost_usd or 50.0)
+                        * config.discovery_budget_fraction
+                        * _disc_prompt_share
+                    )
+
+                _wf_client = _run_llm_client(config)
+
+                def _wf_review_fn(
+                    system: str, prompt: str,
+                ) -> tuple[str, float]:
+                    resp = _wf_client.generate(
+                        prompt, system_prompt=system,
+                    )
+                    return resp.content, resp.cost
+
+                _wf_results = run_workflow_discovery(
+                    _wf_bundles,
+                    review_fn=_wf_review_fn,
+                    max_cost_usd=_wf_budget,
+                )
+                _wf_total_w = 0
+                for wr in _wf_results:
+                    if wr.weaknesses:
+                        write_discovery_weaknesses(
+                            config.out_dir,
+                            wr.seam_or_field,
+                            wr.weaknesses,
+                            run_id=_disc_run_id,
+                            cost_usd=wr.cost_usd,
+                        )
+                        _wf_total_w += len(wr.weaknesses)
+                if _wf_total_w:
+                    logger.info(
+                        "open discovery: %d workflow weaknesses "
+                        "from %d paths",
+                        _wf_total_w, len(_wf_results),
+                    )
 
             # Assumption mining on high-priority targets
             _mining_targets = build_sweep_targets(

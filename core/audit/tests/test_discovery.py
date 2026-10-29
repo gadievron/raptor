@@ -11,13 +11,17 @@ _REPO_ROOT = str(Path(__file__).resolve().parents[3])
 from core.audit.discovery import (
     HandlerSite,
     SeamBundle,
+    SideEffectSite,
     StateMachineBundle,
     SweepTarget,
+    WorkflowBundle,
     _GUARD_TYPES,
     _HINT_MULTI_THREADED,
     _HINT_SINGLE_THREADED,
+    _build_forward_index,
     _build_func_index,
     _build_sm_prompt,
+    _detect_side_effects,
     _extract_call_site_snippet,
     _extract_cross_file_seams,
     _filter_grounded_findings,
@@ -27,17 +31,22 @@ from core.audit.discovery import (
     _parse_discovery_findings,
     _parse_findings,
     _parse_sm_findings,
+    _render_workflow_annotation,
     _score_field,
     _score_seam,
     _score_sweep_target,
+    _score_workflow,
     _source_identifiers,
+    _walk_forward_callees,
     build_seam_bundles,
     build_state_machine_bundles,
     build_sweep_targets,
+    build_workflow_bundles,
     detect_single_threaded,
     run_assumption_mining,
     run_contract_discovery,
     run_state_machine_discovery,
+    run_workflow_discovery,
     write_discovery_weaknesses,
 )
 
@@ -2179,3 +2188,539 @@ class TestNormaliseConfidence:
         assert _normalise_confidence("") == "medium"
         assert _normalise_confidence("refuted") == "medium"
         assert _normalise_confidence("unknown") == "medium"
+
+
+# ── workflow extraction (A3) + B1b ───────────────────────────────
+
+
+def _call_edges(*triples: tuple[str, str, str, str]) -> list[dict]:
+    """Build call_edges from (caller_file, caller, callee_file, callee)."""
+    return [
+        {"caller_file": cf, "caller": cn, "callee_file": ef, "callee": en}
+        for cf, cn, ef, en in triples
+    ]
+
+
+def _workflow_checklist() -> dict:
+    """Three-file checklist with an entry point → handler → DB writer chain."""
+    return _checklist(
+        (
+            "src/api.py",
+            [{"name": "create_order", "line_start": 1, "line_end": 30}],
+            [{"line": 10, "chain": ["process_payment"],
+              "caller": "create_order"}],
+        ),
+        (
+            "src/payment.py",
+            [{"name": "process_payment", "line_start": 1, "line_end": 40}],
+            [{"line": 20, "chain": ["save_receipt"],
+              "caller": "process_payment"}],
+        ),
+        (
+            "src/db.py",
+            [{"name": "save_receipt", "line_start": 1, "line_end": 25}],
+            [],
+        ),
+    )
+
+
+class TestDetectSideEffects:
+    """Side-effect detection from function source."""
+
+    def test_detects_db_write(self, tmp_path):
+        src = tmp_path / "src" / "db.py"
+        src.parent.mkdir(parents=True)
+        src.write_text(
+            "def save_receipt(order):\n"
+            "    db.session.commit()\n"
+            "    return True\n",
+        )
+        info = {"file": "src/db.py", "name": "save_receipt",
+                "line_start": 1, "line_end": 3}
+        hits = _detect_side_effects("src/db.py:save_receipt", info, tmp_path)
+        assert len(hits) == 1
+        assert hits[0].category == "db_write"
+        assert hits[0].callee_name == "commit"
+
+    def test_detects_network(self, tmp_path):
+        src = tmp_path / "src" / "notify.py"
+        src.parent.mkdir(parents=True)
+        src.write_text(
+            "def send_alert(msg):\n"
+            "    requests.post(url, data=msg)\n",
+        )
+        info = {"file": "src/notify.py", "name": "send_alert",
+                "line_start": 1, "line_end": 2}
+        hits = _detect_side_effects("src/notify.py:send_alert", info, tmp_path)
+        assert len(hits) == 1
+        assert hits[0].category == "network"
+
+    def test_detects_file_write(self, tmp_path):
+        src = tmp_path / "src" / "log.py"
+        src.parent.mkdir(parents=True)
+        src.write_text(
+            "def log_event(event):\n"
+            "    f.write(json.dumps(event))\n",
+        )
+        info = {"file": "src/log.py", "name": "log_event",
+                "line_start": 1, "line_end": 2}
+        hits = _detect_side_effects("src/log.py:log_event", info, tmp_path)
+        assert len(hits) == 1
+        assert hits[0].category == "file_write"
+
+    def test_no_false_positives_on_reads(self, tmp_path):
+        src = tmp_path / "src" / "reader.py"
+        src.parent.mkdir(parents=True)
+        src.write_text(
+            "def read_config(path):\n"
+            "    with open(path) as f:\n"
+            "        return json.load(f)\n",
+        )
+        info = {"file": "src/reader.py", "name": "read_config",
+                "line_start": 1, "line_end": 3}
+        hits = _detect_side_effects("src/reader.py:read_config", info, tmp_path)
+        assert len(hits) == 0
+
+    def test_one_category_per_line(self, tmp_path):
+        src = tmp_path / "src" / "multi.py"
+        src.parent.mkdir(parents=True)
+        src.write_text(
+            "def do_both():\n"
+            "    db.execute(requests.post(url).text)\n",
+        )
+        info = {"file": "src/multi.py", "name": "do_both",
+                "line_start": 1, "line_end": 2}
+        hits = _detect_side_effects("src/multi.py:do_both", info, tmp_path)
+        # Should detect first match only (post comes before execute in line,
+        # but the pattern iteration order matters — db_write is checked first)
+        assert len(hits) == 1
+
+    def test_known_false_positives_are_tolerated(self, tmp_path):
+        """Known FP patterns: string.replace, matplotlib save, comments."""
+        src = tmp_path / "src" / "fp.py"
+        src.parent.mkdir(parents=True)
+        src.write_text(
+            "def clean_text(s):\n"
+            "    out = s.replace('\\n', ' ')\n"
+            "    # TODO: delete this workaround\n"
+            "    fig.save('plot.png')\n"
+            "    return out\n",
+        )
+        info = {"file": "src/fp.py", "name": "clean_text",
+                "line_start": 1, "line_end": 5}
+        hits = _detect_side_effects("src/fp.py:clean_text", info, tmp_path)
+        # These ARE false positives (replace → file_write, delete → db_write,
+        # save → db_write) but the regex detector is intentionally imprecise.
+        # The grounding filter in the LLM stage catches hallucinated findings
+        # from these FP seeds. This test documents the known FP rate so
+        # future precision improvements can measure against it.
+        categories = [h.category for h in hits]
+        assert "file_write" in categories  # from replace
+        assert "db_write" in categories    # from delete or save
+        assert len(hits) >= 2
+
+
+class TestWalkForwardCallees:
+    """BFS call-graph walk from entry points."""
+
+    def test_walks_chain(self):
+        edges = _call_edges(
+            ("a.py", "main", "b.py", "handler"),
+            ("b.py", "handler", "c.py", "save"),
+        )
+        fwd = _build_forward_index(edges)
+        idx = {"a.py:main": {}, "b.py:handler": {}, "c.py:save": {}}
+        result = _walk_forward_callees("a.py:main", fwd, idx)
+        assert result == ["b.py:handler", "c.py:save"]
+
+    def test_skips_unknown_callees(self):
+        edges = _call_edges(
+            ("a.py", "main", "b.py", "handler"),
+            ("b.py", "handler", "ext.py", "unknown"),
+        )
+        fwd = _build_forward_index(edges)
+        idx = {"a.py:main": {}, "b.py:handler": {}}
+        result = _walk_forward_callees("a.py:main", fwd, idx)
+        assert result == ["b.py:handler"]
+
+    def test_no_cycles(self):
+        edges = _call_edges(
+            ("a.py", "f", "b.py", "g"),
+            ("b.py", "g", "a.py", "f"),
+        )
+        fwd = _build_forward_index(edges)
+        idx = {"a.py:f": {}, "b.py:g": {}}
+        result = _walk_forward_callees("a.py:f", fwd, idx)
+        assert result == ["b.py:g"]
+
+    def test_depth_limit(self):
+        edges = _call_edges(
+            ("a.py", "f0", "a.py", "f1"),
+            ("a.py", "f1", "a.py", "f2"),
+        )
+        fwd = _build_forward_index(edges)
+        idx = {"a.py:f0": {}, "a.py:f1": {}, "a.py:f2": {}}
+        result = _walk_forward_callees("a.py:f0", fwd, idx, max_depth=1)
+        assert result == ["a.py:f1"]
+
+
+class TestScoreWorkflow:
+    """Workflow scoring prioritises mixed categories and sinks."""
+
+    def test_mixed_categories_boost(self):
+        effects = [
+            SideEffectSite("a:f", "commit", "db_write", 10, ""),
+            SideEffectSite("b:g", "post", "network", 20, ""),
+        ]
+        score, reason = _score_workflow("entry:main", effects,
+                                        sinks=set(), weakness_fids=set())
+        assert score >= 3  # 1 (2 effects) + 2 (mixed)
+        assert "mixed-categories" in reason
+
+    def test_sink_on_path_boost(self):
+        effects = [
+            SideEffectSite("a:f", "commit", "db_write", 10, ""),
+            SideEffectSite("b:g", "post", "network", 20, ""),
+        ]
+        score, _ = _score_workflow("entry:main", effects,
+                                   sinks={"a:f"}, weakness_fids=set())
+        assert score >= 5
+
+    def test_minimum_effects(self):
+        effects = [
+            SideEffectSite("a:f", "commit", "db_write", 10, ""),
+        ]
+        score, _ = _score_workflow("entry:main", effects,
+                                   sinks=set(), weakness_fids=set())
+        assert score == 0
+
+
+class TestBuildWorkflowBundles:
+    """Integration: bundle assembly from checklist + call edges."""
+
+    def test_no_entry_points(self):
+        cl = _workflow_checklist()
+        edges = _call_edges(
+            ("src/api.py", "create_order", "src/payment.py", "process_payment"),
+        )
+        bundles = build_workflow_bundles(
+            cl, None, set(), edges,
+            target_path=Path("/nonexistent"),
+        )
+        assert bundles == []
+
+    def test_builds_bundle_with_side_effects(self, tmp_path):
+        # Write source files with side effects
+        api = tmp_path / "src" / "api.py"
+        api.parent.mkdir(parents=True)
+        api.write_text(
+            "def create_order(req):\n"
+            "    payment = process_payment(req.card)\n"
+            "    db.session.commit()\n"
+            "    send_email(req.user)\n"
+            "    return payment\n",
+        )
+        pay = tmp_path / "src" / "payment.py"
+        pay.write_text(
+            "def process_payment(card):\n"
+            "    result = gateway.charge(card)\n"
+            "    save_receipt(result)\n"
+            "    return result\n",
+        )
+        db = tmp_path / "src" / "db.py"
+        db.write_text(
+            "def save_receipt(receipt):\n"
+            "    db.execute(insert_sql, receipt)\n"
+            "    db.session.commit()\n",
+        )
+
+        cl = _checklist(
+            (
+                "src/api.py",
+                [{"name": "create_order", "line_start": 1, "line_end": 5}],
+                [{"line": 2, "chain": ["process_payment"],
+                  "caller": "create_order"}],
+            ),
+            (
+                "src/payment.py",
+                [{"name": "process_payment", "line_start": 1, "line_end": 4}],
+                [{"line": 3, "chain": ["save_receipt"],
+                  "caller": "process_payment"}],
+            ),
+            (
+                "src/db.py",
+                [{"name": "save_receipt", "line_start": 1, "line_end": 3}],
+                [],
+            ),
+        )
+        edges = _call_edges(
+            ("src/api.py", "create_order",
+             "src/payment.py", "process_payment"),
+            ("src/payment.py", "process_payment",
+             "src/db.py", "save_receipt"),
+        )
+        entry_points = {"src/api.py:create_order"}
+
+        bundles = build_workflow_bundles(
+            cl, None, entry_points, edges,
+            target_path=tmp_path,
+        )
+        assert len(bundles) == 1
+        b = bundles[0]
+        assert b.entry_fid == "src/api.py:create_order"
+        assert len(b.side_effects) >= 2
+        categories = {se.category for se in b.side_effects}
+        assert "db_write" in categories or "external_api" in categories
+
+
+class TestRunWorkflowDiscovery:
+    """LLM dispatch for workflow perspective."""
+
+    def test_parses_findings(self):
+        bundle = WorkflowBundle(
+            entry_fid="api.py:create_order",
+            side_effects=[
+                SideEffectSite("db.py:save", "commit", "db_write", 10, ""),
+                SideEffectSite("net.py:send", "post", "network", 20, ""),
+            ],
+            path_fids=["api.py:create_order", "db.py:save", "net.py:send"],
+            entry_source="def create_order():\n    send_email(user)\n    commit()",
+            side_effect_sources=[
+                "def save(): commit()",
+                "def send(): send_email(msg)",
+            ],
+            annotation="## Workflow analysis: api.py:create_order\n...",
+            priority_score=5.0,
+            priority_reason="test",
+        )
+
+        response = json.dumps({"findings": [
+            {
+                "guard_type": "ordering",
+                "assumed_property": "payment committed before email sent",
+                "mechanism": "send_email at L15 fires before "
+                             "commit at L20 — email goes out even on "
+                             "rollback",
+                "cwe_class": "CWE-662",
+                "standalone": True,
+                "confidence": "high",
+            },
+        ]})
+
+        def fake_review(system, prompt):
+            return response, 0.01
+
+        results = run_workflow_discovery(
+            [bundle], review_fn=fake_review, max_cost_usd=1.0,
+        )
+        assert len(results) == 1
+        r = results[0]
+        assert len(r.weaknesses) == 1
+        assert r.weaknesses[0]["guard_type"] == "ordering"
+        assert r.weaknesses[0]["source"] == "workflow_perspective"
+        assert r.cost_usd == 0.01
+
+    def test_cost_cap(self):
+        bundle = WorkflowBundle(
+            entry_fid="a:f",
+            side_effects=[
+                SideEffectSite("b:g", "commit", "db_write", 10, ""),
+                SideEffectSite("c:h", "post", "network", 20, ""),
+            ],
+            path_fids=["a:f", "b:g", "c:h"],
+            entry_source="def f(): ...",
+            side_effect_sources=[],
+            annotation="...",
+            priority_score=1.0,
+            priority_reason="test",
+        )
+
+        def expensive_review(system, prompt):
+            return '{"findings": []}', 10.0
+
+        results = run_workflow_discovery(
+            [bundle, bundle, bundle],
+            review_fn=expensive_review,
+            max_cost_usd=0.5,
+        )
+        # First call completes before the cap is checked on next iteration
+        assert len(results) == 1
+
+    def test_grounding_filter_drops_hallucinated_findings(self):
+        bundle = WorkflowBundle(
+            entry_fid="api.py:create_order",
+            side_effects=[
+                SideEffectSite("db.py:save", "commit", "db_write", 10, ""),
+                SideEffectSite("net.py:send", "post", "network", 20, ""),
+            ],
+            path_fids=["api.py:create_order", "db.py:save", "net.py:send"],
+            entry_source="def create_order(req): save(req)",
+            side_effect_sources=["def save(r): commit(r)"],
+            annotation="...",
+            priority_score=5.0,
+            priority_reason="test",
+        )
+
+        response = json.dumps({"findings": [
+            {
+                "guard_type": "ordering",
+                "assumed_property": "commit before email",
+                "mechanism": "save at L10 fires before commit at L20",
+                "cwe_class": "CWE-662",
+                "standalone": True,
+                "confidence": "high",
+            },
+            {
+                "guard_type": "concurrency",
+                "assumed_property": "no race on hallucinated_function",
+                "mechanism": "hallucinated_function is called without lock",
+                "cwe_class": "CWE-367",
+                "standalone": True,
+                "confidence": "high",
+            },
+        ]})
+
+        def fake_review(system, prompt):
+            return response, 0.01
+
+        results = run_workflow_discovery(
+            [bundle], review_fn=fake_review, max_cost_usd=1.0,
+        )
+        assert len(results) == 1
+        # The first finding references "save" and "commit" (in the source);
+        # the second references only "hallucinated_function" (not in source).
+        assert len(results[0].weaknesses) == 1
+        assert results[0].weaknesses[0]["guard_type"] == "ordering"
+
+
+class TestRenderWorkflowAnnotation:
+    """Annotation rendering maps side-effect source correctly."""
+
+    def test_renders_correct_source_per_function(self):
+        entry_info = {"file": "api.py", "line_start": 1}
+        effects = [
+            SideEffectSite("db.py:save", "commit", "db_write", 10, ""),
+            SideEffectSite("net.py:send", "post", "network", 20, ""),
+            # Duplicate fid — should appear in summary but not duplicate source
+            SideEffectSite("db.py:save", "execute", "db_write", 12, ""),
+        ]
+        se_source_map = {
+            "db.py:save": "def save(r): commit(r)",
+            "net.py:send": "def send(m): post(url, m)",
+        }
+        func_index = {
+            "api.py:create": {"file": "api.py"},
+            "db.py:save": {"file": "db.py"},
+            "net.py:send": {"file": "net.py"},
+        }
+
+        result = _render_workflow_annotation(
+            "api.py:create", entry_info, "def create(): ...",
+            effects, se_source_map, func_index,
+        )
+
+        # Both side-effect functions appear exactly once
+        assert result.count("### Side-effect function: db.py:save") == 1
+        assert result.count("### Side-effect function: net.py:send") == 1
+        # Correct source mapped to each
+        assert "def save(r): commit(r)" in result
+        assert "def send(m): post(url, m)" in result
+        # Source appears AFTER the correct heading
+        save_pos = result.index("db.py:save")
+        save_src_pos = result.index("def save(r)")
+        assert save_src_pos > save_pos
+        send_pos = result.index("net.py:send")
+        send_src_pos = result.index("def send(m)")
+        assert send_src_pos > send_pos
+
+    def test_missing_source_skips_section(self):
+        entry_info = {"file": "api.py", "line_start": 1}
+        effects = [
+            SideEffectSite("db.py:save", "commit", "db_write", 10, ""),
+            SideEffectSite("net.py:send", "post", "network", 20, ""),
+        ]
+        # Only db.py:save has source; net.py:send missing
+        se_source_map = {"db.py:save": "def save(r): commit(r)"}
+        func_index = {
+            "db.py:save": {"file": "db.py"},
+            "net.py:send": {"file": "net.py"},
+        }
+
+        result = _render_workflow_annotation(
+            "api.py:create", entry_info, "def create(): ...",
+            effects, se_source_map, func_index,
+        )
+
+        assert "### Side-effect function: db.py:save" in result
+        assert "### Side-effect function: net.py:send" not in result
+
+
+class TestBuildWorkflowBundlesMultiEntry:
+    """Multi-entry-point bundle building."""
+
+    def test_multiple_entry_points_independent(self, tmp_path):
+        api = tmp_path / "src" / "api.py"
+        api.parent.mkdir(parents=True)
+        api.write_text(
+            "def create_order(req):\n"
+            "    db.session.commit()\n"
+            "    send_email(req.user)\n",
+        )
+        admin = tmp_path / "src" / "admin.py"
+        admin.write_text(
+            "def delete_user(uid):\n"
+            "    db.execute(delete_sql)\n"
+            "    audit_log.write(uid)\n",
+        )
+
+        cl = _checklist(
+            (
+                "src/api.py",
+                [{"name": "create_order", "line_start": 1, "line_end": 3}],
+                [],
+            ),
+            (
+                "src/admin.py",
+                [{"name": "delete_user", "line_start": 1, "line_end": 3}],
+                [],
+            ),
+        )
+        edges = _call_edges()  # no cross-file edges needed
+        entry_points = {
+            "src/api.py:create_order",
+            "src/admin.py:delete_user",
+        }
+
+        bundles = build_workflow_bundles(
+            cl, None, entry_points, edges,
+            target_path=tmp_path,
+        )
+        assert len(bundles) == 2
+        fids = {b.entry_fid for b in bundles}
+        assert "src/api.py:create_order" in fids
+        assert "src/admin.py:delete_user" in fids
+
+    def test_path_fids_are_deduplicated(self, tmp_path):
+        src = tmp_path / "src" / "api.py"
+        src.parent.mkdir(parents=True)
+        # Two side effects in same function → fid appears twice in effects
+        src.write_text(
+            "def handler(req):\n"
+            "    db.commit()\n"
+            "    db.execute(sql)\n",
+        )
+
+        cl = _checklist(
+            (
+                "src/api.py",
+                [{"name": "handler", "line_start": 1, "line_end": 3}],
+                [],
+            ),
+        )
+        bundles = build_workflow_bundles(
+            cl, None, {"src/api.py:handler"}, _call_edges(),
+            target_path=tmp_path,
+        )
+        assert len(bundles) == 1
+        # path_fids should have no duplicates
+        assert len(bundles[0].path_fids) == len(set(bundles[0].path_fids))
