@@ -1,12 +1,19 @@
 # Codex support
 
-Use the shared launcher with `--codex`, or run `codex` directly from a trusted
-RAPTOR checkout. Review and trust the checkout and its hooks through Codex's
-normal trust flow.
+Use the shared launcher with `--codex`. Review and trust the checkout and its
+hooks through Codex's normal trust flow.
 
 ```bash
 bin/raptor --codex
 ```
+
+The launcher pins `RAPTOR_CODEX_HOOK_ROOT` to its own resolved installation.
+Hooks use that host-side anchor even when their working directory is a nested
+repository or scan target. They never discover executable code using the hook
+cwd, git root, payload, or `RAPTOR_DIR`. Plain `codex` launches without the
+launcher anchor refuse RAPTOR hooks; use the launcher rather than setting the
+anchor from a target repository. Restart through the launcher after updating
+these hook definitions, then review them through `/hooks`.
 
 The workspace-write sandbox is required for analyses. Use natural language or
 name a skill explicitly (`$scan`, `$project`).
