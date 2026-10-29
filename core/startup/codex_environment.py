@@ -18,6 +18,7 @@ import time
 from core.hash import sha256_bytes, sha256_string
 
 ROOT = Path(__file__).resolve().parents[2]
+BROKER_ENVIRONMENT_VERSION = 2
 _MAX_BYTES = 64 * 1024
 _FIELDS = {"version", "root", "session_id", "pid", "identity", "token_digest",
            "registry_home", "caller_dir", "launch_target", "broker_key"}
@@ -361,28 +362,38 @@ def restore(session_id):
             os.environ.pop("RAPTOR_REGISTRY_HOME", None)
             if previous is not None:
                 os.environ["RAPTOR_REGISTRY_HOME"] = previous
-        values = overlay(value, fields)
-    else:
-        # The sandbox hides host PIDs. Ask the same-user host broker rather
-        # than weakening identity validation or trusting a stored liveness bit.
-        from core.startup.codex_broker import request
-        values = request(session_id, {"op": "environment"})["environment"]
-        # Brokers started before config cleanup can still send this inert
-        # compatibility field. Accept but discard it during a rolling update.
-        if isinstance(values, dict):
-            values.pop("RAPTOR_MAINTAIN_PROJECT_WORKING_DIR", None)
-        allowed = {"RAPTOR_DIR", "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN", "CODEX",
-                   "RAPTOR_CODEX_CONTEXT_ID", "RAPTOR_CODEX_ENVIRONMENT",
-                   "RAPTOR_REGISTRY_HOME",
-                   "RAPTOR_CALLER_DIR", "RAPTOR_LAUNCH_TARGET"}
-        if (not isinstance(values, dict) or set(values) - allowed
-                or any(not isinstance(v, str) or "\0" in v for v in values.values())
-                or values.get("RAPTOR_DIR") != str(ROOT)
-                or values.get("RAPTOR_SESSION_PID") != str(pid)
-                or values.get("RAPTOR_CODEX_CONTEXT_ID") != value["session_id"]
-                or not secrets.compare_digest(sha256_string(values.get("RAPTOR_SESSION_TOKEN", "")),
-                                              value["token_digest"])):
-            raise CodexEnvironmentError("broker response does not match startup")
+    # Even with visible host PIDs, core-filtered shells have lost operator
+    # settings. The broker owns the launch-time snapshot; missing IPC is an
+    # explicit error, never a fallback to defaults or another root's values.
+    from core.startup.codex_broker import request
+    from core.startup.codex_operator_environment import allowed_name, install
+    reply = request(session_id, {"op": "environment"})
+    if (type(reply.get("environment_version")) is not int
+            or reply["environment_version"] != BROKER_ENVIRONMENT_VERSION):
+        raise CodexEnvironmentError("Codex environment broker needs a session restart")
+    values = reply["environment"]
+    # Inert compatibility field from brokers started before config cleanup.
+    if isinstance(values, dict):
+        values.pop("RAPTOR_MAINTAIN_PROJECT_WORKING_DIR", None)
+    allowed = {"RAPTOR_DIR", "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN", "CODEX",
+               "RAPTOR_CODEX_CONTEXT_ID", "RAPTOR_CODEX_ENVIRONMENT",
+               "RAPTOR_REGISTRY_HOME", "RAPTOR_CALLER_DIR", "RAPTOR_LAUNCH_TARGET"}
+    if (not isinstance(values, dict)
+            or any(key not in allowed and not allowed_name(key) for key in values)
+            or any(not isinstance(v, str) or "\0" in v for v in values.values())
+            or values.get("RAPTOR_DIR") != str(ROOT)
+            or values.get("RAPTOR_SESSION_PID") != str(pid)
+            or values.get("RAPTOR_CODEX_CONTEXT_ID") != value["session_id"]
+            or not secrets.compare_digest(sha256_string(values.get("RAPTOR_SESSION_TOKEN", "")),
+                                          value["token_digest"])):
+        raise CodexEnvironmentError("broker response does not match startup")
+    try:
+        for key, item in values.items():
+            os.fsencode(key)
+            os.fsencode(item)
+    except UnicodeError as exc:
+        raise CodexEnvironmentError("invalid broker environment encoding") from exc
+    install(values)
     additions = [str(ROOT / "bin"), str(ROOT / "libexec")]
     values["PATH"] = os.pathsep.join(additions + [p for p in os.environ.get("PATH", "").split(os.pathsep)
                                                  if p and p not in additions])
