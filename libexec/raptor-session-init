@@ -224,6 +224,20 @@ def warm_sage_embeddings():
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--codex-python"]:
+        # Standalone procedure snippets need RAPTOR_DIR before their first
+        # import. process_init above restores this process only; never source
+        # a shared env file or rewrite an independently approved shell call.
+        if (len(sys.argv) < 3 or os.environ.get("RAPTOR_CODEX_ENVIRONMENT") != "1"
+                or not os.environ.get("CODEX_THREAD_ID")
+                or not os.environ.get("RAPTOR_CODEX_CONTEXT_ID")
+                or os.environ.get("CLAUDECODE") or os.environ.get("RAPTOR_CODEX_HOOK") == "1"):
+            sys.exit("Usage in an initialized Codex session: "
+                     "python3 -I libexec/raptor-session-init --codex-python SCRIPT [ARGS...]")
+        import runpy
+        sys.argv = sys.argv[2:]
+        runpy.run_path(sys.argv[0], run_name="__main__")
+        sys.exit(0)
     if sys.argv[1:] == ["--codex-subagent-context"]:
         from core.json import loads
         from core.startup.codex_environment import publish_alias
