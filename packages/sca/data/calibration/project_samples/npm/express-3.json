@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-09-01T11:17:40Z",
+    "fetched_at": "2026-10-29T21:47:32Z",
     "git_ref": "3.21.2",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of express-3",
@@ -21,7 +21,7 @@
           "0.7.0"
         ],
         "id": "GHSA-pxg6-pf52-xh8x",
-        "modified": "2026-02-04T03:19:35.420344+00:00",
+        "modified": "2026-09-10T03:50:19.898971+00:00",
         "published": "2024-10-04T20:31:00+00:00",
         "references": [
           "https://github.com/jshttp/cookie/security/advisories/GHSA-pxg6-pf52-xh8x",
@@ -53,7 +53,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/cookie@0.1.3",
-      "raptor_risk_estimate": 7.2758942075999995,
+      "raptor_risk_estimate": 7.19031628404,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -66,14 +66,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.403096632,
+        "epss_multiplier": 0.442617192,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 7.2758942075999995,
+        "exposure_multiplier": 0.45,
+        "final": 7.19031628404,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -123,7 +123,7 @@
       "dep_version": "2.2.0",
       "direct": true,
       "ecosystem": "npm",
-      "epss": 0.02046,
+      "epss": 0.02105,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -139,7 +139,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/debug@2.2.0",
-      "raptor_risk_estimate": 13.867163101687499,
+      "raptor_risk_estimate": 13.672246809234375,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -153,14 +153,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.409740738,
+        "epss_multiplier": 0.448868265,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 13.867163101687499,
+        "exposure_multiplier": 0.45,
+        "final": 13.672246809234375,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -191,7 +191,7 @@
           "4.3.1"
         ],
         "id": "GHSA-gxpj-cx7g-858c",
-        "modified": "2026-02-04T02:48:03.221457+00:00",
+        "modified": "2026-09-10T03:47:07.070123+00:00",
         "published": "2018-08-09T20:18:07+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2017-16137",
@@ -212,7 +212,7 @@
       "dep_version": "2.2.0",
       "direct": true,
       "ecosystem": "npm",
-      "epss": 0.02798,
+      "epss": 0.02832,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -228,7 +228,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/debug@2.2.0",
-      "raptor_risk_estimate": 6.9052049215724995,
+      "raptor_risk_estimate": 6.795150661385999,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -242,14 +242,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.413578194,
+        "epss_multiplier": 0.452207376,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 6.9052049215724995,
+        "exposure_multiplier": 0.45,
+        "final": 6.795150661385999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -313,7 +313,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/ejs@2.3.3",
-      "raptor_risk_estimate": 19.08606766794,
+      "raptor_risk_estimate": 18.637044325326,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -328,14 +328,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.431591784,
+        "epss_multiplier": 0.46826450399999997,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 19.08606766794,
+        "exposure_multiplier": 0.45,
+        "final": 18.637044325326,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -400,7 +400,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/ejs@2.3.3",
-      "raptor_risk_estimate": 13.905330830718748,
+      "raptor_risk_estimate": 13.694910594553123,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -415,14 +415,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.410868501,
+        "epss_multiplier": 0.449612331,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 13.905330830718748,
+        "exposure_multiplier": 0.45,
+        "final": 13.694910594553123,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -451,7 +451,7 @@
           "3.1.10"
         ],
         "id": "GHSA-ghr5-ch3p-vcr6",
-        "modified": "2026-02-04T02:37:02.497258+00:00",
+        "modified": "2026-09-10T03:50:11.217600+00:00",
         "published": "2024-04-28T18:30:31+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2024-33883",
@@ -472,7 +472,7 @@
       "dep_version": "2.3.3",
       "direct": true,
       "ecosystem": "npm",
-      "epss": 0.00619,
+      "epss": 0.00614,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -488,7 +488,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/ejs@2.3.3",
-      "raptor_risk_estimate": 12.531056472641248,
+      "raptor_risk_estimate": 12.38656356080775,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -503,14 +503,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 69.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.402458757,
+        "epss_multiplier": 0.44202010199999997,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 12.531056472641248,
+        "exposure_multiplier": 0.45,
+        "final": 12.38656356080775,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -575,7 +575,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/ejs@2.3.3",
-      "raptor_risk_estimate": 11.164426762473749,
+      "raptor_risk_estimate": 11.020873325117623,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -590,14 +590,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 61.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.405591999,
+        "epss_multiplier": 0.444863169,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 11.164426762473749,
+        "exposure_multiplier": 0.45,
+        "final": 11.020873325117623,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -662,7 +662,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/ejs@2.3.3",
-      "raptor_risk_estimate": 25.06174088334,
+      "raptor_risk_estimate": 23.477655802986003,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -677,14 +677,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.566719224,
+        "epss_multiplier": 0.589887144,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 25.06174088334,
+        "exposure_multiplier": 0.45,
+        "final": 23.477655802986003,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -731,7 +731,7 @@
       "dep_version": "0.3.0",
       "direct": true,
       "ecosystem": "npm",
-      "epss": 0.01584,
+      "epss": 0.0156,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -747,7 +747,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/fresh@0.3.0",
-      "raptor_risk_estimate": 13.787373550499998,
+      "raptor_risk_estimate": 13.596001358625,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -760,14 +760,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40738315199999997,
+        "epss_multiplier": 0.44636507999999997,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 13.787373550499998,
+        "exposure_multiplier": 0.45,
+        "final": 13.596001358625,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -795,7 +795,7 @@
           "4.0.10"
         ],
         "id": "GHSA-5v2h-r2cx-5xgj",
-        "modified": "2026-08-03T21:44:57.222567+00:00",
+        "modified": "2026-09-10T03:49:10.576912+00:00",
         "published": "2022-01-14T21:04:46+00:00",
         "references": [
           "https://github.com/markedjs/marked/security/advisories/GHSA-5v2h-r2cx-5xgj",
@@ -816,7 +816,7 @@
       "dep_version": "0.3.5",
       "direct": true,
       "ecosystem": "npm",
-      "epss": 0.02743,
+      "epss": 0.02766,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -832,7 +832,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/marked@0.3.5",
-      "raptor_risk_estimate": 13.987538247093749,
+      "raptor_risk_estimate": 13.764720649331249,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -846,14 +846,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.413297529,
+        "epss_multiplier": 0.45190423799999996,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 13.987538247093749,
+        "exposure_multiplier": 0.45,
+        "final": 13.764720649331249,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -918,7 +918,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/marked@0.3.5",
-      "raptor_risk_estimate": 11.203616903069998,
+      "raptor_risk_estimate": 11.052619412552998,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -932,14 +932,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 61.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40701573599999996,
+        "epss_multiplier": 0.446144616,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 11.203616903069998,
+        "exposure_multiplier": 0.45,
+        "final": 11.052619412552998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -988,7 +988,7 @@
       "dep_version": "0.3.5",
       "direct": true,
       "ecosystem": "npm",
-      "epss": 0.00585,
+      "epss": 0.0061,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1004,7 +1004,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/marked@0.3.5",
-      "raptor_risk_estimate": 27.783760240473722,
+      "raptor_risk_estimate": 27.474094428281095,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1018,14 +1018,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 69.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.402285255,
+        "epss_multiplier": 0.44200173,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 27.783760240473722,
+        "exposure_multiplier": 0.45,
+        "final": 27.474094428281095,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1055,7 +1055,7 @@
           "4.0.10"
         ],
         "id": "GHSA-rrrm-qjm4-v8hf",
-        "modified": "2026-08-03T21:44:57.494710+00:00",
+        "modified": "2026-09-10T03:49:11.241428+00:00",
         "published": "2022-01-14T21:04:41+00:00",
         "references": [
           "https://github.com/markedjs/marked/security/advisories/GHSA-rrrm-qjm4-v8hf",
@@ -1076,7 +1076,7 @@
       "dep_version": "0.3.5",
       "direct": true,
       "ecosystem": "npm",
-      "epss": 0.02828,
+      "epss": 0.02852,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1092,7 +1092,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/marked@0.3.5",
-      "raptor_risk_estimate": 14.002218142874998,
+      "raptor_risk_estimate": 13.776752041537499,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1106,14 +1106,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.413731284,
+        "epss_multiplier": 0.452299236,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 14.002218142874998,
+        "exposure_multiplier": 0.45,
+        "final": 13.776752041537499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1162,7 +1162,7 @@
       "dep_version": "0.3.5",
       "direct": true,
       "ecosystem": "npm",
-      "epss": 0.01463,
+      "epss": 0.0144,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1178,7 +1178,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/marked@0.3.5",
-      "raptor_risk_estimate": 11.196734046836248,
+      "raptor_risk_estimate": 11.044426873859999,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1192,14 +1192,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 61.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.406765689,
+        "epss_multiplier": 0.44581392,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 11.196734046836248,
+        "exposure_multiplier": 0.45,
+        "final": 11.044426873859999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1247,7 +1247,7 @@
       "dep_version": "0.3.5",
       "direct": true,
       "ecosystem": "npm",
-      "epss": 0.01758,
+      "epss": 0.01731,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1263,7 +1263,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/marked@0.3.5",
-      "raptor_risk_estimate": 13.8174241606875,
+      "raptor_risk_estimate": 13.619924243128123,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1277,14 +1277,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.408271074,
+        "epss_multiplier": 0.447150483,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 13.8174241606875,
+        "exposure_multiplier": 0.45,
+        "final": 13.619924243128123,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1312,7 +1312,7 @@
           "0.19.0"
         ],
         "id": "GHSA-m6fv-jmcg-4jfg",
-        "modified": "2026-02-04T03:14:06.122593+00:00",
+        "modified": "2026-09-10T03:50:18.939403+00:00",
         "published": "2024-09-10T19:42:41+00:00",
         "references": [
           "https://github.com/pillarjs/send/security/advisories/GHSA-m6fv-jmcg-4jfg",
@@ -1349,7 +1349,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/send@0.13.0",
-      "raptor_risk_estimate": 9.071495062687498,
+      "raptor_risk_estimate": 8.96896223398125,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1362,14 +1362,14 @@
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 50.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.402060723,
+        "epss_multiplier": 0.44168481299999995,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 9.071495062687498,
+        "exposure_multiplier": 0.45,
+        "final": 8.96896223398125,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,

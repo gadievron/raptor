@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-09-01T11:17:18Z",
+    "fetched_at": "2026-10-29T21:47:12Z",
     "git_ref": "2.2.20",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of django-2.2",
@@ -21,7 +21,7 @@
           "1.5.2"
         ],
         "id": "GHSA-j383-35pm-c5h4",
-        "modified": "2026-02-04T03:45:47.351871+00:00",
+        "modified": "2026-09-10T03:49:18.059750+00:00",
         "published": "2022-04-13T00:00:16+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2022-0436",
@@ -42,7 +42,7 @@
       "dep_version": "1.0.1",
       "direct": true,
       "ecosystem": "npm",
-      "epss": 0.00566,
+      "epss": 0.00589,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -58,7 +58,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/grunt@1.0.1",
-      "raptor_risk_estimate": 6.772558823931808,
+      "raptor_risk_estimate": 7.014375768693654,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -69,17 +69,17 @@
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 55.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.402188298,
+        "epss_multiplier": 0.441905277,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 6.772558823931808,
+        "exposure_multiplier": 0.45,
+        "final": 7.014375768693654,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
+        "reachability_multiplier": 0.71062,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -104,7 +104,7 @@
           "1.3.0"
         ],
         "id": "GHSA-m5pj-vjjf-4m3h",
-        "modified": "2026-02-04T04:31:59.671592+00:00",
+        "modified": "2026-09-10T03:49:05.039322+00:00",
         "published": "2021-05-06T18:27:18+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2020-7729",
@@ -125,7 +125,7 @@
       "dep_version": "1.0.1",
       "direct": true,
       "ecosystem": "npm",
-      "epss": 0.02285,
+      "epss": 0.02304,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -141,7 +141,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/grunt@1.0.1",
-      "raptor_risk_estimate": 8.933444479482878,
+      "raptor_risk_estimate": 9.216326106804567,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -152,17 +152,17 @@
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 71.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.410960355,
+        "epss_multiplier": 0.449782272,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 8.933444479482878,
+        "exposure_multiplier": 0.45,
+        "final": 9.216326106804567,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
+        "reachability_multiplier": 0.71062,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -187,7 +187,7 @@
           "1.5.3"
         ],
         "id": "GHSA-rm36-94g8-835r",
-        "modified": "2026-02-04T04:15:34.923245+00:00",
+        "modified": "2026-09-10T03:49:40.619385+00:00",
         "published": "2022-05-11T00:01:37+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2022-1537",
@@ -208,7 +208,7 @@
       "dep_version": "1.0.1",
       "direct": true,
       "ecosystem": "npm",
-      "epss": 0.00299,
+      "epss": 0.00302,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -224,7 +224,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/grunt@1.0.1",
-      "raptor_risk_estimate": 8.590419468518766,
+      "raptor_risk_estimate": 8.900757196872071,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -235,17 +235,17 @@
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "validated_v1",
+        "calibration_status": "needs_retune",
         "cvss_base": 70.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400825797,
+        "epss_multiplier": 0.44058708599999996,
         "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 8.590419468518766,
+        "exposure_multiplier": 0.45,
+        "final": 8.900757196872071,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
+        "reachability_multiplier": 0.71062,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
