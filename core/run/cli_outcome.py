@@ -9,10 +9,10 @@ import json
 import os
 from pathlib import Path
 import re
-import shlex
 import sys
 
 from core.hash import sha256_string
+from core.run.literal_command import _literal_words
 from core.startup import codex_environment as environment
 
 _ID = re.compile(r'[A-Za-z0-9_-]{1,256}')
@@ -87,16 +87,10 @@ def cli_outcome():
 
 def _expected(command):
     """Only standalone literal RAPTOR calls; shell expansions remain unknown."""
-    if (not isinstance(command, str) or len(command) > 16000
-            or any(c in command for c in ('\n', '\r', '`', '$', '*', '?', '[', '#'))):
-        return None
-    try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
-        lexer.whitespace_split = True
-        words = list(lexer)
-    except ValueError:
-        return None
-    if not words or any(w and all(c in ';&|()<>' for c in w) for w in words):
+    # The read-coverage path uses the same conservative POSIX literal parser:
+    # quoted metacharacters are argv data; active expansion is never evaluated.
+    words = _literal_words(command)
+    if not words:
         return None
     first = Path(words[0])
     if not first.is_absolute():
