@@ -239,6 +239,8 @@ class SandboxHost:
 
         readable = list(readable_paths or [])
         readable.append(str(daemon))
+        from core.sandbox.python_paths import python_runtime_tool_paths
+        readable.extend(python_runtime_tool_paths())
 
         result_holder: dict[str, Any] = {"error": None, "returncode": None}
 
@@ -559,6 +561,8 @@ def one_shot_call(
     output_dir, owned_output = _resolve_output(target_path, output)
     readable = list(readable_paths or [])
     readable.append(str(daemon))
+    from core.sandbox.python_paths import python_runtime_tool_paths
+    readable.extend(python_runtime_tool_paths())
 
     # Same request/response binding as SandboxHost._rpc: the daemon
     # echoes the parent-minted ``rid`` and the reply is rejected on a
