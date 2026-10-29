@@ -993,14 +993,14 @@ class TestPresweepBulkBudget:
         # 4x cap (1200 s) that killed its sweep, inside the hard cap.
         derived = _presweep_bulk_timeout_s(300, 190 * 1024 * 1024)
         assert derived > 4 * 300
-        assert derived <= 7200
+        assert derived <= 3600
 
     def test_budget_is_capped(self):
         # Hostile/corrupt size input: a multi-TB claim must bound at
         # the hard cap, never mint an unbounded REPL-holding window.
         huge = 100 * 1024 * 1024 * 1024
-        assert _presweep_bulk_timeout_s(300, huge) == 7200
-        assert _presweep_bulk_timeout_s(300, 4 * 1024**4) == 7200
+        assert _presweep_bulk_timeout_s(300, huge) == 3600
+        assert _presweep_bulk_timeout_s(300, 4 * 1024**4) == 3600
 
     def test_operator_raised_budget_passes_through(self):
         # The floor is the CONFIGURED budget: an operator value above
@@ -1030,6 +1030,10 @@ class TestPresweepDeadlineClamp:
         def query_script(self, script, timeout=300, substitutions=None):
             self.windows.append(int(timeout))
             return SimpleNamespace(errors=[], flows=[])
+
+        def run_tiered_sweep(self, *, timeout=None, lang_profile=None,
+                             cancel_check=None):
+            return self.query_script("tiered", timeout=timeout or 300)
 
     def test_no_deadline_keeps_configured_window(self):
         from core.audit.sweep import run_joern_pre_sweep
@@ -1089,6 +1093,10 @@ class TestPresweepRequeueClamp:
             return SimpleNamespace(
                 errors=["query timed out after 300s"], flows=[],
             )
+
+        def run_tiered_sweep(self, *, timeout=None, lang_profile=None,
+                             cancel_check=None):
+            return self.query_script("tiered", timeout=timeout or 300)
 
     class _SteppedClock:
         """Advances by a fixed step on every monotonic() call, so the

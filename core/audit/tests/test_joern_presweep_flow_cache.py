@@ -70,6 +70,10 @@ class _FakeServer:
             query="", errors=["exhausted"],
         )
 
+    def run_tiered_sweep(self, *, timeout=None, lang_profile=None,
+                         cancel_check=None):
+        return self.query_script()
+
     def ensure_alive(self):
         return True
 
