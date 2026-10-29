@@ -79,7 +79,7 @@ def check(corpus_dir: Path, attribution_md: Path) -> list[str]:
         try:
             # Local calibration corpus; ValueError also covers the
             # byte-budget refusal.
-            data = load_json(path, strict=True, max_bytes=64 * 1024 * 1024)
+            data = load_json(path, strict=True, max_bytes=128 * 1024 * 1024)
         except (OSError, ValueError) as e:
             violations.append(
                 f"{rel}: failed to read/parse JSON ({e})"
