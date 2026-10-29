@@ -603,6 +603,11 @@
     "kind": "literal",
     "note": "C keywords + English stop words for the assumption-mining grounding filter: findings whose mechanism text contains none of the target source's identifiers are dropped as ungrounded; this set is subtracted before comparison so common tokens don't cause false retention"
   },
+  "core/audit/discovery.py::_SIDE_EFFECT_PATTERNS": {
+    "count": 12,
+    "kind": "alternation",
+    "note": "closed language-ecosystem taxonomy: common ORM/driver/stdlib side-effect call names (db writes, network sends, file mutations, external API calls) used by the workflow perspective to detect side-effect call sites along entry-point paths; intentionally broad to maximise recall (precision comes from the downstream grounding filter)"
+  },
   "core/audit/discovery.py::_STATE_NAME_RE": {
     "count": 10,
     "kind": "alternation"
