@@ -658,6 +658,7 @@ class ReviewJournalEntry:
     # through the sidecar module and fail toward re-review when the
     # sidecar is unavailable. Additive; absent on non-stub rows.
     body_offload: dict | None = None
+    from_composition: bool | None = None
     schema_version: int = SCHEMA_VERSION
 
     @property

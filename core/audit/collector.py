@@ -650,6 +650,7 @@ def append_journal_for_outcome(
             if outcome.status == "error" else None
         ),
         weaknesses=weaknesses,
+        from_composition=(True if gap.get("from_composition") else None),
         # What a clean was minted from (see ReviewJournalEntry). Every
         # clean row carries it — an absent basis marks a pre-field row,
         # which the reuse fold screens (traced rows refused, traceless

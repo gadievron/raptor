@@ -9407,7 +9407,9 @@ def _run_audit_body(
     if review_reserve_held:
         _release_review_reserve(config)
     deepen_reserve_held = _hold_deepen_reserve(
-        config, study_active=study_consumer_thread is not None,
+        config,
+        study_active=study_consumer_thread is not None,
+        composition_active=config.open_discovery,
     )
 
     try:
@@ -9560,6 +9562,7 @@ def _run_audit_body(
     deepen_reserve_held = _drain_study_with_reserve_handover(
         config, study_queue, study_consumer_thread,
         deepen_reserve_held, start_time, result,
+        composition_active=config.open_discovery,
     )
 
     # --- SIGTERM salvage: skip every optional post pass ---
@@ -9770,6 +9773,7 @@ def _run_audit_body(
     # the remaining post-loop phases inherit the headroom).
     if deepen_reserve_held:
         _release_deepen_reserve(config)
+    _comp_reserve_held = _hold_composition_reserve(config)
 
     if config.deepen_suspicious:
         result = _deepen_suspicious(
@@ -10663,10 +10667,12 @@ def _run_audit_body(
                 target_path=config.target_path,
                 weakness_fids=_disc_weakness_fids,
             )
+            _disc_prompt_share = 1.0 - _COMPOSITION_VERIFICATION_SHARE
             if _disc_bundles:
                 _disc_budget = (
                     (config.max_cost_usd or 50.0)
                     * config.discovery_budget_fraction
+                    * _disc_prompt_share
                 )
 
                 _disc_client = _run_llm_client(config)
@@ -10717,12 +10723,14 @@ def _run_audit_body(
                     _sm_budget = (
                         (config.max_cost_usd or 50.0)
                         * config.discovery_budget_fraction
+                        * _disc_prompt_share
                         * 0.3
                     )
                     if not _disc_bundles:
                         _sm_budget = (
                             (config.max_cost_usd or 50.0)
                             * config.discovery_budget_fraction
+                            * _disc_prompt_share
                         )
 
                     _sm_st = detect_single_threaded(config.target_path)
@@ -10772,6 +10780,7 @@ def _run_audit_body(
                 _mining_budget = (
                     (config.max_cost_usd or 50.0)
                     * config.discovery_budget_fraction
+                    * _disc_prompt_share
                     * 0.15
                 )
 
@@ -10856,7 +10865,8 @@ def _run_audit_body(
                             checklist,
                             reviewed_set=_comp_reviewed,
                         )
-                        if _comp_gaps and not executor_stats.budget_stopped:
+                        if _comp_gaps:
+                            _release_composition_reserve(config)
                             logger.info(
                                 "composition: %d verifiable hypotheses "
                                 "from %d weaknesses, %d resolved to "
@@ -10883,7 +10893,7 @@ def _run_audit_body(
                                 layer_disagreements=layer_disagreements,
                                 on_progress=on_progress,
                                 collector=collector,
-                                budget_check=lambda: _check_budget(
+                                budget_check=lambda: _check_composition_budget(
                                     config, start_time, result,
                                 ),
                                 on_tick=_make_executor_on_tick(config),
@@ -10921,6 +10931,9 @@ def _run_audit_body(
             logger.warning(
                 "open discovery failed", exc_info=True,
             )
+        finally:
+            if _comp_reserve_held:
+                _release_composition_reserve(config)
 
     # --- Structural-receipt rescue composition (post-loop) ---
     #
@@ -13540,6 +13553,11 @@ def _commit_outcome(
         )
         return
 
+    if gap.get("from_composition"):
+        if outcome.review_result is None:
+            outcome.review_result = {}
+        outcome.review_result["from_composition"] = True
+
     checked_by = ["audit"]
     if outcome.model:
         checked_by.append(outcome.model)
@@ -13563,11 +13581,6 @@ def _commit_outcome(
     )
 
     outcome.verification_tier = outcome.compute_tier()
-
-    if gap.get("from_composition"):
-        if outcome.review_result is None:
-            outcome.review_result = {}
-        outcome.review_result["from_composition"] = True
 
     line_start = gap.get("line_start", 0)
     entry: dict[str, Any] = {
@@ -14647,17 +14660,22 @@ def _release_review_reserve(config: OrchestratorConfig) -> None:
 
 
 def _hold_deepen_reserve(
-    config: OrchestratorConfig, *, study_active: bool = False,
+    config: OrchestratorConfig,
+    *,
+    study_active: bool = False,
+    composition_active: bool = False,
 ) -> float:
     """Hold the end-of-run consumers' budget slice on the budget client.
 
     The client holds ONE reserve at a time (a new hold replaces the
     previous), so the priority chain is enforced by handover: before
-    the main loop this holds deepen + study together (reviews and
-    their refinement rounds gate against ``cap - both``); at the study
-    drain the caller re-holds deepen-only, releasing exactly the study
-    slice to the drain; the deepen phase releases the rest when it
-    starts. Returns the amount held (0.0 when no reserve was taken).
+    the main loop this holds deepen + study + composition together
+    (reviews and their refinement rounds gate against ``cap - all``);
+    at the study drain the caller re-holds deepen + composition,
+    releasing exactly the study slice to the drain; the deepen phase
+    re-holds composition-only; and the composition verification
+    releases the last slice. Returns the amount held (0.0 when no
+    reserve was taken).
     """
     fraction = 0.0
     if config.deepen_suspicious:
@@ -14668,6 +14686,8 @@ def _hold_deepen_reserve(
         fraction += max(
             0.0, getattr(config, "study_reserve_fraction", 0.0) or 0.0,
         )
+    if composition_active:
+        fraction += _composition_reserve_fraction(config)
     fraction = min(fraction, 0.9)
     if fraction <= 0:
         return 0.0
@@ -14682,12 +14702,18 @@ def _hold_deepen_reserve(
             return 0.0
         held = client.hold_budget_reserve(cap * fraction)
         if held:
+            _parts = []
+            if config.deepen_suspicious:
+                _parts.append("deepen")
+            if study_active:
+                _parts.append("study")
+            if composition_active:
+                _parts.append("composition")
             logger.info(
-                "deepen%s: holding $%.2f (%.0f%% of the $%.2f cap) in "
-                "reserve so announced re-reviews%s can execute",
-                "+study" if study_active else "",
+                "%s: holding $%.2f (%.0f%% of the $%.2f cap) in "
+                "reserve for end-of-run phases",
+                "+".join(_parts) or "reserve",
                 held, 100.0 * fraction, cap,
-                " and pending study questions" if study_active else "",
             )
         return held
     except Exception:  # reserve is an optimisation, never fatal
@@ -14702,25 +14728,29 @@ def _drain_study_with_reserve_handover(
     deepen_reserve_held: float,
     start_time: float,
     result: "OrchestratorResult",
+    *,
+    composition_active: bool = False,
 ) -> float:
     """Drain-boundary step: hand the study slice back, then drain.
 
     The budget client holds ONE reserve at a time, so re-holding
-    deepen-only here releases exactly the study slice to the drain
-    (and when deepen holds nothing of its own, the whole reserve is
-    released). The drain's exhaustion flag is re-evaluated against
-    the post-handover cap — the executor's sticky budget-stop flag
-    describes the OLD cap and would abandon the pending study
-    questions the slice exists to pay for; ``_check_budget``
-    re-checks every rail, including SIGTERM and wall clock, so
-    nothing weakens. Returns the updated deepen hold.
+    deepen + composition here releases exactly the study slice to the
+    drain (and when deepen holds nothing of its own, just the
+    composition slice is kept). The drain's exhaustion flag is
+    re-evaluated against the post-handover cap — the executor's
+    sticky budget-stop flag describes the OLD cap and would abandon
+    the pending study questions the slice exists to pay for;
+    ``_check_budget`` re-checks every rail, including SIGTERM and
+    wall clock, so nothing weakens. Returns the updated deepen hold.
     """
     if study_queue is not None:
         study_queue.signal_producer_done()
     if study_consumer_thread is None:
         return deepen_reserve_held
     if deepen_reserve_held:
-        deepen_reserve_held = _hold_deepen_reserve(config)
+        deepen_reserve_held = _hold_deepen_reserve(
+            config, composition_active=composition_active,
+        )
         if not deepen_reserve_held:
             _release_deepen_reserve(config)
     _drain_study_consumer(
@@ -14747,6 +14777,103 @@ def _release_deepen_reserve(config: OrchestratorConfig) -> None:
             )
     except Exception:
         logger.debug("deepen reserve release failed", exc_info=True)
+
+
+_COMPOSITION_VERIFICATION_SHARE = 0.5
+
+
+def _composition_reserve_fraction(config: OrchestratorConfig) -> float:
+    """The fraction of the cost cap reserved for composition verification."""
+    if not config.open_discovery:
+        return 0.0
+    return max(
+        0.0,
+        config.discovery_budget_fraction * _COMPOSITION_VERIFICATION_SHARE,
+    )
+
+
+def _hold_composition_reserve(config: OrchestratorConfig) -> float:
+    """Hold just the composition verification slice on the budget client.
+
+    Called after the deepen phase releases its reserve — the
+    composition slice is the last in the priority chain. Returns the
+    amount held (0.0 when no reserve was taken).
+    """
+    fraction = _composition_reserve_fraction(config)
+    if fraction <= 0:
+        return 0.0
+    client = getattr(config, "llm_budget_client", None)
+    if client is None or not hasattr(client, "hold_budget_reserve"):
+        return 0.0
+    try:
+        cap = getattr(
+            getattr(client, "config", None), "max_cost_per_scan", 0,
+        ) or 0
+        if not cap or cap == float("inf"):
+            return 0.0
+        held = client.hold_budget_reserve(cap * fraction)
+        if held:
+            logger.info(
+                "composition: holding $%.2f (%.0f%% of the $%.2f "
+                "cap) in reserve for composition verification",
+                held, 100.0 * fraction, cap,
+            )
+        return held
+    except Exception:
+        logger.debug("composition reserve hold failed", exc_info=True)
+        return 0.0
+
+
+def _release_composition_reserve(config: OrchestratorConfig) -> None:
+    """Release the composition reserve back to dispatch (idempotent)."""
+    client = getattr(config, "llm_budget_client", None)
+    if client is None or not hasattr(client, "release_budget_reserve"):
+        return
+    try:
+        released = client.release_budget_reserve()
+        if released:
+            logger.info(
+                "composition: released the $%.2f reserve for "
+                "verification",
+                released,
+            )
+    except Exception:
+        logger.debug("composition reserve release failed", exc_info=True)
+
+
+def _check_composition_budget(
+    config: OrchestratorConfig,
+    start_time: float,
+    result: "OrchestratorResult",
+) -> bool:
+    """Budget check for the composition executor.
+
+    Identical to :func:`_check_budget` except it skips the
+    ``result.total_cost_usd >= config.max_cost_usd`` rail.  The
+    composition verification's cost allowance is enforced by the
+    budget-client reserve (the client refuses calls when its cap minus
+    the reserve is breached); the result-level cost counter may
+    already be at the cap from the main review's successful outcomes.
+    """
+    _persist_spend_floor(config, result)
+    _flush_scorecard_events_incremental(config, result)
+    if is_sigterm_requested():
+        result.terminated_by = "sigterm"
+        _persist_spend_floor(config, result, force=True)
+        _flush_scorecard_events_incremental(config, result, force=True)
+        return True
+    if _environment_stop_booked(config, result):
+        return True
+    if (
+        config.max_seconds
+        and time.monotonic() - start_time >= config.max_seconds
+    ):
+        result.terminated_by = "max_seconds"
+        return True
+    _client = getattr(config, "llm_budget_client", None)
+    if _client is not None and _client.is_budget_exhausted():
+        return True
+    return False
 
 
 def _client_class_cost(client: Any, call_class: str) -> float:

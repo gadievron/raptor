@@ -219,6 +219,7 @@ _GENERATION_VOCABULARY: dict[int, frozenset[str]] = {
         "error_class",
         "evidence_tools",
         "file",
+        "from_composition",
         "function",
         "function_qualified",
         "hypotheses",
