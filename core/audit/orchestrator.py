@@ -20837,7 +20837,7 @@ def _ghidra_re_context(
 # confirmations.
 _EARLY_EXIT_SKIPPABLE_TYPES: frozenset[str] = frozenset({
     "semgrep", "coccinelle", "coccinelle_flow", "codeql", "compiler",
-    "joern", "joern_guard", "joern_flow",
+    "joern", "joern_guard", "joern_flow", "symbolic",
 })
 
 
@@ -23147,6 +23147,72 @@ def _run_tool_chain(
                             "inconclusive",
                         )
 
+            elif tool_type == "symbolic":
+                from .sweep import run_symbolic_sweep
+
+                _sym_binary = tool_cfg.get("binary") or ""
+                if not _sym_binary:
+                    if skipped_types is not None:
+                        skipped_types.add(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "symbolic", "skipped",
+                        )
+                    continue
+                sym_res = run_symbolic_sweep(
+                    target_path=Path(_sym_binary),
+                    file_path=file_path,
+                    function_name=function_name,
+                    out_dir=config.out_dir,
+                    cwe=cwe,
+                )
+                _sym_oc = _classify_sweep_outcome(sym_res)
+                if _sym_oc == "confirmed":
+                    confirmed.append(
+                        f"symbolic:{sym_res.rule_id or 'witness'}",
+                    )
+                    logger.info(
+                        "symbolic witness %s:%s — %s",
+                        file_path, function_name,
+                        (sym_res.details or {}).get("mode", ""),
+                    )
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "symbolic", "confirmed",
+                        )
+                elif _sym_oc == "error":
+                    logger.debug(
+                        "tool_chain symbolic error %s:%s: %s",
+                        file_path, function_name, sym_res.errors,
+                    )
+                    if errored_types is not None:
+                        errored_types.add(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "symbolic", "errors",
+                        )
+                elif _sym_oc == "skipped":
+                    if skipped_types is not None:
+                        skipped_types.add(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "symbolic", "skipped",
+                        )
+                elif _sym_oc == "inconclusive":
+                    _book_inconclusive(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "symbolic", "inconclusive",
+                        )
+                elif _sym_oc == "refuted" and tier_counters:
+                    # Unreachable by substrate contract (absence of a
+                    # witness is not absence of the bug); booked
+                    # defensively so a future variant cannot be
+                    # miscounted.
+                    _increment_tier_dict(
+                        tier_counters, "symbolic", "refuted",
+                    )
+
         except Exception as exc:  # noqa: BLE001
             logger.debug(
                 "tool_chain %s exception %s:%s: %s",
@@ -23289,6 +23355,17 @@ def _check_preconditions(
         )
 
     return outcome
+
+
+def _resolve_binary_path(
+    config: OrchestratorConfig, file_path: str,
+) -> Path | None:
+    """Map a ``binary:<stem>`` checklist sentinel back to the ELF on disk."""
+    stem = file_path.removeprefix(BINARY_PATH_PREFIX)
+    for bin_path in _current_binary_build_ids(config, None).values():
+        if bin_path and Path(bin_path).stem == stem and Path(bin_path).is_file():
+            return Path(bin_path)
+    return None
 
 
 def _sweep_validate(
@@ -23456,6 +23533,15 @@ def _sweep_validate(
                     chain.append({"type": "semgrep", "config": {"rule": str(rule_path)}})
             except ImportError:
                 pass
+
+            from .sweep import symbolic_applicable
+            if symbolic_applicable(cwe, outcome.file):
+                _sym_binary = _resolve_binary_path(config, outcome.file)
+                if _sym_binary is not None:
+                    chain.append({
+                        "type": "symbolic",
+                        "config": {"binary": str(_sym_binary)},
+                    })
 
         dispatched = {step.get("type") for step in chain if step.get("type")}
         errored: set = set()
