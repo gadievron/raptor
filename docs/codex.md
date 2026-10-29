@@ -19,6 +19,16 @@ RAPTOR's existing credential stripping. Restart Codex after upgrading the
 broker so it captures the operator's current environment. Custom output and
 credential-file locations still need the appropriate native sandbox grants.
 
+For standalone Python files required by a shared RAPTOR procedure, use:
+
+```bash
+python3 -I libexec/raptor-session-init --codex-python <script-path> [args...]
+```
+
+The runner restores the current session before executing the file, preserves
+its arguments and exit status, and uses the native sandbox and approval policy.
+It does not initialize a new session or modify future shell environments.
+
 RAPTOR's Claude-style `/scan`, `/fuzz`, `/web` and `/agentic` shortcuts are not
 registered Codex slash commands. In the Codex chat composer, use:
 
