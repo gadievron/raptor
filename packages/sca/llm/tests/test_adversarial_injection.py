@@ -42,11 +42,18 @@ def _load_fixture(name: str) -> str:
 
 
 def _all_fixtures() -> list[tuple[str, str]]:
-    """Return (name, content) for every injection fixture."""
-    pairs = []
-    for p in sorted(_FIXTURES_DIR.glob("*.txt")):
-        pairs.append((p.stem, p.read_text(encoding="utf-8")))
-    return pairs
+    """Return (name, content) for every injection fixture.
+
+    Called at parametrize time (module collection), so must not
+    crash if the filesystem state is unavailable in an xdist worker.
+    """
+    try:
+        pairs = []
+        for p in sorted(_FIXTURES_DIR.glob("*.txt")):
+            pairs.append((p.stem, p.read_text(encoding="utf-8")))
+        return pairs
+    except Exception:
+        return []
 
 
 # ------------------------------------------------------------------ stubs

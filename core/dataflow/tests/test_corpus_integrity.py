@@ -25,7 +25,12 @@ _CORPUS_DIR = _REPO_ROOT / "core" / "dataflow" / "corpus" / "findings"
 
 
 def _finding_paths() -> list[Path]:
-    return sorted(p for p in _CORPUS_DIR.glob("*.json") if not p.name.endswith(".label.json"))
+    """Called at parametrize time (module collection), so must not
+    crash if the import chain is unavailable in an xdist worker."""
+    try:
+        return sorted(p for p in _CORPUS_DIR.glob("*.json") if not p.name.endswith(".label.json"))
+    except Exception:
+        return []
 
 
 def _label_path(finding_path: Path) -> Path:

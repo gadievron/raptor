@@ -43,13 +43,20 @@ _RESOLUTION_FAILURE_MARKERS = (
 
 
 def _pack_dirs() -> list[Path]:
-    """Per-language curated packs, discovered the runner's way."""
-    return sorted(
-        d for d in _QUERIES_ROOT.iterdir()
-        if d.is_dir()
-        and (d / "qlpack.yml").is_file()
-        and any(d.glob("*.ql"))
-    )
+    """Per-language curated packs, discovered the runner's way.
+
+    Called at parametrize time (module collection), so must not
+    crash if the filesystem state is unavailable in an xdist worker.
+    """
+    try:
+        return sorted(
+            d for d in _QUERIES_ROOT.iterdir()
+            if d.is_dir()
+            and (d / "qlpack.yml").is_file()
+            and any(d.glob("*.ql"))
+        )
+    except Exception:
+        return []
 
 
 def _compile(args: list[str]) -> subprocess.CompletedProcess:

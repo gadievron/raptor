@@ -36,16 +36,21 @@ class _Site:
 
 
 def _sites() -> list[_Site]:
-    return [
-        _Site("core.llm.cc_proxy_hosts", "proxy_hosts_for_cc_dispatch",
-              "proxy_hosts", "api.anthropic.com", "_resolve_claude_bin"),
-        _Site("packages.codeql.codeql_proxy_hosts", "proxy_hosts_for_codeql",
-              "proxy_hosts", "ghcr.io", "_resolve_codeql_bin"),
-        _Site("packages.sca.resolvers._proxy_hosts", "proxy_hosts_for_pip",
-              "pip", "pypi.org", "_resolve_bin"),
-        _Site("packages.semgrep._proxy_hosts", "proxy_hosts_for_semgrep",
-              "hosts", "semgrep.dev", "_resolve_semgrep_bin"),
-    ]
+    """Called at parametrize time (module collection), so must not
+    crash if the import chain is unavailable in an xdist worker."""
+    try:
+        return [
+            _Site("core.llm.cc_proxy_hosts", "proxy_hosts_for_cc_dispatch",
+                  "proxy_hosts", "api.anthropic.com", "_resolve_claude_bin"),
+            _Site("packages.codeql.codeql_proxy_hosts", "proxy_hosts_for_codeql",
+                  "proxy_hosts", "ghcr.io", "_resolve_codeql_bin"),
+            _Site("packages.sca.resolvers._proxy_hosts", "proxy_hosts_for_pip",
+                  "pip", "pypi.org", "_resolve_bin"),
+            _Site("packages.semgrep._proxy_hosts", "proxy_hosts_for_semgrep",
+                  "hosts", "semgrep.dev", "_resolve_semgrep_bin"),
+        ]
+    except Exception:
+        return []
 
 
 _SITE_IDS = [s.name for s in _sites()]
