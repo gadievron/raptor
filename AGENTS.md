@@ -7,6 +7,8 @@ Dangerous operations (apply patches, delete, git push): ASK FIRST.
 
 ## SESSION START
 
+Start Codex through `bin/raptor --codex` so the trusted launcher pins native hook paths. The bootstrap fallback below initializes session state only; it cannot establish a hook-code root or replace native lifecycle hooks. If hooks report a missing launcher anchor, restart through the launcher instead of resolving hook scripts from cwd or a target repository.
+
 **On first message:**
 VERY IMPORTANT: follow these steps in order.
 **Codex startup trigger:** An initial message exactly equal to `Loading RAPTOR ...` (or the older `load raptor`) requests startup only. If startup context contains `RAPTOR_CODEX_STARTUP_COMPLETE`, the hook has already rendered the banner and Quick commands. Skip steps 1 and 3 below: do not print, fetch, quote or reconstruct the banner or Quick commands. Reply exactly `Ready.` to the startup trigger, then stop. For a different user request, handle it normally without repeating startup. Do not read `.claude/commands/raptor.md`, narrate startup, or start analysis merely because a launch target is present. Without the completion marker, follow the fallback below. Resolve launch context with step 2 only when needed. Always perform step 4 when applicable.

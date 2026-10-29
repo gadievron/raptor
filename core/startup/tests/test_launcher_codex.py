@@ -54,6 +54,7 @@ print(json.dumps({'cli':Path(sys.argv[0]).name,'args':sys.argv[1:],'cwd':os.getc
     'token_present':bool(os.environ.get('RAPTOR_SESSION_TOKEN')),
     'caller':os.environ.get('RAPTOR_CALLER_DIR'),
     'target':os.environ.get('RAPTOR_LAUNCH_TARGET'),
+    'hook_root':os.environ.get('RAPTOR_CODEX_HOOK_ROOT'),
     'bash_env_present':'BASH_ENV' in os.environ}))
 ''')
             path.chmod(0o755)
@@ -139,3 +140,17 @@ def test_codex_target_shell_syntax_is_data(launch, tmp_path):
     assert result.returncode == 0, result.stderr
     assert _launch_context(payload)['launch_target'] == target
     assert not marker.exists()
+
+
+@pytest.mark.parametrize('args', [['--codex'], ['--codex', '--continue']])
+def test_launcher_replaces_inherited_hook_anchor_even_on_resume(launch, args):
+    result, payload = launch(['codex'], args, {'RAPTOR_CODEX_HOOK_ROOT': '/untrusted/target'})
+    assert result.returncode == 0, result.stderr
+    assert payload['hook_root'] == payload['cwd']
+    assert payload['hook_root'] != '/untrusted/target'
+
+
+def test_claude_launch_does_not_inherit_codex_hook_anchor(launch):
+    result, payload = launch(['claude'], [], {'RAPTOR_CODEX_HOOK_ROOT': '/old/codex'})
+    assert result.returncode == 0, result.stderr
+    assert payload['hook_root'] is None

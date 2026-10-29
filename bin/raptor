@@ -842,7 +842,7 @@ fi
 _sessions_dir="$_sessions_base/sessions.d"
 # A launcher starts a new harness, not a child workflow of the calling chat.
 # Never let inherited Codex context select the new Claude/Codex session.
-unset RAPTOR_CODEX_CONTEXT_ID RAPTOR_CODEX_ENVIRONMENT RAPTOR_CODEX_HOOK
+unset RAPTOR_CODEX_CONTEXT_ID RAPTOR_CODEX_ENVIRONMENT RAPTOR_CODEX_HOOK RAPTOR_CODEX_HOOK_ROOT
 if [ -z "$USE_CODEX" ]; then
     unset CODEX
 fi
@@ -972,6 +972,10 @@ unset _sessions_dir _startup_out _seed_proj _seed_by
 # SessionStart and shared RAPTOR process startup restore session context;
 # native configuration still controls ordinary shell environment inheritance.
 if [ -n "$USE_CODEX" ]; then
+    # Host hook execution must remain pinned to this reviewed installation,
+    # even when a later hook cwd is an untrusted nested or target repository.
+    # This is host-only launch state, not shell policy or hook-payload data.
+    export RAPTOR_CODEX_HOOK_ROOT="$RAPTOR_DIR"
     export CODEX=1
     if [ -n "$RESUME_SESSION" ] && [ -z "$RAPTOR_LAUNCH_TARGET" ]; then
         exec env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS \
