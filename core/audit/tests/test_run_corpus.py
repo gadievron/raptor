@@ -166,8 +166,6 @@ class TestAmbiguousStrippedKeyFallback:
         verdict for one of them carries a line that matches neither label,
         so the exact line-key lookup misses — the bare fallback must still
         surface the finding instead of degrading it to error/clean."""
-        monkeypatch.setattr(rc, "_start_shared_joern", lambda dirs: None)
-
         src = tmp_path / "src"
         src.mkdir()
         out = tmp_path / "out"
