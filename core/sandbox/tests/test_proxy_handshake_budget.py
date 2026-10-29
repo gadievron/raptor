@@ -110,6 +110,16 @@ class TestHandshakeDeadline:
                         if len(parts) >= 2 and parts[1].isdigit():
                             status = int(parts[1])
                     break
+                if status is None:
+                    s.settimeout(0.5)
+                    try:
+                        chunk = s.recv(256)
+                        if chunk:
+                            parts = chunk.split(b"\r\n", 1)[0].split(None, 2)
+                            if len(parts) >= 2 and parts[1].isdigit():
+                                status = int(parts[1])
+                    except (OSError, socket.timeout):
+                        pass
                 elapsed = time.monotonic() - t0
                 assert elapsed < 4.0, (
                     f"handshake not bounded: still trickling after "
