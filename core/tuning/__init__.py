@@ -342,25 +342,18 @@ def derived_max_joern_import_timeout_s() -> int:
     return _JOERN_IMPORT_TIMEOUT_CAP_S
 
 
-# Pre-sweep window budget curve. The bulk pre-sweep runs the full
-# standard-sink catalog's whole-CPG dataflow solves in ONE
-# submission, so its runtime scales with graph size while the
-# configured joern_query_timeout_s is sized for a single query. The
-# solve is heavier per byte than the deserialise, but the only
-# calibration datum is one-sided (a kernel-scale CPG in the ~200 MiB
-# class was killed at a flat 300 s and recorded zero flows), so the
-# slope reuses the import curve's 20 s/MiB — roughly an hour for that
-# graph, >12x the budget that killed it — pending a measured
-# completion. Floor:
-# the configured per-query timeout (small CPGs keep today's budget
-# and kill latency). Cap 7,200 s (2 h): the window holds the
-# single-threaded REPL — and every review worker's query behind
-# it — so a genuinely wedged solve must not park the run for the
-# import/build caps' longer walls; a graph that honestly needs more
-# needs an explicit joern_query_timeout_s (floor scaling keeps the
-# operator's number authoritative upward).
-_JOERN_PRESWEEP_S_PER_MIB = 20.0
-_JOERN_PRESWEEP_TIMEOUT_CAP_S = 7200
+# Pre-sweep window budget curve.  The tiered taint query (T0 call-graph
+# walk → T1 intra-proc → T2 inter-proc on survivors) does dramatically
+# less work per MiB than the old monolithic standard_sinks.sc.  10 s/MiB
+# gives ~30 min for a kernel-scale 200 MiB CPG — still generous, since
+# T0+T1 prune 90%+ of sinks before T2.  Floor: the configured per-query
+# timeout (small CPGs keep today's budget).  Cap 3,600 s (1 h): the
+# window holds the single-threaded REPL so a wedged solve must not park
+# the run; a graph that honestly needs more needs an explicit
+# joern_query_timeout_s (floor scaling keeps the operator's number
+# authoritative upward).
+_JOERN_PRESWEEP_S_PER_MIB = 10.0
+_JOERN_PRESWEEP_TIMEOUT_CAP_S = 3600
 
 
 def derive_joern_presweep_timeout_s(

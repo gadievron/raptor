@@ -299,9 +299,6 @@ class TestLabelPinning:
         monkeypatch.setattr(
             run_corpus, "_build_checklist", lambda t, o: True,
         )
-        monkeypatch.setattr(
-            run_corpus, "_start_shared_joern", lambda dirs: None,
-        )
         src = tmp_path / "repo"
         src.mkdir()
         (src / "a.c").write_text("int f(void) { return 0; }\n")
@@ -463,9 +460,6 @@ class TestErrorReason:
             run_corpus, "_run_audit_on_target",
             lambda *a, **kw: (outcomes or {}, {}, audit_dir),
         )
-        monkeypatch.setattr(
-            run_corpus, "_start_shared_joern", lambda dirs: None,
-        )
         labels = [self._label_for("a.c:f", "a.c")]
         results, _ = run_corpus._run_audit(
             labels, {"test": src}, **kwargs,
@@ -559,9 +553,6 @@ class TestTriageKnob:
             return {}, {}, audit_dir
 
         monkeypatch.setattr(run_corpus, "_run_audit_on_target", fake_target)
-        monkeypatch.setattr(
-            run_corpus, "_start_shared_joern", lambda dirs: None,
-        )
         results, _ = run_corpus._run_audit(
             [self._label_for()], {"test": src}, triage=triage,
         )
@@ -623,9 +614,6 @@ class TestTriageKnob:
             } for lb in labels], [])
 
         monkeypatch.setattr(run_corpus, "_run_audit", fake_run_audit)
-        monkeypatch.setattr(
-            run_corpus, "_start_shared_joern", lambda dirs: None,
-        )
         monkeypatch.setattr(
             run_corpus, "_run_phase2_classify", lambda *a, **kw: 0.0,
         )
@@ -722,9 +710,6 @@ class TestProfileKnob:
             return {}, {}, audit_dir
 
         monkeypatch.setattr(run_corpus, "_run_audit_on_target", fake_target)
-        monkeypatch.setattr(
-            run_corpus, "_start_shared_joern", lambda dirs: None,
-        )
         run_corpus._run_audit(
             [self._label_for()], {"test": src}, profile=profile,
         )
@@ -797,9 +782,6 @@ class TestProfileKnob:
             } for lb in labels], [])
 
         monkeypatch.setattr(run_corpus, "_run_audit", fake_run_audit)
-        monkeypatch.setattr(
-            run_corpus, "_start_shared_joern", lambda dirs: None,
-        )
         monkeypatch.setattr(
             run_corpus, "_run_phase2_classify", lambda *a, **kw: 0.0,
         )
@@ -900,9 +882,6 @@ class TestPrefilterKnob:
             return {}, {}, audit_dir
 
         monkeypatch.setattr(run_corpus, "_run_audit_on_target", fake_target)
-        monkeypatch.setattr(
-            run_corpus, "_start_shared_joern", lambda dirs: None,
-        )
         run_corpus._run_audit(
             [self._label_for()], {"test": src}, prefilter=prefilter,
         )
@@ -957,9 +936,6 @@ class TestPrefilterKnob:
             } for lb in labels], [])
 
         monkeypatch.setattr(run_corpus, "_run_audit", fake_run_audit)
-        monkeypatch.setattr(
-            run_corpus, "_start_shared_joern", lambda dirs: None,
-        )
         monkeypatch.setattr(
             run_corpus, "_run_phase2_classify", lambda *a, **kw: 0.0,
         )
@@ -2178,9 +2154,6 @@ def _live_ensemble_merge(
     monkeypatch.setattr(
         run_corpus, "_run_phase2_classify", fake_phase2,
     )
-    monkeypatch.setattr(
-        run_corpus, "_start_shared_joern", lambda dirs: None,
-    )
     monkeypatch.setattr(conc, "derive_max_workers", lambda model: 1)
     labels = [_FenceLabel(r["function_id"]) for r in sec_rows]
     merged, _run_dirs = run_corpus._run_ensemble_audit(
@@ -2319,9 +2292,6 @@ class TestMergeFenceUnarmedNotice:
 
         monkeypatch.setattr(
             run_corpus, "_run_phase2_classify", fake_phase2,
-        )
-        monkeypatch.setattr(
-            run_corpus, "_start_shared_joern", lambda dirs: None,
         )
         monkeypatch.setattr(
             conc, "derive_max_workers", lambda model: 1,
@@ -2760,9 +2730,6 @@ class TestRunLevelRunningTotal:
 
         monkeypatch.setattr(run_corpus, "_run_audit", fake_run_audit)
         monkeypatch.setattr(
-            run_corpus, "_start_shared_joern", lambda dirs: None,
-        )
-        monkeypatch.setattr(
             run_corpus, "_run_phase2_classify",
             lambda findings, model="": 0.0,
         )
@@ -3170,9 +3137,6 @@ class TestEnsembleAttributedConsistency:
 
         monkeypatch.setattr(run_corpus, "_run_audit", fake_run_audit)
         monkeypatch.setattr(
-            run_corpus, "_start_shared_joern", lambda dirs: None,
-        )
-        monkeypatch.setattr(
             run_corpus, "_run_phase2_classify",
             lambda findings, model="": 0.0,
         )
@@ -3308,9 +3272,6 @@ class TestPassCheckpointGuards:
             )
 
         monkeypatch.setattr(run_corpus, "_run_audit", fake_run_audit)
-        monkeypatch.setattr(
-            run_corpus, "_start_shared_joern", lambda dirs: None,
-        )
         (tmp_path / "r1").mkdir(exist_ok=True)
         run_corpus._run_ensemble_audit(
             labels, {"r1": tmp_path / "r1"}, out_dir=tmp_path / "out",

@@ -685,18 +685,19 @@ class TestDerivedPresweepTimeout:
     def test_kernel_scale_cpg_clears_the_killing_budget(self):
         # Calibration datum: a ~190 MiB kernel-scale CPG's bulk sweep
         # was killed at a flat 300 s and recorded zero flows. The
-        # derived window must clear that budget with real headroom.
+        # tiered query (T0/T1 prune 90%+) needs less budget: 10 s/MiB
+        # gives 1900s for 190 MiB — 6× the killing budget.
         from core.tuning import derive_joern_presweep_timeout_s
         derived = derive_joern_presweep_timeout_s(300, 190 * _MIB)
-        assert derived >= 10 * 300
-        assert derived <= 7200
+        assert derived >= 6 * 300
+        assert derived <= 3600
 
     def test_cap_bounds_hostile_sizes(self):
         # Direction 2: the REPL is single-threaded — one wedged
         # window must not park the run beyond the cap, no matter how
         # large (or hostile) the CPG size signal is.
         from core.tuning import derive_joern_presweep_timeout_s
-        assert derive_joern_presweep_timeout_s(300, 4 * 1024**4) == 7200
+        assert derive_joern_presweep_timeout_s(300, 4 * 1024**4) == 3600
 
     def test_include_import_widens_budget_and_cap(self):
         from core.tuning import derive_joern_presweep_timeout_s
@@ -707,7 +708,7 @@ class TestDerivedPresweepTimeout:
             300, 190 * _MIB, include_import=True)
         assert local > server_side
         assert derive_joern_presweep_timeout_s(
-            300, 4 * 1024**4, include_import=True) == 7200 + 10800
+            300, 4 * 1024**4, include_import=True) == 3600 + 10800
 
     def test_non_positive_query_timeout_passes_through(self):
         # 0 is some callers' "no budget" sentinel — never inflate it.
@@ -719,15 +720,15 @@ class TestDerivedPresweepTimeout:
         # Exact mid-curve pins hold the slope in BOTH directions (the
         # headroom pins above only fail from below, the cap pins only
         # from above — a silently doubled or halved slope would pass
-        # every one of them). 100 MiB x 20 s/MiB = 2000 s; the
+        # every one of them). 100 MiB x 10 s/MiB = 1000 s; the
         # subprocess path adds the import slope on the same bytes
-        # (40 s/MiB total = 4000 s). Any slope change must move these
+        # (30 s/MiB total = 3000 s). Any slope change must move these
         # numbers and re-argue the calibration.
         from core.tuning import derive_joern_presweep_timeout_s
-        assert derive_joern_presweep_timeout_s(300, 100 * _MIB) == 2000
+        assert derive_joern_presweep_timeout_s(300, 100 * _MIB) == 1000
         assert derive_joern_presweep_timeout_s(
             300, 100 * _MIB, include_import=True,
-        ) == 4000
+        ) == 3000
 
 
 class TestDerivedMaxPresweepTimeout:

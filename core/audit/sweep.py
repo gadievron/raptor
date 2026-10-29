@@ -4851,18 +4851,13 @@ def run_joern_pre_sweep(
         return {}
 
     queries_dir = Path(__file__).resolve().parents[2] / "packages" / "joern" / "queries"
-    sinks_script = queries_dir / "standard_sinks.sc"
-    if not sinks_script.exists():
-        logger.warning("standard_sinks.sc not found at %s", sinks_script)
+    tiered_script = queries_dir / "tiered_taint.sc"
+    if not tiered_script.exists():
+        logger.warning("tiered_taint.sc not found at %s", tiered_script)
         return {}
 
-    # Sink list authority: lang_config.STANDARD_SWEEP_SINKS, rendered
-    # into the script's __SINK_NAMES__ slot (was a hardcoded copy).
-    from packages.joern.lang_config import (
-        STANDARD_SWEEP_SINKS,
-        scala_string_list,
-    )
-    sink_subst = {"__SINK_NAMES__": scala_string_list(STANDARD_SWEEP_SINKS)}
+    from packages.joern.lang_config import detect_language, profile_for
+    lang_profile = profile_for(detect_language(str(target_path)))
 
     if server is not None:
         if _aborted("server taint query"):
@@ -4904,9 +4899,15 @@ def run_joern_pre_sweep(
                 )
                 return {}
             bulk_timeout = min(bulk_timeout, int(_rem))
-        result = server.query_script(
-            sinks_script, timeout=bulk_timeout, substitutions=sink_subst,
-        )
+
+        def _submit_sweep(timeout: int):
+            return server.run_tiered_sweep(
+                timeout=timeout,
+                lang_profile=lang_profile,
+                cancel_check=abort_check,
+            )
+
+        result = _submit_sweep(bulk_timeout)
         requeued = 0
         interrupted = 1 if _presweep_interrupted(result.errors) else 0
         # Scale-aware re-queue budget: a timeout-class interruption
@@ -4990,10 +4991,7 @@ def run_joern_pre_sweep(
                     )
                     break
                 _window = min(_window, int(_rem))
-            result = server.query_script(
-                sinks_script, timeout=_window,
-                substitutions=sink_subst,
-            )
+            result = _submit_sweep(_window)
             if _presweep_interrupted(result.errors):
                 interrupted += 1
 
@@ -5035,6 +5033,86 @@ def run_joern_pre_sweep(
                 "joern pre-sweep recovered after %d re-queue attempt(s)",
                 requeued,
             )
+
+        if (result.errors and not result.flows
+                and not _presweep_interrupted(result.errors)
+                and _presweep_error_reason(result.errors) == "query_error"
+                and not _aborted("per-sink fallback")):
+            logger.info(
+                "joern tiered sweep crashed — falling back to per-sink "
+                "queries (%d sinks)", len(lang_profile.sinks),
+            )
+            current_heap = getattr(server, "_heap_mb", None)
+            if current_heap:
+                try:
+                    from core.tuning import derived_max_joern_heap_mb
+                    max_heap = derived_max_joern_heap_mb()
+                except Exception:  # noqa: BLE001
+                    max_heap = None
+                if max_heap and current_heap < max_heap:
+                    logger.info(
+                        "joern heap at %d MB (ceiling %d MB) — if per-"
+                        "sink fallback also fails, '/tune max' raises "
+                        "the heap",
+                        current_heap, max_heap,
+                    )
+                else:
+                    logger.info(
+                        "joern heap at %d MB (already at ceiling)",
+                        current_heap,
+                    )
+            from dataclasses import replace as _replace
+            per_sink_flows: list = []
+            per_sink_errors: list[str] = []
+            per_sink_timeout = max(
+                60, bulk_timeout // max(len(lang_profile.sinks), 1),
+            )
+            for sink_name in lang_profile.sinks:
+                if _aborted("per-sink:" + sink_name):
+                    break
+                _rem = _remaining_s()
+                if _rem is not None and _rem < _PRE_SWEEP_MIN_WINDOW_S:
+                    break
+                single_timeout = per_sink_timeout
+                if _rem is not None:
+                    single_timeout = min(single_timeout, int(_rem))
+                single_profile = _replace(
+                    lang_profile, sinks=(sink_name,),
+                )
+                sink_result = server.run_tiered_sweep(
+                    timeout=single_timeout,
+                    lang_profile=single_profile,
+                )
+                if sink_result.flows:
+                    per_sink_flows.extend(sink_result.flows)
+                if sink_result.errors:
+                    per_sink_errors.append(
+                        f"{sink_name}: "
+                        f"{sink_result.errors[0][:80]}"
+                    )
+                    logger.debug(
+                        "per-sink query for %s: %s",
+                        sink_name, sink_result.errors,
+                    )
+            if per_sink_flows:
+                from packages.joern.models import JoernResult as _JR
+                result = _JR(
+                    query="per-sink-fallback",
+                    flows=per_sink_flows,
+                    errors=[],
+                )
+                logger.info(
+                    "per-sink fallback recovered %d flows from %d sinks",
+                    len(per_sink_flows), len(lang_profile.sinks),
+                )
+                if status_out is not None:
+                    status_out["errors"] = []
+                    status_out.pop("reason", None)
+            elif per_sink_errors:
+                logger.warning(
+                    "per-sink fallback: all sinks failed (%d errors)",
+                    len(per_sink_errors),
+                )
 
         flows_by_key: dict[str, list] = {}  # type: ignore[no-redef]
         for flow in result.flows:
@@ -5120,9 +5198,21 @@ def run_joern_pre_sweep(
                 local_timeout, (cpg_bytes or 0) / (1024 * 1024),
                 query_timeout,
             )
+        from packages.joern.runner import _escape_scala_string
+        sink_items = ", ".join(
+            f'"{_escape_scala_string(s)}"' for s in lang_profile.sinks
+        )
+        tiered_subst = {
+            "__DANGEROUS_SINKS__": f"List({sink_items})",
+            "__EFFECTIVE_DEPTH__": str(lang_profile.max_call_depth),
+            "__MAX_ARGS__": str(lang_profile.max_args_to_allow),
+            "__MAX_OUTPUT_ARGS__": str(lang_profile.max_output_args_expansion),
+            "__SEMANTICS_DECL__\n": "",
+            "__CTX_SEMANTICS__": "",
+        }
         result = run_query(
-            cpg, str(sinks_script), timeout=local_timeout,
-            substitutions=sink_subst,
+            cpg, str(tiered_script), timeout=local_timeout,
+            substitutions=tiered_subst,
         )
         if result.errors:
             logger.warning(

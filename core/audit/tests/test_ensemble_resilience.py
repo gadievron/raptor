@@ -55,44 +55,26 @@ class TestCheckpointIO:
 
 
 class TestRunAuditJoernOwnership:
-    """Verify _run_audit skips Joern start/stop when a server is passed in."""
+    """Verify _run_audit always passes joern_server=None downstream."""
 
-    @patch("core.audit.corpus.run_corpus._stop_shared_joern")
-    @patch("core.audit.corpus.run_corpus._start_shared_joern")
     @patch("core.audit.corpus.run_corpus._run_audit_on_target")
-    def test_caller_owned_joern_not_started(
-        self, mock_target, mock_start, mock_stop,
-    ):
-        from core.audit.corpus.run_corpus import _run_audit
-
-        mock_target.return_value = ({}, {}, None)
-        external_srv = MagicMock(name="external_joern")
-
-        with patch("core.audit.corpus.run_corpus.FunctionLabel",
-                    create=True):
-            _run_audit(
-                [], {"repo": Path("/tmp/r")},
-                joern_server=external_srv,
-            )
-
-        mock_start.assert_not_called()
-        mock_stop.assert_not_called()
-
-    @patch("core.audit.corpus.run_corpus._stop_shared_joern")
-    @patch("core.audit.corpus.run_corpus._start_shared_joern",
-           return_value=None)
-    @patch("core.audit.corpus.run_corpus._run_audit_on_target")
-    def test_self_owned_joern_started_and_stopped(
-        self, mock_target, mock_start, mock_stop,
-    ):
+    def test_joern_server_always_none(self, mock_target, tmp_path):
         from core.audit.corpus.run_corpus import _run_audit
 
         mock_target.return_value = ({}, {}, None)
 
-        _run_audit([], {"repo": Path("/tmp/r")})
+        label = MagicMock()
+        label.source.repo = "repo"
+        label.function_id = "a.c:foo"
 
-        mock_start.assert_called_once()
-        mock_stop.assert_called_once()
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+
+        _run_audit([label], {"repo": repo_dir})
+
+        mock_target.assert_called_once()
+        _, kwargs = mock_target.call_args
+        assert kwargs["joern_server"] is None
 
 
 # ── max_workers propagation ────────────────────────────────────────
@@ -101,12 +83,9 @@ class TestRunAuditJoernOwnership:
 class TestMaxWorkersPropagation:
     """Verify max_workers flows from _run_audit → _run_audit_on_target → pipeline."""
 
-    @patch("core.audit.corpus.run_corpus._stop_shared_joern")
-    @patch("core.audit.corpus.run_corpus._start_shared_joern",
-           return_value=None)
     @patch("core.audit.corpus.run_corpus._run_audit_on_target")
     def test_max_workers_passed_to_target(
-        self, mock_target, mock_start, mock_stop, tmp_path,
+        self, mock_target, tmp_path,
     ):
         from core.audit.corpus.run_corpus import _run_audit
 
@@ -169,9 +148,6 @@ class TestEnsembleCheckpointResume:
             "duration_s": 5.0,
         }]
 
-    @patch("core.audit.corpus.run_corpus._stop_shared_joern")
-    @patch("core.audit.corpus.run_corpus._start_shared_joern",
-           return_value=None)
     @patch("core.audit.corpus.run_corpus._run_audit")
     @patch("core.llm.concurrency.derive_max_workers",
            return_value=16)
@@ -181,7 +157,7 @@ class TestEnsembleCheckpointResume:
     @patch("core.audit.corpus.run_corpus._run_phase2_classify",
            return_value=0.0)
     def test_both_cached_skips_passes(
-        self, mock_phase2, mock_derive, mock_audit, mock_start, mock_stop,
+        self, mock_phase2, mock_derive, mock_audit,
         tmp_path,
     ):
         from core.audit.corpus.run_corpus import _run_ensemble_audit
@@ -201,9 +177,6 @@ class TestEnsembleCheckpointResume:
         assert len(results) == 1
         assert results[0]["actual"] == "finding"
 
-    @patch("core.audit.corpus.run_corpus._stop_shared_joern")
-    @patch("core.audit.corpus.run_corpus._start_shared_joern",
-           return_value=None)
     @patch("core.audit.corpus.run_corpus._run_audit")
     @patch("core.llm.concurrency.derive_max_workers",
            return_value=16)
@@ -213,7 +186,7 @@ class TestEnsembleCheckpointResume:
     @patch("core.audit.corpus.run_corpus._run_phase2_classify",
            return_value=0.0)
     def test_one_cached_runs_only_missing(
-        self, mock_phase2, mock_derive, mock_audit, mock_start, mock_stop,
+        self, mock_phase2, mock_derive, mock_audit,
         tmp_path,
     ):
         from core.audit.corpus.run_corpus import _run_ensemble_audit
@@ -239,14 +212,11 @@ class TestEnsembleCheckpointResume:
 
 
 class TestWorkerHalving:
-    @patch("core.audit.corpus.run_corpus._stop_shared_joern")
-    @patch("core.audit.corpus.run_corpus._start_shared_joern",
-           return_value=None)
     @patch("core.audit.corpus.run_corpus._run_audit")
     @patch("core.llm.concurrency.derive_max_workers",
            return_value=20)
     def test_workers_full_for_sequential_passes(
-        self, mock_derive, mock_audit, mock_start, mock_stop, tmp_path,
+        self, mock_derive, mock_audit, tmp_path,
     ):
         from core.audit.corpus.run_corpus import _run_ensemble_audit
 
@@ -261,14 +231,11 @@ class TestWorkerHalving:
         for c in mock_audit.call_args_list:
             assert c[1]["max_workers"] == 20
 
-    @patch("core.audit.corpus.run_corpus._stop_shared_joern")
-    @patch("core.audit.corpus.run_corpus._start_shared_joern",
-           return_value=None)
     @patch("core.audit.corpus.run_corpus._run_audit")
     @patch("core.llm.concurrency.derive_max_workers",
            return_value=1)
     def test_workers_floor_at_one(
-        self, mock_derive, mock_audit, mock_start, mock_stop, tmp_path,
+        self, mock_derive, mock_audit, tmp_path,
     ):
         from core.audit.corpus.run_corpus import _run_ensemble_audit
 
@@ -280,14 +247,11 @@ class TestWorkerHalving:
         for c in mock_audit.call_args_list:
             assert c[1]["max_workers"] == 1
 
-    @patch("core.audit.corpus.run_corpus._stop_shared_joern")
-    @patch("core.audit.corpus.run_corpus._start_shared_joern",
-           return_value=None)
     @patch("core.audit.corpus.run_corpus._run_audit")
     @patch("core.llm.concurrency.derive_max_workers",
            return_value=10)
     def test_pass2_skipped_when_all_clean(
-        self, mock_derive, mock_audit, mock_start, mock_stop, tmp_path,
+        self, mock_derive, mock_audit, tmp_path,
     ):
         from core.audit.corpus.run_corpus import _run_ensemble_audit
 
@@ -305,22 +269,18 @@ class TestWorkerHalving:
         assert mock_audit.call_count == 1
 
 
-# ── Shared Joern in ensemble ──────────────────────────────────────
+# ── Per-group Joern in ensemble ───────────────────────────────────
 
 
-class TestEnsembleSharedJoern:
-    @patch("core.audit.corpus.run_corpus._stop_shared_joern")
-    @patch("core.audit.corpus.run_corpus._start_shared_joern")
+class TestEnsemblePerGroupJoern:
     @patch("core.audit.corpus.run_corpus._run_audit")
     @patch("core.llm.concurrency.derive_max_workers",
            return_value=8)
-    def test_joern_started_once_passed_to_both(
-        self, mock_derive, mock_audit, mock_start, mock_stop, tmp_path,
+    def test_joern_server_none_for_each_pass(
+        self, mock_derive, mock_audit, tmp_path,
     ):
         from core.audit.corpus.run_corpus import _run_ensemble_audit
 
-        sentinel = MagicMock(name="shared_joern")
-        mock_start.return_value = sentinel
         mock_audit.return_value = ([], [])
 
         base = tmp_path / "ensemble"
@@ -328,8 +288,6 @@ class TestEnsembleSharedJoern:
             [], {"repo": Path("/tmp/r")}, out_dir=base,
         )
 
-        mock_start.assert_called_once()
-        mock_stop.assert_called_once_with(sentinel)
         assert mock_audit.call_count >= 1
         for c in mock_audit.call_args_list:
-            assert c[1]["joern_server"] is sentinel
+            assert c[1]["joern_server"] is None

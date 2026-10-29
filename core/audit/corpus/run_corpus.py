@@ -816,35 +816,6 @@ def _build_checklist(
 
 
 
-def _start_shared_joern(target_dirs: list[Path]):
-    """Start a Joern server for the corpus run, if available."""
-    try:
-        from core.audit.joern_backend import (
-            start_joern_server,
-            target_has_c_sources,
-            target_has_joern_sources,
-        )
-    except ImportError:
-        return None
-    for td in target_dirs:
-        if target_has_c_sources(td) or target_has_joern_sources(td):
-            srv = start_joern_server(td)
-            if srv is not None:
-                logger.info("shared Joern server started for corpus run")
-                return srv
-    return None
-
-
-def _stop_shared_joern(srv) -> None:
-    if srv is None:
-        return
-    try:
-        from core.audit.joern_backend import stop_joern_server
-
-        stop_joern_server(srv)
-    except Exception:
-        logger.debug("shared Joern server stop failed", exc_info=True)
-
 
 # File suffixes the C preprocessor governs — the only ones the
 # preprocessor-dead dormancy mapping may apply to.
@@ -994,12 +965,7 @@ def _run_audit(
     for label in labels:
         by_repo.setdefault(label.source.repo, []).append(label)
 
-    own_joern = joern_server is None
-    joern_srv = (
-        _start_shared_joern([d for d in source_dirs.values() if d.is_dir()])
-        if own_joern
-        else joern_server
-    )
+    joern_srv = None
 
     # Per-group resume state: rows already scored by a previous
     # (stopped) process of the same pass.  A checkpointed group is
@@ -1272,8 +1238,7 @@ def _run_audit(
             if heartbeat is not None:
                 heartbeat()
     finally:
-        if own_joern:
-            _stop_shared_joern(joern_srv)
+        pass
 
     return results, run_dirs
 
@@ -2793,11 +2758,6 @@ def _run_ensemble_audit(
     if checkpoint_extra:
         pass_stamp.update(checkpoint_extra)
 
-    # --- Shared Joern server (read-only, thread-safe over HTTP) ---
-    joern_srv = _start_shared_joern(
-        [d for d in source_dirs.values() if d.is_dir()],
-    )
-
     # --- Worker budget: full for each sequential pass ---
     resolved_model = model or "default"
     full_workers = derive_max_workers(resolved_model)
@@ -2831,7 +2791,7 @@ def _run_ensemble_audit(
                     model=model, out_dir=sec_out,
                     full_source_dirs=full_source_dirs,
                     mode="security",
-                    joern_server=joern_srv,
+                    joern_server=None,
                     max_workers=full_workers,
                     triage=triage,
                     prefilter=prefilter,
@@ -2894,7 +2854,7 @@ def _run_ensemble_audit(
                         model=model, out_dir=bf_out,
                         full_source_dirs=full_source_dirs,
                         mode="bug_first",
-                        joern_server=joern_srv,
+                        joern_server=None,
                         max_workers=full_workers,
                         triage=triage,
                         prefilter=prefilter,
@@ -2930,7 +2890,7 @@ def _run_ensemble_audit(
 
         run_dirs = sec_dirs + bf_dirs
     finally:
-        _stop_shared_joern(joern_srv)
+        pass
 
     # --- Merge at the result level ---
     merged_cached = _read_pass_checkpoint(

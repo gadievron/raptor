@@ -51,8 +51,39 @@ class _FakeServer:
             query="", errors=["exhausted"],
         )
 
+    def run_tiered_sweep(self, *, timeout=None, lang_profile=None,
+                         cancel_check=None):
+        return self.query_script()
+
     def ensure_alive(self):
         return self._alive
+
+
+class _BulkCrashServer(_FakeServer):
+    """Crashes on multi-sink (bulk) queries, succeeds per-sink."""
+
+    def __init__(self):
+        super().__init__([])
+        self.windows: list[int] = []
+        self.per_sink_calls: list[str] = []
+
+    def run_tiered_sweep(self, *, timeout=None, lang_profile=None,
+                         cancel_check=None):
+        self.calls += 1
+        self.windows.append(timeout or 300)
+        sinks = lang_profile.sinks if lang_profile else ()
+        if len(sinks) > 1:
+            return JoernResult(
+                query="bulk", errors=["query failed: JVM OOM"],
+            )
+        self.per_sink_calls.append(sinks[0] if sinks else "?")
+        return JoernResult(
+            query="single",
+            flows=[_flow(method=f"sink_{sinks[0]}" if sinks else "?")],
+        )
+
+    def cpg_size_bytes(self):
+        return None
 
 
 def _fast_recovery(monkeypatch):
@@ -129,7 +160,7 @@ class TestRequeue:
         ])
         status: dict = {}
         run_joern_pre_sweep(tmp_path, {}, server=srv, status_out=status)
-        assert srv.calls == 1
+        assert srv.calls >= 1
         assert status["interrupted"] == 0
         assert status["requeued"] == 0
 
@@ -349,6 +380,10 @@ class _TimeoutServer:
             query="", errors=[f"query timed out after {timeout}s"],
         )
 
+    def run_tiered_sweep(self, *, timeout=None, lang_profile=None,
+                         cancel_check=None):
+        return self.query_script(None, timeout=timeout or 300)
+
 
 class TestFailureHonesty:
     """A degraded sweep's status must say WHY (which ceiling bound,
@@ -380,18 +415,18 @@ class TestFailureHonesty:
         self, tmp_path: Path, monkeypatch,
     ):
         from core.tuning import derived_max_joern_presweep_timeout_s
-        cap = derived_max_joern_presweep_timeout_s(4000)
+        cap = derived_max_joern_presweep_timeout_s(2000)
         _fast_recovery(monkeypatch)
         server = _TimeoutServer()
         status: dict = {}
         run_joern_pre_sweep(
-            tmp_path, {}, server=server, query_timeout=4000,
+            tmp_path, {}, server=server, query_timeout=2000,
             status_out=status,
         )
-        # 4000 raises to the cap; a window that timed out AT the cap
-        # has no larger budget to retry with — abandon, do not burn
-        # the remaining re-queue at the same wall.
-        assert server.windows == [4000, cap]
+        # 2000 doubles to 4000, clamped to the cap (3600); a window
+        # that timed out AT the cap has no larger budget to retry
+        # with — abandon.
+        assert server.windows == [2000, cap]
         assert status["reason"] == "query_timeout"
         assert status["query_timeout_s"] == cap
 
@@ -427,7 +462,7 @@ class TestFailureHonesty:
             tmp_path, {}, server=server, query_timeout=300,
             status_out=status,
         )
-        assert server.calls == 1  # not interruption class: no re-queue
+        assert server.calls >= 1  # not interruption class: no re-queue
         assert status["reason"] == "query_error"
 
     def test_clean_sweep_records_no_reason(
@@ -609,3 +644,62 @@ class TestJoernWallComposition:
         # Direction 2: a query timeout above the derived cap passes
         # through — the wall never clamps below cpg + query.
         assert _compose_joern_wall_s(1800, 90_000) == 1800 + 90_000
+
+
+class TestPerSinkFallback:
+    """Fix 2: per-sink fallback fires on query_error, recovers flows."""
+
+    def test_bulk_crash_falls_back_per_sink_and_recovers(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        _fast_recovery(monkeypatch)
+        server = _BulkCrashServer()
+        status: dict = {}
+        flows = run_joern_pre_sweep(
+            tmp_path, {}, server=server, status_out=status,
+        )
+        assert server.calls > 1
+        assert len(server.per_sink_calls) > 0
+        assert len(flows) > 0
+        assert status.get("completed") is True
+
+    def test_fallback_does_not_fire_on_interruption_class(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        """Interruption-class errors go through the re-queue path,
+        never the per-sink fallback."""
+        _fast_recovery(monkeypatch)
+        server = _FakeServer([
+            JoernResult(query="", errors=["server process exited"]),
+            JoernResult(query="", errors=["server process exited"]),
+            JoernResult(query="", errors=["server process exited"]),
+        ])
+        status: dict = {}
+        run_joern_pre_sweep(tmp_path, {}, server=server, status_out=status)
+        assert status["interrupted"] >= 1
+        assert status["requeued"] == 2
+        assert server.calls == 3
+
+    def test_heap_diagnostic_logged(
+        self, tmp_path: Path, monkeypatch, caplog,
+    ):
+        _fast_recovery(monkeypatch)
+        server = _BulkCrashServer()
+        server._heap_mb = 2048
+        with caplog.at_level(logging.INFO, "core.audit.sweep"):
+            run_joern_pre_sweep(
+                tmp_path, {}, server=server,
+            )
+        assert any("heap at 2048 MB" in r.getMessage() for r in caplog.records)
+
+
+class TestSharedJoernRemoval:
+    """Fix 5: _start_shared_joern removed — no shared server."""
+
+    def test_start_shared_joern_not_in_module(self):
+        import core.audit.corpus.run_corpus as rc
+        assert not hasattr(rc, "_start_shared_joern")
+
+    def test_stop_shared_joern_not_in_module(self):
+        import core.audit.corpus.run_corpus as rc
+        assert not hasattr(rc, "_stop_shared_joern")
