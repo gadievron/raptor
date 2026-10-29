@@ -1,5 +1,6 @@
 """Outcomes must preserve exits and correlate literal invocation + native call."""
 import hashlib
+import shlex
 import sys
 
 import pytest
@@ -82,6 +83,21 @@ def test_foreign_or_stale_evidence_does_not_attribute_failure(context, mutation)
     'libexec/raptor-example $(echo x)', 'libexec/raptor-example # comment'])
 def test_compounds_and_expansions_remain_unknown(context, command):
     assert outcome._expected(command) is None
+
+
+@pytest.mark.parametrize('argument', [
+    '/tmp/project[1]', '/tmp/cost$estimate', '/tmp/star*.c', '/tmp/has?.c',
+    '/tmp/issue#123', "/tmp/apostrophe's", '/tmp/tick`literal', '|', ';',
+])
+def test_quoted_literal_arguments_preserve_failure_receipts(context, monkeypatch, argument):
+    _, directory, payload = context
+    executable = str(outcome.environment.ROOT / 'libexec/raptor-example')
+    monkeypatch.setattr(sys, 'argv', [executable, argument])
+    payload['tool_input']['command'] = shlex.join(['libexec/raptor-example', argument])
+    with pytest.raises(SystemExit), outcome.cli_outcome():
+        sys.exit(7)
+    assert outcome.consume(payload) is not None
+    assert not list(directory.glob('outcome-*'))
 
 
 def test_record_failure_cannot_replace_exit_status(context, monkeypatch, capsys):
