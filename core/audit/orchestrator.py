@@ -1526,6 +1526,9 @@ def _make_tier_counters() -> dict[str, TierCounters]:
         # (format_tier_diagnostics), so source-only runs never print
         # a dead disasm stanza.
         "disasm_xcheck": TierCounters(),
+        # Binary symbolic (angr) channel — same registration rationale
+        # as disasm_xcheck: all-zero tiers suppressed by the renderer.
+        "symbolic": TierCounters(),
     }
 
 
@@ -23389,7 +23392,7 @@ def _sweep_validate(
       2. No hypothesis at all → demote to suspicious
       3. Run prefilter regex patterns on the source
       4. Run tool chain (Semgrep → SMT → Coccinelle → CodeQL) with fallback
-         — for binary targets, use decompiler Semgrep + Frida auto-launch
+         — for binary targets, use decompiler Semgrep + symbolic (angr)
       5. If nothing confirms, keep the finding but flag as ungrounded
 
     Parameters
@@ -23585,12 +23588,11 @@ def _sweep_validate(
             errored=errored,
         )
 
-        # No Frida auto-launch here — an earlier last-resort path gated
-        # on a never-set ``config._binary_path`` attribute was dead code
-        # and has been removed. Dynamic engagement is handled by
-        # core/audit/dynamic_sweep.py (should_run_dynamic /
-        # run_dynamic_sweep in the review loop, gated on
-        # config.dynamic_validation) and core/audit/frida_observe.py.
+        # Frida auto-launch was evaluated and rejected — argument
+        # synthesis puts the LLM back in the verdict loop, and running
+        # untrusted binaries from the scanned repo is unsound. Dynamic
+        # observation remains attach-only (review loop, gated on
+        # config.dynamic_validation + explicit PID/process name).
 
         outcome.tools_dispatched = (outcome.tools_dispatched or set()) | dispatched
         if errored:

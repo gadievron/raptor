@@ -587,7 +587,7 @@ class WebClient:
                     break
             response._content = b"".join(chunks)
         except (requests.exceptions.RequestException, *_CLOSE_ERRORS,
-                ValueError):
+                AttributeError, ValueError):
             # Let the caller see whatever was buffered; do not raise
             # from the cap-enforcer. The extra classes are what the
             # watchdog's close() makes the blocked read raise

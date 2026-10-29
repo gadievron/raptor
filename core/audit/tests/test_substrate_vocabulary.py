@@ -239,6 +239,7 @@ class TestRegistryEnumeration:
         "integer_truncation",
         "proto_length",
         "struct_field",
+        "symbolic",           # binary-only; angr_available gate in sweep
     })
 
     @staticmethod

@@ -307,7 +307,18 @@ class TestRuntimeRefusalRelaunch:
             # wrap joern in the forwarder with identical JVM flags.
             def jvm_flags(argv: list[str]) -> list[str]:
                 tail = argv[argv.index("--") + 1:]
-                return [f for f in tail if f.startswith("-X")]
+                skip_next = False
+                flags = []
+                for f in tail:
+                    if skip_next:
+                        skip_next = False
+                        continue
+                    if f.startswith("--server-auth-"):
+                        skip_next = True
+                        continue
+                    if f.startswith("-X") or f.startswith("-J-X"):
+                        flags.append(f)
+                return flags
             assert jvm_flags(argvs[0]) == jvm_flags(argvs[1])
             assert srv._supervision_tier == "group"
             assert srv._tier_refusal_reason is not None

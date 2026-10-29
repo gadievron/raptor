@@ -4034,7 +4034,10 @@ def _run_phase2_parallel(
     all_contracts: list[Contract] = []
     all_bug_patterns: list[BugPattern] = []
     all_struct_annots: list[dict[str, str]] = []
-    for concepts, invariants, contracts, bug_patterns, struct_annots in results:
+    for batch in results:
+        if batch is None:
+            continue
+        concepts, invariants, contracts, bug_patterns, struct_annots = batch
         all_concepts.extend(concepts)
         all_invariants.extend(invariants)
         all_contracts.extend(contracts)
