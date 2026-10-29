@@ -459,7 +459,7 @@ def _try_build_bundle(
     if not callee_info.get("signature"):
         return None
 
-    callee_span = callee_info.get("line_end", 0) - callee_info.get("line_start", 0)
+    callee_span = (callee_info.get("line_end") or 0) - (callee_info.get("line_start") or 0)
     if callee_span < MIN_CALLEE_LINES:
         return None
 
@@ -1234,7 +1234,7 @@ def _score_sweep_target(
         score += 2
         reasons.append(f"fan-in={fi}")
 
-    span = info.get("line_end", 0) - info.get("line_start", 0)
+    span = (info.get("line_end") or 0) - (info.get("line_start") or 0)
     if span >= 50:
         score += 1
         reasons.append(f"complex={span}L")
@@ -1385,7 +1385,7 @@ def build_sweep_targets(
 
     scored: list[tuple[float, int, str, dict[str, Any]]] = []
     for fid, info in func_index.items():
-        span = info.get("line_end", 0) - info.get("line_start", 0)
+        span = (info.get("line_end") or 0) - (info.get("line_start") or 0)
         if span < MIN_SWEEP_LINES:
             continue
         score, reason = _score_sweep_target(
