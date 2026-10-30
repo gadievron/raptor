@@ -4086,6 +4086,27 @@ def _codeql_pack_root(query_path: Path) -> Path:
     return parent
 
 
+_WORKSPACE_MANIFEST_ASCENT_MAX = 5
+
+
+def _codeql_workspace_root(pack_root: Path) -> Path | None:
+    """Walk up from a resolved pack root to find ``codeql-workspace.yml``.
+
+    CodeQL packs using ``${workspace}`` dependencies need the workspace
+    manifest AND its sibling packs readable — granting the workspace
+    root covers both.  Bounded ascent; refuses home or filesystem root.
+    """
+    home = Path.home()
+    candidate = pack_root.parent
+    for _ in range(_WORKSPACE_MANIFEST_ASCENT_MAX):
+        if candidate == home or candidate == candidate.parent:
+            break
+        if (candidate / "codeql-workspace.yml").is_file():
+            return candidate
+        candidate = candidate.parent
+    return None
+
+
 def _codeql_cache_args(database_dir: Path) -> tuple[str, ...]:
     """Extra ``database analyze`` args redirecting the compilation cache.
 
@@ -4166,9 +4187,12 @@ def _sandboxed_codeql_runner(
     cannot steer the spawn. Omitted, the adapter keeps call-time
     resolution — right for same-thread callers, where the live
     surface IS the caller's context."""
-    readable = {
-        str(_codeql_pack_root(Path(q))) for q in query_paths
-    }
+    pack_roots = {_codeql_pack_root(Path(q)) for q in query_paths}
+    readable = {str(r) for r in pack_roots}
+    for pr in pack_roots:
+        ws = _codeql_workspace_root(pr)
+        if ws is not None:
+            readable.add(str(ws))
     codeql_home = Path.home() / ".codeql"
     if codeql_home.is_dir():
         readable.add(str(codeql_home))
