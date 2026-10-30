@@ -909,6 +909,11 @@ class OrchestratorConfig:
     functions: list[str] | None = None
     joern_server: Any | None = None  # pre-started server; caller owns lifecycle
     study_root: Path | None = None  # full source root for study loop (when target_path is an excerpt)
+    # Library source trees for expanded study: each (path, identifier)
+    # pair runs study-prep against a dependency's source, merging its
+    # domain model into the run's concept inventory (struct layouts,
+    # allocator invariants, API contracts from the actual linked version).
+    study_libraries: tuple[tuple[str, str], ...] = ()
     mode: ReviewMode = ReviewMode.SECURITY
     project_sinks: frozenset | None = None  # IRIS-derived sink names for wrapper pre-filter
     # The LLM client whose cost cap governs this run (core.llm.client.
@@ -17206,6 +17211,7 @@ def _study_consumer_loop(
     re_review_count = st.get("re_review_count", 0)
     stale_batches = st.get("stale_batches", 0)
     seen_concepts = st.get("seen_concepts", set())
+    lib_studies_done = False
     # Burn-breaker accounting across run_study invocations (each
     # invocation resets the phase's own counters — see the module
     # constants above the consumer).
@@ -17318,6 +17324,14 @@ def _study_consumer_loop(
             break
         batch = study_queue.dequeue_batch(max_items=15, timeout=30.0)
         if not batch:
+            # Library studies fire even without study batches — a tiny
+            # target may never generate concept questions, but library
+            # context (struct layouts, allocator invariants) is still
+            # valuable.  Gate: producer done (reviews finished) and no
+            # batch means nothing else is coming.
+            if not lib_studies_done and study_queue.producer_done():
+                _run_library_studies(config, study_queue, checklist)
+                lib_studies_done = True
             continue
         study_queue.set_working(True)
 
@@ -17502,6 +17516,16 @@ def _study_consumer_loop(
                     concept_index_ref, checklist, config.out_dir,
                     target_path=config.target_path,
                 )
+
+        # Library studies: run once after the target's own prep (or
+        # once the producer is done, if the reviews never generated
+        # study questions — a tiny target may produce zero batches,
+        # but library context is still valuable).
+        if not lib_studies_done and (
+            study_list_built or study_queue.producer_done()
+        ):
+            _run_library_studies(config, study_queue, checklist)
+            lib_studies_done = True
 
         # Multi-language requests: resolve in-process and merge the
         # definitions into study-list.json (run_study re-reads it), so
@@ -17893,6 +17917,343 @@ def _is_suspicious_outcome(key: str, outcomes: _LockedOutcomes) -> bool:
     if outcome and hasattr(outcome, "status"):
         return outcome.status == "suspicious"
     return False
+
+
+def _build_mechanical_domain_model(
+    study_list_path: Path,
+    identifier: str,
+):
+    """Build a domain model from study-prep output without LLM calls.
+
+    Extracts struct layouts, paired operations, and function contracts
+    mechanically from the study-list.json items. Zero cost, immediate.
+    """
+    from core.concepts.model import (
+        Concept,
+        Contract,
+        DomainModel,
+        Evidence,
+        Invariant,
+        StudyItem,
+        _filter_fields,
+    )
+    from core.json import load_json
+
+    raw = load_json(study_list_path, strict=True, max_bytes=64 * 1024 * 1024)
+    if not raw or not isinstance(raw, dict):
+        return DomainModel()
+
+    items = [
+        StudyItem(**_filter_fields(StudyItem, r))
+        for r in raw.get("items", [])
+    ]
+
+    concepts: list[Concept] = []
+    invariants: list[Invariant] = []
+    contracts: list[Contract] = []
+    paired_ops: list[dict] = []
+
+    for item in items:
+        if item.kind == "struct" and item.fields:
+            cid = f"lib_{identifier}_{item.name}"
+            concepts.append(Concept(
+                id=cid,
+                description=(
+                    f"struct {item.name}: "
+                    f"{len(item.fields)} field(s) "
+                    f"[{', '.join(item.fields[:5])}]"
+                ),
+                confidence="mechanical",
+                provenance="mechanical",
+                evidence=[Evidence(
+                    type="type_definition",
+                    file=item.file,
+                    line=item.line,
+                    observation=item.definition[:200] if item.definition else "",
+                )],
+            ))
+            if item.refcount_fields:
+                invariants.append(Invariant(
+                    id=f"inv_{cid}_refcount",
+                    concept=cid,
+                    statement=(
+                        f"{item.name} uses reference counting "
+                        f"via {', '.join(item.refcount_fields)}"
+                    ),
+                    negation=(
+                        f"{item.name} refcount field modified "
+                        "without matching acquire/release"
+                    ),
+                    confidence="mechanical",
+                    provenance="mechanical",
+                ))
+            if item.lock_sites:
+                invariants.append(Invariant(
+                    id=f"inv_{cid}_lock",
+                    concept=cid,
+                    statement=(
+                        f"{item.name} requires lock discipline: "
+                        f"{', '.join(item.lock_sites[:3])}"
+                    ),
+                    negation=f"{item.name} accessed without lock",
+                    confidence="mechanical",
+                    provenance="mechanical",
+                ))
+            if item.flexible_arrays:
+                invariants.append(Invariant(
+                    id=f"inv_{cid}_flex",
+                    concept=cid,
+                    statement=(
+                        f"{item.name} has flexible array member(s): "
+                        f"{', '.join(item.flexible_arrays)}"
+                    ),
+                    negation=(
+                        f"{item.name} allocated without accounting "
+                        "for flexible array size"
+                    ),
+                    confidence="mechanical",
+                    provenance="mechanical",
+                    relevant_cwes=["CWE-122", "CWE-787"],
+                ))
+
+        elif item.kind == "paired_ops":
+            if item.paired_with:
+                acquire = item.name.split("/")[0] if "/" in item.name else item.name
+                for pw in item.paired_with:
+                    paired_ops.append({
+                        "acquire": acquire,
+                        "release": pw,
+                        "kind": "paired",
+                        "provenance": "mechanical",
+                    })
+
+        elif item.kind == "function":
+            if item.paired_with:
+                for pw in item.paired_with:
+                    paired_ops.append({
+                        "acquire": item.name,
+                        "release": pw,
+                        "kind": "paired",
+                        "provenance": "mechanical",
+                    })
+            if item.gate_checks or item.null_guards:
+                contracts.append(Contract(
+                    function=item.name,
+                    file=item.file,
+                    input_semantics=(
+                        f"gate: {', '.join(item.gate_checks[:3])}"
+                        if item.gate_checks else ""
+                    ),
+                    security_note=(
+                        f"null guards: {', '.join(item.null_guards[:3])}"
+                        if item.null_guards else ""
+                    ),
+                    provenance="mechanical",
+                ))
+
+    seen_pairs: set[tuple[str, str]] = set()
+    deduped_paired: list[dict] = []
+    for op in paired_ops:
+        key = (op["acquire"], op["release"])
+        if key not in seen_pairs:
+            seen_pairs.add(key)
+            deduped_paired.append(op)
+
+    return DomainModel(
+        target=raw.get("target", ""),
+        source_root=raw.get("source_root", ""),
+        concepts=concepts,
+        invariants=invariants,
+        contracts=contracts,
+        paired_operations=deduped_paired,
+    )
+
+
+def _run_library_studies(
+    config: OrchestratorConfig,
+    study_queue: StudyQueue | None,
+    checklist: dict | None,
+) -> None:
+    """Detect and study library dependencies, merging their domain
+    models into the run's main domain model.
+
+    Combines two sources:
+
+    1. **Manual** — ``config.study_libraries`` from ``--study-lib``
+       flags. These always win: if a manual entry names an identifier
+       that auto-detection would also produce, the auto-detected
+       version is suppressed.
+    2. **Auto-detected** — system includes harvested from the target,
+       resolved to installed source packages via ``dpkg``, extracted
+       to ``out/library-sources/`` if needed.
+
+    Called once after the target's own study-prep succeeds. Each
+    library gets its own output subdirectory
+    (``<out_dir>/study/lib-<identifier>/``). Failures are logged and
+    skipped — a broken library study never disables the target's own
+    domain model.
+    """
+    # Collect manual entries first — they define the override set.
+    manual_idents = frozenset(ident for _, ident in config.study_libraries)
+    libraries: list[tuple[str, str]] = list(config.study_libraries)
+
+    # Auto-detect from system includes.
+    try:
+        from core.concepts.library_detect import detect_library_candidates
+
+        raptor_dir = Path(os.environ["RAPTOR_DIR"])
+        cache_dir = raptor_dir / "out" / "library-sources"
+        auto_ready, auto_missing = detect_library_candidates(
+            config.target_path,
+            cache_dir,
+            exclude_identifiers=manual_idents,
+        )
+        libraries.extend(auto_ready)
+        if auto_ready:
+            logger.info(
+                "study-consumer: auto-detected %d library subtree(s): %s",
+                len(auto_ready),
+                ", ".join(ident for _, ident in auto_ready),
+            )
+        for candidate in auto_missing:
+            if candidate.install_hint:
+                logger.info(
+                    "study-consumer: library source for %s not installed "
+                    "— install with `%s` for deeper analysis",
+                    candidate.source_pkg, candidate.install_hint,
+                )
+            elif candidate.tarball and not candidate.extracted_root:
+                logger.warning(
+                    "study-consumer: found %s but extraction failed",
+                    candidate.tarball,
+                )
+    except Exception:
+        logger.debug(
+            "study-consumer: library auto-detection failed",
+            exc_info=True,
+        )
+
+    if not libraries:
+        return
+
+    study_prep_path = str(
+        Path(__file__).resolve().parents[2] / "libexec" / "raptor-study-prep"
+    )
+    main_dm_path = config.out_dir / "domain-model.json"
+    prep_timeout = _study_prep_timeout_s(checklist)
+
+    from core.concepts.model import DomainModel
+    from core.concepts.study import _merge_domain_models
+    from core.config import RaptorConfig
+
+    study_env = RaptorConfig.get_llm_env()
+    study_env["_RAPTOR_TRUSTED"] = "1"
+
+    for lib_path, identifier in libraries:
+        if study_queue is not None and study_queue.stop_requested:
+            logger.info(
+                "study-consumer: stop requested — skipping remaining "
+                "library studies",
+            )
+            break
+
+        lib_out = config.out_dir / "study" / f"lib-{identifier}"
+        lib_out.mkdir(parents=True, exist_ok=True)
+
+        lib_cmd = [
+            sys.executable,
+            study_prep_path,
+            lib_path,
+            str(lib_out),
+        ]
+        if config.models and config.models[0] != "default":
+            lib_cmd.extend(["--model", config.models[0]])
+
+        logger.info(
+            "study-consumer: running study-prep for library %s (%s)",
+            identifier, lib_path,
+        )
+        try:
+            result = _run_study_prep(
+                lib_cmd,
+                env=study_env,
+                timeout=prep_timeout,
+                study_queue=study_queue,
+            )
+            if result.returncode != 0:
+                logger.warning(
+                    "study-consumer: library study-prep for %s failed "
+                    "(exit %d) — skipping",
+                    identifier, result.returncode,
+                )
+                continue
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "study-consumer: library study-prep for %s timed out "
+                "— skipping",
+                identifier,
+            )
+            continue
+        except _StudyStopRequested:
+            logger.info(
+                "study-consumer: stop requested during library study-prep "
+                "for %s — exiting",
+                identifier,
+            )
+            break
+
+        lib_study_list = lib_out / "study-list.json"
+        lib_dm_path = lib_out / "domain-model.json"
+
+        if not lib_study_list.is_file():
+            logger.info(
+                "study-consumer: library %s produced no study list "
+                "— skipping",
+                identifier,
+            )
+            continue
+
+        try:
+            lib_model = _build_mechanical_domain_model(
+                lib_study_list, identifier,
+            )
+            lib_model.save(lib_dm_path)
+        except Exception:
+            logger.warning(
+                "study-consumer: library %s mechanical model failed "
+                "— skipping",
+                identifier,
+                exc_info=True,
+            )
+            continue
+
+        try:
+            if main_dm_path.is_file():
+                main_model = DomainModel.load(main_dm_path)
+                merged = _merge_domain_models(lib_model, main_model)
+            else:
+                merged = DomainModel(
+                    concepts=lib_model.concepts,
+                    invariants=lib_model.invariants,
+                    contracts=lib_model.contracts,
+                    paired_operations=lib_model.paired_operations,
+                )
+            merged.save(main_dm_path)
+            logger.info(
+                "study-consumer: merged library %s domain model "
+                "(%d concepts, %d invariants, %d contracts)",
+                identifier,
+                len(lib_model.concepts),
+                len(lib_model.invariants),
+                len(lib_model.contracts),
+            )
+        except Exception:
+            logger.warning(
+                "study-consumer: failed to merge library %s domain "
+                "model — skipping",
+                identifier,
+                exc_info=True,
+            )
 
 
 def _build_concept_index_from_prep(
@@ -19289,6 +19650,8 @@ def _hypothesis_to_tool_chain(
     file_path: str,
     cwe: str = "",
     language: str | None = None,
+    *,
+    llm_client=None,
 ) -> list[dict[str, Any]]:
     """Build an ordered list of tools to try for a hypothesis.
 
@@ -19306,12 +19669,20 @@ def _hypothesis_to_tool_chain(
     (``_inventory_language_hint``): content-probed unknown extensions
     can satisfy the curated-semgrep leg's language gate where the
     extension cannot (see ``resolve_semgrep_rule_for_cwe``).
+
+    When *llm_client* is provided, the CWE chain builder asks the LLM
+    whether the standing checkers cover the hypothesis sub-shape; if
+    not, the CWE tools are dropped and the empty chain routes to
+    on-demand synthesis.
     """
     chain: list[dict[str, Any]] = []
     seen_types: set = set()
 
     if cwe:
-        cwe_chain = _cwe_fallback_chain(cwe, hypothesis, file_path, language)
+        cwe_chain = _cwe_fallback_chain(
+            cwe, hypothesis, file_path, language,
+            llm_client=llm_client,
+        )
         for entry in cwe_chain:
             chain.append(entry)
             seen_types.add(entry["type"])
@@ -20438,6 +20809,8 @@ def _cwe_fallback_chain(
     hypothesis: str = "",
     file_path: str = "",
     language: str | None = None,
+    *,
+    llm_client=None,
 ) -> list[dict[str, Any]]:
     """Generate tool chain from CWE dispatch when string matching fails.
 
@@ -20459,10 +20832,21 @@ def _cwe_fallback_chain(
             joern_applicable,
             resolve_cocci_rules_for_cwe,
             resolve_semgrep_rule_for_cwe,
+            route_hypothesis_to_checkers,
             sinks_for_cwe,
             smt_verb_for_cwe,
         )
     except ImportError:
+        return chain
+
+    if llm_client is not None and not route_hypothesis_to_checkers(
+        cwe, hypothesis, llm_client,
+    ):
+        logger.info(
+            "cwe_fallback_chain: %s — LLM says standing tools do not "
+            "cover the hypothesis; dropping chain for synthesis",
+            cwe,
+        )
         return chain
 
     # Curated per-class semgrep rule (language-gated in the resolver):
@@ -27110,6 +27494,7 @@ def _promote_suspicious_one(
     chain = _hypothesis_to_tool_chain(
         hypothesis, outcome.file, cwe=cwe,
         language=_inventory_language_hint(config, outcome.file),
+        llm_client=getattr(config, "llm_budget_client", None),
     )
     if not chain:
         _route_to_synthesis()
@@ -27156,6 +27541,24 @@ def _promote_suspicious_one(
             # planted-runtime-error shapes alike). A chain where
             # any leg actually RAN (dispatched and stayed silent)
             # does not re-route — that silence is an adjudication.
+            _route_to_synthesis()
+            return None
+        # Chain exhaustion: tools ran and stayed silent — their
+        # sub-shape may not cover the hypothesis. For CWEs that
+        # opted into deep verification (dark_verify), try synthesis
+        # as a last resort before letting the hypothesis die.
+        try:
+            from .cwe_dispatch import dark_verify_applicable
+        except ImportError:
+            dark_verify_applicable = lambda _c: False  # noqa: E731
+        if dark_verify_applicable(cwe):
+            logger.info(
+                "sweep: chain exhausted without confirmation for "
+                "%s:%s (%s) — routing to synthesis as fallback",
+                outcome.file,
+                outcome.function,
+                cwe,
+            )
             _route_to_synthesis()
             return None
 
@@ -29295,11 +29698,27 @@ def _dispatch_secondary_hypotheses(
             chain = _hypothesis_to_tool_chain(
                 mechanism, outcome.file, cwe=cwe,
                 language=_inventory_language_hint(config, outcome.file),
+                llm_client=getattr(config, "llm_budget_client", None),
             )
             if not chain:
-                _increment_tier_dict(
-                    result.tier_counters, "secondary_sweep", "skipped",
-                )
+                try:
+                    from .cwe_dispatch import dark_verify_applicable
+                except ImportError:
+                    dark_verify_applicable = lambda _c: False  # noqa: E731
+                if dark_verify_applicable(cwe):
+                    _synthesize_unmapped_suspicious(
+                        result, config, i, outcome,
+                        mechanism, cwe, source or "",
+                        joern_server=joern_server,
+                    )
+                    _increment_tier_dict(
+                        result.tier_counters, "secondary_sweep",
+                        "synthesis_routed",
+                    )
+                else:
+                    _increment_tier_dict(
+                        result.tier_counters, "secondary_sweep", "skipped",
+                    )
                 continue
 
             confirmed = _run_tool_chain(
@@ -29327,6 +29746,21 @@ def _dispatch_secondary_hypotheses(
                 "confirmed" if confirmed else "inconclusive",
             )
             if not confirmed:
+                try:
+                    from .cwe_dispatch import dark_verify_applicable as _dva
+                except ImportError:
+                    _dva = lambda _c: False  # noqa: E731
+                if _dva(cwe):
+                    logger.info(
+                        "secondary sweep: chain exhausted for %s:%s (%s) "
+                        "— routing to synthesis",
+                        outcome.file, outcome.function, cwe,
+                    )
+                    _synthesize_unmapped_suspicious(
+                        result, config, i, outcome,
+                        mechanism, cwe, source or "",
+                        joern_server=joern_server,
+                    )
                 continue
 
             high_prec = [t for t in confirmed if not _is_detection_only(t)]

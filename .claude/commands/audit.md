@@ -28,6 +28,7 @@ Two-phase: Claude runs `/understand --map` (LLM-driven, produces context-map.jso
        [--binary <path> ...] [--binary-auto] [--no-binary-oracle] [--no-vendored-triage]
        [--annotations-dir <path>] [--no-validate] [--model <name> ...]
        [--no-auto-siblings]
+       [--study-lib PATH:IDENTIFIER ...] [--no-study-lib]
 ```
 
 - `<target_path>` — path to codebase to review (required on first run; resolved per DEFAULT TARGET DIRECTORY if omitted)
@@ -64,6 +65,8 @@ Two-phase: Claude runs `/understand --map` (LLM-driven, produces context-map.jso
 - `--adversarial` — enable adversarial reviewer that challenges positive verdicts (requires `--model` x2+)
 - `--edges` — review cross-function edge obligations: tier-1 boundary edges as dedicated contract units, tier-2 on-path edges folded into caller reviews (flag-gated beta). Aliasing/ownership contract detection needs a populated domain model — run a study pass first or seed `concepts/domain-model.json`; absence is reported as a degradation
 - `--max-propagation-depth <N>` — override adaptive constraint propagation depth (default: auto-calibrated p90+2, floor 5, cap 15)
+- `--study-lib PATH:IDENTIFIER` — library source tree to study alongside the target (repeatable). Format: `path:identifier`, e.g. `/usr/src/glibc-2.31/nss:service_user`. Overrides auto-detected entries with matching identifiers. Runs study-prep against each library, merging struct layouts, allocator invariants, and API contracts into the domain model
+- `--no-study-lib` — disable automatic library source detection entirely (skip Step 2a below)
 
 ## Instructions
 
@@ -101,6 +104,36 @@ Note: for a source-tree target this is the **in-session** `/understand` workflow
 
 If the operator passed `--scope`, still map the full target (the map covers the whole codebase; the scope only filters gap selection).
 
+### Step 2a: Library source detection
+
+**Skip this step if** `--no-study-lib` was passed, or if the target contains no C/C++ source files.
+
+Detect library dependencies the target uses (via its `#include <…>` directives) and check whether their source trees are available for study-prep. This runs pre-pipeline so the interactive prompt is available.
+
+```bash
+libexec/raptor-detect-libraries "$TARGET_PATH" --json
+```
+
+If the operator passed `--study-lib` entries, extract their identifiers and pass them as `--exclude` so auto-detected subtrees don't duplicate manual overrides:
+
+```bash
+libexec/raptor-detect-libraries "$TARGET_PATH" --json --exclude identifier1 --exclude identifier2
+```
+
+Parse the JSON output. If `missing` is non-empty, present an interactive prompt. Run `libexec/raptor-may-ask` first; only if it prints `interactive` AND the AskUserQuestion tool is available, ask:
+
+**Question:** "Library source packages could improve analysis depth — N package(s) not installed"
+
+**Options** (fill descriptions with the actual package names and install hints from the JSON):
+1. **(Recommended) Continue without library source** — the audit runs without library context; struct layouts and API contracts from `<packages>` won't be in the domain model. Re-run after installing for deeper analysis.
+2. **Stop — I'll install the source packages first** — stop so packages can be installed. Show the install command(s) from the detection output. The user re-runs `/audit` afterwards.
+
+**Non-interactive fallback:** proceed without library source (current behaviour — the orchestrator's study consumer logs the install hint).
+
+File paths and package names quoted into AskUserQuestion options are target-derived: render them with non-printables escaped per CLAUDE.md § INTERACTIVE PROMPTS display integrity.
+
+If `ready` is non-empty: no prompt needed — the orchestrator's study consumer picks these up automatically.
+
 ### Step 3: Run the orchestrator
 
 **IMPORTANT:** `target` is a **positional** argument, NOT `--target`. The lifecycle uses `--target` but `raptor-audit run` does not.
@@ -109,7 +142,7 @@ If the operator passed `--scope`, still map the full target (the map covers the 
 libexec/raptor-audit run "$TARGET_PATH" --out "$OUTPUT_DIR"
 ```
 
-Pass through any operator flags (`--strategy`, `--budget`, `--scope`, `--pin`, `--scope-floor`, `--no-scope-floor`, `--pre-scan`, `--annotations-dir`, `--no-validate`, `--model`, `--adversarial`, `--edges`, `--max-propagation-depth`, `--codeql-db`, `--max-cost`, `--forecast`, `--deepen-reserve`, `--max-time`, `--review-passes`, `--max-workers`, `--subsystem-depth`, `--batch-sloc-threshold`, `--include-kinds`, `--no-verdict-reuse`, `--schedule`, `--prior-journal`, `--prior-claims`, `--hypothesis-seeds`, `--seed-rereview`, `--dynamic`, `--no-dynamic`, `--binary`, `--binary-auto`, `--no-binary-oracle`, `--no-vendored-triage`).
+Pass through any operator flags (`--strategy`, `--budget`, `--scope`, `--pin`, `--scope-floor`, `--no-scope-floor`, `--pre-scan`, `--annotations-dir`, `--no-validate`, `--model`, `--adversarial`, `--edges`, `--max-propagation-depth`, `--codeql-db`, `--max-cost`, `--forecast`, `--deepen-reserve`, `--max-time`, `--review-passes`, `--max-workers`, `--subsystem-depth`, `--batch-sloc-threshold`, `--include-kinds`, `--no-verdict-reuse`, `--schedule`, `--prior-journal`, `--prior-claims`, `--hypothesis-seeds`, `--seed-rereview`, `--dynamic`, `--no-dynamic`, `--binary`, `--binary-auto`, `--no-binary-oracle`, `--no-vendored-triage`, `--study-lib`).
 
 The orchestrator handles everything from here: gap computation, context assembly, LLM review, tool chain dispatch, Joern background build, sweep validation, constraint propagation, Mode 2 checker synthesis, /validate post-pass, report generation, and lifecycle completion.
 
@@ -123,6 +156,7 @@ When the orchestrator completes, read and print the summary from `$OUTPUT_DIR/au
 
 ```
 0. context-map.json (from /understand --map, done by the .md shim above)
+0a. Library source detection → interactive prompt if packages missing (done by the .md shim)
 1. Lifecycle start, build inventory → checklist.json
 2. Compute gaps → gaps.json (functions with no coverage)
 2a. Consistency census pre-pass → return-census.json (registry-grade contract deviations become LLM-free findings)

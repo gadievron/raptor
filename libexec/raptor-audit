@@ -95,6 +95,28 @@ pin_raptor_dir_in_environ()
 from core.security.log_sanitisation import escape_nonprintable  # noqa: E402
 
 
+def _parse_study_libs(
+    raw: list[str] | None,
+) -> tuple[tuple[str, str], ...]:
+    """Parse ``--study-lib path:identifier`` into a tuple of pairs."""
+    if not raw:
+        return ()
+    pairs: list[tuple[str, str]] = []
+    for entry in raw:
+        if ":" not in entry:
+            raise SystemExit(
+                f"--study-lib requires PATH:IDENTIFIER format, got: {entry!r}"
+            )
+        path, ident = entry.split(":", 1)
+        if not path or not ident:
+            raise SystemExit(
+                f"--study-lib: both path and identifier must be non-empty, "
+                f"got: {entry!r}"
+            )
+        pairs.append((path, ident))
+    return tuple(pairs)
+
+
 def _print_scrubbed(text: object, **kwargs: object) -> None:
     """Terminal print for values that can carry target-/LLM-derived
     bytes (rule descriptions, sweep errors, report summaries):
@@ -2224,6 +2246,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         on_demand_synthesis=not args.no_on_demand_synthesis,
         vendored_triage=not args.no_vendored_triage,
         probe_determine_value=args.probe_determine_value,
+        study_libraries=_parse_study_libs(args.study_lib),
         environment_breaker=not args.no_environment_breaker,
         deepen_reserve_fraction=args.deepen_reserve,
         prior_journal_dirs=(
@@ -3573,6 +3596,9 @@ def cmd_resume(args: argparse.Namespace) -> int:
         on_demand_synthesis=bool(run_cfg.get("on_demand_synthesis", True)),
         vendored_triage=bool(run_cfg.get("vendored_triage", True)),
         probe_determine_value=bool(run_cfg.get("probe_determine_value")),
+        study_libraries=tuple(
+            tuple(pair) for pair in run_cfg.get("study_libraries", ())
+        ),
         environment_breaker=bool(run_cfg.get("environment_breaker", True)),
         deepen_reserve_fraction=run_cfg.get("deepen_reserve_fraction"),
         same_run_reuse=True,
@@ -3864,6 +3890,7 @@ def _run_config_from_args(
         "on_demand_synthesis": not args.no_on_demand_synthesis,
         "vendored_triage": not args.no_vendored_triage,
         "probe_determine_value": args.probe_determine_value,
+        "study_libraries": _parse_study_libs(args.study_lib),
         "environment_breaker": not args.no_environment_breaker,
         "deepen_reserve_fraction": args.deepen_reserve,
         "prior_journal_dirs": args.prior_journal,
@@ -4772,6 +4799,18 @@ def main() -> int:
                             "equality probe is the only verdict). Up to "
                             "~66 sandboxed compiles per constant, capped "
                             "per run — off by default")
+    p_run.add_argument("--study-lib", action="append", default=None,
+                       metavar="PATH:IDENTIFIER",
+                       help="Library source tree to study alongside the "
+                            "target (repeatable). Format: path:identifier, "
+                            "e.g. /usr/src/glibc-2.31/nss:service_user. "
+                            "Runs study-prep against each library, merging "
+                            "struct layouts, allocator invariants, and API "
+                            "contracts into the domain model")
+    p_run.add_argument("--no-study-lib", action="store_true", default=False,
+                       help="Disable automatic library source detection "
+                            "(skip the pre-pipeline detection step; manual "
+                            "--study-lib entries still apply)")
     p_run.add_argument("--pre-scan", action="store_true",
                        help="When no scan SARIF exists (this run or a "
                             "fresh sibling run), run one bounded semgrep "

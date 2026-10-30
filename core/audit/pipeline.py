@@ -111,6 +111,7 @@ class AuditPipelineOpts:
     joern_server: Any | None = None
     on_progress: Callable | None = None
     study_root: Path | None = None
+    study_libraries: tuple[tuple[str, str], ...] = ()
     mode: ReviewMode = ReviewMode.ENSEMBLE
     max_workers: int = 0
     # Tri-state: True/False = explicit per-run choice (--dynamic /
@@ -441,6 +442,7 @@ def _build_orchestrator_config(
         joern_overrides=opts.joern_overrides,
         joern_server=opts.joern_server,
         study_root=opts.study_root,
+        study_libraries=opts.study_libraries,
         mode=mode,
         max_workers=opts.max_workers,
         dynamic_validation=_resolve_dynamic(opts),
