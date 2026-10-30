@@ -236,6 +236,83 @@ class TestOnDemandHookInPromoteSuspicious:
         )
         return calls
 
+    def test_secondary_sweep_routes_aliasing_mechanism_to_synthesis(
+        self, tmp_path, monkeypatch,
+    ):
+        """The real corpus scenario: primary hypothesis is integer
+        overflow (CWE-190), but mechanism #4 is an aliasing UAF
+        (CWE-416). The secondary sweep should route that mechanism
+        to synthesis via chain exhaustion."""
+        from core.audit.orchestrator import _dispatch_secondary_hypotheses
+
+        monkeypatch.setattr(
+            "core.audit.orchestrator._run_tool_chain",
+            lambda *a, **kw: [],
+        )
+        monkeypatch.setattr(
+            "core.audit.orchestrator._read_raw_source",
+            lambda *a, **kw: "int _aead_recvmsg(void) { return 0; }",
+        )
+
+        synth_calls: list[tuple] = []
+        _real_synth = None
+        try:
+            from core.audit.orchestrator import (
+                _synthesize_unmapped_suspicious as _real,
+            )
+            _real_synth = _real
+        except ImportError:
+            pass
+
+        def fake_synth(result, config, i, outcome, hyp, cwe, source, **kw):
+            synth_calls.append((hyp, cwe))
+
+        monkeypatch.setattr(
+            "core.audit.orchestrator._synthesize_unmapped_suspicious",
+            fake_synth,
+        )
+
+        outcome = _outcome(
+            hypothesis=(
+                "Integer underflow in decryption output length "
+                "calculation when auth tag size exceeds available data"
+            ),
+        )
+        outcome.review_result["cwe"] = "CWE-190"
+        outcome.file = "crypto/algif_aead.c"
+        outcome.function = "_aead_recvmsg"
+        outcome.hypotheses = [
+            {
+                "mechanism": (
+                    "Integer underflow in decryption output length "
+                    "calculation when auth tag size exceeds available data"
+                ),
+                "confidence": "high",
+            },
+            {
+                "mechanism": (
+                    "Aliasing vulnerability: memcpy_sglist copies data "
+                    "from TX SGL to RX SGL. If source and destination "
+                    "reference the same page frames, the decryption "
+                    "frees pages via the source scatterlist that are "
+                    "still referenced by the destination"
+                ),
+                "confidence": "medium",
+            },
+        ]
+        result = self._result([outcome])
+
+        _dispatch_secondary_hypotheses(
+            result, _config(tmp_path), joern_server=None,
+        )
+
+        assert any(
+            "CWE-416" in cwe for _, cwe in synth_calls
+        ), (
+            f"synthesis must fire for CWE-416 aliasing mechanism; "
+            f"got calls: {synth_calls}"
+        )
+
     def _result(self, outcomes):
         from core.audit.orchestrator import OrchestratorResult
         r = OrchestratorResult()
@@ -343,6 +420,87 @@ class TestOnDemandHookInPromoteSuspicious:
         assert not calls
         assert result.outcomes[0].status == "suspicious"
 
+    def test_empty_chain_routes_to_synthesis(self, tmp_path, monkeypatch):
+        """When the LLM router drops the standing chain (not dominated),
+        the empty chain routes to synthesis."""
+        from core.audit.orchestrator import _promote_suspicious
+
+        aliasing_hyp = (
+            "scatterlist aliasing — src and dst reference the same "
+            "pages; free through src invalidates dst"
+        )
+        self._patch_environment(monkeypatch)
+        monkeypatch.setattr(
+            "core.audit.orchestrator._effective_cwe",
+            lambda *a, **kw: "CWE-416",
+        )
+        calls = self._patch_synth(monkeypatch, None)
+        outcome = _outcome(hypothesis=aliasing_hyp)
+        outcome.review_result["cwe"] = "CWE-416"
+        result = self._result([outcome])
+
+        _promote_suspicious(result, _config(tmp_path))
+
+        assert len(calls) == 1
+
+    def test_chain_exhaustion_routes_to_synthesis(self, tmp_path, monkeypatch):
+        """When the tool chain ran but nothing confirmed, and the CWE
+        has dark_verify, synthesis fires as a fallback."""
+        from core.audit.orchestrator import _promote_suspicious
+
+        self._patch_environment(
+            monkeypatch,
+            chain=[{"type": "coccinelle", "config": {"rule": "x.cocci"}}],
+        )
+        monkeypatch.setattr(
+            "core.audit.orchestrator._run_tool_chain",
+            lambda *a, **kw: [],
+        )
+        monkeypatch.setattr(
+            "core.audit.orchestrator._effective_cwe",
+            lambda *a, **kw: "CWE-416",
+        )
+        calls = self._patch_synth(monkeypatch, None)
+        outcome = _outcome(
+            hypothesis="use after free in error cleanup path",
+        )
+        outcome.review_result["cwe"] = "CWE-416"
+        result = self._result([outcome])
+
+        _promote_suspicious(result, _config(tmp_path))
+
+        assert len(calls) == 1
+
+    def test_chain_exhaustion_no_dark_verify_stays_quiet(
+        self, tmp_path, monkeypatch,
+    ):
+        """Chain exhaustion without dark_verify does not route to
+        synthesis — the tools adjudicated and the hypothesis stays
+        suspicious."""
+        from core.audit.orchestrator import _promote_suspicious
+
+        self._patch_environment(
+            monkeypatch,
+            chain=[{"type": "smt", "config": {"verb": "check-oob"}}],
+        )
+        monkeypatch.setattr(
+            "core.audit.orchestrator._run_tool_chain",
+            lambda *a, **kw: [],
+        )
+        monkeypatch.setattr(
+            "core.audit.orchestrator._effective_cwe",
+            lambda *a, **kw: "CWE-120",
+        )
+        calls = self._patch_synth(monkeypatch, None)
+        outcome = _outcome()
+        outcome.review_result["cwe"] = "CWE-120"
+        result = self._result([outcome])
+
+        _promote_suspicious(result, _config(tmp_path))
+
+        assert not calls
+        assert result.outcomes[0].status == "suspicious"
+
     def test_attempt_cap_passed_through(self, tmp_path, monkeypatch):
         from core.audit.orchestrator import _promote_suspicious
 
@@ -404,3 +562,259 @@ class TestSynthesisHypothesisForCwe:
         from core.audit.orchestrator import _synthesis_hypothesis_for_cwe
         o = self._outcome("p", ["p", "q"], inferred="CWE-416")
         assert _synthesis_hypothesis_for_cwe(o, "CWE-416", "p") == "p"
+
+
+class TestCVE2026_31431_AliasingRoute:
+    """Focused proof that CVE-2026-31431 (_aead_recvmsg, CWE-416
+    aliasing UAF) routes to on-demand synthesis instead of dying
+    as suspicious.
+
+    Uses the REAL chain builder — only tool execution and
+    source-reading are stubbed.
+    """
+
+    ALIASING_HYP = (
+        "scatterlist aliasing — src and dst reference the same "
+        "pages through zero-copy splice; the decryption operation "
+        "frees pages via the source scatterlist that are still "
+        "referenced by the destination"
+    )
+
+    def test_cwe_chain_empty_but_string_chain_not(self):
+        """The LLM router drops the CWE-416 standing tools (not
+        dominated), but string-matching adds joern/codeql back from
+        'free' in the hypothesis text."""
+        from core.audit.orchestrator import (
+            _cwe_fallback_chain,
+            _hypothesis_to_tool_chain,
+        )
+
+        class _NotDominatedClient:
+            def generate_structured(self, *a, **kw):
+                return {"dominated": False, "reasoning": "aliasing"}
+
+        client = _NotDominatedClient()
+
+        cwe_chain = _cwe_fallback_chain(
+            "CWE-416", self.ALIASING_HYP,
+            "crypto/algif_aead.c", None,
+            llm_client=client,
+        )
+        assert cwe_chain == [], (
+            "LLM router should drop CWE-416 standing tools for aliasing hyp"
+        )
+
+        full_chain = _hypothesis_to_tool_chain(
+            self.ALIASING_HYP, "crypto/algif_aead.c", cwe="CWE-416",
+            llm_client=client,
+        )
+        assert len(full_chain) > 0, (
+            "string-matched tools should still populate the chain"
+        )
+        chain_types = {e["type"] for e in full_chain}
+        assert "coccinelle" not in chain_types, (
+            "CWE-416 cocci rules (sequential UAF) must be absent"
+        )
+        assert "smt" not in chain_types, (
+            "CWE-416 smt:check-early-release must be absent"
+        )
+
+    def test_sequential_uaf_keeps_full_chain(self):
+        """Contrast: a sequential UAF hypothesis keeps the full
+        CWE-416 standing tools (cocci, smt, codeql, joern)."""
+        from core.audit.orchestrator import _cwe_fallback_chain
+
+        seq_hyp = (
+            "kfree is called and then the pointer is dereferenced "
+            "in the error cleanup path"
+        )
+        cwe_chain = _cwe_fallback_chain(
+            "CWE-416", seq_hyp, "crypto/algif_aead.c", None,
+        )
+        chain_types = {e["type"] for e in cwe_chain}
+        assert "coccinelle" in chain_types
+        assert "codeql" in chain_types
+
+    def test_exhaustion_routes_to_synthesis_with_real_chain(
+        self, tmp_path, monkeypatch,
+    ):
+        """Layer 2 (chain exhaustion): no LLM client, so the CWE-416
+        standing tools stay; string-matched tools also fire. All return
+        nothing → chain exhaustion routes to synthesis."""
+        from core.audit.orchestrator import _promote_suspicious
+
+        # No llm_budget_client on config → LLM routing skipped → CWE-416
+        # standing tools + string-matched tools form the chain. All tools
+        # return [] → chain exhaustion fires.
+        monkeypatch.setattr(
+            "core.audit.orchestrator._run_tool_chain",
+            lambda *a, **kw: [],
+        )
+        monkeypatch.setattr(
+            "core.audit.orchestrator.run_prefilter",
+            lambda **kw: SimpleNamespace(hits=[]),
+        )
+        monkeypatch.setattr(
+            "core.audit.orchestrator._read_raw_source",
+            lambda *a, **kw: "int _aead_recvmsg(void) { return 0; }",
+        )
+        monkeypatch.setattr(
+            "core.audit.orchestrator._effective_cwe",
+            lambda *a, **kw: "CWE-416",
+        )
+
+        calls: list[dict] = []
+
+        def fake_synth(outcome, config, **kwargs):
+            calls.append(kwargs)
+            return None
+
+        monkeypatch.setattr(
+            "core.audit.checker_synthesis.synthesize_verification_rule",
+            fake_synth,
+        )
+
+        outcome = _outcome(hypothesis=self.ALIASING_HYP)
+        outcome.review_result["cwe"] = "CWE-416"
+        outcome.file = "crypto/algif_aead.c"
+        outcome.function = "_aead_recvmsg"
+        result = self._result([outcome])
+
+        _promote_suspicious(result, _config(tmp_path))
+
+        assert len(calls) == 1, (
+            "synthesis must fire — chain exhaustion + dark_verify(CWE-416)"
+        )
+
+    def test_llm_routing_drops_cwe_chain_for_aliasing(
+        self, tmp_path, monkeypatch,
+    ):
+        """LLM routing: LLM says standing tools do NOT dominate the
+        aliasing hypothesis → CWE chain dropped → string-matched
+        residual tools run but find nothing → chain exhaustion
+        routes to synthesis."""
+        from core.audit.orchestrator import _promote_suspicious
+
+        class _NotDominatedClient:
+            def generate_structured(self, *a, **kw):
+                return {"dominated": False, "reasoning": "aliasing"}
+
+        monkeypatch.setattr(
+            "core.audit.orchestrator._run_tool_chain",
+            lambda *a, **kw: [],
+        )
+        monkeypatch.setattr(
+            "core.audit.orchestrator.run_prefilter",
+            lambda **kw: SimpleNamespace(hits=[]),
+        )
+        monkeypatch.setattr(
+            "core.audit.orchestrator._read_raw_source",
+            lambda *a, **kw: "int _aead_recvmsg(void) { return 0; }",
+        )
+        monkeypatch.setattr(
+            "core.audit.orchestrator._effective_cwe",
+            lambda *a, **kw: "CWE-416",
+        )
+
+        calls: list[dict] = []
+
+        def fake_synth(outcome, config, **kwargs):
+            calls.append(kwargs)
+            return None
+
+        monkeypatch.setattr(
+            "core.audit.checker_synthesis.synthesize_verification_rule",
+            fake_synth,
+        )
+
+        outcome = _outcome(hypothesis=self.ALIASING_HYP)
+        outcome.review_result["cwe"] = "CWE-416"
+        outcome.file = "crypto/algif_aead.c"
+        outcome.function = "_aead_recvmsg"
+        result = self._result([outcome])
+
+        config = _config(tmp_path)
+        config.llm_budget_client = _NotDominatedClient()
+
+        _promote_suspicious(result, config)
+
+        assert len(calls) == 1, (
+            "synthesis must fire — LLM dropped CWE chain + exhaustion"
+        )
+
+    def test_secondary_sweep_routes_aliasing_mechanism_to_synthesis(
+        self, tmp_path, monkeypatch,
+    ):
+        """The real corpus scenario: primary hypothesis is integer
+        overflow (CWE-190), but mechanism #4 is an aliasing UAF
+        (CWE-416). The secondary sweep should route that mechanism
+        to synthesis via chain exhaustion."""
+        from core.audit.orchestrator import _dispatch_secondary_hypotheses
+
+        monkeypatch.setattr(
+            "core.audit.orchestrator._run_tool_chain",
+            lambda *a, **kw: [],
+        )
+        monkeypatch.setattr(
+            "core.audit.orchestrator._read_raw_source",
+            lambda *a, **kw: "int _aead_recvmsg(void) { return 0; }",
+        )
+
+        synth_calls: list[tuple] = []
+
+        def fake_synth(result, config, i, outcome, hyp, cwe, source, **kw):
+            synth_calls.append((hyp, cwe))
+
+        monkeypatch.setattr(
+            "core.audit.orchestrator._synthesize_unmapped_suspicious",
+            fake_synth,
+        )
+
+        outcome = _outcome(
+            hypothesis=(
+                "Integer underflow in decryption output length "
+                "calculation when auth tag size exceeds available data"
+            ),
+        )
+        outcome.review_result["cwe"] = "CWE-190"
+        outcome.file = "crypto/algif_aead.c"
+        outcome.function = "_aead_recvmsg"
+        outcome.hypotheses = [
+            {
+                "mechanism": (
+                    "Integer underflow in decryption output length "
+                    "calculation when auth tag size exceeds available data"
+                ),
+                "confidence": "high",
+            },
+            {
+                "mechanism": (
+                    "Aliasing vulnerability: memcpy_sglist copies data "
+                    "from TX SGL to RX SGL. If source and destination "
+                    "reference the same page frames, the decryption "
+                    "frees pages via the source scatterlist that are "
+                    "still referenced by the destination"
+                ),
+                "confidence": "medium",
+            },
+        ]
+        result = self._result([outcome])
+
+        _dispatch_secondary_hypotheses(
+            result, _config(tmp_path), joern_server=None,
+        )
+
+        assert any(
+            "CWE-416" in cwe for _, cwe in synth_calls
+        ), (
+            f"synthesis must fire for CWE-416 aliasing mechanism; "
+            f"got calls: {synth_calls}"
+        )
+
+    def _result(self, outcomes):
+        from core.audit.orchestrator import OrchestratorResult
+        r = OrchestratorResult()
+        r.outcomes = list(outcomes)
+        r.suspicious = sum(1 for o in outcomes if o.status == "suspicious")
+        r.findings = sum(1 for o in outcomes if o.status == "finding")
+        return r
