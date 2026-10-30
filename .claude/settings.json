@@ -21,6 +21,7 @@
       "Bash(libexec/raptor-cve-env *)",
       "Bash(libexec/raptor-describe *)",
       "Bash(libexec/raptor-describe)",
+      "Bash(libexec/raptor-detect-libraries *)",
       "Bash(libexec/raptor-enrich-context-map *)",
       "Bash(libexec/raptor-enrich-context-map-ast-view *)",
       "Bash(libexec/raptor-enrich-context-map-callgraph *)",

@@ -480,6 +480,17 @@ REGISTRY: dict[str, Entry] = {
              "github-archive skill's non-interactive fallback it "
              "applies instead",
     ),
+    ".claude/commands/audit.md": Entry(
+        lane="instruction", status="clean",
+        note="Step 2a library-source missing-packages prompt fills "
+             "option descriptions with package names, install hints, "
+             "and target paths from raptor-detect-libraries JSON; "
+             "non-interactive fallback proceeds without library "
+             "source",
+        wire_tokens=("non-printables escaped",
+                     "libexec/raptor-may-ask",
+                     "Non-interactive fallback",),
+    ),
     "docs/environment.md": Entry(
         lane="instruction", status="clean",
         note="end-user documentation describing the interactivity "

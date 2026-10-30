@@ -32,15 +32,18 @@ if not (os.environ.get("CLAUDECODE")
     )
     sys.exit(2)
 # fmt: on
+# ─── end trust-marker check ─────────────────────────────────
 
-_HERE = Path(__file__).resolve().parent
-_RAPTOR_DIR = _HERE.parent
-sys.path.insert(0, str(_RAPTOR_DIR))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
 
 from core.concepts.library_detect import (  # noqa: E402
     detect_library_candidates,
     harvest_system_includes,
 )
+
+
+_RAPTOR_DIR = Path(__file__).resolve().parents[1]
 
 
 def _default_cache_dir() -> Path:

@@ -980,6 +980,16 @@
    ],
    "verdict": "linear"
   },
+  "core/concepts/library_detect.py_INCLUDE_RE": {
+   "digests": [
+    "7bfeadd31336"
+   ],
+   "exp": 1.0,
+   "rules": [
+    "R"
+   ],
+   "verdict": "linear"
+  },
   "core/concepts/study.py\u001fm": {
    "digests": [
     "1622d9111f12"

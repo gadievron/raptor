@@ -19650,8 +19650,6 @@ def _hypothesis_to_tool_chain(
     file_path: str,
     cwe: str = "",
     language: str | None = None,
-    *,
-    llm_client=None,
 ) -> list[dict[str, Any]]:
     """Build an ordered list of tools to try for a hypothesis.
 
@@ -19669,20 +19667,12 @@ def _hypothesis_to_tool_chain(
     (``_inventory_language_hint``): content-probed unknown extensions
     can satisfy the curated-semgrep leg's language gate where the
     extension cannot (see ``resolve_semgrep_rule_for_cwe``).
-
-    When *llm_client* is provided, the CWE chain builder asks the LLM
-    whether the standing checkers cover the hypothesis sub-shape; if
-    not, the CWE tools are dropped and the empty chain routes to
-    on-demand synthesis.
     """
     chain: list[dict[str, Any]] = []
     seen_types: set = set()
 
     if cwe:
-        cwe_chain = _cwe_fallback_chain(
-            cwe, hypothesis, file_path, language,
-            llm_client=llm_client,
-        )
+        cwe_chain = _cwe_fallback_chain(cwe, hypothesis, file_path, language)
         for entry in cwe_chain:
             chain.append(entry)
             seen_types.add(entry["type"])
@@ -20809,8 +20799,6 @@ def _cwe_fallback_chain(
     hypothesis: str = "",
     file_path: str = "",
     language: str | None = None,
-    *,
-    llm_client=None,
 ) -> list[dict[str, Any]]:
     """Generate tool chain from CWE dispatch when string matching fails.
 
@@ -20832,21 +20820,10 @@ def _cwe_fallback_chain(
             joern_applicable,
             resolve_cocci_rules_for_cwe,
             resolve_semgrep_rule_for_cwe,
-            route_hypothesis_to_checkers,
             sinks_for_cwe,
             smt_verb_for_cwe,
         )
     except ImportError:
-        return chain
-
-    if llm_client is not None and not route_hypothesis_to_checkers(
-        cwe, hypothesis, llm_client,
-    ):
-        logger.info(
-            "cwe_fallback_chain: %s — LLM says standing tools do not "
-            "cover the hypothesis; dropping chain for synthesis",
-            cwe,
-        )
         return chain
 
     # Curated per-class semgrep rule (language-gated in the resolver):
@@ -27494,7 +27471,6 @@ def _promote_suspicious_one(
     chain = _hypothesis_to_tool_chain(
         hypothesis, outcome.file, cwe=cwe,
         language=_inventory_language_hint(config, outcome.file),
-        llm_client=getattr(config, "llm_budget_client", None),
     )
     if not chain:
         _route_to_synthesis()
@@ -27541,24 +27517,6 @@ def _promote_suspicious_one(
             # planted-runtime-error shapes alike). A chain where
             # any leg actually RAN (dispatched and stayed silent)
             # does not re-route — that silence is an adjudication.
-            _route_to_synthesis()
-            return None
-        # Chain exhaustion: tools ran and stayed silent — their
-        # sub-shape may not cover the hypothesis. For CWEs that
-        # opted into deep verification (dark_verify), try synthesis
-        # as a last resort before letting the hypothesis die.
-        try:
-            from .cwe_dispatch import dark_verify_applicable
-        except ImportError:
-            dark_verify_applicable = lambda _c: False  # noqa: E731
-        if dark_verify_applicable(cwe):
-            logger.info(
-                "sweep: chain exhausted without confirmation for "
-                "%s:%s (%s) — routing to synthesis as fallback",
-                outcome.file,
-                outcome.function,
-                cwe,
-            )
             _route_to_synthesis()
             return None
 
@@ -29698,27 +29656,11 @@ def _dispatch_secondary_hypotheses(
             chain = _hypothesis_to_tool_chain(
                 mechanism, outcome.file, cwe=cwe,
                 language=_inventory_language_hint(config, outcome.file),
-                llm_client=getattr(config, "llm_budget_client", None),
             )
             if not chain:
-                try:
-                    from .cwe_dispatch import dark_verify_applicable
-                except ImportError:
-                    dark_verify_applicable = lambda _c: False  # noqa: E731
-                if dark_verify_applicable(cwe):
-                    _synthesize_unmapped_suspicious(
-                        result, config, i, outcome,
-                        mechanism, cwe, source or "",
-                        joern_server=joern_server,
-                    )
-                    _increment_tier_dict(
-                        result.tier_counters, "secondary_sweep",
-                        "synthesis_routed",
-                    )
-                else:
-                    _increment_tier_dict(
-                        result.tier_counters, "secondary_sweep", "skipped",
-                    )
+                _increment_tier_dict(
+                    result.tier_counters, "secondary_sweep", "skipped",
+                )
                 continue
 
             confirmed = _run_tool_chain(
@@ -29746,21 +29688,6 @@ def _dispatch_secondary_hypotheses(
                 "confirmed" if confirmed else "inconclusive",
             )
             if not confirmed:
-                try:
-                    from .cwe_dispatch import dark_verify_applicable as _dva
-                except ImportError:
-                    _dva = lambda _c: False  # noqa: E731
-                if _dva(cwe):
-                    logger.info(
-                        "secondary sweep: chain exhausted for %s:%s (%s) "
-                        "— routing to synthesis",
-                        outcome.file, outcome.function, cwe,
-                    )
-                    _synthesize_unmapped_suspicious(
-                        result, config, i, outcome,
-                        mechanism, cwe, source or "",
-                        joern_server=joern_server,
-                    )
                 continue
 
             high_prec = [t for t in confirmed if not _is_detection_only(t)]
