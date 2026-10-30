@@ -914,6 +914,7 @@ class OrchestratorConfig:
     # domain model into the run's concept inventory (struct layouts,
     # allocator invariants, API contracts from the actual linked version).
     study_libraries: tuple[tuple[str, str], ...] = ()
+    no_study_libraries: bool = False
     mode: ReviewMode = ReviewMode.SECURITY
     project_sinks: frozenset | None = None  # IRIS-derived sink names for wrapper pre-filter
     # The LLM client whose cost cap governs this run (core.llm.client.
@@ -18097,41 +18098,42 @@ def _run_library_studies(
     manual_idents = frozenset(ident for _, ident in config.study_libraries)
     libraries: list[tuple[str, str]] = list(config.study_libraries)
 
-    # Auto-detect from system includes.
-    try:
-        from core.concepts.library_detect import detect_library_candidates
+    # Auto-detect from system includes (unless --no-study-lib).
+    if not config.no_study_libraries:
+        try:
+            from core.concepts.library_detect import detect_library_candidates
 
-        raptor_dir = Path(os.environ["RAPTOR_DIR"])
-        cache_dir = raptor_dir / "out" / "library-sources"
-        auto_ready, auto_missing = detect_library_candidates(
-            config.target_path,
-            cache_dir,
-            exclude_identifiers=manual_idents,
-        )
-        libraries.extend(auto_ready)
-        if auto_ready:
-            logger.info(
-                "study-consumer: auto-detected %d library subtree(s): %s",
-                len(auto_ready),
-                ", ".join(ident for _, ident in auto_ready),
+            raptor_dir = Path(os.environ["RAPTOR_DIR"])
+            cache_dir = raptor_dir / "out" / "library-sources"
+            auto_ready, auto_missing = detect_library_candidates(
+                config.target_path,
+                cache_dir,
+                exclude_identifiers=manual_idents,
             )
-        for candidate in auto_missing:
-            if candidate.install_hint:
+            libraries.extend(auto_ready)
+            if auto_ready:
                 logger.info(
-                    "study-consumer: library source for %s not installed "
-                    "— install with `%s` for deeper analysis",
-                    candidate.source_pkg, candidate.install_hint,
+                    "study-consumer: auto-detected %d library subtree(s): %s",
+                    len(auto_ready),
+                    ", ".join(ident for _, ident in auto_ready),
                 )
-            elif candidate.tarball and not candidate.extracted_root:
-                logger.warning(
-                    "study-consumer: found %s but extraction failed",
-                    candidate.tarball,
-                )
-    except Exception:
-        logger.debug(
-            "study-consumer: library auto-detection failed",
-            exc_info=True,
-        )
+            for candidate in auto_missing:
+                if candidate.install_hint:
+                    logger.info(
+                        "study-consumer: library source for %s not installed "
+                        "— install with `%s` for deeper analysis",
+                        candidate.source_pkg, candidate.install_hint,
+                    )
+                elif candidate.tarball and not candidate.extracted_root:
+                    logger.warning(
+                        "study-consumer: found %s but extraction failed",
+                        candidate.tarball,
+                    )
+        except Exception:
+            logger.debug(
+                "study-consumer: library auto-detection failed",
+                exc_info=True,
+            )
 
     if not libraries:
         return

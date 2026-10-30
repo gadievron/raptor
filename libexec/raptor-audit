@@ -2247,6 +2247,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         vendored_triage=not args.no_vendored_triage,
         probe_determine_value=args.probe_determine_value,
         study_libraries=_parse_study_libs(args.study_lib),
+        no_study_libraries=args.no_study_lib,
         environment_breaker=not args.no_environment_breaker,
         deepen_reserve_fraction=args.deepen_reserve,
         prior_journal_dirs=(
@@ -3599,6 +3600,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
         study_libraries=tuple(
             tuple(pair) for pair in run_cfg.get("study_libraries", ())
         ),
+        no_study_libraries=bool(run_cfg.get("no_study_libraries", False)),
         environment_breaker=bool(run_cfg.get("environment_breaker", True)),
         deepen_reserve_fraction=run_cfg.get("deepen_reserve_fraction"),
         same_run_reuse=True,
@@ -3891,6 +3893,7 @@ def _run_config_from_args(
         "vendored_triage": not args.no_vendored_triage,
         "probe_determine_value": args.probe_determine_value,
         "study_libraries": _parse_study_libs(getattr(args, "study_lib", None)),
+        "no_study_libraries": bool(getattr(args, "no_study_lib", False)),
         "environment_breaker": not args.no_environment_breaker,
         "deepen_reserve_fraction": args.deepen_reserve,
         "prior_journal_dirs": args.prior_journal,
