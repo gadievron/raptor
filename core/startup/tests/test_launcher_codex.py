@@ -16,7 +16,6 @@ def _launch_context(payload):
     for index, arg in enumerate(payload['args']):
         if arg == '-c' and payload['args'][index + 1].startswith('shell_environment_policy.set.'):
             settings.update(tomllib.loads(payload['args'][index + 1])['shell_environment_policy']['set'])
-    assert payload['args'][-1] == 'Loading RAPTOR ...'
     return {'caller_dir': settings['RAPTOR_CALLER_DIR'],
             'launch_target': settings['RAPTOR_LAUNCH_TARGET'] or None}
 
@@ -108,6 +107,7 @@ def test_codex_target_is_data_and_flags_after_separator_are_verbatim(launch):
     assert payload['target']=='a target; $(false)'
     assert _launch_context(payload) == {'caller_dir': payload['caller'], 'launch_target': payload['target']}
     assert payload['args'][:2]==['--config','model_reasoning_effort="low"']
+    assert payload['args'][-1] == 'Loading RAPTOR ...'
 
 
 def test_local_only_conflict_is_explicit(launch):
@@ -125,10 +125,15 @@ def test_direct_analysis_route_remains_local_when_claude_absent(launch,extra):
     assert payload['cwd']==payload['caller']
 
 
-def test_codex_resume_keeps_explicit_target(launch):
-    result, payload = launch(['codex'], ['--codex', '--continue', 'relative target'])
+@pytest.mark.parametrize('resume_flag', ['-c', '--continue'])
+def test_codex_resume_keeps_explicit_target_without_a_prompt(launch, resume_flag):
+    result, payload = launch(['codex'], ['--codex', resume_flag, 'relative target'])
     assert result.returncode == 0, result.stderr
     assert payload['args'][:2] == ['resume', '--last']
+    # Only launch-context option pairs follow --last: neither a session selector
+    # nor an automatic prompt is passed as a positional argument.
+    assert len(payload['args'][2:]) == 4
+    assert payload['args'][2::2] == ['-c', '-c']
     assert _launch_context(payload) == {'caller_dir': payload['caller'],
                                        'launch_target': 'relative target'}
 

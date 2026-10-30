@@ -994,7 +994,7 @@ if [ -n "$USE_CODEX" ]; then
     unset _codex_launch_config _codex_setting
     if [ -n "$RESUME_SESSION" ]; then
         exec env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS \
-            codex resume --last "${CODEX_ARGS[@]}" "Loading RAPTOR ..."
+            codex resume --last "${CODEX_ARGS[@]}"
     fi
     exec env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS \
         codex "${CODEX_ARGS[@]}" "Loading RAPTOR ..."
