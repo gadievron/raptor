@@ -6349,15 +6349,69 @@ class TestTaintApproxHasFlow:
 class TestHeuristicBypassFindings:
     """Post-loop stored-taint / config-provenance bypass detection.
 
-    The runner is None whenever IRIS refinement did not build a
-    compositional analyzer — previously the name was not even bound in
-    that (common) case and the pass died with a NameError swallowed by
-    a broad except."""
+    Two modes: assumptions with enforcers go through bypass_runner;
+    assumptions without enforcers (config-provenance) become direct
+    findings.  When bypass_runner is None, ALL assumptions become
+    direct findings — this subsumes the legacy check_stored_taint /
+    check_config_dependent codepath.
+    """
 
-    def test_none_runner_returns_empty(self):
+    def test_none_runner_emits_direct_findings(self, monkeypatch):
         from core.audit.orchestrator import _heuristic_bypass_findings
 
-        assert _heuristic_bypass_findings([{"file": "a.c"}], None) == []
+        from core.iris.assumptions import AssumptionCategory, SafetyAssumption
+
+        a = SafetyAssumption(
+            target="render_page",
+            file="web.c",
+            assumption="render_page reads stored data unsafely",
+            category=AssumptionCategory.SANITISATION,
+            enforced_by=["escape_html"],
+            bug_class="CWE-79",
+        )
+        import core.iris.synthesise as synth_mod
+        monkeypatch.setattr(
+            synth_mod, "stored_taint_assumptions", lambda gaps, **kw: [a],
+        )
+        monkeypatch.setattr(
+            synth_mod, "config_provenance_assumptions", lambda gaps, **kw: [],
+        )
+
+        findings = _heuristic_bypass_findings([{"file": "web.c"}], None)
+        assert len(findings) == 1
+        assert findings[0]["confidence"] == "low"
+        assert findings[0]["function"] == "render_page"
+
+    def test_enforcerless_assumptions_direct(self, monkeypatch):
+        """Config-provenance assumptions (no enforcers) emit direct findings
+        regardless of whether bypass_runner is available."""
+        from core.audit.orchestrator import _heuristic_bypass_findings
+
+        from core.iris.assumptions import AssumptionCategory, SafetyAssumption
+
+        a = SafetyAssumption(
+            target="set_debug",
+            file="config.py",
+            assumption="reads config for security decision",
+            category=AssumptionCategory.PROVENANCE,
+            enforced_by=[],
+            bug_class="CWE-15",
+        )
+        import core.iris.synthesise as synth_mod
+        monkeypatch.setattr(
+            synth_mod, "stored_taint_assumptions", lambda gaps, **kw: [],
+        )
+        monkeypatch.setattr(
+            synth_mod, "config_provenance_assumptions", lambda gaps, **kw: [a],
+        )
+
+        findings = _heuristic_bypass_findings(
+            [{"file": "config.py"}],
+            lambda assumptions: [],
+        )
+        assert len(findings) == 1
+        assert findings[0]["cwe"] == "CWE-15"
+        assert findings[0]["function"] == "set_debug"
 
     def test_runner_findings_are_collected(self, monkeypatch):
         from core.audit.orchestrator import _heuristic_bypass_findings
@@ -6376,10 +6430,10 @@ class TestHeuristicBypassFindings:
         import core.iris.synthesise as synth_mod
         monkeypatch.setattr(
             synth_mod, "stored_taint_assumptions",
-            lambda gaps: [FakeAssumption()],
+            lambda gaps, **kw: [FakeAssumption()],
         )
         monkeypatch.setattr(
-            synth_mod, "config_provenance_assumptions", lambda gaps: [],
+            synth_mod, "config_provenance_assumptions", lambda gaps, **kw: [],
         )
 
         findings = _heuristic_bypass_findings(
@@ -6399,16 +6453,28 @@ class TestHeuristicBypassFindings:
         import core.iris.synthesise as synth_mod
         monkeypatch.setattr(
             synth_mod, "stored_taint_assumptions",
-            lambda gaps: [FakeAssumption()],
+            lambda gaps, **kw: [FakeAssumption()],
         )
         monkeypatch.setattr(
-            synth_mod, "config_provenance_assumptions", lambda gaps: [],
+            synth_mod, "config_provenance_assumptions", lambda gaps, **kw: [],
         )
 
         def broken_runner(assumptions):
             raise RuntimeError("analyzer crashed")
 
         assert _heuristic_bypass_findings([], broken_runner) == []
+
+    def test_no_assumptions_no_findings(self, monkeypatch):
+        from core.audit.orchestrator import _heuristic_bypass_findings
+
+        import core.iris.synthesise as synth_mod
+        monkeypatch.setattr(
+            synth_mod, "stored_taint_assumptions", lambda gaps, **kw: [],
+        )
+        monkeypatch.setattr(
+            synth_mod, "config_provenance_assumptions", lambda gaps, **kw: [],
+        )
+        assert _heuristic_bypass_findings([], None) == []
 
 
 class TestDiffNewConcepts:

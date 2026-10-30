@@ -745,8 +745,22 @@ def _extract_storage_names(source: str) -> set[str]:
     return names
 
 
+def _resolve_gap_source(gap: dict[str, Any], target_path: Path | None) -> str:
+    """Return the gap's source text, falling back to disk if needed."""
+    source = gap.get("source", "")
+    if source or not target_path:
+        return source
+    try:
+        from core.audit.gaps import read_gap_source
+        return read_gap_source(gap, target_path)
+    except Exception:
+        return ""
+
+
 def stored_taint_assumptions(
     gaps: Sequence[dict[str, Any]],
+    *,
+    target_path: Path | None = None,
 ) -> list[SafetyAssumption]:
     """Generate assumptions for persistence-layer stored-XSS patterns.
 
@@ -758,9 +772,10 @@ def stored_taint_assumptions(
     readers: list[dict[str, Any]] = []
     writer_storage: dict[str, set[str]] = {}
     reader_storage: dict[str, set[str]] = {}
+    resolved_source: dict[str, str] = {}
 
     for gap in gaps:
-        source = gap.get("source", "")
+        source = _resolve_gap_source(gap, target_path)
         if not source:
             continue
         key = f"{gap.get('file', '')}:{gap.get('name', '')}"
@@ -770,13 +785,16 @@ def stored_taint_assumptions(
         if _DB_READ_KW.search(source):
             readers.append(gap)
             reader_storage[key] = _extract_storage_names(source)
+        if _DB_WRITE_KW.search(source) or _DB_READ_KW.search(source):
+            resolved_source[key] = source
 
     if not writers or not readers:
         return []
 
     assumptions: list[SafetyAssumption] = []
     for reader in readers:
-        rsource = reader.get("source", "")
+        rkey_src = f"{reader.get('file', '')}:{reader.get('name', '')}"
+        rsource = resolved_source.get(rkey_src, "")
         if not _RENDER_KW.search(rsource):
             continue
         rkey = f"{reader.get('file', '')}:{reader.get('name', '')}"
@@ -814,6 +832,8 @@ def stored_taint_assumptions(
 
 def config_provenance_assumptions(
     gaps: Sequence[dict[str, Any]],
+    *,
+    target_path: Path | None = None,
 ) -> list[SafetyAssumption]:
     """Generate assumptions for config-dependent security decisions.
 
@@ -822,7 +842,7 @@ def config_provenance_assumptions(
     """
     assumptions: list[SafetyAssumption] = []
     for gap in gaps:
-        source = gap.get("source", "")
+        source = _resolve_gap_source(gap, target_path)
         if not source:
             continue
         if not _CONFIG_READ_KW.search(source):

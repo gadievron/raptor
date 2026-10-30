@@ -1,0 +1,96 @@
+#!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
+"""Widen flow traces with sibling-caller bypass candidates.
+
+Usage: raptor-widen-flow-traces <understand_dir>
+
+After /understand --trace produces flow-trace-*.json files, this
+script examines each trace for sanitiser/enforcer steps, constructs
+safety assumptions, and uses CompositionalAnalyzer to discover
+sibling callers that reach the sink without calling the enforcer.
+
+Appends a ``widening`` field to each trace JSON. Idempotent —
+traces that already have widening data are skipped.
+"""
+import argparse
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+from core.iris.trace_widening import widen_dir  # noqa: E402
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        prog="raptor-widen-flow-traces",
+        description=(
+            "Widen each flow-trace-*.json with sibling-caller "
+            "bypass candidates via CompositionalAnalyzer."
+        ),
+    )
+    parser.add_argument("understand_dir", help="path to /understand run dir")
+    args = parser.parse_args()
+
+    understand_dir = Path(args.understand_dir).resolve()
+    if not understand_dir.is_dir():
+        print(
+            f"raptor-widen-flow-traces: {understand_dir} is "
+            "not a directory", file=sys.stderr,
+        )
+        return 1
+
+    trace_files = sorted(understand_dir.glob("flow-trace-*.json"))
+    if not trace_files:
+        print(
+            "raptor-widen-flow-traces: no flow-trace-*.json files; "
+            "nothing to widen", file=sys.stderr,
+        )
+        return 0
+
+    from core.inventory import read_checklist
+    checklist = read_checklist(understand_dir)
+    target_path = checklist.get("target_path")
+    if not target_path:
+        print(
+            "raptor-widen-flow-traces: checklist missing target_path; "
+            "skipping", file=sys.stderr,
+        )
+        return 0
+
+    from core.run.metadata import corroborate_target_path
+    mismatch = corroborate_target_path(understand_dir, target_path)
+    if mismatch:
+        print(
+            f"raptor-widen-flow-traces: {mismatch}; refusing "
+            "recovered target", file=sys.stderr,
+        )
+        return 1
+
+    total = widen_dir(
+        understand_dir, Path(target_path), checklist=checklist,
+    )
+    print(
+        f"raptor-widen-flow-traces: {total} widening candidate(s) "
+        f"across {len(trace_files)} trace file(s)"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

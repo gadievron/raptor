@@ -226,6 +226,30 @@ Phase A — can read this without re-parsing source. Idempotent.
 Skip if `$WORKDIR/checklist.json` doesn't exist or doesn't carry
 `target_path`.
 
+**[TRACE-WIDEN] Sibling-caller widening**
+
+After writing and enriching all `flow-trace-*.json` files, run the
+widening pass to discover sibling callers that reach the same sink
+without the sanitiser/enforcer found on the traced path:
+
+```bash
+libexec/raptor-widen-flow-traces "$WORKDIR"
+```
+
+If the trace included sanitisation steps, this uses
+`CompositionalAnalyzer` to find callers that bypass them — those
+callers are investigation candidates where the same vulnerability
+class may exist without the protection the traced path had.
+Idempotent. Skip if no `checklist.json` or no `target_path`.
+
+When candidates are found, display them after the trace narrative:
+
+```
+Widening: N sibling caller(s) reach the sink without the enforcer:
+  - caller_file:caller_function — missing enforcer_name
+  ...
+```
+
 ## Gates
 
 GATES APPLY: U1 [READ-FIRST], U2 [ATTACKER-LENS], U3 [FULL-FLOW], U5 [EVIDENCE-ONLY]

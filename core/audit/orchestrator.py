@@ -7449,16 +7449,24 @@ def _make_iris_joern_tool_runner(
 def _heuristic_bypass_findings(
     gaps: list[dict[str, Any]],
     bypass_runner: Callable | None,
+    target_path: Path | None = None,
 ) -> list[dict[str, Any]]:
-    """Stored-taint / config-provenance assumption bypass detection.
+    """Stored-taint / config-provenance heuristic findings.
 
-    *bypass_runner* is ``None`` when IRIS refinement did not build a
-    compositional analyzer (no candidates, missing call graphs, or the
-    refine imports failed) — nothing to check then.
+    Two modes:
+
+    * **Assumptions with enforcers** (stored-taint) — run through
+      *bypass_runner* to find callers that skip the enforcer.
+    * **Assumptions without enforcers** (config-provenance) — emitted
+      as direct findings; bypass detection can't add anything when
+      there's nothing to bypass.
+
+    When *bypass_runner* is ``None`` (no call graph / IRIS off), all
+    heuristic assumptions are emitted as direct findings — this
+    subsumes the legacy ``check_stored_taint`` / ``check_config_dependent``
+    codepath.
     """
     findings: list[dict[str, Any]] = []
-    if bypass_runner is None:
-        return findings
     try:
         from core.iris.synthesise import (
             config_provenance_assumptions,
@@ -7466,12 +7474,13 @@ def _heuristic_bypass_findings(
         )
 
         heuristic_assumptions = stored_taint_assumptions(
-            gaps
-        ) + config_provenance_assumptions(gaps)
-        heuristic_with_enforcers = [
-            a for a in heuristic_assumptions if a.enforced_by
-        ]
-        if heuristic_with_enforcers:
+            gaps, target_path=target_path,
+        ) + config_provenance_assumptions(gaps, target_path=target_path)
+
+        with_enforcers = [a for a in heuristic_assumptions if a.enforced_by]
+        without_enforcers = [a for a in heuristic_assumptions if not a.enforced_by]
+
+        if bypass_runner is not None and with_enforcers:
             findings.extend({
                         "check": f"iris_{bf.assumption.bug_class or 'bypass'}",
                         "title": (
@@ -7487,7 +7496,29 @@ def _heuristic_bypass_findings(
                         "cwe": bf.assumption.bug_class or "",
                         "confidence": "medium",
                         "missing_enforcer": bf.missing_enforcer,
-                    } for bf in bypass_runner(heuristic_with_enforcers))
+                    } for bf in bypass_runner(with_enforcers))
+        elif with_enforcers:
+            for a in with_enforcers:
+                findings.append({
+                    "check": f"iris_{a.bug_class or 'assumption'}",
+                    "title": a.assumption,
+                    "description": a.assumption,
+                    "file": a.file or "",
+                    "function": a.target,
+                    "cwe": a.bug_class or "",
+                    "confidence": "low",
+                })
+
+        for a in without_enforcers:
+            findings.append({
+                "check": f"iris_{a.bug_class or 'assumption'}",
+                "title": a.assumption,
+                "description": a.assumption,
+                "file": a.file or "",
+                "function": a.target,
+                "cwe": a.bug_class or "",
+                "confidence": "low",
+            })
     except Exception:
         logger.debug("IRIS heuristic assumption bypass failed", exc_info=True)
     return findings
@@ -8479,6 +8510,30 @@ def _iris_refine_and_bypass(
                     len(assumptions),
                     sum(1 for s in refined_specs if s.role in ("sink", "sanitiser")),
                 )
+
+            promoted_sanitisers = [
+                s for s in refined_specs
+                if getattr(s, "source", "") == "bypass_promotion"
+            ]
+            if promoted_sanitisers and bypass_runner is not None and assumptions:
+                try:
+                    post_bp = bypass_runner(assumptions)
+                    new_post = [
+                        bf for bf in post_bp
+                        if bf not in bypass_findings
+                    ]
+                    if new_post:
+                        bypass_findings.extend(new_post)
+                        logger.info(
+                            "IRIS post-refine bypass: %d new findings "
+                            "after %d enforcer promotions",
+                            len(new_post), len(promoted_sanitisers),
+                        )
+                except Exception:
+                    logger.debug(
+                        "IRIS post-refine bypass pass failed",
+                        exc_info=True,
+                    )
 
             if bypass_findings:
                 logger.info(
@@ -10413,20 +10468,33 @@ def _run_audit_body(
     post_loop_findings: list[dict] = []
     generated: list = []
 
-    try:
-        from .taint_specs import check_config_dependent, check_stored_taint
-
-        post_loop_findings.extend(tf.to_dict() for tf in check_stored_taint(gaps, target_path=config.target_path))
-        post_loop_findings.extend(tf.to_dict() for tf in check_config_dependent(gaps, target_path=config.target_path))
-    except Exception:
-        logger.debug("taint-spec post-loop checks failed", exc_info=True)
-
     if getattr(config, "iris", True):
-        # Heuristic assumption/bypass pass rides the same IRIS gate
-        # as spec synthesis and refinement.
+        # IRIS heuristic assumption/bypass pass subsumes the legacy
+        # check_stored_taint / check_config_dependent codepath —
+        # assumptions with enforcers go through bypass detection,
+        # enforcerless assumptions and all assumptions when
+        # bypass_runner is None emit as direct findings.
         post_loop_findings.extend(
-            _heuristic_bypass_findings(gaps, bypass_runner),
+            _heuristic_bypass_findings(
+                gaps, bypass_runner, target_path=config.target_path,
+            ),
         )
+    else:
+        try:
+            from .taint_specs import check_config_dependent, check_stored_taint
+
+            post_loop_findings.extend(
+                tf.to_dict() for tf in check_stored_taint(
+                    gaps, target_path=config.target_path,
+                )
+            )
+            post_loop_findings.extend(
+                tf.to_dict() for tf in check_config_dependent(
+                    gaps, target_path=config.target_path,
+                )
+            )
+        except Exception:
+            logger.debug("taint-spec post-loop checks failed", exc_info=True)
     post_loop_findings.extend(
         _refine_bypass_post_loop_findings(
             iris_bypass_findings, post_loop_findings,
@@ -13614,11 +13682,6 @@ def _commit_outcome(
         )
         return
 
-    if gap.get("from_composition"):
-        if outcome.review_result is None:
-            outcome.review_result = {}
-        outcome.review_result["from_composition"] = True
-
     checked_by = ["audit"]
     if outcome.model:
         checked_by.append(outcome.model)
@@ -13642,6 +13705,11 @@ def _commit_outcome(
     )
 
     outcome.verification_tier = outcome.compute_tier()
+
+    if gap.get("from_composition"):
+        if outcome.review_result is None:
+            outcome.review_result = {}
+        outcome.review_result["from_composition"] = True
 
     line_start = gap.get("line_start", 0)
     entry: dict[str, Any] = {

@@ -187,6 +187,8 @@ def refine_loop(
         try:
             bp = bypass_runner(assumptions)
             all_bypass_findings.extend(bp)
+            if bp:
+                specs = _promote_enforcers(specs, bp)
         except Exception:
             logger.debug(
                 "iris.refine: bypass runner failed", exc_info=True,
@@ -373,6 +375,7 @@ def refine_loop(
                             "found %d new findings",
                             round_num, new_count,
                         )
+                        specs = _promote_enforcers(specs, bp)
                 except Exception:
                     logger.debug(
                         "iris.refine: bypass runner failed at round %d",
@@ -380,6 +383,62 @@ def refine_loop(
                     )
 
     return specs, history, assumptions, all_bypass_findings
+
+
+def _promote_enforcers(
+    specs: list[TaintSpec],
+    bypass_findings: list[BypassFinding],
+) -> list[TaintSpec]:
+    """Promote enforcer functions to sanitiser role when bypass findings
+    reference them and they aren't already classified.
+
+    When the bypass detector finds that function G enforces a safety
+    assumption, G should be known to the taint-tracking system as a
+    sanitiser — otherwise standard taint queries can't use it as a
+    barrier, and the same unsanitised paths keep producing duplicate
+    findings.
+
+    Only creates new specs at HEURISTIC tier (the bypass finding proves
+    the *assumption* is real, not that the enforcer is a correct
+    sanitiser — that requires tool confirmation in a later round).
+    """
+    existing_keys: set[str] = set()
+    for s in specs:
+        existing_keys.add(_spec_key(s))
+
+    enforcer_files: dict[str, str] = {}
+    enforcer_classes: dict[str, set[str]] = {}
+    for bf in bypass_findings:
+        for enforcer_name in bf.assumption.enforced_by:
+            if bf.assumption.file:
+                enforcer_files.setdefault(enforcer_name, bf.assumption.file)
+            if bf.assumption.bug_class:
+                enforcer_classes.setdefault(enforcer_name, set()).add(
+                    bf.assumption.bug_class,
+                )
+
+    new_specs: list[TaintSpec] = []
+    for enforcer_name, file in enforcer_files.items():
+        candidate = TaintSpec(
+            function=enforcer_name,
+            file=file,
+            role="sanitiser",
+            taint_classes=sorted(enforcer_classes.get(enforcer_name, set())),
+            confidence=0.5,
+            evidence_tier=EvidenceTier.HEURISTIC,
+            source="bypass_promotion",
+        )
+        key = _spec_key(candidate)
+        if key not in existing_keys:
+            existing_keys.add(key)
+            new_specs.append(candidate)
+
+    if new_specs:
+        logger.info(
+            "iris.refine: promoted %d enforcer(s) to sanitiser role",
+            len(new_specs),
+        )
+    return specs + new_specs
 
 
 def _inject_bypass_candidates(
