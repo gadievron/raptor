@@ -288,3 +288,74 @@ def test_same_process_resume_rotates_generation_and_invalidates_old_alias(host):
     assert os.environ['RAPTOR_SESSION_TOKEN'] == successor[1]
     environment.publish_alias(sid, child)
     assert environment.restore(child)['RAPTOR_SESSION_TOKEN'] == successor[1]
+
+
+@pytest.fixture
+def child_outcome(host, tmp_path, monkeypatch):
+    from core.run import cli_outcome as outcome
+    from core.sandbox import summary
+    root, process, _credential = host
+    child = str(uuid.uuid4())
+    environment.publish_alias(root, child)
+    environment.restore(child)
+    monkeypatch.setenv('RAPTOR_CODEX_ENVIRONMENT', '1')
+    monkeypatch.setenv('CODEX_THREAD_ID', child)
+    monkeypatch.setenv('CODEX_TOOL_CALL_ID', 'child_failure')
+    monkeypatch.delenv('CLAUDECODE', raising=False)
+    monkeypatch.delenv('RAPTOR_CODEX_HOOK', raising=False)
+    run = tmp_path / 'owned-run'
+    monkeypatch.setattr(summary, '_active_run_dir', run)
+    monkeypatch.setattr(sys, 'argv', [str(environment.ROOT / 'libexec/raptor-example')])
+    with pytest.raises(SystemExit), outcome.cli_outcome():
+        sys.exit(7)
+    receipts = list(broker._address(root).glob('outcome-*.json'))
+    assert len(receipts) == 1
+    payload = {'session_id': child, 'tool_use_id': 'child_failure',
+               'hook_event_name': 'PostToolUse', 'tool_name': 'Bash',
+               'tool_input': {'command': 'libexec/raptor-example'}}
+    return root, process, child, payload, receipts[0], run
+
+
+@pytest.mark.parametrize('hook_id', ['root', 'child'])
+def test_child_hook_consumes_root_receipt_once(child_outcome, hook_id):
+    from core.run import cli_outcome as outcome
+    root, _process, _child, payload, receipt, run = child_outcome
+    if hook_id == 'root':
+        payload = dict(payload, session_id=root)
+    assert outcome.consume(payload) == ('libexec/raptor-example', str(run), [])
+    assert outcome.consume(payload) is None
+    assert not receipt.exists()
+
+
+def test_stale_child_alias_cannot_delete_root_receipt(child_outcome):
+    import json
+    from core.run import cli_outcome as outcome
+    root, _process, child, payload, receipt, run = child_outcome
+    alias = environment._context_document(child)
+    alias['generation'] = '0' * 64
+    path = environment._context_directory() / environment._name(child, None)
+    path.write_text(json.dumps(alias))
+    with pytest.raises(environment.CodexEnvironmentError, match='generation changed'):
+        outcome.consume(payload)
+    assert receipt.exists()
+    assert outcome.consume(dict(payload, session_id=root)) == (
+        'libexec/raptor-example', str(run), [])
+
+
+def test_other_root_child_cannot_consume_root_receipt(child_outcome, monkeypatch):
+    from core.run import cli_outcome as outcome
+    root, process, _child, payload, receipt, run = child_outcome
+    other, other_child = str(uuid.uuid4()), str(uuid.uuid4())
+    monkeypatch.setenv('RAPTOR_CODEX_CONTEXT_ID', other)
+    credential = sessions.ensure_codex_session(process.pid)
+    assert credential
+    environment.publish(other, process.pid)
+    try:
+        environment.publish_alias(other, other_child)
+        assert outcome.consume(dict(payload, session_id=other_child)) is None
+        assert receipt.exists()
+        assert outcome.consume(payload) == ('libexec/raptor-example', str(run), [])
+        assert os.environ['RAPTOR_CODEX_CONTEXT_ID'] == root
+    finally:
+        environment.restore(other)
+        assert sessions.end_codex_session(process.pid, credential[1])
