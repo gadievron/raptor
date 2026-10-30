@@ -298,8 +298,8 @@ def test_spawn_chain_environ_image_is_scrubbed(tmp_path):
     ptrace gate (and they live in the runner's pid namespace,
     invisible through the target's fresh procfs), so the
     payload-userns filter excludes them structurally. The scrub
-    itself runs immediately AFTER the spawn child's unshare, before
-    the process becomes same-userns-readable to any target.
+    runs BEFORE the spawn child's unshare so the child never enters
+    the foreign userns with live credential values.
 
     Each watcher sample re-reads ns/user after reading environ and is
     discarded on mismatch — a pre-unshare (unscrubbed) environ image

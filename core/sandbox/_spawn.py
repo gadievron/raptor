@@ -2765,15 +2765,20 @@ def run_sandboxed(
                 # UTS-ns post-newuidmap (we own it as ns-uid-0) — the
                 # actual sethostname call lives after step 7.
                 ns_flags |= CLONE_NEWUTS
-            os.unshare(ns_flags)
-
-            # The child (and every un-exec'd fork it makes: the proxy
-            # forwarder, the intermediate pid-ns init) carries the
-            # ORCHESTRATOR's environ image, readable by same-userns
-            # processes wherever host procfs stays visible. Zero the
-            # sensitive values before anything target-adjacent can
-            # exist; forks below inherit the scrubbed image.
+            # Scrub credential values from the execve-time environ
+            # image BEFORE unshare(USER) — after unshare the child is
+            # in a foreign userns, and any host-side reader (or a
+            # degraded sandbox with visible host procfs) could observe
+            # the unscrubbed image during the window between unshare
+            # and the scrub call.  Pre-unshare, same-userns readers
+            # are the operator's own trusted processes.  The scrub has
+            # no namespace dependency (reads /proc/self/stat + memset
+            # on own memory) and no code between here and unshare
+            # reads credential values.  Forks below (proxy forwarder,
+            # pid-ns init) inherit the already-scrubbed image.
             _scrub_env_image_values(_env_image_scrub_names)
+
+            os.unshare(ns_flags)
 
             # Step 3.5: bring lo up in the fresh netns. A new netns has
             # loopback DOWN — bind() works but self-connect fails
