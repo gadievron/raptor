@@ -1501,7 +1501,7 @@ class TestMonotonicOverBase:
             )
             assert w or fail, attr
 
-    @pytest.mark.wall_budget(seconds=15)
+    @pytest.mark.wall_budget(15)
     def test_long_suppress_list_linear(self):
         """A 2 MB attribute list must be scanned in bounded time, inside
         and outside '#if 0', for both the file and the closure scan."""

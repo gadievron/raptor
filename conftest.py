@@ -651,7 +651,19 @@ def pytest_collection_modifyitems(config, items):
                     reason="requires the real "
                            f"{'/'.join(sorted(allowed))} kernel"))
     for item in items:
-        _validate_wall_budget_marker(item)
+        try:
+            _validate_wall_budget_marker(item)
+        except pytest.UsageError as exc:
+            # Re-raise in the controller (non-xdist) where it surfaces
+            # as a clean collection error.  Inside an xdist worker the
+            # unhandled UsageError kills the process — and since every
+            # worker collects the same files, ALL workers die, producing
+            # the opaque "Unexpectedly no active workers available" crash.
+            # Stash the message and fail the item at setup time so it
+            # shows as a red FAILED in the summary.
+            if not hasattr(config, "workerinput"):
+                raise
+            item.stash[_WALL_BUDGET_ERROR_KEY] = str(exc)
     if _RANDOMISE_SEED_RAW is None:
         return
     import random as _random
@@ -737,6 +749,7 @@ _slow_test_warnings: "list[tuple[str, str, float]]" = []
 # (churn-prone-limits doctrine), same as any other bound.
 _WALL_BUDGET_MARK = "wall_budget"
 _WALL_BUDGET_PROP = "raptor-wall-budget"
+_WALL_BUDGET_ERROR_KEY = pytest.StashKey[str]()
 
 
 def _wall_budget_seconds(item) -> "float | None":
@@ -778,6 +791,12 @@ def _validate_wall_budget_marker(item) -> None:
         or seconds <= 0
     ):
         raise pytest.UsageError(usage)
+
+
+def pytest_runtest_setup(item):
+    msg = item.stash.get(_WALL_BUDGET_ERROR_KEY, None)
+    if msg is not None:
+        pytest.fail(msg, pytrace=False)
 
 
 @pytest.hookimpl(wrapper=True)
