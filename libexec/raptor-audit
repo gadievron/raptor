@@ -3890,7 +3890,7 @@ def _run_config_from_args(
         "on_demand_synthesis": not args.no_on_demand_synthesis,
         "vendored_triage": not args.no_vendored_triage,
         "probe_determine_value": args.probe_determine_value,
-        "study_libraries": _parse_study_libs(args.study_lib),
+        "study_libraries": _parse_study_libs(getattr(args, "study_lib", None)),
         "environment_breaker": not args.no_environment_breaker,
         "deepen_reserve_fraction": args.deepen_reserve,
         "prior_journal_dirs": args.prior_journal,
