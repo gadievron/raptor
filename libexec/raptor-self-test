@@ -144,18 +144,36 @@ class Ctx:
 
     # -- environment builders -------------------------------------------
 
+    def _child_env(self) -> dict[str, str]:
+        # Cases are independent operator runs, not actions in the launching
+        # conversation. Never restore its project/session or emit per-command
+        # receipts for individual fixture helpers. Keep kernel protection and
+        # CI/tool settings intact; removing attribution cannot relax either.
+        session_keys = {
+            "CODEX", "CODEX_THREAD_ID", "CODEX_TOOL_CALL_ID",
+            "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_SESSION_ID",
+            "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN",
+            "RAPTOR_CALLER_DIR", "RAPTOR_LAUNCH_TARGET",
+        }
+        env = {k: v for k, v in os.environ.items()
+               if k not in session_keys and not k.startswith("RAPTOR_CODEX_")}
+        env["_RAPTOR_TRUSTED"] = "1"
+        env["RAPTOR_REGISTRY_HOME"] = str(self.home / ".raptor")
+        env["RAPTOR_OUT_DIR"] = str(self.outs)
+        return env
+
     def env_t0(self, *, isolated_home: bool = False) -> dict[str, str]:
         """Scrubbed env: no LLM reachable, marker set.
 
-        With isolated_home=True, HOME points into the scratch dir so
-        registry-touching commands (/project, annotations) can never
-        reach the operator's real ~/.raptor. Scanner pipelines keep the
+        All children use scratch project registry and output roots.
+        With isolated_home=True, HOME also points into the scratch dir.
+        Scanner pipelines keep the
         real HOME: the sandbox's calibrated tool paths live under it,
         and RAPTOR's own caches (codeql_dbs, sca) are designed to be
         shared across runs.
         """
         env = {
-            k: v for k, v in os.environ.items() if k not in _LLM_ENV_VARS
+            k: v for k, v in self._child_env().items() if k not in _LLM_ENV_VARS
         }
         env["_RAPTOR_TRUSTED"] = "1"
         # Point models-config discovery at the empty stub: with the env
@@ -176,11 +194,9 @@ class Ctx:
 
     def env_llm(self) -> dict[str, str]:
         """Real operator env (keys intact) with marker set; HOME real so
-        configured credentials/config files stay visible."""
-        env = dict(os.environ)
-        env["_RAPTOR_TRUSTED"] = "1"
-        env.pop("RAPTOR_CALLER_DIR", None)
-        return env
+        configured credentials/config files stay visible. Project/session
+        state is still isolated from the launching conversation."""
+        return self._child_env()
 
     # -- process runner ---------------------------------------------------
 
