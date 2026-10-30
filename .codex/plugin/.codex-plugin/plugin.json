@@ -1,0 +1,6 @@
+{
+  "name": "raptor-codex-hooks",
+  "version": "0.1.0",
+  "description": "Codex lifecycle adapters for RAPTOR launcher sessions.",
+  "hooks": "./hooks/hooks.json"
+}

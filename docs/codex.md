@@ -12,7 +12,7 @@ uv tool install semgrep
 ```
 
 Install and sign in to Codex using the [official CLI instructions](https://learn.chatgpt.com/docs/cli).
-For an existing standalone installation, update and record the version:
+For an existing standalone installation:
 
 ```bash
 codex update
@@ -23,102 +23,93 @@ codex login
 Use a Linux environment. Native Windows is not supported; use WSL for Windows.
 macOS and WSL support have not been verified end to end.
 
-Use the shared launcher with `--codex`. Review and trust the checkout and its
-hooks through Codex's normal trust flow.
+## Install the hooks plugin
+
+From the trusted RAPTOR checkout, install the local Codex hooks plugin:
+
+```bash
+codex plugin marketplace add . --json
+codex plugin add raptor-codex-hooks@raptor-local --json
+```
+
+The plugin requires the RAPTOR checkout and its dependencies. It installs into
+Codex's user-level cache and remains inactive outside RAPTOR launcher sessions.
+
+Start RAPTOR through the shared launcher:
 
 ```bash
 bin/raptor --codex -- --sandbox workspace-write --ask-for-approval on-request
 ```
 
-After an update, add `--no-daemon` after `--` if Codex reconnects to an older
-server, so the new client/server receives the launcher's environment.
+Trust the RAPTOR checkout through Codex's normal project trust flow, then
+review the five plugin hooks through `/hooks`: SessionStart, SubagentStart,
+PostToolUse, Stop and SessionEnd. Restart through the launcher after review.
+The same installed plugin serves normal checkouts and linked worktrees.
 
-The launcher pins `RAPTOR_CODEX_HOOK_ROOT` to its own resolved installation.
-Hooks use that host-side anchor even when their working directory is a nested
-repository or scan target. They never discover executable code using the hook
-cwd, git root, payload, or `RAPTOR_DIR`. Plain `codex` launches without the
-launcher anchor refuse RAPTOR hooks; use the launcher rather than setting the
-anchor from a target repository. Restart through the launcher after updating
-these hook definitions, then review them through `/hooks`.
+Checkout trust and hook trust are separate. RAPTOR's target
+`config`/`build`/`dynamic` trust markers are also separate; `--trust-repo` does
+not install or trust Codex hooks. See [Codex hook review](https://learn.chatgpt.com/docs/hooks).
 
-The workspace-write sandbox is required for analyses. Use natural language or
-name a skill explicitly (`$scan`, `$project`).
+### Upgrade from inline hooks
 
-There are separate trust decisions: trust the RAPTOR checkout so Codex loads
-its project configuration, then review its five hooks through `/hooks`.
-Changed hook definitions need review again. A listed but untrusted hook is
-different from a missing hook. RAPTOR's target `config`/`build`/`dynamic` trust
-markers are separate; `--trust-repo` does not make Codex discover or trust
-RAPTOR hooks. See the [native hook trust contract](https://learn.chatgpt.com/docs/hooks).
+Remove old RAPTOR `[hooks]` definitions from any configuration Codex still
+loads, including the primary checkout of a linked worktree. The current
+`.codex/config.toml` contains no inline hooks. Keeping both sources runs
+lifecycle events twice.
 
-Use a normal Git checkout for the first full journey. On Codex 0.166.0,
-linked-worktree hook discovery still fails the owner-specific configuration
-check. Other project settings and skills may load while the hooks are absent
-or come from the primary checkout. Verify all five hook sources in `/hooks`
-before running analysis in a worktree. The bootstrap fallback initializes
-state; it cannot provide missing `PostToolUse`, `SubagentStart`, or `SessionEnd`
-events.
-This concerns the RAPTOR/Codex workspace being a linked worktree; a separate
-analysis target that happens to be a worktree is a different case.
-
-RAPTOR commands recover operator configuration, output settings, provider
-credentials and routing from the private session broker. Ordinary shell
-commands retain Codex's core environment filter. Credentials are not placed in
-launcher arguments or persistent startup context; target subprocesses retain
-RAPTOR's existing credential stripping. Restart Codex after upgrading the
-broker so it captures the operator's current environment. Custom output and
-credential-file locations still need the appropriate native sandbox grants.
-
-Codex sign-in authenticates the interactive frontend. Configure the shared
-analysis backend separately in `~/.config/raptor/models.json` or through
-`RAPTOR_CONFIG`; see [LLM configuration](llm.md). Selecting `--codex` or `-m`
-does not replace Claude-dispatched backend stages or their authentication.
-Choose output and registry locations before launch; use narrow `--add-dir`
-grants when the native policy requires them for custom locations.
-
-Workspace-write does not imply network access. Registry packs, cloning and
-provider calls need the native policy's permitted network route or normal
-command approval. A scan with unavailable packs is reduced-coverage evidence,
-even if the process exits successfully. Keep those limitations in the report.
-
-For standalone Python files required by a shared RAPTOR procedure, use:
+The plugin cache is not a live view of the checkout. After a RAPTOR update
+changes the packaged hooks, reinstall the plugin, review changed hooks through
+`/hooks`, and restart through the launcher:
 
 ```bash
-python3 -I libexec/raptor-session-init --codex-python <script-path> [args...]
+codex plugin remove raptor-codex-hooks@raptor-local
+codex plugin add raptor-codex-hooks@raptor-local --json
 ```
 
-The runner restores the current session before executing the file, preserves
-its arguments and exit status, and uses the native sandbox and approval policy.
-It does not initialize a new session or modify future shell environments.
+If Codex reconnects to a server started before the update, add `--no-daemon`
+after `--` to start a fresh client/server with the launcher's environment.
 
-RAPTOR's Claude-style `/scan`, `/fuzz`, `/web` and `/agentic` shortcuts are not
-registered Codex slash commands. In the Codex chat composer, use:
+## Run workflows
+
+In the Codex chat composer, invoke a skill with its target:
 
 ```text
 $scan /absolute/path/to/repo
 ```
 
-Likewise use `$agentic`, `$fuzz` or
-`$web` with the target and options for that workflow. Type
-`/skills` to browse installed skills, or `$commands` to list
-RAPTOR workflows. Ordinary requests such as `scan /absolute/path/to/repo`
-also select the matching RAPTOR skill. These are chat inputs, not shell commands.
+Use `$agentic`, `$fuzz` or `$web` for the corresponding workflows. Type
+`/skills` to browse skills or `$commands` to list RAPTOR workflows. Ordinary
+requests such as `scan /absolute/path/to/repo` also select the matching skill.
+These are chat inputs. Claude-style `/scan`, `/fuzz`, `/web` and `/agentic`
+shortcuts are not registered Codex slash commands.
 
-Codex project bindings and run ownership are scoped to the root session, even
-when multiple conversations share an app-server process. Subagents share their
-root's binding. See [session ownership](codex-sessions.md) for project switching,
-subagents and upgrades. Review the changed hooks and
-restart after upgrading from PID-only Codex session state.
+Codex sign-in authenticates the interactive frontend. Configure the shared
+analysis backend separately in `~/.config/raptor/models.json` or through
+`RAPTOR_CONFIG`; see [LLM configuration](llm.md). Some analysis stages still
+use the Claude backend and require its configured authentication. Selecting
+`--codex` or `-m` does not replace that backend.
+
+Choose output and registry locations before launch. Restart Codex after
+changing operator configuration or credentials. Custom output and
+credential-file locations may need narrow `--add-dir` grants through Codex's
+normal sandbox policy.
+
+Workspace-write does not imply network access. Registry packs, cloning and
+provider calls need the permitted network route or normal command approval.
+A scan with unavailable packs has reduced coverage even if it exits successfully.
+
+Each Codex conversation keeps its own active project. See
+[Codex sessions](codex-sessions.md) for project switching, subagents and upgrades.
 
 ## Troubleshooting
 
 | Symptom | Check |
 | --- | --- |
-| Missing or invalid startup context | Review `/hooks` and any SessionStart error. Confirm the checkout is trusted and restart. |
+| Missing or invalid startup context | Confirm the plugin is installed and enabled, review `/hooks` and any SessionStart error, trust the checkout and restart through `bin/raptor --codex`. |
+| Hooks run twice | Remove legacy inline RAPTOR hook definitions from configurations Codex still loads. |
+| No RAPTOR hooks in a worktree | Check `/hooks` for the five installed plugin sources under Codex's plugin cache. Startup fallback cannot replace missing later events. |
+| Plugin is listed but RAPTOR startup is absent | Launch through `bin/raptor --codex`; add `--no-daemon` after `--` if reconnecting to an older server. Do not set a hook root from a scan target. |
 | Writes denied during startup | Use workspace-write. Custom paths need explicit directory grants. |
-| Project differs after resume | Inspect current session status. Use `-p` to pin the intended project. |
-| No RAPTOR hooks in a worktree | Check actual source paths in `/hooks`; use a normal checkout for the first full journey. Bootstrap cannot replace later events. |
-| Hook says the launcher anchor is missing | Restart through `bin/raptor --codex`; for an isolated check add `--no-daemon` after `--`. Do not derive an anchor from a target directory. |
-| Codex reports bubblewrap needs user namespaces | Run Codex from a regular host terminal; an outer sandbox may prevent creation of its inner sandbox. |
-| Frontend signs in but an analysis stage cannot authenticate | Check the shared backend provider configuration and credential/file grants separately from Codex sign-in. |
-
+| Project differs after resume | Check `$project status`; use `-p` at launch to pin the intended project. |
+| Codex reports bubblewrap needs user namespaces | Run Codex from a regular host terminal. An outer sandbox or container may prevent creation of Codex's inner sandbox; if it also fails on the host, check the host/container namespace policy. |
+| Frontend signs in but an analysis stage cannot authenticate | Check backend provider configuration and credential/file grants separately from Codex sign-in. |
