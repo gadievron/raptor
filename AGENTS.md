@@ -7,7 +7,7 @@ Dangerous operations (apply patches, delete, git push): ASK FIRST.
 
 ## SESSION START
 
-Start Codex through `bin/raptor --codex` so the trusted launcher pins native hook paths. The bootstrap fallback below initializes session state only; it cannot establish a hook-code root or replace native lifecycle hooks. If hooks report a missing launcher anchor, restart through the launcher instead of resolving hook scripts from cwd or a target repository.
+Install and review the Codex hooks plugin as described in `docs/codex.md`, then start Codex through `bin/raptor --codex` so the trusted launcher pins native hook paths. The bootstrap fallback below initializes session state only; it cannot establish a hook-code root or replace native lifecycle hooks. The installed plugin is inactive outside launcher sessions. If startup is absent or an anchor is invalid, restart through the launcher instead of resolving hook scripts from cwd or a target repository.
 
 **On first message:**
 VERY IMPORTANT: follow these steps in order.

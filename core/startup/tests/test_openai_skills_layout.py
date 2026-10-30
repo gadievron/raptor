@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tomllib
 from pathlib import Path
 
@@ -34,7 +35,7 @@ def test_codex_repo_guidance_files_exist() -> None:
     assert (ROOT / ".agents" / "skills").is_dir()
     assert (ROOT / ".codex" / "config.toml").is_file()
     assert not (ROOT / ".codex" / "hooks.json").exists(), \
-        "hooks.json must not exist — hooks live in config.toml (worktree discovery)"
+        "repo-local hooks must not duplicate installed plugin hooks"
 
 
 def test_agent_skills_have_required_frontmatter() -> None:
@@ -57,17 +58,17 @@ def test_codex_agents_are_valid_toml() -> None:
         assert data.get("developer_instructions"), f"{agent} is missing developer instructions"
 
 
-def test_codex_startup_hook_uses_repo_relative_session_init() -> None:
+def test_codex_startup_hook_uses_installed_plugin_adapter() -> None:
     config = tomllib.loads(_read(ROOT / ".codex" / "config.toml"))
     env = config["shell_environment_policy"]["set"]
     assert "RAPTOR_ENV_FILE" not in env
     assert "BASH_ENV" not in env
     assert "CLAUDE_ENV_FILE" not in env
 
-    hooks = config["hooks"]["SessionStart"]
+    assert "hooks" not in config
+    hooks = json.loads(_read(ROOT / ".codex/plugin/hooks/hooks.json"))["hooks"]["SessionStart"]
     command = hooks[0]["hooks"][0]["command"]
-    assert "_RAPTOR_TRUSTED=1" in command
-    assert "python3 -I .codex/hooks/session_start.py" in command
+    assert 'python3 -I "${PLUGIN_ROOT}/hooks/dispatch.py" session-start' in command
     assert "CLAUDE_PROJECT_DIR" not in command
 
 
@@ -90,13 +91,13 @@ def test_active_codex_docs_do_not_point_at_retired_skill_paths() -> None:
 
 
 def test_codex_hooks_do_not_rewrite_or_autoapprove_shell_commands() -> None:
-    config = tomllib.loads(_read(ROOT / ".codex/config.toml"))
+    config = json.loads(_read(ROOT / ".codex/plugin/hooks/hooks.json"))
     assert "PreToolUse" not in config["hooks"]
     post = config["hooks"]["PostToolUse"]
     assert post[0]["matcher"] == "Bash"
-    assert post[0]["hooks"][0]["command"].endswith("libexec/raptor-lifecycle-hook codex-outcome")
+    assert post[0]["hooks"][0]["command"].endswith('dispatch.py" outcome; fi')
     command = config["hooks"]["Stop"][0]["hooks"][0]["command"]
-    assert command.endswith("libexec/raptor-lifecycle-hook codex-stop")
+    assert command.endswith('dispatch.py" stop; fi')
 
 
 def test_documented_codex_specialists_are_registered():
