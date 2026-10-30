@@ -577,30 +577,27 @@ def _check_target_match(
     candidate_dir: Path,
     target_path: Path,
 ) -> bool:
-    """Check if a candidate output dir is for the same target."""
-    from core.inventory import read_checklist
-    checklist = read_checklist(candidate_dir)
-    # A checklist without a target (e.g. /validate writes its stage
-    # checklist with target=None) must not veto the match — fall back
-    # to the run manifest instead of comparing None to the path.
-    if not checklist or not checklist.get("target"):
-        manifest = _load_json(candidate_dir / ".raptor-run.json")
-        if manifest:
-            # Run manifests write "target_path" (core/run/metadata.py);
-            # "target" is the legacy key. Resolve both sides so
-            # equivalent spellings of the same path still match —
-            # same pattern as strategy_stats/binary_bridge.
-            sibling_target = manifest.get("target_path") or manifest.get("target", "")
-            if not sibling_target:
-                return False
+    """Check if a candidate output dir is for the same target.
+
+    Checks the lightweight run manifest first — it carries the target
+    path and doesn't trigger the checklist frame-auth check, so
+    non-matching candidates are rejected cheaply without noisy
+    warnings about relocated frames.
+    """
+    manifest = _load_json(candidate_dir / ".raptor-run.json")
+    if manifest:
+        sibling_target = manifest.get("target_path") or manifest.get("target", "")
+        if sibling_target:
             try:
                 return Path(sibling_target).resolve() == target_path.resolve()
             except OSError:
                 return False
+
+    from core.inventory import read_checklist
+    checklist = read_checklist(candidate_dir)
+    if not checklist or not checklist.get("target"):
         return False
 
-    # Resolve both sides like the manifest branch above: symlinked or
-    # relative spellings of the same target must still match.
     try:
         return Path(checklist["target"]).resolve() == target_path.resolve()
     except OSError:
