@@ -99,10 +99,12 @@ full flag table.
    g. If pattern has variants: generate codebase-wide checker (Mode 2)
 6. Joern CPG builds in background, drains when ready for dataflow re-review
 7. Constraint propagation across related functions
-8. Sweep validation to confirm tool-backed evidence
-9. Tool-grounded critique: identifies gaps, generates additional tool invocations
-10. Report: review-journal.jsonl + findings.json + summary
-11. /validate post-pass on findings (unless --no-validate)
+8. Cross-outcome promotion passes (preconditions, clean-refuted, hypothesis
+   consistency, self-contradiction demotion)
+9. Dark verification (witness execution for auth/logic CWEs)
+10. Sweep validation to confirm tool-backed evidence
+11. Report: review-journal.jsonl + findings.json + summary
+12. /validate post-pass on findings (unless --no-validate)
 ```
 
 
