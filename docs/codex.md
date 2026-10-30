@@ -50,12 +50,7 @@ Checkout trust and hook trust are separate. RAPTOR's target
 `config`/`build`/`dynamic` trust markers are also separate; `--trust-repo` does
 not install or trust Codex hooks. See [Codex hook review](https://learn.chatgpt.com/docs/hooks).
 
-### Upgrade from inline hooks
-
-Remove old RAPTOR `[hooks]` definitions from any configuration Codex still
-loads, including the primary checkout of a linked worktree. The current
-`.codex/config.toml` contains no inline hooks. Keeping both sources runs
-lifecycle events twice.
+### Update the plugin
 
 The plugin cache is not a live view of the checkout. After a RAPTOR update
 changes the packaged hooks, reinstall the plugin, review changed hooks through
@@ -98,15 +93,20 @@ Workspace-write does not imply network access. Registry packs, cloning and
 provider calls need the permitted network route or normal command approval.
 A scan with unavailable packs has reduced coverage even if it exits successfully.
 
-Each Codex conversation keeps its own active project. See
-[Codex sessions](codex-sessions.md) for project switching, subagents and upgrades.
+## Projects and conversations
+
+Each Codex conversation keeps its own active project, even when conversations
+share a Codex server. Use `$project create`, `$project use` and `$project status`
+to manage it; `$project none` clears the current conversation's binding.
+Subagents share their root conversation's project. Switching projects does not
+move an existing run or its output, and ending one conversation does not end
+another's runs. After resuming, check `$project status` before continuing work.
 
 ## Troubleshooting
 
 | Symptom | Check |
 | --- | --- |
 | Missing or invalid startup context | Confirm the plugin is installed and enabled, review `/hooks` and any SessionStart error, trust the checkout and restart through `bin/raptor --codex`. |
-| Hooks run twice | Remove legacy inline RAPTOR hook definitions from configurations Codex still loads. |
 | No RAPTOR hooks in a worktree | Check `/hooks` for the five installed plugin sources under Codex's plugin cache. Startup fallback cannot replace missing later events. |
 | Plugin is listed but RAPTOR startup is absent | Launch through `bin/raptor --codex`; add `--no-daemon` after `--` if reconnecting to an older server. Do not set a hook root from a scan target. |
 | Writes denied during startup | Use workspace-write. Custom paths need explicit directory grants. |
