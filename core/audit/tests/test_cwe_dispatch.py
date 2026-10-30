@@ -6,8 +6,10 @@ from core.audit.cwe_dispatch import (
     dark_verify_applicable,
     joern_applicable,
     lookup,
+    route_hypothesis_to_checkers,
     sinks_for_cwe,
     smt_verb_for_cwe,
+    tool_scope_for_cwe,
 )
 
 
@@ -137,3 +139,75 @@ class TestDarkVerifyStatuses:
         from core.audit.cwe_dispatch import dark_verify_statuses
         for cwe in ("CWE-287", "CWE-862", "CWE-863"):
             assert dark_verify_statuses(cwe) is None
+
+
+class TestToolScope:
+    def test_cwe416_has_scope(self):
+        scope = tool_scope_for_cwe("CWE-416")
+        assert scope is not None
+        assert "use_after_free.cocci" in scope
+        assert "cpp/use-after-free" in scope
+
+    def test_normalisation(self):
+        assert tool_scope_for_cwe("416") is not None
+        assert tool_scope_for_cwe("cwe-416") is not None
+
+    def test_unknown_cwe_returns_none(self):
+        assert tool_scope_for_cwe("CWE-78") is None
+
+
+class _FakeRouteClient:
+    """Stub LLM client for route_hypothesis_to_checkers tests."""
+
+    def __init__(self, dominated: bool):
+        self._dominated = dominated
+
+    def generate_structured(self, prompt, schema, **kwargs):
+        return {
+            "dominated": self._dominated,
+            "reasoning": "stub",
+        }
+
+
+class TestRouteHypothesisToCheckers:
+    def test_dominated_returns_true(self):
+        client = _FakeRouteClient(dominated=True)
+        assert route_hypothesis_to_checkers(
+            "CWE-416",
+            "kfree then dereference in same function",
+            client,
+        ) is True
+
+    def test_not_dominated_returns_false(self):
+        client = _FakeRouteClient(dominated=False)
+        assert route_hypothesis_to_checkers(
+            "CWE-416",
+            "scatterlist aliasing — src and dst reference the same pages",
+            client,
+        ) is False
+
+    def test_no_scope_metadata_keeps_chain(self):
+        client = _FakeRouteClient(dominated=False)
+        assert route_hypothesis_to_checkers(
+            "CWE-78",
+            "anything — no _TOOL_SCOPE entry for CWE-78",
+            client,
+        ) is True
+
+    def test_llm_error_falls_back_to_true(self):
+        class _BrokenClient:
+            def generate_structured(self, *a, **kw):
+                raise RuntimeError("boom")
+
+        assert route_hypothesis_to_checkers(
+            "CWE-416", "some hypothesis", _BrokenClient(),
+        ) is True
+
+    def test_malformed_response_falls_back_to_true(self):
+        class _GarbageClient:
+            def generate_structured(self, *a, **kw):
+                return {"not_dominated": True}
+
+        assert route_hypothesis_to_checkers(
+            "CWE-416", "some hypothesis", _GarbageClient(),
+        ) is True
