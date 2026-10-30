@@ -66,7 +66,8 @@ def test_launch_config_survives_toml_without_shell_interpretation(tmp_path, targ
 @pytest.mark.parametrize("resume,target,prompt", [
     ("", "", True),
     ("", 'target with spaces; $(false)', True),
-    ("1", "relative target", True),
+    ("1", "relative target", False),
+    ("1", 'target with spaces; $(false)', False),
     ("1", "", False),
 ])
 def test_codex_launcher_passes_short_trigger_and_separate_data(tmp_path, resume, target, prompt):
@@ -92,11 +93,15 @@ def test_codex_launcher_passes_short_trigger_and_separate_data(tmp_path, resume,
     assert args[:2] == (["resume", "--last"] if resume else ["--model", "fixture"])
     if prompt:
         assert args[-1] == "Loading RAPTOR ..."
-        settings = {}
-        for index, arg in enumerate(args):
-            if arg == "-c":
-                settings.update(tomllib.loads(args[index + 1])["shell_environment_policy"]["set"])
-        assert settings == {"RAPTOR_CALLER_DIR": str(tmp_path), "RAPTOR_LAUNCH_TARGET": target}
     else:
         assert "Loading RAPTOR ..." not in args
+    # Target/caller transport is independent of whether a chat prompt is sent.
+    settings = {}
+    for index, arg in enumerate(args):
+        if arg == "-c":
+            settings.update(tomllib.loads(args[index + 1])["shell_environment_policy"]["set"])
+    if not resume or target:
+        assert settings == {"RAPTOR_CALLER_DIR": str(tmp_path), "RAPTOR_LAUNCH_TARGET": target}
+    else:
+        assert settings == {}
     assert "Read .claude/commands/raptor.md" not in " ".join(args)
