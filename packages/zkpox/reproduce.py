@@ -646,7 +646,7 @@ def _reproduce_replay(
                     "outcome": "error",
                     "error": str(e)[:200],
                 })
-                log.debug("reproduce replay run raised: %s", e)
+                log.warning("reproduce replay run %d/%d raised: %s", _i + 1, n, e)
                 break
             # Spawn failure: the child never successfully exec'd the
             # target, so this is NOT an observed outcome — the pre-fix

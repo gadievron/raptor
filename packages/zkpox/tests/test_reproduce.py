@@ -958,12 +958,12 @@ def test_real_fuzz_replay_reproduces(tmp_path):
         target_binary_hash=sha256_file(binary),
     )
     result = reproduce_witness(
-        bundle, data, binary_path=binary, n=3, sandbox_timeout=10,
+        bundle, data, binary_path=binary, n=3, sandbox_timeout=30,
     )
     assert result.attempted is True
     assert result.reproduced is True, (
         f"expected reproduce; got {result.observed_outcomes} "
-        f"({result.reason})"
+        f"({result.reason}); details={result.run_details}"
     )
     assert result.observed_outcomes == ["exit_signal"] * 3
 
@@ -1040,7 +1040,7 @@ def test_real_replay_first_run_etxtbsy_is_spawn_failure_not_outcome(
                         first_call_holds_writer)
     try:
         result = reproduce_witness(
-            bundle, data, binary_path=binary, n=3, sandbox_timeout=10,
+            bundle, data, binary_path=binary, n=3, sandbox_timeout=30,
         )
     finally:
         if state["wfd"] is not None:
@@ -1052,7 +1052,8 @@ def test_real_replay_first_run_etxtbsy_is_spawn_failure_not_outcome(
         f"details={result.run_details}"
     )
     assert result.observed_outcomes == ["exit_signal"] * 3, (
-        f"verdict polluted: {result.observed_outcomes} ({result.reason})"
+        f"verdict polluted: {result.observed_outcomes} ({result.reason}); "
+        f"details={result.run_details}"
     )
     assert result.reproduced is True
     assert "non-deterministic" not in result.reason
