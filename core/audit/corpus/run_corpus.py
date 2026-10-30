@@ -1654,12 +1654,23 @@ def _parse_audit_log_outcomes(
                 head if (head and tail.isdigit()) else key,
             )
 
+    # Per-function accumulated cost: promotion rows carry cost_usd=0.0
+    # (mechanical, no LLM spend) but replace the review row that had the
+    # real spend.  Track the running total per bare key so the final
+    # entry — whatever status it lands on — carries every dollar spent
+    # reaching that verdict.
+    _accumulated_cost: dict[str, float] = {}
+
     for entry in raw_entries:
         key = entry.get("key", "")
-        outcomes_by_id[key] = entry
         head, _, tail = key.rpartition(":")
-        _fb = head if (head and tail.isdigit()) else key
-        if _fb in floored_bases:
+        bare = head if (head and tail.isdigit()) else key
+        _accumulated_cost[bare] = (
+            _accumulated_cost.get(bare, 0.0) + entry.get("cost_usd", 0.0)
+        )
+        entry["cost_usd"] = _accumulated_cost[bare]
+        outcomes_by_id[key] = entry
+        if bare in floored_bases:
             entry["receipt_floored"] = True
         if head and tail.isdigit():
             outcomes_by_id[head] = entry
@@ -1671,18 +1682,17 @@ def _parse_audit_log_outcomes(
                 derived_bare_entries[head] = entry
         else:
             bare_key_entries[key] = entry
-        base = head if (head and tail.isdigit()) else key
         qualified = entry.get("function_qualified") or ""
         qualified_key = ""
         if qualified:
-            file_part = base.rsplit(":", 1)[0]
+            file_part = bare.rsplit(":", 1)[0]
             if file_part:
                 qualified_key = f"{file_part}:{qualified}"
-        elif base in qualified_by_bare:
+        elif bare in qualified_by_bare:
             # Learned alias: an unqualified row on a function some
             # other row qualified — keep the qualified alias current
             # under last-row-wins.
-            qualified_key = qualified_by_bare[base]
+            qualified_key = qualified_by_bare[bare]
         if qualified_key:
             outcomes_by_id[qualified_key] = entry
             if head and tail.isdigit():
