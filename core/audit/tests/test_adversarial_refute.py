@@ -279,7 +279,7 @@ class TestAdversarialRefutePass:
         })
         monkeypatch.setattr(
             orch, "_hypothesis_to_tool_chain",
-            lambda hyp, f, cwe="", language=None: [
+            lambda hyp, f, cwe="", language=None, **kw: [
                 {"type": "smt", "config": {"verb": "check-overflow"}},
             ],
         )
@@ -312,7 +312,7 @@ class TestAdversarialRefutePass:
         })
         monkeypatch.setattr(
             orch, "_hypothesis_to_tool_chain",
-            lambda hyp, f, cwe="", language=None: [
+            lambda hyp, f, cwe="", language=None, **kw: [
                 {"type": "smt", "config": {"verb": "check-overflow"}},
             ],
         )
