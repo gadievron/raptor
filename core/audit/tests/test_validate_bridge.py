@@ -943,6 +943,33 @@ class TestTargetMatchResolution:
         assert result.source_command == "validate (project sibling)"
 
 
+class TestManifestWithoutTarget:
+    """When the manifest exists but has no target, fall through to the
+    checklist rather than returning False immediately."""
+
+    def test_manifest_no_target_falls_through_to_checklist(self, tmp_path):
+        target = tmp_path / "src"
+        target.mkdir()
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        sibling = project_dir / "validate-20261030-1"
+        sibling.mkdir()
+        (sibling / ".raptor-run.json").write_text(json.dumps({
+            "command": "validate",
+        }))
+        (sibling / "checklist.json").write_text(json.dumps({
+            "target": str(target), "items": [],
+        }))
+        _write_validate_findings(sibling)
+        audit_dir = project_dir / "audit_x"
+        audit_dir.mkdir()
+
+        result = import_validate_evidence(
+            audit_dir, target, project_dir=project_dir,
+        )
+        assert result.source_command == "validate (project sibling)"
+
+
 class TestColocatedGatePrefix:
     """The co-located gate must probe a prefix of the findings list,
     not only findings[0]: a genuine /validate dir whose first finding
