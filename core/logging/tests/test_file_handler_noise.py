@@ -164,3 +164,42 @@ class TestRaptorLoggerWiring:
         for handler in self._file_handlers():
             assert os.path.exists(handler.baseFilename)
             assert _group_other_bits(handler.baseFilename) == 0
+
+
+def test_graph_import_does_not_initialize_analysis_storage(tmp_path):
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parents[3]
+    state = tmp_path / 'must-not-be-created'
+    code = r'''
+import os, pathlib, sys
+sys.path.insert(0, os.environ['RAPTOR_DIR'])
+from core.config import RaptorConfig
+state = pathlib.Path(sys.argv[1])
+for name in ('BASE_OUT_DIR', 'MCP_JOB_DIR', 'LOG_DIR', 'SCHEMAS_DIR',
+             'CODEQL_DB_DIR', 'CODEQL_SUITES_DIR'):
+    setattr(RaptorConfig, name, state / name.lower())
+from core.understand_graph.queries import graph_summary
+assert callable(graph_summary)
+assert not state.exists(), 'graph import created analysis storage through logging setup'
+assert not pathlib.Path(os.environ['RAPTOR_OUT_DIR']).exists()
+'''
+    env = {'HOME': str(tmp_path), 'PATH': os.environ['PATH'], 'RAPTOR_DIR': str(source),
+           'RAPTOR_OUT_DIR': str(tmp_path / 'output'), 'RAPTOR_INSTALL_PROTECTED': '1'}
+    result = subprocess.run([sys.executable, '-I', '-B', '-c', code, str(state)],
+                            env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+
+
+def test_owner_only_handler_creates_only_its_parent_on_first_emit(tmp_path):
+    destination = tmp_path / 'logs/nested/audit.jsonl'
+    handler = core_logging._OwnerOnlyFileHandler(destination, delay=True)
+    try:
+        assert not destination.parent.exists()
+        handler.emit(_record('first audit record'))
+        assert destination.read_text().strip() == 'first audit record'
+        assert _group_other_bits(str(destination)) == 0
+    finally:
+        handler.close()

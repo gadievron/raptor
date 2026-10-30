@@ -201,6 +201,9 @@ class _OwnerOnlyFileHandler(logging.FileHandler):
     """
 
     def _open(self):
+        # delay=True must defer directory creation as well as file creation.
+        # Logging setup must not initialize unrelated analysis/tool storage.
+        os.makedirs(os.path.dirname(self.baseFilename), exist_ok=True)
         fd = os.open(
             self.baseFilename,
             os.O_WRONLY | os.O_CREAT | os.O_APPEND,
@@ -256,9 +259,6 @@ class RaptorLogger:
             self.logger = logging.getLogger("raptor")
             self.logger.setLevel(logging.DEBUG)
             self.logger.propagate = False
-
-            # Ensure log directory exists
-            RaptorConfig.ensure_directories()
 
             # Console handler with standard formatting
             console_handler = logging.StreamHandler(sys.stderr)
