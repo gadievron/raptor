@@ -88,7 +88,7 @@ def test_all_hooks_use_the_launcher_owner_despite_foreign_cwd(tmp_path, plugin_e
         assert not marker.exists(), event
 
 
-@pytest.mark.parametrize('anchor', [None, '', 'relative'])
+@pytest.mark.parametrize('anchor', [None, '', 'relative', 'missing-absolute'])
 def test_missing_or_relative_anchor_never_falls_back_to_target_code(tmp_path, plugin_env, anchor):
     target = init_scratch_repo(tmp_path)
     marker = tmp_path / 'target-script-executed'
@@ -96,7 +96,8 @@ def test_missing_or_relative_anchor_never_falls_back_to_target_code(tmp_path, pl
     env = {**os.environ, **plugin_env, 'RAPTOR_DIR': str(target)}
     env.pop('RAPTOR_CODEX_HOOK_ROOT', None)
     if anchor is not None:
-        env['RAPTOR_CODEX_HOOK_ROOT'] = anchor
+        env['RAPTOR_CODEX_HOOK_ROOT'] = (str(tmp_path / 'missing-installation')
+                                         if anchor == 'missing-absolute' else anchor)
     for event in EXPECTED:
         result = _fire(event, target, env)
         if anchor:
@@ -122,3 +123,41 @@ def test_unrelated_codex_session_does_not_even_start_an_interpreter(tmp_path, pl
         result = _fire(event, tmp_path, env)
         assert result.returncode == 0, result.stderr
         assert not marker.exists()
+
+
+@pytest.mark.parametrize('path_prefix', ['.', ''])
+def test_target_cwd_cannot_supply_hook_python(tmp_path, plugin_env, path_prefix):
+    owner = tmp_path / 'owner'
+    target = tmp_path / 'target'
+    target.mkdir()
+    _scripts(owner)
+    marker = tmp_path / 'target-python-executed'
+    python = target / 'python3'
+    python.write_text(f'#!{sys.executable}\nfrom pathlib import Path\n'
+                      f'Path({str(marker)!r}).touch()\nraise SystemExit(93)\n')
+    python.chmod(0o755)
+    env = {**os.environ, **plugin_env, 'RAPTOR_CODEX_HOOK_ROOT': str(owner),
+           'PATH': path_prefix + os.pathsep + os.environ['PATH']}
+    for event in EXPECTED:
+        result = _fire(event, target, env)
+        assert not marker.exists(), event
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout)['cwd'] == str(owner)
+
+
+def test_plugin_python_ignores_target_import_paths(tmp_path, plugin_env):
+    owner = tmp_path / 'owner'
+    target = tmp_path / 'target'
+    target.mkdir()
+    _scripts(owner)
+    marker = tmp_path / 'target-module-imported'
+    for module in ('sitecustomize.py', 'argparse.py'):
+        (target / module).write_text('from pathlib import Path\n'
+                                   f'Path({str(marker)!r}).touch()\n'
+                                   'raise RuntimeError("target module imported")\n')
+    env = {**os.environ, **plugin_env, 'RAPTOR_CODEX_HOOK_ROOT': str(owner),
+           'PYTHONPATH': str(target)}
+    for event in EXPECTED:
+        result = _fire(event, target, env)
+        assert result.returncode == 0, result.stderr
+        assert not marker.exists(), event
