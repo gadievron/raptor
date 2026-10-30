@@ -11,53 +11,6 @@ _RAPTOR_TRUSTED = "1"
 [sandbox_workspace_write]
 writable_roots = ["~/.raptor", "~/.local/share/raptor"]
 
-# ── Hooks ─────────────────────────────────────────────────────────
-# Hook cwd may be a scanned repo. Only the trusted launcher pins this root;
-# never discover code through cwd, git, hook payloads, or a RAPTOR_DIR fallback.
-# Unanchored direct Codex launches refuse these hooks.
-# Codex 0.163.0 resolves both inline and JSON hook sources through the
-# git common directory in a worktree. AGENTS.md supplies an explicit
-# startup fallback when that prevents discovery; inline TOML alone does
-# not fix native worktree hook discovery.
-
-[[hooks.SessionStart]]
-matcher = "startup|resume|fork|clear"
-
-[[hooks.SessionStart.hooks]]
-type = "command"
-command = 'case "${RAPTOR_CODEX_HOOK_ROOT-}" in /*) cd -- "$RAPTOR_CODEX_HOOK_ROOT" || exit 1;; *) echo "RAPTOR: launch with bin/raptor --codex to pin hook paths" >&2; exit 1;; esac; CODEX=1 RAPTOR_CODEX_HOOK=1 _RAPTOR_TRUSTED=1 python3 -I .codex/hooks/session_start.py'
-
-[[hooks.Stop]]
-matcher = ""
-
-[[hooks.Stop.hooks]]
-type = "command"
-command = 'case "${RAPTOR_CODEX_HOOK_ROOT-}" in /*) cd -- "$RAPTOR_CODEX_HOOK_ROOT" || exit 1;; *) echo "RAPTOR: launch with bin/raptor --codex to pin hook paths" >&2; exit 1;; esac; CODEX=1 RAPTOR_CODEX_HOOK=1 _RAPTOR_TRUSTED=1 libexec/raptor-lifecycle-hook codex-stop'
-timeout = 5
-
-[[hooks.SubagentStart]]
-matcher = ""
-
-[[hooks.SubagentStart.hooks]]
-type = "command"
-command = 'case "${RAPTOR_CODEX_HOOK_ROOT-}" in /*) cd -- "$RAPTOR_CODEX_HOOK_ROOT" || exit 1;; *) echo "RAPTOR: launch with bin/raptor --codex to pin hook paths" >&2; exit 1;; esac; CODEX=1 RAPTOR_CODEX_HOOK=1 _RAPTOR_TRUSTED=1 python3 -I libexec/raptor-session-init --codex-subagent-context'
-
-# Command rewrites can bypass native execution rules. No PreToolUse rewrite:
-# shared RAPTOR process startup restores context without changing the command.
-
-[[hooks.SessionEnd]]
-matcher = ""
-
-[[hooks.SessionEnd.hooks]]
-type = "command"
-command = 'case "${RAPTOR_CODEX_HOOK_ROOT-}" in /*) cd -- "$RAPTOR_CODEX_HOOK_ROOT" || exit 1;; *) echo "RAPTOR: launch with bin/raptor --codex to pin hook paths" >&2; exit 1;; esac; CODEX=1 RAPTOR_CODEX_HOOK=1 _RAPTOR_TRUSTED=1 libexec/raptor-lifecycle-hook codex-end'
-timeout = 3
-
-# Notification only: RAPTOR records its own exit outcome. No PreToolUse rewrite.
-[[hooks.PostToolUse]]
-matcher = "Bash"
-
-[[hooks.PostToolUse.hooks]]
-type = "command"
-command = 'case "${RAPTOR_CODEX_HOOK_ROOT-}" in /*) cd -- "$RAPTOR_CODEX_HOOK_ROOT" || exit 1;; *) echo "RAPTOR: launch with bin/raptor --codex to pin hook paths" >&2; exit 1;; esac; CODEX=1 RAPTOR_CODEX_HOOK=1 _RAPTOR_TRUSTED=1 libexec/raptor-lifecycle-hook codex-outcome'
-timeout = 5
+# Lifecycle hooks are installed from .codex/plugin through the native Codex
+# plugin mechanism. No inline hooks: loading both sources would run them twice.
+# See docs/codex.md for install, hook review, and cache refresh instructions.

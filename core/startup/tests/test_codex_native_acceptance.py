@@ -104,9 +104,10 @@ def native(tmp_path):
     for checkout in (primary, worktree, untrusted):
         (checkout / '.codex').mkdir()
         (checkout / '.codex/config.toml').write_text(source)
-    # A unique matcher makes silently reading the primary's copy detectable.
-    (worktree / '.codex/config.toml').write_text(
-        source.replace('startup|resume|fork|clear', '^acceptance-worktree-only$'))
+    # An untrusted checkout cannot inject additional project-local hooks.
+    with (untrusted / '.codex/config.toml').open('a') as stream:
+        stream.write('\n[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\n'
+                     'type = "command"\ncommand = "must-not-execute"\n')
     home = tmp_path / 'home'
     home.mkdir()
     codex_home = tmp_path / 'codex-state'
@@ -118,6 +119,13 @@ def native(tmp_path):
            'CODEX_HOME': str(codex_home), 'TERM': 'dumb',
            'RAPTOR_CODEX_HOOK_ROOT': str(ROOT),
            'RAPTOR_REGISTRY_HOME': str(tmp_path / 'registry')}
+    for arguments in (
+        ['plugin', 'marketplace', 'add', str(ROOT), '--json'],
+        ['plugin', 'add', 'raptor-codex-hooks@raptor-local', '--json'],
+    ):
+        install = subprocess.run([executable, *arguments], env=env, cwd=primary,
+                                 capture_output=True, text=True, timeout=15)
+        assert install.returncode == 0, install.stderr
     client = NativeClient(executable, primary, env, tmp_path / 'native-stderr.log')
     try:
         client.result('initialize', {'clientInfo': {'name': 'raptor-native-acceptance',
@@ -133,47 +141,50 @@ def _hooks(client, cwd):
     data = client.result('hooks/list', {'cwds': [str(cwd)]})['data']
     assert len(data) == 1
     assert not data[0]['errors'], data[0]['errors']
-    return [hook for hook in data[0]['hooks'] if hook['source'] == 'project']
+    return data[0]['hooks']
 
 
-def _check_primary(client, primary):
-    hooks = _hooks(client, primary)
+def _check_plugin(client, cwd):
+    hooks = _hooks(client, cwd)
+    plugin = [hook for hook in hooks
+              if hook['pluginId'] == 'raptor-codex-hooks@raptor-local']
     events = {'sessionStart', 'subagentStart', 'postToolUse', 'stop', 'sessionEnd'}
-    assert {hook['eventName'] for hook in hooks} == events
-    assert all(hook['sourcePath'] == str(primary / '.codex/config.toml') for hook in hooks)
-    assert all(hook['trustStatus'] == 'untrusted' for hook in hooks)
-    return hooks
+    assert len(plugin) == 5
+    assert {hook['eventName'] for hook in plugin} == events
+    assert all(hook['source'] == 'plugin' for hook in plugin)
+    assert all(hook['trustStatus'] == 'untrusted' for hook in plugin)
+    assert all('plugins/cache/raptor-local/raptor-codex-hooks/' in hook['sourcePath']
+               for hook in plugin)
+    assert all((Path(hook['sourcePath']).parent / 'dispatch.py').is_file()
+               for hook in plugin)
+    assert not any(hook['source'] == 'project' for hook in hooks), hooks
+    return plugin
 
 
-def test_primary_checkout_lists_all_hooks_without_trusting_them(native):
+def test_primary_checkout_lists_all_plugin_hooks_without_trusting_them(native):
     client, primary, *_ = native
-    _check_primary(client, primary)
+    _check_plugin(client, primary)
     nested = primary / 'core'
     nested.mkdir()
-    assert len(_hooks(client, nested)) == 5
+    assert len(_check_plugin(client, nested)) == 5
 
 
-def test_worktree_uses_its_own_hook_configuration(native):
-    client, primary, worktree, _untrusted, version, _home = native
-    _check_primary(client, primary)  # A broken control must never become xfail.
-    hooks = _hooks(client, worktree)
-    owns_hooks = (len(hooks) == 5 and all(
-        hook['sourcePath'] == str(worktree / '.codex/config.toml') for hook in hooks)
-        and any(hook.get('matcher') == '^acceptance-worktree-only$' for hook in hooks))
-    if not owns_hooks and version == '0.166.0':
-        pytest.xfail('Codex 0.166.0 linked-worktree hook discovery: '
-                     f'{len(hooks)} hooks; primary control passes; owner/matcher mismatch')
-    assert owns_hooks, [(h['sourcePath'], h.get('matcher')) for h in hooks]
+def test_plugin_discovery_is_identical_in_primary_and_worktree(native):
+    client, primary, worktree, *_ = native
+    primary_hooks = _check_plugin(client, primary)
+    worktree_hooks = _check_plugin(client, worktree)
+    assert {(h['key'], h['currentHash']) for h in primary_hooks} == {
+        (h['key'], h['currentHash']) for h in worktree_hooks}
 
 
-def test_untrusted_project_does_not_load_its_hooks(native):
+def test_untrusted_project_cannot_add_hooks_to_installed_plugin(native):
     client, _primary, _worktree, untrusted, *_ = native
-    assert _hooks(client, untrusted) == []
+    _check_plugin(client, untrusted)
 
 
 def test_native_thread_ids_are_distinct_without_executing_untrusted_hooks(native):
     client, primary, _worktree, _untrusted, _version, home = native
-    _check_primary(client, primary)
+    _check_plugin(client, primary)
     params = {'cwd': str(primary), 'sandbox': 'workspace-write',
               'approvalPolicy': 'on-request'}
     first = client.result('thread/start', params)['thread']['id']
@@ -183,7 +194,7 @@ def test_native_thread_ids_are_distinct_without_executing_untrusted_hooks(native
     assert not (home / '.local/share/raptor/codex-contexts').exists()
 
 
-def test_worktree_loads_shell_settings_even_when_hooks_are_missing(native):
+def test_worktree_loads_shell_settings_alongside_plugin_hooks(native):
     client, _primary, worktree, _untrusted, _version, home = native
     config = client.result('config/read', {'cwd': str(worktree), 'includeLayers': True})['config']
     assert config['shell_environment_policy']['inherit'] == 'core'
