@@ -2658,7 +2658,7 @@ class TestRealExecutionRust:
             },
         )
         r = execute_witness(spec, tmp_path)
-        assert r.verdict == "confirmed"
+        assert r.verdict == "confirmed", r.match_detail
         assert r.language == "rust"
 
     def test_refutes_wrong_prediction(self, tmp_path):
@@ -2701,8 +2701,12 @@ class TestRealExecutionRust:
             },
         )
         r = execute_witness(spec, tmp_path)
-        assert r.verdict == "confirmed"
-        assert r.actual_exception.startswith("signal: SIG")
+        assert r.verdict == "confirmed", (
+            f"expected confirmed; got {r.verdict}: {r.match_detail}"
+        )
+        assert r.actual_exception.startswith("signal: SIG"), (
+            f"expected signal death; actual_exception={r.actual_exception!r}"
+        )
 
     def test_confirms_through_rustup_proxy_layout(self, tmp_path, monkeypatch):
         """rustup-managed hosts reach rustc through a proxy that reads
@@ -2772,7 +2776,7 @@ class TestRealExecutionRust:
             },
         )
         r = execute_witness(spec, tmp_path)
-        assert r.verdict == "confirmed"
+        assert r.verdict == "confirmed", r.match_detail
 
 
 @pytest.mark.slow

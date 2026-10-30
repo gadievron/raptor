@@ -2198,10 +2198,14 @@ def _execute_native(
                 spec, binary, target_root, timeout_s, lang,
                 expected_token=token)
 
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as te:
+        logger.warning(
+            "C witness %s timed out (timeout=%ss): %s",
+            spec.finding_key, timeout_s, te,
+        )
         return DarkVerifyResult(
             finding_key=spec.finding_key, verdict="inconclusive", language=lang,
-            match_detail="compilation or execution timed out",
+            match_detail=f"compilation or execution timed out ({timeout_s}s)",
         )
     except Exception as exc:
         logger.debug("native witness failed: %s", exc, exc_info=True)
@@ -2321,10 +2325,14 @@ def _execute_go(
                 spec, binary, target_root, timeout_s, "go",
                 expected_token=token)
 
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as te:
+        logger.warning(
+            "Go witness %s timed out (timeout=%ss): %s",
+            spec.finding_key, timeout_s, te,
+        )
         return DarkVerifyResult(
             finding_key=spec.finding_key, verdict="inconclusive", language="go",
-            match_detail="go execution timed out",
+            match_detail=f"go execution timed out ({timeout_s}s)",
         )
     except Exception as exc:
         logger.debug("Go witness failed: %s", exc, exc_info=True)
@@ -2560,11 +2568,15 @@ def _execute_rust(
                 spec, binary, target_root, timeout_s, "rust",
                 expected_token=token, sanitizers_active=asan_active)
 
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as te:
+        logger.warning(
+            "Rust witness %s timed out (timeout=%ss): %s",
+            spec.finding_key, timeout_s, te,
+        )
         return DarkVerifyResult(
             finding_key=spec.finding_key, verdict="inconclusive",
             language="rust",
-            match_detail="compilation or execution timed out",
+            match_detail=f"compilation or execution timed out ({timeout_s}s)",
         )
     except Exception as exc:
         logger.debug("Rust witness failed: %s", exc, exc_info=True)
@@ -2662,11 +2674,15 @@ def _execute_java(
             return _classify_json_output(
                 spec, stdout, "java", expected_token=token)
 
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as te:
+        logger.warning(
+            "Java witness %s timed out (timeout=%ss): %s",
+            spec.finding_key, timeout_s, te,
+        )
         return DarkVerifyResult(
             finding_key=spec.finding_key, verdict="inconclusive",
             language="java",
-            match_detail="compilation or execution timed out",
+            match_detail=f"compilation or execution timed out ({timeout_s}s)",
         )
     except Exception as exc:
         logger.debug("Java witness failed: %s", exc, exc_info=True)
