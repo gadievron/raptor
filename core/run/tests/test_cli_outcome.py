@@ -18,6 +18,11 @@ def context(tmp_path, monkeypatch):
                'token_digest': hashlib.sha256(b'credential').hexdigest()}
     monkeypatch.setattr(outcome.environment, 'ROOT', root)
     monkeypatch.setattr(outcome.environment, 'read_context', lambda sid: context)
+    def restore(sid):
+        if sid not in ('session', 'native-child'):
+            raise outcome.environment.CodexEnvironmentError('unknown session')
+        return {'RAPTOR_CODEX_CONTEXT_ID': 'session'}
+    monkeypatch.setattr(outcome.environment, 'restore', restore)
     monkeypatch.setattr(outcome, '_address', lambda sid: directory)
     monkeypatch.setenv('RAPTOR_CODEX_ENVIRONMENT', '1')
     monkeypatch.setenv('CODEX_THREAD_ID', 'session')
@@ -152,13 +157,27 @@ def test_direct_python_and_bash_dispatcher_map_to_python_argv(context):
     assert outcome._expected('libexec/raptor-openant --repo /target') == [str(root/'raptor.py'), 'openant', '--repo', '/target']
 
 
-def test_native_child_call_correlates_to_root_hook_session(context, monkeypatch):
-    """Native child Bash env has the child ID; PostToolUse reports the root ID."""
+@pytest.mark.parametrize('hook_session', ['session', 'native-child'])
+def test_native_child_call_correlates_to_root_hook_session(context, monkeypatch, hook_session):
+    """Both native root and child hook IDs resolve to the authenticated root."""
     _, directory, payload = context
     monkeypatch.setenv('CODEX_THREAD_ID', 'native-child')
     monkeypatch.setenv('RAPTOR_CODEX_CONTEXT_ID', 'session')
     with pytest.raises(SystemExit), outcome.cli_outcome():
         sys.exit(7)
-    assert outcome.consume(dict(payload, session_id='native-child')) is None
-    assert outcome.consume(payload) is not None
+    assert outcome.consume(dict(payload, session_id=hook_session)) is not None
+    assert outcome.consume(payload) is None
     assert not list(directory.glob('outcome-*'))
+
+
+@pytest.mark.parametrize('hook_session', ['unknown-child', None])
+def test_unmapped_child_cannot_use_inherited_root(context, monkeypatch, hook_session):
+    _, directory, payload = context
+    monkeypatch.setenv('RAPTOR_CODEX_CONTEXT_ID', 'session')
+    with pytest.raises(SystemExit), outcome.cli_outcome():
+        sys.exit(7)
+    receipts = list(directory.glob('outcome-*'))
+    with pytest.raises(outcome.environment.CodexEnvironmentError):
+        outcome.consume(dict(payload, session_id=hook_session))
+    assert list(directory.glob('outcome-*')) == receipts
+    assert outcome.consume(payload) is not None
