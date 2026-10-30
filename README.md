@@ -204,10 +204,13 @@ export PATH="$PATH:$PWD/bin"
 raptor
 ```
 
-Use the `raptor` launcher from any directory. It loads RAPTOR's configuration,
-performs pre-flight checks, tracks coverage, and remembers your caller directory.
-For persistent PATH setup, launcher flags, and optional installation protection,
-see [manual installation](docs/installation.md#option-1-install-manually).
+The `raptor` launcher is the recommended way to start a session, and it works from any directory -- it resolves the RAPTOR installation, remembers the directory you launched from (so commands like `/scan` default to it), runs the pre-flight trust and project checks, and sanitises the environment before handing off to the selected agent host. It also takes an optional target path and flags like `--project`, `--continue`, and `--model` -- see `raptor --help`.
+
+For Codex, use `raptor --codex -- --sandbox workspace-write --ask-for-approval on-request` and follow the [Codex setup guide](docs/codex.md). Checkout trust, native hook review, worktree discovery and backend authentication are separate requirements.
+
+Running plain `claude` from inside the repo directory also works -- Claude Code picks up RAPTOR's configuration from the checkout -- but you skip everything the launcher does above: no pre-flight checks, no coverage tracking, and commands that default to "the directory you ran this from" can't see it.
+
+**Important:** RAPTOR loads its configuration from the repo directory. If you run `claude` from any other directory, you get plain Claude Code, not RAPTOR. The `raptor` launcher avoids this failure mode entirely.
 
 ### Option 2: Run in a container (recommended)
 
