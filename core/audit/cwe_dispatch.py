@@ -18,6 +18,38 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Tool-scope descriptions: what each standing tool in a CWE's chain
+# actually adjudicates.  Consumed by route_hypothesis_to_checkers()
+# which presents them to the LLM so it can decide whether the
+# existing tools cover the hypothesis or synthesis is needed.
+# ---------------------------------------------------------------------------
+_TOOL_SCOPE: dict[str, dict[str, str]] = {
+    "CWE-416": {
+        "use_after_free.cocci": (
+            "Sequential free-then-use: a pointer is freed (kfree, free, "
+            "vfree) and later dereferenced (->field) without reassignment "
+            "in between, within the same function."
+        ),
+        "teardown_lifetime.cocci": (
+            "Callback-lifetime race: an asynchronous callback (timer, "
+            "workqueue, hrtimer) is cancelled then its container is "
+            "freed, but a callback already executing on another CPU "
+            "still holds a reference."
+        ),
+        "smt:check-early-release": (
+            "Path feasibility: checks whether a resource release can "
+            "happen before all uses on a given execution path complete."
+        ),
+        "cpp/use-after-free": (
+            "CodeQL dataflow: tracks a freed pointer flowing to a "
+            "subsequent dereference through local and inter-procedural "
+            "dataflow."
+        ),
+    },
+}
+
+
 CWE_TO_TOOL_DISPATCH: dict[str, dict[str, Any]] = {
     # Memory / bounds
     "CWE-120": {
@@ -1356,7 +1388,7 @@ _HYPOTHESIS_CWE_MAP = [
     (r"race\s+condition|data\s+race|concurrent.{0,200}(?:write|access|modif)", "CWE-362"),
     (r"toctou|time.of.check.{0,100}time.of.use|check.{0,100}then.{0,100}use.{0,100}race", "CWE-367"),
     (r"deadlock|livelock|lock.{0,200}order|double.{0,200}lock", "CWE-667"),
-    (r"use.after.free|dangling.{0,200}pointer|freed.{0,200}(?:object|memory|buffer)", "CWE-416"),
+    (r"use.after.free|dangling.{0,200}pointer|freed?.{0,200}(?:object|memory|buffer|page).{0,200}(?:still|later).{0,200}(?:referenc|access|used|read|deref)|freed.{0,200}(?:object|memory|buffer)", "CWE-416"),
     (r"double.free|free.{0,200}twice", "CWE-415"),
     (r"(?:integer|arithmetic).{0,200}overflow|integer.{0,200}wrap", "CWE-190"),
     (r"(?:integer|arithmetic).{0,200}underflow", "CWE-191"),
@@ -1763,3 +1795,97 @@ def dark_verify_statuses(cwe: str):
     if not statuses:
         return None
     return frozenset(statuses)
+
+
+def tool_scope_for_cwe(cwe: str) -> dict[str, str] | None:
+    """Return {tool_name: scope_description} for *cwe*, or None."""
+    normalized = (cwe or "").upper().strip()
+    if not normalized.startswith("CWE-"):
+        normalized = f"CWE-{normalized}"
+    return _TOOL_SCOPE.get(normalized)
+
+
+_ROUTE_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "dominated": {
+            "type": "boolean",
+            "description": (
+                "true when at least one existing checker's scope fully "
+                "covers the hypothesis — the standing tools can "
+                "adjudicate it."
+            ),
+        },
+        "reasoning": {
+            "type": "string",
+            "description": (
+                "One sentence: which checker covers it, or why none do."
+            ),
+        },
+    },
+    "required": ["dominated", "reasoning"],
+    "additionalProperties": False,
+}
+
+
+def route_hypothesis_to_checkers(
+    cwe: str,
+    hypothesis: str,
+    llm_client,
+) -> bool:
+    """Ask the LLM whether the standing checkers cover *hypothesis*.
+
+    Returns True when the LLM judges the existing tools dominate the
+    hypothesis (use the standing chain).  Returns False when none of
+    them cover the sub-shape (drop the chain → route to synthesis).
+
+    Falls back to True (keep the standing chain) on any error — the
+    chain-exhaustion fallback in the sweep catches missed routing.
+    """
+    scope = tool_scope_for_cwe(cwe)
+    if not scope:
+        return True  # no scope metadata → keep existing behaviour
+
+    catalogue = "\n".join(
+        f"- **{name}**: {desc}" for name, desc in scope.items()
+    )
+    prompt = (
+        f"A code auditor hypothesised the following vulnerability:\n\n"
+        f"> {hypothesis}\n\n"
+        f"The CWE class is {cwe}.  The following existing checkers are "
+        f"available for this class:\n\n{catalogue}\n\n"
+        f"Does at least one existing checker's scope fully cover the "
+        f"sub-shape described in the hypothesis?  A checker covers the "
+        f"hypothesis when it models the same mechanism — not merely the "
+        f"same CWE class.  Answer with a JSON object."
+    )
+    try:
+        from core.llm.coerce import structured_result
+
+        response = llm_client.generate_structured(
+            prompt,
+            _ROUTE_SCHEMA,
+            system_prompt=(
+                "You are a vulnerability-class routing expert.  Given a "
+                "hypothesis and a catalogue of checkers, decide whether "
+                "the existing checkers can adjudicate the hypothesis or "
+                "whether a new checker must be synthesised."
+            ),
+            task_type="classify",
+        )
+        result = structured_result(response)
+        if result and isinstance(result, dict):
+            dominated = result.get("dominated")
+            if isinstance(dominated, bool):
+                reason = result.get("reasoning", "")
+                logger.info(
+                    "route_hypothesis: %s dominated=%s — %s",
+                    cwe, dominated, reason,
+                )
+                return dominated
+    except Exception:
+        logger.debug(
+            "route_hypothesis_to_checkers failed — keeping standing chain",
+            exc_info=True,
+        )
+    return True
