@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
+"""Detect library source trees a C/C++ target depends on.
+
+Harvests #include <…> from the target, resolves to source packages via
+the system package manager, and reports which are available and which
+are missing.  Fast (no LLM cost), no side effects beyond tarball
+extraction to the cache directory.
+
+Usage:
+  raptor-detect-libraries <target_path> [--cache-dir <path>] [--json]
+
+Output (default): human-readable summary.
+Output (--json): machine-readable JSON with "ready" and "missing" lists.
+"""
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# fmt: on
+
+_HERE = Path(__file__).resolve().parent
+_RAPTOR_DIR = _HERE.parent
+sys.path.insert(0, str(_RAPTOR_DIR))
+
+from core.concepts.library_detect import (  # noqa: E402
+    detect_library_candidates,
+    harvest_system_includes,
+)
+
+
+def _default_cache_dir() -> Path:
+    return _RAPTOR_DIR / "out" / "library-sources"
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Detect library source dependencies for a C/C++ target",
+    )
+    parser.add_argument("target", help="Path to the target source tree")
+    parser.add_argument(
+        "--cache-dir",
+        help="Directory for extracted library sources "
+             "(default: out/library-sources/)",
+    )
+    parser.add_argument(
+        "--json", action="store_true", dest="json_output",
+        help="Machine-readable JSON output",
+    )
+    parser.add_argument(
+        "--exclude", action="append", default=None,
+        metavar="IDENTIFIER",
+        help="Suppress auto-detected subtrees with this identifier "
+             "(repeatable; used for --study-lib overrides)",
+    )
+    args = parser.parse_args()
+
+    target = Path(args.target)
+    if not target.is_dir():
+        sys.stderr.write(f"Target is not a directory: {target}\n")
+        return 1
+
+    cache_dir = Path(args.cache_dir) if args.cache_dir else _default_cache_dir()
+    exclude = frozenset(args.exclude or [])
+
+    ready, missing = detect_library_candidates(
+        target, cache_dir, exclude_identifiers=exclude,
+    )
+
+    if args.json_output:
+        doc = {
+            "ready": [
+                {"path": path, "identifier": ident}
+                for path, ident in ready
+            ],
+            "missing": [
+                {
+                    "source_package": c.source_pkg,
+                    "installed": c.installed,
+                    "install_hint": c.install_hint,
+                }
+                for c in missing
+            ],
+            "headers_found": len(harvest_system_includes(target)),
+        }
+        json.dump(doc, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return 0
+
+    headers = harvest_system_includes(target)
+    print(f"System includes found: {len(headers)}")
+
+    if ready:
+        print(f"\nReady ({len(ready)} subtrees):")
+        for path, ident in ready:
+            print(f"  {ident}: {path}")
+
+    if missing:
+        print(f"\nMissing ({len(missing)} source packages):")
+        for c in missing:
+            status = "installed but extraction failed" if c.installed else "not installed"
+            print(f"  {c.source_pkg}: {status}")
+            if c.install_hint:
+                print(f"    → {c.install_hint}")
+
+    if not ready and not missing:
+        print("\nNo library source packages detected.")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
