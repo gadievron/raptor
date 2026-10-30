@@ -1,6 +1,7 @@
 """Basic smoke tests for the project CLI."""
 
 import contextlib
+import errno
 import io
 import json
 import os
@@ -165,6 +166,54 @@ class TestRunSummarySca(unittest.TestCase):
             on_disk = json.loads(meta_path.read_text(encoding="utf-8"))
             self.assertEqual(on_disk.get("project"), "just-pinned")
             self.assertEqual(on_disk.get("output_summary"), "1 findings")
+
+
+@pytest.mark.parametrize('error_number', [errno.EACCES, errno.EROFS, errno.ENOSPC],
+                         ids=['permission', 'read-only', 'full-disk'])
+@pytest.mark.parametrize('failure_point', ['save', 'lock'])
+def test_status_survives_unwritable_summary_cache(
+        tmp_path, monkeypatch, capsys, error_number, failure_point):
+    from core.project.project import ProjectManager
+    from core.run import metadata as run_metadata
+    import core.json as json_io
+
+    target = tmp_path / 'target'
+    target.mkdir()
+    project = ProjectManager().create(
+        'readonly-status', str(target), output_dir=str(tmp_path / 'output'))
+    originals = {}
+    for status in ('completed', 'failed'):
+        run = Path(project.output_dir) / ('scan-' + status)
+        run.mkdir()
+        _write_sca(run, [_sca_finding('lodash-pro')])
+        path = run / run_metadata.RUN_METADATA_FILE
+        path.write_text(json.dumps({'command': 'scan', 'status': status}), encoding='utf-8')
+        originals[path] = path.read_bytes()
+
+    attempted = []
+
+    def denied(path, *args, **kwargs):
+        attempted.append(Path(path))
+        raise OSError(error_number, os.strerror(error_number), str(path))
+
+    @contextlib.contextmanager
+    def unavailable_lock(path):
+        denied(path)
+        yield  # pragma: no cover -- contextmanager must fail on entry
+
+    if failure_point == 'save':
+        monkeypatch.setattr(json_io, 'save_json', denied)
+    else:
+        monkeypatch.setattr(run_metadata, '_metadata_lock', unavailable_lock)
+    monkeypatch.setattr('sys.argv', ['raptor-project', 'status', project.name])
+    main()
+    output = capsys.readouterr()
+    assert 'scan-completed' in output.out
+    assert 'scan-failed' in output.out
+    assert output.out.count('1 findings') == 2
+    assert set(attempted) == set(originals)
+    for path, before in originals.items():
+        assert path.read_bytes() == before
 
 
 class TestPrintFindingsSca(unittest.TestCase):

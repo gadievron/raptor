@@ -1995,7 +1995,8 @@ def _get_output_summary(run_dir, meta):
     """Get findings/results string for a run, using cached summary when available.
 
     On first access for a completed run, computes the summary and writes it
-    back to .raptor-run.json so subsequent calls are instant.
+    back to .raptor-run.json when permitted so subsequent calls are instant.
+    Cache I/O failures must not prevent displaying the computed summary.
     """
     from core.json import save_json
     from core.run.metadata import RUN_METADATA_FILE
@@ -2034,22 +2035,26 @@ def _get_output_summary(run_dir, meta):
     status = (meta or {}).get("status", "")
     if result and status in ("completed", "failed"):
         meta_path = run_dir / RUN_METADATA_FILE
-        if meta_path.exists() and meta:
-            # Same cross-process lock every other RMW on this file
-            # takes (start_run, _update_status, write_run_pin) — an
-            # unlocked save of the pre-computed snapshot raced
-            # concurrent marker writers (a pin rewrite, another status
-            # invocation) and clobbered their update. Re-load inside
-            # the lock and add ONLY the cache keys.
-            # _load_meta, not bare load_json: the marker is sandbox-
-            # writable and every reader carries the metadata budget.
-            from core.run.metadata import _load_meta, _metadata_lock
-            with _metadata_lock(meta_path):
-                fresh = _load_meta(meta_path)
-                if isinstance(fresh, dict):
-                    fresh["output_summary"] = result
-                    fresh["output_summary_v"] = summary_version
-                    save_json(meta_path, fresh)
+        # Persistence is optional. A read-only mount, denied write or full disk
+        # must not turn a status/list query into an error or require escalation.
+        # Keep the lock and fresh read on the successful write-back path.
+        with contextlib.suppress(OSError):
+            if meta_path.exists() and meta:
+                # Same cross-process lock every other RMW on this file
+                # takes (start_run, _update_status, write_run_pin) — an
+                # unlocked save of the pre-computed snapshot raced
+                # concurrent marker writers (a pin rewrite, another status
+                # invocation) and clobbered their update. Re-load inside
+                # the lock and add ONLY the cache keys.
+                # _load_meta, not bare load_json: the marker is sandbox-
+                # writable and every reader carries the metadata budget.
+                from core.run.metadata import _load_meta, _metadata_lock
+                with _metadata_lock(meta_path):
+                    fresh = _load_meta(meta_path)
+                    if isinstance(fresh, dict):
+                        fresh["output_summary"] = result
+                        fresh["output_summary_v"] = summary_version
+                        save_json(meta_path, fresh)
 
     return result
 
