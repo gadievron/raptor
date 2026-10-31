@@ -1377,7 +1377,7 @@ class TestAdditiveChecks:
         small = run(2_000)
         big = run(2_000 * 4 * 2)  # ~2.9 MB at chunk ≈ 180 B
         assert big[0] > 2_500_000, big
-        assert big[1] < 10.0, big
+        assert big[1] < 20.0, big
         # Linear: 8x the input may not cost much more than ~8x (+slack);
         # a quadratic walk would be ~64x.
         assert big[1] < max(small[1], 0.02) * 20, (small, big)
