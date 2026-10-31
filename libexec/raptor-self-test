@@ -150,12 +150,13 @@ class Ctx:
         # receipts for individual fixture helpers. Keep kernel protection and
         # CI/tool settings intact; removing attribution cannot relax either.
         session_keys = {
+            "CODEX", "CODEX_THREAD_ID", "CODEX_TOOL_CALL_ID",
             "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_SESSION_ID",
             "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN",
             "RAPTOR_CALLER_DIR", "RAPTOR_LAUNCH_TARGET",
         }
         env = {k: v for k, v in os.environ.items()
-               if k not in session_keys}
+               if k not in session_keys and not k.startswith("RAPTOR_CODEX_")}
         env["_RAPTOR_TRUSTED"] = "1"
         env["RAPTOR_REGISTRY_HOME"] = str(self.home / ".raptor")
         env["RAPTOR_OUT_DIR"] = str(self.outs)
