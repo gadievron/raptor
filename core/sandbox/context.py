@@ -165,18 +165,8 @@ def _audit_degrade_reason(b_fallback_reason, b_fallback_instr,
          Their reason is the most specific: it names the binary.
       2. ``check_mount_available()`` False — host kernel refuses
          unprivileged mount-ns (Ubuntu 24.04 default sysctl).
-      3. ``pass_fds=`` kwarg set (Linux only) — _spawn's fork chain
-         doesn't plumb inherited fds; the call had to go
-         subprocess+preexec. The macOS backend plumbs pass_fds
-         natively, so this cause never applies on darwin.
-      4. ``input=`` kwarg set (Linux only) — same reason; piping
-         stdin via input= can't survive mount-ns fork+exec. Plumbed
-         natively on darwin.
-      5. ``target`` and ``output`` both None — mount-ns has nothing
-         to bind-mount as the working area; the tracer has nowhere
-         to attach in the new namespace.
-      6. Catch-all — reachable only if a future change adds a new
-         spawn-eligibility gate without updating this helper.
+      3. ``target`` and ``output`` both None — no working area to bind.
+      4. Catch-all for future spawn-eligibility conditions.
 
     Each branch returns a short ``reason`` (what failed) and
     ``instructions`` (operator action to fix). Both flow into the
@@ -210,20 +200,6 @@ def _audit_degrade_reason(b_fallback_reason, b_fallback_instr,
         # returns a routed ``(condition, fix)``.
         from .probes import mount_unavailable_reason
         return mount_unavailable_reason()
-    if sys.platform != "darwin" and kwargs.get("pass_fds"):
-        return (
-            "call uses pass_fds= which the Linux spawn chain doesn't "
-            "plumb through",
-            ("rework the caller to avoid pass_fds or accept that this "
-            "call won't audit"),
-        )
-    if sys.platform != "darwin" and kwargs.get("input") is not None:
-        return (
-            "call uses input= which the Linux spawn chain doesn't "
-            "plumb through",
-            ("pipe via stdin= instead of input=, or accept that this "
-            "call won't audit"),
-        )
     if not (target or output):
         # Common case: callers that pass audit_run_dir= alone for
         # audit-signal routing but no target/output for filesystem
@@ -1692,7 +1668,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                  FAIL-CLOSED: rootfs requires the Linux mount-ns spawn
                  backend — every degradation that other calls tolerate
                  (Landlock-only fallback, seatbelt, profile 'none',
-                 pass_fds/input kwargs) raises SandboxSetupError
+                 native setup failures) raises SandboxSetupError
                  instead, because "degraded" here means the command
                  would run against the HOST filesystem while the caller
                  believes it is containerised. The rootfs directory is
@@ -4826,6 +4802,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         # host services. Reject socket FDs outright; allow regular
         # files, pipes, block devices, TTYs. Runtime cost: one fstat
         # per pass_fds entry.
+        if "pass_fds" in kwargs:
+            kwargs["pass_fds"] = tuple(kwargs["pass_fds"])
         _pass_fds_declared = kwargs.pop("pass_fds_declared", False)
         # stdin= carries a descriptor capability past every path-based
         # layer exactly like a pass_fds entry: the spawn backends dup2
@@ -5318,38 +5296,11 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         # exception); None while audit is still expected to engage.
         _audit_no_engage_reason = None
         _audit_no_engage_instr = ""
-        # _spawn doesn't replicate every subprocess.run kwarg through its
-        # manual os.fork() path. The Landlock-only subprocess.run path
-        # handles them natively via Python's posix_spawn logic. Route
-        # callers that use one of these kwargs down the Landlock-only
-        # path rather than silently dropping them:
-        #   - `pass_fds`: inherited FDs into the child
-        #   - `input`: bytes/str piped to child's stdin (needs a writer
-        #     thread to avoid pipe-fill deadlock on large inputs)
-        # (`stdin=<fd>` IS plumbed through _spawn.run_sandboxed, so we
-        # only exclude `input=` here, not plain stdin=.)
-        # The kwarg-compat gate is LINUX-ONLY: _spawn's os.fork()
-        # chain can't plumb pass_fds/input=. macOS _macos_spawn wraps
-        # subprocess.run, which handles both natively (caller fds
-        # union with the shim's status/death pipes; input= uses
-        # subprocess's own communicate machinery) — disqualifying
-        # darwin here used to SILENTLY drop seatbelt for such calls,
-        # leaving the child rlimits-only with no signal outside audit
-        # mode.
-        _kwarg_plumb_native = use_seatbelt  # subprocess-backed spawn
-        # input= no longer disqualifies the fork backend: the spawn
-        # chain maps stdin FDs natively, so witness bytes convert to
-        # an UNLINKED private tempfile served as fd 0. Pre-fix,
-        # feeding a PoC its witness via input= silently routed the
-        # run onto the no-mount-ns fallback — host-pid /proc visible
-        # to exactly the attacker-derived code the witness drives
-        # (the full host argv surface, including concurrent runs'
-        # credential-bearing command lines). pass_fds remains the one
-        # disqualifier (real multi-fd plumbing, no caller on the
-        # untrusted contract).
+        # Both native backends preserve audited pass_fds. Linux input=
+        # uses an unlinked, read-only spool mapped onto stdin, including
+        # calls which also pass additional descriptors.
         if (sys.platform != "darwin" and (use_mount or need_unshare)
-                and kwargs.get("input") is not None
-                and not kwargs.get("pass_fds")):
+                and kwargs.get("input") is not None):
             # subprocess.run's own contract, enforced here because the
             # conversion below would otherwise silently prefer input=.
             if kwargs.get("stdin") is not None:
@@ -5403,26 +5354,13 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         # including no-target/output block_network runs and
         # restrict_reads on mount-incapable hosts — routes through it
         # (mountlessly when the mount tier isn't in play).
-        spawn_eligible = ((use_mount or use_seatbelt or need_unshare)
-                          and (_kwarg_plumb_native
-                               or (not kwargs.get("pass_fds")
-                                   and kwargs.get("input") is None)))
-        # Rootfs fail-closed gate #2 (per-call): the kwarg-compat gate
-        # above routes pass_fds/input= callers to the Landlock-only
-        # subprocess path, which for a rootfs run means executing
-        # against the HOST filesystem. Refuse instead.
+        spawn_eligible = bool(use_mount or use_seatbelt or need_unshare)
         if rootfs is not None and not spawn_eligible:
             from .errors import SandboxSetupError
-            msg_0 = (
-                "sandbox(rootfs=...).run() cannot engage the mount-ns "
-                "spawn backend for this call (pass_fds= / input= are "
-                "not plumbed through the fork-based spawn path) — "
-                "refusing to run against the host filesystem."
-            )
             raise SandboxSetupError(
-                msg_0,
-                "drop pass_fds=/input= (write stdin via stdin=<fd> "
-                "instead) or run without rootfs=.",
+                "sandbox(rootfs=...).run() cannot engage the mount namespace; "
+                "refusing to run against the host filesystem.",
+                "restore the native mount namespace backend before using rootfs=.",
             )
         # Track the audit-degraded reason so the audit-mode degraded
         # diagnostic block (further down) can attribute correctly.
@@ -5564,8 +5502,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                     cmd[0],
                 )
         # Persona fail-closed gate (pre-spawn arm): every route that
-        # abandons the mount-ns spawn path — pass_fds/input= kwarg
-        # compat, the B fallback (cmd[0] outside the bind tree), a
+        # abandons the mount-ns spawn path — the B fallback (cmd[0] outside the bind tree), a
         # speculative-failure-cache hit, or a per-call
         # skip_mount_ns=True — runs the command WITHOUT the
         # fingerprint persona (it only rides run_sandboxed's mount-ns
@@ -5580,8 +5517,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                 _b_fallback_reason
                 or ("per-call skip_mount_ns=True bypasses the "
                     "mount-ns backend" if _skip_mount_ns else
-                    "pass_fds=/input= are not plumbed through the "
-                    "fork-based spawn path")
+                    "the native spawn backend is unavailable")
             )
             msg_0 = (
                 f"sandbox(require_sanitisation=True).run() cannot "
@@ -5592,7 +5528,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             raise SandboxSetupError(
                 msg_0,
                 _b_fallback_instr
-                or "drop pass_fds=/input=/skip_mount_ns= for this "
+                or "restore native mount support or drop skip_mount_ns= for this "
                    "call, or drop require_sanitisation= to accept "
                    "host-real identity surfaces on degrade.",
             )
@@ -5601,8 +5537,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         # per-call skip_mount_ns= refuses at the entry-time check, the
         # B-fallback / speculative-cache routes refuse at the mountless
         # dispatch (with the route's own tool_paths= remedy), and the
-        # pass_fds kwarg-demoted route refuses at the fallback-lane
-        # dispatch — all before any spawn attempt, all naming the
+        # other fallback routes refuse before execution, all naming the
         # override through the same honesty-checked hint.
         # Audit mode (b2/b3) requires the _spawn path because the
         # tracer needs to PTRACE_SEIZE a target the parent forked
@@ -6059,6 +5994,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                 stdin=kwargs.get("stdin"),
                                 stdout=kwargs.get("stdout"),
                                 stderr=kwargs.get("stderr"),
+                                pass_fds=kwargs.get("pass_fds", ()),
                                 max_capture_bytes=_max_capture_bytes,
                                 audit_mode=nonlocal_audit_mode,
                                 audit_run_dir=_audit_run_dir,
@@ -7150,8 +7086,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                 # ---- Mount-ns demotion hardening -------------------
                 # Reaching here with use_mount True means THIS CALL was
                 # demoted from the mount-ns backend to the Landlock-only
-                # subprocess path (pass_fds/input= kwarg compat, the
-                # B-fallback cmd-visibility check, the speculative-
+                # subprocess path (the B-fallback cmd-visibility check, the speculative-
                 # failure cache, an M/X setup status, or a mid-setup
                 # spawn error). Two contracts must survive that:
                 #
@@ -7174,15 +7109,13 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                         from .errors import SandboxSetupError
                         _demote_why = (
                             _mount_ns_degraded or _b_fallback_reason
-                            or "pass_fds=/input= are not plumbed "
-                               "through the fork-based spawn path")
+                            or "the native spawn backend is unavailable")
                         raise SandboxSetupError(
                             "sandbox profile 'strict': this call was "
                             "demoted from the mount-ns backend to the "
                             f"Landlock-only path ({_demote_why}) — "
                             "strict does not degrade silently.",
-                            "drop pass_fds=/input= (write stdin via "
-                            "stdin=<fd> instead), make cmd[0] visible "
+                            "make cmd[0] visible "
                             "in the mount-ns bind tree (tool_paths=), "
                             "or explicitly choose a profile that "
                             "degrades gracefully (e.g. `--sandbox "
@@ -7248,11 +7181,6 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                     _fallback_floor_detail = (
                         "demoted from the mount-ns backend "
                         f"({_mount_ns_degraded or _b_fallback_reason})")
-                elif use_mount and kwargs.get("pass_fds"):
-                    _fallback_floor_detail = (
-                        "demoted from the mount-ns backend (per-call "
-                        "pass_fds= is not plumbed through the "
-                        "fork-based spawn path)")
                 elif (sys.platform == "linux" and not landlock_available
                         and not effectively_disabled):
                     # No demotion happened — the plain lane simply
@@ -7346,8 +7274,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                     from .errors import SandboxSetupError
                     _demote_why = (
                         _mount_ns_degraded or _b_fallback_reason
-                        or "pass_fds= demoted this call from the "
-                           "mount-ns backend")
+                        or "the native spawn backend is unavailable")
                     raise SandboxSetupError(
                         "sandbox: this call was demoted from the "
                         f"mount-ns backend ({_demote_why}) and "

@@ -26,7 +26,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from packages.joern import lifecycle
 from packages.joern import server as server_mod
 from packages.joern.server import (
     JoernServer,
@@ -88,11 +87,6 @@ def _short_graces(monkeypatch):
     """Bound the escalation waits so tests stay fast."""
     monkeypatch.setattr(server_mod, "_GROUP_KILL_GRACE_S", 0.5)
     monkeypatch.setattr(server_mod, "_SHUTDOWN_GRACE_S", 1.0)
-    # The lifecycle kill's own SIGTERM grace: the SIGTERM-immune
-    # stand-in member guarantees that loop always runs to its
-    # deadline, so the production 5s would dominate every
-    # _kill_server test here.
-    monkeypatch.setattr(lifecycle, "_KILL_GRACE_S", 0.5)
 
 
 @pytest.fixture
@@ -289,11 +283,11 @@ class TestRestartReapsBeforeReplacing:
         real = server_mod._ensure_group_dead
 
         def _recording(pgid, *, label="", grace_s=None,
-                       member_anchor=None, corroborated=False):
+                       member_anchor=None, corroborated=False, strict_identity=False):
             calls.append((pgid, label))
             return real(pgid, label=label, grace_s=grace_s,
                         member_anchor=member_anchor,
-                        corroborated=corroborated)
+                        corroborated=corroborated, strict_identity=strict_identity)
 
         monkeypatch.setattr(server_mod, "_ensure_group_dead", _recording)
         monkeypatch.setattr(srv, "start", lambda: None)
@@ -304,118 +298,11 @@ class TestRestartReapsBeforeReplacing:
         )
         assert "restart" in calls[1][1]
 
-    def test_reused_handle_restart_kills_via_lifecycle_state(
-        self, monkeypatch,
-    ):
-        """connect_existing handles own no Popen: stop() has nothing
-        to signal, so restart must address the recorded server
-        through the lifecycle state file."""
-        calls: list[dict] = []
-        monkeypatch.setattr(
-            lifecycle, "kill_recorded_server",
-            lambda port=None, socket_path=None: calls.append(
-                {"port": port, "socket_path": socket_path},
-            ) or True,
-        )
-        srv = JoernServer()
-        srv._port = 54321
-        srv._uds_path = "/nonexistent/raptor-joern-uds-test/sock"
-        monkeypatch.setattr(srv, "start", lambda: None)
-        assert srv.restart() is True
-        assert calls == [{
-            "port": 54321,
-            "socket_path": "/nonexistent/raptor-joern-uds-test/sock",
-        }]
+    def test_endpoint_client_cannot_restart_a_worker_it_does_not_own(self):
+        srv = JoernServer.connect_existing(port=54321, auth_user="fixture", auth_password="fixture")
+        assert srv.restart() is False
 
 
-class TestLifecycleKillServer:
-    def test_kill_server_reaps_surviving_member(self, _reap_all):
-        """The lifecycle grace loop declared victory as soon as the
-        LEADER died, even though the JVM member survived — the whole
-        tree must be dead before the socket dir teardown."""
-        # A leader that dies on SIGTERM (default python) holding a
-        # SIGTERM-ignoring member in its group.
-        leader_src = (
-            "import subprocess, sys, time;"
-            "child = subprocess.Popen([sys.executable, '-c', sys.argv[1]],"
-            " stdout=subprocess.PIPE, text=True);"
-            "child.stdout.readline();"
-            "print(child.pid, flush=True);"
-            "time.sleep(300)"
-        )
-        leader = subprocess.Popen(
-            [sys.executable, "-c", leader_src, _IGNORING_MEMBER_SRC],
-            stdout=subprocess.PIPE,
-            text=True,
-            start_new_session=True,
-        )
-        _reap_all.append(leader.pid)
-        assert leader.stdout is not None
-        member_pid = int(leader.stdout.readline())
-        state = {
-            "pid": leader.pid,
-            "comm": lifecycle._read_comm(leader.pid),
-        }
-        lifecycle._kill_server(state)
-        leader.wait(timeout=10)
-        assert _wait_gone(member_pid), (
-            "group member survived the lifecycle kill"
-        )
-
-    def test_kill_recorded_server_is_identity_gated(self, monkeypatch):
-        killed: list[dict] = []
-
-        def _fake_kill(state):
-            killed.append(state)
-            return True
-
-        monkeypatch.setattr(lifecycle, "_kill_server", _fake_kill)
-        state = {"pid": 1234, "port": 999, "socket_path": "/x/sock"}
-        monkeypatch.setattr(
-            lifecycle, "_read_state", lambda fd: dict(state),
-        )
-
-        class _Fd:
-            def __enter__(self):
-                return 0
-
-            def __exit__(self, *a):
-                return False
-
-        monkeypatch.setattr(lifecycle, "_locked", lambda: _Fd())
-        # No identity: refused.
-        assert lifecycle.kill_recorded_server() is False
-        # Mismatched identity: refused.
-        assert lifecycle.kill_recorded_server(port=1000) is False
-        assert killed == []
-        # Matching port: dispatched.
-        assert lifecycle.kill_recorded_server(port=999) is True
-        # Matching socket path: dispatched.
-        assert lifecycle.kill_recorded_server(
-            socket_path="/x/sock",
-        ) is True
-        assert len(killed) == 2
-
-    def test_kill_recorded_server_reports_comm_gate_refusal(
-        self, monkeypatch,
-    ):
-        """A matched record whose pid the comm gate refuses (reused
-        pid, dead leader) dispatched nothing — the return must say
-        so, not claim a kill."""
-        monkeypatch.setattr(lifecycle, "_kill_server", lambda state: False)
-        monkeypatch.setattr(
-            lifecycle, "_read_state", lambda fd: {"pid": 1234, "port": 999},
-        )
-
-        class _Fd:
-            def __enter__(self):
-                return 0
-
-            def __exit__(self, *a):
-                return False
-
-        monkeypatch.setattr(lifecycle, "_locked", lambda: _Fd())
-        assert lifecycle.kill_recorded_server(port=999) is False
 
 
 class TestPgidAlive:

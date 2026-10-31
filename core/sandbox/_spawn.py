@@ -773,6 +773,12 @@ def _kill_and_reap(pid: int) -> None:
     the child already exited (ProcessLookupError) or was reaped
     elsewhere (ChildProcessError), we just return.
 
+    The caller must be the sole reaper until this function returns,
+    including against other threads and SIGCHLD handlers. WNOWAIT observes
+    ownership; it is not a lock against another waitpid(). Suppressing
+    ESRCH cannot protect against signalling a successfully recycled PID.
+    Production callers own these directly forked children exclusively.
+
     Crucially this also kills the child's PROCESS GROUP, not just the
     direct child PID. Children spawned via ``start_new_session=True``
     become session leaders, and their descendants (think: codeql Java
@@ -791,6 +797,13 @@ def _kill_and_reap(pid: int) -> None:
     silently — by the time the second call fires the first may have
     swept the leader; that's fine.
     """
+    # Only this helper's unreaped direct child authorises numeric signals.
+    # A stale/reaped PID can already name an unrelated process or group.
+    try:
+        os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+    except (ChildProcessError, ProcessLookupError):
+        # Linux normally reports ECHILD; tolerate ESRCH defensively too.
+        return
     pidfd_open = getattr(os, "pidfd_open", None)
     pidfd_send_signal = getattr(signal, "pidfd_send_signal", None)
     # Capture the PGID FIRST — before any signal fires. If the leader
@@ -880,46 +893,24 @@ def _teardown_target(child_pid: int, death_w: int, parent_fds: set,
     its loop, wedged intermediate, pre-exec failures where no
     grandchild exists yet, or an already-reaped child.
 
-    The intermediate's PGID is captured up front for the same
-    PID-reuse rationale documented in ``_kill_and_reap``: when the
-    grace loop reaps the intermediate we still sweep the ORIGINAL
-    process group (descendants that stayed in it), but never
-    re-signal the reaped PID itself.
+    Observe exit without reaping: the zombie pins the numeric PID/PGID
+    until the final sweep. If another owner already reaped it, do not
+    signal cached numbers, which may now belong to unrelated processes.
     """
-    try:
-        pgid = os.getpgid(child_pid)
-    except ProcessLookupError:
-        pgid = None
-    reaped = False
     if death_w in parent_fds:
         close_death_w(death_w)
         parent_fds.discard(death_w)
         deadline = time.monotonic() + grace_s
         while time.monotonic() < deadline:
             try:
-                pid_, _status = os.waitpid(child_pid, os.WNOHANG)
-            except ChildProcessError:
-                reaped = True  # reaped elsewhere — never re-signal the PID
-                break
-            if pid_ != 0:
-                reaped = True
+                status = os.waitid(os.P_PID, child_pid,
+                                   os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            except (ChildProcessError, ProcessLookupError):
+                return
+            if status is not None:
                 break
             time.sleep(0.01)
-    if not reaped:
-        _kill_and_reap(child_pid)
-    elif pgid is not None and pgid != os.getpgrp():
-        # The watcher swept the grandchild and exited on its own;
-        # sweep any descendants that stayed in the intermediate's
-        # original process group (same belt-and-braces killpg
-        # _kill_and_reap would have sent). Same confused-deputy guard
-        # as _kill_and_reap: with the supported start_new_session=
-        # False escape hatch the captured PGID is RAPTOR'S OWN group —
-        # an unconditional killpg here would SIGKILL the orchestrator
-        # on a timeout the target itself provoked.
-        try:
-            os.killpg(pgid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError, OSError):
-            pass
+    _kill_and_reap(child_pid)
 
 
 def _reap_tracer(tracer_pid: int, timeout_s: float = 2.0) -> None:
@@ -1452,6 +1443,33 @@ _POST_EXIT_DRAIN_SECONDS = 0.5
 _P_READY_DEADLINE_S = 15.0
 
 
+def _prepare_exec_fds(pass_fds, status_w):
+    """Preserve only audited caller capabilities and the CLOEXEC status pipe."""
+    if status_w in pass_fds:
+        raise ValueError("caller descriptors overlap the sandbox status pipe")
+    keep = {status_w, *pass_fds}
+    try:
+        opened = [int(name) for name in os.listdir("/proc/self/fd")]
+    except (OSError, ValueError):
+        try:
+            ceiling = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
+        except (ValueError, OSError):
+            ceiling = 1024
+        opened = range(3, min(ceiling, 65536))
+    for descriptor in opened:
+        if descriptor > 2 and descriptor not in keep:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+    # Post-fork: these CLOEXEC changes do not affect the parent fd table.
+    for descriptor in pass_fds:
+        os.set_inheritable(descriptor, True)
+    # Never make status_w inheritable: EOF after the positive setup
+    # marker proves exec succeeded, rather than letting the target spoof it.
+    os.set_inheritable(status_w, False)
+
+
 def run_sandboxed(
     cmd: Sequence[str],
     *,
@@ -1473,6 +1491,7 @@ def run_sandboxed(
     stdin=None,
     stdout=None,
     stderr=None,
+    pass_fds: Sequence[int] = (),
     start_new_session: bool = True,
     audit_mode: bool = False,
     audit_run_dir: str | None = None,
@@ -1583,7 +1602,18 @@ def run_sandboxed(
     F063a/b/c) raise SandboxSetupError after writing the per-run
     degrade marker, instead of running the command without a tracer.
     The raise happens before the fork, so the target never executes.
+
+    pass_fds: audited caller descriptors. Their numbers must remain open
+    and refer to the same resources until this synchronous call returns;
+    callers must not close/replace them concurrently with setup or exec.
     """
+    # Validate before allocating internal pipes: an invalid caller fd must
+    # not accidentally become a valid setup/status descriptor later.
+    pass_fds = tuple(sorted(set(pass_fds)))
+    for descriptor in pass_fds:
+        if not isinstance(descriptor, int) or descriptor < 0:
+            raise ValueError("pass_fds must contain nonnegative descriptors")
+        os.fstat(descriptor)
     if rootfs is not None:
         # Rootfs mode is mount-ns-or-nothing: without the pivot there is
         # no image filesystem to run against — the command would execute
@@ -3392,31 +3422,7 @@ def run_sandboxed(
                                            (nproc_limit, nproc_limit))
                     except (ValueError, OSError):
                         warn_post_fork(b"sandbox: _spawn grandchild RLIMIT_NPROC setrlimit failed -- fork-bomb bound not applied\n")
-                try:
-                    _soft_nofile = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
-                except (ValueError, OSError):
-                    _soft_nofile = 1024
-                _keep_fds = {status_w}
-                # Enumerate the ACTUALLY-open fds instead of assuming
-                # they all sit below the RLIMIT_NOFILE soft limit:
-                # _set_rlimits already LOWERED that limit earlier in
-                # this child, and lowering NOFILE does not invalidate
-                # existing descriptors — a pre-existing inheritable fd
-                # numbered at/above the reduced limit survived the old
-                # range()-based sweep and rode into the exec as an
-                # out-of-policy capability. Fall back to the bounded
-                # range only when /proc isn't listable.
-                try:
-                    _open_fds = [int(_n)
-                                 for _n in os.listdir("/proc/self/fd")]
-                except (OSError, ValueError):
-                    _open_fds = list(range(3, min(_soft_nofile, 65536)))
-                for _fd in _open_fds:
-                    if _fd > 2 and _fd not in _keep_fds:
-                        try:
-                            os.close(_fd)
-                        except OSError:
-                            pass
+                _prepare_exec_fds(pass_fds, status_w)
                 # POSITIVE exec confirmation, the last write before
                 # execvpe: status_w is CLOEXEC, so a successful exec
                 # leaves exactly 'G' + EOF on the pipe. Without it,

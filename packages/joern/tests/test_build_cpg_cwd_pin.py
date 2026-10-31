@@ -66,13 +66,14 @@ def _bare_runner(
     text: bool,
     timeout: int,
     cwd: str | None = None,
+    pass_fds: tuple[int, ...] = (),
 ) -> subprocess.CompletedProcess[str]:
     """bare subprocess.run shape: raises TypeError on the sandbox
     kwargs (target=, output=, ...), so build_cpg's fallback lane
     fires; then actually runs the command like subprocess.run."""
     return subprocess.run(
         cmd, capture_output=capture_output, text=text,
-        timeout=timeout, cwd=cwd,
+        timeout=timeout, cwd=cwd, pass_fds=pass_fds,
     )
 
 

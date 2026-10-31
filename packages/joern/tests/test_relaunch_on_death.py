@@ -163,15 +163,7 @@ class TestReusedHandleQueryability:
     def test_connect_existing_sets_restarting_event(self):
         # __new__ bypasses __init__; without _restarting every query()
         # on a reused server raised AttributeError.
-        from packages.joern import lifecycle
-
-        state = {
-            "pid": 12345, "port": 8888,
-            "auth_user": "raptor", "auth_password": "test-credential",
-        }
-        with patch.object(lifecycle, "_pid_alive", return_value=True), \
-                patch.object(lifecycle, "_health_check", return_value=True):
-            srv = lifecycle._connect_existing(state)
+        srv = JoernServer.connect_existing(port=8888, auth_user="raptor", auth_password="test-credential")
         assert srv is not None
         assert not srv._restarting.is_set()
         assert srv._relaunch_last_attempt is None

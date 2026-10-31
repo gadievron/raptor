@@ -115,7 +115,7 @@ def main() -> int:
         if srv is None:
             print(f"{PROG}: Joern server unavailable; skipping")
             return 0
-        if not srv.import_cpg(cpg.path):
+        if not srv.bind_graph(cpg):
             print(f"{PROG}: CPG import failed; skipping", file=sys.stderr)
             return 0
         enriched = enrich_with_taint_flows(

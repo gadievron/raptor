@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -117,6 +118,7 @@ class TestRowLifecycle:
                 "mb": 2000, "derived": True, "created_at": 0.0}
         ledger.write_text(json.dumps({"version": 1,
                                       "rows": [dead, live]}))
+        ledger.chmod(0o600)
         res = reserve_heap_mb(9000, derived=True, ledger_path=ledger)
         # Only the live 2000 counted: 8000 remained.
         assert res.granted_mb == 8000
@@ -151,13 +153,13 @@ class TestRowLifecycle:
         reserve_heap_mb(1, derived=True, ledger_path=ledger)
         assert all(r["pid"] != proc.pid for r in _rows(ledger))
 
-    def test_corrupt_ledger_treated_as_empty(self, tmp_path, monkeypatch):
+    def test_corrupt_ledger_not_overwritten(self, tmp_path, monkeypatch):
         _set_budget(monkeypatch, 4096)
         ledger = tmp_path / "l.json"
         ledger.write_text("{not json")
         res = reserve_heap_mb(4096, derived=True, ledger_path=ledger)
         assert res.granted_mb == 4096
-        assert len(_rows(ledger)) == 1  # rewritten valid
+        assert ledger.read_text() == "{not json"
 
 
 class TestConcurrentAdmission:
@@ -201,6 +203,7 @@ class TestHostileRowSchema:
              "mb": 6000, "derived": True, "created_at": 0.0},
         ]
         ledger.write_text(json.dumps({"version": 1, "rows": rows}))
+        ledger.chmod(0o600)
         res = reserve_heap_mb(6000, derived=True, ledger_path=ledger)
         # The poisoned row counts as 0, not -1e9: only 4000 remains.
         assert res.granted_mb == 4000
@@ -212,6 +215,7 @@ class TestHostileRowSchema:
         row = {"id": "b", "pid": me, "starttime": _pid_starttime(me),
                "mb": True, "derived": True, "created_at": 0.0}
         ledger.write_text(json.dumps({"version": 1, "rows": [row]}))
+        ledger.chmod(0o600)
         res = reserve_heap_mb(4096, derived=True, ledger_path=ledger)
         assert res.granted_mb == 4096
 
@@ -226,6 +230,7 @@ class TestHostileRowSchema:
         row = {"id": "immortal", "pid": 1, "starttime": None,
                "mb": 9000, "derived": True, "created_at": 0.0}
         ledger.write_text(json.dumps({"version": 1, "rows": [row]}))
+        ledger.chmod(0o600)
         res = reserve_heap_mb(9000, derived=True, ledger_path=ledger)
         assert res.granted_mb == 9000
         assert "immortal" not in {r["id"] for r in _rows(ledger)}
@@ -435,7 +440,7 @@ class TestBuildCpgAdmission:
         _set_budget(monkeypatch, 10000)
         ledger = tmp_path / "build-ledger.json"
         monkeypatch.setattr(heap_ledger, "_LEDGER_PATH", ledger)
-        reserve_heap_mb(7000, derived=True, ledger_path=ledger)
+        reserve_heap_mb(6000, derived=True, ledger_path=ledger)
 
         seen: dict = {}
 
@@ -451,7 +456,8 @@ class TestBuildCpgAdmission:
             heap_mb=6000,
             heap_is_derived=True,
         )
-        assert "-J-Xmx3000m" in seen["cmd"]
+        heap = next(arg for arg in seen["cmd"] if arg.startswith("-J-Xmx"))
+        assert 512 <= int(heap.removeprefix("-J-Xmx").removesuffix("m")) < 3000
         assert seen["rows_during_build"] == 2  # held across the JVM run
         assert len(_rows(ledger)) == 1        # released after
 
@@ -471,14 +477,13 @@ class TestBuildCpgAdmission:
             seen["cmd"] = list(cmd)
             return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-        build_cpg(
-            self._make_target(tmp_path),
-            output_dir=tmp_path / "out",
-            subprocess_runner=fake_runner,
-            heap_mb=6000,
-            heap_is_derived=False,
-        )
-        assert "-J-Xmx6000m" in seen["cmd"]
+        with pytest.raises(OSError, match="capacity"):
+            build_cpg(
+                self._make_target(tmp_path), output_dir=tmp_path / "out",
+                subprocess_runner=fake_runner, heap_mb=6000, heap_is_derived=False,
+            )
+        assert not seen, "an explicit heap must not bypass admission or be silently reduced"
+
 
 
 class TestLedgerPathResolution:
@@ -545,3 +550,75 @@ class TestLedgerPathResolution:
             assert not fakehome.exists()
         finally:
             res.release()
+
+
+def test_darwin_birth_uses_both_kernel_time_fields(monkeypatch):
+    import ctypes
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    def info(pid, flavor, argument, pointer, size):
+        assert flavor == 3 and size == 136
+        output = ctypes.cast(pointer, ctypes.POINTER(heap_ledger._DarwinProcessInfo)).contents
+        output.identifiers[3] = pid
+        output.seconds, output.microseconds = 1234, 987654
+        return size
+    monkeypatch.setattr(heap_ledger.ctypes, "CDLL", lambda *a, **kw: SimpleNamespace(proc_pidinfo=Mock(side_effect=info)))
+    assert heap_ledger._darwin_starttime(321) == 1234987654
+
+
+def test_strict_admission_never_overwrites_corrupt_ledger(tmp_path, monkeypatch):
+    _set_budget(monkeypatch, 10000)
+    ledger = tmp_path / "ledger.json"
+    ledger.write_text("corrupt")
+    ledger.chmod(0o600)
+    with pytest.raises(OSError, match="verified"):
+        reserve_heap_mb(512, derived=True, require_capacity=True, ledger_path=ledger)
+    assert ledger.read_text() == "corrupt"
+
+
+def test_parse_admission_charges_driver_and_frontend(tmp_path, monkeypatch):
+    _set_budget(monkeypatch, 10000)
+    ledger = tmp_path / "ledger.json"
+    with heap_admission(2000, derived=False, require_capacity=True,
+                        simultaneous_jvms=2, ledger_path=ledger) as heap:
+        assert heap == 2000
+        charge = sum(row["mb"] for row in _rows(ledger))
+        assert charge > 2 * heap
+    assert _rows(ledger) == []
+
+
+def test_kernel_lifetime_follows_child_after_parent_release(tmp_path, monkeypatch):
+    from packages.joern import resource_lifetime
+    _set_budget(monkeypatch, 10000)
+    ledger = tmp_path / "ledger.json"
+    reservation = reserve_heap_mb(2000, derived=False, ledger_path=ledger,
+                                  require_capacity=True)
+    process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
+                               pass_fds=reservation.pass_fds)
+    try:
+        rows = _rows(ledger)
+        rows[0]["pid_namespace"] = -1  # another namespace must not need PID lookup
+        ledger.write_text(json.dumps({"rows": rows}))
+        ledger.chmod(0o600)
+        reservation.release()
+        assert resource_lifetime.held(ledger, reservation.row_id)
+        assert len(_rows(ledger)) == 1
+        with pytest.raises(OSError, match="capacity"):
+            reserve_heap_mb(6000, derived=False, ledger_path=ledger, require_capacity=True)
+    finally:
+        process.kill()
+        process.wait(timeout=5)
+        reservation.release()
+    assert not resource_lifetime.held(ledger, reservation.row_id)
+    assert _rows(ledger) == []
+
+
+def test_lifetime_directory_symlink_cannot_receive_files(tmp_path, monkeypatch):
+    _set_budget(monkeypatch, 10000)
+    ledger = tmp_path / "ledger.json"
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    ledger.with_name(ledger.name + ".leases").symlink_to(victim, target_is_directory=True)
+    with pytest.raises(OSError):
+        reserve_heap_mb(512, derived=False, ledger_path=ledger, require_capacity=True)
+    assert not list(victim.iterdir())

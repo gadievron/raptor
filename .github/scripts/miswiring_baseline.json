@@ -1,6 +1,9 @@
 {
  "_comment": "Accepted miswiring-detector findings. Keys are class:kind:file:symbol (no line numbers). Add an entry ONLY with a note explaining why the finding is accepted; prefer fixing. check_miswiring.py fails CI on any finding not listed here and warns on stale entries.",
  "entries": {
+  "artifacts:orphan_reader::INSTALL_RECEIPT.json": {
+   "note": "External input produced by Homebrew when installing a formula. Joern prereqs reads the bounded, regular, non-symlink receipt from the verified keg to resolve its stable package version and declared OpenJDK dependency; RAPTOR must not write or alter Homebrew installation metadata."
+  },
   "artifacts:orphan_reader::*-metadata.json": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },

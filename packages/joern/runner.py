@@ -10,6 +10,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import signal
@@ -17,6 +18,7 @@ import stat
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -30,7 +32,7 @@ from core.analysis._joern_lines import (
 )
 from core.atomic_fs.fs_lock import artifact_lock
 
-from .heap_ledger import heap_admission
+from .heap_ledger import heap_admission, reservation_fds, reservation_paths
 from .models import FlowStep, JoernCPG, JoernMethodSummary, JoernResult, TaintFlow
 from .prereqs import _joern_parse_path, _joern_path, joern_tool_paths
 from .tunables import sandbox_cpu_limits
@@ -215,9 +217,14 @@ def _default_sandbox_runner():
             # twin already uses the sanitised env.
             try:
                 from core.config import RaptorConfig
-                kwargs.setdefault("env", RaptorConfig.get_safe_env())
+                kwargs.setdefault("env", RaptorConfig.strip_target_exec_markers(RaptorConfig.get_safe_env()))
             except ImportError:
                 pass
+            output = kwargs.pop("output", None)
+            if output is not None:
+                kwargs.setdefault("cwd", output)
+            for key in ("target", "block_network", "tool_paths", "limits", "readable_paths"):
+                kwargs.pop(key, None)
             return subprocess.run(cmd, **kwargs)
 
         _unsandboxed_run._raptor_unsandboxed = True
@@ -244,29 +251,16 @@ def _drain_stream(stream, chunks: list[str]) -> None:
         pass
 
 
-def _kill_build_group(proc: subprocess.Popen) -> None:
-    """SIGKILL the joern-parse process GROUP, not just the leader.
-
-    joern-parse may be a shell wrapper that spawns the JVM without
-    exec (the shape ``JoernServer.stop()`` documents and defends): a
-    leader-only ``proc.kill()`` orphaned the wrapper-spawned JVM,
-    which kept parsing — and holding memory — after the stall/timeout
-    verdict. Only ``killpg`` when the pid still leads its own group
-    (the build Popen used ``start_new_session=True``; anything else
-    means reuse or a mock) and the group is not the caller's own —
-    mirroring the server's ``_signal_group``.
-    """
-    try:
-        pid = proc.pid
-        if pid != os.getpgid(pid) or pid == os.getpgrp():
-            raise ProcessLookupError
-        os.killpg(pid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError, OSError, TypeError,
-            AttributeError):
-        # Mock/handle shapes without a real leader pid keep the
-        # leader-only kill.
-        with contextlib.suppress(OSError):
-            proc.kill()
+def _kill_build_group(proc: subprocess.Popen) -> bool:
+    """Signal only an owned, unreaped parser group; retry a busy reap lock."""
+    from .server import _POPEN_TYPE, _signal_owned_group
+    if isinstance(proc, _POPEN_TYPE):
+        return _signal_owned_group(proc, signal.SIGKILL)
+    # Injected test handles have no kernel group identity to address.
+    with contextlib.suppress(OSError):
+        proc.kill()
+        return True
+    return False
 
 
 class _StallMonitor:
@@ -351,9 +345,9 @@ class _StallMonitor:
                     "(no progress for %.1fs > %.1fs threshold)",
                     self._total_files, elapsed, threshold,
                 )
-                self._killed = True
-                _kill_build_group(self._proc)
-                return
+                if _kill_build_group(self._proc):
+                    self._killed = True
+                    return
 
     def _calibrate(self) -> None:
         if len(self._file_times) < 2:
@@ -685,7 +679,7 @@ def build_cpg(
     Returns a JoernCPG handle. The CPG is written to output_dir
     (default: tempdir) as a binary file. ``heap_mb`` sets the JVM
     ``-Xms``/``-Xmx`` via the launcher's ``-J`` passthrough, matching
-    JoernServer's heap flags; ``None`` keeps the JVM default.
+    the query worker's heap flags; ``None`` resolves central tuning defaults.
 
     ``heap_is_derived``: True when ``heap_mb`` came from the tuning
     derivation rather than an operator. The parse JVM's heap is
@@ -705,7 +699,16 @@ def build_cpg(
     ``--exclude-regex`` so the graph's coverage matches the content
     key's file set exactly (key/analysis parity).
     """
-    with heap_admission(heap_mb, derived=heap_is_derived) as granted_mb:
+    if heap_mb is None:
+        from .tunables import JoernTunables
+        default = JoernTunables.from_tuning()
+        heap_mb, heap_is_derived = default.heap_mb, default.heap_is_derived
+    if heap_mb is None:
+        raise RuntimeError("Joern parser requires a bounded heap")
+    # joern-parse keeps its driver JVM while a frontend JVM uses the
+    # forwarded Xmx. Both may reach that ceiling concurrently.
+    with heap_admission(heap_mb, derived=heap_is_derived, require_capacity=True,
+                        simultaneous_jvms=2) as granted_mb:
         return _build_cpg_admitted(
             target,
             languages=languages,
@@ -746,7 +749,8 @@ def _build_cpg_admitted(
         # /tmp forever.
         from core.run import tmp_reaper
         tmp_reaper.register_dir_prefix("raptor-joern-cpg-")
-        output_dir = Path(tempfile.mkdtemp(prefix="raptor-joern-cpg-"))
+        from .client import runtime_base
+        output_dir = Path(tempfile.mkdtemp(prefix="raptor-joern-cpg-", dir=runtime_base()))
     output_dir.mkdir(parents=True, exist_ok=True)
     # Absolute from here on: output_dir feeds joern-parse argv
     # (--output, -J-Djava.io.tmpdir) AND is the cwd pin for the bare
@@ -811,6 +815,8 @@ def _build_cpg_admitted(
     for d in sorted(_resolved_exclude_dirs(exclude_dirs)):
         cmd.extend(["--exclude", str(d)])
 
+    cmd = _jvm_scratch_command(cmd, output_dir)
+
     runner = subprocess_runner or _default_sandbox_runner()
 
     start = time.monotonic()
@@ -836,6 +842,8 @@ def _build_cpg_admitted(
             capture_output=True,
             text=True,
             timeout=timeout,
+            pass_fds=reservation_fds(),
+            readable_paths=reservation_paths(),
             target=str(target),
             output=str(output_dir),
             block_network=True,
@@ -847,7 +855,10 @@ def _build_cpg_admitted(
             # ~1 h inside a 4 h derived wall).
             limits=sandbox_cpu_limits(timeout),
         )
-    except TypeError:
+    except TypeError as exc:
+        if subprocess_runner is None or "unexpected keyword argument" not in str(exc):
+            logger.error("joern-parse sandbox rejected the call: %s", exc)
+            return _failed_build_cpg(cpg_path, target)
         try:
             # Runner without the sandbox kwargs (injected stubs, bare
             # subprocess.run). Still pass an explicit cwd: a bare
@@ -863,6 +874,7 @@ def _build_cpg_admitted(
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                pass_fds=reservation_fds(),
                 cwd=str(output_dir),
             )
         except subprocess.TimeoutExpired:
@@ -902,6 +914,7 @@ def _build_cpg_admitted(
         target=target,
         languages=languages or detected_langs,
         build_time_ms=elapsed,
+        build_failed=proc.returncode != 0,
     )
 
 
@@ -922,7 +935,7 @@ def _build_cpg_with_stall_monitor(
     """
     try:
         from core.config import RaptorConfig
-        safe_env = RaptorConfig.get_safe_env()
+        safe_env = RaptorConfig.strip_target_exec_markers(RaptorConfig.get_safe_env())
     except ImportError:
         safe_env = None
 
@@ -934,6 +947,7 @@ def _build_cpg_with_stall_monitor(
             stderr=subprocess.PIPE,
             text=True,
             env=safe_env,
+            pass_fds=reservation_fds(),
             # Raw Popen inherits the CALLER's cwd — pin it to the
             # build's own output dir (cpg_path's parent, created by
             # build_cpg before cmd assembly) so any cwd-relative
@@ -1032,6 +1046,23 @@ def _build_cpg_with_stall_monitor(
     )
 
 
+def _jvm_scratch_command(command: list, directory: Path) -> list:
+    # Set the properties AFTER the generic tool environment scrub so nested
+    # JVMs inherit them too. No shell evaluates these assignment arguments.
+    from .server import _java_option_value
+    from .prereqs import _java_path, _jdk_home
+    value = _java_option_value(str(directory))
+    java = _java_path()
+    if sys.platform == "darwin" and java is None:
+        raise RuntimeError("Joern requires a real JDK on macOS; correct JAVA_HOME or PATH")
+    runtime = [f"JAVACMD={java}"] if java else []
+    home = _jdk_home(java) if java else None
+    if home is not None:
+        runtime.append(f"JAVA_HOME={home}")
+    return ["/usr/bin/env", *runtime, f"_JAVA_OPTIONS=-Djava.io.tmpdir={value} -Duser.home={value}",
+            f"TMPDIR={directory}", f"HOME={directory}", *command]
+
+
 def run_query(
     cpg: JoernCPG,
     query: str,
@@ -1040,6 +1071,33 @@ def run_query(
     subprocess_runner=None,
     validate: bool = True,
     substitutions: dict[str, str] | None = None,
+    heap_mb: int | None = None,
+    heap_is_derived: bool = False,
+) -> JoernResult:
+    if heap_mb is None:
+        from .tunables import JoernTunables
+        default = JoernTunables.from_tuning()
+        heap_mb, heap_is_derived = default.heap_mb, default.heap_is_derived
+    if heap_mb is None:
+        return JoernResult(query=query, errors=["Joern query requires a bounded heap"])
+    try:
+        with heap_admission(heap_mb, derived=heap_is_derived, require_capacity=True) as granted:
+            return _run_query_admitted(cpg, query, timeout=timeout,
+                subprocess_runner=subprocess_runner, validate=validate,
+                substitutions=substitutions, heap_mb=granted)
+    except OSError as error:
+        return JoernResult(query=query, errors=[f"Joern query admission failed: {error}"])
+
+
+def _run_query_admitted(
+    cpg: JoernCPG,
+    query: str,
+    *,
+    timeout: int = 300,
+    subprocess_runner=None,
+    validate: bool = True,
+    substitutions: dict[str, str] | None = None,
+    heap_mb: int | None = None,
 ) -> JoernResult:
     """Execute a Joern/CPGQL query against a built CPG.
 
@@ -1048,6 +1106,8 @@ def run_query(
     substitutions: template-slot markers (e.g. ``__SINK_NAMES__``)
     mapped to replacement text, applied to the script body.
     """
+    if cpg.build_failed:
+        return JoernResult(query=query, errors=["CPG build failed; graph cannot provide evidence"])
     if not cpg.exists():
         return JoernResult(
             query=query,
@@ -1085,21 +1145,26 @@ def run_query(
         if err:
             return JoernResult(query=query, errors=[err])
 
-    # Per-query scratch dir INSIDE the CPG dir, used as the joern
+    # Per-query scratch outside the immutable cache, used as the joern
     # process cwd: importCpg copies the CPG into a `workspace/` under
     # the cwd, and the CPG dir is a cache slot SHARED across sessions
     # (build_cpg_cached) — two JVMs racing on one `<slot>/workspace/`
     # corrupt each other's imports. A private cwd per query makes the
     # workspace copy collision-free, and the whole dir is removed
-    # after the run. Kept inside the CPG dir so the sandbox write
-    # grant (`output=` below) covers it.
+    # after the run. The cache remains a read-only input.
     try:
-        query_dir = Path(tempfile.mkdtemp(
-            prefix="raptor-query-", dir=cpg.path.parent,
-        ))
+        from .client import runtime_base
+        query_dir = Path(tempfile.mkdtemp(prefix="raptor-query-", dir=runtime_base()))
     except OSError as e:
         return JoernResult(
             query=query, errors=[f"cannot create query scratch dir: {e}"])
+
+    from .artifacts import FrozenGraph
+    try:
+        frozen = FrozenGraph.copy(cpg.path, directory=query_dir, expected=cpg.content_digest)
+    except (OSError, ValueError) as error:
+        shutil.rmtree(query_dir, ignore_errors=True)
+        return JoernResult(query=query, errors=[f"cannot pin query graph: {error}"])
 
     # joern's CLI flag surface drifts across releases: `--script-content`
     # does not exist in 4.x, and `--import` there means "compile .sc onto
@@ -1107,7 +1172,7 @@ def run_query(
     # versions is `--script` plus the importCpg predef, so wrap every
     # query in a temporary script that loads the CPG itself.
     wrapper = (
-        f'importCpg("{_escape_scala_string(str(cpg.path))}")\n'
+        f'importCpg("{_escape_scala_string(str(frozen.path))}")\n'
         f"{script_body}\n"
     )
     wrapper_path = query_dir / "query.sc"
@@ -1119,32 +1184,32 @@ def run_query(
 
     # Point the driver JVM's java.io.tmpdir at the per-query dir (a
     # writable surface inside the sandbox grant, removed below).
-    # This does NOT capture the script-wrapping scratch
-    # (scala-repl-pp*/ and wrapped-script*.sc land in /tmp from a
-    # nested JVM the argv flag never reaches; only an _JAVA_OPTIONS
-    # env override moves them, and the sandboxed runner owns its env)
-    # — those strays are reaped by core.run.tmp_reaper instead.
+    # The environment shim below also reaches nested frontend JVMs,
+    # which do not inherit the driver's command-line system properties.
     cmd = [
         joern,
+        f"-J-Xmx{heap_mb}m",
         f"-J-Djava.io.tmpdir={query_dir}",
         "--script", str(wrapper_path),
     ]
+    cmd = _jvm_scratch_command(cmd, query_dir)
 
     runner = subprocess_runner or _default_sandbox_runner()
 
     start = time.monotonic()
     try:
         try:
-            # cwd = the per-query dir; the output grant stays the CPG
-            # dir (its parent) so both the scratch cwd and the CPG
-            # itself are writable inside the sandbox.
+            # Only per-query scratch is writable. The cached graph is
+            # separately declared as a read-only tool input.
             proc = runner(
                 cmd,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                pass_fds=reservation_fds(),
+                readable_paths=reservation_paths(),
                 target=str(cpg.target),
-                output=str(cpg.path.parent),
+                output=str(query_dir),
                 cwd=str(query_dir),
                 block_network=True,
                 tool_paths=joern_tool_paths(),
@@ -1154,7 +1219,9 @@ def run_query(
                 # stays the binding limit.
                 limits=sandbox_cpu_limits(timeout),
             )
-        except TypeError:
+        except TypeError as exc:
+            if subprocess_runner is None or "unexpected keyword argument" not in str(exc):
+                return JoernResult(query=query, errors=[f"sandbox rejected query: {exc}"])
             # Runner without the sandbox kwargs (injected stubs,
             # bare subprocess.run). Still pass an explicit cwd:
             # importCpg copies the CPG into a `workspace/` under the
@@ -1167,6 +1234,7 @@ def run_query(
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                pass_fds=reservation_fds(),
                 cwd=str(query_dir),
             )
     except subprocess.TimeoutExpired:
@@ -1182,6 +1250,9 @@ def run_query(
     elapsed = int((time.monotonic() - start) * 1000)
 
     flows, errors = _parse_output(proc.stdout or "")
+    from .server import _has_scala_error
+    if _has_scala_error((proc.stdout or "") + "\n" + (proc.stderr or "")):
+        errors.append("Joern query reported a Scala compilation or runtime error")
     if proc.stderr:
         stderr_errors = _parse_errors(proc.stderr)
         errors.extend(stderr_errors)
@@ -1701,7 +1772,9 @@ def cpg_cache_slot_name(scope_exclude_dirs=(), *, target=None) -> str:
     """
     norm = _normalised_scope_excludes(scope_exclude_dirs)
     if norm:
-        digest = hashlib.sha256("\n".join(norm).encode()).hexdigest()[:12]
+        from core.json import dumps_canonical
+        key = dumps_canonical([str(Path(target).resolve()) if target else None, norm])
+        digest = hashlib.sha256(key.encode()).hexdigest()[:12]
         return f"{_CPG_SLOT_SCOPED_PREFIX}{digest}"
     if target is None:
         return _CPG_SLOT_UNSCOPED
@@ -1801,6 +1874,7 @@ def _write_cpg_manifest(
     method_count: int | None = None,
     exclude_dirs=(),
     scope_exclude_dirs=(),
+    requested_languages=None,
 ) -> None:
     """Write manifest.json alongside the cached CPG."""
     manifest = {
@@ -1821,6 +1895,11 @@ def _write_cpg_manifest(
         "scope_exclude_dirs": _normalised_scope_excludes(scope_exclude_dirs),
     }
     manifest_path = cpg_dir / "manifest.json"
+    from .artifacts import graph_digest, toolchain_identity
+    manifest["schema"] = 2
+    manifest["toolchain"] = toolchain_identity()
+    manifest["requested_languages"] = sorted(requested_languages or ())
+    manifest["graph_digest"] = graph_digest(cpg_dir / "cpg.bin")
     from core.json import save_json
     save_json(manifest_path, manifest)
 
@@ -1842,6 +1921,7 @@ def _load_cached_cpg_slot(
     current_content_hash: str | None = None,
     exclude_dirs=(),
     scope_exclude_dirs=(),
+    expected_languages=None,
 ) -> JoernCPG | None:
     """Validate ONE slot directory against the consumer's contract.
 
@@ -1885,6 +1965,14 @@ def _load_cached_cpg_slot(
 
     manifest = _read_cpg_manifest(cpg_dir)
     if manifest is None:
+        return None
+    from .artifacts import toolchain_identity
+    if manifest.get("schema") != 2 or manifest.get("toolchain") != toolchain_identity():
+        return None
+    if expected_languages is not None and manifest.get("requested_languages") != sorted(expected_languages):
+        return None
+    graph_hash = manifest.get("graph_digest")
+    if not isinstance(graph_hash, str) or re.fullmatch(r"[0-9a-f]{64}", graph_hash) is None:
         return None
 
     if not _same_target_path(manifest.get("target_path"), target):
@@ -2008,6 +2096,7 @@ def _load_cached_cpg_slot(
         target=target,
         languages=langs,
         build_time_ms=manifest.get("build_time_ms", 0),
+        content_digest=graph_hash,
     )
 
 
@@ -2029,6 +2118,7 @@ def load_cached_cpg(
     current_content_hash: str | None = None,
     exclude_dirs=(),
     scope_exclude_dirs=(),
+    expected_languages=None,
 ) -> JoernCPG | None:
     """Return a cached CPG if fresh, None if stale or missing.
 
@@ -2049,6 +2139,7 @@ def load_cached_cpg(
         current_content_hash=current_content_hash,
         exclude_dirs=exclude_dirs,
         scope_exclude_dirs=scope_exclude_dirs,
+        expected_languages=expected_languages,
     )
     if got is None and slot.startswith(_CPG_SLOT_TARGET_PREFIX):
         got = _load_cached_cpg_slot(
@@ -2057,7 +2148,18 @@ def load_cached_cpg(
             current_content_hash=current_content_hash,
             exclude_dirs=exclude_dirs,
             scope_exclude_dirs=scope_exclude_dirs,
+            expected_languages=expected_languages,
         )
+    if got is None and scope_exclude_dirs:
+        legacy = cpg_cache_slot_name(scope_exclude_dirs)
+        if legacy != slot:
+            got = _load_cached_cpg_slot(
+                target, cache_dir / legacy,
+                expected_frontend_fingerprint=expected_frontend_fingerprint,
+                current_content_hash=current_content_hash,
+                exclude_dirs=exclude_dirs, scope_exclude_dirs=scope_exclude_dirs,
+                expected_languages=expected_languages,
+            )
     return got
 
 
@@ -2097,19 +2199,15 @@ def build_cpg_cached(
     coverage, so they must never share a cache slot with a
     differently-scoped build.
     """
-    frontend_args = _EMPTY_FRONTEND_ARGS
-    if languages and "c" in languages:
-        frontend_args = discover_frontend_args(Path(target))
+    # Auto-detected C frontends need the same compile-command contract as
+    # explicitly selected ones. Discovery is harmless when no database exists.
+    frontend_args = discover_frontend_args(Path(target))
 
     combined_excludes = tuple(exclude_dirs or ()) + tuple(
         scope_exclude_dirs or ())
 
-    # Hash the tree ONCE, before the (potentially minutes-long) build.
-    # The manifest then records the tree state the CPG was built FROM;
-    # re-walking after the build used to pick up transient files
-    # written while it ran, producing a recorded hash that never
-    # matched the at-rest tree — a guaranteed rebuild at the next
-    # consumer.
+    # Initial lookup identity. Refresh after exclusive admission (another
+    # build may hold the slot for minutes), then verify after parsing.
     content_hash = _target_content_hash(
         target, exclude_dirs=combined_excludes)
 
@@ -2118,6 +2216,7 @@ def build_cpg_cached(
         expected_frontend_fingerprint=frontend_args.fingerprint(),
         current_content_hash=content_hash,
         scope_exclude_dirs=scope_exclude_dirs,
+        expected_languages=languages or set(),
     )
     if cached is not None:
         return cached
@@ -2131,10 +2230,14 @@ def build_cpg_cached(
     # DIRECTLY into cpg_dir concurrently — interleaved c2cpg output
     # streams into one cpg.bin (corruption), and the loser's manifest
     # described the winner's bytes. The lock serialises the
-    # miss→build→admit critical section per slot; artifact_lock
-    # degrades loudly (never silently unlocked) when flock is
-    # unavailable.
-    with artifact_lock(cpg_dir / "cpg.bin", subject="joern CPG cache slot"):
+    # miss→build→admit critical section per slot. Refuse the build if
+    # exclusion is unavailable: even a loud unlocked fallback would
+    # allow competing publishers to replace a graph under its readers.
+    admission_started = time.monotonic()
+    with artifact_lock(cpg_dir / "cpg.bin", subject="joern CPG cache slot",
+                       required=True, deadline_s=timeout):
+        content_hash = _target_content_hash(target, exclude_dirs=combined_excludes)
+        frontend_args = discover_frontend_args(Path(target))
         # Double-checked reload: a sibling holding the lock may have
         # completed this exact build while we queued — a fresh cache
         # hit here saves a full rebuild.
@@ -2143,9 +2246,15 @@ def build_cpg_cached(
             expected_frontend_fingerprint=frontend_args.fingerprint(),
             current_content_hash=content_hash,
             scope_exclude_dirs=scope_exclude_dirs,
+            expected_languages=languages or set(),
         )
         if cached is not None:
             return cached
+
+        remaining = timeout - (time.monotonic() - admission_started)
+        if remaining <= 0:
+            raise TimeoutError("Joern cache admission deadline expired")
+        parse_timeout = max(1, math.ceil(remaining))
 
         # Build into private scratch on the SAME filesystem, then
         # promote atomically. Readers (load_cached_cpg holds no lock)
@@ -2158,7 +2267,7 @@ def build_cpg_cached(
                 target,
                 languages=languages,
                 output_dir=build_dir,
-                timeout=timeout,
+                timeout=parse_timeout,
                 subprocess_runner=subprocess_runner,
                 on_progress=on_progress,
                 heap_mb=heap_mb,
@@ -2179,6 +2288,10 @@ def build_cpg_cached(
             # rebuild-per-run, never to serving an unverifiable
             # graph).
             if not cpg.exists() or cpg.build_failed:
+                return cpg
+            if _target_content_hash(target, exclude_dirs=combined_excludes) != content_hash:
+                logger.warning("source changed during CPG build — refusing cache publication")
+                cpg.build_failed = True
                 return cpg
             method_count = cpg_method_count(cpg.path)
             if method_count is None:
@@ -2209,6 +2322,7 @@ def build_cpg_cached(
                 method_count=method_count,
                 exclude_dirs=exclude_dirs,
                 scope_exclude_dirs=scope_exclude_dirs,
+                requested_languages=languages,
             )
             _prune_scoped_cpg_slots(cache_dir, active_slot=cpg_dir.name)
             return JoernCPG(
@@ -2216,6 +2330,7 @@ def build_cpg_cached(
                 target=cpg.target,
                 languages=cpg.languages,
                 build_time_ms=cpg.build_time_ms,
+                content_digest=_read_cpg_manifest(cpg_dir)["graph_digest"],
             )
         finally:
             if not keep:

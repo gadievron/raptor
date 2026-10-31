@@ -215,7 +215,7 @@ class TestAcquireWarmServer:
         assert acquire_warm_server(tmp_path, tmp_path, tmp_path / "x") is None
 
     def test_starts_server_on_cache_hit(self, monkeypatch, tmp_path):
-        import packages.joern.server as server_mod
+        import packages.joern.client as client_mod
         from packages.joern import prereqs, runner
 
         class FakeCPG:
@@ -228,8 +228,8 @@ class TestAcquireWarmServer:
             def start(self):
                 FakeServer.started = True
 
-            def import_cpg(self, path):
-                FakeServer.imported = path
+            def bind_graph(self, cpg):
+                FakeServer.imported = cpg.path
                 return True
 
             def stop(self):
@@ -240,7 +240,7 @@ class TestAcquireWarmServer:
             runner, "load_cached_cpg",
             lambda target, cache: FakeCPG() if cache == tmp_path else None,
         )
-        monkeypatch.setattr(server_mod, "JoernServer", FakeServer)
+        monkeypatch.setattr(client_mod.GraphClient, "from_tunables", lambda *a, **kw: FakeServer())
         server = acquire_warm_server(tmp_path / "repo", tmp_path)
         assert isinstance(server, FakeServer)
         assert FakeServer.started

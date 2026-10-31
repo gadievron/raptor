@@ -276,8 +276,7 @@ def test_required_sanitisation_accepts_input_kwarg(
     """input= no longer demotes (it converts to a stdin spool on the
     fork backend), so a require_sanitisation caller feeding witness
     bytes RUNS — with the persona applied — instead of refusing.
-    pass_fds remains the demoter that must still refuse (covered by
-    the pass_fds test below alongside the speculative-cache one)."""
+    Audited descriptor passing also preserves the native backend."""
     ctx = _required_sanitisation_ctx(monkeypatch, tmp_path)
     with ctx.sandbox(target=str(tmp_path), output=str(tmp_path),
                      sanitise_host_fingerprint=True,

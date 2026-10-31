@@ -86,6 +86,8 @@ class TestForeignUidRefusal:
         artifact = tmp_path / "store.json"
         lock = tmp_path / "store.json.lock"
         lock.write_bytes(b"")
+        # This process-wide identity patch requires no concurrent identity
+        # readers in this test; monkeypatch restores it before the next test.
         # Simulate the foreign owner: the file's real uid is ours, so
         # shift what the checker believes OUR euid is.
         real_euid = os.geteuid()
@@ -500,3 +502,28 @@ class TestStampRewrite:
         finally:
             os.close(fd)
         assert lock.read_bytes() == b"%d\n" % os.getpid()
+
+
+def test_required_operation_can_wait_beyond_default_budget(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from core.atomic_fs import fs_lock
+    monkeypatch.setattr(fs_lock, "_ACQUIRE_DEADLINE_S", 0.001)
+    monkeypatch.setattr(fs_lock, "_ACQUIRE_POLL_S", 0.001)
+    artifact = tmp_path / "graph.bin"
+    attempted = threading.Event()
+    finished = threading.Event()
+
+    def contender():
+        attempted.set()
+        try:
+            with fs_lock.artifact_lock(artifact, required=True, deadline_s=2):
+                return "acquired"
+        finally:
+            finished.set()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with fs_lock.artifact_lock(artifact, required=True):
+            waiting = executor.submit(contender)
+            assert attempted.wait(1)
+            assert not finished.wait(0.03), "operation used the shorter generic deadline"
+        assert waiting.result(timeout=2) == "acquired"

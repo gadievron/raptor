@@ -192,7 +192,7 @@ class TestBuildCpgCachedScoped:
             target, cache, subprocess_runner=fake_runner,
             scope_exclude_dirs=scope,
         )
-        slot = cpg_cache_slot_name(scope)
+        slot = cpg_cache_slot_name(scope, target=target)
         assert result.path.parent.name == slot
         assert str(skip.resolve()) in seen["cmd"]  # --exclude parity
         manifest = json.loads((cache / slot / "manifest.json").read_text())

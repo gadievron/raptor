@@ -2776,11 +2776,6 @@
     "count": 18,
     "kind": "literal"
   },
-  "packages/joern/lifecycle.py::new_state": {
-    "count": 11,
-    "kind": "literal",
-    "note": "lifecycle state-file field names (pid/comm/port/heap/credential/socket_path keys of joern-server.json), not name vocabulary \u2014 same class as the to_dict field-name entries"
-  },
   "packages/joern/runner.py::_DANGEROUS_QUERY_PATTERNS": {
     "count": 19,
     "kind": "alternation"

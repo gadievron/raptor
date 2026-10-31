@@ -211,7 +211,7 @@ class TestSessionUsesResolvedTimeout:
                 tunables=tunables,
                 register_reach_audit=False,
             ) as srv:
-                assert srv is server
+                assert srv is None
         assert captured.get("timeout") == 300
 
 

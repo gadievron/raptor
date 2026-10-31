@@ -1062,17 +1062,11 @@ def test_no_mount_ns_host_refuses_untrusted_run(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="linux-only waiver")
-def test_waived_pass_fds_demotion_warns_per_call(
+def test_pass_fds_preserves_fresh_procfs_without_waiver(
         tmp_path, monkeypatch, caplog):
-    """A waived untrusted call carrying pass_fds= lands on the
-    subprocess fallback even on a fully capable host — the consented-
-    degrade branch of the dispatch floor check must warn on that
-    per-call shape, naming the pass_fds demotion and the HOST process
-    table exposure. Without the waiver the same shape is refused (the
-    refusal path owns the messaging) with the demotion named."""
+    """Inherited descriptors must not route untrusted code onto host procfs."""
     import logging as _logging
     from core.sandbox import context as _ctx
-    from core.sandbox.errors import SandboxFloorError, SandboxSetupError
     if not (_ctx.check_net_available() and _ctx.check_mount_available()):
         pytest.skip("mount-capable host required for the pass_fds shape")
     _r, _w = os.pipe()
@@ -1084,20 +1078,15 @@ def test_waived_pass_fds_demotion_warns_per_call(
                 _ctx.run_untrusted(
                     ["true"], target=str(tmp_path), output=str(tmp_path),
                     timeout=60, pass_fds=[_r])
-            except SandboxSetupError as e:
-                pytest.skip(f"fallback lane unavailable: {e}")
-        assert any("pass_fds" in rec.getMessage()
-                   and "HOST process table" in rec.getMessage()
-                   for rec in caplog.records), caplog.text
-
-        monkeypatch.delenv("RAPTOR_ALLOW_DEGRADED_UNTRUSTED",
-                           raising=False)
-        with pytest.raises(SandboxFloorError) as excinfo:
-            _ctx.run_untrusted(
-                ["true"], target=str(tmp_path), output=str(tmp_path),
-                timeout=60, pass_fds=[_r])
-        assert "pass_fds" in str(excinfo.value)
-        assert "RAPTOR_ALLOW_DEGRADED_UNTRUSTED" in str(excinfo.value)
+            except RuntimeError as e:
+                pytest.skip(f"native lane unavailable: {e}")
+        assert not any("HOST process table" in rec.getMessage() for rec in caplog.records)
+        monkeypatch.delenv("RAPTOR_ALLOW_DEGRADED_UNTRUSTED", raising=False)
+        result = _ctx.run_untrusted(
+            ["true"], target=str(tmp_path), output=str(tmp_path),
+            timeout=60, pass_fds=[_r])
+        assert result.returncode == 0, result.stderr
+        assert result.sandbox_info["mount_ns_active"]
     finally:
         os.close(_r)
         os.close(_w)

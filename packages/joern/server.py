@@ -1,14 +1,7 @@
-"""Persistent Joern server for fast inter-procedural taint queries.
+"""Private process-owning Joern backend for the graph service controller.
 
-Replaces the subprocess-per-query model (30-60s JVM boot each time)
-with a long-lived HTTP server that boots once and handles queries
-via REST.  The CPG stays loaded in memory between queries.
-
-Usage::
-
-    with JoernServer() as srv:
-        srv.import_cpg("/path/to/cpg.bin")
-        result = srv.query("cpg.method.l")
+Application callers use ``packages.joern.JoernServer`` or ``joern_session``;
+only the controller owns this backend's JVM, import and restart lifecycle.
 """
 
 from __future__ import annotations
@@ -61,6 +54,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
+_POPEN_TYPE = subprocess.Popen
 
 _BOOT_TIMEOUT_S = 120
 _BOOT_POLL_INTERVAL_S = 2
@@ -115,11 +109,58 @@ _TIER_REPORT_TIMEOUT_S = 10.0
 _WORKSPACE_PREFIX = "raptor-joern-ws-"
 
 
+def _java_option_value(value: str) -> str:
+    # Path-value quoting for OpenJDK environment options, not shell or @file
+    # quoting. OpenJDK's environment-option parser supports adjacent quoted segments,
+    # but does not interpret backslash-escaped quotes like a shell would.
+    if any(character.isspace() or character in "\"'" for character in value):
+        return '"' + value.replace('"', '"' + "'\"'" + '"') + '"'
+    return value
+
+
+def _private_java_command(binary: str, flags: list[str], arguments: list[str], workspace: str):
+    """Run the declared distribution entry point with no argv credential.
+
+    Appending @file to a shell launcher's application arguments is too late:
+    Java stops expanding argument files after the main class. Put the complete
+    Java invocation in one private argument file instead.
+    """
+    from .prereqs import _java_path
+    launcher = Path(binary).resolve(strict=True)
+    with launcher.open(encoding="utf-8") as stream:
+        source = stream.read(65537)
+    match = re.search(r"^declare -a app_mainclass=\('([A-Za-z_$][\w.$]*)'\)$", source, re.MULTILINE)
+    library = launcher.parent.parent / "lib"
+    if match is None or len(source) > 65536 or not library.is_dir() or not _java_path():
+        raise RuntimeError("Joern distribution does not declare a supported secure Java entry point")
+    configured = []
+    settings = launcher.parent.parent / "conf" / "application.ini"
+    if settings.exists():
+        if settings.stat().st_size > 65536:
+            raise RuntimeError("Joern application.ini exceeds supported size")
+        for line in settings.read_text().splitlines():
+            if line.startswith("#"):
+                continue
+            for word in line.split():
+                value = word[2:] if word.startswith("-J") else word
+                if not value.startswith(("-D", "-X", "-agentlib:", "-agentpath:", "-javaagent:")):
+                    raise RuntimeError("unsupported Joern application.ini option for secure launch")
+                configured.append(value)
+    command = configured + [flag[2:] if flag.startswith("-J") else flag for flag in flags]
+    command += ["-cp", str(library / "*"), match.group(1), *arguments]
+    path = Path(workspace) / "server.args"
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w") as stream:
+        stream.write("\n".join(json.dumps(argument, ensure_ascii=False) for argument in command) + "\n")
+    return [_java_path(), "@" + str(path)]
+
+
 def _new_workspace() -> str:
     """Mint a fresh per-boot workspace dir, stamped with an ownership
     marker so a later boot's sweep can tell dead-owner orphans from
     live servers."""
-    workdir = tempfile.mkdtemp(prefix=_WORKSPACE_PREFIX)
+    from .client import runtime_base
+    workdir = tempfile.mkdtemp(prefix=_WORKSPACE_PREFIX, dir=runtime_base())
     write_owner_marker(workdir)
     return workdir
 
@@ -182,6 +223,9 @@ _SCALA_ERROR_LINE_RE = re.compile(
     r"|[^\s:]\S*:\d+: error:"
     r"|error:"
     r"|Error:)"
+)
+_RUNTIME_ERROR_LINE_RE = re.compile(
+    r"^(?:[A-Za-z_$][\w$]*\.)*[A-Za-z_$][\w$]*(?:Exception|Error)(?::|$)"
 )
 
 _RESTARTING_ERROR = (
@@ -352,6 +396,7 @@ def _pgid_alive(pgid: int | None) -> bool:
 def _group_kill_corroborated(
     pgid: int,
     member_anchor: tuple[int | None, int | None] | None,
+    *, strict_identity: bool = False,
 ) -> bool:
     """Does anything in *pgid* corroborate as OUR Joern server?
 
@@ -385,6 +430,8 @@ def _group_kill_corroborated(
                     return True
             except OSError:
                 pass
+    if strict_identity:
+        return False
     try:
         entries = os.scandir("/proc")
     except OSError:
@@ -413,6 +460,7 @@ def _ensure_group_dead(
     grace_s: float | None = None,
     member_anchor: tuple[int | None, int | None] | None = None,
     corroborated: bool = False,
+    strict_identity: bool = False,
 ) -> bool:
     """Verify the server's whole process GROUP is dead; escalate if not.
 
@@ -462,7 +510,9 @@ def _ensure_group_dead(
         return True
     grace = _GROUP_KILL_GRACE_S if grace_s is None else grace_s
     tag = label or f"pgid {pgid}"
-    if not corroborated and not _group_kill_corroborated(pgid, member_anchor):
+    if not corroborated and not _group_kill_corroborated(
+        pgid, member_anchor, strict_identity=strict_identity,
+    ):
         logger.warning(
             "Joern server process group (%s) survived stop but NO "
             "member corroborates as the recorded server (pid "
@@ -519,6 +569,9 @@ def _proc_starttime(pid: int) -> int | None:
     ``)`` because comm (field 2) may itself contain spaces and
     parentheses. None off-Linux and on any read/parse failure.
     """
+    if sys.platform == "darwin":
+        from .heap_ledger import _pid_starttime
+        return _pid_starttime(pid)
     try:
         stat = Path(f"/proc/{pid}/stat").read_text(
             encoding="ascii", errors="replace",
@@ -600,9 +653,9 @@ def _has_scala_error(stdout: str) -> bool:
         return False
     for raw_line in stdout.splitlines():
         line = _strip_ansi(raw_line)
-        if any(marker in line for marker in _RECORD_LINE_MARKERS):
+        if line.lstrip().startswith(_RECORD_LINE_MARKERS):
             continue
-        if _SCALA_ERROR_LINE_RE.match(line):
+        if _SCALA_ERROR_LINE_RE.match(line) or _RUNTIME_ERROR_LINE_RE.match(line.lstrip()):
             return True
     return False
 
@@ -660,6 +713,14 @@ def _repl_bridge_path() -> str | None:
     return shutil.which(_REPL_BRIDGE_NAME)
 
 
+def _probe_environment():
+    from core.config import RaptorConfig
+    from .client import runtime_base
+    environment = RaptorConfig.get_safe_env()
+    environment["TMPDIR"] = str(runtime_base())
+    return environment
+
+
 def _netns_isolation_available() -> bool:
     """Probe whether the private-netns tier can engage on this host.
 
@@ -674,14 +735,13 @@ def _netns_isolation_available() -> bool:
     with _NETNS_PROBE_LOCK:
         if _NETNS_PROBE_CACHE is not None:
             return _NETNS_PROBE_CACHE
-        from core.config import RaptorConfig
         try:
             proc = subprocess.run(
                 [sys.executable, str(_FORWARDER_SCRIPT), "--self-probe"],
                 capture_output=True,
                 text=True,
                 timeout=_NETNS_PROBE_TIMEOUT_S,
-                env=RaptorConfig.get_safe_env(),
+                env=_probe_environment(),
                 check=False,
             )
         except (subprocess.TimeoutExpired, OSError, ValueError) as e:
@@ -716,7 +776,6 @@ def _pidns_supervision_available() -> bool:
     with _PIDNS_PROBE_LOCK:
         if _PIDNS_PROBE_CACHE is not None:
             return _PIDNS_PROBE_CACHE
-        from core.config import RaptorConfig
         try:
             proc = subprocess.run(
                 [sys.executable, str(_FORWARDER_SCRIPT),
@@ -724,7 +783,7 @@ def _pidns_supervision_available() -> bool:
                 capture_output=True,
                 text=True,
                 timeout=_NETNS_PROBE_TIMEOUT_S,
-                env=RaptorConfig.get_safe_env(),
+                env=_probe_environment(),
                 check=False,
             )
         except (subprocess.TimeoutExpired, OSError, ValueError) as e:
@@ -789,25 +848,22 @@ def _read_achieved_tier(
 
 
 def _make_uds_dir() -> str:
-    """0700 directory for the forwarder socket, sun_path-safe.
+    """Keep the selected private base even when the socket path is long.
 
-    Honours TMPDIR like every other RAPTOR temp dir, but AF_UNIX
-    pathname sockets cap sun_path at ~108 bytes: a long TMPDIR would
-    pass the self-probe (which runs under the scrubbed environment,
-    where TMPDIR is dropped) and then fail every real bind. When the
-    TMPDIR-based path would not fit, fall back to /tmp — matching
-    where the probe proved the mechanism works.
+    Linux uses a pinned descriptor-relative procfs address. Other platforms
+    refuse paths beyond their kernel limit instead of choosing public /tmp.
     """
-    d = tempfile.mkdtemp(prefix="raptor-joern-uds-")
+    from .client import runtime_base
+    d = tempfile.mkdtemp(prefix="raptor-joern-uds-", dir=runtime_base())
     # Bytes, not characters — see the rationale at _SUN_PATH_MAX_SAFE.
     sock_bytes = len(os.fsencode(os.path.join(d, _UDS_SOCKET_NAME)))
     if sock_bytes <= _SUN_PATH_MAX_SAFE:
         return d
+    if sys.platform == "linux":
+        # Both listener and client use a pinned procfs directory alias.
+        return d
     shutil.rmtree(d, ignore_errors=True)
-    logger.debug(
-        "joern uds dir under TMPDIR exceeds sun_path; using /tmp",
-    )
-    return tempfile.mkdtemp(prefix="raptor-joern-uds-", dir="/tmp")
+    raise ValueError("Joern socket path is too long; select a shorter private TMPDIR")
 
 
 class _UnixHTTPConnection(HTTPConnection):
@@ -828,7 +884,9 @@ class _UnixHTTPConnection(HTTPConnection):
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.settimeout(self.timeout)
         try:
-            sock.connect(self._socket_path)
+            from .unix_socket import socket_address
+            with socket_address(self._socket_path) as address:
+                sock.connect(address)
         except BaseException:
             sock.close()
             raise
@@ -846,14 +904,24 @@ def _server_auth_supported(binary: str) -> bool:
     cached = _AUTH_SUPPORT_CACHE.get(binary)
     if cached is not None:
         return cached
-    from core.config import RaptorConfig
     try:
+        # NativePackager launchers need the same selected JDK as the actual
+        # server. The safe environment strips JAVA_HOME, and Homebrew's outer
+        # wrapper (which normally supplies it) has already been resolved away.
+        from .prereqs import _java_path, _jdk_home
+        environment = _probe_environment()
+        java = _java_path()
+        if java:
+            environment["JAVACMD"] = java
+            home = _jdk_home(java)
+            if home is not None:
+                environment["JAVA_HOME"] = str(home)
         proc = subprocess.run(
             [binary, "--help"],
             capture_output=True,
             text=True,
             timeout=60,
-            env=RaptorConfig.get_safe_env(),
+            env=environment,
             check=False,
         )
         supported = "--server-auth-username" in (
@@ -865,44 +933,66 @@ def _server_auth_supported(binary: str) -> bool:
     return supported
 
 
+def _signal_owned_group(process, signum):
+    """Keep Popen's reap lock across signal delivery so its PID cannot recycle.
+
+    Never block behind a wait(): shutdown can retain resources if another
+    reaper owns the handle. Cancellation retries while its request is active.
+    """
+    if not isinstance(process, _POPEN_TYPE) or process.pid <= 1:
+        return False
+    lock = process._waitpid_lock
+    if not lock.acquire(blocking=False):
+        return False
+    try:
+        if process.returncode is not None:
+            return False
+        with contextlib.suppress(ProcessLookupError):
+            if os.getpgid(process.pid) == process.pid:
+                os.killpg(process.pid, signum)
+            else:
+                os.kill(process.pid, signum)
+        return True
+    finally:
+        lock.release()
+
+
+def _managed_group_stopped(process, pgid):
+    # While the leader is unreaped, its wait lock pins the group identity.
+    # Once reaped, only observe: a numeric PGID or Java comm is not authority
+    # to signal a group that could now belong to somebody else.
+    if isinstance(process, _POPEN_TYPE) and process._waitpid_lock.acquire(blocking=False):
+        try:
+            if process.returncode is None:
+                return _ensure_group_dead(pgid, corroborated=True, strict_identity=True)
+        finally:
+            process._waitpid_lock.release()
+    deadline = time.monotonic() + _GROUP_KILL_GRACE_S
+    while _pgid_alive(pgid):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+    return True
+
+
 class JoernServer:
     """Manages a persistent ``joern --server`` process.
 
     The server listens on 127.0.0.1 with a random port.  Queries
     are submitted via ``POST /query-sync`` and return synchronously.
 
-    Sandbox note: the server process runs unsandboxed — same trust
-    level as the LLM harness itself.  The CPG build step
-    (``joern-parse``) that processes untrusted target code runs
-    sandboxed via ``core.sandbox.run``.  The server only receives
-    RAPTOR-authored CPGQL queries validated by ``_validate_query``,
-    not raw target input.
+    This is the private process-owning backend. Public callers use
+    ``packages.joern.JoernServer`` (a graph-bound lease client), not this
+    class. Controller-created workers require filesystem and syscall
+    confinement before Java starts. Raw internal/testing instances retain
+    the historical unconfined mode when ``confined=False``.
 
-    Cross-user isolation — ``POST /query-sync`` executes arbitrary
-    Scala, so the endpoint must be unreachable for other local users.
-    Two tiers, probed at boot (``_netns_isolation_available``):
-
-    * Strong tier (unprivileged user namespaces work): the server
-      boots inside a private network namespace behind
-      ``netns_forwarder.py``. Its loopback TCP port does not exist on
-      the host; the only way in is the forwarder's unix socket inside
-      a 0700 directory, bound before the server can accept traffic.
-      Every boot still generates a random HTTP Basic credential
-      (``--server-auth-username`` / ``--server-auth-password``) and
-      every client request carries the matching Authorization header.
-      Honest caveat: that credential still travels on the server's
-      argv and remains readable by ANY local user via
-      ``/proc/<pid>/cmdline`` — but on this tier it gates nothing a
-      cross-user attacker can reach (netns hides the port, directory
-      permissions gate the socket), so it is defense-in-depth rather
-      than a load-bearing secret. Same-uid processes can read it and
-      connect through the socket; that is the intended trust boundary.
-    * Fallback tier (no user namespaces): the server listens on
-      host-loopback TCP and the argv credential is the ONLY thing
-      keeping other local users out — and it is /proc-visible for the
-      server's lifetime. ``start()`` logs a WARNING stating exactly
-      that degradation, mirroring the sandbox's tier-degradation
-      convention.
+    The preferred Linux transport is a private network namespace behind
+    a Unix socket in a private directory. When namespaces are unavailable,
+    the worker uses authenticated host-loopback TCP. Confined workers keep
+    the full Java invocation in a mode-0600 argument file, including the
+    per-boot credential, so process arguments do not expose that secret.
+    Endpoint access remains a trusted same-user interface.
 
     If the installed joern does not support the auth flags,
     ``start()`` raises rather than exposing an unauthenticated
@@ -915,14 +1005,14 @@ class JoernServer:
     # before the body executes at all, and tests build bare instances
     # via ``__new__``. ``stop()`` early-returns on None, so teardown
     # of such an instance is a no-op instead of an unraisable.
+    _confined: bool = False
     _proc: subprocess.Popen | None = None
     # Same bare-instance safety for the strong-tier socket state:
     # ``stop()`` and ``health_check()`` consult these.
     _uds_path: str | None = None
     _uds_dir: str | None = None
-    # ... and for the boot-derived JVM member anchor: the lifecycle
-    # persists these off every handle it records, including
-    # ``connect_existing`` handles whose ``__init__`` predates a boot.
+    # ... and for the boot-derived JVM member anchor used by owned
+    # process-group teardown. External endpoints never own that group.
     _member_pid: int | None = None
     _member_starttime: int | None = None
     _member_comm: str | None = None
@@ -947,8 +1037,14 @@ class JoernServer:
         boot_timeout_s: int = _BOOT_TIMEOUT_S,
         query_timeout_s: int = _QUERY_TIMEOUT_S,
         orphan_idle_ttl_s: float | None = None,
+        confined: bool = False,
+        graph_read_paths: tuple[str, ...] = (),
     ) -> None:
         self._heap_mb = heap_mb
+        self._external_endpoint = False
+        self._confined = confined
+        self._graph_read_paths = graph_read_paths
+        self._stderr_tail = bytearray()
         self._heap_is_derived = heap_is_derived
         # Host-global heap admission grant (see
         # ``packages.joern.heap_ledger``). Held from start() until
@@ -1034,7 +1130,7 @@ class JoernServer:
         self._code_path: Path | None = None
         # Lineage token attached by packages.joern.lifecycle at
         # acquire time (None for privately booted servers): names the
-        # state-file lineage this handle belongs to, so release-time
+        # borrower token associated with a managed client, so release-time
         # bookkeeping can refuse to touch a record that a concurrent
         # session replaced.
         self._lifecycle_token: str | None = None
@@ -1065,6 +1161,8 @@ class JoernServer:
 
     def start(self) -> None:
         """Boot the Joern server and wait for readiness."""
+        from core.config import RaptorConfig
+
         if self._proc is not None:
             return
 
@@ -1112,6 +1210,7 @@ class JoernServer:
             # reduce (see packages.joern.heap_ledger).
             self._heap_reservation = reserve_heap_mb(
                 self._heap_mb, derived=self._heap_is_derived,
+                require_capacity=self._confined,
             )
             if self._heap_reservation.granted_mb != self._heap_mb:
                 logger.warning(
@@ -1137,7 +1236,9 @@ class JoernServer:
         # cross-user barrier — say so, loudly, like the sandbox does
         # when one of its layers cannot engage.
         use_netns = _netns_isolation_available()
-        if not use_netns:
+        if not use_netns and self._confined:
+            logger.info("Joern worker uses host-loopback TCP with a private credential argument file")
+        elif not use_netns:
             logger.warning(
                 "Joern server: network-namespace isolation UNAVAILABLE "
                 "on this host (unprivileged user namespaces refused) — "
@@ -1156,7 +1257,6 @@ class JoernServer:
         use_pidns = use_netns and _pidns_supervision_available()
         tier_refusal_reason: str | None = None
 
-        from core.config import RaptorConfig
         try:
             attempt = 0
             while True:
@@ -1186,10 +1286,32 @@ class JoernServer:
                     "--server-auth-username", self._auth_user,
                     "--server-auth-password", self._auth_password,
                 ]
+                if self._confined:
+                    # Java expands the complete private invocation. The kernel
+                    # command line therefore carries a private filename,
+                    # rather than the loopback server's bearer credential.
+                    joern_cmd = _private_java_command(
+                        binary, heap_flags + tuning_flags,
+                        joern_cmd[1 + len(heap_flags) + len(tuning_flags):], self._workdir,
+                    )
+                    from .prereqs import joern_tool_paths
+                    prefix = [sys.executable, "-I", str(Path(__file__).with_name("worker_guard.py")),
+                              "--write", self._workdir]
+                    if not use_netns:
+                        prefix.extend(["--parent", str(os.getpid())])
+                    if self._heap_reservation is not None:
+                        for descriptor in self._heap_reservation.pass_fds:
+                            prefix.extend(["--keep-fd", str(descriptor)])
+                    for readable in ["/usr", "/lib", "/lib64", "/bin", "/sbin", "/etc",
+                                     "/sys", "/proc/cpuinfo", "/proc/meminfo", "/proc/stat",
+                                     *joern_tool_paths(), *self._graph_read_paths]:
+                        if Path(readable).exists():
+                            prefix.extend(["--read", readable])
+                    joern_cmd = [*prefix, "--", *joern_cmd]
 
                 ready_r: int | None = None
                 ready_w: int | None = None
-                pass_fds: tuple[int, ...] = ()
+                pass_fds = self._heap_reservation.pass_fds if self._heap_reservation is not None else ()
                 if use_netns:
                     # mkdtemp gives the 0700 parent the forwarder requires;
                     # the forwarder binds the socket (also 0700) BEFORE it
@@ -1204,7 +1326,7 @@ class JoernServer:
                     # (or a test double that inherits nothing) reads as
                     # EOF — i.e. the weaker tier — instead of blocking.
                     ready_r, ready_w = os.pipe()
-                    pass_fds = (ready_w,)
+                    pass_fds = (*pass_fds, ready_w)
                     cmd = self._forwarder_argv(
                         joern_cmd, pidns=use_pidns, ready_fd=ready_w,
                     )
@@ -1229,7 +1351,14 @@ class JoernServer:
                 jvm_tmp = os.path.join(self._workdir, "jvm-tmp")
                 os.makedirs(jvm_tmp, exist_ok=True)
                 env = RaptorConfig.get_safe_env()
-                env["_JAVA_OPTIONS"] = f"-Djava.io.tmpdir={jvm_tmp}"
+                env["_JAVA_OPTIONS"] = f"-Djava.io.tmpdir={_java_option_value(jvm_tmp)}"
+                if self._confined:
+                    env = RaptorConfig.strip_target_exec_markers(env)
+                    env["HOME"] = self._workdir
+                    env["TMPDIR"] = jvm_tmp
+                    env["_JAVA_OPTIONS"] += f" -Duser.home={_java_option_value(self._workdir)}"
+                    for name in ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME"):
+                        env.pop(name, None)
 
                 # New session so stop() can signal the whole process group:
                 # the joern launcher may be a shell wrapper that spawns the
@@ -1256,6 +1385,21 @@ class JoernServer:
                 # guaranteed true so stop() can address the whole group
                 # later, leader alive or not.
                 self._pgid = self._proc.pid
+                # Drain for the entire boot, not only after process exit. A
+                # noisy JVM must not block when the stderr pipe fills.
+                tail = bytearray()
+                self._stderr_tail = tail
+                stream = self._proc.stderr
+                if stream is not None and isinstance(self._proc, _POPEN_TYPE):
+                    def drain(source=stream, destination=tail):
+                        try:
+                            while chunk := source.read(4096):
+                                data = chunk.encode(errors="replace") if isinstance(chunk, str) else chunk
+                                destination.extend(data)
+                                del destination[:-65536]
+                        except (OSError, ValueError):
+                            pass
+                    threading.Thread(target=drain, name="joern-stderr", daemon=True).start()
 
                 if self._wait_for_ready():
                     if ready_r is not None:
@@ -1348,8 +1492,7 @@ class JoernServer:
                 self._member_starttime = None
                 self._member_comm = None
 
-            if (self._heap_reservation is not None
-                    and self._member_pid is not None):
+            if self._heap_reservation is not None:
                 # Re-key the admission row to the JVM member: the
                 # shared server outlives its spawner (refcounted
                 # state file), so the reservation must live and die
@@ -1357,7 +1500,7 @@ class JoernServer:
                 # happened to boot it. No anchor → the row stays on
                 # this process (under-counts after this session
                 # exits; eviction still self-heals when the JVM dies).
-                self._heap_reservation.rebind(self._member_pid)
+                self._heap_reservation.rebind(self._member_pid or self._proc.pid)
 
             self._warmup_imports()
         except BaseException:
@@ -1375,9 +1518,9 @@ class JoernServer:
         deadline = time.monotonic() + self._boot_timeout_s
         while time.monotonic() < deadline:
             if self._proc.poll() is not None:  # type: ignore[union-attr]
-                stderr = self._proc.stderr.read() if self._proc.stderr else ""  # type: ignore[union-attr]
+                stderr = bytes(self._stderr_tail).decode(errors="replace")
                 logger.error("Joern server exited during boot: %s",
-                             stderr[:500])
+                             stderr[-1000:])
                 return False
             # _post_sync returns None on every transport failure
             # (both httpx and urllib paths catch their own errors),
@@ -1457,12 +1600,33 @@ class JoernServer:
             argv += ["--ready-fd", str(ready_fd)]
         if self._orphan_idle_ttl_s is not None:
             argv += ["--orphan-idle-ttl", str(self._orphan_idle_ttl_s)]
+        if self._heap_reservation is not None:
+            for descriptor in self._heap_reservation.pass_fds:
+                argv += ["--keep-fd", str(descriptor)]
         argv += ["--", *joern_cmd]
         return argv
 
-    def stop(self) -> None:
+    def interrupt(self) -> None:
+        """Abort this owned worker without consulting persisted process IDs.
+
+        Called only while the controller pins the active request. Recovery
+        runs later in the serialized execution lane.
+        """
+        process = self._proc
+        if process is not None:
+            _signal_owned_group(process, signal.SIGKILL)
+
+    def stop(self) -> bool | None:
         """Shut down the Joern server."""
         if self._proc is None:
+            # Admission/capability failures can happen after scratch was
+            # allocated but before Popen. They still own cleanup obligations.
+            for attribute in ("_workdir", "_uds_dir"):
+                directory = getattr(self, attribute, None)
+                if directory is not None:
+                    shutil.rmtree(directory, ignore_errors=True)
+                    setattr(self, attribute, None)
+            self._release_heap_reservation()
             return
 
         pid = self._proc.pid
@@ -1470,6 +1634,9 @@ class JoernServer:
         logger.info("stopping Joern server (pid %d)", pid)
 
         def _signal_group(sig: int) -> None:
+            if self._confined:
+                _signal_owned_group(self._proc, sig)
+                return
             # The launcher may be a shell wrapper whose JVM child would
             # survive a plain terminate() — signal the whole group.  Only
             # killpg when pid is the leader of its own group: Popen used
@@ -1504,14 +1671,16 @@ class JoernServer:
         group_death_proven = False
 
         try:
-            if pidns_tier:
+            if pidns_tier and not self._confined:
                 self._proc.terminate()
             else:
                 _signal_group(signal.SIGTERM)
             self._proc.wait(timeout=_SHUTDOWN_GRACE_S)
-            group_death_proven = pidns_tier
+            returncode = getattr(self._proc, "returncode", None)
+            group_death_proven = (pidns_tier and isinstance(returncode, int)
+                                  and returncode >= 0)
         except subprocess.TimeoutExpired:
-            if pidns_tier:
+            if pidns_tier and not self._confined:
                 self._proc.kill()
             else:
                 _signal_group(signal.SIGKILL)
@@ -1566,11 +1735,18 @@ class JoernServer:
         # proved the namespace empty, and no /proc scanning belongs on
         # that tier.
         if not group_death_proven:
-            _ensure_group_dead(
-                pgid, label=f"stop of pid {pid}",
-                member_anchor=(self._member_pid, self._member_starttime),
-                corroborated=self._proc.poll() is None,
-            )
+            if self._confined:
+                group_death_proven = _managed_group_stopped(self._proc, pgid)
+            else:
+                group_death_proven = _ensure_group_dead(
+                    pgid, label=f"stop of pid {pid}",
+                    member_anchor=(self._member_pid, self._member_starttime),
+                    corroborated=self._proc.poll() is None,
+                )
+        if self._confined and not group_death_proven:
+            self._cpg_loaded = False
+            logger.error("Joern teardown unverified; retaining worker scratch and reservation")
+            return False
 
         self._proc = None
         self._pgid = None
@@ -1682,7 +1858,9 @@ class JoernServer:
             return False
 
     def is_alive(self) -> bool:
-        if self._proc is None or self._proc.poll() is not None:
+        if self._proc is None:
+            return self.health_check() if self._base_url is not None else False
+        if self._proc.poll() is not None:
             return False
         try:
             resp = self._post_sync(_HEALTH_QUERY, timeout=5)
@@ -1828,6 +2006,9 @@ class JoernServer:
         queries return an error result; the run degrades to
         "no Joern evidence for this claim" instead of stalling.
         """
+        if self._external_endpoint:
+            logger.warning("an endpoint client cannot replace a worker it does not own")
+            return False
         if not self._restart_lock.acquire(blocking=False):
             logger.warning(
                 "Joern restart already in progress — failing fast "
@@ -1846,32 +2027,9 @@ class JoernServer:
             # the grace window belongs to the group tier only.
             old_anchor = (self._member_pid, self._member_starttime)
             old_tier = self._supervision_tier
-            old_port = self._port
-            old_socket = self._uds_path
-            logger.info("restarting Joern server (stuck query recovery)")
-            if old_pid is None:
-                # Lifecycle-reused handle (connect_existing): no Popen,
-                # so stop() has nothing to signal and the stuck JVM
-                # would survive the restart unaddressed — while
-                # note_server_replaced repoints the state file at the
-                # replacement, erasing the last record of it. Kill the
-                # recorded server through the lifecycle state instead.
-                logger.warning(
-                    "restarting a lifecycle-reused Joern server (no "
-                    "process handle) — killing the recorded server "
-                    "via the lifecycle state file",
-                )
-                try:
-                    from .lifecycle import kill_recorded_server
-                    kill_recorded_server(
-                        port=old_port, socket_path=old_socket,
-                    )
-                except Exception:  # noqa: BLE001 — reap is best-effort
-                    logger.debug(
-                        "lifecycle kill of the reused server failed",
-                        exc_info=True,
-                    )
-            self.stop()
+            logger.info("restarting privately owned Joern worker")
+            if self.stop() is False:
+                return False
             # Reap before replacing: stop() already ran the identical
             # group verification, so this re-check is the DELIBERATE
             # second grace window — it only bites when stop()'s own
@@ -1885,7 +2043,7 @@ class JoernServer:
             # (or handed a stalled collapse to the background reaper
             # plus the ladder), and no /proc-based group verification
             # belongs on that tier.
-            if old_tier != "pidns":
+            if old_tier != "pidns" and not self._confined:
                 _ensure_group_dead(
                     old_pgid, label=f"restart of pid {old_pid}",
                     member_anchor=old_anchor,
@@ -1895,19 +2053,6 @@ class JoernServer:
             except RuntimeError:
                 logger.error("Joern server failed to restart")
                 return False
-            # The restarted JVM has a new pid/port/credential — record
-            # it in the lifecycle state file (when this server is the
-            # one it tracks) so joern_release can still stop it.
-            try:
-                from .lifecycle import note_server_replaced
-                note_server_replaced(
-                    old_pid=old_pid, old_port=old_port, srv=self,
-                )
-            except Exception:  # noqa: BLE001 — bookkeeping must not fail restart
-                logger.debug(
-                    "lifecycle state update after restart failed",
-                    exc_info=True,
-                )
             if cpg_path is not None:
                 if not cpg_path.exists():
                     # Pre-fix this returned True with _cpg_loaded
@@ -2005,7 +2150,7 @@ class JoernServer:
         elapsed = time.monotonic() - t0
         # Strict: a missing "success" key is a malformed response, not
         # a success — pre-fix it defaulted to True.
-        if resp.get("success") is not True:
+        if resp.get("success") is not True or _has_scala_error(str(resp.get("stdout", ""))):
             logger.error("importCpg failed: %s",
                          (resp.get("stderr") or str(resp))[:500])
             return False
@@ -2055,6 +2200,7 @@ class JoernServer:
             probe is None
             or probe.get("success") is not True
             or "Not found: cpg" in probe_out
+            or _has_scala_error(probe_out)
         ):
             logger.error(
                 "%s reported success but the `cpg` binding is "
@@ -2111,7 +2257,7 @@ class JoernServer:
         # a success — pre-fix it defaulted to True, so a keyless
         # response set _cpg_loaded and every later query failed
         # "Not found: cpg" with only per-query warnings.
-        if resp.get("success") is not True:
+        if resp.get("success") is not True or _has_scala_error(str(resp.get("stdout", ""))):
             logger.error("importCode failed: %s",
                          (resp.get("stderr") or str(resp))[:500])
             return False
@@ -2136,6 +2282,7 @@ class JoernServer:
         validate: bool = True,
         check_length: bool = True,
         no_restart: bool = False,
+        isolate_scope: bool = False,
     ) -> JoernResult:
         """Execute a CPGQL query and return parsed results.
 
@@ -2190,11 +2337,12 @@ class JoernServer:
         # attempt 1 falls through to the ordinary failure path — a
         # sibling that actively keeps importing gets an error result,
         # never wrong-graph evidence and never an unbounded loop here.
+        payload = f"locally {{\n{cpgql}\n}}" if isolate_scope else cpgql
         seen_epoch = self._cpg_load_epoch
         for attempt in (0, 1):
             t0 = time.monotonic()
             resp = self._post_sync(
-                self._lease_guard_prefix() + cpgql, timeout=timeout,
+                self._lease_guard_prefix() + payload, timeout=timeout,
             )
             elapsed_ms = int((time.monotonic() - t0) * 1000)
 
@@ -2208,12 +2356,18 @@ class JoernServer:
                 return JoernResult(
                     query=cpgql,
                     errors=[detail],
+                    execution_incomplete=True,
                     elapsed_ms=elapsed_ms,
                 )
 
+            if (not isinstance(resp, dict) or type(resp.get("success")) is not bool
+                    or not isinstance(resp.get("stdout", ""), str)
+                    or not isinstance(resp.get("stderr", ""), str)):
+                return JoernResult(query=cpgql, errors=["malformed Joern query response"],
+                                   execution_incomplete=True, elapsed_ms=elapsed_ms)
             stdout = resp.get("stdout", "")
             stderr = resp.get("stderr", "")
-            success = resp.get("success", True)
+            success = resp["success"]
 
             if attempt == 0 and self._lease_swapped(stdout, stderr):
                 if not self._recover_graph_lease(seen_epoch):
@@ -2229,7 +2383,7 @@ class JoernServer:
             if not success:
                 detail = stderr[:500] or stdout[:500]
                 errors.append(f"query failed: {detail}")
-            elif _has_scala_error(stdout):
+            elif _has_scala_error(stdout + "\n" + stderr):
                 errors.append(f"query failed: {_strip_ansi(stdout)[:500]}")
 
             flows, parse_errors = _parse_output(stdout)
@@ -2637,6 +2791,7 @@ class JoernServer:
         poll_interval: float = 2.0,
         validate: bool = True,
         check_length: bool = True,
+        isolate_scope: bool = False,
     ) -> JoernResult:
         """Submit a query asynchronously and poll until done or cancelled.
 
@@ -2676,15 +2831,24 @@ class JoernServer:
                 return JoernResult(query=cpgql, errors=[err])
 
         seen_epoch = self._cpg_load_epoch
-        uuid = self._post_async(self._lease_guard_prefix() + cpgql)
+        payload = f"locally {{\n{cpgql}\n}}" if isolate_scope else cpgql
+        uuid = self._post_async(self._lease_guard_prefix() + payload)
         if uuid is None:
+            if isolate_scope:
+                return JoernResult(query=cpgql, errors=["Joern async submission acknowledgement lost"],
+                                   execution_incomplete=True)
             return self.query(cpgql, timeout=timeout, validate=False,
-                              check_length=False)
+                              check_length=False, isolate_scope=isolate_scope)
 
         t0 = time.monotonic()
         deadline = t0 + timeout
         while time.monotonic() < deadline:
             if cancel_check is not None and cancel_check():
+                # Poll cancellation alone leaves the REPL running the query.
+                # A controller serializes this generation change and reports
+                # queued requests as interrupted rather than replaying them.
+                if not isolate_scope:
+                    self.stop()
                 elapsed_ms = int((time.monotonic() - t0) * 1000)
                 return JoernResult(
                     query=cpgql, errors=["cancelled"],
@@ -2696,16 +2860,22 @@ class JoernServer:
                 elapsed_ms = int((time.monotonic() - t0) * 1000)
                 stdout = resp.get("stdout", "")
                 stderr = resp.get("stderr", "")
-                success = resp.get("success", True)
+                if (type(resp.get("success")) is not bool
+                        or not isinstance(stdout, str) or not isinstance(stderr, str)):
+                    return JoernResult(query=cpgql, errors=["malformed Joern query response"],
+                                       execution_incomplete=True, elapsed_ms=elapsed_ms)
+                success = resp["success"]
 
                 if not success and not stdout and not stderr:
+                    if isolate_scope:
+                        return JoernResult(query=cpgql, errors=["Joern async query failed"], elapsed_ms=elapsed_ms)
                     logger.debug(
                         "async query returned empty failure; "
                         "falling back to sync path",
                     )
                     return self.query(
                         cpgql, timeout=max(1, timeout - int(time.monotonic() - t0)),
-                        validate=False, check_length=False,
+                        validate=False, check_length=False, isolate_scope=isolate_scope,
                     )
 
                 if self._lease_swapped(stdout, stderr):
@@ -2723,13 +2893,13 @@ class JoernServer:
                         cpgql,
                         timeout=max(
                             1, timeout - int(time.monotonic() - t0)),
-                        validate=False, check_length=False,
+                        validate=False, check_length=False, isolate_scope=isolate_scope,
                     )
                 errors: list[str] = []
                 if not success:
                     detail = stderr[:500] or stdout[:500]
                     errors.append(f"query failed: {detail}")
-                elif _has_scala_error(stdout):
+                elif _has_scala_error(stdout + "\n" + stderr):
                     errors.append(f"query failed: {_strip_ansi(stdout)[:500]}")
                 flows, parse_errors = _parse_output(stdout)
                 errors.extend(parse_errors)
@@ -2745,9 +2915,10 @@ class JoernServer:
         elapsed_ms = int((time.monotonic() - t0) * 1000)
         # The server is stuck on this query.  Restart so subsequent
         # queries don't queue behind it.
-        self.restart()
+        if not isolate_scope:
+            self.restart()
         return JoernResult(
-            query=cpgql, errors=["timeout (async poll)"],
+            query=cpgql, errors=["timeout (async poll)"], execution_incomplete=True,
             elapsed_ms=elapsed_ms,
         )
 
@@ -3202,6 +3373,8 @@ class JoernServer:
         tunables: JoernTunables | None = None,
         *,
         orphan_idle_ttl_s: float | None = None,
+        confined: bool = False,
+        graph_read_paths: tuple[str, ...] = (),
     ) -> JoernServer:
         """Create a server instance from JoernTunables.
 
@@ -3217,6 +3390,8 @@ class JoernServer:
             heap_is_derived=tunables.heap_is_derived,
             query_timeout_s=tunables.query_timeout_s,
             orphan_idle_ttl_s=orphan_idle_ttl_s,
+            confined=confined,
+            graph_read_paths=graph_read_paths,
         )
 
     @classmethod
@@ -3232,7 +3407,7 @@ class JoernServer:
     ) -> JoernServer:
         """Build a client handle for an already-running server.
 
-        Used by the lifecycle module to reconnect to a reused server.
+        Legacy internal transport adapter; application sharing uses graph leases.
         Goes through ``__init__`` so EVERY instance field — including
         any added later — gets its default: the previous ``__new__``-
         based field copy in ``lifecycle._connect_existing`` omitted
@@ -3251,6 +3426,7 @@ class JoernServer:
         # Reuse handles never own the socket directory — the process
         # that booted the server (or its supervisor) cleans it up.
         srv._uds_dir = None
+        srv._external_endpoint = True
         return srv
 
     @property

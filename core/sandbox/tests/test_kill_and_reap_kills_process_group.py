@@ -202,3 +202,36 @@ class TestTeardownTargetSelfGroupGuard:
         killed = self._teardown(proc, monkeypatch)
         assert killed == [proc.pid], (
             f"expected exactly the child's group swept, got {killed}")
+
+
+def test_reaped_numeric_pid_never_authorises_signals(monkeypatch):
+    def reaped(*args):
+        raise ChildProcessError("already reaped")
+    def forbidden(*args):
+        raise AssertionError("reaped PID used to address a process or group")
+    monkeypatch.setattr(os, "waitid", reaped)
+    monkeypatch.setattr(os, "getpgid", forbidden)
+    monkeypatch.setattr(os, "kill", forbidden)
+    monkeypatch.setattr(os, "killpg", forbidden)
+    _kill_and_reap(12345)
+
+
+def test_graceful_teardown_keeps_zombie_until_group_sweep(monkeypatch):
+    from core.sandbox._spawn import _teardown_target
+    process = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
+    read_fd, write_fd = os.pipe()
+    observations = []
+    original_killpg = os.killpg
+    def sweep(group, signum):
+        status = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        assert status is not None, "group identity released before descendant sweep"
+        observations.append(group)
+        return original_killpg(group, signum)
+    monkeypatch.setattr(os, "killpg", sweep)
+    try:
+        _teardown_target(process.pid, write_fd, {write_fd}, grace_s=2)
+        process.returncode = 0  # helper owns the wait
+        assert observations == [process.pid]
+    finally:
+        os.close(read_fd)
+        process.wait(timeout=2)

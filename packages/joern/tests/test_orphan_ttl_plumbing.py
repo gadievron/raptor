@@ -18,7 +18,6 @@ from typing import Any
 
 import pytest
 
-from packages.joern import lifecycle
 from packages.joern import netns_forwarder as nf
 from packages.joern.server import JoernServer
 
@@ -73,7 +72,7 @@ def _run_main(monkeypatch, argv: list[str]) -> tuple[int, dict[str, Any]]:
     monkeypatch.setattr(nf.signal, "signal", lambda *_a: None)
     monkeypatch.setattr(
         nf.subprocess, "Popen",
-        lambda cmd: SimpleNamespace(wait=lambda: 0),
+        lambda cmd, **kwargs: SimpleNamespace(wait=lambda **kwargs: 0),
     )
     return nf.main(argv), captured
 
@@ -135,23 +134,3 @@ class TestFromTunablesPlumb:
 
     def test_default_is_no_override(self):
         assert JoernServer.from_tunables(None)._orphan_idle_ttl_s is None
-
-
-class TestLifecycleFreshStartKeepsDefault:
-    def test_start_fresh_passes_no_ttl_override(self, monkeypatch):
-        # A lifecycle-recorded server is warm-handoff re-acquirable:
-        # its forwarder must keep the long default horizon.
-        captured: dict[str, Any] = {}
-
-        class _StubServer:
-            @staticmethod
-            def from_tunables(
-                tunables: Any = None, *,
-                orphan_idle_ttl_s: float | None = None,
-            ) -> Any:
-                captured["ttl"] = orphan_idle_ttl_s
-                return SimpleNamespace(start=lambda: None)
-
-        monkeypatch.setattr(lifecycle, "JoernServer", _StubServer)
-        assert lifecycle._start_fresh(None) is not None
-        assert captured["ttl"] is None

@@ -24,7 +24,7 @@ from collections.abc import Iterator
 from .models import FlowStep, JoernCPG, JoernMethodSummary, JoernResult, TaintFlow
 from .prereqs import check_prereqs, is_available, version
 from .runner import build_cpg, build_cpg_cached, cleanup_cpg, run_query, run_taint_query
-from .server import JoernServer
+from .client import GraphClient as JoernServer
 from .tunables import JoernTunables
 
 _logger = logging.getLogger(__name__)
@@ -95,6 +95,7 @@ def joern_session(
         return
 
     cpg = None
+    reach_token = None
     try:
         # Pin the joern-parse frontend from the curated per-language
         # profiles rather than trusting parse-side auto-detection.
@@ -135,22 +136,32 @@ def joern_session(
                 # exclusions still shape the graph (analysis parity).
                 exclude_dirs=combined_excludes,
             )
+        if not cpg.exists() or getattr(cpg, "build_failed", False):
+            yield None
+            return
         if cpg.exists():
-            srv.import_cpg(cpg.path, timeout=tunables.import_timeout_s)
+            from .client import GraphClient
+            if isinstance(srv, GraphClient):
+                if cpg.build_failed or not srv.bind_graph(cpg, timeout=tunables.import_timeout_s):
+                    yield None
+                    return
+            elif not srv.import_cpg(cpg.path, timeout=tunables.import_timeout_s):
+                yield None
+                return
 
         if register_reach_audit:
             try:
                 from core.analysis.reach_audit import set_joern_server
-                set_joern_server(srv)
+                reach_token = set_joern_server(srv)
             except ImportError:
                 pass
 
         yield srv
     finally:
-        if register_reach_audit:
+        if reach_token is not None:
             try:
-                from core.analysis.reach_audit import set_joern_server
-                set_joern_server(None)
+                from core.analysis.reach_audit import reset_joern_server
+                reset_joern_server(reach_token)
             except ImportError:
                 pass
         srv.stop()

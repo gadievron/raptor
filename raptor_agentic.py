@@ -3400,14 +3400,14 @@ def main() -> int:
             cpg = load_cached_cpg(target, project_dir)
             if cpg is None:
                 return None
-            from packages.joern.server import JoernServer
-            srv = JoernServer()
+            from packages.joern.client import GraphClient
+            srv = GraphClient.from_tunables()
             srv.start()
             # Checked contract: import_cpg returns False on handled
             # failures — an unchecked call here handed the prepass a
             # CPG-less server that read as loaded (same class as the
             # audit-path fix in core/audit/joern_backend).
-            if not srv.import_cpg(cpg.path):
+            if not srv.bind_graph(cpg):
                 logger.warning(
                     "Joern cached-CPG import failed for prepass — "
                     "running without the joern reachability channel")

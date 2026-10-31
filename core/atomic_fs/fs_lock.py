@@ -33,6 +33,8 @@ here). Contract, matching those siblings:
   expiry the writer degrades to the loud unlocked path (the same
   best-effort disposition every other lock-unavailable shape takes);
 - degrade to a no-op without ``fcntl`` (non-POSIX);
+- callers with ``required=True`` refuse every unlocked fallback above,
+  including missing ``fcntl`` and bounded-acquisition expiry;
 - the lock file is deliberately never unlinked — unlink-after-unlock
   races split lockers across two inodes. Its only content is the last
   acquirer's pid stamp (advisory, possibly stale — see
@@ -272,6 +274,8 @@ def sidecar_flock(
     *,
     subject: str = "artifact",
     create_parent: bool = True,
+    required: bool = False,
+    deadline_s: float | None = None,
 ) -> Iterator[None]:
     """Exclusive cross-process flock on an explicit sidecar lock file.
 
@@ -286,8 +290,15 @@ def sidecar_flock(
     *subject* names the guarded resource in the warnings.
     ``create_parent=False`` preserves callers whose missing parent dir
     must degrade rather than be created.
+    ``required=True`` refuses the operation instead of yielding without
+    a lock. Use it for ownership transitions and exclusive publication,
+    where concurrent execution cannot be treated as a best-effort save.
+    Contention expiry intentionally raises TimeoutError with ETIMEDOUT,
+    preserving the OSError errno contract for callers handling lock failures.
     """
     if not _HAS_FCNTL:
+        if required:
+            raise OSError(errno.ENOSYS, f"{subject}: cross-process locking unavailable")
         yield
         return
     flags = (
@@ -306,6 +317,11 @@ def sidecar_flock(
         if fd is not None:
             with contextlib.suppress(OSError):
                 os.close(fd)
+        if required:
+            raise OSError(
+                exc.errno or errno.EACCES,
+                f"{subject} lock {lock_path}: refusing unlocked operation ({exc})",
+            ) from exc
         logger.warning(
             "%s lock %s: refusing to open (%s); proceeding WITHOUT "
             "cross-process lock — concurrent writers may drop each "
@@ -317,13 +333,18 @@ def sidecar_flock(
         return
     try:
         if not acquire_flock_bounded(
-                fd, lock_path, subject=subject, stamp=True,
-                expiry_note=(
+                fd, lock_path, subject=subject, stamp=True, deadline_s=deadline_s,
+                expiry_note=("refusing unlocked operation" if required else
                     "proceeding WITHOUT cross-process lock — "
                     "concurrent writers may drop each other's "
                     "contributions; investigate a wedged or hostile "
                     "holder of that lock file"
                 )):
+            if required:
+                raise TimeoutError(
+                    errno.ETIMEDOUT,
+                    f"{subject} lock {lock_path}: acquisition deadline expired",
+                )
             yield
             return
         try:
@@ -340,6 +361,8 @@ def artifact_lock(
     *,
     subject: str = "artifact",
     create_parent: bool = True,
+    required: bool = False,
+    deadline_s: float | None = None,
 ) -> Iterator[None]:
     """Exclusive cross-process lock over *artifact*'s read-modify-write
     window (flocks the sibling ``<artifact>.lock``).
@@ -349,8 +372,12 @@ def artifact_lock(
     must degrade to the loud unlocked path rather than be created —
     conjuring a directory the owner deliberately removed is a side
     effect the lock has no business having.
+    ``required=True`` propagates lock failures rather than entering an
+    unlocked read-modify-write window (see :func:`sidecar_flock`).
+    ``deadline_s`` sets an operation-specific acquisition budget; None
+    preserves the standard bounded wait.
     """
     lock_path = artifact.with_suffix(artifact.suffix + ".lock")
     with sidecar_flock(lock_path, subject=subject,
-                       create_parent=create_parent):
+                       create_parent=create_parent, required=required, deadline_s=deadline_s):
         yield

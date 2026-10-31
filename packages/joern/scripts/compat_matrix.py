@@ -316,7 +316,7 @@ def run_e2e(joern_dir: str) -> dict:
     from packages.joern.lang_config import C_CPP
     from packages.joern.prereqs import version as joern_version
     from packages.joern.runner import build_cpg
-    from packages.joern.server import JoernServer
+    from packages.joern import JoernServer
 
     results: dict = {"joern_version": joern_version() or "?"}
     t0 = time.monotonic()
@@ -333,13 +333,16 @@ def run_e2e(joern_dir: str) -> dict:
         (fixture_dir / "vuln.c").write_text(_FIXTURE_C, encoding="utf-8")
 
         cpg = build_cpg(fixture_dir, output_dir=cpg_dir)
+        if cpg.build_failed or not cpg.exists():
+            raise RuntimeError("Joern parser did not produce a usable graph")
         results["parse"] = "ok"
 
         srv = JoernServer()
-        srv.start()
+        if not srv.bind_graph(cpg):
+            raise RuntimeError("Joern graph worker failed to bind")
         results["boot"] = f"ok({time.monotonic() - t0:.0f}s)"
 
-        results["import"] = "ok" if srv.import_cpg(cpg.path) else "FAIL"
+        results["import"] = "ok"
 
         r = srv.query("cpg.method.name.l")
         body = r.raw_output or ""

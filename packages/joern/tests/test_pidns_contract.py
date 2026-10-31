@@ -192,12 +192,14 @@ from packages.joern.netns_forwarder import _ns_init_split
 signum = getattr(signal, sys.argv[2])
 live_r, live_w = os.pipe2(os.O_CLOEXEC)
 arm_r, arm_w = os.pipe2(os.O_CLOEXEC)
+ready_r, ready_w = os.pipe2(os.O_CLOEXEC)
 pid = os.fork()
 if pid != 0:
     os.close(live_r); os.close(arm_w)
     if os.read(arm_r, 1) != b"A":
         sys.exit(96)
-    time.sleep(0.3)  # let C install its trap
+    os.close(ready_w)
+    assert os.read(ready_r, 1) == b"R"
     os.kill(pid, signum)  # our own just-forked child, unreaped
     _, status = os.waitpid(pid, 0)
     if os.WIFEXITED(status):
@@ -207,6 +209,9 @@ os.close(live_w); os.close(arm_r)
 _ns_init_split(live_r, arm_w)
 # --- C: the forwarded signal must arrive here ---
 signal.signal(signum, lambda *_: os._exit(44))
+os.close(ready_r)
+os.write(ready_w, b"R")
+os.close(ready_w)
 for _ in range(600):
     time.sleep(0.1)
 os._exit(9)

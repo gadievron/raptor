@@ -73,10 +73,10 @@ def acquire_warm_server(target: Path, *run_dirs: Path) -> Any | None:
                 break
         if cpg is None:
             return None
-        from packages.joern.server import JoernServer
-        server = JoernServer()
+        from packages.joern.client import GraphClient
+        server = GraphClient.from_tunables()
         server.start()
-        if not server.import_cpg(cpg.path):
+        if not server.bind_graph(cpg):
             server.stop()
             return None
         logger.info("guard-dominance: Joern server started with cached CPG")

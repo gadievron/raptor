@@ -280,7 +280,8 @@ class TestMakeUdsDir:
         finally:
             os.rmdir(d)
 
-    def test_long_tmpdir_falls_back_to_tmp(self, monkeypatch, tmp_path):
+    @pytest.mark.skipif(sys.platform != "linux", reason="procfs socket alias")
+    def test_long_tmpdir_preserves_operator_base(self, monkeypatch, tmp_path):
         """AF_UNIX sun_path caps at ~108 bytes; a long TMPDIR must not
         produce a socket path the forwarder cannot bind (the probe
         runs under the scrubbed env and would not catch it)."""
@@ -295,24 +296,28 @@ class TestMakeUdsDir:
             return real_mkdtemp(prefix=prefix, dir=dir)
 
         monkeypatch.setattr(server_mod.tempfile, "mkdtemp", fake_mkdtemp)
+        from packages.joern import client
+        monkeypatch.setattr(client, "runtime_base", lambda: Path(str(long_root)))
         d = server_mod._make_uds_dir()
         try:
             sock = os.path.join(d, "joern.sock")
-            # Bytes, not characters: sun_path caps the fsencoded form.
-            assert len(os.fsencode(sock)) <= server_mod._SUN_PATH_MAX_SAFE
-            assert d.startswith("/tmp/")
+            from packages.joern.unix_socket import socket_address
+            with socket_address(sock) as address:
+                assert len(os.fsencode(address)) <= server_mod._SUN_PATH_MAX_SAFE
+            assert d.startswith(str(long_root))
         finally:
             os.rmdir(d)
         assert not any(long_root.iterdir())  # long candidate cleaned up
 
+    @pytest.mark.skipif(sys.platform != "linux", reason="procfs socket alias")
     def test_multibyte_tmpdir_budgeted_in_bytes(
         self,
         monkeypatch: pytest.MonkeyPatch,
         request: pytest.FixtureRequest,
     ) -> None:
         """The ceiling is a BYTE budget: a TMPDIR that fits in str
-        characters but not in fsencoded bytes must trigger the /tmp
-        fallback — a character count admits it and every later
+        characters but not in fsencoded bytes must use a procfs
+        socket address — a character count admits it and every later
         ``bind()`` fails with a confusing error instead."""
         base = tempfile.mkdtemp(prefix="jm", dir="/tmp")
         request.addfinalizer(lambda: shutil.rmtree(base, ignore_errors=True))
@@ -336,16 +341,20 @@ class TestMakeUdsDir:
             return real_mkdtemp(prefix=prefix, dir=dir)
 
         monkeypatch.setattr(server_mod.tempfile, "mkdtemp", fake_mkdtemp)
+        from packages.joern import client
+        monkeypatch.setattr(client, "runtime_base", lambda: Path(multi_root))
         d = server_mod._make_uds_dir()
         try:
             sock = os.path.join(d, "joern.sock")
-            assert len(os.fsencode(sock)) <= server_mod._SUN_PATH_MAX_SAFE
-            assert d.startswith("/tmp/")
-            assert not d.startswith(multi_root)
+            from packages.joern.unix_socket import socket_address
+            with socket_address(sock) as address:
+                assert len(os.fsencode(address)) <= server_mod._SUN_PATH_MAX_SAFE
+            assert d.startswith(multi_root)
         finally:
             os.rmdir(d)
         assert not any(os.scandir(multi_root))  # candidate cleaned up
 
+    @pytest.mark.skipif(sys.platform != "linux", reason="procfs socket alias")
     def test_surrogate_escaped_tmpdir_does_not_crash(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -356,7 +365,7 @@ class TestMakeUdsDir:
         ``str.encode("utf-8")`` raises UnicodeEncodeError. The budget
         check must survive such roots and keep counting exactly: an
         under-budget one is used as-is, an over-budget one still
-        diverts to the /tmp fallback instead of crashing."""
+        uses a procfs address instead of crashing."""
         base = tempfile.mkdtemp(prefix="js", dir="/tmp")
         request.addfinalizer(lambda: shutil.rmtree(base, ignore_errors=True))
         # One raw \x80 byte -> '\udc80' after fsdecode; encoding it
@@ -383,6 +392,8 @@ class TestMakeUdsDir:
             return real_mkdtemp(prefix=prefix, dir=dir)
 
         monkeypatch.setattr(server_mod.tempfile, "mkdtemp", fake_mkdtemp)
+        from packages.joern import client
+        monkeypatch.setattr(client, "runtime_base", lambda: Path(target))
         d = server_mod._make_uds_dir()
         try:
             assert d.startswith(sur_ok)  # fits in bytes: used as-is
@@ -392,8 +403,7 @@ class TestMakeUdsDir:
         target = sur_over
         d = server_mod._make_uds_dir()
         try:
-            assert d.startswith("/tmp/")
-            assert not d.startswith(sur_over)
+            assert d.startswith(sur_over)
         finally:
             os.rmdir(d)
         assert not any(os.scandir(sur_over))  # candidate cleaned up

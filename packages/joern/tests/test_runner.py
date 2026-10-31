@@ -607,7 +607,7 @@ class TestRunQueryScratchCwd:
 
         seen: dict = {}
 
-        def bare_runner(cmd, capture_output, text, timeout, cwd):
+        def bare_runner(cmd, capture_output, text, timeout, cwd, pass_fds=()):
             seen["cwd"] = Path(cwd)
             return SimpleNamespace(stdout="", stderr="", returncode=0)
 
@@ -615,7 +615,8 @@ class TestRunQueryScratchCwd:
             cpg, "cpg.method.l", subprocess_runner=bare_runner,
         )
         assert result.ok
-        assert seen["cwd"].parent == tmp_path
+        assert seen["cwd"] != tmp_path
+        assert not seen["cwd"].exists()
         assert seen["cwd"].name.startswith("raptor-query-")
 
     def test_concurrent_queries_get_distinct_cwds(self, tmp_path: Path):
@@ -628,7 +629,7 @@ class TestRunQueryScratchCwd:
 
         cwds: list[Path] = []
 
-        def bare_runner(cmd, capture_output, text, timeout, cwd):
+        def bare_runner(cmd, capture_output, text, timeout, cwd, pass_fds=()):
             cwds.append(Path(cwd))
             # The scratch cwd must exist while the query runs.
             assert Path(cwd).is_dir()
@@ -648,13 +649,13 @@ class TestRunQueryScratchCwd:
         f.write_bytes(b"fake")
         cpg = JoernCPG(path=f, target=tmp_path)
 
-        def ok_runner(cmd, capture_output, text, timeout, cwd):
+        def ok_runner(cmd, capture_output, text, timeout, cwd, pass_fds=()):
             # Simulate importCpg's workspace copy inside the cwd.
             (Path(cwd) / "workspace").mkdir()
             (Path(cwd) / "workspace" / "cpg.bin").write_bytes(b"copy")
             return SimpleNamespace(stdout="", stderr="", returncode=0)
 
-        def raising_runner(cmd, capture_output, text, timeout, cwd):
+        def raising_runner(cmd, capture_output, text, timeout, cwd, pass_fds=()):
             raise OSError("boom")
 
         run_query(cpg, "cpg.method.l", subprocess_runner=ok_runner)
@@ -917,6 +918,7 @@ class TestCPGCaching:
     def test_manifest_roundtrip(self, tmp_path):
         cpg_dir = tmp_path / "joern-cpg"
         cpg_dir.mkdir()
+        (cpg_dir / "cpg.bin").write_bytes(b"graph fixture")
         _write_cpg_manifest(cpg_dir, Path("/src"), "abc123", {"c"}, 500)
         m = _read_cpg_manifest(cpg_dir)
         assert m["content_hash"] == "abc123"
@@ -1683,7 +1685,7 @@ class TestSandboxCpuLimitsPlumbing:
         target.mkdir()
         calls: list = []
 
-        def strict_runner(cmd, capture_output, text, timeout, cwd):
+        def strict_runner(cmd, capture_output, text, timeout, cwd, pass_fds=()):
             calls.append(cmd)
             return SimpleNamespace(stdout="", stderr="", returncode=0)
 
@@ -1704,7 +1706,7 @@ class TestSandboxCpuLimitsPlumbing:
         cpg = JoernCPG(path=f, target=tmp_path)
         calls: list = []
 
-        def strict_runner(cmd, capture_output, text, timeout, cwd):
+        def strict_runner(cmd, capture_output, text, timeout, cwd, pass_fds=()):
             calls.append(cmd)
             return SimpleNamespace(stdout="", stderr="", returncode=0)
 
@@ -1713,3 +1715,59 @@ class TestSandboxCpuLimitsPlumbing:
         )
         assert result.errors == []
         assert len(calls) == 1
+
+
+def test_default_parser_policy_typeerror_never_retries_without_sandbox(tmp_path, monkeypatch):
+    import packages.joern.runner as runner
+    calls = []
+    def rejected(command, **kwargs):
+        calls.append(kwargs)
+        raise TypeError("out-of-policy inherited descriptor")
+    monkeypatch.setattr(runner, "_default_sandbox_runner", lambda: rejected)
+    graph = build_cpg(tmp_path, output_dir=tmp_path / "output")
+    assert graph.build_failed
+    assert len(calls) == 1
+    assert "target" in calls[0]
+
+
+def test_default_query_policy_typeerror_never_retries_without_sandbox(tmp_path, monkeypatch):
+    import packages.joern.runner as runner
+    calls = []
+    graph_path = tmp_path / "cpg.bin"
+    graph_path.write_bytes(_valid_cpg_bytes())
+    def rejected(command, **kwargs):
+        calls.append(kwargs)
+        raise TypeError("out-of-policy inherited descriptor")
+    monkeypatch.setattr(runner, "_default_sandbox_runner", lambda: rejected)
+    result = run_query(JoernCPG(graph_path, tmp_path), "cpg.method.name.l")
+    assert result.errors and "sandbox rejected" in result.errors[0]
+    assert len(calls) == 1
+
+
+def test_parser_uses_the_runtime_in_its_toolchain_identity(tmp_path, monkeypatch):
+    from packages.joern import prereqs, runner
+    java = str(tmp_path / "jdk/bin/java")
+    (tmp_path / "jdk/bin").mkdir(parents=True)
+    (tmp_path / "jdk/release").write_text("JDK fixture")
+    monkeypatch.setattr(prereqs, "_java_path", lambda: java)
+    command = runner._jvm_scratch_command(["joern-parse"], tmp_path)
+    assert f"JAVACMD={java}" in command
+    assert f"JAVA_HOME={tmp_path / 'jdk'}" in command
+
+
+def test_parser_does_not_infer_java_home_from_a_system_shim(tmp_path, monkeypatch):
+    from packages.joern import prereqs, runner
+    monkeypatch.setattr(prereqs, "_java_path", lambda: "/usr/bin/java")
+    monkeypatch.setattr(prereqs, "_jdk_home", lambda java: None)
+    command = runner._jvm_scratch_command(["joern-parse"], tmp_path)
+    assert "JAVACMD=/usr/bin/java" in command
+    assert not any(value.startswith("JAVA_HOME=") for value in command)
+
+
+def test_macos_parser_does_not_fall_back_to_an_unselected_jdk(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from packages.joern import prereqs, runner
+    monkeypatch.setattr(runner, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(prereqs, "_java_path", lambda: None)
+    with pytest.raises(RuntimeError, match="real JDK"):
+        runner._jvm_scratch_command(["joern-parse"], tmp_path)

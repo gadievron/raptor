@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import gc
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -959,6 +960,22 @@ class TestServerAuthSupportProbe:
 
     def test_probe_failure_fails_closed(self):
         assert self._probe("/fake/joern-broken", error=OSError("boom")) is False
+
+
+    def test_probe_uses_selected_jdk_without_homebrew_wrapper(self, tmp_path, monkeypatch):
+        from packages.joern import server, prereqs
+        from packages.joern.tests.test_prereqs import _mac_jdk
+        home, java = _mac_jdk(tmp_path)
+        monkeypatch.setattr(prereqs, "_java_path", lambda: str(java))
+        binary = str(tmp_path / "repl-bridge")
+        monkeypatch.setattr(server, "_AUTH_SUPPORT_CACHE", {})
+        def launch(command, **kwargs):
+            assert command == [binary, "--help"]
+            assert kwargs["env"]["JAVACMD"] == str(java)
+            assert kwargs["env"]["JAVA_HOME"] == str(home)
+            return subprocess.CompletedProcess(command, 0, "--server-auth-username", "")
+        monkeypatch.setattr(server.subprocess, "run", launch)
+        assert server._server_auth_supported(binary)
 
 
 class TestJoernServerAuth:

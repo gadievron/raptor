@@ -895,6 +895,7 @@ def run_reachability_prepass(
                 duration_s=time.monotonic() - t0,
             )
 
+    reach_token = None
     try:
         from core.inventory import read_checklist, update_checklist
         from core.orchestration.reachability_enrichment import (
@@ -907,7 +908,7 @@ def run_reachability_prepass(
         )
         if joern_server is not None:
             from core.analysis.reach_audit import set_joern_server
-            set_joern_server(joern_server)
+            reach_token = set_joern_server(joern_server)
 
         # Heavy discovery runs BEFORE the flock: the events.jsonl
         # parses + sandboxed addr2line behind the frida evidence maps
@@ -989,9 +990,9 @@ def run_reachability_prepass(
         )
         marked = 0
     finally:
-        if joern_server is not None:
-            from core.analysis.reach_audit import set_joern_server
-            set_joern_server(None)
+        if reach_token is not None:
+            from core.analysis.reach_audit import reset_joern_server
+            reset_joern_server(reach_token)
 
     return ReachabilityPrepassResult(
         ran=True,

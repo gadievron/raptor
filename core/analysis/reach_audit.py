@@ -24,7 +24,9 @@ prepass (which mutates a checklist with the same precedence).
 from __future__ import annotations
 
 import logging
+from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
+from functools import wraps
 
 from core.paths import path_to_module
 
@@ -63,11 +65,10 @@ _STAGE_VERDICTS = frozenset({
     "uncertain",
 })
 
-# NOTE: single-threaded use assumed — no synchronisation on this global.
-_joern_server = None
+_joern_server = ContextVar("raptor_reachability_joern", default=None)
 
 
-def set_joern_server(server) -> None:
+def set_joern_server(server) -> Token:
     """Set a Joern server for indirect-call resolution.
 
     When set, the ``not_called`` verdict from ``_stage_one_hop`` is
@@ -77,8 +78,30 @@ def set_joern_server(server) -> None:
 
     Call with None to clear.
     """
-    global _joern_server
-    _joern_server = server
+    return _joern_server.set(server)
+
+
+def reset_joern_server(token) -> None:
+    """Restore the caller's registration after a nested graph session."""
+    _joern_server.reset(token)
+
+
+def bind_joern_context(callback):
+    """Capture this graph binding for a thread without leaking it to later jobs."""
+    server = _joern_server.get()
+
+    @wraps(callback)
+    def bound(*args, **kwargs):
+        token = set_joern_server(server)
+        try:
+            return callback(*args, **kwargs)
+        finally:
+            reset_joern_server(token)
+    return bound
+
+
+def submit_with_joern(executor, callback, *args, **kwargs):
+    return executor.submit(bind_joern_context(callback), *args, **kwargs)
 
 
 @dataclass
@@ -276,11 +299,12 @@ def _joern_has_callers(function_name: str) -> bool:
     unavailable) therefore maps to False — no rescue, the graph
     verdict stands, same as a run without a Joern lane.
     """
-    if _joern_server is None:
+    server = _joern_server.get()
+    if server is None:
         return False
     try:
         from core.analysis.reachability_gates import _joern_find_callers
-        return bool(_joern_find_callers(function_name, _joern_server))
+        return bool(_joern_find_callers(function_name, server))
     except Exception:  # noqa: BLE001 — advisory cross-check: any failure means "no extra callers"
         return False
 

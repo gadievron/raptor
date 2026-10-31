@@ -23,9 +23,8 @@ These tests cover the three fix layers:
      ``sandbox_info["audit_engaged"] is False``).
 
 All tests are hermetic: environmental degradation is forced by
-monkeypatching the seccomp/ptrace probes and by ``input=`` (which
-routes the call off the spawn path), never by relying on host
-capabilities.
+monkeypatching backend availability and seccomp/ptrace probes,
+never by relying on host capabilities.
 """
 
 from __future__ import annotations
@@ -54,11 +53,12 @@ def no_audit_tiers(monkeypatch):
     The Landlock-only tracer probes are patched at their defining
     modules (context.py imports them inside the function bodies, so
     patching the source modules reaches every call site). The spawn
-    tier is avoided per-test by passing ``input=`` — the kwarg-compat
-    gate routes such calls off the spawn path on Linux.
+    tier is disabled through its mount capability probe.
     """
     import core.sandbox.ptrace_probe as pp
     import core.sandbox.seccomp as sc
+    import core.sandbox.context as ctx
+    monkeypatch.setattr(ctx, "check_mount_available", lambda: False)
     monkeypatch.setattr(sc, "check_seccomp_available", lambda: False)
     monkeypatch.setattr(pp, "check_ptrace_available", lambda: False)
 
@@ -212,9 +212,8 @@ class TestEvidenceBottleneck:
         _pr, _pw = os.pipe()
         os.close(_pw)
         with _audit_sandbox(d) as r:
-            # pass_fds= routes off the spawn tier (input= now rides
-            # it); the probes fixture kills the Landlock-only tracer
-            # tier, so audit cannot engage anywhere.
+            # Backend and tracer probes are disabled by the fixture;
+            # audit cannot engage anywhere.
             res = r(["cat"], stdin=_pr, pass_fds=[_pr],
                     pass_fds_declared=True, capture_output=True,
                     timeout=60)

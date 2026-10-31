@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
 import shutil
+import stat
 import subprocess
+import sys
 from pathlib import Path
 
 from core.run.toolprobe import probe
@@ -26,6 +29,59 @@ _resolved_joern_parse: str | None = None
 _joern_parse_resolved: bool = False
 
 
+def _homebrew_install_root(launcher: str) -> Path | None:
+    """Recognize an installed Joern keg, not arbitrary adjacent directories."""
+    path = Path(launcher)
+    if path.parent.name != "bin":
+        return None
+    root = path.parent.parent
+    if root.name == "libexec":
+        root = root.parent
+    if (root.parent.name != "joern" or root.parent.parent.name != "Cellar"
+            or not (root / "INSTALL_RECEIPT.json").is_file()
+            or not (root / "libexec/lib").is_dir()):
+        return None
+    return root
+
+
+def _homebrew_receipt(root: Path) -> dict:
+    try:
+        descriptor = os.open(root / "INSTALL_RECEIPT.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor, "rb") as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                return {}
+            data = stream.read(65537)
+        if len(data) > 65536:
+            return {}
+        value = json.loads(data)
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError, RecursionError):
+        return {}
+
+
+def _homebrew_entry(launcher: str, name: str) -> str | None:
+    root = _homebrew_install_root(launcher)
+    if root is not None:
+        candidate = root / "libexec/bin" / name
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate.resolve())
+    return None
+
+
+def _homebrew_version(launcher: str) -> str | None:
+    root = _homebrew_install_root(launcher)
+    if root is None:
+        return None
+    source = _homebrew_receipt(root).get("source")
+    if not isinstance(source, dict) or source.get("spec") != "stable":
+        return None
+    versions = source.get("versions")
+    value = versions.get("stable") if isinstance(versions, dict) else None
+    # A timestamped HEAD banner is not a semantic release number. A stable
+    # Homebrew receipt records the source release used to build these JARs.
+    return value if isinstance(value, str) and re.fullmatch(r"\d+\.\d+\.\d+", value) else None
+
+
 # Both resolvers cache the REAL path (os.path.realpath of the which()
 # result): joern installs put symlink launchers on PATH while the
 # actual scripts live in the joern-cli install dir next to the jars
@@ -39,7 +95,9 @@ def _joern_path() -> str | None:
         for name in _JOERN_NAMES:
             found = shutil.which(name)
             if found:
-                _resolved_joern = os.path.realpath(found)
+                real = os.path.realpath(found)
+                _resolved_joern = (_homebrew_entry(real, "repl-bridge")
+                                   or _homebrew_entry(real, "joern-cli") or real)
                 break
         _joern_resolved = True
     return _resolved_joern
@@ -49,7 +107,12 @@ def _joern_parse_path() -> str | None:
     global _resolved_joern_parse, _joern_parse_resolved
     if not _joern_parse_resolved:
         found = shutil.which(_JOERN_PARSE_BIN)
-        _resolved_joern_parse = os.path.realpath(found) if found else None
+        if found:
+            real = os.path.realpath(found)
+            _resolved_joern_parse = _homebrew_entry(real, "joern-parse") or real
+        else:
+            launcher = _joern_path()
+            _resolved_joern_parse = _homebrew_entry(launcher, "joern-parse") if launcher else None
         _joern_parse_resolved = True
     return _resolved_joern_parse
 
@@ -71,8 +134,102 @@ def _java_path() -> str | None:
     if not _java_resolved:
         found = shutil.which("java")
         _resolved_java = os.path.realpath(found) if found else None
+        launcher = _joern_path()
+        if launcher and _homebrew_install_root(launcher) is not None:
+            # Homebrew wrappers choose JAVA_HOME on both Linux and macOS.
+            # Resolve that choice explicitly before bypassing the wrapper.
+            selected = os.environ.get("JAVA_HOME")
+            if selected:
+                _resolved_java = _java_in_home(selected)
+            else:
+                home = _homebrew_java_home(launcher)
+                _resolved_java = str(home / "bin/java") if home is not None else None
+            if _resolved_java is None:
+                logging.getLogger(__name__).warning(
+                    "Joern Homebrew JDK unavailable; check JAVA_HOME and the installed OpenJDK dependency")
+        elif sys.platform == "darwin" and (found == "/usr/bin/java" or _resolved_java == "/usr/bin/java"):
+            _resolved_java = _darwin_java_path()
         _java_resolved = True
     return _resolved_java
+
+
+def _jdk_home(java: str) -> Path | None:
+    """Return a verified JDK layout, never infer JAVA_HOME from a shim."""
+    path = Path(java).resolve()
+    root = path.parent.parent
+    if path.parent.name == "bin" and (
+        (root / "release").is_file() or (root / "jmods").is_dir()
+        or (root / "lib/modules").is_file()
+    ):
+        return root
+    return None
+
+
+def _java_in_home(selected: str) -> str | None:
+    try:
+        root = Path(selected)
+        if not root.is_absolute():
+            return None
+        for candidate in (root / "bin/java", root / "openjdk.jdk/Contents/Home/bin/java"):
+            if not candidate.is_file() or not os.access(candidate, os.X_OK):
+                continue
+            java = candidate.resolve(strict=True)
+            if str(java) != "/usr/bin/java" and _jdk_home(str(java)) is not None:
+                return str(java)
+    except (OSError, ValueError, RuntimeError):
+        pass
+    return None
+
+
+def _homebrew_java_home(launcher: str) -> Path | None:
+    root = _homebrew_install_root(launcher)
+    if root is None:
+        return None
+    dependencies = _homebrew_receipt(root).get("runtime_dependencies")
+    if not isinstance(dependencies, list):
+        return None
+    # Prefer the formula's declared JDK over unrelated transitive runtimes.
+    direct = [entry for entry in dependencies if isinstance(entry, dict)
+              and entry.get("declared_directly") is True]
+    names = []
+    for entry in direct or dependencies:
+        name = entry.get("full_name") if isinstance(entry, dict) else entry
+        if isinstance(name, str) and re.fullmatch(r"openjdk(?:@\d+)?", name) and name not in names:
+            names.append(name)
+    if len(names) != 1:
+        # Ambiguous receipts cannot establish the wrapper's JDK choice.
+        # An explicit JAVA_HOME remains available to the operator.
+        return None
+    prefix = root.parent.parent.parent / "opt" / names[0]
+    for candidate in (prefix / "libexec", prefix):
+        java = _java_in_home(str(candidate))
+        if java is not None:
+            return _jdk_home(java)
+    return None
+
+
+def _darwin_java_path() -> str | None:
+    # Apple's system launcher needs services blocked by worker confinement.
+    # Resolve the JDK before sandboxing instead of treating /usr as JAVA_HOME.
+    selected = os.environ.get("JAVA_HOME")
+    if not selected:
+        from core.config import RaptorConfig
+        try:
+            result = subprocess.run(
+                ["/usr/libexec/java_home"], capture_output=True, text=True,
+                timeout=5, env=RaptorConfig.get_safe_env(),
+            )
+            if result.returncode != 0:
+                return None
+            selected = result.stdout.strip()
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+    java = _java_in_home(selected)
+    if java is not None:
+        return java
+    logging.getLogger(__name__).warning(
+        "Joern requires a real JDK on macOS; correct JAVA_HOME or put the JDK bin directory on PATH")
+    return None
 
 
 def _java_declared_root(java_real: str) -> str | None:
@@ -209,10 +366,10 @@ def reset_path_cache() -> None:
 
 
 def is_available() -> bool:
-    """True if joern (or joern-cli) and joern-parse are on PATH."""
+    """True if the CLI and parser resolve from PATH or a verified Homebrew keg."""
     return (
         _joern_path() is not None
-        and shutil.which(_JOERN_PARSE_BIN) is not None
+        and _joern_parse_path() is not None
     )
 
 
@@ -224,7 +381,9 @@ def _version_from_dist(joern: str) -> str | None:
     the launcher carries the version in every jar name
     (``io.joern.joern-cli-<version>.jar``) — read it for free.
     """
-    lib = Path(joern).resolve().parent / "lib"
+    launcher = Path(joern).resolve()
+    root = launcher.parent.parent if launcher.parent.name == "bin" else launcher.parent
+    lib = root / "lib"
     try:
         for jar in lib.glob("io.joern.joern-cli-*.jar"):
             # \d\S* — \S subsumes the digit run (same language, no
@@ -234,7 +393,7 @@ def _version_from_dist(joern: str) -> str | None:
                 return m.group(1)
     except OSError:
         pass
-    return None
+    return _homebrew_version(str(launcher))
 
 
 def version() -> str | None:
@@ -296,7 +455,10 @@ def _java_version() -> int | None:
     Probes via core.run.toolprobe (sanitised env, resolved-path
     exec). java prints its version to stderr — scan both streams.
     """
-    info = probe("java", args=("-version",), timeout=10)
+    java = _java_path()
+    if java is None:
+        return None
+    info = probe(java, args=("-version",), timeout=10)
     if info is None:
         return None
     combined = info.stdout + info.stderr
@@ -315,7 +477,7 @@ def check_prereqs() -> list[str]:
 
     if _joern_path() is None:
         missing.append("joern-cli not found on PATH")
-    if shutil.which(_JOERN_PARSE_BIN) is None:
+    if _joern_parse_path() is None:
         missing.append("joern-parse not found on PATH")
 
     java_ver = _java_version()

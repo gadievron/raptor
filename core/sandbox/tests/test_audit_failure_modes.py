@@ -13,7 +13,6 @@ import json
 import os
 import platform
 import time
-from pathlib import Path
 
 import pytest
 
@@ -795,22 +794,13 @@ class TestAuditDegradationWarning:
                     f"{rec.getMessage()!r}"
                 )
 
-    def test_warning_text_distinguishes_mount_ns_vs_pass_fds(
-            self, monkeypatch):
-        """The warning message picks the precise reason for the spawn
-        ineligibility: 'mount-ns blocked' (host sysctl) vs 'pass_fds='
-        / 'input=' (call kwargs). Operator gets actionable fix."""
-        from core.sandbox import context as ctx_mod
-        # Read the source to confirm all three reason strings are
-        # present — a structural-drift defense (so a future refactor
-        # that drops one branch is caught even without exercising it).
-        src = (Path(ctx_mod.__file__)).read_text()
-        assert "mount-ns blocked by host" in src, (
-            "mount-ns degradation reason missing from context.py")
-        assert "pass_fds=" in src, (
-            "pass_fds degradation reason missing from context.py")
-        assert "input=" in src, (
-            "input= degradation reason missing from context.py")
+    def test_descriptor_and_input_arguments_are_not_audit_degradation_reasons(self, monkeypatch):
+        from core.sandbox import context
+        monkeypatch.setattr(context, "check_mount_available", lambda: True)
+        reason, _ = context._audit_degrade_reason(
+            "", "", "/target", "/output", {"pass_fds": (3,), "input": b"payload"})
+        assert "pass_fds" not in reason
+        assert "input=" not in reason
 
 
 # Real sandbox() runs — real-kernel binding on both platforms.

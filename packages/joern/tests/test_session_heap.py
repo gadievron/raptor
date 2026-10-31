@@ -33,7 +33,7 @@ def _run_session(tmp_path: Path, tunables: JoernTunables, use_cache: bool):
             tunables=tunables,
             register_reach_audit=False,
         ) as srv:
-            assert srv is server
+            assert srv is None  # the fixture deliberately produced no graph
     return captured
 
 

@@ -539,6 +539,9 @@ _REPORT_CONSTRUCTORS = frozenset({"ReportSection"})
 # writer needs an explicit add (forcing a security review at file-add
 # time).
 _REPORT_WRITER_FILES = (
+    # Confined Joern worker launcher: runtime/path errors are terminal text,
+    # sanitised through sanitise_for_terminal before printing.
+    "packages/joern/worker_guard.py",
     "core/analysis/binary_oracle.py",
     "core/analysis/binary_oracle_cli.py",
     # Build-system detector CLI: command/working_dir/env_vars derive

@@ -544,3 +544,17 @@ class TestEntryPointSampleDeterminism:
         depths = _sample_entry_point_depths(inventory, entry_points)
         # Only the lexically-first 50 (all shallow) are sampled.
         assert max(depths) == 1
+
+
+def test_failed_lease_acquisition_never_boots_a_direct_worker(monkeypatch):
+    from unittest.mock import Mock
+    from core.audit import joern_backend
+    from packages.joern import lifecycle
+    from packages.joern.server import JoernServer
+    monkeypatch.setattr(joern_backend, "joern_available", lambda **kw: True)
+    monkeypatch.setattr(joern_backend, "target_has_c_sources", lambda target: True)
+    monkeypatch.setattr(lifecycle, "joern_acquire", Mock(side_effect=RuntimeError("refused")))
+    direct = Mock()
+    monkeypatch.setattr(JoernServer, "start", direct)
+    assert joern_backend.start_joern_server("/unused") is None
+    direct.assert_not_called()

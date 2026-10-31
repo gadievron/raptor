@@ -25,20 +25,6 @@ logger = logging.getLogger(__name__)
 
 _C_EXTENSIONS = frozenset({".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh"})
 _JOERN_STALL_FLOOR_S = 30
-# Forwarder orphan-idle horizon for the DIRECT-START (run-private)
-# server below: no lifecycle state file records it, so once this
-# process is gone no later run can ever re-acquire it — an orphaned
-# pair is pure multi-GB squatting from the first idle second. The
-# horizon still is not zero: parent death is observable mid-run (a
-# segment drain re-execs the orchestrator; an operator attaches a
-# debugger to a wedged run and the original parent exits) and a
-# too-short value (<~5 min) would reap a server a still-running
-# analysis is about to query again. Longer buys nothing — nobody can
-# reconnect after the run's process tree is gone — and re-creates the
-# multi-hour JVM squat this value exists to end. 15 min covers the
-# longest observed segment-handoff gaps with margin.
-_RUN_PRIVATE_ORPHAN_TTL_S = 900.0
-
 # Byte budget for .raptor-run.json / pre-sweep status metadata reads.
 _MAX_RUN_META_BYTES = 1024 * 1024
 
@@ -339,31 +325,14 @@ def start_joern_server(target_path, joern_overrides=None, tunables=None,
             or target_has_joern_sources(target_path)):
         return None
 
-    srv = None
     try:
         from packages.joern.lifecycle import joern_acquire
         srv = joern_acquire(tunables)
     except Exception:
-        logger.debug("joern lifecycle acquire failed; trying direct start",
-                     exc_info=True)
-
+        logger.debug("Joern client unavailable; using subprocess fallback", exc_info=True)
+        return None
     if srv is None:
-        try:
-            from packages.joern.server import JoernServer
-        except ImportError:
-            return None
-        try:
-            # Run-private server: lifecycle acquire failed, so this
-            # server is never state-file-recorded — pass the short
-            # orphan horizon (see _RUN_PRIVATE_ORPHAN_TTL_S).
-            srv = JoernServer.from_tunables(
-                tunables, orphan_idle_ttl_s=_RUN_PRIVATE_ORPHAN_TTL_S,
-            )
-            srv.start()
-        except Exception:
-            logger.debug("Joern server failed to start; using subprocess fallback",
-                         exc_info=True)
-            return None
+        return None
 
     _cpg_start = time.monotonic()
     _cpg_ok = _ensure_cpg_loaded(srv, target_path, tunables,
@@ -375,7 +344,8 @@ def start_joern_server(target_path, joern_overrides=None, tunables=None,
     if not _cpg_ok:
         logger.warning("Joern CPG failed to load for %s — disabling Joern", target_path)
         try:
-            srv.stop()
+            from packages.joern.lifecycle import joern_release
+            joern_release(srv=srv)
         except Exception:
             logger.debug("joern server stop failed", exc_info=True)
         return None
@@ -680,6 +650,12 @@ def _ensure_cpg_loaded(srv, target_path, tunables=None,
         # successful _cpg_path to re-import), and the status record
         # claimed a channel the run never had.
         try:
+            from packages.joern.client import GraphClient
+            # Graph clients acquire controller-owned bindings; legacy injected
+            # private handles still import directly. Only their owning backend
+            # may restart a failed process (see the retry branch below).
+            if isinstance(srv, GraphClient):
+                return bool(srv.bind_graph(cpg, timeout=timeout))
             return bool(srv.import_cpg(cpg.path, timeout=timeout))
         except Exception:
             logger.debug(
@@ -761,11 +737,17 @@ def _ensure_cpg_loaded(srv, target_path, tunables=None,
         )
         restarted = False
         try:
-            restart = getattr(srv, "restart", None)
-            restarted = bool(restart()) if callable(restart) else False
+            from packages.joern.client import GraphClient
+            if isinstance(srv, GraphClient):
+                # Failed cold admission already tears down its private worker.
+                # Retry with the larger import budget without restarting a
+                # shared generation another borrower might be querying.
+                restarted = True
+            else:
+                restart = getattr(srv, "restart", None)
+                restarted = bool(restart()) if callable(restart) else False
         except Exception:
-            logger.debug("server restart before import retry failed",
-                         exc_info=True)
+            logger.debug("server preparation before import retry failed", exc_info=True)
         if restarted:
             import_retried = True
             imported = _try_import(import_retry_timeout_s)

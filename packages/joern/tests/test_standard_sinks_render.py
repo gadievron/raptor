@@ -55,15 +55,11 @@ class TestStandardSinksRender:
 
             return P()
 
-        class FakeCPG:
-            path = _SC  # any existing file; importCpg line is inert here
-            target = _SC.parent
-
-            def exists(self):
-                return True
+        from packages.joern.models import JoernCPG
+        graph = JoernCPG(_SC, _SC.parent)
 
         run_query(
-            FakeCPG(), str(_SC),
+            graph, str(_SC),
             subprocess_runner=fake_runner, validate=False,
             substitutions={
                 "__SINK_NAMES__": scala_string_list(STANDARD_SWEEP_SINKS),

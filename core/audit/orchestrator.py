@@ -34,6 +34,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, NoReturn, TYPE_CHECKING
 
+from core.analysis.reach_audit import bind_joern_context, submit_with_joern
 from core.analysis.reachability_gates import (
     GUARD_UNAVAILABLE,
     build_sink_reachable_set,
@@ -634,11 +635,8 @@ def _reset_shutdown_state() -> None:
 
 
 # Hard bound on the joern server release during a SIGTERM salvage or
-# forced exit. Not lower: ``joern_release`` serialises on a
-# cross-process file lock, and a healthy sibling holding it briefly
-# (registering or releasing its own server) legitimately takes a few
-# seconds — a ~1s bound would abandon releases that were about to
-# succeed and leak the JVM anyway. Not higher: this wait sits inside
+# forced exit. Explicit release waits for controller teardown acknowledgement;
+# a healthy worker shutdown can legitimately take a few seconds. Not higher: this wait sits inside
 # the ~30s SIGTERM grace shared with the ledger/journal flush and the
 # salvage export; letting the release consume most of that window
 # trades a JVM the operator can reap by hand for salvage artifacts
@@ -650,9 +648,8 @@ def _bounded_joern_exit_release(release: Callable[[], None]) -> None:
     """Run *release* with a hard time bound, then abandon it.
 
     Exit paths only (SIGTERM salvage conclusion, watchdog expiry,
-    second TERM): ``joern_release`` can block on its cross-process
-    file lock, and an exiting process must not hang there — a leaked
-    forwarder+JVM pair is recoverable, a wedged salvage is not. The
+    second TERM): explicit release can wait for controller acknowledgement,
+    and an exiting process must not delay salvage indefinitely. The
     worker thread is daemonic, so an expired bound never delays the
     interpreter's exit.
     """
@@ -664,8 +661,8 @@ def _bounded_joern_exit_release(release: Callable[[], None]) -> None:
     if worker.is_alive():
         logger.warning(
             "joern server release did not finish within %.0fs during "
-            "exit — abandoning it (the forwarder/JVM pair may outlive "
-            "this process; reap it manually if it does)",
+            "exit — continuing shutdown; connection EOF releases this "
+            "client's lease and controller teardown continues independently",
             _JOERN_EXIT_STOP_TIMEOUT_S,
         )
 
@@ -2304,11 +2301,9 @@ def run_orchestrator(
             and getattr(joern_server, "_lifecycle_token", None) is not None
         )
 
-    # Forced-exit reap for run-private servers only (lifecycle acquire
-    # failed — no state-file record, so no other session can reference
-    # them). Lifecycle-managed servers are released through the bounded
-    # joern_release registered just below; a stop_fast here would kill
-    # the process under another session's refcount.
+    # Retain compatibility for caller-supplied private servers. Controller
+    # clients release only their own lease through the bounded hook below;
+    # they never own another client's process.
     _register_private_joern_reap_hook(
         joern_server,
         caller_owns=_caller_owns_joern,
@@ -2400,6 +2395,8 @@ def run_orchestrator(
     # (call class, duration, tokens, cache read/write counters,
     # timeout/retry disposition) in the run directory. Diagnostics
     # only — installation failure must never block the run.
+    from core.analysis.reach_audit import set_joern_server, reset_joern_server
+    _reach_token = set_joern_server(joern_server)
     _telemetry_sink = None
     try:
         from core.llm.telemetry import TELEMETRY_FILENAME, TelemetrySink, set_sink
@@ -2437,9 +2434,7 @@ def run_orchestrator(
                     logger.debug(
                         "llm telemetry summary failed", exc_info=True,
                     )
-            from core.analysis.reach_audit import set_joern_server
-
-            set_joern_server(None)
+            reset_joern_server(_reach_token)
             if is_sigterm_requested():
                 # Salvage conclusion: joern_release can block on its
                 # cross-process file lock, and the ~30s grace budget
@@ -9409,7 +9404,7 @@ def _run_audit_body(
         study_queue = StudyQueue()
         shared.study_queue = study_queue
         study_consumer_thread = _threading.Thread(
-            target=_study_consumer,
+            target=bind_joern_context(_study_consumer),
             args=(
                 study_queue,
                 config,
@@ -9571,7 +9566,7 @@ def _run_audit_body(
         review_idx = 0
         batch_stop = False
         with ThreadPoolExecutor(max_workers=resolved_workers) as pool:
-            pending = {pool.submit(_review_batch, b) for b in batched}
+            pending = {submit_with_joern(pool, _review_batch, b) for b in batched}
             while pending:
                 if batch_stop:
                     # shutdown(cancel_futures=True) cancels queued
@@ -10064,7 +10059,7 @@ def _run_audit_body(
                     ls_raw = []
                     with ThreadPoolExecutor(max_workers=effective_ls_workers) as pool:
                         ls_futs = {
-                            pool.submit(_do_ls_review, item): item
+                            submit_with_joern(pool, _do_ls_review, item): item
                             for item in ls_prepared
                         }
                         for fut in as_completed(ls_futs):
@@ -12711,7 +12706,7 @@ def _run_mechanical_detectors(
                 max_workers=min(8, len(to_compute)),
             ) as pool:
                 futures = {
-                    pool.submit(_process_file_conditions, fp, src): fp
+                    submit_with_joern(pool, _process_file_conditions, fp, src): fp
                     for fp, src in to_compute
                 }
                 for fut, fut_fp in futures.items():
@@ -25459,7 +25454,7 @@ def _collect_reviews_until_budget(
         future_to_item = {}
         try:
             for item in prepared:
-                future_to_item[pool.submit(run_item, item)] = item
+                future_to_item[submit_with_joern(pool, run_item, item)] = item
         except RuntimeError:
             # Interpreter shutdown between the budget check and
             # dispatch: the run is tearing down while a background
@@ -33469,7 +33464,7 @@ def _callee_contract_requeue(
 
         raw_results = []
         with ThreadPoolExecutor(max_workers=effective_workers) as pool:
-            futs = {pool.submit(_do_review, item): item
+            futs = {submit_with_joern(pool, _do_review, item): item
                     for item in prepared}
             for fut in as_completed(futs):
                 raw_results.append(fut.result())

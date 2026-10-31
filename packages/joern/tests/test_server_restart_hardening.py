@@ -509,7 +509,7 @@ class TestPostErrorClassificationRace:
                 # lands before A's query() reads it.
                 b_done.wait(5)
                 return None
-            return {"stdout": 'val res0: String = "ok"', "stderr": ""}
+            return {"success": True, "stdout": 'val res0: String = "ok"', "stderr": ""}
 
         results: dict = {}
         with patch.object(srv, "_uds_request", side_effect=stub_uds), \

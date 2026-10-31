@@ -2,7 +2,7 @@
 
 The mount backend is chosen at context construction, but several
 PER-CALL conditions demote a run to the Landlock-only subprocess path
-(pass_fds=/input= kwarg compat, the B-fallback cmd-visibility check,
+(the B-fallback cmd-visibility check,
 the speculative-failure cache, an M/X setup status). Pre-fix, those
 demotions (a) bypassed the strict fail-closed contract, which was only
 checked at construction, and (b) kept the construction-time writable
@@ -24,6 +24,7 @@ import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from core.sandbox.tests.capability import (
@@ -42,6 +43,11 @@ def _mount_ns_usable() -> bool:
         return False
     sysctl = Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
     return not (sysctl.exists() and sysctl.read_text().strip() == "1")
+
+
+def _force_spawn_failure():
+    return patch("core.sandbox._spawn.run_sandboxed",
+                 side_effect=RuntimeError("forced native setup failure"))
 
 
 class _Base(unittest.TestCase):
@@ -147,16 +153,16 @@ class TestStrictRefusesPerCallDemotion(_Base):
                     capture_output=True, text=True, timeout=30)
 
     @requires_userns
-    def test_pass_fds_demotion_raises_under_strict(self):
+    def test_pass_fds_keeps_strict_namespace_backend(self):
         from core.sandbox import sandbox
-        from core.sandbox.errors import SandboxSetupError
         r, w = os.pipe()
         self.addCleanup(lambda: (os.close(r), os.close(w)))
         with sandbox(profile="strict", target=self.tgt,
                      output=self.out) as run:
-            with self.assertRaises(SandboxSetupError):
-                run(["true"], pass_fds=[r], pass_fds_declared=True,
-                    capture_output=True, text=True, timeout=30)
+            result = run(["true"], pass_fds=[r],
+                         capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(result.sandbox_info["mount_ns_active"])
 
     @requires_landlock
     @requires_userns
@@ -170,10 +176,7 @@ class TestStrictRefusesPerCallDemotion(_Base):
 
 
 class TestDemotedCallGetsPrivateScratch(_Base):
-    """pass_fds= forces the Landlock-only path (input= no longer
-    demotes — it rides the fork backend); under restrict_reads the
-    demoted call must NOT keep the mount-time host /tmp / /dev/shm
-    grants — it gets a per-call private scratch dir instead."""
+    """A failed native setup must not expose host scratch on fallback."""
 
     _PROBE = textwrap.dedent("""
         import os, sys
@@ -203,17 +206,13 @@ class TestDemotedCallGetsPrivateScratch(_Base):
             f"raptor-demote-marker-{os.getpid()}")
         self.addCleanup(
             lambda: os.path.exists(marker) and os.unlink(marker))
-        # pass_fds= is the demotion lever now: input= rides the fork
-        # backend. The probe's stdin arrives via the same input= (it
-        # converts to a spool fd on the SPAWN lane only — on the
-        # demoted subprocess lane it stays subprocess-communicate),
-        # so feed it explicitly through the pipe we pass.
+        # Force a genuine native setup failure; descriptors stay supported.
         _pr, _pw = os.pipe()
         os.write(_pw, b"go")
         os.close(_pw)
         self.addCleanup(lambda: (os.close(_pr) if _pr else None))
         with sandbox(target=self.tgt, output=self.out,
-                     restrict_reads=True) as run:
+                     restrict_reads=True) as run, _force_spawn_failure():
             r = run(["/usr/bin/python3", "-c", self._PROBE, marker],
                     stdin=_pr, pass_fds=[_pr], pass_fds_declared=True,
                     capture_output=True, text=True,
@@ -235,14 +234,10 @@ class TestDemotedCallGetsPrivateScratch(_Base):
             "demoted restricted call must stamp private_scratch")
 
     @requires_landlock
+    @requires_userns
+    @requires_mount
     def test_spawn_lane_masks_host_cgroup(self):
-        # CLONE_NEWCGROUP on the fork lane: /proc/self/cgroup reads
-        # "0::/" instead of the orchestrator's session scope. (The
-        # pass_fds-demoted PLAIN lane no longer masks the cgroup path
-        # — the deleted unshare-CLI fallback's --cgroup was the only
-        # namespace mask a demoted call ever had; a demoted call now
-        # runs at the landlock tier, with the demotion warned and the
-        # tier stamped, and the mask rides the namespace lanes only.)
+        # Namespace execution masks host membership; a forced fallback is stamped.
         from core.sandbox import sandbox
         with sandbox(target=self.tgt, output=self.out) as run:
             r = run(["cat", "/proc/self/cgroup"],
@@ -258,7 +253,7 @@ class TestDemotedCallGetsPrivateScratch(_Base):
         os.write(_pw, b"go")
         os.close(_pw)
         self.addCleanup(lambda: os.close(_pr))
-        with sandbox(target=self.tgt, output=self.out) as run:
+        with sandbox(target=self.tgt, output=self.out) as run, _force_spawn_failure():
             r2 = run(["cat", "/proc/self/cgroup"],
                      stdin=_pr, pass_fds=[_pr], pass_fds_declared=True,
                      capture_output=True, text=True, timeout=60)
@@ -378,7 +373,7 @@ class TestDemotionLandlockRecheck(_Base):
     The construction-time "confinement requested but Landlock
     unavailable" refusal only fires when the mount backend was ruled
     out at setup. A call that chose mount-ns and was then demoted
-    (pass_fds= kwarg, a mid-setup spawn error, an M/X setup status)
+    (a mid-setup spawn error or an M/X setup status)
     lands on the Landlock-only path — where every byte of the requested
     target/output/allowed_tcp_ports/restrict_reads policy is enforced
     by Landlock alone, and the preexec silently skips its Landlock arm
@@ -434,7 +429,7 @@ class TestDemotionLandlockRecheck(_Base):
         from core.sandbox.errors import SandboxSetupError
         run = self._sandbox_run_or_skip()
         fd = self._devnull_fd()
-        with self._patch_landlock_unavailable():
+        with self._patch_landlock_unavailable(), _force_spawn_failure():
             with self.assertRaises(SandboxSetupError) as cm:
                 run(["true"], pass_fds=(fd,), capture_output=True,
                     timeout=30)
@@ -445,7 +440,7 @@ class TestDemotionLandlockRecheck(_Base):
         from core.sandbox.errors import SandboxSetupError
         run = self._sandbox_run_or_skip(restrict_reads=True)
         fd = self._devnull_fd()
-        with self._patch_landlock_unavailable():
+        with self._patch_landlock_unavailable(), _force_spawn_failure():
             with self.assertRaises(SandboxSetupError):
                 run(["true"], pass_fds=(fd,), capture_output=True,
                     timeout=30)
@@ -474,8 +469,8 @@ class TestDemotionLandlockRecheck(_Base):
             self.skipTest("Landlock unavailable")
         run = self._sandbox_run_or_skip()
         fd = self._devnull_fd()
-        r = run(["true"], pass_fds=(fd,), capture_output=True,
-                timeout=30)
+        with _force_spawn_failure():
+            r = run(["true"], pass_fds=(fd,), capture_output=True, timeout=30)
         self.assertEqual(r.returncode, 0, r.stderr[-300:])
 
 

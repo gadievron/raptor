@@ -392,6 +392,7 @@ class TestStopLadderDemotion:
     def test_pidns_tier_skips_the_ladder_on_a_clean_reap(self):
         srv, proc = _server_with_proc("pidns")
         proc.wait.return_value = 0
+        proc.returncode = 0
         with (
             patch("packages.joern.server._ensure_group_dead") as ensure,
             patch("packages.joern.server.os.killpg") as killpg,
@@ -489,7 +490,6 @@ class TestRestartSecondGraceWindow:
         with (
             patch.object(srv, "stop"),
             patch.object(srv, "start"),
-            patch("packages.joern.lifecycle.note_server_replaced"),
             patch("packages.joern.server._ensure_group_dead",
                   return_value=True) as ensure,
         ):

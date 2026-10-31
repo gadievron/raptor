@@ -199,7 +199,12 @@ _SUPERVISOR_CODE = (
     "child = subprocess.Popen([sys.executable, '-c', sys.argv[1]])\n"
     "with open(os.environ['READY_FILE'], 'w') as f:\n"
     "    f.write(f'{os.getpid()} {child.pid}')\n"
-    "child.wait()\n"
+    "while True:\n"
+    "    try:\n"
+    "        child.wait(timeout=0.1)\n"
+    "        break\n"
+    "    except subprocess.TimeoutExpired:\n"
+    "        pass\n"
 )
 
 _PARENT_CODE = (

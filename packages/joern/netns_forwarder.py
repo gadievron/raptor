@@ -196,7 +196,12 @@ def create_listener(socket_path: str) -> socket.socket:
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     old_umask = os.umask(0o077)
     try:
-        listener.bind(socket_path)
+        if __package__:
+            from .unix_socket import socket_address
+        else:
+            from unix_socket import socket_address
+        with socket_address(socket_path) as address:
+            listener.bind(address)
     except BaseException:
         listener.close()
         raise
@@ -495,6 +500,11 @@ def _ns_init_split(live_r: int, arm_w: int) -> None:
             # P died in the fork→prctl window; PDEATHSIG missed it.
             # Collapse now instead of orphaning a tree.
             os._exit(_WAITER_EXIT_PARENT_DIED)
+    # A child can report readiness before this waiter gets CPU again.
+    # Block the forwarded signals across fork/handler installation so an
+    # early signal cannot take the waiter's inherited default disposition.
+    forwarded = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT)
+    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, forwarded)
     try:
         os.write(arm_w, b"A")
         os.close(arm_w)
@@ -512,32 +522,41 @@ def _ns_init_split(live_r: int, arm_w: int) -> None:
         # probe; the working forwarder holds no read end of it.
         with contextlib.suppress(OSError):
             os.close(live_r)
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
         return  # working-forwarder path continues in main()
 
-    def _forward(signum: int, _frame: FrameType | None,
-                 _child: int = child) -> None:
-        with contextlib.suppress(OSError):
-            os.kill(_child, signum)
+    pending_signals: list[int] = []
+
+    def _forward(signum: int, _frame: FrameType | None) -> None:
+        pending_signals.append(signum)
 
     for _sig in (signal.SIGTERM, signal.SIGINT,
                  signal.SIGHUP, signal.SIGQUIT):
         with contextlib.suppress(OSError, ValueError):
             signal.signal(_sig, _forward)
 
+    signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+
     while True:
+        signals, pending_signals = pending_signals, []
+        for signum in signals:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(child, signum)  # only this loop can reap the child
         try:
-            pid_, status = os.wait()
+            pid_, status = os.waitpid(-1, os.WNOHANG)
         except InterruptedError:
             continue
         except ChildProcessError:
             os._exit(0)
+        if not pid_:
+            time.sleep(0.05)
+            continue
         if pid_ != child:
             continue  # reap orphans; only C's status mirrors
         if os.WIFEXITED(status):
             os._exit(os.WEXITSTATUS(status))
         if os.WIFSIGNALED(status):
             os._exit(128 + os.WTERMSIG(status))
-        # stopped/continued — keep waiting
 
 
 def _supervise_ns_init(
@@ -576,13 +595,17 @@ def _supervise_ns_init(
     """
     reaped = False
 
+    pending_signals: list[int] = []
+
     def _forward(signum: int, _frame: FrameType | None) -> None:
-        # Same narrow status-then-kill race as Popen.send_signal;
-        # while unreaped the pid is at worst a zombie, so this cannot
-        # signal a recycled pid.
-        if not reaped:
-            with contextlib.suppress(OSError):
-                os.kill(ns_init_pid, signum)
+        pending_signals.append(signum)
+
+    def forward_pending():
+        while pending_signals:
+            signum = pending_signals.pop(0)
+            if not reaped:
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(ns_init_pid, signum)
 
     signal.signal(signal.SIGTERM, _forward)
     signal.signal(signal.SIGINT, _forward)
@@ -593,10 +616,11 @@ def _supervise_ns_init(
     deadline = time.monotonic() + arm_timeout_s
     try:
         while True:
+            forward_pending()
             remaining_ms = (deadline - time.monotonic()) * 1000
             if remaining_ms <= 0:
                 break
-            if poller.poll(remaining_ms):
+            if poller.poll(min(remaining_ms, 100)):
                 # One byte = armed; EOF = the waiter died unarmed.
                 armed = os.read(arm_r, 1) != b""
                 break
@@ -619,6 +643,7 @@ def _supervise_ns_init(
     raptor = os.getppid()
     raptor_reported = False
     while True:
+        forward_pending()
         try:
             pid_, status = os.waitpid(ns_init_pid, os.WNOHANG)
         except ChildProcessError:
@@ -676,6 +701,19 @@ _PARENT_KILL_GRACE_S = 10.0
 #: re-acquire it) pass a much shorter horizon via ``--orphan-idle-ttl``
 #: — for them the full default is pure squatting time.
 _ORPHAN_IDLE_TTL_S = 3600 * 8
+
+
+def _signal_owned_child(child, signum):
+    lock = getattr(child, "_waitpid_lock", None)
+    if lock is None or not lock.acquire(blocking=False):
+        return False
+    try:
+        if child.returncode is None and child.pid > 1:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(child.pid, signum)
+        return True
+    finally:
+        lock.release()
 
 
 def _start_orphan_watchdog(
@@ -753,10 +791,11 @@ def _start_orphan_watchdog(
             )
         child = get_child()
         if child is not None:
-            with contextlib.suppress(OSError):
-                child.terminate()
             deadline = time.monotonic() + grace_s
+            signalled = False
             while time.monotonic() < deadline:
+                if not signalled:
+                    signalled = _signal_owned_child(child, signal.SIGTERM)
                 if child.poll() is not None:
                     # main()'s wait() unblocks; normal cleanup runs.
                     return
@@ -956,6 +995,7 @@ def main(argv: list[str] | None = None) -> int:
              "handoff staleness horizon; run-private spawners pass a "
              "short value)",
     )
+    parser.add_argument("--keep-fd", action="append", type=int, default=[])
     parser.add_argument("cmd", nargs=argparse.REMAINDER,
                         help="-- command to supervise inside the namespace")
     args = parser.parse_args(argv)
@@ -1058,11 +1098,7 @@ def main(argv: list[str] | None = None) -> int:
     pending_signals: list[int] = []
 
     def _forward_signal(signum: int, _frame: FrameType | None) -> None:
-        if child is not None:
-            with contextlib.suppress(OSError):
-                child.send_signal(signum)
-        else:
-            pending_signals.append(signum)
+        pending_signals.append(signum)
 
     signal.signal(signal.SIGTERM, _forward_signal)
     signal.signal(signal.SIGINT, _forward_signal)
@@ -1109,18 +1145,23 @@ def main(argv: list[str] | None = None) -> int:
 
     # stdio, env, cwd, and the namespace are inherited: the wrapped
     # server's stderr keeps flowing to the parent's boot-failure pipe.
-    child = subprocess.Popen(cmd)
+    child = subprocess.Popen(cmd, pass_fds=tuple(args.keep_fd))
     # A terminal signal can land while ``Popen`` is mid-spawn — the
     # handler still sees ``child is None`` and records it. The child
     # exists now: deliver, and let the normal wait/teardown below
     # finish the contract. Between handler install and this line no
     # terminal signal is ever dropped.
-    for signum in pending_signals:
-        with contextlib.suppress(OSError):
-            child.send_signal(signum)
-
     try:
-        rc = child.wait()
+        while True:
+            signals, pending_signals = pending_signals, []
+            for signum in signals:
+                if not _signal_owned_child(child, signum):
+                    pending_signals.append(signum)
+            try:
+                rc = child.wait(timeout=0.2)
+                break
+            except subprocess.TimeoutExpired:
+                pass
     finally:
         forwarder.stop()
         # Parent-owned directory; removing it here covers the

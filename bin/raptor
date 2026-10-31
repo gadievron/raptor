@@ -271,6 +271,23 @@ if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ]; then
     fi
     unset _claude_path
 
+    # Service scratch has its own lease lifetime, independent of this
+    # launcher's session TMPDIR. Capture the operator base before rewriting it.
+    if [ "${RAPTOR_WORK_DIR+x}" = x ]; then
+        _RAPTOR_JOERN_TMP_BASE="$RAPTOR_WORK_DIR"
+    elif [ "${TMPDIR+x}" = x ]; then
+        _RAPTOR_JOERN_TMP_BASE="$TMPDIR"
+    elif [ "$(_rp uname -s)" = Darwin ]; then
+        _RAPTOR_JOERN_TMP_BASE="$(_rp getconf DARWIN_USER_TEMP_DIR)"
+    else
+        _RAPTOR_JOERN_TMP_BASE=/tmp
+    fi
+    case "$_RAPTOR_JOERN_TMP_BASE" in
+        /*|'') ;;
+        *) _RAPTOR_JOERN_TMP_BASE="$(_rp pwd -P)/$_RAPTOR_JOERN_TMP_BASE" ;;
+    esac
+    export _RAPTOR_JOERN_TMP_BASE
+
     # Per-session TMPDIR: <base>/raptor-<uid>/session-<pid>-<rand>
     # (0700; <base> = RAPTOR_WORK_DIR, else operator TMPDIR, else
     # /tmp). Keeps tool scratch private and sweepable, and gives

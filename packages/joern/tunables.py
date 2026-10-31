@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 class JoernTunables:
     """Joern resource knobs.
 
-      * ``heap_mb``          — JVM ``-Xmx`` in MB.  ``None`` = JVM default.
+      * ``heap_mb``          — JVM ``-Xmx`` in MB.  ``None`` resolves central tuning defaults at admission.
       * ``cpg_timeout_s``    — wall-clock cap on ``joern-parse`` (CPG build).
       * ``import_timeout_s`` — wall-clock cap on loading a built CPG into the
         server.  Separate from ``cpg_timeout_s`` because the import runs in

@@ -35,6 +35,9 @@ class JoernCPG:
     # completed graph from a partial file left by a killed writer, and
     # caching consumers must never manifest a failed build as fresh.
     build_failed: bool = False
+    # Expected bytes from the cache publication receipt. Workers copy and
+    # verify these bytes before import, rather than retaining a mutable slot.
+    content_digest: str | None = None
 
     def exists(self) -> bool:
         return self.path.exists()
@@ -135,17 +138,18 @@ class JoernResult:
     errors: list[str] = field(default_factory=list)
     elapsed_ms: int = 0
     dark_methods: list[str] = field(default_factory=list)
+    execution_incomplete: bool = False
 
     @property
     def ok(self) -> bool:
-        return not self.errors
+        return not self.errors and not self.execution_incomplete
 
     @property
     def flow_count(self) -> int:
         return len(self.flows)
 
     def to_dict(self) -> dict:
-        return {
+        result = {
             "query": self.query,
             "flows": [f.to_dict() for f in self.flows],
             "errors": self.errors,
@@ -155,3 +159,6 @@ class JoernResult:
             # back thin.
             "dark_methods": self.dark_methods,
         }
+        if self.execution_incomplete:
+            result["execution_incomplete"] = True
+        return result

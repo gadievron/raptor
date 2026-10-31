@@ -1,45 +1,37 @@
-"""Cross-session JVM heap admission ledger.
+"""Cross-session Joern memory admission.
 
-Every joern JVM RAPTOR spawns (the query server, joern-parse
-frontends) carries an ``-Xmx`` sized by the tuning derivation, and
-the derivation assumes an otherwise-idle host. Run N sessions
-concurrently and each derives the same near-host-sized heap
-independently: the committed Xmx sum crosses physical RAM and the
-kernel OOM-kills whichever JVM happens to grow last — correlated
-mid-run server deaths under fleet load, each session convinced its
-own limits were fine.
+Production spawns reserve Xmx plus native headroom before exec. A parser
+reserves both its driver and frontend JVM. Capacity exhaustion refuses a
+spawn; explicit heaps are never silently reduced. This is bookkeeping, not a
+kernel memory limit.
 
-The ledger arbitrates at SPAWN time, not at derivation time: a
-spawner reserves its heap in a flock-guarded host-global file BEFORE
-exec, and the grant is clamped to what the host budget minus live
-reservations can still carry. Rows are keyed on
-``(pid, /proc starttime)``: a reservation whose owner died — crashed
-session, OOM-killed JVM, hard external kill — is evicted at the next
-admission, so leaked reservations self-heal without any release
-protocol (``release()`` still exists for prompt reclaim, and the
-shared query server relies on eviction: the session that finally
-kills it at refcount zero is usually not the one that booted it).
-
-Only DERIVED heaps are clamped. An explicit operator heap is an
-assertion — the same both-directions rule the retry-at-derived-max
-path follows: it is REGISTERED so other spawners see the pressure,
-but never reduced.
+Each new reservation has a private file lock inherited by the JVM. Kernel
+lock lifetime, rather than a PID meaningful in only one namespace, proves
+whether that reservation remains live. PID/birth metadata remains diagnostic
+and supports legacy rows. Historical advisory callers retain their explicit
+warn-and-continue behavior without writing unverified ledger state.
 """
 
 from __future__ import annotations
 
 import contextlib
+import ctypes
+import sys
+import errno
 import json
 import logging
 import os
+import stat
 import tempfile
 import time
 import uuid
 from collections.abc import Iterator
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 
 from core.atomic_fs.fs_lock import artifact_lock
+from .resource_lifetime import Lifetime, discard, held
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +86,56 @@ def _host_budget_mb() -> int | None:
         return None
     if pages <= 0 or page_size <= 0:
         return None
-    return (pages * page_size) // (1024 * 1024)
+    budget = (pages * page_size) // (1024 * 1024)
+    # A container or delegated scope may have much less memory than the
+    # physical host. Include every visible ancestor ceiling, not only the
+    # current leaf (which commonly says 'max').
+    try:
+        row = next(line for line in Path("/proc/self/cgroup").read_text().splitlines()
+                   if line.startswith("0::"))
+        root = Path("/sys/fs/cgroup")
+        relative = Path(row[3:].lstrip("/"))
+        if ".." not in relative.parts:
+            current = root / relative
+            while current == root or root in current.parents:
+                try:
+                    value = (current / "memory.max").read_text().strip()
+                    if value != "max":
+                        budget = min(budget, int(value) // (1024 * 1024))
+                except (OSError, ValueError):
+                    pass
+                if current == root:
+                    break
+                current = current.parent
+    except (OSError, StopIteration):
+        pass
+    return budget
+
+
+class _DarwinProcessInfo(ctypes.Structure):
+    # XNU sys/proc_info.h, proc_bsdinfo (PROC_PIDTBSDINFO=3).
+    # https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/proc_info.h
+    _fields_ = [("identifiers", ctypes.c_uint32 * 12),
+                ("command", ctypes.c_char * 16), ("name", ctypes.c_char * 32),
+                ("details", ctypes.c_uint32 * 6),
+                ("seconds", ctypes.c_uint64), ("microseconds", ctypes.c_uint64)]
+
+
+def _darwin_starttime(pid):
+    try:
+        function = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True).proc_pidinfo
+        function.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64,
+                             ctypes.c_void_p, ctypes.c_int]
+        function.restype = ctypes.c_int
+        info = _DarwinProcessInfo()
+        size = ctypes.sizeof(info)
+        if function(pid, 3, 0, ctypes.byref(info), size) != size:
+            return None
+        if info.identifiers[3] != pid or not info.seconds:
+            return None
+        return info.seconds * 1_000_000 + info.microseconds
+    except (OSError, AttributeError):
+        return None
 
 
 def _pid_starttime(pid: int) -> int | None:
@@ -104,6 +145,8 @@ def _pid_starttime(pid: int) -> int | None:
     starttime, so a stale row never rides a stranger's pid. None when
     unreadable (process gone, or no procfs on this platform).
     """
+    if sys.platform == "darwin":
+        return _darwin_starttime(pid)
     try:
         stat = Path(f"/proc/{pid}/stat").read_bytes()
         # Split AFTER the comm field — comm may contain spaces and
@@ -113,12 +156,21 @@ def _pid_starttime(pid: int) -> int | None:
         return None
 
 
-def _row_live(row: dict) -> bool:
+def _row_live(row: dict, *, ledger_path=None) -> bool:
     """A row is live while its recorded (pid, starttime) still names
     a running process."""
+    if row.get("lease") is True:
+        return held(_ledger_path() if ledger_path is None else ledger_path, row.get("id"))
     pid = row.get("pid")
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return False
+    boot, namespace = _kernel_context()
+    if row.get("boot") is not None and boot is not None and row["boot"] != boot:
+        return False
+    if row.get("pid_namespace") is not None and namespace is not None and row["pid_namespace"] != namespace:
+        # A nested /proc cannot prove that another namespace's PID died.
+        # Retain its charge instead of admitting overlapping heaps.
+        return True
     starttime = _pid_starttime(pid)
     if starttime is not None:
         # The recorded starttime must MATCH — a row without one (or
@@ -156,18 +208,39 @@ def _row_mb(row: dict) -> int:
     return max(0, mb)
 
 
-def _read_rows(path: Path) -> list[dict]:
-    """Ledger rows on disk; a missing or corrupt file is an empty
-    ledger (the ledger is arbitration state, not a record of truth —
-    live JVMs re-register on their next spawn, dead ones should not
-    survive corruption anyway)."""
+def _kernel_context():
     try:
-        data = json.loads(path.read_text())
-    except (OSError, ValueError):
+        return (Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
+                Path("/proc/self/ns/pid").stat().st_ino)
+    except OSError:
+        return None, None
+
+
+def _read_rows(path: Path, *, required=False) -> list[dict]:
+    """Read verified reservations; only a missing ledger is empty.
+
+    Corruption must never erase existing reservations during admission.
+    Advisory callers may decline bookkeeping, but cannot overwrite it.
+    """
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(descriptor, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022:
+                raise ValueError("unsafe heap ledger")
+            raw = stream.read(1024 * 1024 + 1)
+            if len(raw) > 1024 * 1024:
+                raise ValueError("oversized heap ledger")
+            data = json.loads(raw)
+    except FileNotFoundError:
         return []
+    except (OSError, ValueError) as error:
+        raise OSError(errno.EINVAL, "Joern heap ledger cannot be verified") from error
     rows = data.get("rows") if isinstance(data, dict) else None
     if not isinstance(rows, list):
-        return []
+        raise OSError(errno.EINVAL, "invalid Joern heap ledger rows")
+    if required and any(not isinstance(row, dict) or type(row.get("mb")) is not int or row["mb"] < 0 for row in rows):
+        raise OSError(errno.EINVAL, "invalid Joern heap reservation")
     return [r for r in rows if isinstance(r, dict)]
 
 
@@ -194,20 +267,30 @@ class HeapReservation:
     requested_mb: int
     granted_mb: int
     ledger_path: Path
+    require_capacity: bool = False
+    lifetime: Lifetime | None = None
+
+    @property
+    def pass_fds(self):
+        return self.lifetime.pass_fds if self.lifetime is not None else ()
 
     def release(self) -> None:
-        """Return the reservation promptly (idempotent). Never
-        required for correctness — a dead owner's row is evicted at
-        the next admission."""
+        """Close this holder; a surviving child retains the kernel charge."""
+        if self.lifetime is not None:
+            self.lifetime.close()
         try:
-            with artifact_lock(
-                self.ledger_path, subject="joern JVM heap ledger",
-            ):
-                rows = [
-                    r for r in _read_rows(self.ledger_path)
-                    if r.get("id") != self.row_id and _row_live(r)
-                ]
-                _write_rows(self.ledger_path, rows)
+            with artifact_lock(self.ledger_path, subject="joern JVM heap ledger", required=True):
+                rows = _read_rows(self.ledger_path, required=self.require_capacity)
+                remaining = []
+                for row in rows:
+                    live = _row_live(row, ledger_path=self.ledger_path)
+                    if row.get("id") == self.row_id and self.lifetime is None:
+                        live = False  # legacy advisory reservations release explicitly
+                    if live:
+                        remaining.append(row)
+                    elif row.get("lease") is True:
+                        discard(self.ledger_path, row.get("id"))
+                _write_rows(self.ledger_path, remaining)
         except OSError:
             logger.debug("heap ledger release failed", exc_info=True)
 
@@ -222,13 +305,14 @@ class HeapReservation:
         """
         try:
             with artifact_lock(
-                self.ledger_path, subject="joern JVM heap ledger",
+                self.ledger_path, subject="joern JVM heap ledger", required=True,
             ):
-                rows = _read_rows(self.ledger_path)
+                rows = _read_rows(self.ledger_path, required=self.require_capacity)
                 for row in rows:
                     if row.get("id") == self.row_id:
                         row["pid"] = pid
                         row["starttime"] = _pid_starttime(pid)
+                        row["boot"], row["pid_namespace"] = _kernel_context()
                 _write_rows(self.ledger_path, rows)
         except OSError:
             logger.debug("heap ledger rebind failed", exc_info=True)
@@ -240,6 +324,8 @@ def reserve_heap_mb(
     derived: bool,
     pid: int | None = None,
     ledger_path: Path | None = None,
+    require_capacity: bool = False,
+    simultaneous_jvms: int = 1,
 ) -> HeapReservation:
     """Admit a JVM spawn of *requested_mb* against the host budget.
 
@@ -249,15 +335,23 @@ def reserve_heap_mb(
     overcommitted JVM beats losing the joern channel. The new row is
     keyed on *pid* (default: this process) until :meth:`rebind`.
     """
+    if type(requested_mb) is not int or requested_mb <= 0:
+        raise ValueError("Joern heap must be a positive number of megabytes")
+    if type(simultaneous_jvms) is not int or simultaneous_jvms < 1:
+        raise ValueError("simultaneous JVM count must be positive")
     pid = os.getpid() if pid is None else pid
     path = _ledger_path() if ledger_path is None else ledger_path
     granted = requested_mb
+    lifetime = None
     row_id = uuid.uuid4().hex
     try:
-        granted = _admit_locked(
+        granted, lifetime = _admit_locked(
             path, requested_mb, derived=derived, pid=pid, row_id=row_id,
+            require_capacity=require_capacity, simultaneous_jvms=simultaneous_jvms,
         )
     except OSError:
+        if require_capacity:
+            raise
         # The ledger is advisory bookkeeping: a full or read-only
         # state dir must not kill the JVM boot it was arbitrating
         # (release/rebind already degrade the same way). The grant
@@ -273,20 +367,45 @@ def reserve_heap_mb(
         requested_mb=requested_mb,
         granted_mb=granted,
         ledger_path=path,
+        require_capacity=require_capacity, lifetime=lifetime,
     )
 
 
 def _admit_locked(
     path: Path, requested_mb: int, *,
     derived: bool, pid: int, row_id: str,
-) -> int:
-    """The locked admission transaction; returns the granted MB."""
+    require_capacity: bool = False,
+    simultaneous_jvms: int = 1,
+) -> tuple[int, Lifetime | None]:
+    """Return the admitted heap and its kernel-held lifetime."""
     granted = requested_mb
-    with artifact_lock(path, subject="joern JVM heap ledger"):
-        rows = [r for r in _read_rows(path) if _row_live(r)]
+    lifetime = None
+    with artifact_lock(path, subject="joern JVM heap ledger", required=True):
+        rows = []
+        for row in _read_rows(path, required=require_capacity):
+            if _row_live(row, ledger_path=path):
+                rows.append(row)
+            elif row.get("lease") is True:
+                discard(path, row.get("id"))
         committed = sum(_row_mb(r) for r in rows)
         budget = _host_budget_mb()
-        if budget is not None and committed + requested_mb > budget:
+        if require_capacity:
+            # Reserve native/metaspace/thread headroom as well as Xmx.
+            # This is admission bookkeeping, not a kernel memory limit.
+            if budget is None:
+                raise OSError(errno.ENOSPC, "Joern memory budget is unavailable")
+            available = budget - committed
+            maximum_heap = max(0, (available // simultaneous_jvms - 256) * 4 // 5)
+            if derived:
+                granted = min(requested_mb, maximum_heap)
+                if granted < min(requested_mb, _HEAP_GRANT_FLOOR_MB):
+                    raise OSError(errno.ENOSPC, "Joern memory capacity exhausted")
+            elif requested_mb > maximum_heap:
+                raise OSError(errno.ENOSPC, "explicit Joern heap exceeds available capacity")
+            accounted_mb = simultaneous_jvms * (granted + (granted + 3) // 4 + 256)
+        else:
+            accounted_mb = None
+        if not require_capacity and budget is not None and committed + requested_mb > budget:
             available = budget - committed
             if derived:
                 granted = min(requested_mb, max(available,
@@ -316,16 +435,43 @@ def _admit_locked(
                     "expect memory pressure",
                     requested_mb, committed, budget,
                 )
+        boot, namespace = _kernel_context()
         rows.append({
             "id": row_id,
             "pid": pid,
             "starttime": _pid_starttime(pid),
-            "mb": granted,
+            "mb": accounted_mb if accounted_mb is not None else granted,
             "derived": derived,
             "created_at": time.time(),
+            "boot": boot,
+            "pid_namespace": namespace,
         })
-        _write_rows(path, rows)
-    return granted
+        if require_capacity:
+            lifetime = Lifetime.create(path, row_id)
+            rows[-1]["lease"] = True
+        try:
+            _write_rows(path, rows)
+        except BaseException:
+            if lifetime is not None:
+                lifetime.close()
+                discard(path, row_id)
+            raise
+    return granted, lifetime
+
+
+
+_active_reservation = ContextVar("joern_heap_admission", default=None)
+
+
+def reservation_fds():
+    reservation = _active_reservation.get()
+    return reservation.pass_fds if reservation is not None else ()
+
+
+def reservation_paths():
+    reservation = _active_reservation.get()
+    lifetime = reservation.lifetime if reservation is not None else None
+    return [str(lifetime.path)] if lifetime is not None else []
 
 
 @contextlib.contextmanager
@@ -334,6 +480,8 @@ def heap_admission(
     *,
     derived: bool,
     ledger_path: Path | None = None,
+    require_capacity: bool = False,
+    simultaneous_jvms: int = 1,
 ) -> Iterator[int | None]:
     """Reserve for the duration of a synchronous JVM run (the
     joern-parse frontend). Yields the granted -Xmx MB — the requested
@@ -343,8 +491,11 @@ def heap_admission(
         return
     reservation = reserve_heap_mb(
         requested_mb, derived=derived, ledger_path=ledger_path,
+        require_capacity=require_capacity, simultaneous_jvms=simultaneous_jvms,
     )
+    token = _active_reservation.set(reservation)
     try:
         yield reservation.granted_mb
     finally:
+        _active_reservation.reset(token)
         reservation.release()
