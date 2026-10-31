@@ -43,6 +43,10 @@ rules:
     pattern-sinks:
       - patterns:
           - pattern: $FN(...)
+          # $FN also matches the whole receiver->method expression.
+          # A tainted object does not make its fixed method name dynamic;
+          # the dedicated method sink below checks only the selector.
+          - pattern-not: $OBJ->$METHOD(...)
           - focus-metavariable: $FN
       - patterns:
           - pattern-either:
