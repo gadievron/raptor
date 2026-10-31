@@ -122,20 +122,39 @@ def _seed_codex_session(session_id=None) -> tuple[str, str] | None:
         return None
 
     initial_project = None
+    launcher_seed = None
     if session_id is not None:
         from core.project import sessions, session_scope
         session_id = session_scope.validate_id(session_id)
-        # The launcher seeds its own PID before exec. Copy only its verified
-        # binding; every logical session mints a separate credential/ledger.
+        # The launcher seeds its own PID before exec. Transfer only its
+        # verified binding; logical sessions mint separate credentials/ledgers.
         with session_scope.using_directory(sessions._base_sessions_dir()):
-            if sessions._env_session_pid() == pid:
-                fields = sessions._parse_entry(sessions._sessions_dir() / str(pid))
-                if fields.get("seeded_by") in ("flag", "auto", "bookmark"):
-                    initial_project = fields.get("project")
+            with sessions._ledger_lock(pid):
+                if sessions._env_session_pid() == pid:
+                    fields = sessions._parse_entry(sessions._sessions_dir() / str(pid))
+                    if fields.get("seeded_by") in ("flag", "auto", "bookmark"):
+                        initial_project = fields.get("project")
+                        launcher_seed = fields
         os.environ["RAPTOR_CODEX_CONTEXT_ID"] = session_id
     result = ensure_codex_session(pid, initial_project=initial_project)
     if result is None:
         return None
+    if launcher_seed is not None:
+        # Retire the temporary launcher row only after scoped publication.
+        # Keep the lock file: unlinking a held lock would split serialization.
+        # A changed binding/credential is not ours to remove; fail startup
+        # rather than silently expose two disagreeing session bindings.
+        with session_scope.using_directory(sessions._base_sessions_dir()):
+            with sessions._ledger_lock(pid):
+                entry = sessions._sessions_dir() / str(pid)
+                try:
+                    entry.lstat()
+                except FileNotFoundError:
+                    pass  # A concurrent successful hook already retired it.
+                else:
+                    if sessions._parse_entry(entry) != launcher_seed:
+                        return None
+                    entry.unlink()
 
     pid_str, token = result
     os.environ["RAPTOR_SESSION_PID"] = pid_str
