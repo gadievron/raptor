@@ -18,6 +18,13 @@ than Haiku 4.5). Cache-read multiplier is model-specific on the 5.x lineup
 (5% for Opus/Sonnet 5.5, 2.5% for Fable/Mythos 5.1) vs the flat 10%
 tabulated here — conservative overcount, acceptable for now.
 
+2026-10-31 — OpenAI refresh from platform.openai.com/docs/models. Added GPT-6
+family (gpt-6-astra, gpt-6.1-sol, gpt-6.1-terra, gpt-6-sol, gpt-6-luna).
+Updated gpt-5.6 pricing (dropped). Removed o1/o1-pro/o1-mini/o3-mini/o4-mini/
+gpt-4.1-nano (shut down 2026-10-23). Deprecated: gpt-5.4-nano/5.3-codex/5.1
+(shutdown 2027-04-01), gpt-4.1/4.1-mini/4o/4o-mini (shutdown 2027-01-14),
+o3/o3-pro/gpt-5/5-mini/5-nano/5-pro (shutdown 2026-12-11).
+
 2026-10-31 — Gemini refresh from ai.google.dev/gemini-api/docs/pricing. Added
 gemini-4-argon (flagship, introductory pricing through 2026-12-01) and
 gemini-3.8-flash (introductory through 2027-01-01). Removed gemini-3.7-flash
@@ -111,11 +118,9 @@ PROVIDER_DEFAULT_MODELS = {
 #   Gemini:     Pro   $0.00125/$0.01 →  Flash-L $0.0001/$0.0004  (~25×)
 #   Mistral:    Large $0.002/$0.006  →  Small   $0.00015/$0.0006 (~13×)
 #
-# OpenAI mapping prefers ``gpt-4o-mini`` over the cheaper
-# ``gpt-5-nano`` because the 4o-mini has a longer track record for
-# structured-output reliability across third-party libraries (Instructor,
-# pydantic-ai). Switch to a 5.x mini when its structured-output story
-# stabilises in those libraries.
+# OpenAI mapping retains ``gpt-4o-mini`` (deprecated 2026-10-14, shutdown
+# 2027-01-14) pending evidence testing of ``gpt-5.6-luna`` or ``gpt-6-luna``
+# on structured-output reliability.  Switch before Jan 2027.
 #
 # Providers without a fast-model mapping (Ollama, Claude Code via
 # subprocess) are intentionally absent — for Ollama the operator picks
@@ -148,38 +153,36 @@ MODEL_COSTS = {
     "claude-sonnet-5":         {"input": 0.002,   "output": 0.010},
     "claude-sonnet-4-6":       {"input": 0.003,   "output": 0.015},
     "claude-haiku-4-5":        {"input": 0.001,   "output": 0.005},
-    # OpenAI — flagship (5.6/5.5/5.4 families)
-    "gpt-5.6-sol":             {"input": 0.005,   "output": 0.030},
-    "gpt-5.6-terra":           {"input": 0.0025,  "output": 0.015},
-    "gpt-5.6-luna":            {"input": 0.001,   "output": 0.006},
+    # OpenAI — current (6.x / 5.6 / 5.5 / 5.4 active)
+    "gpt-6-astra":             {"input": 0.010,   "output": 0.050},
+    "gpt-6.1-sol":             {"input": 0.002,   "output": 0.010},
+    "gpt-6.1-terra":           {"input": 0.001,   "output": 0.005},
+    "gpt-6-sol":               {"input": 0.002,   "output": 0.010},
+    "gpt-6-luna":              {"input": 0.0001,  "output": 0.0005},
+    "gpt-5.6-sol":             {"input": 0.004,   "output": 0.020},
+    "gpt-5.6-terra":           {"input": 0.002,   "output": 0.012},
+    "gpt-5.6-luna":            {"input": 0.0002,  "output": 0.0012},
     "gpt-5.5":                 {"input": 0.005,   "output": 0.030},
     "gpt-5.5-pro":             {"input": 0.030,   "output": 0.180},
     "gpt-5.4":                 {"input": 0.0025,  "output": 0.015},
     "gpt-5.4-mini":            {"input": 0.00075, "output": 0.0045},
-    "gpt-5.4-nano":            {"input": 0.0002,  "output": 0.00125},
     "gpt-5.4-pro":             {"input": 0.030,   "output": 0.180},
-    "gpt-5.3-codex":           {"input": 0.00175, "output": 0.014},
     "gpt-5.2":                 {"input": 0.00175, "output": 0.014},
     "gpt-5.2-pro":             {"input": 0.021,   "output": 0.168},
+    # OpenAI — deprecated (still serving; shutdown dates in changelog)
+    "gpt-5.4-nano":            {"input": 0.0002,  "output": 0.00125},
+    "gpt-5.3-codex":           {"input": 0.00175, "output": 0.014},
     "gpt-5.1":                 {"input": 0.00125, "output": 0.010},
     "gpt-5":                   {"input": 0.00125, "output": 0.010},
     "gpt-5-mini":              {"input": 0.00025, "output": 0.002},
     "gpt-5-nano":              {"input": 0.00005, "output": 0.0004},
     "gpt-5-pro":               {"input": 0.015,   "output": 0.120},
-    # OpenAI — gpt-4 family
     "gpt-4.1":                 {"input": 0.002,   "output": 0.008},
     "gpt-4.1-mini":            {"input": 0.0004,  "output": 0.0016},
-    "gpt-4.1-nano":            {"input": 0.0001,  "output": 0.0004},
     "gpt-4o":                  {"input": 0.0025,  "output": 0.010},
     "gpt-4o-mini":             {"input": 0.00015, "output": 0.0006},
-    # OpenAI — reasoning (thinking tokens billed as output)
-    "o1":                      {"input": 0.015,   "output": 0.060},
-    "o1-pro":                  {"input": 0.150,   "output": 0.600},
-    "o1-mini":                 {"input": 0.0011,  "output": 0.0044},
     "o3":                      {"input": 0.002,   "output": 0.008},
-    "o3-mini":                 {"input": 0.0011,  "output": 0.0044},
     "o3-pro":                  {"input": 0.020,   "output": 0.080},
-    "o4-mini":                 {"input": 0.0011,  "output": 0.0044},
     # Google Gemini (<=200K prompt tier for pro models)
     # gemini-4-argon: introductory pricing through 2026-12-01; post-intro
     # is 2× ($0.004/$0.020). gemini-3.8/3.6-flash: introductory pricing
@@ -220,8 +223,8 @@ MODEL_COSTS = {
 #              per-tier tables; Start tier (1,000 RPM all families).
 #   OpenAI:    developers.openai.com/api/docs/models/<model-id> —
 #              published per-tier tables; Tier 1 (most 500 — recorded
-#              conservatively for most mini models too; o3-mini /
-#              o4-mini 1K; gpt-5.5-pro 50).
+#              conservatively for most mini models too;
+#              gpt-5.5-pro 50).
 #   Gemini:    operator-observed defaults. Pro=1K, Flash=2K,
 #              Flash-Lite=10K, Gemma=30.
 #   Mistral:   operator-observed defaults (RPS × 60 → RPM).
@@ -244,7 +247,12 @@ MODEL_LIMITS = {
     "claude-sonnet-5":         {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
     "claude-sonnet-4-6":       {"max_context": 1000000, "max_output": 64000,  "rpm": 1000},
     "claude-haiku-4-5":        {"max_context": 200000,  "max_output": 64000,  "rpm": 1000},
-    # OpenAI — flagship
+    # OpenAI — current
+    "gpt-6-astra":             {"max_context": 1050000, "max_output": 128000, "rpm": 500},
+    "gpt-6.1-sol":             {"max_context": 1050000, "max_output": 128000, "rpm": 500},
+    "gpt-6.1-terra":           {"max_context": 1050000, "max_output": 128000, "rpm": 500},
+    "gpt-6-sol":               {"max_context": 1050000, "max_output": 128000, "rpm": 500},
+    "gpt-6-luna":              {"max_context": 1050000, "max_output": 128000, "rpm": 500},
     "gpt-5.6-sol":             {"max_context": 1050000, "max_output": 128000, "rpm": 500},
     "gpt-5.6-terra":           {"max_context": 1050000, "max_output": 128000, "rpm": 500},
     "gpt-5.6-luna":            {"max_context": 1050000, "max_output": 128000, "rpm": 500},
@@ -252,30 +260,23 @@ MODEL_LIMITS = {
     "gpt-5.5-pro":             {"max_context": 1050000, "max_output": 128000, "rpm": 50},
     "gpt-5.4":                 {"max_context": 1050000, "max_output": 128000, "rpm": 500},
     "gpt-5.4-mini":            {"max_context": 400000,  "max_output": 128000, "rpm": 500},
-    "gpt-5.4-nano":            {"max_context": 400000,  "max_output": 128000, "rpm": 500},
     "gpt-5.4-pro":             {"max_context": 1050000, "max_output": 128000, "rpm": 500},
-    "gpt-5.3-codex":           {"max_context": 400000,  "max_output": 128000, "rpm": 500},
     "gpt-5.2":                 {"max_context": 400000,  "max_output": 128000, "rpm": 500},
     "gpt-5.2-pro":             {"max_context": 400000,  "max_output": 128000, "rpm": 500},
+    # OpenAI — deprecated (still serving; shutdown dates in changelog)
+    "gpt-5.4-nano":            {"max_context": 400000,  "max_output": 128000, "rpm": 500},
+    "gpt-5.3-codex":           {"max_context": 400000,  "max_output": 128000, "rpm": 500},
     "gpt-5.1":                 {"max_context": 400000,  "max_output": 128000, "rpm": 500},
     "gpt-5":                   {"max_context": 400000,  "max_output": 128000, "rpm": 500},
     "gpt-5-mini":              {"max_context": 400000,  "max_output": 128000, "rpm": 500},
     "gpt-5-nano":              {"max_context": 400000,  "max_output": 128000, "rpm": 500},
     "gpt-5-pro":               {"max_context": 400000,  "max_output": 272000, "rpm": 500},
-    # OpenAI — gpt-4 family
     "gpt-4.1":                 {"max_context": 1047576, "max_output": 32768,  "rpm": 500},
     "gpt-4.1-mini":            {"max_context": 1047576, "max_output": 32768,  "rpm": 500},
-    "gpt-4.1-nano":            {"max_context": 1047576, "max_output": 32768,  "rpm": 500},
     "gpt-4o":                  {"max_context": 128000,  "max_output": 16384,  "rpm": 500},
     "gpt-4o-mini":             {"max_context": 128000,  "max_output": 16384,  "rpm": 500},
-    # OpenAI — reasoning
-    "o1":                      {"max_context": 200000,  "max_output": 100000, "rpm": 500},
-    "o1-pro":                  {"max_context": 200000,  "max_output": 100000, "rpm": 500},
-    "o1-mini":                 {"max_context": 128000,  "max_output": 65536,  "rpm": 500},
     "o3":                      {"max_context": 200000,  "max_output": 100000, "rpm": 500},
-    "o3-mini":                 {"max_context": 200000,  "max_output": 100000, "rpm": 1000},
     "o3-pro":                  {"max_context": 200000,  "max_output": 100000, "rpm": 500},
-    "o4-mini":                 {"max_context": 200000,  "max_output": 100000, "rpm": 1000},
     # Google Gemini
     "gemini-4-argon":          {"max_context": 1048576, "max_output": 65536,  "rpm": 1000},
     "gemini-3.8-flash":        {"max_context": 1048576, "max_output": 65536,  "rpm": 2000},

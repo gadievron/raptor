@@ -138,13 +138,15 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
             ("anthropic", "claude-opus-5-5", 120),
             ("anthropic", "claude-opus-4-6", 110),
             ("anthropic", "claude-sonnet-5-5", 105),
+            ("openai", "gpt-6-astra", 115),
+            ("openai", "gpt-6.1-sol", 103),
+            ("openai", "gpt-6-sol", 102),
             ("openai", "gpt-5.4-pro", 100),
             ("openai", "gpt-5.4", 95),
             ("openai", "o3", 90),
 
             # Tier 2: Strong models
             ("openai", "gpt-5.2", 80),
-            ("openai", "o4-mini", 78),
             ("mistral", "mistral-large-latest", 75),
 
             # Tier 3: Latest capable models (fallback)
