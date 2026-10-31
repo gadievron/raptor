@@ -1415,8 +1415,8 @@ def main() -> None:
                       f"will start on '{p.name}'.")
             else:
                 try:
-                    from .sessions import read_sessions
-                    _n = len(read_sessions(prune=False))
+                    from .sessions import all_sessions
+                    _n = len(all_sessions(prune=False))
                 except Exception:  # noqa: BLE001 — count is decorative
                     _n = 0
                 print(f"(no session — acting on the last-activated "
@@ -1919,7 +1919,7 @@ def _print_layer_header(mgr, name: str) -> None:
         binding = mgr.get_active()
         bookmark = _read_bookmark(mgr)
         live = sum(
-            1 for _pid, fields in _sessions.read_sessions().items()
+            1 for _pid, fields, _directory in _sessions.all_sessions()
             if fields.get("project") == name
         )
         bits = [f"Project: {name}"]
@@ -1936,14 +1936,13 @@ def _print_layer_header(mgr, name: str) -> None:
 def _print_sessions(mgr) -> None:
     """Live/stale/foreign session rows with their bindings."""
     from core.project import sessions as _sessions
-    entries = _sessions.read_sessions(prune=False, include_stale=True)
+    entries = _sessions.all_sessions(prune=False, include_stale=True)
     if not entries:
         print("No registered sessions.")
         return
     from core.security.log_sanitisation import sanitise_for_terminal
     print(f"{'PID':>9}  {'STATE':<22} {'PROJECT':<24} SINCE")
-    for pid in sorted(entries):
-        fields = entries[pid]
+    for pid, fields, directory in entries:
         state = fields.get("_state", "live")
         project = fields.get("project") or "?"
         if project == "-":
@@ -1955,7 +1954,8 @@ def _print_sessions(mgr) -> None:
         since = sanitise_for_terminal(
             str(fields.get("since") or "unknown"), max_len=32)
         project = sanitise_for_terminal(str(project), max_len=40)
-        print(f"{pid:>9}  {label:<22} {project:<24} {since}")
+        scope = f" codex:{directory.name[:12]}" if directory != _sessions._base_sessions_dir() else ""
+        print(f"{pid:>9}  {label:<22} {project:<24} {since}{scope}")
     bookmark = _read_bookmark(mgr)
     print(f"Last-activated default: {bookmark or '(none)'}")
 

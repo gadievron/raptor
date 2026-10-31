@@ -94,6 +94,14 @@ class PythonTwinSessionTest(_LedgerCase):
         _run_dir, target = self._resolve()
         self.assertEqual(target, str(tree))
 
+    def test_claude_without_scope_keeps_legacy_lookup_with_inherited_codex_flags(self):
+        run = self._mk_run("claude_from_codex")
+        self._ledger((100, run))
+        with patch.dict(os.environ, {"CLAUDECODE": "1", "CODEX": "1",
+                "RAPTOR_CODEX_ENVIRONMENT": "1", "CODEX_THREAD_ID": "outer-codex",
+                "RAPTOR_CODEX_CONTEXT_ID": ""}):
+            self.assertEqual(self._resolve()[0], str(run))
+
     def test_far_future_epoch_record_skipped(self):
         ok = self._mk_run("scan_now")
         skew = self._mk_run("scan_skew")
@@ -282,6 +290,18 @@ class BashHookSessionTest(_LedgerCase):
             ["bash", str(HOOK)], input=payload, capture_output=True,
             text=True, env=env, timeout=60, check=False,
         )
+
+    def test_claude_without_scope_keeps_legacy_hook_with_inherited_codex_flags(self):
+        tree = self.home / "source"
+        tree.mkdir()
+        src = tree / "main.c"
+        src.write_text("int value;\n")
+        run = self._mk_run("claude_from_codex", target=str(tree))
+        self._ledger((100, run))
+        result = self._fire(src, {"CLAUDECODE": "1", "CODEX": "1",
+                                 "RAPTOR_CODEX_ENVIRONMENT": "1", "CODEX_THREAD_ID": "outer-codex"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(str(src), (run / ".reads-manifest").read_text())
 
     def test_standalone_run_manifest_append(self):
         tree = self.home / "srctree"
@@ -503,6 +523,349 @@ class BashHookRegistrySeamTest(_RegistrySeamCase):
         manifest = run / ".reads-manifest"
         self.assertTrue(manifest.exists(),
                         "override-registry bookmark got no attribution")
+
+
+class _CodexScopeCase(_LedgerCase):
+    """Codex sessions store ledgers under sessions.d/codex/<hash>/,
+    not in the base sessions.d/ — the hook must resolve the scoped
+    directory when RAPTOR_CODEX_CONTEXT_ID is present."""
+
+    CTX_ID = "ctx-root-A"
+
+    def setUp(self):
+        super().setUp()
+        if sys.platform != "linux":
+            self.skipTest("live Codex-shaped owner fixture requires Linux prctl")
+        import select
+        from core.project import sessions, session_scope
+        self.owner = subprocess.Popen([sys.executable, "-c",
+            'import ctypes,sys; ctypes.CDLL(None).prctl(15,b"codex",0,0,0); '
+            'print("ready",flush=True); sys.stdin.read()'],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        def stop_owner():
+            if not self.owner.stdin.closed:
+                self.owner.stdin.close()
+            self.owner.wait(timeout=5)
+            self.owner.stdout.close()
+        self.addCleanup(stop_owner)
+        self.assertTrue(select.select([self.owner.stdout], [], [], 3)[0])
+        self.assertEqual(self.owner.stdout.readline().strip(), "ready")
+        self.pid = self.owner.pid
+        # Decoy legacy ledgers must use the same registry as the consumers.
+        self.sessions_dir = self.home / "registry/sessions.d"
+        registry_patch = patch.object(sessions, "SESSIONS_DIR", self.home / "registry/sessions.d", create=True)
+        registry_patch.start()
+        self.addCleanup(registry_patch.stop)
+        with patch.dict(os.environ, {"HOME": str(self.home),
+                "RAPTOR_CODEX_CONTEXT_ID": self.CTX_ID,
+                "RAPTOR_REGISTRY_HOME": str(self.home / "registry")}):
+            self.scoped_dir = session_scope.directory(self.home / "registry/sessions.d", self.CTX_ID)
+            credential = sessions.ensure_codex_session(self.pid)
+            self.assertIsNotNone(credential)
+            self.token = credential[1]
+        from core.hash import sha256_string
+        self.generation = sha256_string(self.token)
+        self.extra_env = {}
+
+    def _mk_codex_run(self, name, status="running", session_pid=None,
+                      ctx_id=None, target=None):
+        d = self.home / "out" / name
+        d.mkdir(parents=True, exist_ok=True)
+        meta = {"status": status,
+                "session_pid": session_pid or self.pid,
+                "session_harness": "codex",
+                "session_id": ctx_id or self.CTX_ID,
+                "session_generation": self.generation}
+        if target:
+            meta["target_path"] = target
+        (d / ".raptor-run.json").write_text(json.dumps(meta))
+        return d
+
+    def _codex_ledger(self, *records):
+        lines = [f"running {epoch} {d.name} {d}" for epoch, d in records]
+        (self.scoped_dir / f"{self.pid}.run").write_text(
+            "\n".join(lines) + "\n")
+
+
+class _CodexAuthChecks(_LedgerCase):
+    __test__ = False
+
+    def _attributed(self, run):
+        if hasattr(self, "_resolve"):
+            return self._resolve()[0] == str(run)
+        tree = self.home / "source"
+        tree.mkdir(exist_ok=True)
+        source = tree / "file.c"
+        source.write_text("int value;\n")
+        result = self._fire(source, self.extra_env)
+        self.assertEqual(result.returncode, 0, (result.stdout, result.stderr))
+        return (run / ".reads-manifest").exists()
+
+    def test_scoped_claude_backend_keeps_root_ownership(self):
+        run = self._mk_codex_run("scoped_backend")
+        self._codex_ledger((100, run))
+        self.extra_env["CLAUDECODE"] = "1"
+        self.assertTrue(self._attributed(run))
+
+    def test_recognized_codex_without_root_is_not_legacy(self):
+        run = self._mk_codex_run("missing_context")
+        # A legacy ledger with a matching PID must not be a fallback.
+        self._ledger((100, run))
+        self.extra_env.update({"RAPTOR_CODEX_CONTEXT_ID": "", "RAPTOR_CODEX_ENVIRONMENT": "1"})
+        self.assertFalse(self._attributed(run))
+
+    def test_missing_pid_never_uses_global_discovery(self):
+        run = self._mk_codex_run("missing_pid")
+        self._codex_ledger((100, run))
+        self.extra_env["RAPTOR_SESSION_PID"] = ""
+        self.assertFalse(self._attributed(run))
+
+    def test_invalid_context_is_quiet_and_fail_closed(self):
+        run = self._mk_codex_run("invalid_context")
+        self._codex_ledger((100, run))
+        self.extra_env["RAPTOR_CODEX_CONTEXT_ID"] = "../other-root"
+        self.assertFalse(self._attributed(run))
+
+    def test_symlink_ledger_is_refused(self):
+        run = self._mk_codex_run("symlink_ledger")
+        self._codex_ledger((100, run))
+        path = self.scoped_dir / f"{self.pid}.run"
+        moved = path.with_suffix(".other")
+        path.rename(moved)
+        path.symlink_to(moved)
+        self.assertFalse(self._attributed(run))
+
+    def test_string_session_pid_is_accepted(self):
+        run = self._mk_codex_run("string_pid", session_pid=str(self.pid))
+        self._codex_ledger((100, run))
+        self.assertTrue(self._attributed(run))
+
+    def test_missing_token_is_not_authority(self):
+        run = self._mk_codex_run("missing_token")
+        self._codex_ledger((100, run))
+        self.extra_env["RAPTOR_SESSION_TOKEN"] = ""
+        self.assertFalse(self._attributed(run))
+
+    def test_missing_generation_is_not_legacy_fallback(self):
+        run = self._mk_codex_run("missing_generation")
+        path = run / ".raptor-run.json"
+        meta = json.loads(path.read_text())
+        del meta["session_generation"]
+        path.write_text(json.dumps(meta))
+        self._codex_ledger((100, run))
+        self.assertFalse(self._attributed(run))
+
+    def test_retired_generation_is_not_authority(self):
+        from core.project import sessions
+        sessions._retirement_path(self.pid, self.token, self.scoped_dir).touch()
+        run = self._mk_codex_run("retired")
+        self._codex_ledger((100, run))
+        self.assertFalse(self._attributed(run))
+
+    def test_rotated_entry_rejects_old_worker_even_for_old_run(self):
+        entry = self.scoped_dir / str(self.pid)
+        entry.write_text(entry.read_text().replace(self.token, "f" * 32))
+        run = self._mk_codex_run("rotated")
+        self._codex_ledger((100, run))
+        self.assertFalse(self._attributed(run))
+
+    def test_old_worker_cannot_attribute_successor(self):
+        from core.hash import sha256_string
+        entry = self.scoped_dir / str(self.pid)
+        entry.write_text(entry.read_text().replace(self.token, "f" * 32))
+        run = self._mk_codex_run("successor")
+        path = run / ".raptor-run.json"
+        meta = json.loads(path.read_text())
+        meta["session_generation"] = sha256_string("f" * 32)
+        path.write_text(json.dumps(meta))
+        self._codex_ledger((100, run))
+        self.assertFalse(self._attributed(run))
+
+    def test_dead_owner_rejects_read(self):
+        self.owner.stdin.close()
+        self.owner.wait(timeout=5)
+        run = self._mk_codex_run("dead")
+        self._codex_ledger((100, run))
+        self.assertFalse(self._attributed(run))
+
+    def test_wrong_generation_rejects_read(self):
+        run = self._mk_codex_run("wrong_generation")
+        path = run / ".raptor-run.json"
+        meta = json.loads(path.read_text())
+        meta["session_generation"] = "0" * 64
+        path.write_text(json.dumps(meta))
+        self._codex_ledger((100, run))
+        self.assertFalse(self._attributed(run))
+
+
+class PythonTwinCodexScopeTest(_CodexAuthChecks, _CodexScopeCase):
+    __test__ = True
+
+    def _resolve(self):
+        with patch.dict(os.environ, {
+            "RAPTOR_SESSION_PID": str(self.pid),
+            "RAPTOR_CODEX_CONTEXT_ID": self.CTX_ID,
+            "RAPTOR_SESSION_TOKEN": self.token,
+            "RAPTOR_REGISTRY_HOME": str(self.home / "registry"),
+        } | self.extra_env), patch.object(Path, "home", staticmethod(lambda: self.home)):
+            return track_read._find_active_run()
+
+    def test_codex_session_uses_scoped_ledger(self):
+        tree = self.home / "srctree"
+        tree.mkdir()
+        run = self._mk_codex_run("scan_codex", target=str(tree))
+        self._codex_ledger((100, run))
+        run_dir, target = self._resolve()
+        self.assertEqual(run_dir, str(run))
+        self.assertEqual(target, str(tree))
+
+    def test_codex_ignores_base_ledger(self):
+        """A ledger in the base directory (written by a Claude session
+        at the same PID) must not be found by a Codex session."""
+        run = self._mk_codex_run("scan_base")
+        self._ledger((100, run))  # writes to base, not scoped
+        run_dir, _ = self._resolve()
+        self.assertIsNone(run_dir)
+
+    def test_codex_cross_root_run_not_attributed(self):
+        """A run owned by a different Codex root (different session_id)
+        but sharing this PID must not be attributed."""
+        other_ctx = "ctx-root-B"
+        run = self._mk_codex_run("scan_other", ctx_id=other_ctx)
+        self._codex_ledger((100, run))
+        run_dir, _ = self._resolve()
+        self.assertIsNone(run_dir)
+
+
+    def test_retirement_during_payload_read_is_revalidated(self):
+        import io
+        from core.project import sessions
+        run = self._mk_codex_run("retired_while_reading")
+        self._codex_ledger((100, run))
+        tree = self.home / "source"
+        tree.mkdir()
+        source = tree / "main.c"
+        source.write_text("int value;\n")
+        marker = sessions._retirement_path(self.pid, self.token, self.scoped_dir)
+        class RetiringInput(io.StringIO):
+            def read(self, *args):
+                marker.touch()
+                return super().read(*args)
+        with patch.dict(os.environ, {"RAPTOR_SESSION_PID": str(self.pid),
+                "RAPTOR_SESSION_TOKEN": self.token, "RAPTOR_CODEX_CONTEXT_ID": self.CTX_ID,
+                "RAPTOR_REGISTRY_HOME": str(self.home / "registry")}), \
+             patch.object(sys, "stdin", RetiringInput(json.dumps({"tool_input": {"file_path": str(source)}}))):
+            track_read.main()
+        self.assertFalse((run / ".reads-manifest").exists())
+
+
+@unittest.skipIf(sys.platform == "win32", "bash hook")
+class BashHookCodexScopeTest(_CodexAuthChecks, _CodexScopeCase):
+    __test__ = True
+
+    def _fire(self, file_path, extra_env=None):
+        env = {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "HOME": str(self.home),
+            "RAPTOR_SESSION_PID": str(self.pid),
+            "RAPTOR_CODEX_CONTEXT_ID": self.CTX_ID,
+            "RAPTOR_SESSION_TOKEN": self.token,
+            "RAPTOR_REGISTRY_HOME": str(self.home / "registry"),
+        }
+        if extra_env:
+            env.update(extra_env)
+        payload = json.dumps({"tool_input": {"file_path": str(file_path)}})
+        return subprocess.run(
+            ["bash", str(HOOK)], input=payload, capture_output=True,
+            text=True, env=env, timeout=60, check=False,
+        )
+
+    def test_codex_session_uses_scoped_ledger(self):
+        tree = self.home / "srctree"
+        tree.mkdir()
+        src = tree / "main.c"
+        src.write_text("int main(void) { return 0; }\n")
+        run = self._mk_codex_run("scan_codex", target=str(tree))
+        self._codex_ledger((100, run))
+        r = self._fire(src)
+        self.assertEqual(r.returncode, 0, (r.stdout, r.stderr))
+        manifest = run / ".reads-manifest"
+        self.assertTrue(manifest.exists(),
+                        "Codex scoped ledger got no attribution")
+        self.assertIn(str(src.resolve()),
+                      manifest.read_text(encoding="utf-8"))
+
+    def test_codex_cross_root_run_not_attributed(self):
+        tree = self.home / "srctree"
+        tree.mkdir()
+        src = tree / "a.c"
+        src.write_text("int a;\n")
+        other_ctx = "ctx-root-B"
+        run = self._mk_codex_run("scan_other", ctx_id=other_ctx,
+                                 target=str(tree))
+        self._codex_ledger((100, run))
+        r = self._fire(src)
+        self.assertEqual(r.returncode, 0, (r.stdout, r.stderr))
+        self.assertFalse((run / ".reads-manifest").exists(),
+                         "cross-root run was incorrectly attributed")
+
+    def test_no_hash_binaries_or_inherited_import_path_needed(self):
+        import shutil
+        tree = self.home / "source"
+        tree.mkdir()
+        source = tree / "main.c"
+        source.write_text("int value;\n")
+        run = self._mk_codex_run("without_hash_binaries", target=str(tree))
+        self._codex_ledger((100, run))
+        limited = self.home / "bin"
+        limited.mkdir()
+        (limited / "python3").symlink_to(sys.executable)
+        (limited / "dirname").symlink_to(shutil.which("dirname"))
+        # Bash itself is selected by the test parent; the child PATH contains
+        # neither sha256sum/shasum nor jq/stat/realpath.
+        bash = shutil.which("bash")
+        env = {"PATH": str(limited), "HOME": str(self.home),
+               "RAPTOR_SESSION_PID": str(self.pid), "RAPTOR_SESSION_TOKEN": self.token,
+               "RAPTOR_CODEX_CONTEXT_ID": self.CTX_ID,
+               "RAPTOR_REGISTRY_HOME": str(self.home / "registry"),
+               "RAPTOR_DIR": str(self.home / "untrusted-import-root"),
+               "PYTHONPATH": str(self.home / "untrusted-import-root")}
+        result = subprocess.run([bash, str(HOOK)], input=json.dumps({"tool_input": {"file_path": str(source)}}),
+                                text=True, capture_output=True, timeout=10, env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(str(source), (run / ".reads-manifest").read_text())
+
+    def test_fifo_ledger_and_manifest_do_not_block(self):
+        tree = self.home / "source"
+        tree.mkdir()
+        source = tree / "main.c"
+        source.write_text("int value;\n")
+        run = self._mk_codex_run("fifo")
+        ledger = self.scoped_dir / f"{self.pid}.run"
+        os.mkfifo(ledger)
+        result = self._fire(source)
+        self.assertEqual(result.returncode, 0)
+        self.assertFalse((run / ".reads-manifest").exists())
+        ledger.unlink()
+        self._codex_ledger((100, run))
+        os.mkfifo(run / ".reads-manifest")
+        result = self._fire(source)
+        self.assertEqual(result.returncode, 0)
+
+    def test_malformed_hook_payloads_are_quiet(self):
+        run = self._mk_codex_run("bad_payload")
+        self._codex_ledger((100, run))
+        env = {"PATH": os.environ["PATH"], "HOME": str(self.home),
+               "RAPTOR_SESSION_PID": str(self.pid), "RAPTOR_SESSION_TOKEN": self.token,
+               "RAPTOR_CODEX_CONTEXT_ID": self.CTX_ID,
+               "RAPTOR_REGISTRY_HOME": str(self.home / "registry")}
+        for payload in ('[]', '{"tool_input": []}', '{"tool_input": {"file_path": 42}}', '[' * 20000):
+            with self.subTest(payload=payload[:40]):
+                result = subprocess.run(["bash", str(HOOK)], input=payload, text=True,
+                                        capture_output=True, timeout=10, env=env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stderr, "")
+        self.assertFalse((run / ".reads-manifest").exists())
 
 
 if __name__ == "__main__":

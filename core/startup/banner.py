@@ -67,6 +67,7 @@ def format_banner(
     project_line: str | None = None,
     lang_line: str | None = None,
     tool_updates: set[str] | None = None,
+    codex: bool = False,
 ) -> str:
     """Format the startup banner from gathered data.
 
@@ -82,6 +83,7 @@ def format_banner(
         project_line: One-line project status, or None.
         lang_line: Pre-formatted language support line, or None.
         tool_updates: Tool names that have a newer version on PyPI.
+        codex: Use Codex skill names for command references.
 
     Returns:
         Formatted banner string.
@@ -114,6 +116,15 @@ def format_banner(
 
     # Warnings: unavailable first, then limited, then other
     all_raw = tool_warnings + env_warnings + llm_warnings
+    if codex:
+        # Convert known commands throughout lists and explanatory labels.
+        # Require token boundaries so paths such as /scan/config stay intact.
+        command_reference = (
+            r"(?<![\w/])/(agentic|audit|codeql|crash-analysis|exploit|frida|"
+            r"fuzz|oss-forensics|scan|validate|web)(?=$|[\s,);:`])"
+        )
+        all_raw = [re.sub(command_reference,
+                          r"$\1", warning) for warning in all_raw]
     ordered = (
         [w for w in all_raw if "unavailable" in w] +
         [w for w in all_raw if "limited" in w] +
@@ -126,6 +137,8 @@ def format_banner(
 
     # Active project
     if project_line:
+        if codex:
+            project_line = project_line.replace("`/project none`", "`$project none`")
         lines.append(f"   {project_line}")
         lines.append("")
 
