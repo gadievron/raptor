@@ -25,6 +25,10 @@ gpt-4.1-nano (shut down 2026-10-23). Deprecated: gpt-5.4-nano/5.3-codex/5.1
 (shutdown 2027-04-01), gpt-4.1/4.1-mini/4o/4o-mini (shutdown 2027-01-14),
 o3/o3-pro/gpt-5/5-mini/5-nano/5-pro (shutdown 2026-12-11).
 
+2026-10-31 — Mistral refresh from mistral.ai/pricing. mistral-large-latest now
+Mistral Large 4: $0.70/$2.10 per MTok (was $2.00/$6.00), context 1M (was
+262K). Removed mistral-medium-latest (deprecated 2026-10-31).
+
 2026-10-31 — Gemini refresh from ai.google.dev/gemini-api/docs/pricing. Added
 gemini-4-argon (flagship, introductory pricing through 2026-12-01) and
 gemini-3.8-flash (introductory through 2027-01-01). Removed gemini-3.7-flash
@@ -116,7 +120,7 @@ PROVIDER_DEFAULT_MODELS = {
 #   (Note: Sonnet 5/5.5 is $0.002/$0.010; Haiku 5.5 is $0.0001/$0.0005)
 #   OpenAI:     5.4   $0.0025/$0.015 →  4o-mini $0.00015/$0.0006 (~25×)
 #   Gemini:     Pro   $0.00125/$0.01 →  Flash-L $0.0001/$0.0004  (~25×)
-#   Mistral:    Large $0.002/$0.006  →  Small   $0.00015/$0.0006 (~13×)
+#   Mistral:    Large $0.0007/$0.0021 → Small   $0.00015/$0.0006 (~5×)
 #
 # OpenAI mapping retains ``gpt-4o-mini`` (deprecated 2026-10-14, shutdown
 # 2027-01-14) pending evidence testing of ``gpt-5.6-luna`` or ``gpt-6-luna``
@@ -200,8 +204,7 @@ MODEL_COSTS = {
     # Google Gemma (free tier only via Gemini API as of 2026-04, also runs locally via Ollama)
     "gemma-4-31b-it":          {"input": 0,       "output": 0},
     # Mistral
-    "mistral-large-latest":    {"input": 0.002,   "output": 0.006},
-    "mistral-medium-latest":   {"input": 0.0015,  "output": 0.0075},
+    "mistral-large-latest":    {"input": 0.0007,  "output": 0.0021},
     "mistral-small-latest":    {"input": 0.00015, "output": 0.0006},
     "ministral-14b-latest":    {"input": 0.0002,  "output": 0.0002},
     "ministral-8b-latest":     {"input": 0.00015, "output": 0.00015},
@@ -228,7 +231,7 @@ MODEL_COSTS = {
 #   Gemini:    operator-observed defaults. Pro=1K, Flash=2K,
 #              Flash-Lite=10K, Gemma=30.
 #   Mistral:   operator-observed defaults (RPS × 60 → RPM).
-#              Large=4, Medium=50, Small=50.
+#              Large=4, Small=50.
 MODEL_LIMITS = {
     # Anthropic — current lineup
     "claude-fable-5-1":        {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
@@ -292,8 +295,7 @@ MODEL_LIMITS = {
     "gemma-4-31b-it":          {"max_context": 262144,  "max_output": 32768,  "rpm": 30},
     # Mistral — max_output = max_context per Mistral convention
     # RPM derived from observed RPS (RPS × 60, floored).
-    "mistral-large-latest":    {"max_context": 262100,  "max_output": 262100, "rpm": 4},
-    "mistral-medium-latest":   {"max_context": 256000,  "max_output": 256000, "rpm": 50},
+    "mistral-large-latest":    {"max_context": 1000000, "max_output": 1000000, "rpm": 4},
     "mistral-small-latest":    {"max_context": 256000,  "max_output": 256000, "rpm": 50},
     "ministral-14b-latest":    {"max_context": 256000,  "max_output": 256000, "rpm": 30},
     "ministral-8b-latest":     {"max_context": 256000,  "max_output": 256000, "rpm": 188},
