@@ -1435,6 +1435,228 @@ def _find_paired_operations(functions: list[dict]) -> list[tuple[str, str]]:
 
 
 # ------------------------------------------------------------------
+# Pre-filter: compute function names likely to survive tiers 0-2
+# ------------------------------------------------------------------
+
+def _pre_filter_relevant_names(
+    identifiers: list[str],
+    all_structs: list[dict],
+    all_prototypes: list[dict],
+    all_functions: list[dict],
+    type_ref_index: dict[str, list[tuple[str, str]]],
+    impl_chased_names: set[str],
+    narrow: bool,
+) -> set[str]:
+    """Conservatively estimate which function names will pass the relevance filter.
+
+    Returns a superset of tier 0-2 names.  Structs are always kept, so
+    this only governs the function-item loop in ``_build_study_items``.
+    """
+    ident_exact: set[str] = set()
+    ident_stems: set[str] = set()
+    for one_ident in identifiers:
+        low = one_ident.lower()
+        bare = re.sub(r"^(?:struct|union|enum)\s+", "", low)
+        bare_no_t = bare.removesuffix("_t")
+        ident_exact.update((bare, bare_no_t))
+        if low == bare:
+            ident_stems.update((bare, bare_no_t))
+
+    relevant: set[str] = set()
+
+    all_declared = list(all_prototypes) + list(all_functions)
+    for p in all_declared:
+        name = p["name"]
+        name_low = name.lower()
+        if name_low in ident_exact:
+            relevant.add(name)
+            continue
+        if not narrow and ident_stems and any(s in name_low for s in ident_stems):
+            relevant.add(name)
+            continue
+        rt = p.get("return_type", "")
+        if rt:
+            rt_bare = re.sub(r"^(?:struct|union|enum)\s+", "", rt.lower())
+            if rt_bare in ident_exact:
+                relevant.add(name)
+                continue
+        pts = p.get("param_types", [])
+        if pts:
+            hits = sum(
+                1 for pt in pts
+                if re.sub(r"^(?:struct|union|enum)\s+", "", pt.lower()) in ident_exact
+            )
+            if hits >= 2 or (hits and hits / len(pts) >= 0.5):
+                relevant.add(name)
+                continue
+
+    if not narrow:
+        for key in list(ident_exact) + [f"struct {b}" for b in ident_exact]:
+            for fn_name, _ in type_ref_index.get(key, []):
+                relevant.add(fn_name)
+
+    if not narrow:
+        body_terms = ident_exact | {f"struct {b}" for b in ident_exact}
+        for f in all_functions:
+            body = f.get("body", "")
+            if body and any(t in body.lower() for t in body_terms):
+                relevant.add(f["name"])
+
+    if not narrow:
+        tier0_headers: set[str] = set()
+        for s in all_structs:
+            if s["name"].lower() in ident_exact:
+                if s["file"].endswith(tuple(_HEADER_EXTENSIONS)):
+                    tier0_headers.add(s["file"])
+        if tier0_headers:
+            for p in all_prototypes:
+                if p.get("file", "") in tier0_headers:
+                    relevant.add(p["name"])
+            for f in all_functions:
+                if (f.get("file", "").endswith(tuple(_HEADER_EXTENSIONS))
+                        and f.get("file", "") in tier0_headers):
+                    relevant.add(f["name"])
+
+    relevant.update(impl_chased_names)
+    return relevant
+
+
+# ------------------------------------------------------------------
+# Impl-chase: resolve bodyless prototypes to .c implementations
+# ------------------------------------------------------------------
+
+def _impl_chase(
+    all_functions: list[dict],
+    all_prototypes: list[dict],
+    source_files: list[Path],
+    source_root: Path,
+    max_workers: int,
+    search_dirs: list[Path] | None,
+) -> tuple[set[str], list[Path], list[dict], list[dict], dict[str, str]]:
+    """Find .c files implementing bodyless prototyped functions.
+
+    After header + source passes, some prototyped functions still lack
+    bodies because headers don't ``#include`` .c files.  This greps for
+    their definitions in directories of already-scoped files (plus
+    ``include/X/`` → ``X/`` counterparts), scans the hits, and returns
+    the new data for the caller to merge.
+
+    Returns ``(chased_names, added_files, new_structs, new_fns, new_includes)``.
+    """
+    fn_with_body = {f["name"] for f in all_functions if f.get("body")}
+    called_names: set[str] = set()
+    for f in all_functions:
+        body = f.get("body", "")
+        if body:
+            for m in _CALL_SITE_RE.finditer(body):
+                called_names.add(m.group(1))
+    proto_names_all = {p["name"] for p in all_prototypes}
+    bodyless = (proto_names_all - fn_with_body) & called_names
+    if not bodyless:
+        return set(), [], [], [], {}
+
+    try:
+        from core.config import RaptorConfig
+        _safe = RaptorConfig.get_safe_env()
+    except OSError:
+        return bodyless, [], [], [], {}
+
+    scoped_resolved = {f.resolve() for f in source_files}
+    impl_added: list[Path] = []
+    new_structs: list[dict] = []
+    new_fns: list[dict] = []
+    new_includes: dict[str, str] = {}
+
+    try:
+        grep_dirs: set[str] = set()
+        for sf in source_files:
+            d = sf.parent
+            if d.is_relative_to(source_root):
+                grep_dirs.add(str(d))
+                rel_d = d.relative_to(source_root)
+                parts = rel_d.parts
+                if parts and parts[0] == "include" and len(parts) > 1:
+                    impl_d = source_root / Path(*parts[1:])
+                    if impl_d.is_dir():
+                        grep_dirs.add(str(impl_d))
+
+        _batch_sz = 50
+        sorted_bodyless = sorted(bodyless)
+        sorted_dirs = sorted(grep_dirs)
+
+        def _run_grep_batch(batch: list[str]) -> tuple[list[str], int]:
+            combined_pat = "|".join(
+                rf"^[A-Za-z_].*\b{re.escape(n)}\s*\("
+                for n in batch)
+            try:
+                proc = subprocess.run(
+                    ["grep", "-rlE", "--null", "--include=*.c",
+                     combined_pat] + sorted_dirs,
+                    capture_output=True, text=True, timeout=30,
+                    check=False, env=_safe,
+                )
+                return [e for e in proc.stdout.split("\0") if e], 0
+            except (subprocess.TimeoutExpired, OSError):
+                return [], len(batch)
+
+        batches = [
+            sorted_bodyless[i:i + _batch_sz]
+            for i in range(0, len(sorted_bodyless), _batch_sz)
+        ]
+        _timed_out = 0
+        n_grep_workers = min(max_workers, len(batches) or 1)
+        with ThreadPoolExecutor(max_workers=n_grep_workers) as pool:
+            for entries, n_to in pool.map(_run_grep_batch, batches):
+                _timed_out += n_to
+                for entry in entries:
+                    p = Path(entry).resolve()
+                    if (p.is_file()
+                            and p.is_relative_to(source_root)
+                            and p not in scoped_resolved):
+                        impl_added.append(p)
+                        scoped_resolved.add(p)
+
+        if _timed_out:
+            print(
+                f"study-prep: impl-chase: {_timed_out} "
+                f"patterns timed out (coverage gap)",
+                file=sys.stderr)
+
+        if impl_added:
+            print(
+                f"study-prep: impl-chase: {len(impl_added)} "
+                f"implementation files for "
+                f"{len(bodyless)} referenced bodyless "
+                f"prototypes",
+                file=sys.stderr)
+            impl_workers = min(max_workers, len(impl_added))
+            with ThreadPoolExecutor(max_workers=impl_workers) as pool:
+                futures = [
+                    pool.submit(
+                        _scan_file_result, sf,
+                        source_root, False, search_dirs,
+                        extract_protos=False)
+                    for sf in impl_added
+                ]
+                for fut in futures:
+                    structs, functions, _, includes = fut.result()
+                    new_structs.extend(structs)
+                    new_fns.extend(functions)
+                    new_includes.update(includes)
+            resolved_count = sum(
+                1 for f in new_fns
+                if f.get("body") and f["name"] in bodyless)
+            print(
+                f"study-prep: impl-chase scan complete: "
+                f"{resolved_count} implementations resolved",
+                file=sys.stderr)
+    except OSError:
+        pass
+
+    return bodyless, impl_added, new_structs, new_fns, new_includes
+
+
+# ------------------------------------------------------------------
 # Build study items
 # ------------------------------------------------------------------
 
@@ -1447,6 +1669,7 @@ def _build_study_items(
     scoped: bool = False,
     discovered_patterns: dict[str, str] | None = None,
     anchor_names: set[str] | None = None,
+    relevant_names: set[str] | None = None,
 ) -> list[StudyItem]:
     call_graph = _build_call_graph(functions)
     type_ref_index = type_ref_index or {}
@@ -1580,6 +1803,8 @@ def _build_study_items(
             best_by_name[name] = f
 
     for f in best_by_name.values():
+        if relevant_names is not None and f["name"] not in relevant_names:
+            continue
         signals = f.get("signals", {})
         doc = f.get("doc_comment", "") or doc_by_name.get(f["name"], "")
         calls = call_graph.get(f["name"], [])
@@ -3146,7 +3371,7 @@ def main() -> None:
           f"{len(all_structs)} structs, {len(all_prototypes)} prototypes "
           f"[{t1 - t0:.1f}s]", file=sys.stderr)
 
-    # Pass 1.5: external headers — resolve includes from target files that
+    # Pass 2: external headers — resolve includes from target files that
     # point outside the target directory, then scan those that define the
     # study identifier (e.g. include/linux/scatterlist.h when target is
     # crypto/).
@@ -3208,9 +3433,11 @@ def main() -> None:
                     structs, _functions, _protos, _incs = fut.result()
                     all_structs.extend(structs)
 
-            print(f"study-prep: pass 1.5: {len(ext_headers)} external headers "
+            print(f"study-prep: pass 2: {len(ext_headers)} external headers "
                   f"scanned (identifier-relevant includes)",
                   file=sys.stderr)
+
+    impl_chased_names: set[str] = set()
 
     # Assemble identifiers from --identifier, --concept (LLM-seeded), --reading-list
     ident_arg = parsed.identifier
@@ -3360,10 +3587,10 @@ def main() -> None:
         print(f"study-prep: identifier filter ({label}): {len(cf)} search terms",
               file=sys.stderr)
 
-    # Pass 2: .c files — parallel extraction of function bodies and signals
-    n_workers_p2 = min(max_workers, len(c_files) or 1)
-    matched_p2 = 0
-    with ThreadPoolExecutor(max_workers=n_workers_p2) as pool:
+    # Pass 3: .c files — parallel extraction of function bodies and signals
+    n_workers_p3 = min(max_workers, len(c_files) or 1)
+    matched_p3 = 0
+    with ThreadPoolExecutor(max_workers=n_workers_p3) as pool:
         futures = [
             pool.submit(_scan_file_result, sf, source_root, False,
                         search_dirs, extract_protos=False, concept_filter=cf)
@@ -3372,22 +3599,22 @@ def main() -> None:
         for fut in futures:
             structs, functions, _protos, includes = fut.result()
             if structs or functions:
-                matched_p2 += 1
+                matched_p3 += 1
             all_structs.extend(structs)
             all_functions.extend(functions)
             resolved_includes.update(includes)
 
     t2 = time.monotonic()
     if cf:
-        skipped = len(c_files) - matched_p2
-        print(f"study-prep: pass 2 ({matched_p2}/{len(c_files)} files matched, "
-              f"{skipped} skipped, {n_workers_p2} threads) [{t2 - t1:.1f}s]",
+        skipped = len(c_files) - matched_p3
+        print(f"study-prep: pass 3 ({matched_p3}/{len(c_files)} files matched, "
+              f"{skipped} skipped, {n_workers_p3} threads) [{t2 - t1:.1f}s]",
               file=sys.stderr)
     else:
-        print(f"study-prep: pass 2 ({len(c_files)} files, {n_workers_p2} threads) "
+        print(f"study-prep: pass 3 ({len(c_files)} files, {n_workers_p3} threads) "
               f"[{t2 - t1:.1f}s]", file=sys.stderr)
 
-    # Pass 3: resolved includes not already scanned (few files, sequential).
+    # Pass 4: resolved includes not already scanned (few files, sequential).
     # Files outside the target directory contribute struct definitions only
     # — their functions/prototypes stay out of the study-item pool to avoid
     # scope explosion when source_root is wider than target.
@@ -3410,9 +3637,26 @@ def main() -> None:
             all_prototypes.extend(protos)
 
     t3 = time.monotonic()
+    print(f"study-prep: pass 4 (resolved includes) [{t3 - t2:.1f}s]",
+          file=sys.stderr)
+
+    # Pass 5: impl-chase — find .c files for bodyless prototypes
+    if is_scoped:
+        impl_chased_names, impl_added, ic_structs, ic_fns, ic_incs = (
+            _impl_chase(all_functions, all_prototypes, source_files,
+                        source_root, max_workers, search_dirs))
+        if impl_added:
+            source_files.extend(impl_added)
+        all_structs.extend(ic_structs)
+        all_functions.extend(ic_fns)
+        resolved_includes.update(ic_incs)
+
+    t4 = time.monotonic()
+    print(f"study-prep: pass 5 (impl-chase) [{t4 - t3:.1f}s]",
+          file=sys.stderr)
 
     # Final dedup: prototypes extracted in pass 1 may now have body
-    # versions from pass 2/3.  Remove those prototypes so they don't
+    # versions from later passes.  Remove those prototypes so they don't
     # overwrite call-graph entries in _build_call_graph (dict-last-wins).
     fns_with_body = {f["name"] for f in all_functions if f.get("body")}
     all_prototypes[:] = [
@@ -3451,29 +3695,55 @@ def main() -> None:
               file=sys.stderr)
 
     pairs = _find_paired_operations(combined_fns)
+
+    # Start deferred concept seeding in the background so it overlaps
+    # with the reduce step.  Names are drawn from the raw extraction
+    # data (identical to the unique names reduce would produce).
+    _seed_future = None
+    _seed_pool = None
+    if _deferred_concepts:
+        all_candidate_names = sorted(
+            {f["name"] for f in combined_fns}
+            | {s["name"] for s in all_structs})
+        _seed_pool = ThreadPoolExecutor(max_workers=1)
+        _seed_future = _seed_pool.submit(
+            _llm_seed_concepts_from_names,
+            _deferred_concepts, all_candidate_names,
+            model=parsed.model, run_dir=output_dir)
+
+    pre_filter = None
+    if identifiers and not _deferred_concepts:
+        pre_filter = _pre_filter_relevant_names(
+            identifiers, all_structs, all_prototypes, all_functions,
+            type_ref_index, impl_chased_names, parsed.narrow)
     items = _build_study_items(
         all_structs, combined_fns, pairs, type_ref_index,
         scoped=is_scoped,
         discovered_patterns=discovered_patterns,
         anchor_names=expanded_anchors,
+        relevant_names=pre_filter,
     )
-    t4 = time.monotonic()
-    print(f"study-prep: reduce (type-ref + pairs + items) [{t4 - t3:.1f}s]"
+    t5 = time.monotonic()
+    _pf_label = f", pre-filtered to {len(pre_filter)}" if pre_filter is not None else ""
+    print(f"study-prep: reduce (type-ref + pairs + items{_pf_label}) [{t5 - t4:.1f}s]"
           f"{' [scoped — has_content gate bypassed]' if is_scoped else ''}",
           file=sys.stderr)
 
-    # Deferred concept seeding: when --concept was passed without a prior
-    # study-list.json, use the in-memory items to seed identifiers now.
-    if _deferred_concepts and items:
-        all_item_names = sorted({it.name for it in items})
-        seeded = _llm_seed_concepts_from_names(
-            _deferred_concepts, all_item_names, model=parsed.model,
-            run_dir=output_dir)
-        if seeded:
-            identifiers.extend(seeded)
-            print(f"study-prep: deferred concept seeding: {len(seeded)} identifiers "
-                  f"from {len(_deferred_concepts)} concepts (in-memory)",
+    # Collect deferred concept seeding result (overlapped with reduce).
+    if _seed_future is not None:
+        try:
+            seeded = _seed_future.result()
+            if seeded:
+                identifiers.extend(seeded)
+                print(f"study-prep: deferred concept seeding: {len(seeded)} identifiers "
+                      f"from {len(_deferred_concepts)} concepts (in-memory)",
+                      file=sys.stderr)
+        except Exception:
+            print("study-prep: deferred concept seeding failed (LLM error)",
                   file=sys.stderr)
+        finally:
+            if _seed_pool is not None:
+                _seed_pool.shutdown(wait=False)
 
     if identifiers:
         # ident_exact: names that match tier 0 exactly (struct defs)
@@ -3606,6 +3876,8 @@ def main() -> None:
             if not parsed.narrow and item.name in ident_type_fns:
                 return 2
             if not parsed.narrow and item.name in body_mentions:
+                return 2
+            if item.name in impl_chased_names:
                 return 2
             return 3
 
@@ -3839,6 +4111,20 @@ def main() -> None:
     }
     save_json(out_path, out_data)
     print(f"study-prep: wrote {out_path} ({len(items)} items)", file=sys.stderr)
+
+    # Phase 3a: cross-subsystem interaction identification.
+    interactions = _find_cross_subsystem_interactions(items)
+    if interactions:
+        ix_path = output_dir / "interactions.json"
+        save_json(ix_path, {
+            "target": str(target),
+            "source_root": str(source_root),
+            "pair_count": len(interactions),
+            "pairs": interactions,
+        })
+        print(f"study-prep: wrote {ix_path} ({len(interactions)} "
+              "interaction pairs)", file=sys.stderr)
+
     if not items:
         # Drop-first attribution names the likeliest cause, not the
         # only one: survivors/other focus may also have matched no
@@ -3869,6 +4155,109 @@ def main() -> None:
               f"({len(discovered_patterns)} patterns)", file=sys.stderr)
 
         _promote_to_project_concepts(patterns_path, output_dir)
+
+
+def _subsystem_of(filepath: str) -> str:
+    """Derive a subsystem label from a study-list file path.
+
+    Paths are relative to source_root.  ``include/crypto/foo.h`` and
+    ``crypto/bar.c`` both belong to subsystem ``crypto`` — the include
+    tree mirrors the source tree for the same subsystem.  Shared
+    infrastructure headers live in their own subsystem
+    (``include/linux/`` → ``linux``).
+    """
+    parts = filepath.split("/")
+    if not parts:
+        return ""
+    if parts[0] == "include" and len(parts) > 1:
+        return parts[1]
+    return parts[0]
+
+
+def _find_cross_subsystem_interactions(
+    items: "list[StudyItem]",
+) -> list[dict]:
+    """Phase 3a: mechanical cross-subsystem interaction identification.
+
+    Two signals, merged:
+
+    1. ``struct X`` regex in item definitions — catches C struct-tag usage.
+    2. Struct item ``callees`` field — lists functions whose signatures
+       reference the struct type, already typedef-resolved by the
+       extractor.  Catches typedef'd types that signal 1 misses.
+
+    Returns a list of interaction-pair dicts sorted by specificity
+    (fewest total functions first — domain-specific interactions rank
+    above infrastructure noise).
+    """
+    fn_sub: dict[str, str] = {}
+    for it in items:
+        if it.kind == "function":
+            sub = _subsystem_of(it.file or "")
+            if sub:
+                fn_sub[it.name] = sub
+
+    # type_name → {subsystem → set(function_names)}
+    type_subs: dict[str, dict[str, set[str]]] = {}
+    type_signals: dict[str, set[str]] = {}
+    type_file: dict[str, str] = {}
+
+    def _record(type_name: str, subsystem: str, fn_name: str,
+                signal: str) -> None:
+        if type_name not in type_subs:
+            type_subs[type_name] = {}
+        subs = type_subs[type_name]
+        if subsystem not in subs:
+            subs[subsystem] = set()
+        subs[subsystem].add(fn_name)
+        if type_name not in type_signals:
+            type_signals[type_name] = set()
+        type_signals[type_name].add(signal)
+
+    for it in items:
+        defn = it.definition or ""
+        if not defn:
+            continue
+        sub = _subsystem_of(it.file or "")
+        if not sub:
+            continue
+        for type_name in set(_REFERENCED_TYPE_PATTERN.findall(defn)):
+            _record(type_name, sub, it.name, "definition_regex")
+
+    for it in items:
+        if it.kind != "struct":
+            continue
+        callees = getattr(it, "callees", None) or []
+        if not callees:
+            continue
+        type_file[it.name] = it.file or ""
+        for callee in callees:
+            callee_sub = fn_sub.get(callee)
+            if callee_sub:
+                _record(it.name, callee_sub, callee, "struct_callees")
+
+    pairs: list[dict] = []
+    for type_name, subs in type_subs.items():
+        if len(subs) < 2:
+            continue
+        sub_list = sorted(subs.keys())
+        for i, sa in enumerate(sub_list):
+            for sb in sub_list[i + 1:]:
+                fns_a = sorted(subs[sa])
+                fns_b = sorted(subs[sb])
+                pairs.append({
+                    "type_name": type_name,
+                    "type_file": type_file.get(type_name, ""),
+                    "subsystem_a": sa,
+                    "subsystem_b": sb,
+                    "functions_a": fns_a,
+                    "functions_b": fns_b,
+                    "function_count": len(fns_a) + len(fns_b),
+                    "signals": sorted(type_signals.get(type_name, set())),
+                })
+
+    pairs.sort(key=lambda p: p["function_count"])
+    return pairs
 
 
 def _is_under_projects_base(directory: Path) -> bool:

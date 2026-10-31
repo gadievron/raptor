@@ -2488,3 +2488,131 @@ class TestCappedSourceReads:
         # on a Path would reopen the whole-file-buffer class.
         src = _PREP_PATH.read_text(encoding="utf-8")
         assert ".read_text(" not in src
+
+
+# ------------------------------------------------------------------
+# Subsystem derivation
+# ------------------------------------------------------------------
+
+class TestSubsystemOf:
+    def test_include_header_collapses(self):
+        assert prep._subsystem_of("include/crypto/if_alg.h") == "crypto"
+
+    def test_source_dir(self):
+        assert prep._subsystem_of("crypto/algif_aead.c") == "crypto"
+
+    def test_include_linux_is_own_subsystem(self):
+        assert prep._subsystem_of("include/linux/scatterlist.h") == "linux"
+
+    def test_nested_source_dir(self):
+        assert prep._subsystem_of("net/core/sock.c") == "net"
+
+    def test_empty_path(self):
+        assert prep._subsystem_of("") == ""
+
+    def test_root_file(self):
+        assert prep._subsystem_of("Makefile") == "Makefile"
+
+
+# ------------------------------------------------------------------
+# Phase 3a: cross-subsystem interaction identification
+# ------------------------------------------------------------------
+
+def _make_si(name, kind="function", file="test.h", definition="",
+             callees=None):
+    return prep.StudyItem(
+        id=f"{kind}_{name}", kind=kind, name=name, file=file,
+        definition=definition, callees=callees or [],
+    )
+
+
+class TestCrossSubsystemInteractions:
+    def test_struct_regex_finds_cross_subsystem_pair(self):
+        items = [
+            _make_si("fn_a", file="crypto/foo.c",
+                     definition="void fn_a(struct my_struct *p) { }"),
+            _make_si("fn_b", file="net/bar.c",
+                     definition="int fn_b(struct my_struct *s) { }"),
+        ]
+        pairs = prep._find_cross_subsystem_interactions(items)
+        type_names = {p["type_name"] for p in pairs}
+        assert "my_struct" in type_names
+        pair = next(p for p in pairs if p["type_name"] == "my_struct")
+        subs = {pair["subsystem_a"], pair["subsystem_b"]}
+        assert subs == {"crypto", "net"}
+
+    def test_struct_callees_signal(self):
+        items = [
+            _make_si("widget", kind="struct",
+                     file="include/linux/widget.h",
+                     definition="typedef int widget_handle;",
+                     callees=["use_a", "use_b"]),
+            _make_si("use_a", file="drivers/gpu/drm.c",
+                     definition="void use_a(void) { }"),
+            _make_si("use_b", file="fs/ext4/inode.c",
+                     definition="void use_b(void) { }"),
+        ]
+        pairs = prep._find_cross_subsystem_interactions(items)
+        widget_pairs = [p for p in pairs if p["type_name"] == "widget"]
+        assert len(widget_pairs) == 1
+        assert "struct_callees" in widget_pairs[0]["signals"]
+
+    def test_single_subsystem_not_reported(self):
+        items = [
+            _make_si("local_t", kind="struct",
+                     file="crypto/internal.h",
+                     definition="struct local_t { int x; };"),
+            _make_si("fn_a", file="crypto/foo.c",
+                     definition="void fn_a(struct local_t *p) { }"),
+            _make_si("fn_b", file="crypto/bar.c",
+                     definition="int fn_b(struct local_t *s) { }"),
+        ]
+        pairs = prep._find_cross_subsystem_interactions(items)
+        type_names = {p["type_name"] for p in pairs}
+        assert "local_t" not in type_names
+
+    def test_empty_items_returns_empty(self):
+        assert prep._find_cross_subsystem_interactions([]) == []
+
+    def test_sorted_by_function_count_ascending(self):
+        items = [
+            _make_si("big", kind="struct",
+                     file="include/linux/big.h",
+                     definition="struct big { int x; };"),
+            _make_si("small", kind="struct",
+                     file="include/linux/small.h",
+                     definition="struct small { int x; };"),
+            _make_si("f1", file="a/f1.c",
+                     definition="void f1(struct big *p) { }"),
+            _make_si("f2", file="a/f2.c",
+                     definition="void f2(struct big *p) { }"),
+            _make_si("f3", file="b/f3.c",
+                     definition="void f3(struct big *p) { }"),
+            _make_si("f4", file="b/f4.c",
+                     definition="void f4(struct big *p) { }"),
+            _make_si("g1", file="a/g1.c",
+                     definition="void g1(struct small *p) { }"),
+            _make_si("g2", file="b/g2.c",
+                     definition="void g2(struct small *p) { }"),
+        ]
+        pairs = prep._find_cross_subsystem_interactions(items)
+        counts = [p["function_count"] for p in pairs]
+        assert counts == sorted(counts)
+
+    def test_both_signals_merge(self):
+        items = [
+            _make_si("shared", kind="struct",
+                     file="include/crypto/shared.h",
+                     definition="struct shared { int x; };",
+                     callees=["callee_fn"]),
+            _make_si("writer_fn", file="crypto/w.c",
+                     definition="void writer_fn(struct shared *s) { }"),
+            _make_si("callee_fn", file="net/r.c",
+                     definition="void callee_fn(void) { }"),
+        ]
+        pairs = prep._find_cross_subsystem_interactions(items)
+        shared_pairs = [p for p in pairs if p["type_name"] == "shared"]
+        assert len(shared_pairs) == 1
+        assert set(shared_pairs[0]["signals"]) == {
+            "definition_regex", "struct_callees",
+        }

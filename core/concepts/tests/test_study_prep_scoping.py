@@ -459,7 +459,7 @@ class TestExternalHeaderContainment:
             "--identifier", "alpha_ctx",
         ])
         assert result.returncode == 0, result.stderr
-        assert "pass 1.5" not in result.stderr
+        assert "pass 2" not in result.stderr
         assert "alpha_ctx" in _item_names(out)
 
     def test_symlink_escape_not_read(self, tmp_path) -> None:
@@ -478,10 +478,10 @@ class TestExternalHeaderContainment:
             "--identifier", "alpha_ctx",
         ])
         assert result.returncode == 0, result.stderr
-        assert "pass 1.5" not in result.stderr
+        assert "pass 2" not in result.stderr
 
     def test_in_tree_include_still_extracted(self, tmp_path) -> None:
-        """The legitimate pass-1.5 case keeps working: a header under
+        """The legitimate pass-2 case keeps working: a header under
         the source root but outside the target subdir."""
         root = tmp_path / "repo"
         (root / "crypto").mkdir(parents=True)
@@ -503,7 +503,7 @@ class TestExternalHeaderContainment:
             "--identifier", "alpha_ctx",
         ])
         assert result.returncode == 0, result.stderr
-        assert "pass 1.5: 1 external headers scanned" in result.stderr
+        assert "pass 2: 1 external headers scanned" in result.stderr
 
 
 # ------------------------------------------------------------------
