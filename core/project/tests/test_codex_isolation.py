@@ -402,3 +402,80 @@ def test_metadata_and_ledger_transitions_serialize(registry, tmp_path, monkeypat
         expected = "running" if second == "resume" else "interrupted"
         assert load_json(run / metadata.RUN_METADATA_FILE)["status"] == expected
         assert sessions.ledger_runs()[0]["status"] == expected
+
+
+@pytest.fixture
+def launcher_seed(registry, monkeypatch):
+    with registry(None, 'launcher-project') as token:
+        assert sessions.record_session('launcher-project', PID, token,
+                                       seeded_by='bookmark') == PID
+    monkeypatch.setenv('_RAPTOR_TRUSTED', '1')
+    monkeypatch.setenv('CODEX', '1')
+    monkeypatch.setenv('RAPTOR_CODEX_CONTEXT_ID', '')
+    monkeypatch.setenv('RAPTOR_SESSION_PID', str(PID))
+    monkeypatch.setenv('RAPTOR_SESSION_TOKEN', token)
+    monkeypatch.setattr(sessions, 'resolve_codex_owner_pid', lambda: PID)
+    module = runpy.run_path(str(Path(__file__).resolve().parents[3] /
+                               'libexec/raptor-session-init'))
+    return module['_seed_codex_session'], sessions._base_sessions_dir() / str(PID)
+
+
+def test_launcher_binding_moves_to_scoped_session_without_a_live_ghost(launcher_seed):
+    seed, base = launcher_seed
+    assert seed(ROOT_A)
+    assert not base.exists()
+    assert sessions.session_binding() == ('launcher-project', 'bound')
+    assert len(sessions.all_sessions(prune=False)) == 1
+    assert sessions.bind_session('new-project') == PID
+    assert [(pid, fields['project']) for pid, fields, _ in
+            sessions.all_sessions(prune=False)] == [(PID, 'new-project')]
+    assert sessions.other_sessions('launcher-project') == []
+    assert sessions.rebind_project_sessions('launcher-project', 'renamed') == []
+    assert seed(ROOT_A)  # Reentry preserves the user's changed binding.
+    assert sessions.session_binding() == ('new-project', 'bound')
+
+
+def test_failed_scoped_seed_preserves_launcher_binding(launcher_seed, monkeypatch):
+    seed, base = launcher_seed
+    before = base.read_bytes()
+    monkeypatch.setattr(sessions, 'ensure_codex_session', lambda *a, **kw: None)
+    assert seed(ROOT_A) is None
+    assert base.read_bytes() == before
+
+
+def test_unowned_base_binding_is_never_removed(launcher_seed, monkeypatch):
+    seed, base = launcher_seed
+    before = base.read_bytes()
+    monkeypatch.setenv('RAPTOR_SESSION_TOKEN', 'different-credential')
+    assert seed(ROOT_A)
+    assert base.read_bytes() == before
+    assert sessions.session_binding() == (None, 'none')
+
+
+def test_changed_launcher_binding_is_not_removed(launcher_seed, monkeypatch):
+    seed, base = launcher_seed
+    original = sessions.ensure_codex_session
+    def change_then_seed(*args, **kwargs):
+        with session_scope.using_directory(sessions._base_sessions_dir()):
+            assert sessions.record_session('changed-project', PID,
+                                           seeded_by='use') == PID
+        return original(*args, **kwargs)
+    monkeypatch.setattr(sessions, 'ensure_codex_session', change_then_seed)
+    assert seed(ROOT_A) is None
+    assert sessions._parse_entry(base)['project'] == 'changed-project'
+
+
+
+def test_already_retired_launcher_seed_is_an_idempotent_handoff(launcher_seed, monkeypatch):
+    seed, base = launcher_seed
+    original = sessions.ensure_codex_session
+    def seed_then_retire(*args, **kwargs):
+        result = original(*args, **kwargs)
+        with session_scope.using_directory(sessions._base_sessions_dir()):
+            with sessions._ledger_lock(PID):
+                base.unlink()
+        return result
+    monkeypatch.setattr(sessions, 'ensure_codex_session', seed_then_retire)
+    assert seed(ROOT_A)
+    assert sessions.session_binding() == ('launcher-project', 'bound')
+    assert len(sessions.all_sessions(prune=False)) == 1
