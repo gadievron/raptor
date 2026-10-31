@@ -68,5 +68,6 @@ rules:
     # one-argument sink patterns above do not match them.
     pattern-sanitizers:
       - pattern: int(...)
+        exact: true
     metadata:
       cwe: ["CWE-89"]

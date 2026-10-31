@@ -58,7 +58,8 @@ rules:
                   metavariable: $KEY
                   regex: ^['"](HTTP_HOST|HTTP_X_FORWARDED_HOST|HTTP_REFERER|PHP_SELF|REQUEST_URI|QUERY_STRING)['"]$
     pattern-sanitizers:
-      - pattern-either:
+      - exact: true
+        pattern-either:
           - pattern: urlencode(...)
           - pattern: \urlencode(...)
           - pattern: rawurlencode(...)

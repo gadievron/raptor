@@ -36,11 +36,17 @@ rules:
           - pattern: $_COOKIE[...]
     pattern-sanitizers:
       - pattern: str_replace(...)
+        exact: true
       - pattern: preg_replace(...)
+        exact: true
       - pattern: urlencode(...)
+        exact: true
       - pattern: rawurlencode(...)
+        exact: true
       - pattern: intval(...)
+        exact: true
       - pattern: (int) $X
+        exact: true
     pattern-sinks:
       # fwrite/fputs count only when the handle is provably a network
       # stream (opened in the same function): a plain fwrite to a file

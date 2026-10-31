@@ -64,6 +64,7 @@ rules:
           - focus-metavariable: $PATTERN
     pattern-sanitizers:
       - pattern: re.escape(...)
+        exact: true
     metadata:
       cwe: ["CWE-1333"]
       owasp_top_10: ["A3:2021-Injection"]
@@ -135,8 +136,11 @@ rules:
     pattern-sanitizers:
       # lodash/underscore escape function
       - pattern: _.escapeRegExp(...)
+        exact: true
       - pattern: escapeRegExp(...)
+        exact: true
       - pattern: escapeStringRegexp(...)
+        exact: true
     metadata:
       cwe: ["CWE-1333"]
       owasp_top_10: ["A3:2021-Injection"]
@@ -200,6 +204,7 @@ rules:
           - focus-metavariable: $P
     pattern-sanitizers:
       - pattern: Pattern.quote(...)
+        exact: true
     metadata:
       cwe: ["CWE-1333"]
       owasp_top_10: ["A3:2021-Injection"]

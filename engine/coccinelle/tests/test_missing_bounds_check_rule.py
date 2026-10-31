@@ -1,14 +1,4 @@
-"""Fixture tests for the missing_bounds_check rule.
-
-Negatives pin two suppression mechanisms: guard-shape recognition in
-both loop directions (a decreasing ``for (i = n - 1; i >= 0; i--)``
-walk is as guarded as the increasing one) and the parameter scoping —
-only a parameter of the enclosing function used as an index is
-reported, since locally-computed indexes flood every array-walking
-helper. Positives keep the genuine target firing: an
-externally-supplied parameter indexing an array with no in-function
-validation.
-"""
+"""Only extent-aware, two-sided guards justify excluding parameter indexes."""
 
 from __future__ import annotations
 
@@ -36,6 +26,7 @@ def _run_rule(tmp_path: Path, source: str) -> list[dict]:
         ["spatch", "--sp-file", str(_RULE), str(src), "--no-show-diff"],
         capture_output=True, text=True, timeout=120,
     )
+    assert proc.returncode == 0, proc.stderr
     results = []
     for stream in (proc.stdout, proc.stderr):
         for line in stream.splitlines():
@@ -90,9 +81,7 @@ class TestNegatives:
         """)
         assert results == []
 
-    def test_decreasing_while_on_parameter_does_not_fire(self, tmp_path):
-        # The index IS a parameter here, so only the decreasing-while
-        # guard shape keeps it silent.
+    def test_decreasing_while_with_unknown_extent_is_a_candidate(self, tmp_path):
         results = _run_rule(tmp_path, """\
             int countdown(int *arr, int n)
             {
@@ -104,9 +93,9 @@ class TestNegatives:
                 return s;
             }
         """)
-        assert results == []
+        assert len(results) == 1
 
-    def test_early_return_guard_does_not_fire(self, tmp_path):
+    def test_upper_only_guard_with_unknown_extent_is_a_candidate(self, tmp_path):
         results = _run_rule(tmp_path, """\
             int guarded(int *arr, int idx, int n)
             {
@@ -115,7 +104,7 @@ class TestNegatives:
                 return arr[idx];
             }
         """)
-        assert results == []
+        assert len(results) == 1
 
     def test_local_computed_index_does_not_fire(self, tmp_path):
         results = _run_rule(tmp_path, """\
@@ -126,3 +115,76 @@ class TestNegatives:
             }
         """)
         assert results == []
+
+
+@pytest.mark.parametrize("body", [
+    "if (idx <= 4) { return arr[idx]; }",
+    "if (idx < 1000) { return arr[idx]; }",
+    "while (idx > 0) { return arr[idx]; }",
+    "if (idx < 4) { return arr[idx]; }",  # negative index
+    "if (idx >= 0 && idx <= 4) { return arr[idx]; }",
+    "if (idx >= 0 && idx < 1000) { return arr[idx]; }",
+    "if (idx >= 0 && idx < 4) { idx = 9; return arr[idx]; }",
+    "if (idx >= 0 && idx < 4) { idx += 9; return arr[idx]; }",
+    "if (idx >= 0 && idx < 4) { idx++; return arr[idx]; }",
+    "if (idx >= 0 && idx < 4) { --idx; return arr[idx]; }",
+    "if (idx >= 0 && idx < 4) { change(&idx); return arr[idx]; }",
+    "int *alias = &idx; if (idx >= 0 && idx < 4) { *alias = 9; return arr[idx]; }",
+    "if (idx < 0 || idx >= 4) { return 0; } idx = 9; return arr[idx];",
+    "if (idx > 4) { return 0; } return arr[idx];",
+    "while (idx >= 0) { return arr[idx]; }",
+    "int other[1000]; if (idx >= 0 && idx < 1000) { return arr[idx]; }",
+])
+def test_unsafe_guards_do_not_hide_known_array_access(tmp_path, body):
+    results = _run_rule(tmp_path, f"int f(int idx) {{ int arr[4]; {body} return 0; }}")
+    assert len(results) == 1
+    assert results[0]["rule"] == "missing_bounds_check"
+
+
+@pytest.mark.parametrize("index_type, body", [
+    ("int", "if (idx >= 0 && idx < 4) { return arr[idx]; }"),
+    ("int", "if (idx < 0 || idx >= 4) { return 0; } return arr[idx];"),
+    ("unsigned int", "if (idx < 4) { return arr[idx]; }"),
+    ("unsigned", "if (idx < 4) { return arr[idx]; }"),
+    ("unsigned short", "if (idx < 4) { return arr[idx]; }"),
+    ("unsigned char", "if (idx < 4) { return arr[idx]; }"),
+    ("unsigned long long", "if (idx < 4) { return arr[idx]; }"),
+    ("unsigned long", "if (idx >= 4) { return 0; } return arr[idx];"),
+])
+def test_extent_aware_guards_stay_silent(tmp_path, index_type, body):
+    results = _run_rule(tmp_path, f"int f({index_type} idx) {{ int arr[4]; {body} return 0; }}")
+    assert results == []
+
+
+def test_guarded_access_does_not_hide_another_access(tmp_path):
+    results = _run_rule(tmp_path, """
+        int f(int idx) {
+            int arr[4];
+            if (idx >= 0 && idx < 4) { consume(arr[idx]); }
+            return arr[idx];
+        }
+    """)
+    assert len(results) == 1
+    assert results[0]["line"] == 5
+
+
+@pytest.mark.parametrize("body", [
+    "if (idx <= 4) { return arr[idx]; }",
+    "if (idx >= 4) { return 0; } idx++; return arr[idx];",
+    "if (idx < 4) { idx -= 1; return arr[idx]; }",
+])
+def test_unsigned_guards_still_require_strict_unmodified_bound(tmp_path, body):
+    results = _run_rule(tmp_path, f"int f(unsigned int idx) {{ int arr[4]; {body} return 0; }}")
+    assert len(results) == 1
+
+
+def test_unsigned_named_typedef_does_not_prove_unsignedness(tmp_path):
+    results = _run_rule(tmp_path, """
+        typedef int unsigned_index;
+        int f(unsigned_index idx) {
+            int arr[4];
+            if (idx < 4) { return arr[idx]; }
+            return 0;
+        }
+    """)
+    assert len(results) == 1

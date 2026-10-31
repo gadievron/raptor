@@ -104,7 +104,9 @@ rules:
       # be distinguished from a same-named local at pattern level.
       # Missed-finding direction only, never a false confirmation.
       - pattern: mongoSanitize($X)
+        exact: true
       - pattern: sanitize($X)
+        exact: true
     metadata:
       cwe: ["CWE-943"]
       owasp_top_10: ["A3:2021-Injection"]

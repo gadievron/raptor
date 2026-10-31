@@ -197,6 +197,7 @@ rules:
     # (strips every directory component, "../" included).
     pattern-sanitizers:
       - pattern: filepath.Base(...)
+        exact: true
     metadata:
       cwe: ["CWE-22"]
       owasp_top_10: ["A1:2021-Broken Access Control"]

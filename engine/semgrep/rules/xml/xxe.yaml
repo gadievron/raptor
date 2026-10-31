@@ -113,14 +113,22 @@ rules:
     pattern-sanitizers:
       # defusedxml — safe replacement
       - pattern: defusedxml.parse(...)
+        exact: true
       - pattern: defusedxml.fromstring(...)
+        exact: true
       - pattern: defusedxml.ElementTree.parse(...)
+        exact: true
       - pattern: defusedxml.ElementTree.fromstring(...)
+        exact: true
       - pattern: defusedxml.minidom.parseString(...)
+        exact: true
       - pattern: defusedxml.sax.parseString(...)
+        exact: true
       # lxml safe parser configuration
       - pattern: lxml.etree.XMLParser(..., resolve_entities=False, ...)
+        exact: true
       - pattern: etree.XMLParser(..., resolve_entities=False, ...)
+        exact: true
     metadata:
       cwe: ["CWE-611"]
       owasp_top_10: ["A5:2021-Security Misconfiguration"]

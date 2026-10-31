@@ -55,7 +55,9 @@ rules:
           - focus-metavariable: $FILTER
     pattern-sanitizers:
       - pattern: ldap.filter.escape_filter_chars(...)
+        exact: true
       - pattern: escape_filter_chars(...)
+        exact: true
     metadata:
       cwe: ["CWE-90"]
       owasp_top_10: ["A3:2021-Injection"]
@@ -116,8 +118,11 @@ rules:
           - focus-metavariable: $FILTER
     pattern-sanitizers:
       - pattern: ESAPI.encoder().encodeForLDAP(...)
+        exact: true
       - pattern: org.owasp.esapi.ESAPI.encoder().encodeForLDAP(...)
+        exact: true
       - pattern: (Encoder $ENC).encodeForLDAP(...)
+        exact: true
     metadata:
       cwe: ["CWE-90"]
       owasp_top_10: ["A3:2021-Injection"]
@@ -164,6 +169,7 @@ rules:
           - focus-metavariable: $FILTER
     pattern-sanitizers:
       - pattern: ldap.EscapeFilter(...)
+        exact: true
     metadata:
       cwe: ["CWE-90"]
       owasp_top_10: ["A3:2021-Injection"]

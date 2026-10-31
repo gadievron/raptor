@@ -104,6 +104,7 @@ rules:
           - focus-metavariable: $PATH
     pattern-sanitizers:
       - pattern: os.path.basename(...)
+        exact: true
     metadata:
       cwe: ["CWE-22"]
       owasp_top_10: ["A1:2021-Broken Access Control"]

@@ -94,7 +94,8 @@ rules:
           - pattern: $_REQUEST[...]
           - pattern: $_COOKIE[...]
     pattern-sanitizers:
-      - pattern-either:
+      - exact: true
+        pattern-either:
           - pattern: htmlspecialchars(...)
           - pattern: \htmlspecialchars(...)
           - pattern: htmlentities(...)

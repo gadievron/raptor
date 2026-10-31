@@ -59,8 +59,11 @@ rules:
           - focus-metavariable: $X
     pattern-sanitizers:
       - pattern: html.escape(...)
+        exact: true
       - pattern: markupsafe.escape(...)
+        exact: true
       - pattern: bleach.clean(...)
+        exact: true
     metadata:
       cwe: ["CWE-79"]
       owasp_top_10: ["A3:2021-Injection"]
@@ -110,7 +113,9 @@ rules:
           - pattern: template.HTMLAttr($X)
     pattern-sanitizers:
       - pattern: template.HTMLEscapeString(...)
+        exact: true
       - pattern: html.EscapeString(...)
+        exact: true
     metadata:
       cwe: ["CWE-79"]
       owasp_top_10: ["A3:2021-Injection"]
@@ -200,18 +205,27 @@ rules:
       # listed: they do not neutralise HTML-body injection and would
       # suppress real findings.
       - pattern: StringEscapeUtils.escapeHtml4(...)
+        exact: true
       - pattern: HtmlUtils.htmlEscape(...)
+        exact: true
       - pattern: Encode.forHtml(...)
+        exact: true
       - pattern: Encode.forHtmlContent(...)
+        exact: true
       - pattern: Encode.forHtmlAttribute(...)
+        exact: true
       - pattern: org.owasp.encoder.Encode.forHtml(...)
+        exact: true
       # OWASP ESAPI, both the chained singleton and a typed Encoder ref.
       # The fully-qualified chain is a distinct spelling to semgrep's
       # syntactic matcher (no import to normalise against when the code
       # writes org.owasp.esapi.ESAPI inline) — same accepted sanitizer.
       - pattern: ESAPI.encoder().encodeForHTML(...)
+        exact: true
       - pattern: org.owasp.esapi.ESAPI.encoder().encodeForHTML(...)
+        exact: true
       - pattern: (Encoder $ENC).encodeForHTML(...)
+        exact: true
     metadata:
       cwe: ["CWE-79"]
       owasp_top_10: ["A3:2021-Injection"]
@@ -277,8 +291,11 @@ rules:
           - pattern: $RES.write($X)
     pattern-sanitizers:
       - pattern: DOMPurify.sanitize(...)
+        exact: true
       - pattern: xss(...)
+        exact: true
       - pattern: sanitizeHtml(...)
+        exact: true
     metadata:
       cwe: ["CWE-79"]
       owasp_top_10: ["A3:2021-Injection"]

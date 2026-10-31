@@ -52,6 +52,7 @@ rules:
     pattern-sanitizers:
       # ast.literal_eval is a safe subset — only evaluates literals
       - pattern: ast.literal_eval(...)
+        exact: true
     metadata:
       cwe: ["CWE-95"]
       owasp_top_10: ["A3:2021-Injection"]

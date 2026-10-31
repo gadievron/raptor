@@ -43,9 +43,13 @@ rules:
           - pattern: $_COOKIE[...]
     pattern-sanitizers:
       - pattern: escapeshellarg(...)
+        exact: true
       - pattern: intval(...)
+        exact: true
       - pattern: (int) $X
+        exact: true
       - pattern: (float) $X
+        exact: true
     pattern-sinks:
       - pattern: exec(...)
       - pattern: system(...)

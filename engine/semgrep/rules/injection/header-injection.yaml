@@ -54,7 +54,9 @@ rules:
     # character through and the response still splits.
     pattern-sanitizers:
       - pattern: $X.replace("\n", ...).replace("\r", ...)
+        exact: true
       - pattern: $X.replace("\r", ...).replace("\n", ...)
+        exact: true
     metadata:
       cwe: ["CWE-113"]
       owasp_top_10: ["A3:2021-Injection"]
@@ -108,7 +110,9 @@ rules:
     # other character usable for splitting.
     pattern-sanitizers:
       - pattern: strings.ReplaceAll(strings.ReplaceAll($X, "\n", ...), "\r", ...)
+        exact: true
       - pattern: strings.ReplaceAll(strings.ReplaceAll($X, "\r", ...), "\n", ...)
+        exact: true
     metadata:
       cwe: ["CWE-113"]
       owasp_top_10: ["A3:2021-Injection"]
@@ -148,9 +152,13 @@ rules:
     # single-character replaces only qualify chained in both orders.
     pattern-sanitizers:
       - pattern: $X.replaceAll("[\n\r]", ...)
+        exact: true
       - pattern: $X.replaceAll("[\r\n]", ...)
+        exact: true
       - pattern: $X.replace("\n", ...).replace("\r", ...)
+        exact: true
       - pattern: $X.replace("\r", ...).replace("\n", ...)
+        exact: true
     metadata:
       cwe: ["CWE-113"]
       owasp_top_10: ["A3:2021-Injection"]
@@ -219,9 +227,13 @@ rules:
     # orders.
     pattern-sanitizers:
       - pattern: $X.replace(/[\r\n]/g, ...)
+        exact: true
       - pattern: $X.replace(/[\n\r]/g, ...)
+        exact: true
       - pattern: $X.replace(/\n/g, ...).replace(/\r/g, ...)
+        exact: true
       - pattern: $X.replace(/\r/g, ...).replace(/\n/g, ...)
+        exact: true
     metadata:
       cwe: ["CWE-113"]
       owasp_top_10: ["A3:2021-Injection"]

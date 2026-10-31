@@ -76,7 +76,9 @@ rules:
     # character forge entries.
     pattern-sanitizers:
       - pattern: $X.replace("\n", ...).replace("\r", ...)
+        exact: true
       - pattern: $X.replace("\r", ...).replace("\n", ...)
+        exact: true
     metadata:
       cwe: ["CWE-117"]
       owasp_top_10: ["A9:2021-Security Logging and Monitoring Failures"]
@@ -159,7 +161,9 @@ rules:
     # other character usable for forging.
     pattern-sanitizers:
       - pattern: strings.ReplaceAll(strings.ReplaceAll($X, "\n", ...), "\r", ...)
+        exact: true
       - pattern: strings.ReplaceAll(strings.ReplaceAll($X, "\r", ...), "\n", ...)
+        exact: true
     metadata:
       cwe: ["CWE-117"]
       owasp_top_10: ["A9:2021-Security Logging and Monitoring Failures"]
@@ -209,9 +213,13 @@ rules:
     # single-character replaces only qualify chained in both orders.
     pattern-sanitizers:
       - pattern: $X.replaceAll("[\n\r]", ...)
+        exact: true
       - pattern: $X.replaceAll("[\r\n]", ...)
+        exact: true
       - pattern: $X.replace("\n", ...).replace("\r", ...)
+        exact: true
       - pattern: $X.replace("\r", ...).replace("\n", ...)
+        exact: true
     metadata:
       cwe: ["CWE-117"]
       owasp_top_10: ["A9:2021-Security Logging and Monitoring Failures"]
@@ -292,9 +300,13 @@ rules:
     # orders.
     pattern-sanitizers:
       - pattern: $X.replace(/[\r\n]/g, ...)
+        exact: true
       - pattern: $X.replace(/[\n\r]/g, ...)
+        exact: true
       - pattern: $X.replace(/\n/g, ...).replace(/\r/g, ...)
+        exact: true
       - pattern: $X.replace(/\r/g, ...).replace(/\n/g, ...)
+        exact: true
     metadata:
       cwe: ["CWE-117"]
       owasp_top_10: ["A9:2021-Security Logging and Monitoring Failures"]

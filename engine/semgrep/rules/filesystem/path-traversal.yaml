@@ -57,5 +57,6 @@ rules:
     # it. basename genuinely confines (strips directory components).
     pattern-sanitizers:
       - pattern: os.path.basename(...)
+        exact: true
     metadata:
       cwe: ["CWE-22"]
