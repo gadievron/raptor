@@ -34,6 +34,10 @@ MARKER_RES: dict[str, re.Pattern] = {
         r"unterminated\s+string|unclosed\s+quotation|"
         r"quoted\s+string\s+not\s+properly\s+terminated|"
         r"sqlexception|pg::syntaxerror|sqlite3::exception|"
+        # Node's `sqlite3` driver (not the C++ sqlite3::exception class above) reports
+        # errors as "SQLITE_ERROR: <detail>" — absent before, so every SQLite-backed
+        # Node app (e.g. OWASP Juice Shop) never matched here even on a raw syntax error.
+        r"sqlite_error|"
         r"syntax\s+error\s+near|"
         r"ORA-\d{5}|SQLSTATE\[)",
         re.IGNORECASE,
