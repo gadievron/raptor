@@ -619,10 +619,15 @@ class TestCVE2026_31431_AliasingRoute:
             "CWE-416 smt:check-early-release must be absent"
         )
 
-    def test_sequential_uaf_keeps_full_chain(self):
+    def test_sequential_uaf_keeps_full_chain(self, monkeypatch):
         """Contrast: a sequential UAF hypothesis keeps the full
         CWE-416 standing tools (cocci, smt, codeql, joern)."""
         from core.audit.orchestrator import _cwe_fallback_chain
+
+        monkeypatch.setattr(
+            "core.audit.orchestrator._codeql_query_file",
+            lambda q: q or None,
+        )
 
         seq_hyp = (
             "kfree is called and then the pointer is dereferenced "
