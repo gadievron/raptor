@@ -34,9 +34,13 @@ from core.sage.hooks import (
     store_codeql_build_reliability,
 )
 from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
-from core.sarif.parser import load_sarif
+from core.sarif.parser import get_result_rule
 from packages.codeql.agent import CodeQLAgent
 from packages.codeql.autonomous_analyzer import AutonomousCodeQLAnalyzer
+from packages.codeql.finding_selection import (
+    all_run_results as _all_run_results,  # noqa: F401 — retain the entry-point helper
+    select_findings_for_analysis,
+)
 
 logger = get_logger()
 
@@ -65,21 +69,6 @@ def get_multi_turn_analyzer(llm_client):
     except Exception as e:  # noqa: BLE001 — optional component, degrade
         logger.warning("Multi-turn analyzer not available: %s", e)
         return None
-
-
-def _all_run_results(sarif: dict) -> list[tuple[dict, dict]]:
-    """Every run's ``(run, result)`` pairs, in file order.
-
-    Single-run files are the CodeQL norm, but a multi-run SARIF's
-    ``runs[1:]`` were previously never analysed (``runs[0]`` only).
-    Each result stays paired with ITS run — the analyzer resolves
-    rule metadata against the owning run's driver.
-    """
-    return [
-        (run, result)
-        for run in sarif.get("runs", []) if isinstance(run, dict)
-        for result in run.get("results", []) if isinstance(result, dict)
-    ]
 
 
 def run_autonomous_workflow(args: argparse.Namespace) -> None:
@@ -230,109 +219,96 @@ def run_autonomous_workflow(args: argparse.Namespace) -> None:
     logger.info("PHASE 2: AUTONOMOUS VULNERABILITY ANALYSIS")
     logger.info("=" * 70)
 
-    # Initialize autonomous components
-    llm_client = get_llm_client()
-    if not llm_client:
-        logger.error("LLM client not available - cannot perform autonomous analysis")
-        logger.info("Set ANTHROPIC_API_KEY or OPENAI_API_KEY environment variable")
-        agent.print_summary(scan_result)
-        sys.exit(1)
-
-    exploit_validator = get_exploit_validator(agent.out_dir / "exploits")
-    multi_turn = get_multi_turn_analyzer(llm_client)
-
-    # Initialize autonomous analyzer
-    autonomous_analyzer = AutonomousCodeQLAnalyzer(
-        llm_client=llm_client,
-        exploit_validator=exploit_validator,
-        multi_turn_analyzer=multi_turn,
-        enable_visualization=not args.no_visualizations,
-        allow_unreachable=getattr(args, "allow_unreachable", False),
+    candidates, candidate_count = select_findings_for_analysis(
+        scan_result.sarif_files, args.max_findings,
     )
 
-    # Analyze each SARIF file
+    # A zero budget still produces a selection summary without initializing
+    # LLM or exploit components. Selection finishes before any analysis starts.
+    llm_client = None
+    autonomous_analyzer = None
+    if candidates:
+        llm_client = get_llm_client()
+        if not llm_client:
+            logger.error("LLM client not available - cannot perform autonomous analysis")
+            logger.info("Set ANTHROPIC_API_KEY or OPENAI_API_KEY environment variable")
+            agent.print_summary(scan_result)
+            sys.exit(1)
+
+        exploit_validator = get_exploit_validator(agent.out_dir / "exploits")
+        multi_turn = get_multi_turn_analyzer(llm_client)
+        autonomous_analyzer = AutonomousCodeQLAnalyzer(
+            llm_client=llm_client,
+            exploit_validator=exploit_validator,
+            multi_turn_analyzer=multi_turn,
+            enable_visualization=not args.no_visualizations,
+            allow_unreachable=getattr(args, "allow_unreachable", False),
+        )
+
     autonomous_results = []
     total_analyzed = 0
+    total_attempted = 0
+    total_failed = 0
     total_exploitable = 0
     total_exploits_generated = 0
     total_exploits_compiled = 0
 
-    for sarif_file in scan_result.sarif_files:
-        logger.info("\nAnalyzing SARIF: %s", sarif_file)
+    from core.reporting.formatting import display_rule_id
+    for i, candidate in enumerate(candidates, 1):
+        result = candidate.result
+        rule_id = result.get("ruleId")
+        if not isinstance(rule_id, str):
+            rule_id = get_result_rule(candidate.run, result).get("id")
+        if not isinstance(rule_id, str):
+            rule_id = "unknown"
+        logger.info("\n[%d/%d] %s (%s)", i, len(candidates),
+                    display_rule_id(rule_id), candidate.sarif_file)
+        total_attempted += 1
+        try:
+            analysis = autonomous_analyzer.analyze_finding_autonomous(
+                sarif_result=result,
+                sarif_run=candidate.run,
+                repo_path=Path(args.repo),
+                out_dir=agent.out_dir / "autonomous",
+            )
 
-        sarif = load_sarif(Path(sarif_file))
-        if not sarif:
-            continue
+            autonomous_results.append(analysis)
+            total_analyzed += 1
+            if analysis.exploitable:
+                total_exploitable += 1
+            if analysis.exploit_code:
+                total_exploits_generated += 1
+            if analysis.exploit_compiled:
+                total_exploits_compiled += 1
 
-        runs = sarif.get("runs", [])
-        if not runs:
-            logger.warning("No runs in SARIF file: %s", sarif_file)
-            continue
-        run_results = _all_run_results(sarif)
-        results = [result for _run, result in run_results]
-        run_by_result_id = {id(result): run for run, result in run_results}
-
-        # Analyze findings (up to max_findings across all SARIF files).
-        # Signal-sorted, never a head slice: the shared truncator ranks
-        # SARIF results by level (error > warning > note), so a capped
-        # run keeps the strongest findings instead of whichever came
-        # first in file order.
-        remaining = args.max_findings - total_analyzed
-        if remaining <= 0:
-            break
-        from core.orchestration.skill_dispatch import (
-            truncate_findings_by_signal,
-        )
-        findings_to_analyze = truncate_findings_by_signal(
-            results, remaining, log_label="codeql analysis selection")
-        logger.info("Analyzing %d findings...", len(findings_to_analyze))
-
-        from core.reporting.formatting import display_rule_id
-        for i, result in enumerate(findings_to_analyze, 1):
-            rule_id = result.get("ruleId", "unknown")
-            logger.info("\n[%d/%d] %s", i, len(findings_to_analyze), display_rule_id(rule_id))
-
-            try:
-                analysis = autonomous_analyzer.analyze_finding_autonomous(
-                    sarif_result=result,
-                    sarif_run=run_by_result_id[id(result)],
-                    repo_path=Path(args.repo),
-                    out_dir=agent.out_dir / "autonomous"
-                )
-
-                autonomous_results.append(analysis)
-                total_analyzed += 1
-
-                if analysis.exploitable:
-                    total_exploitable += 1
-
+            if analysis.exploitable:
+                logger.info("✓ Exploitable (score: %.2f)", analysis.analysis.exploitability_score)
                 if analysis.exploit_code:
-                    total_exploits_generated += 1
-
-                if analysis.exploit_compiled:
-                    total_exploits_compiled += 1
-
-                # Log results
-                if analysis.exploitable:
-                    logger.info("✓ Exploitable (score: %.2f)", analysis.analysis.exploitability_score)
-                    if analysis.exploit_code:
-                        logger.info("  Exploit generated: %d bytes", len(analysis.exploit_code))
-                        if analysis.exploit_compiled:
-                            logger.info("  ✓ Exploit compiled successfully")
-                        else:
-                            logger.info("  ⚠ Exploit failed to compile")
-                else:
-                    logger.info("✗ Not exploitable")
-
-            except Exception as e:
-                # RaptorLogger has no .exception method
-                logger.error("Analysis failed: %s", e, exc_info=True)  # noqa: G201
+                    logger.info("  Exploit generated: %d bytes", len(analysis.exploit_code))
+                    if analysis.exploit_compiled:
+                        logger.info("  ✓ Exploit compiled successfully")
+                    else:
+                        logger.info("  ⚠ Exploit failed to compile")
+            else:
+                logger.info("✗ Not exploitable")
+        except Exception as e:
+            total_failed += 1
+            # Failed attempts consume their selected slot too: failures must
+            # not expand the operator's budget by pulling in more candidates.
+            logger.error("Analysis failed: %s", e, exc_info=True)  # noqa: G201
 
     # Save autonomous analysis summary
     short_circuits = getattr(llm_client, "short_circuits", 0)
     summary = {
         "total_findings": scan_result.total_findings,
         "analyzed": total_analyzed,
+        "analysis_selection": {
+            "candidates": candidate_count,
+            "selected": len(candidates),
+            "deferred": candidate_count - len(candidates),
+            "attempted": total_attempted,
+            "failed": total_failed,
+        },
         "exploitable": total_exploitable,
         "exploits_generated": total_exploits_generated,
         "exploits_compiled": total_exploits_compiled,

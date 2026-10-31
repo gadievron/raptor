@@ -227,6 +227,18 @@ disk, even when full serialisation fails.
 When `--analyze` is passed, each SARIF finding continues into a
 second, LLM-powered phase.
 
+Findings from all language and query-pass SARIF files are ranked together
+before applying `--max-findings`. Selection uses the shared signal policy
+and inherits missing severity levels from each finding's own rule metadata,
+including explicitly referenced extension rules. Repeated paths and symlink
+aliases of the same SARIF file contribute candidates once.
+Equal-signal ties use stable content identities rather than file order.
+The limit counts attempted findings, including calls that raise an error;
+exceptions do not draw additional findings into the selected set. A limit
+of `0` selects nothing and skips initialization of the autonomous analysis
+components. `autonomous_summary.json` records candidate, selected, deferred,
+attempted, and failed-call counts under `analysis_selection`.
+
 ### Reachability Prefilter
 
 Before spending LLM tokens, the analyser consults a source-level

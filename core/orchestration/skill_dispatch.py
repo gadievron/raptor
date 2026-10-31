@@ -838,7 +838,7 @@ def _safe_score(f: dict) -> float:
     raw = f.get("exploitability_score")
     try:
         v = float(raw) if raw is not None else 0.0
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0.0
     if math.isnan(v) or math.isinf(v):
         return 0.0
@@ -875,7 +875,17 @@ def _tree_class_rank(f: dict) -> int:
     rank as production, so their ordering is unchanged."""
     from core.audit.tree_class import NON_PRODUCTION_TREE_CLASSES
 
-    return 1 if f.get("tree_class") in NON_PRODUCTION_TREE_CLASSES else 0
+    tree_class = f.get("tree_class")
+    return 1 if isinstance(tree_class, str) and tree_class in NON_PRODUCTION_TREE_CLASSES else 0
+
+
+def rank_findings_by_signal(findings: list) -> list:
+    """Rank by the shared signal policy, preserving input order on ties.
+
+    Callers needing deterministic ties should supply a stable input order.
+    Unlike truncation, ranking also applies when every finding fits the cap.
+    """
+    return sorted(findings, key=_signal_key)
 
 
 def truncate_findings_by_signal(
@@ -901,7 +911,7 @@ def truncate_findings_by_signal(
     """
     if len(findings) <= cap:
         return findings
-    ranked = sorted(findings, key=_signal_key)
+    ranked = rank_findings_by_signal(findings)
     logger.warning(
         "%s: %d findings selected; truncating to %d "
         "(keeping highest-signal: is_exploitable then exploitability_score)",

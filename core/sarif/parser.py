@@ -697,6 +697,80 @@ def get_rules(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return out
 
 
+def get_result_rule(run: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    """Resolve a result's descriptor within its referenced tool component.
+
+    An explicit extension reference must never borrow a same-ID driver rule.
+    Support descriptor IDs/GUIDs and indexes, rejecting ambiguous matches and
+    malformed component references. Legacy ID-only results prefer the driver
+    and may use a uniquely matching extension when the driver has no match.
+    """
+    tool = _as_dict(run.get("tool"))
+    driver = _as_dict(tool.get("driver"))
+    extensions = tool.get("extensions")
+    extensions = extensions if isinstance(extensions, list) else []
+    reference = _as_dict(result.get("rule"))
+    result_id = result.get("ruleId")
+    reference_id = reference.get("id")
+    result_id = result_id if isinstance(result_id, str) and result_id else None
+    reference_id = reference_id if isinstance(reference_id, str) and reference_id else None
+    if result_id and reference_id and result_id != reference_id:
+        return {}
+    rule_id = reference_id or result_id
+    guid = reference.get("guid")
+    guid = guid if isinstance(guid, str) and guid else None
+    rule_index = reference.get("index", result.get("ruleIndex"))
+
+    def resolve(component):
+        rules = _as_dict(component).get("rules")
+        if not isinstance(rules, list):
+            return {}
+        if rule_id or guid:
+            matches = [r for r in rules if isinstance(r, dict)
+                       and (not rule_id or r.get("id") == rule_id)
+                       and (not guid or r.get("guid") == guid)]
+            return matches[0] if len(matches) == 1 else (None if matches else {})
+        if type(rule_index) is int and 0 <= rule_index < len(rules):
+            return _as_dict(rules[rule_index])
+        return {}
+
+    if "toolComponent" in reference:
+        component_ref = reference["toolComponent"]
+        if not isinstance(component_ref, dict):
+            return {}
+        index = component_ref.get("index", -1)
+        if type(index) is not int or index < -1:
+            return {}
+        names = {key: component_ref[key] for key in ("name", "guid")
+                 if key in component_ref}
+        if any(not isinstance(value, str) or not value for value in names.values()):
+            return {}
+        if index >= 0:
+            if index >= len(extensions):
+                return {}
+            component = _as_dict(extensions[index])
+            if any(component.get(key) != value for key, value in names.items()):
+                return {}
+        elif names:
+            matches = [c for c in [driver, *extensions] if isinstance(c, dict)
+                       and all(c.get(key) == value for key, value in names.items())]
+            if len(matches) != 1:
+                return {}
+            component = matches[0]
+        else:
+            component = driver
+        return resolve(component) or {}
+
+    rule = resolve(driver)
+    if rule is None or rule or not (rule_id or guid):
+        return rule or {}
+    resolved = [resolve(component) for component in extensions]
+    if any(rule is None for rule in resolved):
+        return {}
+    matches = [rule for rule in resolved if rule]
+    return matches[0] if len(matches) == 1 else {}
+
+
 def rule_default_level(rule: dict[str, Any]) -> str | None:
     """The rule's ``defaultConfiguration.level``, or None.
 

@@ -35,6 +35,7 @@ from core.security.prompt_envelope import (
     UntrustedBlock,
     build_prompt,
 )
+from core.sarif.parser import get_result_rule, rule_default_level
 from core.source import read_text_capped
 from packages.codeql.dataflow_validator import DataflowValidation, DataflowValidator
 from packages.codeql.dataflow_visualizer import DataflowVisualizer
@@ -467,40 +468,12 @@ class AutonomousCodeQLAnalyzer:
         Returns:
             CodeQLFinding object
         """
-        # Extract rule information
-        rule_id = result.get("ruleId", "")
-        # Pre-fix `result.get("ruleIndex", 0)` defaulted to 0 when
-        # the SARIF result omitted ruleIndex entirely. Per SARIF
-        # 2.1.0 §3.27.5, ruleIndex is OPTIONAL — when absent the
-        # consumer is expected to look up the rule by ruleId
-        # against `tool.driver.rules[].id`. Defaulting to 0
-        # silently picked up `rules[0]`, an UNRELATED rule for
-        # most findings; downstream rule-name + tag extraction
-        # then attached the wrong metadata to the finding (wrong
-        # CWE, wrong description, wrong severity).
-        # Use the SENTINEL approach: track presence explicitly so
-        # the lookup-by-ruleId fallback fires for the omitted
-        # case but not for the legitimate `ruleIndex=0` case.
-        rule_index = result.get("ruleIndex")  # None when omitted
-
-        # Get rule metadata
-        rules = run.get("tool", {}).get("driver", {}).get("rules", [])
-        # `rule_index < len(rules)` is true for any negative integer
-        # because len() is non-negative; Python's negative indexing then
-        # returns an unrelated rule from the end of the list. Bound check
-        # explicitly + isinstance to refuse string ruleIndex (some
-        # malformed SARIF emitters produce them).
-        if isinstance(rule_index, int) and 0 <= rule_index < len(rules):
-            rule = rules[rule_index]
-        elif rule_id:
-            # Fallback: SARIF spec — when ruleIndex absent or
-            # invalid, look up by ruleId in the rules array.
-            rule = next(
-                (r for r in rules if isinstance(r, dict) and r.get("id") == rule_id),
-                {},
-            )
-        else:
-            rule = {}
+        rule = get_result_rule(run, result)
+        rule_id = result.get("ruleId")
+        if not isinstance(rule_id, str):
+            rule_id = rule.get("id", "")
+        if not isinstance(rule_id, str):
+            rule_id = ""
 
         rule_name = rule.get("name", rule_id)
 
@@ -540,7 +513,7 @@ class AutonomousCodeQLAnalyzer:
             rule_id=rule_id,
             rule_name=rule_name,
             message=(result.get("message") or {}).get("text", ""),
-            level=result.get("level", "warning"),
+            level=result.get("level", rule_default_level(rule) or "warning"),
             file_path=artifact.get("uri", ""),
             start_line=region.get("startLine", 0),
             end_line=region.get("endLine") or region.get("startLine", 0),
