@@ -83,6 +83,11 @@ MIN_QUOTE_CHARS = 12
 #: absorb off-by-a-few line reporting from the LLM.
 LINE_WINDOW = 20
 
+#: Minimum token-overlap ratio for the approximate fallback.  The LLM
+#: often reformats whitespace, drops comments, or abbreviates mid-line;
+#: 0.7 catches those while rejecting fabricated quotes.
+_APPROX_THRESHOLD = 0.7
+
 
 @dataclass
 class Receipt:
@@ -102,6 +107,15 @@ class Receipt:
 
 def _normalise(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _token_overlap(a: str, b: str) -> float:
+    """Jaccard overlap on whitespace-split tokens."""
+    ta = set(a.split())
+    tb = set(b.split())
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
 
 
 def _confine(source_root: Path, file_path: str) -> Path | None:
@@ -153,6 +167,8 @@ def verify_receipt(
         receipt.note = "file unreadable"
         return receipt
 
+    norm_content = _normalise(content)
+
     if line is not None and line > 0:
         lines = split_lines(content)
         lo = max(0, line - 1 - LINE_WINDOW)
@@ -163,15 +179,28 @@ def verify_receipt(
             return receipt
         # Fall through: quote may exist elsewhere in the file — that
         # still verifies existence, but record the imprecise line.
-        if norm in _normalise(content):
+        if norm in norm_content:
             receipt.verified = True
             receipt.note = "quote found in file but not at stated line"
+            return receipt
+        # Approximate fallback: the LLM reformatted or abbreviated.
+        if _token_overlap(norm, window) >= _APPROX_THRESHOLD:
+            receipt.verified = True
+            receipt.note = "quote_approximate"
+            return receipt
+        if _token_overlap(norm, norm_content) >= _APPROX_THRESHOLD:
+            receipt.verified = True
+            receipt.note = "quote_approximate (not at stated line)"
             return receipt
         receipt.note = "quote not found in file"
         return receipt
 
-    if norm in _normalise(content):
+    if norm in norm_content:
         receipt.verified = True
+        return receipt
+    if _token_overlap(norm, norm_content) >= _APPROX_THRESHOLD:
+        receipt.verified = True
+        receipt.note = "quote_approximate"
         return receipt
     receipt.note = "quote not found in file"
     return receipt

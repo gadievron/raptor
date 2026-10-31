@@ -149,9 +149,9 @@ class TestCollectChainFindings:
 
     def test_body_truncated(self) -> None:
         edges = [_edge("a.py", "f", "b.py", "g")]
-        outcomes = {"b.py:g": _outcome("b.py", "g", "finding", body="X" * 500)}
+        outcomes = {"b.py:g": _outcome("b.py", "g", "finding", body="X" * 1000)}
         chain = _collect_chain_findings("a.py:f", edges, outcomes)
-        assert len(chain[0]["body"]) == 300
+        assert len(chain[0]["body"]) == 800
 
     def test_callee_file_fallback(self) -> None:
         edge = {"caller_file": "a.py", "caller": "f", "callee": "g"}

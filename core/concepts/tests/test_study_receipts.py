@@ -64,6 +64,36 @@ class TestQuoteOrAbstain:
         assert c.receipt and c.receipt["verified"]
         assert c.receipt["tier"] == TIER_VERBATIM
 
+    def test_approximate_quote_does_not_earn_verbatim(
+        self, tmp_path: Path,
+    ) -> None:
+        (tmp_path / "pkg").mkdir()
+        (tmp_path / "pkg" / "mod.py").write_text(
+            "def parse_config(path):\n"
+            "    data = open(path).read()\n"
+            "    schema = load_schema()\n"
+            "    result = validate_schema(data, schema)\n"
+            "    if not result.valid:\n"
+            "        raise ConfigError(result.errors)\n"
+            "    return result.config\n",
+        )
+        approx_quote = (
+            "def parse_config(path): raw_data = open(path).read() "
+            "schema = load_schema() result = "
+            "validate_schema(raw_data, schema) if result.valid: "
+            "raise ConfigError(result.errors) return result.config"
+        )
+        concepts, *_ = _parse_batch_response(
+            _concept_raw(approx_quote, file="pkg/mod.py", line=1),
+            source_root=tmp_path,
+        )
+        assert len(concepts) == 1
+        c = concepts[0]
+        assert c.provenance == TIER_LLM_SUMMARIZED
+        assert c.receipt and c.receipt["verified"]
+        assert c.receipt["tier"] == TIER_LLM_SUMMARIZED
+        assert "quote_approximate" in c.receipt.get("note", "")
+
     def test_fabricated_quote_discards_answer(self, src: Path) -> None:
         sink: list = []
         concepts, *_ = _parse_batch_response(

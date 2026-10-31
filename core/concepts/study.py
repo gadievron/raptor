@@ -2564,12 +2564,13 @@ def _apply_receipts(
         for e in quoted:
             r = verify_receipt(source_root, e.file, e.line, e.quote or "")
             if r.verified:
-                r.tier = TIER_VERBATIM
+                approximate = "quote_approximate" in (r.note or "")
+                r.tier = TIER_LLM_SUMMARIZED if approximate else TIER_VERBATIM
                 verified = r
                 break
             attempts.append(r)
         if verified is not None:
-            c.provenance = TIER_VERBATIM
+            c.provenance = verified.tier
             c.receipt = verified.to_dict()
             kept_concepts.append(c)
         else:
@@ -2592,8 +2593,9 @@ def _apply_receipts(
             raw_receipt.get("quote") or "",
         )
         if r.verified:
-            r.tier = TIER_VERBATIM
-            inv.provenance = TIER_VERBATIM
+            approximate = "quote_approximate" in (r.note or "")
+            r.tier = TIER_LLM_SUMMARIZED if approximate else TIER_VERBATIM
+            inv.provenance = r.tier
             inv.receipt = r.to_dict()
             kept_invariants.append(inv)
         else:
