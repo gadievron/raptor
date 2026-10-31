@@ -627,14 +627,16 @@
     "kind": "literal"
   },
   "core/audit/evidence_grade.py::MODEL_AUTHORED_REVIEW_KEYS": {
-    "count": 35,
+    "count": 36,
     "kind": "literal",
-    "note": "closed schema-key manifest: the review_result keys the review model authors (the review JSON schema fields plus legacy / other-mode fields pipeline code reads as model claims); a closure test (core/audit/tests/test_model_body_markers.py::TestReviewKeyClosure) fails when pipeline code reads a review_result key in neither this set nor PIPELINE_OWNED_REVIEW_KEYS \u2014 persistence/schema keys, not a learned name vocabulary"
+    "note": "closed schema-key manifest: the review_result keys the review model authors (the review JSON schema fields plus legacy / other-mode fields pipeline code reads as model claims); a closure test (core/audit/tests/test_model_body_markers.py::TestReviewKeyClosure) fails when pipeline code reads a review_result key in neither this set nor PIPELINE_OWNED_REVIEW_KEYS \u2014 persistence/schema keys, not a learned name vocabulary",
+    "reviewed": "2026-10-31"
   },
   "core/audit/evidence_grade.py::PIPELINE_OWNED_REVIEW_KEYS": {
-    "count": 57,
+    "count": 65,
     "kind": "literal",
-    "note": "closed schema-key manifest: the review_result keys only pipeline code may set (machine flags, receipts, stage records, panel identity/accounting); the review and edge-review parse boundaries drop them from model output so a model cannot mint a machine signal by emitting the key; kept in lockstep with the code by the same closure test \u2014 persistence/schema keys, not a learned name vocabulary"
+    "note": "closed schema-key manifest: the review_result keys only pipeline code may set (machine flags, receipts, stage records, panel identity/accounting); the review and edge-review parse boundaries drop them from model output so a model cannot mint a machine signal by emitting the key; kept in lockstep with the code by the same closure test \u2014 persistence/schema keys, not a learned name vocabulary",
+    "reviewed": "2026-10-31"
   },
   "core/audit/evidence_grade.py::_CLASSIFIER_FALLBACK_VERIFICATION": {
     "count": 12,
@@ -1040,8 +1042,10 @@
     "note": "framework-internal enum/namespace vocabulary (not target API names)"
   },
   "core/audit/sandbox_policy.py::_LLM_PHASES": {
-    "count": 64,
-    "kind": "literal"
+    "count": 65,
+    "kind": "literal",
+    "note": "Closed cost-ledger phase identifiers used by the advisory sandbox-policy validator to distinguish framework LLM spend classes from external tool invocations; includes iris_refinement_skipped. Infrastructure phase names, not a learned target API vocabulary.",
+    "reviewed": "2026-10-31"
   },
   "core/audit/sandbox_policy.py::_TOOL_POLICIES": {
     "count": 14,
@@ -1263,9 +1267,10 @@
     "note": "subprocess env allowlist (infrastructure env-var names, not a learned name vocabulary); grew by the RAPTOR_SANITIZER_CUT* transport family"
   },
   "core/config/__init__.py::TARGET_ENV_STRIP_SET": {
-    "count": 16,
+    "count": 17,
     "kind": "literal",
-    "note": "target-facing env strip set (trust markers, session credential, framework-identity tells incl. the RAPTOR_SANITIZER_CUT* transport family) - infrastructure env-var names, not a learned name vocabulary; crossed the seed threshold when the sanitizer-cut transport joined"
+    "note": "target-facing env strip set (trust markers, session credential, framework-identity tells incl. the RAPTOR_SANITIZER_CUT* transport family) - infrastructure env-var names, not a learned name vocabulary; crossed the seed threshold when the sanitizer-cut transport joined",
+    "reviewed": "2026-10-31"
   },
   "core/config/__init__.py::TOOL_DEPS": {
     "count": 11,
@@ -2136,9 +2141,10 @@
     "kind": "literal"
   },
   "libexec/raptor-seatbelt-shim::_strip": {
-    "count": 18,
+    "count": 19,
     "kind": "literal",
-    "note": "target environment-strip tuple mirrored from core.config.TARGET_ENV_STRIP_SET for the isolated macOS shim, not a learned name vocabulary"
+    "note": "target environment-strip tuple mirrored from core.config.TARGET_ENV_STRIP_SET for the isolated macOS shim, not a learned name vocabulary",
+    "reviewed": "2026-10-31"
   },
   "libexec/raptor-self-test::_LLM_ENV_VARS": {
     "count": 10,
@@ -2384,6 +2390,12 @@
   "packages/codeql/autonomous_analyzer.py::VULNERABILITY_ANALYSIS_SCHEMA": {
     "count": 10,
     "kind": "literal"
+  },
+  "packages/codeql/finding_selection.py::_duplicate_key": {
+    "kind": "literal",
+    "count": 12,
+    "note": "SARIF run schema fields whose tables and source provenance give meaning to result references during cross-pass deduplication (URI bases, artifacts, logical locations, addresses, special locations, taxonomies, graphs, thread-flow locations, web requests/responses, external-property references, and version-control provenance). These fixed interchange-format keys preserve distinct evidence contexts; they are not target function names or a learned API vocabulary. Shared context is hashed once per run.",
+    "reviewed": "2026-10-31"
   },
   "packages/codeql/language_detector.py::CODEQL_SUPPORTED": {
     "count": 11,
@@ -3252,9 +3264,9 @@
     "reviewed": "2026-09-21"
   },
   "raptor_codeql.py::summary": {
-    "count": 10,
+    "count": 11,
     "kind": "literal",
     "note": "Autonomous-run summary dict: counter + provenance KEYS written to the analysis-summary JSON (persistence schema keys, not a name vocabulary); root-module universe addition.",
-    "reviewed": "2026-09-21"
+    "reviewed": "2026-10-31"
   }
 }
