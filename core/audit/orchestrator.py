@@ -9901,6 +9901,8 @@ def _run_audit_body(
             joern_server=joern_server,
             project_learnings=project_learnings,
             max_workers=resolved_workers,
+            mechanical_findings=mechanical_findings,
+            synthesis_counter=getattr(shared, "synthesis_counter", None),
         )
 
     # Post-loop pass wall-clock phases: one start/end per pass at its
@@ -10181,25 +10183,74 @@ def _run_audit_body(
             )
             logger.debug("exited _promote_suspicious")
 
-        logger.debug("entering _promote_suspicious_preconditions")
-        _promote_suspicious_preconditions(result, config, context_map)
-        logger.debug("exited _promote_suspicious_preconditions")
-
-        logger.debug("entering _promote_clean_refuted")
-        _promote_clean_refuted(
-            result, config, checklist, joern_server=joern_server,
-        )
-        logger.debug("exited _promote_clean_refuted")
+        # 5c: submit dark probes early so they overlap with Phase I.
+        _dark_outcomes: list[ReviewOutcome] = []
+        _dark_futures: list = []
+        _dark_executor = None
+        if config.immediate_verify:
+            try:
+                _dark_client = _run_llm_client(config)
+                _dark_outcomes, _dark_futures, _dark_executor = (
+                    _submit_dark_probes_early(
+                        result,
+                        config,
+                        llm_client=lambda p, s: (
+                            _dark_client.generate(
+                                p,
+                                system_prompt=s or None,
+                            ).content
+                        ),
+                    )
+                )
+            except Exception:
+                logger.debug(
+                    "dark concurrent: early submission failed",
+                    exc_info=True,
+                )
 
         if config.immediate_verify:
-            # IHV path: smt-clean runs before self-contradictions so
-            # newly promoted suspicious outcomes get contradiction
-            # checking (design §Post-loop pipeline optimisations,
-            # Optimisation A ordering).
-            logger.debug("entering _promote_smt_clean (IHV reorder)")
-            _promote_smt_clean(result, config, checklist)
-            logger.debug("exited _promote_smt_clean (IHV reorder)")
+            # IHV path: preconditions ∥ (clean-refuted → smt-clean).
+            # Lanes operate on disjoint outcome subsets (suspicious vs
+            # clean); shared counters are guarded by result._lock.
+            from concurrent.futures import ThreadPoolExecutor
+
+            def _lane_preconditions():
+                logger.debug("entering _promote_suspicious_preconditions")
+                _promote_suspicious_preconditions(result, config, context_map)
+                logger.debug("exited _promote_suspicious_preconditions")
+
+            def _lane_refuted_smt():
+                logger.debug("entering _promote_clean_refuted")
+                _promote_clean_refuted(
+                    result, config, checklist, joern_server=joern_server,
+                )
+                logger.debug("exited _promote_clean_refuted")
+                logger.debug("entering _promote_smt_clean (IHV reorder)")
+                _promote_smt_clean(result, config, checklist)
+                logger.debug("exited _promote_smt_clean (IHV reorder)")
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                fut_a = pool.submit(_lane_preconditions)
+                fut_b = pool.submit(_lane_refuted_smt)
+                _errors = []
+                for _fut in (fut_a, fut_b):
+                    try:
+                        _fut.result()
+                    except Exception as _exc:  # noqa: BLE001
+                        _errors.append(_exc)
+                if _errors:
+                    raise _errors[0]
         else:
+            logger.debug("entering _promote_suspicious_preconditions")
+            _promote_suspicious_preconditions(result, config, context_map)
+            logger.debug("exited _promote_suspicious_preconditions")
+
+            logger.debug("entering _promote_clean_refuted")
+            _promote_clean_refuted(
+                result, config, checklist, joern_server=joern_server,
+            )
+            logger.debug("exited _promote_clean_refuted")
+
             logger.debug("entering _dispatch_secondary_hypotheses")
             _dispatch_secondary_hypotheses(
                 result, config, checklist, joern_server=joern_server,
@@ -10349,6 +10400,18 @@ def _run_audit_body(
             )
     except Exception:
         logger.debug("confidence propagation failed", exc_info=True)
+
+    # 5c: drain early dark probes before resolve-gate-demoted.
+    _dark_handled: set[int] = set()
+    if _dark_futures:
+        try:
+            _dark_handled = _drain_dark_probes(
+                result, config,
+                _dark_outcomes, _dark_futures, _dark_executor,
+                timeout=120.0,
+            )
+        except Exception:
+            logger.debug("dark concurrent: drain failed", exc_info=True)
 
     logger.debug("entering _resolve_gate_demoted")
     _pass_ledger.start_phase("resolve_gate_demoted")
@@ -11287,18 +11350,19 @@ def _run_audit_body(
         logger.debug("error retry pass failed", exc_info=True)
 
     try:
-        _dark_client = _run_llm_client(config)
+        _dark_client_late = _run_llm_client(config)
         _run_dark_verification(
             result,
             config,
             llm_client=lambda p, s: (
-                _dark_client.generate(
+                _dark_client_late.generate(
                     p,
                     system_prompt=s or None,
                 ).content
             ),
             start_time=start_time,
             max_workers=resolved_workers,
+            dark_handled=_dark_handled,
         )
     except Exception:
         logger.debug("dark verification pass failed", exc_info=True)
@@ -26254,6 +26318,8 @@ def _deepen_suspicious(
     joern_server=None,
     project_learnings: list[dict[str, str]] | None = None,
     max_workers: int = 1,
+    mechanical_findings: dict[str, list[dict[str, Any]]] | None = None,
+    synthesis_counter: AtomicSynthesisCounter | None = None,
 ) -> OrchestratorResult:
     """Re-review suspicious verdicts with enriched context.
 
@@ -26533,8 +26599,21 @@ def _deepen_suspicious(
                 prior_outcome.status,
             )
         else:
-            if outcome.status == "finding":
-                if config.sweep_validate_findings:
+            if outcome.status in ("finding", "suspicious"):
+                if config.immediate_verify:
+                    outcome = _verify_hypotheses_immediate(
+                        outcome,
+                        config,
+                        result,
+                        sarif_cache=sarif_cache,
+                        evidence_index=evidence_index,
+                        joern_server=joern_server,
+                        mechanical_findings=mechanical_findings,
+                        synthesis_counter=synthesis_counter,
+                        gap=gap,
+                        source=gap.get("source") or ctx.get("source"),
+                    )
+                elif outcome.status == "finding" and config.sweep_validate_findings:
                     outcome = _sweep_validate(
                         outcome,
                         config,
@@ -26543,31 +26622,31 @@ def _deepen_suspicious(
                         evidence_index=evidence_index,
                         joern_server=joern_server,
                     )
-                if outcome.status == "finding":
-                    outcome = _apply_reachability_gate(
-                        outcome,
-                        ctx,
-                        entry_points,
-                        config,
-                    )
-                if outcome.status == "finding":
-                    gate_violations = _check_finding_gates(
-                        outcome,
-                        audit_log=audit_log,
-                        mode=config.mode,
-                    )
-                    if gate_violations:
-                        for v in gate_violations:
-                            logger.warning(
-                                "gate violation %s:%s: %s — demoted to suspicious",
-                                outcome.file,
-                                outcome.function,
-                                v,
-                            )
-                        outcome = _demote_outcome(
-                            outcome,
-                            f"[gate violation: {'; '.join(gate_violations)}]",
+            if outcome.status == "finding":
+                outcome = _apply_reachability_gate(
+                    outcome,
+                    ctx,
+                    entry_points,
+                    config,
+                )
+            if outcome.status == "finding":
+                gate_violations = _check_finding_gates(
+                    outcome,
+                    audit_log=audit_log,
+                    mode=config.mode,
+                )
+                if gate_violations:
+                    for v in gate_violations:
+                        logger.warning(
+                            "gate violation %s:%s: %s — demoted to suspicious",
+                            outcome.file,
+                            outcome.function,
+                            v,
                         )
+                    outcome = _demote_outcome(
+                        outcome,
+                        f"[gate violation: {'; '.join(gate_violations)}]",
+                    )
 
             # A genuine receipt on the prior row survives the replace:
             # the deepen re-review is an LLM pass whose (sanitised)
@@ -29110,14 +29189,15 @@ def _promote_suspicious_preconditions(
         promoted.semantic_confidence = outcome.semantic_confidence
         if promoted.review_result is not None:
             promoted.review_result["evidence_tool"] = tool
-        result.outcomes[i] = promoted
-        result.precondition_promoted += 1
-        result.sweep_promoted += 1
-        result.suspicious -= 1
-        result.findings += 1
-        _increment_tier_dict(
-            result.tier_counters, "precondition_promotion", "confirmed",
-        )
+        with result._lock:
+            result.outcomes[i] = promoted
+            result.precondition_promoted += 1
+            result.sweep_promoted += 1
+            result.suspicious -= 1
+            result.findings += 1
+            _increment_tier_dict(
+                result.tier_counters, "precondition_promotion", "confirmed",
+            )
         append_audit_log(config.out_dir, {
             "action": "precondition_verified_promotion",
             "key": f"{outcome.file}:{outcome.function}:{outcome.line or 0}",
@@ -30046,14 +30126,15 @@ def _promote_clean_refuted(
                             )
                     # An earlier hypothesis' gate hold may have moved
                     # this slot to suspicious already.
-                    prior_status = result.outcomes[i].status
-                    result.outcomes[i] = promoted_outcome
-                    result.sweep_promoted += 1
-                    if prior_status == "suspicious":
-                        result.suspicious -= 1
-                    else:
-                        result.clean -= 1
-                    result.findings += 1
+                    with result._lock:
+                        prior_status = result.outcomes[i].status
+                        result.outcomes[i] = promoted_outcome
+                        result.sweep_promoted += 1
+                        if prior_status == "suspicious":
+                            result.suspicious -= 1
+                        else:
+                            result.clean -= 1
+                        result.findings += 1
                     logger.info(
                         "clean-refuted promoted %s:%s via %s (LLM refuted, SMT confirmed)",
                         outcome.file, outcome.function, tool,
@@ -30193,13 +30274,12 @@ def _promote_clean_refuted(
             if rescued.review_result is not None:
                 rescued.review_result["evidence_tool"] = _l2_stamp
                 rescued.review_result["refuted_hypothesis_confirmed"] = True
-            result.outcomes[i] = rescued
-            if _l2_prior == "clean":
-                # A slot an earlier gate hold already rescued to
-                # suspicious counts once.
-                result.refuted_rescued += 1
-                result.clean -= 1
-                result.suspicious += 1
+            with result._lock:
+                result.outcomes[i] = rescued
+                if _l2_prior == "clean":
+                    result.refuted_rescued += 1
+                    result.clean -= 1
+                    result.suspicious += 1
             append_audit_log(config.out_dir, {
                 "action": "refuted_hypothesis_confirmed",
                 "key": f"{outcome.file}:{outcome.function}:{outcome.line or 0}",
@@ -30494,10 +30574,11 @@ def _dispatch_secondary_hypotheses(
             if rescued.review_result is not None:
                 rescued.review_result["evidence_tool"] = tool
                 rescued.review_result["secondary_hypothesis_confirmed"] = True
-            result.outcomes[i] = rescued
-            result.sweep_promoted += 1
-            result.suspicious -= 1
-            result.findings += 1
+            with result._lock:
+                result.outcomes[i] = rescued
+                result.sweep_promoted += 1
+                result.suspicious -= 1
+                result.findings += 1
             append_audit_log(config.out_dir, {
                 "action": "secondary_hypothesis_confirmed",
                 "key": f"{outcome.file}:{outcome.function}:{outcome.line or 0}",
@@ -31351,10 +31432,11 @@ def _promote_smt_clean(
             promoted.status = "suspicious"
             promoted.body = promoted.body.replace(
                 "[sweep promoted via", "[smt-clean escalated via", 1)
-            result.outcomes[i] = promoted
-            result.sweep_promoted += 1
-            result.clean -= 1
-            result.suspicious += 1
+            with result._lock:
+                result.outcomes[i] = promoted
+                result.sweep_promoted += 1
+                result.clean -= 1
+                result.suspicious += 1
             logger.info(
                 "smt-clean escalated %s:%s to suspicious via %s",
                 outcome.file, outcome.function, tool_hit,
@@ -31434,8 +31516,9 @@ def _demote_self_contradictions(result: OrchestratorResult) -> None:
             review_result=outcome.review_result,
             line=outcome.line,
         )
-        result.suspicious -= 1
-        result.clean += 1
+        with result._lock:
+            result.suspicious -= 1
+            result.clean += 1
         # Graded adjudication: the verdict contradicted the model's
         # own hypothesis record (consistency axis, not correctness).
         _sc_record_self_consistency(
@@ -31507,8 +31590,9 @@ def _promote_hypothesis_inconsistent(result: OrchestratorResult) -> None:
             outcome, "function_qualified", "",
         )
         result.outcomes[i] = promoted
-        result.clean -= 1
-        result.suspicious += 1
+        with result._lock:
+            result.clean -= 1
+            result.suspicious += 1
         # Graded adjudication: the clean verdict contradicted the
         # model's own live hypotheses (consistency axis).
         _sc_record_self_consistency(
@@ -34640,12 +34724,246 @@ def _merge_validate_evidence(bridge_result, evidence_index) -> None:
         rec.validate_verdicts.append(verdict)
 
 
+def _submit_dark_probes_early(
+    result: OrchestratorResult,
+    config: OrchestratorConfig,
+    llm_client: Callable | None = None,
+) -> tuple[list[ReviewOutcome], list, Any]:
+    """Submit dark probes before Phase I for overlapping execution.
+
+    Returns (eligible_outcomes, futures, executor). The caller holds
+    the executor open, drains with ``_drain_dark_probes`` after the
+    main pipeline phases, then closes it.  If no outcomes are eligible
+    or no client is available, returns empty lists and None.
+    """
+    import concurrent.futures
+
+    if llm_client is None:
+        return [], [], None
+
+    from .dark_verify import (
+        build_witness_prompt,
+        execute_witness,
+        language_for_file,
+        parse_witness_response,
+    )
+
+    try:
+        from .cwe_dispatch import dark_verify_applicable, dark_verify_statuses
+    except ImportError:
+        def dark_verify_applicable(_cwe) -> bool:  # type: ignore[misc]
+            return False
+
+        def dark_verify_statuses(_cwe) -> None:  # type: ignore[misc]
+            return None
+
+    def _eligible(o: ReviewOutcome) -> bool:
+        if o.status == "dark":
+            return True
+        if (o.review_result or {}).get("adversarial_needs_evidence"):
+            return True
+        cwe = (
+            (o.review_result or {}).get("cwe_class")
+            or (o.review_result or {}).get("cwe")
+            or ""
+        )
+        if not (cwe and dark_verify_applicable(cwe)):
+            return False
+        allowed = dark_verify_statuses(cwe)
+        return allowed is None or o.status in allowed
+
+    dark_outcomes = [o for o in result.outcomes if _eligible(o)]
+    if not dark_outcomes:
+        return [], [], None
+
+    try:
+        from core.sandbox import SandboxFloorError
+        _floor_errors: tuple[type[BaseException], ...] = (SandboxFloorError,)
+    except ImportError:
+        _floor_errors = ()
+
+    def _probe(outcome: ReviewOutcome) -> Any:
+        lang = language_for_file(outcome.file)
+        if lang is None:
+            return None
+        prompt, system = build_witness_prompt(
+            file=outcome.file,
+            function=outcome.function,
+            hypothesis=outcome.hypothesis,
+            body=outcome.body,
+            language=lang,
+            model_id=(
+                config.models[0]
+                if config.models and config.models[0] != "default"
+                else ""
+            ),
+        )
+        try:
+            llm_response = llm_client(prompt, system)
+        except Exception:  # noqa: BLE001
+            return None
+        spec = parse_witness_response(
+            llm_response,
+            finding_key=f"{outcome.file}:{outcome.function}",
+            file=outcome.file,
+            function=outcome.function,
+            language=lang,
+        )
+        if spec is None:
+            return None
+        try:
+            return execute_witness(
+                spec, config.target_path, audit_run_dir=config.out_dir,
+            )
+        except _floor_errors:
+            return None
+        except Exception:  # noqa: BLE001
+            return None
+
+    executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=max(1, min(4, len(dark_outcomes))),
+    )
+    try:
+        futures = [executor.submit(_probe, o) for o in dark_outcomes]
+    except Exception:
+        executor.shutdown(wait=False)
+        raise
+    logger.info(
+        "dark concurrent: submitted %d probes pre-Phase I",
+        len(futures),
+    )
+    return dark_outcomes, futures, executor
+
+
+def _drain_dark_probes(
+    result: OrchestratorResult,
+    config: OrchestratorConfig,
+    dark_outcomes: list[ReviewOutcome],
+    futures: list,
+    executor: Any,
+    timeout: float = 120.0,
+) -> set[int]:
+    """Drain dark probe futures and apply verdicts serially.
+
+    Returns the set of outcome ids that were handled (so the later
+    ``_run_dark_verification`` skips them).
+    """
+    import concurrent.futures
+
+    if not futures or executor is None:
+        return set()
+
+    handled: set[int] = set()
+    records: list[dict[str, Any]] = []
+
+    done, not_done = concurrent.futures.wait(
+        futures, timeout=timeout,
+    )
+    if not_done:
+        logger.warning(
+            "dark concurrent: %d/%d probes timed out after %.0fs — "
+            "abandoning them",
+            len(not_done), len(futures), timeout,
+        )
+        for f in not_done:
+            f.cancel()
+
+    for outcome, fut in zip(dark_outcomes, futures):
+        if fut not in done:
+            continue
+        try:
+            verify_result = fut.result(timeout=0)
+        except Exception:  # noqa: BLE001
+            continue
+        if verify_result is None:
+            handled.add(id(outcome))
+            continue
+
+        prior = outcome.status
+        if verify_result.verdict == "confirmed":
+            from .evidence_grade import is_tool_evidence as _is_tool_ev
+
+            _prior_ev = outcome.evidence_tool or ""
+            if "dark_verify:confirmed" not in _prior_ev:
+                if _prior_ev and _is_tool_ev(_prior_ev):
+                    outcome.evidence_tool = f"{_prior_ev}+dark_verify:confirmed"
+                else:
+                    outcome.evidence_tool = "dark_verify:confirmed"
+            if outcome.status != "finding":
+                outcome.status = "finding"
+                with result._lock:
+                    result.findings += 1
+                    if prior in ("dark", "dormant"):
+                        result.dormant -= 1
+                    elif prior == "suspicious":
+                        result.suspicious -= 1
+                    elif prior == "clean":
+                        result.clean -= 1
+                    elif prior == "error":
+                        result.errors -= 1
+        elif verify_result.verdict == "refuted":
+            from .evidence_grade import is_tool_evidence
+
+            prior_evidence = outcome.evidence_tool or ""
+            tool_backed = (
+                prior in ("finding", "suspicious")
+                and is_tool_evidence(prior_evidence)
+            )
+            if tool_backed:
+                outcome.status = "suspicious"
+                if "dark_verify:refuted" not in prior_evidence:
+                    outcome.evidence_tool = (
+                        f"{prior_evidence}+dark_verify:refuted"
+                    )
+                if prior == "finding":
+                    with result._lock:
+                        result.findings -= 1
+                        result.suspicious += 1
+            else:
+                outcome.status = "clean"
+                outcome.evidence_tool = "dark_verify:refuted"
+                outcome.clean_basis = "dark_verify_refuted"
+                if prior != "clean":
+                    with result._lock:
+                        result.clean += 1
+                        if prior in ("dark", "dormant"):
+                            result.dormant -= 1
+                        elif prior == "suspicious":
+                            result.suspicious -= 1
+                        elif prior == "finding":
+                            result.findings -= 1
+                        elif prior == "error":
+                            result.errors -= 1
+
+        records.append({
+            "file": outcome.file,
+            "function": outcome.function,
+            "status": outcome.status,
+            "evidence_tool": outcome.evidence_tool,
+            "verdict": verify_result.verdict,
+            "match_detail": getattr(verify_result, "match_detail", ""),
+        })
+        handled.add(id(outcome))
+
+    if records:
+        results_path = Path(config.out_dir) / "dark-verify-early-results.json"
+        save_json(results_path, records)
+        logger.info(
+            "dark concurrent: %d/%d probes applied",
+            len(records), len(dark_outcomes),
+        )
+
+    executor.shutdown(wait=False)
+    return handled
+
+
 def _run_dark_verification(
     result: OrchestratorResult,
     config: OrchestratorConfig,
     llm_client: Callable | None = None,
     start_time: float | None = None,
     max_workers: int = 1,
+    dark_handled: set[int] | None = None,
 ) -> None:
     """Run dark-verification pass on eligible outcomes.
 
@@ -34727,7 +35045,11 @@ def _run_dark_verification(
         allowed = dark_verify_statuses(cwe)
         return allowed is None or o.status in allowed
 
-    dark_outcomes = [o for o in result.outcomes if _eligible(o)]
+    _dh = dark_handled or set()
+    dark_outcomes = [
+        o for o in result.outcomes
+        if _eligible(o) and id(o) not in _dh
+    ]
     if not dark_outcomes:
         return
 
