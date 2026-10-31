@@ -310,6 +310,12 @@ REGISTRY: dict[str, Entry] = {
     # ── instruction lane: members (clean — each file instructs the
     #    display-integrity rule at its fill site; the note names the
     #    external content each surface renders) ────────────────────
+    "AGENTS.md": Entry(
+        lane="instruction", status="clean",
+        members=(),
+        note="target-resolution fallback says 'ask the user' — "
+             "a plain question, no external content rendered",
+    ),
     "CLAUDE.md": Entry(
         lane="instruction", status="clean",
         members=("M05-binary-oracle-provenance-consent",

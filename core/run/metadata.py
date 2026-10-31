@@ -190,7 +190,8 @@ def _find_claude_ancestor() -> int | None:
                     return None
         except OSError:
             return None
-        if comm == "claude":
+        from core.project.sessions import _codex_shaped
+        if comm == "claude" or _codex_shaped(comm):
             return pid
     return None
 
@@ -269,7 +270,10 @@ def _get_session_pid() -> int | None:
     pid = resolve_session_pid()
     if pid is not None:
         return pid
-    if not os.environ.get("CLAUDECODE"):
+    from core.project.session_scope import current_id
+    if current_id():
+        return None
+    if not (os.environ.get("CLAUDECODE") or os.environ.get("CODEX")):
         return None
     ppid = os.getppid()
     if ppid <= 1:
@@ -378,6 +382,10 @@ def _harness_session_id() -> str | None:
     ending session IS this run's owner" and finalize immediately.
     None outside a harness session or on a non-uuid-shaped value.
     """
+    from core.project.session_scope import current_id
+    codex_id = current_id()
+    if codex_id:
+        return codex_id
     for var in ("CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID"):
         value = os.environ.get(var, "")
         if value and _SESSION_ID_RE.fullmatch(value):
@@ -418,6 +426,9 @@ def _session_liveness_for_meta(meta: dict) -> str:
         pid = int(pid)  # stringified pid: read like the hooks do
     if not isinstance(pid, int) or isinstance(pid, bool):
         return "dead"
+    if meta.get("session_harness") == "codex":
+        from core.project.sessions import logical_owner_liveness
+        return logical_owner_liveness(meta, pid)
     start = meta.get("session_start")
     boot = meta.get("session_boot_id")
     if start and boot:
@@ -498,7 +509,8 @@ def _pid_alive(pid: int) -> bool:
         comm = proc_comm.read_text(encoding="utf-8", errors="replace").strip().lower()
     except OSError:
         return True
-    return "claude" in comm
+    from core.project.sessions import _codex_shaped
+    return "claude" in comm or _codex_shaped(comm)
 
 
 def _run_recently_active(run_dir: Path) -> bool:
@@ -821,7 +833,7 @@ def _gate_session_alive(pid: int) -> bool:
     root daemon does not. Without a readable comm (non-Linux), only a
     signallable pid is accepted: unverifiable never blocks a start.
     """
-    if pid <= 0:
+    if pid <= 1:
         return False
     signallable = True
     try:
@@ -838,7 +850,8 @@ def _gate_session_alive(pid: int) -> bool:
             encoding="utf-8", errors="replace").strip().lower()
     except OSError:
         return signallable
-    return "claude" in comm
+    from core.project.sessions import _codex_shaped
+    return "claude" in comm or _codex_shaped(comm)
 
 
 # Gate-side age ceiling for FOREIGN-stamped running markers (see the
@@ -934,7 +947,8 @@ def _live_conflicting_run(project_dir: Path, self_dir: Path,
             owner = int(owner)  # stringified pid: read like the hooks
         if not isinstance(owner, int) or isinstance(owner, bool):
             continue
-        if self_session_pid is not None and owner == self_session_pid:
+        from core.project.sessions import same_logical_owner
+        if same_logical_owner(dict(meta, session_pid=owner), self_session_pid):
             continue
         try:
             from core.project.findings_utils import run_is_imported
@@ -945,7 +959,8 @@ def _live_conflicting_run(project_dir: Path, self_dir: Path,
         # Stamped metadata gets the identity check (a recycled claude
         # pid must not hold contention forever); unstamped falls back
         # to the gate's EPERM-aware comm probe.
-        if meta.get("session_start") and meta.get("session_boot_id"):
+        if meta.get("session_harness") == "codex" or (
+                meta.get("session_start") and meta.get("session_boot_id")):
             liveness = _session_liveness_for_meta(meta)
             if liveness == "dead":
                 continue
@@ -1161,6 +1176,8 @@ def start_run(output_dir: Path, command: str,
                 # owner's OWN graceful end — the run is then genuinely
                 # unowned and may be finalized immediately.
                 metadata["session_id"] = sid
+            from core.project.sessions import logical_owner_stamp
+            metadata.update(logical_owner_stamp())
         if target:
             metadata["target_path"] = str(target)
 
@@ -1189,7 +1206,7 @@ def start_run(output_dir: Path, command: str,
             for _k in ("session_pid", "tool_pid", "tool_pid_start",
                        "session_start", "session_boot_id",
                        "session_pidns", "session_machine_id",
-                       "session_id"):
+                       "session_id", "session_harness", "session_generation"):
                 if _k in _prior_meta:
                     metadata[_k] = _prior_meta[_k]
                 else:
@@ -1379,13 +1396,25 @@ def start_run(output_dir: Path, command: str,
         # Lazy import to avoid circular core.sandbox load on metadata import.
         from core.sandbox.summary import set_active_run_dir
         save_json(output_dir / RUN_METADATA_FILE, metadata)
-        # Ledger write under the metadata lock: a concurrent reader
-        # must never see committed metadata without its ledger record.
+        # Ledger write under the metadata lock: a concurrent resume
+        # must never see committed metadata without a corresponding
+        # ledger record. The ledger's own flock (sessions .run.lock)
+        # nests safely inside the metadata lock — independent inodes,
+        # no circular ordering.
         if session_pid is not None:
-            from core.project.sessions import ledger_record_start
-            ledger_record_start(output_dir, pid=session_pid,
-                                pin_project=pin_project, record_pin=True,
-                                pin_source=pin_source)
+            from core.project.sessions import ledger_record_start, owner_registry
+            if metadata.get("session_harness") == "codex" or os.environ.get("RAPTOR_CODEX_CONTEXT_ID"):
+                try:
+                    with owner_registry(metadata):
+                        ledger_record_start(output_dir, pid=metadata.get("session_pid", session_pid),
+                                            pin_project=pin_project, record_pin=True,
+                                            pin_source=pin_source)
+                except (ValueError, OSError):
+                    logger.debug("owner ledger start skipped", exc_info=True)
+            else:
+                ledger_record_start(output_dir, pid=session_pid,
+                                    pin_project=pin_project, record_pin=True,
+                                    pin_source=pin_source)
     set_active_run_dir(output_dir)
     _run_target = metadata.get("target_path")
     _setup_checklist_symlink(
@@ -1455,6 +1484,10 @@ def _cleanup_abandoned(project_dir: Path, command: str, session_pid: int) -> Non
         if meta.get("status") != STATUS_RUNNING:
             continue
         run_session = meta.get("session_pid")
+        from core.project.sessions import same_logical_owner, logical_owner_stamp
+        same_owner = (same_logical_owner(meta, session_pid)
+                      if logical_owner_stamp() or meta.get("session_harness") == "codex"
+                      else run_session == session_pid)
         # Same-session retry additionally requires the run's own worker
         # (``tool_pid``, recorded at start_run) to be DEAD. The freshness
         # gate alone is not enough: a legitimate parallel run of the same
@@ -1467,7 +1500,7 @@ def _cleanup_abandoned(project_dir: Path, command: str, session_pid: int) -> Non
         # recording have no pid and keep the old (freshness-only) gate.
         same_session_retry = (
             meta.get("command") == command
-            and run_session == session_pid
+            and same_owner
             and not worker_liveness_for_meta(meta)[0]
             # Stub-driven runs record a transient shell as tool_pid, so
             # a dead worker alone is not abandonment evidence — the run
@@ -1476,7 +1509,7 @@ def _cleanup_abandoned(project_dir: Path, command: str, session_pid: int) -> Non
         )
         session_dead = (
             isinstance(run_session, int)
-            and run_session != session_pid
+            and not same_owner
             and not _session_alive_for_meta(meta)
             # A legacy detached record (session_pid<=1, written before
             # the recorder refused reparented-to-init pids) has no
@@ -2667,6 +2700,8 @@ def resume_run(output_dir: Path, note: str | None = None) -> int:
         metadata.pop("end_timestamp", None)
         metadata.pop("duration_seconds", None)
         prior_session_pid = metadata.get("session_pid")
+        prior_session_id = metadata.get("session_id")
+        prior_codex = metadata.get("session_harness") == "codex"
         session_pid = _get_session_pid()
         # Worker identity ALWAYS refreshes to the resuming shape —
         # segment N's liveness credential must be segment N's worker,
@@ -2687,12 +2722,14 @@ def resume_run(output_dir: Path, note: str | None = None) -> int:
             # resumed run abandoned: stamp != live process at new pid).
             for key in ("session_start", "session_boot_id",
                         "session_pidns", "session_machine_id",
-                        "session_id"):
+                        "session_id", "session_harness", "session_generation"):
                 metadata.pop(key, None)
             metadata.update(_session_stamp(session_pid))
             resumed_sid = _harness_session_id()
             if resumed_sid:
                 metadata["session_id"] = resumed_sid
+            from core.project.sessions import logical_owner_stamp
+            metadata.update(logical_owner_stamp())
         else:
             # Sessionless resume (detached orchestrator, bare shell):
             # the prior owner's session identity is stale — keeping a
@@ -2703,7 +2740,7 @@ def resume_run(output_dir: Path, note: str | None = None) -> int:
             metadata.pop("session_pid", None)
             for key in ("session_start", "session_boot_id",
                         "session_pidns", "session_machine_id",
-                        "session_id"):
+                        "session_id", "session_harness", "session_generation"):
                 metadata.pop(key, None)
         save_json(path, metadata)
         # Pin sealing and ledger write under the metadata lock: a
@@ -2764,7 +2801,9 @@ def resume_run(output_dir: Path, note: str | None = None) -> int:
                                               if _restored_pin else None),
                                  pin_source=(_restored_pin[1]
                                               if _restored_pin else None),
-                                 record_pin=_restored_pin is not None)
+                                 record_pin=_restored_pin is not None,
+                                 **({"prior_session_id": prior_session_id, "prior_codex": True}
+                                    if prior_codex else {}))
     # Re-mark as the active run so sandbox summaries and coverage
     # tracking attach to the resumed segment.
     from core.sandbox.summary import set_active_run_dir
@@ -3214,13 +3253,20 @@ def _update_status(output_dir: Path, status: str,
         save_json(path, metadata)
 
         # Ledger finish under the metadata lock: a concurrent resume
-        # must not interleave between the terminal metadata and its
-        # ledger record.
+        # must not interleave between the terminal metadata write and
+        # its ledger mirror — same rationale as the start-side fix.
         if status in _TERMINAL_STATUSES:
             owner = metadata.get("session_pid")
             if isinstance(owner, int) and not isinstance(owner, bool):
-                from core.project.sessions import ledger_record_finish
-                ledger_record_finish(output_dir, status, pid=owner)
+                from core.project.sessions import ledger_record_finish, owner_registry
+                if metadata.get("session_harness") == "codex" or os.environ.get("RAPTOR_CODEX_CONTEXT_ID"):
+                    try:
+                        with owner_registry(metadata):
+                            ledger_record_finish(output_dir, status, pid=owner)
+                    except (ValueError, OSError):
+                        logger.debug("owner ledger finish skipped", exc_info=True)
+                else:
+                    ledger_record_finish(output_dir, status, pid=owner)
 
 
 def _apply_standard_provenance(metadata: dict[str, Any], output_dir: Path) -> None:

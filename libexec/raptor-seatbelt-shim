@@ -560,7 +560,11 @@ def main() -> int:
             ("_RAPTOR_STATUS_FD", "_RAPTOR_DEATH_FD",
              "RAPTOR_NO_SANDBOX_NONCE") if keep_trust_markers
             else ("_RAPTOR_STATUS_FD", "_RAPTOR_DEATH_FD",
-                  "_RAPTOR_TRUSTED", "CLAUDECODE",
+                  "_RAPTOR_TRUSTED", "CLAUDECODE", "CODEX",
+                  "CODEX_THREAD_ID", "CODEX_SESSION_ID",
+                  "RAPTOR_CODEX_ENVIRONMENT", "RAPTOR_CODEX_HOOK",
+                  "RAPTOR_CODEX_HOOK_ROOT",
+                  "RAPTOR_CODEX_CONTEXT_ID",
                   "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN",
                   "RAPTOR_ALLOW_DEGRADED_UNTRUSTED",
                   "RAPTOR_NO_SANDBOX_NONCE",

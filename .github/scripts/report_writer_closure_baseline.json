@@ -10,6 +10,9 @@
     ".claude/skills/crash-analysis/rr-debugger/scripts/crash_trace.py::extract_trace::unsanitised_llm_value::stderr": {
       "note": "crash-analysis skill helper script; gdb/rr output relayed for the skill's own agent consumption (KNOWN U35 row) — sanitise + register when the crash-analysis skill lane is hardened"
     },
+    ".codex/hooks/session_start.py::main::unsanitised_llm_value::stderr": {
+      "note": "stderr passthrough from raptor-session-init subprocess — the child is our own trusted startup script, not LLM output; stderr carries operator-facing init diagnostics"
+    },
     "core/analysis/binary_oracle_edges.py::_extract_direct_call_edges_impl::unsanitised_llm_value::addr": {
       "note": "addr is an integer address hex-formatted for the r2 script file, not operator output"
     },
@@ -361,6 +364,9 @@
     "core/sandbox/scripts/feature-matrix/bin/report.py::main::unsanitised_llm_value::errors": {
       "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
+    "core/startup/codex_environment.py::_text::sanitiser_shadow::_text": {
+      "note": "startup-context value validator — a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
+    },
     "core/startup/init.py::_check_analyzer_capabilities::unsanitised_llm_value::gcc_ver": {
       "note": "gcc --version first line from the local trusted toolchain probe (safe_subprocess_env, no target input)"
     },
@@ -480,6 +486,9 @@
     },
     "libexec/raptor-self-test::_run_selected::unsanitised_exception_text::exc": {
       "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
+    },
+    "libexec/raptor-session-init::<module>::raw_serialiser_at_sink::dumps": {
+      "note": "json.dumps serialising operator-supplied RAPTOR_CALLER_DIR/RAPTOR_LAUNCH_TARGET argv into TOML config values — these are the launcher’s own vetted env vars, not scanned-repo or LLM-derived data"
     },
     "libexec/raptor-session-init::warm_sage_embeddings::unsanitised_exception_text::e": {
       "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"

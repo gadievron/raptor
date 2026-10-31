@@ -232,6 +232,66 @@ class TestChildSessionIsolation:
                            ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_SESSION_ID"))
 
 
+class TestCodexChildSessionIsolation:
+    @pytest.mark.parametrize("mode", ["tier0", "isolated-home", "llm"])
+    @pytest.mark.parametrize("ci", [False, True])
+    def test_real_child_cannot_restore_operator_session(
+        self, selftest, tmp_path, monkeypatch, mode, ci,
+    ):
+        operator = tmp_path / "operator"
+        operator.mkdir()
+        inherited = {
+            "CODEX": "1", "CODEX_THREAD_ID": "foreign-thread",
+            "CODEX_TOOL_CALL_ID": "foreign-call",
+            "RAPTOR_CODEX_ENVIRONMENT": "1",
+            "RAPTOR_CODEX_CONTEXT_ID": "foreign-root",
+            "RAPTOR_CODEX_HOOK_ROOT": str(operator),
+            "RAPTOR_SESSION_PID": str(os.getpid()),
+            "RAPTOR_SESSION_TOKEN": "foreign-token",
+            "RAPTOR_REGISTRY_HOME": str(operator),
+            "RAPTOR_OUT_DIR": str(operator),
+            "RAPTOR_CALLER_DIR": str(operator), "RAPTOR_LAUNCH_TARGET": "target",
+        }
+        for key, value in inherited.items():
+            monkeypatch.setenv(key, value)
+        monkeypatch.delenv("CLAUDECODE", raising=False)
+        monkeypatch.setenv("RAPTOR_INSTALL_PROTECTED", "1")
+        monkeypatch.setenv("CODEX_SANDBOX_NETWORK_DISABLED", "1")
+        if ci:
+            monkeypatch.setenv("CI", "true")
+        else:
+            monkeypatch.delenv("CI", raising=False)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        ctx = _make_ctx(selftest, tmp_path / "scratch")
+        env = (ctx.env_llm() if mode == "llm" else
+               ctx.env_t0(isolated_home=mode == "isolated-home"))
+        # An actual dispatcher import must not consult a foreign broker or
+        # replace the scratch registry with the operator's restored settings.
+        code = (
+            "import os, sys; sys.path.insert(0, sys.argv[1]); "
+            "import core.startup.process_init; "
+            "assert not os.environ.get('CODEX_THREAD_ID'); "
+            "assert not os.environ.get('RAPTOR_SESSION_TOKEN'); "
+            "assert os.environ['RAPTOR_REGISTRY_HOME'] == sys.argv[2]; "
+            "assert os.environ['RAPTOR_OUT_DIR'] == sys.argv[3]"
+        )
+        result = subprocess.run(
+            [sys.executable, "-I", "-c", code, str(REPO_ROOT),
+             str(ctx.home / ".raptor"), str(ctx.outs)],
+            env=env, capture_output=True, text=True, timeout=10,
+        )
+        assert result.returncode == 0, result.stderr
+        assert not list(operator.iterdir())
+        for key in inherited:
+            if key not in {"RAPTOR_REGISTRY_HOME", "RAPTOR_OUT_DIR"}:
+                assert key not in env
+        assert env["RAPTOR_INSTALL_PROTECTED"] == "1"
+        assert env["CODEX_SANDBOX_NETWORK_DISABLED"] == "1"
+        assert (env.get("CI") == "true") == ci
+        assert ("ANTHROPIC_API_KEY" in env) == (mode == "llm")
+
+
+
 class TestProjectLifecycleCase:
     def test_broken_project_manager_fails_the_case(
         self, selftest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
