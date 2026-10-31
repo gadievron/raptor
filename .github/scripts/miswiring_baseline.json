@@ -388,6 +388,9 @@
   "artifacts:write_only_artifact::hash-pin.json": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },
+  "artifacts:write_only_artifact::interactions.json": {
+   "note": "study-prep output: cross-subsystem interaction pairs consumed by the study LLM synthesis pass (wiring pending)"
+  },
   "artifacts:write_only_artifact::io-correlation.json": {
    "note": "operator/LLM-facing output: packages/frida cli._maybe_correlate_io writes the ingest-payload/call-argument correlation report after a run and prints its path for the operator to inspect; no in-repo literal-name production reader by design (tests assert the file, the CLI only echoes the path)"
   },
