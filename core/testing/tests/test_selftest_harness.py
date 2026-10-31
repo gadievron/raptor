@@ -176,11 +176,8 @@ class TestChildSessionIsolation:
         operator = tmp_path / "operator"
         operator.mkdir()
         inherited = {
-            "CODEX": "1", "CODEX_THREAD_ID": "foreign-thread",
-            "CODEX_TOOL_CALL_ID": "foreign-call",
-            "RAPTOR_CODEX_ENVIRONMENT": "1",
-            "RAPTOR_CODEX_CONTEXT_ID": "foreign-root",
-            "RAPTOR_CODEX_HOOK_ROOT": str(operator),
+            "CLAUDECODE": "1", "CLAUDE_CODE_ENTRYPOINT": "cli",
+            "CLAUDE_SESSION_ID": "foreign-session",
             "RAPTOR_SESSION_PID": str(os.getpid()),
             "RAPTOR_SESSION_TOKEN": "foreign-token",
             "RAPTOR_REGISTRY_HOME": str(operator),
@@ -189,9 +186,7 @@ class TestChildSessionIsolation:
         }
         for key, value in inherited.items():
             monkeypatch.setenv(key, value)
-        monkeypatch.delenv("CLAUDECODE", raising=False)
         monkeypatch.setenv("RAPTOR_INSTALL_PROTECTED", "1")
-        monkeypatch.setenv("CODEX_SANDBOX_NETWORK_DISABLED", "1")
         if ci:
             monkeypatch.setenv("CI", "true")
         else:
@@ -205,7 +200,7 @@ class TestChildSessionIsolation:
         code = (
             "import os, sys; sys.path.insert(0, sys.argv[1]); "
             "import core.startup.process_init; "
-            "assert not os.environ.get('CODEX_THREAD_ID'); "
+            "assert not os.environ.get('CLAUDE_SESSION_ID'); "
             "assert not os.environ.get('RAPTOR_SESSION_TOKEN'); "
             "assert os.environ['RAPTOR_REGISTRY_HOME'] == sys.argv[2]; "
             "assert os.environ['RAPTOR_OUT_DIR'] == sys.argv[3]"
@@ -221,7 +216,6 @@ class TestChildSessionIsolation:
             if key not in {"RAPTOR_REGISTRY_HOME", "RAPTOR_OUT_DIR"}:
                 assert key not in env
         assert env["RAPTOR_INSTALL_PROTECTED"] == "1"
-        assert env["CODEX_SANDBOX_NETWORK_DISABLED"] == "1"
         assert (env.get("CI") == "true") == ci
         assert ("ANTHROPIC_API_KEY" in env) == (mode == "llm")
 
