@@ -232,12 +232,20 @@ before applying `--max-findings`. Selection uses the shared signal policy
 and inherits missing severity levels from each finding's own rule metadata,
 including explicitly referenced extension rules. Repeated paths and symlink
 aliases of the same SARIF file contribute candidates once.
+Repeated reports across query passes are deduplicated before the cap when
+rule/component metadata, source context, and finding evidence match. The
+strongest-ranked original report is retained. Different messages, locations,
+fingerprints, or dataflow paths remain separate; incomplete metadata disables
+deduplication. Raw SARIF files are preserved.
 Equal-signal ties use stable content identities rather than file order.
 The limit counts attempted findings, including calls that raise an error;
 exceptions do not draw additional findings into the selected set. A limit
 of `0` selects nothing and skips initialization of the autonomous analysis
 components. `autonomous_summary.json` records candidate, selected, deferred,
-attempted, and failed-call counts under `analysis_selection`.
+attempted, and failed-call counts under `analysis_selection`, plus `duplicates`
+and `unique`. Here `candidates` counts reports from distinct readable SARIF
+paths, `unique = candidates - duplicates`, and `deferred = unique - selected`.
+Duplicate counts are computed even when the analysis limit is zero.
 
 ### Reachability Prefilter
 

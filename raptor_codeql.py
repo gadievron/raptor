@@ -219,7 +219,7 @@ def run_autonomous_workflow(args: argparse.Namespace) -> None:
     logger.info("PHASE 2: AUTONOMOUS VULNERABILITY ANALYSIS")
     logger.info("=" * 70)
 
-    candidates, candidate_count = select_findings_for_analysis(
+    candidates, candidate_count, duplicate_count = select_findings_for_analysis(
         scan_result.sarif_files, args.max_findings,
     )
 
@@ -305,7 +305,9 @@ def run_autonomous_workflow(args: argparse.Namespace) -> None:
         "analysis_selection": {
             "candidates": candidate_count,
             "selected": len(candidates),
-            "deferred": candidate_count - len(candidates),
+            "duplicates": duplicate_count,
+            "unique": candidate_count - duplicate_count,
+            "deferred": candidate_count - duplicate_count - len(candidates),
             "attempted": total_attempted,
             "failed": total_failed,
         },
