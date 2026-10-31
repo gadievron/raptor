@@ -632,7 +632,7 @@
     "note": "closed schema-key manifest: the review_result keys the review model authors (the review JSON schema fields plus legacy / other-mode fields pipeline code reads as model claims); a closure test (core/audit/tests/test_model_body_markers.py::TestReviewKeyClosure) fails when pipeline code reads a review_result key in neither this set nor PIPELINE_OWNED_REVIEW_KEYS \u2014 persistence/schema keys, not a learned name vocabulary"
   },
   "core/audit/evidence_grade.py::PIPELINE_OWNED_REVIEW_KEYS": {
-    "count": 56,
+    "count": 57,
     "kind": "literal",
     "note": "closed schema-key manifest: the review_result keys only pipeline code may set (machine flags, receipts, stage records, panel identity/accounting); the review and edge-review parse boundaries drop them from model output so a model cannot mint a machine signal by emitting the key; kept in lockstep with the code by the same closure test \u2014 persistence/schema keys, not a learned name vocabulary"
   },
@@ -857,7 +857,7 @@
     "note": "audit-log demotion record field names (framework record keys, not target API names)"
   },
   "core/audit/orchestrator.py::_make_tier_counters": {
-    "count": 43,
+    "count": 44,
     "kind": "literal"
   },
   "core/audit/orchestrator.py::_post_loop_receipt_rescue": {
@@ -1249,7 +1249,7 @@
     "note": "closed PHP language-keyword taxonomy: identifiers the PHP-lite lexer excludes from call-event extraction because the language grammar reserves them (control flow, constructs, include forms) \u2014 language keywords, not a learned name vocabulary (the learned vocabulary is DomainModel.token_checks; TOKEN_SEED_RE is the <=9-name discovery seed)"
   },
   "core/config/__init__.py::DANGEROUS_ENV_VARS": {
-    "count": 72,
+    "count": 74,
     "kind": "literal"
   },
   "core/config/__init__.py::LLM_ROUTING_ENV_VARS": {
@@ -1273,7 +1273,7 @@
     "note": "tool-dependency registry keys (doctor/banner); crossed the seed threshold when the perl entry (perlasm generated-asm inventory) was added - not a name vocabulary"
   },
   "core/config/__init__.py::_LLM_AGGREGATOR_KEYS": {
-    "count": 11,
+    "count": 14,
     "kind": "literal",
     "note": "aggregator/routing provider API-key env vars splatted into LLM_API_KEY_VARS (infrastructure constants, not a learnable name vocabulary)"
   },
@@ -1303,7 +1303,7 @@
     "note": "closed record schema, not a name vocabulary: the checkpoint hysteresis state record written to the run dir (the exact fields _load_state validates on read; the two sides must stay in lockstep)"
   },
   "core/coverage/journal_mac.py::_GENERATION_VOCABULARY": {
-    "count": 50,
+    "count": 53,
     "kind": "literal",
     "note": "shipped-generation schema manifest for the journal-row MAC verifier: the enumerated extra-key vocabulary each provenance generation is allowed to carry (covered-additive-field invariant - a row with keys outside its generation's set never verifies via the raw form); persistence schema keys in lockstep with the row writers, not a learned name vocabulary"
   },
@@ -1574,11 +1574,11 @@
     "note": "allowlist of RAPTOR's own run-lifecycle command names that hold LLM quota mid-run (the sibling-observation classifier; includes forward-compat members that cannot occur on the ledger yet \u2014 rationale inline), not a learned name vocabulary; same class as core/run/provenance.py::_DETERMINISTIC_COMMANDS"
   },
   "core/llm/dispatcher/auth.py::__init__": {
-    "count": 21,
+    "count": 24,
     "kind": "literal"
   },
   "core/llm/dispatcher/auth.py::build_rules": {
-    "count": 17,
+    "count": 20,
     "kind": "literal"
   },
   "core/llm/providers.py::_TRANSPORT_EXC_MODULE_ROOTS": {
@@ -1909,7 +1909,7 @@
     "kind": "literal"
   },
   "core/security/cc_trust.py::_COMPREHENSIVE_DANGEROUS_ENV_VARS": {
-    "count": 84,
+    "count": 86,
     "kind": "literal"
   },
   "core/security/credential_env.py::BUILD_ECOSYSTEM_ENV_SURFACES": {
@@ -2111,7 +2111,7 @@
     "note": "graph schema node-kind enum (entry_point/sink/function/...) \u2014 fixed taxonomy for the understand graph, not target API names"
   },
   "libexec/raptor-audit::_run_config_from_args": {
-    "count": 44,
+    "count": 47,
     "kind": "literal",
     "note": "serialised run-option field names for audit-run-config.json (same-run resume contract) - CLI flag surface, not a name vocabulary"
   },
@@ -2955,7 +2955,7 @@
     "note": "OCI floating-tag release-channel names (latest/stable/nightly/...), not target API names; single shared copy after the container-parser dedup (previously baselined 3x under packages/sca/parsers/*)."
   },
   "packages/sca/models.py::SupplyChainKind": {
-    "count": 33,
+    "count": 34,
     "kind": "literal"
   },
   "packages/sca/osv_offline.py::_BUCKET_NAME": {
