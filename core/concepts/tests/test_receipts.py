@@ -120,6 +120,68 @@ class TestVerifyReceipt:
         assert r.sha256
 
 
+class TestApproximateReceipt:
+    """Fuzzy receipt fallback: the LLM reformats, abbreviates, or drops
+    comments — exact substring fails but token overlap passes."""
+
+    def _tree(self, tmp_path: Path) -> Path:
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "lib.c").write_text(
+            "int validate_input(const char *buf, size_t len) {\n"
+            "    if (len > MAX_BUF) return -EINVAL;\n"
+            "    memcpy(scratch, buf, len);\n"
+            "    return 0;\n"
+            "}\n",
+        )
+        return tmp_path
+
+    def test_reformatted_quote_matches_approximately(
+        self, tmp_path: Path,
+    ) -> None:
+        root = self._tree(tmp_path)
+        r = verify_receipt(
+            root, "src/lib.c", 1,
+            "int validate_input(char *buf, size_t len) {"
+            " if (len > MAX_BUF) return -EINVAL;"
+            " memcpy(scratch, buf, len); return 0; }",
+        )
+        assert r.verified
+        assert "quote_approximate" in r.note
+
+    def test_reformatted_quote_at_wrong_line(
+        self, tmp_path: Path,
+    ) -> None:
+        root = self._tree(tmp_path)
+        r = verify_receipt(
+            root, "src/lib.c", 99,
+            "int validate_input(const char *buf, size_t len) {"
+            " if (len > MAX_BUF) return -EINVAL;"
+            " memcpy(scratch, buf, len); return 0; }",
+        )
+        assert r.verified
+        assert "not at stated line" in r.note
+
+    def test_no_line_approximate_match(self, tmp_path: Path) -> None:
+        root = self._tree(tmp_path)
+        r = verify_receipt(
+            root, "src/lib.c", None,
+            "int validate_input(char *buf, size_t len) {"
+            " if (len > MAX_BUF) return -EINVAL;"
+            " memcpy(scratch, buf, len); return 0; }",
+        )
+        assert r.verified
+        assert "quote_approximate" in r.note
+
+    def test_fabricated_still_fails(self, tmp_path: Path) -> None:
+        root = self._tree(tmp_path)
+        r = verify_receipt(
+            root, "src/lib.c", 1,
+            "void completely_different_function(int x, int y) {"
+            " total = x + y; printf(\"%d\", total); }",
+        )
+        assert not r.verified
+
+
 class TestDetectStaleDoc:
     def test_missing_documented_param(self) -> None:
         reason = detect_stale_doc(

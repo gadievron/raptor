@@ -18107,6 +18107,8 @@ def _study_consumer_loop(
             joern_server=joern_server,
             max_workers=min(4, budget),
             throttle=throttle,
+            mechanical_findings=getattr(shared, "mechanical_findings", None),
+            synthesis_counter=getattr(shared, "synthesis_counter", None),
         )
         re_review_count += len(to_review)
         study_queue.note_progress()
@@ -27494,7 +27496,7 @@ def _collect_chain_findings(
             if prior.hypothesis:
                 entry["hypothesis"] = prior.hypothesis
             if prior.body:
-                entry["body"] = prior.body[:300]
+                entry["body"] = prior.body[:800]
             if prior.evidence_tool:
                 entry["evidence_tool"] = prior.evidence_tool
             chain.append(entry)
@@ -34181,6 +34183,8 @@ def _re_review_study_enriched(
     joern_server=None,
     max_workers: int = 1,
     throttle: Any = None,
+    mechanical_findings: dict[str, list[dict[str, Any]]] | None = None,
+    synthesis_counter: AtomicSynthesisCounter | None = None,
 ) -> OrchestratorResult:
     """Re-review functions that queued reading-list items.
 
@@ -34260,7 +34264,7 @@ def _re_review_study_enriched(
         ctx["study_re_review"] = True
         ctx["prior_verdict"] = {
             "status": prior_outcome.status,
-            "body": prior_outcome.body[:300] if prior_outcome.body else "",
+            "body": prior_outcome.body[:800] if prior_outcome.body else "",
             "hypothesis": (
                 prior_outcome.review_result.get("hypothesis", "")[:200]
                 if prior_outcome.review_result
@@ -34365,7 +34369,20 @@ def _re_review_study_enriched(
                 outcome.review_result["study_receipts"] = receipts
 
         if outcome.status in ("finding", "suspicious"):
-            if outcome.status == "finding" and config.sweep_validate_findings:
+            if config.immediate_verify:
+                outcome = _verify_hypotheses_immediate(
+                    outcome,
+                    config,
+                    result,
+                    sarif_cache=sarif_cache,
+                    evidence_index=evidence_index,
+                    joern_server=joern_server,
+                    mechanical_findings=mechanical_findings,
+                    synthesis_counter=synthesis_counter,
+                    gap=gap,
+                    source=gap.get("source") or ctx.get("source"),
+                )
+            elif outcome.status == "finding" and config.sweep_validate_findings:
                 outcome = _sweep_validate(
                     outcome,
                     config,
