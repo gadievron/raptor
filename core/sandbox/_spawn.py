@@ -1378,6 +1378,11 @@ def _pid1_split_for_waiter(wstat_w: int | None = None) -> None:
                 os.close(wstat_w)
         return  # exec path continues as PID 2
 
+    # Only the target owns caller capabilities. Retaining either end of an
+    # RPC pipe here can prevent the target from seeing EOF or keep its reply
+    # pipe open after it dies. This init only needs its wait-status channel.
+    _close_fds_except(() if wstat_w is None else (wstat_w,))
+
     def _forward(signum, _frame, _child=child) -> None:
         with contextlib.suppress(OSError):
             os.kill(_child, signum)
@@ -1443,11 +1448,9 @@ _POST_EXIT_DRAIN_SECONDS = 0.5
 _P_READY_DEADLINE_S = 15.0
 
 
-def _prepare_exec_fds(pass_fds, status_w):
-    """Preserve only audited caller capabilities and the CLOEXEC status pipe."""
-    if status_w in pass_fds:
-        raise ValueError("caller descriptors overlap the sandbox status pipe")
-    keep = {status_w, *pass_fds}
+def _close_fds_except(keep):
+    """Drop ambient capabilities in a forked child, preserving stdio."""
+    keep = set(keep)
     try:
         opened = [int(name) for name in os.listdir("/proc/self/fd")]
     except (OSError, ValueError):
@@ -1462,6 +1465,13 @@ def _prepare_exec_fds(pass_fds, status_w):
                 os.close(descriptor)
             except OSError:
                 pass
+
+
+def _prepare_exec_fds(pass_fds, status_w):
+    """Preserve only audited caller capabilities and the CLOEXEC status pipe."""
+    if status_w in pass_fds:
+        raise ValueError("caller descriptors overlap the sandbox status pipe")
+    _close_fds_except({status_w, *pass_fds})
     # Post-fork: these CLOEXEC changes do not affect the parent fd table.
     for descriptor in pass_fds:
         os.set_inheritable(descriptor, True)
@@ -2987,6 +2997,9 @@ def run_sandboxed(
                             for _pin_fd in _bind_src_fds.values():
                                 with contextlib.suppress(OSError):
                                     os.close(_pin_fd)
+                        # The relay owns only its death-pipe read end;
+                        # sockets are opened by the forwarder itself.
+                        _close_fds_except((_fwd_death_r,))
                         # p_ready_w was closed at step 5 — do NOT close
                         # here; the fd number may have been reused by
                         # the death pipe allocated above.
@@ -3480,6 +3493,11 @@ def run_sandboxed(
                         os.write(pid_w, str(grand).encode("ascii"))
                     with contextlib.suppress(OSError):
                         os.close(pid_w)
+                # This watcher neither executes the target nor owns its
+                # caller capabilities. Keep only teardown/status controls.
+                _close_fds_except(fd for fd in (
+                    death_r, _tgt_wstat_r, _forwarder_death_w,
+                ) if fd >= 0)
                 # Intermediate (pid 1's parent-in-parent-ns). Wait
                 # for grandchild and mirror its exit status so the
                 # top-level parent sees the same returncode shape
