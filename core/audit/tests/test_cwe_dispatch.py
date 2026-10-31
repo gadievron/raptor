@@ -172,42 +172,47 @@ class _FakeRouteClient:
 class TestRouteHypothesisToCheckers:
     def test_dominated_returns_true(self):
         client = _FakeRouteClient(dominated=True)
-        assert route_hypothesis_to_checkers(
+        r = route_hypothesis_to_checkers(
             "CWE-416",
             "kfree then dereference in same function",
             client,
-        ) is True
+        )
+        assert r.dominated is True
 
     def test_not_dominated_returns_false(self):
         client = _FakeRouteClient(dominated=False)
-        assert route_hypothesis_to_checkers(
+        r = route_hypothesis_to_checkers(
             "CWE-416",
             "scatterlist aliasing — src and dst reference the same pages",
             client,
-        ) is False
+        )
+        assert r.dominated is False
 
     def test_no_scope_metadata_keeps_chain(self):
         client = _FakeRouteClient(dominated=False)
-        assert route_hypothesis_to_checkers(
+        r = route_hypothesis_to_checkers(
             "CWE-78",
             "anything — no _TOOL_SCOPE entry for CWE-78",
             client,
-        ) is True
+        )
+        assert r.dominated is True
 
     def test_llm_error_falls_back_to_true(self):
         class _BrokenClient:
             def generate_structured(self, *a, **kw):
                 raise RuntimeError("boom")
 
-        assert route_hypothesis_to_checkers(
+        r = route_hypothesis_to_checkers(
             "CWE-416", "some hypothesis", _BrokenClient(),
-        ) is True
+        )
+        assert r.dominated is True
 
     def test_malformed_response_falls_back_to_true(self):
         class _GarbageClient:
             def generate_structured(self, *a, **kw):
                 return {"not_dominated": True}
 
-        assert route_hypothesis_to_checkers(
+        r = route_hypothesis_to_checkers(
             "CWE-416", "some hypothesis", _GarbageClient(),
-        ) is True
+        )
+        assert r.dominated is True

@@ -629,6 +629,7 @@ class TestCVE2026_31431_AliasingRoute:
             lambda q: q or None,
         )
 
+
         seq_hyp = (
             "kfree is called and then the pointer is dereferenced "
             "in the error cleanup path"

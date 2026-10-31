@@ -420,6 +420,7 @@ class TestEndToEndCadence:
             sweep_validate_findings=True, batch_sloc_threshold=0,
             critique_interval=2, triage=False,
             joern_overrides={"enabled": False},
+            immediate_verify=False,
         )
         result = orch_mod.run_orchestrator(config, review_fn)
 

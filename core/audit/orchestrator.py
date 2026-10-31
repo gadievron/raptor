@@ -1068,6 +1068,7 @@ class OrchestratorConfig:
     # (--no-on-demand-synthesis); capped per run
     # (checker_synthesis.MAX_ONDEMAND_SYNTHESIS_PER_RUN).
     on_demand_synthesis: bool = True
+    immediate_verify: bool = True
     # Determine-value compile probes (--probe-determine-value):
     # bisection over static assertions resolves "what is the value of
     # X?" study questions. Default OFF — up to ~66 sandboxed compiles
@@ -1614,6 +1615,8 @@ class OrchestratorResult:
     # Non-primary medium/high-confidence hypotheses that a mechanical
     # tool confirmed (secondary-hypothesis dispatch lane).
     secondary_confirmed: int = 0
+    # Outcomes confirmed inline by _verify_hypotheses_immediate (IHV).
+    immediate_verified: int = 0
     # Positive outcomes demoted by the adversarial refuter pass
     # (--adversarial): the refuter named a defeating mechanism and no
     # tool receipt overturned it.
@@ -1691,6 +1694,39 @@ class OrchestratorResult:
         (verdict_reuse's sweep re-validation counters) — result
         counters are mutated from parallel workers."""
         return self._lock
+
+
+class AtomicSynthesisCounter:
+    """Thread-safe synthesis cap shared between IHV and the slow path.
+
+    Parallel IHV workers and post-loop synthesis all compete for the
+    same per-run cap.  ``try_reserve()`` atomically checks and
+    increments; returns True when a slot was available.
+    """
+
+    __slots__ = ("_count", "_cap", "_lock")
+
+    def __init__(self, cap: int = 10):
+        self._count = 0
+        self._cap = cap
+        self._lock = _threading.Lock()
+
+    def try_reserve(self) -> bool:
+        with self._lock:
+            if self._count >= self._cap:
+                return False
+            self._count += 1
+            return True
+
+    @property
+    def remaining(self) -> int:
+        with self._lock:
+            return max(0, self._cap - self._count)
+
+    @property
+    def count(self) -> int:
+        with self._lock:
+            return self._count
 
 
 class _LockedOutcomes:
@@ -4031,9 +4067,22 @@ def review_one_function(
                 "refinement module unavailable — clean-check rescue disabled",
             )
 
-    # ── Sweep validation ──────────────────────────────────────────────
+    # ── Hypothesis verification ─────────────────────────────────────
     pre_sweep_status = outcome.status
-    if outcome.status == "finding" and config.sweep_validate_findings:
+    if config.immediate_verify:
+        outcome = _verify_hypotheses_immediate(
+            outcome,
+            config,
+            result,
+            sarif_cache=sarif_cache,
+            evidence_index=evidence_index,
+            joern_server=joern_server,
+            mechanical_findings=mechanical_findings,
+            synthesis_counter=shared.synthesis_counter,
+            gap=gap,
+            source=gap.get("source"),
+        )
+    elif outcome.status == "finding" and config.sweep_validate_findings:
         outcome = _sweep_validate(
             outcome,
             config,
@@ -4048,12 +4097,6 @@ def review_one_function(
             else:
                 result.sweep_demoted += 1
         if pre_sweep_status == "finding" and outcome.status != "finding":
-            # Graded adjudication ONLY for the sweep's receipted
-            # refutation (Z3 UNSAT disproof; the reason is the body's
-            # bracketed prefix line). The hypothesis-less demotion is
-            # schema discipline — no tool ran, nothing was refuted —
-            # so it carries no grade; any future non-receipted sweep
-            # transition stays ungraded by the same allowlist.
             _sweep_reason = (outcome.body or "").split("\n", 1)[0][:200]  # line-model: journal entry body (RAPTOR/LLM text)
             if _sweep_reason.startswith("[smt-disproof:"):
                 _sc_record_refutation(
@@ -9220,6 +9263,11 @@ def _run_audit_body(
     shared.session_observations = session_observations
     shared.reviewed_before_joern = reviewed_before_joern
     shared.live_classifications = live_classifications
+    if config.immediate_verify:
+        from .checker_synthesis import MAX_ONDEMAND_SYNTHESIS_PER_RUN
+        shared.synthesis_counter = AtomicSynthesisCounter(
+            cap=MAX_ONDEMAND_SYNTHESIS_PER_RUN,
+        )
 
     # --- Background CodeQL warm-up ---
     # One whole-run ``database analyze`` per database over every
@@ -10106,31 +10154,32 @@ def _run_audit_body(
         pre_sweep = {
             (o.file, o.function): o.status for o in result.outcomes
         }
-        # Receipt supply first: give every zero-dispatch suspicious
-        # outcome its mechanical chain (and warm the sweep memo), so
-        # the promotion pass below consumes real receipts through its
-        # existing gates instead of leaving the pile unexamined.
-        logger.debug("entering _resweep_zero_dispatch_suspicious")
-        try:
-            _resweep_zero_dispatch_suspicious(
-                result, config,
-                sarif_cache=sarif_cache,
-                checklist=checklist,
+        # When IHV is active, per-function verification already ran
+        # during review — skip the legacy re-sweep and promotion
+        # passes (§Immediate hypothesis verification, §Post-loop
+        # pipeline optimisations in docs/audit.md design).
+        if not config.immediate_verify:
+            logger.debug("entering _resweep_zero_dispatch_suspicious")
+            try:
+                _resweep_zero_dispatch_suspicious(
+                    result, config,
+                    sarif_cache=sarif_cache,
+                    checklist=checklist,
+                    joern_server=joern_server,
+                    max_workers=resolved_workers,
+                )
+            except Exception:
+                logger.debug("zero-dispatch re-sweep failed", exc_info=True)
+            logger.debug("exited _resweep_zero_dispatch_suspicious")
+
+            logger.debug("entering _promote_suspicious")
+            _promote_suspicious(
+                result, config, sarif_cache, checklist,
                 joern_server=joern_server,
+                mechanical_findings=mechanical_findings,
                 max_workers=resolved_workers,
             )
-        except Exception:
-            logger.debug("zero-dispatch re-sweep failed", exc_info=True)
-        logger.debug("exited _resweep_zero_dispatch_suspicious")
-
-        logger.debug("entering _promote_suspicious")
-        _promote_suspicious(
-            result, config, sarif_cache, checklist,
-            joern_server=joern_server,
-            mechanical_findings=mechanical_findings,
-            max_workers=resolved_workers,
-        )
-        logger.debug("exited _promote_suspicious")
+            logger.debug("exited _promote_suspicious")
 
         logger.debug("entering _promote_suspicious_preconditions")
         _promote_suspicious_preconditions(result, config, context_map)
@@ -10142,95 +10191,107 @@ def _run_audit_body(
         )
         logger.debug("exited _promote_clean_refuted")
 
-        logger.debug("entering _dispatch_secondary_hypotheses")
-        _dispatch_secondary_hypotheses(
-            result, config, checklist, joern_server=joern_server,
-        )
-        logger.debug("exited _dispatch_secondary_hypotheses")
+        if config.immediate_verify:
+            # IHV path: smt-clean runs before self-contradictions so
+            # newly promoted suspicious outcomes get contradiction
+            # checking (design §Post-loop pipeline optimisations,
+            # Optimisation A ordering).
+            logger.debug("entering _promote_smt_clean (IHV reorder)")
+            _promote_smt_clean(result, config, checklist)
+            logger.debug("exited _promote_smt_clean (IHV reorder)")
+        else:
+            logger.debug("entering _dispatch_secondary_hypotheses")
+            _dispatch_secondary_hypotheses(
+                result, config, checklist, joern_server=joern_server,
+            )
+            logger.debug("exited _dispatch_secondary_hypotheses")
 
         logger.debug("entering _demote_self_contradictions")
         _demote_self_contradictions(result)
         logger.debug("exited _demote_self_contradictions")
 
-        logger.debug("entering _promote_hypothesis_inconsistent")
-        _promote_hypothesis_inconsistent(result)
-        logger.debug("exited _promote_hypothesis_inconsistent")
+        if not config.immediate_verify:
+            logger.debug("entering _promote_hypothesis_inconsistent")
+            _promote_hypothesis_inconsistent(result)
+            logger.debug("exited _promote_hypothesis_inconsistent")
 
-        # Run refutation gates on newly-promoted suspicious outcomes.
-        # Hypothesis-consistency promotes clean→suspicious when the LLM
-        # had high-confidence race/leak hypotheses but said "clean".
-        # The per-function refutation gate (line ~1398) missed these
-        # because they were clean at that point.
-        try:
-            from .refutation import refute_hypothesis
+            # Run refutation gates on newly-promoted suspicious outcomes.
+            # Hypothesis-consistency promotes clean→suspicious when the
+            # LLM had high-confidence race/leak hypotheses but said
+            # "clean".  The per-function refutation gate missed these
+            # because they were clean at that point.
+            try:
+                from .refutation import refute_hypothesis
 
-            for i, outcome in enumerate(result.outcomes):
-                if outcome.status != "suspicious":
-                    continue
-                if "[hypothesis-consistency:" not in outcome.body:
-                    continue
-                # Own try: records only, must never skip refutation.
-                try:
-                    from .binary_honesty import record_gate_engagement
+                for i, outcome in enumerate(result.outcomes):
+                    if outcome.status != "suspicious":
+                        continue
+                    if "[hypothesis-consistency:" not in outcome.body:
+                        continue
+                    # Own try: records only, must never skip refutation.
+                    try:
+                        from .binary_honesty import record_gate_engagement
 
-                    record_gate_engagement(
-                        config.out_dir,
+                        record_gate_engagement(
+                            config.out_dir,
+                            outcome,
+                            domain_model=domain_model,
+                            checklist=checklist,
+                            phase="post_promote",
+                        )
+                    except Exception:
+                        logger.debug(
+                            "gate-engagement record skipped (post-promote)",
+                            exc_info=True,
+                        )
+                    rv = refute_hypothesis(
                         outcome,
                         domain_model=domain_model,
                         checklist=checklist,
-                        phase="post_promote",
+                        config=config,
+                        joern_server=joern_server,
+                        tier_counters=result.tier_counters,
                     )
-                except Exception:
-                    logger.debug(
-                        "gate-engagement record skipped (post-promote)",
-                        exc_info=True,
-                    )
-                rv = refute_hypothesis(
-                    outcome,
-                    domain_model=domain_model,
-                    checklist=checklist,
-                    config=config,
-                    joern_server=joern_server,
-                    tier_counters=result.tier_counters,
+                    if rv is not None:
+                        append_audit_log(config.out_dir, {
+                            "action": "refutation_gate_post_promote",
+                            "gate": rv.gate,
+                            "file": outcome.file,
+                            "function": outcome.function,
+                            "reason": rv.reason,
+                            "demote_to": rv.demote_to,
+                            "original_status": "suspicious",
+                        })
+                        logger.info(
+                            "refutation gate (post-promote) [%s] %s:%s — %s → %s",
+                            rv.gate, outcome.file, outcome.function,
+                            rv.reason, rv.demote_to,
+                        )
+                        result.outcomes[i] = _demote_outcome(
+                            outcome, f"[{rv.gate}: {rv.reason}]",
+                        )
+                        result.outcomes[i].status = rv.demote_to
+                        # Counters must follow demote_to. The old
+                        # unconditional suspicious-=1/clean+=1 drifted
+                        # the tallies whenever the gate demoted TO
+                        # suspicious (the outcome stayed suspicious
+                        # while the counters recorded a clean).
+                        result.suspicious -= 1
+                        if rv.demote_to == "suspicious":
+                            result.suspicious += 1
+                        else:
+                            result.clean += 1
+            except Exception:
+                logger.debug(
+                    "refutation gate (post-promote) error",
+                    exc_info=True,
                 )
-                if rv is not None:
-                    append_audit_log(config.out_dir, {
-                        "action": "refutation_gate_post_promote",
-                        "gate": rv.gate,
-                        "file": outcome.file,
-                        "function": outcome.function,
-                        "reason": rv.reason,
-                        "demote_to": rv.demote_to,
-                        "original_status": "suspicious",
-                    })
-                    logger.info(
-                        "refutation gate (post-promote) [%s] %s:%s — %s → %s",
-                        rv.gate, outcome.file, outcome.function,
-                        rv.reason, rv.demote_to,
-                    )
-                    result.outcomes[i] = _demote_outcome(
-                        outcome, f"[{rv.gate}: {rv.reason}]",
-                    )
-                    result.outcomes[i].status = rv.demote_to
-                    # Counters must follow demote_to. The old
-                    # unconditional suspicious-=1/clean+=1 drifted the
-                    # tallies whenever the gate demoted TO suspicious
-                    # (the outcome stayed suspicious while the counters
-                    # recorded a clean).
-                    result.suspicious -= 1
-                    if rv.demote_to == "suspicious":
-                        result.suspicious += 1
-                    else:
-                        result.clean += 1
-        except Exception:
-            logger.debug(
-                "refutation gate (post-promote) error",
-                exc_info=True,
-            )
 
-        logger.debug("entering _promote_smt_clean")
-        _promote_smt_clean(result, config, checklist)
-        logger.debug("exited _promote_smt_clean")
+        if not config.immediate_verify:
+            # Legacy path: smt-clean runs after refutation gate.
+            logger.debug("entering _promote_smt_clean")
+            _promote_smt_clean(result, config, checklist)
+            logger.debug("exited _promote_smt_clean")
 
         for outcome in result.outcomes:
             key = (outcome.file, outcome.function)
@@ -11667,6 +11728,15 @@ def _run_audit_body(
         except Exception as _gexc:
             logger.warning("graph store enrichment skipped: %s", _gexc)
             logger.debug("graph store enrichment skipped", exc_info=True)
+
+    if getattr(config, "debug", False):
+        try:
+            from .pipeline_invariants import check_pipeline_invariants
+            violations = check_pipeline_invariants(result)
+            for v in violations:
+                logger.warning("pipeline invariant violation: %s", v)
+        except Exception:
+            logger.debug("pipeline invariant check failed", exc_info=True)
 
     return result
 
@@ -17291,6 +17361,93 @@ def _study_consumer_loop(
         stop_check=lambda: _environment_stop_booked(config, result),
     )
 
+    # ── Eager study-prep (gap 1) ─────────────────────────────────────
+    # Build the domain model BEFORE the first review batch arrives so
+    # the first review pass has study context.  The inner loop's
+    # ``if not study_list_built`` block is the safety net — it is never
+    # reached when the eager path succeeds.
+    if config.out_dir and not study_list_built:
+        study_target = str(config.study_root or config.target_path)
+        prep_cmd = [
+            sys.executable,
+            str(
+                Path(__file__).resolve().parents[2]
+                / "libexec"
+                / "raptor-study-prep"
+            ),
+            study_target,
+            str(config.out_dir),
+        ]
+        rl_path = config.out_dir / "reading-list.json"
+        if rl_path.is_file():
+            prep_cmd.extend(["--reading-list", str(rl_path)])
+        if config.models and config.models[0] != "default":
+            prep_cmd.extend(["--model", config.models[0]])
+
+        from core.config import RaptorConfig
+
+        study_env = RaptorConfig.get_llm_env()
+        study_env["_RAPTOR_TRUSTED"] = "1"
+        prep_timeout = _study_prep_timeout_s(checklist)
+        try:
+            prep_result = _run_study_prep(
+                prep_cmd,
+                env=study_env,
+                timeout=prep_timeout,
+                study_queue=study_queue,
+            )
+            if prep_result.returncode == 0:
+                study_list_path = config.out_dir / "study-list.json"
+                if study_list_path.is_file():
+                    study_list_built = True
+                    study_queue.note_progress()
+                    if concept_index_ref is not None:
+                        _build_concept_index_from_prep(
+                            concept_index_ref, checklist, config.out_dir,
+                            target_path=config.target_path,
+                        )
+                    # Initial unseeded study: full corpus → domain model
+                    # available for the first review pass.
+                    try:
+                        from core.concepts.study import run_study
+                        _eager_client = _run_llm_client(config)
+                        _eager_stop = (
+                            lambda: study_queue.stop_requested  # noqa: E731
+                        )
+                        run_study(
+                            study_list_path,
+                            config.out_dir,
+                            _eager_client,
+                            should_stop=_eager_stop,
+                        )
+                        _eager_cost = _client_class_cost(
+                            _eager_client, "study",
+                        )
+                        if _eager_cost:
+                            with result._lock:
+                                result.total_cost_usd += _eager_cost
+                            result.cost_tracker.record_call(
+                                "study", cost_usd=_eager_cost,
+                            )
+                        runstudy_ok += 1
+                    except Exception:
+                        logger.debug(
+                            "eager study run failed", exc_info=True,
+                        )
+                else:
+                    logger.warning(
+                        "eager study-prep produced no study-list.json",
+                    )
+            else:
+                logger.warning(
+                    "eager study-prep failed (exit %d)",
+                    prep_result.returncode,
+                )
+        except (subprocess.TimeoutExpired, _StudyStopRequested):
+            logger.debug("eager study-prep interrupted", exc_info=True)
+        except Exception:
+            logger.debug("eager study-prep error", exc_info=True)
+
     while not study_queue.is_done():
         # Idle at the top of every iteration: the drain path uses the
         # working flag to tell "mid-batch, let it finish" apart from
@@ -20830,9 +20987,12 @@ def _cwe_fallback_chain(
     except ImportError:
         return chain
 
-    if llm_client is not None and not route_hypothesis_to_checkers(
-        cwe, hypothesis, llm_client,
-    ):
+    _routing = (
+        route_hypothesis_to_checkers(cwe, hypothesis, llm_client)
+        if llm_client is not None
+        else None
+    )
+    if _routing is not None and not _routing.dominated:
         logger.info(
             "cwe_fallback_chain: %s — LLM says standing tools do not "
             "cover the hypothesis; dropping chain for synthesis",
@@ -23801,6 +23961,412 @@ def _check_preconditions(
         )
 
     return outcome
+
+
+_SECONDARY_CONFIDENCES_IHV = frozenset({"medium", "high"})
+
+
+def _extract_all_hypotheses(
+    outcome: ReviewOutcome,
+) -> list[dict[str, Any]]:
+    """Extract ALL hypotheses from a review outcome — primary + secondary.
+
+    Returns a ranked list of dicts with at least ``mechanism`` and
+    ``cwe`` keys.  The primary hypothesis comes first (highest rank);
+    secondary entries are sorted by confidence then mechanism specificity.
+    """
+    review = outcome.review_result or {}
+    primary_text = (review.get("hypothesis") or outcome.hypothesis or "").strip()
+    primary_cwe = (review.get("cwe") or "").strip()
+
+    hypotheses_raw = getattr(outcome, "hypotheses", None) or []
+    if not hypotheses_raw and review:
+        hypotheses_raw = review.get("hypotheses") or []
+
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    if primary_text:
+        result.append({
+            "mechanism": primary_text,
+            "cwe": primary_cwe,
+            "confidence": "high",
+            "is_primary": True,
+        })
+        seen.add(primary_text.lower())
+
+    for h in hypotheses_raw:
+        if not isinstance(h, dict):
+            continue
+        mech = (h.get("mechanism") or "").strip()
+        if not mech:
+            continue
+        norm = mech.lower()
+        if norm in seen:
+            continue
+        conf = (h.get("confidence") or "").lower()
+        if conf not in _SECONDARY_CONFIDENCES_IHV and conf != "high":
+            continue
+        seen.add(norm)
+        result.append({
+            "mechanism": mech,
+            "cwe": h.get("cwe", primary_cwe) or primary_cwe,
+            "confidence": conf,
+            "is_primary": False,
+        })
+
+    result[1:] = sorted(
+        result[1:],
+        key=lambda h: (
+            h.get("confidence", "") == "high",
+            _mechanism_specificity(h.get("mechanism", "")),
+        ),
+        reverse=True,
+    )
+    return result
+
+
+def _verify_hypotheses_immediate(
+    outcome: ReviewOutcome,
+    config: OrchestratorConfig,
+    result: OrchestratorResult,
+    *,
+    sarif_cache: "SarifCache | None" = None,
+    evidence_index: "dict[str, EvidenceRecord] | None" = None,
+    joern_server=None,
+    mechanical_findings: "dict[str, list[dict[str, Any]]] | None" = None,
+    synthesis_counter: AtomicSynthesisCounter | None = None,
+    gap: dict[str, Any] | None = None,
+    source: str | None = None,
+) -> ReviewOutcome:
+    """Inline hypothesis verification (IHV) — the fast path.
+
+    Extracts ALL hypotheses from the review result, routes each through
+    mechanical tools or synthesis, and aggregates the verdicts into a
+    final status.  Replaces the deferred sweep-validate + post-loop
+    secondary-dispatch pipeline for the common case.
+
+    Architecture: Extract → Route → Verify → Aggregate
+    """
+    if not config.immediate_verify:
+        return outcome
+
+    _ihv_hyp_attr = getattr(outcome, "hypotheses", None)
+    _ihv_rr = outcome.review_result or {}
+    logger.info(
+        "ihv: %s:%s — entering: status=%s hypothesis=%r "
+        "hypotheses_attr=%d review_result_keys=%d",
+        outcome.file, outcome.function, outcome.status,
+        (outcome.hypothesis or "")[:40],
+        len(_ihv_hyp_attr) if _ihv_hyp_attr else 0,
+        len(_ihv_rr),
+    )
+    hypotheses = _extract_all_hypotheses(outcome)
+    if not hypotheses:
+        logger.info(
+            "ihv: %s:%s — no hypotheses extracted "
+            "(hypothesis=%r, hypotheses_attr_type=%r, review_result_keys=%r)",
+            outcome.file, outcome.function,
+            (outcome.hypothesis or "")[:60],
+            type(_ihv_hyp_attr).__name__,
+            list(_ihv_rr.keys())[:10],
+        )
+        return outcome
+
+    file_path = outcome.file
+    function_name = outcome.function
+    cwe = hypotheses[0].get("cwe", "")
+    language = _inventory_language_hint(config, file_path)
+
+    confirmed_tools: list[str] = []
+    confirmed_hypotheses: list[dict[str, Any]] = []
+    refuted_count = 0
+
+    for hyp in hypotheses:
+        mechanism = hyp["mechanism"]
+        hyp_cwe = hyp.get("cwe", cwe) or cwe
+
+        # Step 1a: prep-phase mechanical correlation (free, instant)
+        mech_tool = _correlated_mech_detector_tool(
+            outcome, mechanism, hyp_cwe, mechanical_findings,
+        )
+        if mech_tool:
+            confirmed_tools.append(mech_tool)
+            confirmed_hypotheses.append(hyp)
+            logger.info(
+                "ihv: %s:%s — prep-phase correlation %s for '%s'",
+                file_path, function_name, mech_tool, mechanism[:60],
+            )
+            continue
+
+        # Step 1b: gather rule library candidates
+        library_candidates = _gather_library_candidates(hyp_cwe)
+
+        # Step 2: route via LLM (cached on exact inputs)
+        llm_client = _get_llm_client(config)
+        if llm_client is not None:
+            from .cwe_dispatch import route_hypothesis_to_checkers
+
+            routing = route_hypothesis_to_checkers(
+                hyp_cwe, mechanism, llm_client,
+                library_candidates=library_candidates,
+            )
+        else:
+            routing = None
+
+        # Step 3: verify — run tool chain or synthesis
+        if routing is not None and not routing.dominated:
+            # Not dominated → synthesis needed.
+            # Cap exhaustion = untested (not refuted) — don't increment.
+            if synthesis_counter is not None and synthesis_counter.try_reserve():
+                _try_ihv_synthesis(
+                    outcome, config, result, hyp, hyp_cwe,
+                    source, confirmed_tools, confirmed_hypotheses,
+                )
+            continue
+
+        # Dominated → run standing tool chain
+        chain = _hypothesis_to_tool_chain(
+            mechanism, file_path, hyp_cwe, language,
+            llm_client=llm_client,
+        )
+        if not chain:
+            # No tools available — try synthesis as fallback.
+            # Cap exhaustion = untested (not refuted) — don't increment.
+            if synthesis_counter is not None and synthesis_counter.try_reserve():
+                _try_ihv_synthesis(
+                    outcome, config, result, hyp, hyp_cwe,
+                    source, confirmed_tools, confirmed_hypotheses,
+                )
+            continue
+
+        # Strip Joern from the immediate chain (design: Joern exclusion).
+        # Joern-only = untested by fast tools (not refuted).
+        chain = [
+            entry for entry in chain
+            if not (isinstance(entry, dict) and entry.get("type") == "joern")
+        ]
+        if not chain:
+            continue
+
+        tools_confirmed = _run_tool_chain(
+            chain,
+            config=config,
+            file_path=file_path,
+            function_name=function_name,
+            source=source,
+            hypothesis=mechanism,
+            line_start=outcome.line,
+            sarif_cache=sarif_cache,
+            tier_counters=result.tier_counters,
+            evidence_index=evidence_index,
+            cwe=hyp_cwe,
+        )
+
+        if tools_confirmed:
+            confirmed_tools.extend(tools_confirmed)
+            confirmed_hypotheses.append(hyp)
+            logger.info(
+                "ihv: %s:%s — tool confirmed '%s' via %s",
+                file_path, function_name,
+                mechanism[:60], tools_confirmed,
+            )
+        else:
+            refuted_count += 1
+
+    # Step 4: aggregate (context gates run inside)
+    return _aggregate_ihv_verdicts(
+        outcome, result, hypotheses,
+        confirmed_tools, confirmed_hypotheses, refuted_count,
+        config,
+        joern_server=joern_server,
+    )
+
+
+def _gather_library_candidates(cwe: str) -> list:
+    """Gather replayable library rules for all engines."""
+    try:
+        from packages.checker_synthesis.library import RuleLibrary
+
+        lib = RuleLibrary()
+        candidates = []
+        for engine in ("semgrep", "coccinelle"):
+            candidates.extend(lib.find_replayable(cwe, engine))
+        return candidates
+    except Exception:
+        logger.debug("ihv: library lookup failed", exc_info=True)
+        return []
+
+
+def _get_llm_client(config: OrchestratorConfig):
+    """Return the LLM client from config, or None."""
+    return getattr(config, "llm_client", None)
+
+
+def _try_ihv_synthesis(
+    outcome: ReviewOutcome,
+    config: OrchestratorConfig,
+    result: OrchestratorResult,
+    hyp: dict[str, Any],
+    cwe: str,
+    source: str | None,
+    confirmed_tools: list[str],
+    confirmed_hypotheses: list[dict[str, Any]],
+) -> None:
+    """Attempt on-demand synthesis for an IHV hypothesis."""
+    try:
+        from .checker_synthesis import synthesize_verification_rule
+
+        synth = synthesize_verification_rule(
+            outcome, config, cwe=cwe,
+            source_snippet=source,
+            synthesis_count=result.ondemand_synthesized,
+        )
+        if synth is not None and synth.confirmed and synth.stamp:
+            with result._lock:
+                result.ondemand_synthesized += 1
+            if synth.cost_usd:
+                result.cost_tracker.record_call(
+                    "checker_synthesis_ihv", cost_usd=synth.cost_usd,
+                )
+                with result._lock:
+                    result.total_cost_usd += synth.cost_usd
+            confirmed_tools.append(synth.stamp)
+            confirmed_hypotheses.append(hyp)
+            logger.info(
+                "ihv: %s:%s — synthesis confirmed '%s' via %s",
+                outcome.file, outcome.function,
+                hyp.get("mechanism", "")[:60], synth.stamp,
+            )
+        elif synth is not None and synth.cost_usd:
+            result.cost_tracker.record_call(
+                "checker_synthesis_ihv", cost_usd=synth.cost_usd,
+            )
+            with result._lock:
+                result.total_cost_usd += synth.cost_usd
+    except Exception:
+        logger.debug(
+            "ihv: synthesis failed for %s:%s",
+            outcome.file, outcome.function, exc_info=True,
+        )
+
+
+def _aggregate_ihv_verdicts(
+    outcome: ReviewOutcome,
+    result: OrchestratorResult,
+    hypotheses: list[dict[str, Any]],
+    confirmed_tools: list[str],
+    confirmed_hypotheses: list[dict[str, Any]],
+    refuted_count: int,
+    config: OrchestratorConfig,
+    *,
+    joern_server=None,
+) -> ReviewOutcome:
+    """Aggregate IHV per-hypothesis verdicts into a final status.
+
+    Context validation gates run between tool confirmation and promotion:
+    1. Caller attribution — hypothesis describes a caller's bug
+    2. Guarded-sink veto — Joern says the sink is sanitised
+    3. Refuting counter — LLM identified an architectural blocker
+
+    Gates block PROMOTION, not verification — tool evidence is preserved
+    for the slow path even when a gate blocks.
+    """
+    if outcome.review_result is None:
+        outcome.review_result = {}
+
+    if confirmed_tools:
+        best_tool = confirmed_tools[0]
+        best_hyp = confirmed_hypotheses[0]
+
+        # Context validation gates — block promotion, not verification
+        gate_block = _ihv_context_gate(
+            outcome, config, joern_server=joern_server,
+        )
+        if gate_block:
+            # NOT stamped immediate_verified — the slow path should see
+            # these and can use the tool evidence we collected.
+            outcome.review_result["ihv_tools"] = confirmed_tools
+            outcome.review_result["ihv_gate_blocked"] = gate_block
+            outcome.review_result["ihv_hypotheses_confirmed"] = len(
+                confirmed_hypotheses)
+            outcome.review_result["ihv_hypotheses_total"] = len(hypotheses)
+            logger.info(
+                "ihv: %s:%s — tool confirmed but gate blocked: %s "
+                "(evidence preserved for slow path)",
+                outcome.file, outcome.function, gate_block,
+            )
+            return outcome
+
+        # No gate blocks → promote to finding
+        outcome.status = "finding"
+        outcome.evidence_tool = best_tool
+        outcome.hypothesis = best_hyp.get("mechanism", outcome.hypothesis)
+        outcome.review_result["immediate_verified"] = True
+        outcome.review_result["ihv_tools"] = confirmed_tools
+        outcome.review_result["ihv_hypotheses_confirmed"] = len(
+            confirmed_hypotheses)
+        outcome.review_result["ihv_hypotheses_total"] = len(hypotheses)
+        with result._lock:
+            result.immediate_verified += 1
+        logger.info(
+            "ihv: %s:%s → finding (tool=%s, %d/%d confirmed)",
+            outcome.file, outcome.function, best_tool,
+            len(confirmed_hypotheses), len(hypotheses),
+        )
+        return outcome
+
+    if refuted_count == len(hypotheses) and hypotheses:
+        outcome.status = "clean"
+        outcome.review_result["immediate_verified"] = True
+        outcome.review_result["ihv_all_refuted"] = True
+        outcome.review_result["ihv_hypotheses_total"] = len(hypotheses)
+        logger.info(
+            "ihv: %s:%s → clean (all %d hypotheses refuted)",
+            outcome.file, outcome.function, len(hypotheses),
+        )
+        return outcome
+
+    # Otherwise → suspicious (some untested, none confirmed)
+    if outcome.status not in ("finding", "suspicious"):
+        outcome.status = "suspicious"
+    outcome.review_result["immediate_verified"] = True
+    outcome.review_result["ihv_hypotheses_total"] = len(hypotheses)
+    outcome.review_result["ihv_refuted"] = refuted_count
+    return outcome
+
+
+def _ihv_context_gate(
+    outcome: ReviewOutcome,
+    config: OrchestratorConfig,
+    *,
+    joern_server=None,
+) -> str | None:
+    """Run the three IHV context validation gates.
+
+    Returns a block reason string, or None if promotion is clear.
+    """
+    # Gate 1: caller attribution — apply it first (stamps the outcome)
+    callers = (outcome.review_result or {}).get("callers") or []
+    if isinstance(callers, list) and callers:
+        _apply_caller_attribution(outcome, callers)
+    if getattr(outcome, "caller_attributed", False):
+        return f"caller-attributed:{outcome.attributed_caller}"
+
+    # Gate 2: guarded-sink veto
+    if joern_server is not None:
+        block = _guard_blocks_promotion(
+            outcome.function, joern_server,
+            config=config,
+        )
+        if block:
+            return f"guarded-sink:{block}"
+
+    # Gate 3: refuting counter
+    if _has_refuting_counter(outcome):
+        return "refuting-counter"
+
+    return None
 
 
 def _resolve_binary_path(

@@ -212,6 +212,10 @@ class AuditPipelineOpts:
     # On-demand Mode-2 checker synthesis for chain-less suspicious
     # hypotheses (--no-on-demand-synthesis to disable). Capped per run.
     on_demand_synthesis: bool = True
+    # Inline hypothesis verification (--no-immediate-verify to disable):
+    # verify hypotheses during review_one_function instead of deferring
+    # to post-loop serial passes.
+    immediate_verify: bool = True
     # Determine-value compile probes (--probe-determine-value):
     # bisection over static assertions for claim-less constant study
     # questions. Default off (up to ~66 sandboxed compiles/constant).
@@ -471,6 +475,7 @@ def _build_orchestrator_config(
         caller_contract_demotion=opts.caller_contract_demotion,
         schedule=opts.schedule,
         on_demand_synthesis=opts.on_demand_synthesis,
+        immediate_verify=opts.immediate_verify,
         probe_determine_value=opts.probe_determine_value,
         **({"deepen_reserve_fraction": opts.deepen_reserve_fraction}  # type: ignore[arg-type]
            if opts.deepen_reserve_fraction is not None else {}),

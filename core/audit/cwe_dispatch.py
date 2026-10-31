@@ -12,7 +12,9 @@ Consumed by:
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -1805,6 +1807,26 @@ def tool_scope_for_cwe(cwe: str) -> dict[str, str] | None:
     return _TOOL_SCOPE.get(normalized)
 
 
+class RoutingResult:
+    """Result of hypothesis-to-checker routing."""
+
+    __slots__ = ("dominated", "selected_rule", "reasoning")
+
+    def __init__(
+        self,
+        dominated: bool,
+        selected_rule: str,
+        reasoning: str,
+    ) -> None:
+        self.dominated = dominated
+        self.selected_rule = selected_rule
+        self.reasoning = reasoning
+
+    def __bool__(self) -> bool:
+        return self.dominated
+
+
+
 _ROUTE_SCHEMA: dict = {
     "type": "object",
     "properties": {
@@ -1814,6 +1836,13 @@ _ROUTE_SCHEMA: dict = {
                 "true when at least one existing checker's scope fully "
                 "covers the hypothesis — the standing tools can "
                 "adjudicate it."
+            ),
+        },
+        "selected_rule": {
+            "type": "string",
+            "description": (
+                "If a library rule is the best match, its rule_id.  "
+                "Empty string if no library rule matches."
             ),
         },
         "reasoning": {
@@ -1827,37 +1856,93 @@ _ROUTE_SCHEMA: dict = {
     "additionalProperties": False,
 }
 
+_routing_cache: dict[str, RoutingResult] = {}
+_routing_cache_lock = threading.Lock()
+_ROUTING_CACHE_CAP = 256
+
+
+def _clear_routing_cache() -> None:
+    with _routing_cache_lock:
+        _routing_cache.clear()
+
+
+def _routing_cache_key(
+    cwe: str, hypothesis: str, candidate_ids: frozenset[str],
+) -> str:
+    text = f"{cwe}|{hypothesis}|{','.join(sorted(candidate_ids))}"
+    return hashlib.sha256(text.encode()).hexdigest()[:32]
+
+
 
 def route_hypothesis_to_checkers(
     cwe: str,
     hypothesis: str,
     llm_client,
-) -> bool:
+    *,
+    library_candidates: list | None = None,
+) -> RoutingResult:
     """Ask the LLM whether the standing checkers cover *hypothesis*.
 
-    Returns True when the LLM judges the existing tools dominate the
-    hypothesis (use the standing chain).  Returns False when none of
-    them cover the sub-shape (drop the chain → route to synthesis).
+    Returns a :class:`RoutingResult` with ``dominated=True`` when the
+    LLM judges existing tools cover the hypothesis (use the standing
+    chain), or ``dominated=False`` (route to synthesis).
 
-    Falls back to True (keep the standing chain) on any error — the
+    Falls back to ``dominated=True`` on any error — the
     chain-exhaustion fallback in the sweep catches missed routing.
     """
-    scope = tool_scope_for_cwe(cwe)
-    if not scope:
-        return True  # no scope metadata → keep existing behaviour
-
-    catalogue = "\n".join(
-        f"- **{name}**: {desc}" for name, desc in scope.items()
+    candidate_ids = frozenset(
+        c.rule_id for c in (library_candidates or [])
     )
+    cache_key = _routing_cache_key(cwe, hypothesis, candidate_ids)
+    with _routing_cache_lock:
+        cached = _routing_cache.get(cache_key)
+    if cached is not None:
+        logger.debug(
+            "route_hypothesis: cache hit %s (%d candidates)",
+            cwe, len(candidate_ids),
+        )
+        return cached
+
+    scope = tool_scope_for_cwe(cwe)
+    if not scope and not library_candidates:
+        result = RoutingResult(True, "", "no scope metadata")
+        with _routing_cache_lock:
+            if len(_routing_cache) < _ROUTING_CACHE_CAP:
+                _routing_cache[cache_key] = result
+        return result
+
+    sections: list[str] = []
+    if scope:
+        catalogue = "\n".join(
+            f"- **{name}**: {desc}" for name, desc in scope.items()
+        )
+        sections.append(
+            f"Standing checkers for {cwe}:\n\n{catalogue}"
+        )
+    if library_candidates:
+        from core.security.log_sanitisation import escape_nonprintable
+
+        lib_lines = "\n".join(
+            f"- **{c.rule_id}** ({c.engine}): "
+            f"{escape_nonprintable(c.rationale or '')}"
+            for c in library_candidates
+        )
+        sections.append(
+            f"Library rules (previously synthesised, validated):"
+            f"\n\n{lib_lines}"
+        )
+
+    checkers_block = "\n\n".join(sections)
     prompt = (
         f"A code auditor hypothesised the following vulnerability:\n\n"
         f"> {hypothesis}\n\n"
-        f"The CWE class is {cwe}.  The following existing checkers are "
-        f"available for this class:\n\n{catalogue}\n\n"
-        f"Does at least one existing checker's scope fully cover the "
+        f"The CWE class is {cwe}.  The following checkers are "
+        f"available:\n\n{checkers_block}\n\n"
+        f"Does at least one checker's scope fully cover the "
         f"sub-shape described in the hypothesis?  A checker covers the "
         f"hypothesis when it models the same mechanism — not merely the "
-        f"same CWE class.  Answer with a JSON object."
+        f"same CWE class.  If a library rule is the best match, name it "
+        f"in selected_rule.  Answer with a JSON object."
     )
     try:
         from core.llm.coerce import structured_result
@@ -1873,19 +1958,24 @@ def route_hypothesis_to_checkers(
             ),
             task_type="classify",
         )
-        result = structured_result(response)
-        if result and isinstance(result, dict):
-            dominated = result.get("dominated")
+        raw = structured_result(response)
+        if raw and isinstance(raw, dict):
+            dominated = raw.get("dominated")
             if isinstance(dominated, bool):
-                reason = result.get("reasoning", "")
+                reason = raw.get("reasoning", "")
+                selected = raw.get("selected_rule", "")
                 logger.info(
                     "route_hypothesis: %s dominated=%s — %s",
                     cwe, dominated, reason,
                 )
-                return dominated
+                result = RoutingResult(dominated, selected, reason)
+                with _routing_cache_lock:
+                    if len(_routing_cache) < _ROUTING_CACHE_CAP:
+                        _routing_cache[cache_key] = result
+                return result
     except Exception:
         logger.debug(
             "route_hypothesis_to_checkers failed — keeping standing chain",
             exc_info=True,
         )
-    return True
+    return RoutingResult(True, "", "fallback")

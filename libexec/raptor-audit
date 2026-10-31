@@ -2244,6 +2244,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         caller_contract_demotion=not args.no_caller_contract_demotion,
         schedule=args.schedule,
         on_demand_synthesis=not args.no_on_demand_synthesis,
+        immediate_verify=not args.no_immediate_verify,
         vendored_triage=not args.no_vendored_triage,
         probe_determine_value=args.probe_determine_value,
         study_libraries=_parse_study_libs(args.study_lib),
@@ -3595,6 +3596,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
             run_cfg.get("caller_contract_demotion", True)),
         schedule=run_cfg.get("schedule") or "cost",
         on_demand_synthesis=bool(run_cfg.get("on_demand_synthesis", True)),
+        immediate_verify=bool(run_cfg.get("immediate_verify", True)),
         vendored_triage=bool(run_cfg.get("vendored_triage", True)),
         probe_determine_value=bool(run_cfg.get("probe_determine_value")),
         study_libraries=tuple(
@@ -3890,6 +3892,7 @@ def _run_config_from_args(
         "caller_contract_demotion": not args.no_caller_contract_demotion,
         "schedule": args.schedule,
         "on_demand_synthesis": not args.no_on_demand_synthesis,
+        "immediate_verify": not args.no_immediate_verify,
         "vendored_triage": not args.no_vendored_triage,
         "probe_determine_value": args.probe_determine_value,
         "study_libraries": _parse_study_libs(getattr(args, "study_lib", None)),
@@ -4780,6 +4783,10 @@ def main() -> int:
                             "suspicious hypotheses whose CWE has no "
                             "tool-chain dispatch entry (synthesis is "
                             "LLM-cost bearing; capped per run)")
+    p_run.add_argument("--no-immediate-verify", action="store_true",
+                       help="Disable inline hypothesis verification (IHV) "
+                            "and use the legacy post-loop sweep pipeline "
+                            "instead (for corpus A/B comparison)")
     p_run.add_argument("--no-vendored-triage", action="store_true",
                        help="Disable the vendored/generated-code triage "
                             "tier for this run — vendored and generated "

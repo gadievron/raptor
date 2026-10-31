@@ -3310,6 +3310,7 @@ class TestRefutationGateWirePoint:
         config = OrchestratorConfig(
             target_path=target, out_dir=out, resume=False,
             batch_sloc_threshold=0,
+            immediate_verify=False,
         )
         result = run_orchestrator(config, review_fn)
         # The refutation gate should demote to clean
@@ -3440,6 +3441,7 @@ class TestRefutationGateWirePoint:
         config = OrchestratorConfig(
             target_path=target, out_dir=out, resume=False,
             batch_sloc_threshold=0,
+            immediate_verify=False,
         )
         result = run_orchestrator(config, review_fn)
         outcomes = [o for o in result.outcomes if o.function == "cache_update"]

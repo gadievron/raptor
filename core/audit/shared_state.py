@@ -153,6 +153,10 @@ class SharedState:
     # Mutable during loop
     # ------------------------------------------------------------------
 
+    # Thread-safe synthesis cap shared between IHV (inline) and
+    # post-loop synthesis; None until immediate_verify is on.
+    synthesis_counter: Any = None
+
     # Callee taint summaries; new entries are added after each function
     # review so that callers later in the topological order can use them.
     taint_summary_results: dict[str, Any] = field(default_factory=dict)

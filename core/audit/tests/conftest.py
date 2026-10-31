@@ -176,3 +176,14 @@ def _hermetic_sigterm_disposition():
             signal.signal(signal.SIGTERM, prev)
     except (TypeError, ValueError, OSError):
         pass
+
+
+@pytest.fixture(autouse=True)
+def _clear_routing_cache():
+    """Reset the module-level LLM routing cache between tests."""
+    yield
+    try:
+        from core.audit.cwe_dispatch import _clear_routing_cache
+        _clear_routing_cache()
+    except ImportError:
+        pass

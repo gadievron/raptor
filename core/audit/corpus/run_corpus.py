@@ -899,6 +899,7 @@ def _run_audit(
     prefilter: bool = True,
     profile: str = "deployed",
     open_discovery: bool = False,
+    immediate_verify: bool = True,
     checkpoint: Path | None = None,
     checkpoint_stamp: dict[str, Any] | None = None,
     heartbeat: Callable[[], None] | None = None,
@@ -1091,6 +1092,7 @@ def _run_audit(
                 mode=mode, max_workers=max_workers, triage=triage,
                 prefilter=prefilter, profile=profile,
                 open_discovery=open_discovery,
+                immediate_verify=immediate_verify,
             )
             if audit_dir:
                 run_dirs.append(audit_dir)
@@ -1417,6 +1419,7 @@ def _run_audit_on_target(
     prefilter: bool = True,
     profile: str = "deployed",
     open_discovery: bool = False,
+    immediate_verify: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any], Path | None]:
     """Run /audit orchestrator on a target (in-process).
 
@@ -1540,6 +1543,7 @@ def _run_audit_on_target(
             max_workers=max_workers,
             validate=False,
             open_discovery=open_discovery,
+            immediate_verify=immediate_verify,
             # Corpus fixtures are operator-curated pinned trees — the
             # operator running the corpus IS asserting repo trust, and
             # trust-gated witnesses (goconc) must behave here exactly
@@ -2728,6 +2732,7 @@ def _run_ensemble_audit(
     prefilter: bool = True,
     profile: str = "deployed",
     open_discovery: bool = False,
+    immediate_verify: bool = True,
     heartbeat: Callable[[], None] | None = None,
     checkpoint_extra: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], list[Path]]:
@@ -2807,6 +2812,7 @@ def _run_ensemble_audit(
                     prefilter=prefilter,
                     profile=profile,
                     open_discovery=open_discovery,
+                    immediate_verify=immediate_verify,
                     checkpoint=sec_groups_ckpt,
                     checkpoint_stamp=checkpoint_extra,
                     heartbeat=heartbeat,
@@ -2870,6 +2876,7 @@ def _run_ensemble_audit(
                         prefilter=prefilter,
                         profile=profile,
                         open_discovery=open_discovery,
+                        immediate_verify=immediate_verify,
                         checkpoint=bf_groups_ckpt,
                         checkpoint_stamp=checkpoint_extra,
                         heartbeat=heartbeat,
@@ -3617,6 +3624,11 @@ def main(argv: list[str] | None = None) -> int:
              "cross-scope weakness records to the journal. Uses up to "
              "20%% of the group budget",
     )
+    parser.add_argument(
+        "--no-immediate-verify", action="store_true",
+        help="Disable inline hypothesis verification (IHV) — use the "
+             "legacy post-loop sweep-validate path instead",
+    )
     args = parser.parse_args(argv)
 
     # Pin RAPTOR_DIR to THIS tree for the runner's OWN process, not
@@ -3994,6 +4006,7 @@ def main(argv: list[str] | None = None) -> int:
                         prefilter=args.prefilter == "on",
                         profile=args.profile,
                         open_discovery=args.open_discovery,
+                        immediate_verify=not args.no_immediate_verify,
                         heartbeat=_heartbeat,
                         checkpoint_extra=ckpt_stamp_extra,
                     )
@@ -4007,6 +4020,7 @@ def main(argv: list[str] | None = None) -> int:
                         prefilter=args.prefilter == "on",
                         profile=args.profile,
                         open_discovery=args.open_discovery,
+                        immediate_verify=not args.no_immediate_verify,
                         checkpoint=(
                             args.out / f"checkpoint-{mode}-groups.json"
                             if args.out else None
@@ -4155,6 +4169,7 @@ def main(argv: list[str] | None = None) -> int:
         # or the mechanical prefilter.
         meta["triage"] = args.triage
         meta["prefilter"] = args.prefilter
+        meta["immediate_verify"] = not args.no_immediate_verify
     if spliced_ids:
         meta["spliced_from"] = str(args.splice)
         meta["new_count"] = len(spliced_ids)

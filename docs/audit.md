@@ -72,6 +72,7 @@ full flag table.
 | `--seed-rereview` | Schedule a fresh review for seeds resolving to already-covered checklist functions (default off: such seeds record as `no_matching_gap` misses) — see [Hypothesis seeds](#hypothesis-seeds) |
 | `--dynamic` / `--no-dynamic` | Enable/disable dynamic validation (Frida observation / target execution) for confirmed findings |
 | `--binary <path>` / `--binary-auto` / `--no-binary-oracle` | Binary-oracle reachability enrichment of the inventory |
+| `--no-immediate-verify` | Disable inline hypothesis verification (IHV) and use the legacy post-loop sweep pipeline instead (for corpus A/B comparison) |
 | `--no-open-discovery` | Disable open discovery (LLM-driven hypothesis generation beyond the checklist — see [Open Discovery](#open-discovery)) |
 | `--no-vendored-triage` | Disable the vendored/generated-code triage tier (corroborated generated files → skip tier, uncorroborated banners / vendored paths / generated-shape structure → glance tier; every decision leaves a `suppressions.jsonl` record and the run summary counts them) |
 | `--no-auto-siblings` | Binary targets only: skip the automatic sibling-consistency pass (default: on for binary targets; source targets never run it) — see [Hypothesis seeds](#hypothesis-seeds). Also accepted by `resume` for a single segment |
