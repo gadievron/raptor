@@ -633,9 +633,9 @@ Install with `uv sync --locked` and activate with `source .venv/bin/activate`.
 Useful installs:
 
 ```bash
-uv sync --locked                            # core runtime
-uv sync --locked --group dev                # tests + linting
-uv sync --locked --extra web                # /web scanner support
-uv sync --locked --extra "web smt llm sage" # optional stacks
-source .venv/bin/activate                   # use the installed environment
+uv sync --locked                                                  # core runtime
+uv sync --locked --group dev                                      # tests + linting
+uv sync --locked --extra web                                      # /web scanner support
+uv sync --locked --extra web --extra smt --extra llm --extra sage # optional stacks
+source .venv/bin/activate                                         # use the installed environment
 ```
