@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import heapq
 import json
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -125,21 +126,110 @@ def _duplicate_key(
     })
 
 
+
+@dataclass(eq=False)
+class _HeapEntry:
+    rank: tuple
+    duplicate_key: str | None
+    candidate: AnalysisCandidate
+
+    def __lt__(self, other: _HeapEntry) -> bool:
+        # heapq exposes the worst retained candidate at the root.
+        return self.rank > other.rank
+
+
+def _scan_file(
+    path: Path, cap: int, heap: list[_HeapEntry],
+    selected_groups: dict[str, _HeapEntry], seen_duplicates: set[str],
+    ordinal: int,
+) -> tuple[int, int]:
+    """Load one document; retain payloads only for its current winners."""
+    # Reuse the batch sorter's existing key; keep the policy in one place.
+    from core.orchestration.skill_dispatch import _signal_key
+
+    sarif = load_sarif(path)
+    if not sarif or not isinstance(sarif.get("runs"), list):
+        return 0, 0
+    candidate_count = duplicate_count = 0
+    for run in sarif["runs"]:
+        if not isinstance(run, dict) or not isinstance(run.get("results"), list):
+            continue
+        run_key = _content_key({k: v for k, v in run.items() if k != "results"})
+        rule_owners: dict[int, dict] = {}
+        context_keys: dict[tuple[str, int], str] = {}
+        resolved_rules: dict[str, dict] = {}
+        tool = run.get("tool")
+        if isinstance(tool, dict):
+            extensions = tool.get("extensions")
+            components = [tool.get("driver"), *(extensions if isinstance(extensions, list) else [])]
+            for component in components:
+                if isinstance(component, dict) and isinstance(component.get("rules"), list):
+                    rule_owners.update({id(rule): component for rule in component["rules"]
+                                        if isinstance(rule, dict)})
+        analysis_run = None
+        for result in run["results"]:
+            if not isinstance(result, dict):
+                continue
+            candidate_count += 1
+            reference_key = _content_key({
+                key: result[key] for key in ("ruleId", "ruleIndex", "rule") if key in result
+            })
+            if reference_key not in resolved_rules:
+                resolved_rules[reference_key] = get_result_rule(run, result)
+            rule = resolved_rules[reference_key]
+            duplicate_key = _duplicate_key(run, result, rule, rule_owners.get(id(rule)), context_keys)
+            if duplicate_key is not None:
+                if duplicate_key in seen_duplicates:
+                    duplicate_count += 1
+                else:
+                    seen_duplicates.add(duplicate_key)
+            if cap <= 0:
+                continue
+            signal = dict(result)
+            if signal.get("level") is None:
+                signal["level"] = rule_default_level(rule) or "warning"
+            # Matches stable content-sort followed by stable signal-sort.
+            # Ordinal preserves the old encounter order for exact ties.
+            rank = (_signal_key(signal), _content_key(result), run_key,
+                    str(path), ordinal + candidate_count)
+            previous = selected_groups.get(duplicate_key) if duplicate_key is not None else None
+            if previous is not None:
+                if rank >= previous.rank:
+                    continue
+                heap.remove(previous)
+                heapq.heapify(heap)
+            elif len(heap) >= cap and rank >= heap[0].rank:
+                continue
+            if analysis_run is None:
+                # The analyzer reads the selected result plus run metadata.
+                # Keeping run.results here would retain every sibling payload.
+                analysis_run = {key: value for key, value in run.items() if key != "results"}
+            entry = _HeapEntry(rank, duplicate_key, AnalysisCandidate(path, analysis_run, result))
+            if len(heap) < cap:
+                heapq.heappush(heap, entry)
+            else:
+                evicted = heapq.heapreplace(heap, entry)
+                if evicted.duplicate_key is not None:
+                    del selected_groups[evicted.duplicate_key]
+            if duplicate_key is not None:
+                selected_groups[duplicate_key] = entry
+    return candidate_count, duplicate_count
+
+
 def select_findings_for_analysis(
     sarif_files: Iterable[str | Path], cap: int,
 ) -> tuple[list[AnalysisCandidate], int, int]:
-    """Apply one global cap using shared signals and stable SARIF tie-breaks.
+    """Select the exact global top unique reports without retaining all payloads.
 
-    Scoring uses copies, including inherited rule severity when needed.
-    The analyzer receives the original result and its original run. No
-    synthetic exploitability signals are added. Return selected reports,
-    raw candidate count, and the number of duplicate reports removed.
+    Keep at most cap candidate payloads across files, one document while it is
+    scanned, and compact identities for exact duplicate counts. Run metadata
+    is preserved; each returned run.results contains only its selected reports.
     """
-    from core.orchestration.skill_dispatch import rank_findings_by_signal
-
-    records = []
+    heap: list[_HeapEntry] = []
+    selected_groups: dict[str, _HeapEntry] = {}
     seen_paths: set[Path] = set()
-    candidate_count = 0
+    seen_duplicates: set[str] = set()
+    candidate_count = duplicate_count = 0
     for sarif_file in sarif_files:
         path = Path(sarif_file)
         try:
@@ -150,60 +240,14 @@ def select_findings_for_analysis(
         if path in seen_paths:
             continue
         seen_paths.add(path)
-        sarif = load_sarif(path)
-        if not sarif:
-            continue
-        run_contexts: dict[int, str] = {}
-        rule_owners: dict[int, dict] = {}
-        context_keys: dict[tuple[str, int], str] = {}
-        resolved_rules: dict[tuple[int, str], dict] = {}
-        for run, result in all_run_results(sarif):
-            candidate_count += 1
-            if id(run) not in run_contexts:
-                run_contexts[id(run)] = _content_key(
-                    {k: v for k, v in run.items() if k != "results"},
-                )
-                tool = run.get("tool")
-                if isinstance(tool, dict):
-                    extensions = tool.get("extensions")
-                    components = [tool.get("driver"), *(extensions if isinstance(extensions, list) else [])]
-                    for component in components:
-                        if isinstance(component, dict) and isinstance(component.get("rules"), list):
-                            rule_owners.update({id(rule): component for rule in component["rules"]
-                                                if isinstance(rule, dict)})
-            run_key = run_contexts[id(run)]
-            signal = dict(result)
-            reference_key = (id(run), _content_key({
-                key: result[key] for key in ("ruleId", "ruleIndex", "rule") if key in result
-            }))
-            if reference_key not in resolved_rules:
-                resolved_rules[reference_key] = get_result_rule(run, result)
-            rule = resolved_rules[reference_key]
-            if signal.get("level") is None:
-                signal["level"] = rule_default_level(rule) or "warning"
-            candidate = AnalysisCandidate(path, run, result)
-            records.append(((_content_key(result), run_key, str(path)), signal, candidate,
-                            _duplicate_key(run, result, rule, rule_owners.get(id(rule)), context_keys)))
-
-    # Stable sort before the shared ranker makes ties independent of file,
-    # run, and result enumeration. Run metadata disambiguates equal results
-    # without letting other results in that run influence the tie-break.
-    records.sort(key=lambda record: record[0])
-    by_signal = {id(signal): (candidate, duplicate_key)
-                 for _key, signal, candidate, duplicate_key in records}
-    ranked = rank_findings_by_signal([signal for _key, signal, _candidate, _duplicate_key_value in records])
-    selected = []
-    seen_duplicates: set[str] = set()
-    duplicate_count = 0
-    for signal in ranked:
-        candidate, duplicate_key = by_signal[id(signal)]
-        if duplicate_key is not None:
-            if duplicate_key in seen_duplicates:
-                duplicate_count += 1
-                continue
-            seen_duplicates.add(duplicate_key)
-        if len(selected) < max(0, cap):
-            selected.append(candidate)
+        count, duplicates = _scan_file(
+            path, cap, heap, selected_groups, seen_duplicates, candidate_count,
+        )
+        candidate_count += count
+        duplicate_count += duplicates
+    selected = [entry.candidate for entry in sorted(heap, key=lambda entry: entry.rank)]
+    for candidate in selected:
+        candidate.run.setdefault("results", []).append(candidate.result)
     logger.info(
         "CodeQL analysis selection: %d of %d reports selected globally; "
         "%d duplicates removed; %d unique candidates deferred",

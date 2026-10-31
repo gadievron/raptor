@@ -484,3 +484,146 @@ def test_referenced_run_context_cannot_be_ignored(tmp_path, context):
     path = _write(tmp_path, "contexts.sarif", first, second)
     selected, count, duplicates = select_findings_for_analysis([path], 5)
     assert (len(selected), count, duplicates) == (2, 2, 0)
+
+
+def _batch_selection_reference(paths, cap):
+    """Full-materialization oracle for the original selection algorithm."""
+    from core.orchestration.skill_dispatch import rank_findings_by_signal
+    from core.sarif.parser import get_result_rule, load_sarif, rule_default_level
+    from packages.codeql.finding_selection import _content_key, _duplicate_key, all_run_results
+
+    records = []
+    for path in sorted({path.resolve() for path in paths}):
+        document = load_sarif(path)
+        if not document:
+            continue
+        contexts = {}
+        for run, result in all_run_results(document):
+            rule = get_result_rule(run, result)
+            tool = run.get("tool", {})
+            components = [tool.get("driver", {}), *tool.get("extensions", [])]
+            owner = next((c for c in components if isinstance(c, dict)
+                          and any(r is rule for r in c.get("rules", []))), None)
+            signal = dict(result)
+            if signal.get("level") is None:
+                signal["level"] = rule_default_level(rule) or "warning"
+            records.append((
+                (_content_key(result), _content_key({k: v for k, v in run.items() if k != "results"}), str(path)),
+                signal, (path, run, result), _duplicate_key(run, result, rule, owner, contexts),
+            ))
+    records.sort(key=lambda row: row[0])
+    by_signal = {id(row[1]): row for row in records}
+    seen = set()
+    unique = []
+    for signal in rank_findings_by_signal([row[1] for row in records]):
+        row = by_signal[id(signal)]
+        key = row[3]
+        if key is not None:
+            if key in seen:
+                continue
+            seen.add(key)
+        unique.append(row[2])
+    return unique[:max(0, cap)], len(records), len(records) - len(unique)
+
+
+def _selection_signature(candidates):
+    return [(str(path), result, {key: value for key, value in run.items() if key != "results"})
+            for path, run, result in candidates]
+
+
+@pytest.mark.parametrize("seed", range(8))
+@pytest.mark.parametrize("cap", [0, 1, 3, 20, 100])
+def test_bounded_selection_matches_batch_oracle(tmp_path, seed, cap):
+    import random
+
+    randomizer = random.Random(seed)
+    pool = [_located_result(f"rule-{i}") for i in range(12)]
+    paths = []
+    for file_index in range(3):
+        runs = []
+        for _ in range(2):
+            results = [copy.deepcopy(randomizer.choice(pool)) for _ in range(16)]
+            for result in results:
+                result["level"] = randomizer.choice(["error", "warning", "note", None])
+                result["exploitability_score"] = randomizer.choice([0, 0.2, 1, "bad", 10**400])
+                result["is_exploitable"] = randomizer.choice([True, False, None])
+                result["tree_class"] = randomizer.choice(["test", "production", [], {}])
+                if randomizer.randrange(5) == 0:
+                    result["codeFlows"] = [{"message": {"text": str(randomizer.randrange(3))}}]
+            run = _run(*results, default=randomizer.choice(["error", "warning", "note"]))
+            # SARIF rule tables contain one descriptor per ID, even when
+            # many results reference it.
+            rules = run["tool"]["driver"]["rules"]
+            run["tool"]["driver"]["rules"] = list({r["id"]: r for r in rules}.values())
+            runs.append(run)
+        paths.append(_write(tmp_path, f"pass-{file_index}.sarif", *runs))
+    expected, count, duplicates = _batch_selection_reference(paths, cap)
+    randomizer.shuffle(paths)
+    actual, actual_count, actual_duplicates = select_findings_for_analysis(paths, cap)
+    assert (actual_count, actual_duplicates) == (count, duplicates)
+    assert _selection_signature([(c.sarif_file, c.run, c.result) for c in actual]) == _selection_signature(expected)
+    retained_runs = {id(c.run): c.run for c in actual}
+    assert sum(len(run["results"]) for run in retained_runs.values()) == len(actual)
+
+
+def test_evicted_duplicate_group_can_return_with_stronger_report(tmp_path):
+    paths = [
+        _write(tmp_path, "weak.sarif", _run(_located_result(level="note"))),
+        _write(tmp_path, "other.sarif", _run(_located_result("other", "warning"))),
+        _write(tmp_path, "strong.sarif", _run(_located_result(level="error"))),
+    ]
+    expected, count, duplicates = _batch_selection_reference(paths, 1)
+    actual, actual_count, actual_duplicates = select_findings_for_analysis(paths, 1)
+    assert (actual_count, actual_duplicates) == (count, duplicates) == (3, 1)
+    assert actual[0].sarif_file == paths[-1]
+    assert _selection_signature([(c.sarif_file, c.run, c.result) for c in actual]) == _selection_signature(expected)
+
+
+def test_retained_run_drops_sibling_payloads_but_parses_identically(tmp_path):
+    results = [_located_result("strong", "error"), *[
+        _located_result(f"weak-{i}", "note") for i in range(100)
+    ]]
+    run = _run(*results, default="warning")
+    path = _write(tmp_path, "siblings.sarif", run)
+    before = path.read_bytes()
+    selected, count, duplicates = select_findings_for_analysis([path], 1)
+    assert (count, duplicates) == (101, 0)
+    assert selected[0].run["results"] == [results[0]]
+    analyzer = AutonomousCodeQLAnalyzer.__new__(AutonomousCodeQLAnalyzer)
+    assert analyzer.parse_sarif_finding(selected[0].result, selected[0].run) == analyzer.parse_sarif_finding(results[0], run)
+    assert path.read_bytes() == before
+
+
+def test_finished_documents_and_unselected_payloads_are_released(tmp_path, monkeypatch):
+    import gc
+    import weakref
+
+    import packages.codeql.finding_selection as selection
+
+    class TrackedDict(dict):
+        pass
+
+    paths = [_write(tmp_path, f"pass-{i}.sarif", _run(
+        _located_result(f"strong-{i}", "error"), _located_result(f"weak-{i}", "note"),
+    )) for i in range(3)]
+    original_loader = selection.load_sarif
+    previous = []
+
+    def load(path):
+        # These acyclic fixture objects need no scan of the worker's old
+        # generations; full collections scale with unrelated suite state.
+        gc.collect(0)
+        assert all(ref() is None for ref in previous)
+        document = original_loader(path)
+        run = TrackedDict(document["runs"][0])
+        skipped = TrackedDict(run["results"][-1])
+        run["results"][-1] = skipped
+        document["runs"][0] = run
+        previous[:] = [weakref.ref(run), weakref.ref(skipped)]
+        return document
+
+    monkeypatch.setattr(selection, "load_sarif", load)
+    selected, count, duplicates = selection.select_findings_for_analysis(paths, 1)
+    gc.collect(0)
+    assert all(ref() is None for ref in previous)
+    assert (len(selected), count, duplicates) == (1, 6, 0)

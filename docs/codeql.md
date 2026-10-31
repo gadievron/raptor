@@ -247,6 +247,14 @@ and `unique`. Here `candidates` counts reports from distinct readable SARIF
 paths, `unique = candidates - duplicates`, and `deferred = unique - selected`.
 Duplicate counts are computed even when the analysis limit is zero.
 
+Selection scans one SARIF document at a time and retains at most
+`--max-findings` candidate payloads, using the same ranking and duplicate
+identities. Analysis receives the selected result and all owning-run metadata;
+the in-memory run's `results` array contains only selected reports. Exact
+duplicate counting still requires one compact identity per distinct deduplicable
+report, and the loader still reads one complete document at a time. Large
+individual files and retained rule/source metadata therefore still use memory.
+
 ### Reachability Prefilter
 
 Before spending LLM tokens, the analyser consults a source-level
