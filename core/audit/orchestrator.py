@@ -27543,7 +27543,7 @@ def _promote_suspicious_one(
         try:
             from .cwe_dispatch import dark_verify_applicable
         except ImportError:
-            dark_verify_applicable = lambda _c: False  # noqa: E731
+            dark_verify_applicable = lambda cwe: False  # noqa: E731
         if dark_verify_applicable(cwe):
             logger.info(
                 "sweep: chain exhausted without confirmation for "
@@ -29697,7 +29697,7 @@ def _dispatch_secondary_hypotheses(
                 try:
                     from .cwe_dispatch import dark_verify_applicable
                 except ImportError:
-                    dark_verify_applicable = lambda _c: False  # noqa: E731
+                    dark_verify_applicable = lambda cwe: False  # noqa: E731
                 if dark_verify_applicable(cwe):
                     _synthesize_unmapped_suspicious(
                         result, config, i, outcome,
@@ -29742,7 +29742,7 @@ def _dispatch_secondary_hypotheses(
                 try:
                     from .cwe_dispatch import dark_verify_applicable as _dva
                 except ImportError:
-                    _dva = lambda _c: False  # noqa: E731
+                    _dva = lambda cwe: False  # noqa: E731
                 if _dva(cwe):
                     logger.info(
                         "secondary sweep: chain exhausted for %s:%s (%s) "

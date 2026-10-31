@@ -1226,6 +1226,11 @@
     "kind": "literal",
     "note": "English stopwords gating the identifier-shaped fallback in literal spot-checks; natural-language function words, not a learned name vocabulary (nothing here is a project API or sink name)"
   },
+  "core/concepts/study.py::_CROSS_SUBSYSTEM_RESPONSE_SCHEMA": {
+    "count": 10,
+    "kind": "literal",
+    "note": "JSON schema field names for the cross-subsystem LLM response (concepts + invariants with evidence, confidence, CWE fields); wire-format contract, not a learned name vocabulary"
+  },
   "core/concepts/study.py::_RESPONSE_SCHEMA": {
     "count": 10,
     "kind": "literal"
