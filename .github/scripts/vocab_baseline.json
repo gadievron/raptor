@@ -2155,6 +2155,11 @@
     "kind": "literal",
     "note": "env vars that make core.llm.detection report an available LLM - a security scrub list the tier-0 harness must strip from child environments, not a learned name vocabulary"
   },
+  "libexec/raptor-self-test::session_keys": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Closed host-session environment keys stripped from self-test children to isolate fixture runs from the launching Claude/Codex session; an environment isolation contract, not a learned function-name vocabulary."
+  },
   "libexec/raptor-study-prep::_ALLOC_NAMES": {
     "count": 31,
     "kind": "literal"
