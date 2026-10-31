@@ -575,6 +575,26 @@ def assemble_context(
                 file_path, function_name, exc_info=True,
             )
 
+    if out_dir:
+        try:
+            from core.concepts.audit_bridge import (
+                study_list_structural_context,
+            )
+            struct_block = study_list_structural_context(
+                out_dir, file_path, function_name,
+            )
+            if struct_block:
+                ctx["structural_context"] = wrap_untrusted(
+                    struct_block,
+                    kind="structural-context",
+                    origin="study-prep extraction",
+                )
+        except Exception:
+            logger.debug(
+                "structural context failed for %s:%s",
+                file_path, function_name, exc_info=True,
+            )
+
     _defend_assembled_context(ctx, file_path, function_name)
 
     return ctx
@@ -2320,6 +2340,10 @@ def format_context_for_prompt(
 
     if ctx.get("domain_model"):
         sections.append(PromptSection("domain_model", "\n" + ctx["domain_model"], 1))
+
+    if ctx.get("structural_context"):
+        sections.append(PromptSection(
+            "structural_context", "\n" + ctx["structural_context"], 1))
 
     if ctx.get("token_enforcement"):
         sections.append(PromptSection(

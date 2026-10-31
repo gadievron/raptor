@@ -2697,3 +2697,152 @@ def queue_reading_list_item(
         except OSError as exc:
             logger.debug("failed to save reading list: %s", exc)
             return False
+
+
+# ------------------------------------------------------------------
+# Gap 6: raw structural data from study-list.json
+# ------------------------------------------------------------------
+
+_study_list_cache: dict[str, dict[str, Any] | None] = {}
+_study_list_lock = threading.Lock()
+
+
+def _load_study_list(out_dir: Path) -> dict[str, Any] | None:
+    """Load study-list.json with thread-safe caching."""
+    sl = out_dir / "study-list.json"
+    if not sl.is_file():
+        return None
+    key = str(sl.resolve())
+    with _study_list_lock:
+        if key in _study_list_cache:
+            return _study_list_cache[key]
+    from core.json import load_json
+    data = load_json(sl, max_bytes=_MAX_MODEL_BYTES)
+    with _study_list_lock:
+        if len(_study_list_cache) >= 8:
+            _study_list_cache.pop(next(iter(_study_list_cache)))
+        _study_list_cache[key] = data
+    return data
+
+
+def study_list_structural_context(
+    out_dir: Path,
+    file_path: str,
+    function_name: str,
+    *,
+    max_callees: int = 15,
+    max_callers: int = 10,
+    max_types: int = 5,
+) -> str | None:
+    """Build a prompt block with raw structural data for a function.
+
+    Returns a formatted string with callees, callers, related type
+    definitions, and field types from study-list.json — structural
+    data that the LLM-synthesised domain model does not carry.
+    Returns None when no relevant data is available.
+    """
+    data = _load_study_list(out_dir)
+    if not data:
+        return None
+
+    items = data.get("items")
+    if not items:
+        return None
+
+    fn_item = None
+    fn_file_matched = False
+    struct_items: dict[str, dict] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        kind = item.get("kind", "")
+        name = item.get("name", "")
+        if kind == "struct" and name:
+            struct_items[name] = item
+        if kind == "function" and name == function_name and not fn_file_matched:
+            item_file = item.get("file", "")
+            if _paths_match(file_path, item_file):
+                fn_item = item
+                fn_file_matched = True
+            elif not item_file and fn_item is None:
+                fn_item = item
+
+    if fn_item is None:
+        return None
+
+    parts: list[str] = [
+        "## Structural context (from study-prep extraction)\n",
+    ]
+    has_content = False
+
+    callees = fn_item.get("callees") or []
+    if callees:
+        has_content = True
+        shown = callees[:max_callees]
+        parts.append(f"**Callees:** {', '.join(shown)}")
+        if len(callees) > max_callees:
+            parts.append(f" (+{len(callees) - max_callees} more)")
+        parts.append("\n")
+
+    callers = fn_item.get("callers") or []
+    if callers:
+        has_content = True
+        shown = callers[:max_callers]
+        parts.append(f"**Callers:** {', '.join(shown)}")
+        if len(callers) > max_callers:
+            parts.append(f" (+{len(callers) - max_callers} more)")
+        parts.append("\n")
+
+    alloc_frees = fn_item.get("alloc_frees") or []
+    if alloc_frees:
+        has_content = True
+        parts.append(f"**Alloc/free APIs:** {', '.join(alloc_frees)}\n")
+
+    lock_sites = fn_item.get("lock_sites") or []
+    if lock_sites:
+        has_content = True
+        parts.append(f"**Lock sites:** {', '.join(lock_sites)}\n")
+
+    flag_checks = fn_item.get("flag_checks") or []
+    if flag_checks:
+        has_content = True
+        parts.append(f"**Flag checks:** {', '.join(flag_checks)}\n")
+
+    state_transitions = fn_item.get("state_transitions") or []
+    if state_transitions:
+        has_content = True
+        parts.append(
+            f"**State transitions:** {', '.join(state_transitions)}\n",
+        )
+
+    # Inject related type definitions for types the function touches
+    referenced_types: list[str] = []
+    defn = fn_item.get("definition", "")
+    if defn:
+        referenced_types = re.findall(r"\bstruct\s+(\w+)\b", defn)
+    referenced_types.extend(callees)
+
+    shown_types = 0
+    for type_name in referenced_types:
+        if shown_types >= max_types:
+            break
+        si = struct_items.get(type_name)
+        if not si:
+            continue
+        si_defn = si.get("definition", "")
+        if not si_defn:
+            continue
+        has_content = True
+        parts.append(
+            f"\n**Type `{type_name}`** "
+            f"({si.get('file', '?')}):\n```c\n{si_defn[:600]}\n```\n",
+        )
+        si_fields = si.get("fields") or []
+        if si_fields:
+            parts.append(f"Fields: {', '.join(si_fields[:20])}\n")
+        shown_types += 1
+
+    if not has_content:
+        return None
+
+    return "".join(parts)

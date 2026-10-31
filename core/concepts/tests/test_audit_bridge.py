@@ -1,6 +1,7 @@
 """Tests for core.concepts.audit_bridge."""
 
 import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -2731,3 +2732,174 @@ class TestDomainSliceHash:
         })
         after = self._hash(tmp_path)
         assert before != after
+
+
+# ------------------------------------------------------------------
+# study_list_structural_context (gap 6)
+# ------------------------------------------------------------------
+
+class TestStudyListStructuralContext:
+    """Tests for raw structural data injection from study-list.json."""
+
+    def _write_study_list(
+        self, tmp_path: Path, items: list[dict],
+    ) -> None:
+        (tmp_path / "study-list.json").write_text(
+            json.dumps({"items": items, "target": "test"}),
+        )
+
+    def setup_method(self) -> None:
+        from core.concepts.audit_bridge import _study_list_cache
+        _study_list_cache.clear()
+
+    def test_returns_callees_and_callers(self, tmp_path: Path) -> None:
+        from core.concepts.audit_bridge import (
+            study_list_structural_context,
+        )
+        self._write_study_list(tmp_path, [{
+            "kind": "function", "name": "do_send",
+            "file": "net/send.c",
+            "callees": ["alloc_skb", "kfree_skb"],
+            "callers": ["tcp_sendmsg"],
+        }])
+        block = study_list_structural_context(
+            tmp_path, "net/send.c", "do_send",
+        )
+        assert block is not None
+        assert "alloc_skb" in block
+        assert "kfree_skb" in block
+        assert "tcp_sendmsg" in block
+
+    def test_returns_none_when_no_study_list(self, tmp_path: Path) -> None:
+        from core.concepts.audit_bridge import (
+            study_list_structural_context,
+        )
+        result = study_list_structural_context(
+            tmp_path, "x.c", "fn",
+        )
+        assert result is None
+
+    def test_returns_none_when_function_not_found(
+        self, tmp_path: Path,
+    ) -> None:
+        from core.concepts.audit_bridge import (
+            study_list_structural_context,
+        )
+        self._write_study_list(tmp_path, [{
+            "kind": "function", "name": "other_fn",
+            "file": "a.c", "callees": ["x"],
+        }])
+        result = study_list_structural_context(
+            tmp_path, "a.c", "missing_fn",
+        )
+        assert result is None
+
+    def test_includes_related_struct_definitions(
+        self, tmp_path: Path,
+    ) -> None:
+        from core.concepts.audit_bridge import (
+            study_list_structural_context,
+        )
+        self._write_study_list(tmp_path, [
+            {
+                "kind": "function", "name": "encrypt",
+                "file": "crypto/enc.c",
+                "definition": "void encrypt(struct scatterlist *sg) {}",
+                "callees": [],
+            },
+            {
+                "kind": "struct", "name": "scatterlist",
+                "file": "include/linux/scatterlist.h",
+                "definition": "struct scatterlist { void *page; };",
+                "fields": ["page", "offset", "length"],
+            },
+        ])
+        block = study_list_structural_context(
+            tmp_path, "crypto/enc.c", "encrypt",
+        )
+        assert block is not None
+        assert "scatterlist" in block
+        assert "void *page" in block
+        assert "page, offset, length" in block
+
+    def test_includes_alloc_frees_and_lock_sites(
+        self, tmp_path: Path,
+    ) -> None:
+        from core.concepts.audit_bridge import (
+            study_list_structural_context,
+        )
+        self._write_study_list(tmp_path, [{
+            "kind": "function", "name": "handle",
+            "file": "kern/handle.c",
+            "alloc_frees": ["kmalloc", "kfree"],
+            "lock_sites": ["spin_lock(&data->lock)"],
+            "flag_checks": ["if (flags & O_NONBLOCK)"],
+        }])
+        block = study_list_structural_context(
+            tmp_path, "kern/handle.c", "handle",
+        )
+        assert block is not None
+        assert "kmalloc" in block
+        assert "spin_lock" in block
+        assert "O_NONBLOCK" in block
+
+    def test_truncation_overflow_suffix(
+        self, tmp_path: Path,
+    ) -> None:
+        from core.concepts.audit_bridge import (
+            study_list_structural_context,
+        )
+        callees = [f"fn_{i}" for i in range(30)]
+        self._write_study_list(tmp_path, [{
+            "kind": "function", "name": "big_fn",
+            "file": "a.c",
+            "callees": callees,
+        }])
+        block = study_list_structural_context(
+            tmp_path, "a.c", "big_fn", max_callees=5,
+        )
+        assert block is not None
+        assert "fn_0" in block
+        assert "fn_4" in block
+        assert "fn_5" not in block
+        assert "(+25 more)" in block
+
+    def test_file_matched_entry_preferred_over_fileless(
+        self, tmp_path: Path,
+    ) -> None:
+        from core.concepts.audit_bridge import (
+            study_list_structural_context,
+        )
+        self._write_study_list(tmp_path, [
+            {
+                "kind": "function", "name": "dup_fn",
+                "file": "a.c",
+                "callees": ["correct_callee"],
+            },
+            {
+                "kind": "function", "name": "dup_fn",
+                "file": "",
+                "callees": ["wrong_callee"],
+            },
+        ])
+        block = study_list_structural_context(
+            tmp_path, "a.c", "dup_fn",
+        )
+        assert block is not None
+        assert "correct_callee" in block
+        assert "wrong_callee" not in block
+
+    def test_returns_none_when_function_has_no_structural_data(
+        self, tmp_path: Path,
+    ) -> None:
+        from core.concepts.audit_bridge import (
+            study_list_structural_context,
+        )
+        self._write_study_list(tmp_path, [{
+            "kind": "function", "name": "empty_fn",
+            "file": "a.c",
+        }])
+        result = study_list_structural_context(
+            tmp_path, "a.c", "empty_fn",
+        )
+        assert result is None

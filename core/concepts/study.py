@@ -2360,7 +2360,12 @@ def _parse_batch_response(
     Returns (concepts, invariants, contracts, bug_patterns, struct_annotations).
     """
     concepts = []
-    for c in raw.get("concepts", []) or []:
+    raw_concepts = raw.get("concepts", []) or []
+    if not isinstance(raw_concepts, list):
+        raw_concepts = []
+    for c in raw_concepts:
+        if not isinstance(c, dict):
+            continue
         evidence = []
         for e in c.get("evidence") or []:
             if isinstance(e, str):
@@ -2389,7 +2394,12 @@ def _parse_batch_response(
         ))
 
     invariants = []
-    for inv in raw.get("invariants") or []:
+    raw_invariants = raw.get("invariants") or []
+    if not isinstance(raw_invariants, list):
+        raw_invariants = []
+    for inv in raw_invariants:
+        if not isinstance(inv, dict):
+            continue
         inv_desc = inv.get("description") or ""
         if not inv_desc:
             stmt = inv.get("statement") or ""
@@ -2420,6 +2430,9 @@ def _parse_batch_response(
     concepts.extend(vc_concepts)
     invariants.extend(vc_invariants)
 
+    raw_contracts = raw.get("contracts") or []
+    if not isinstance(raw_contracts, list):
+        raw_contracts = []
     contracts = [Contract(
             function=ct.get("function") or "",
             file=ct.get("file") or "",
@@ -2429,19 +2442,27 @@ def _parse_batch_response(
             ownership_transfer=ct.get("ownership_transfer") or "",
             implication=ct.get("implication") or "",
             security_note=ct.get("security_note") or "",
-        ) for ct in raw.get("contracts") or []]
+        ) for ct in raw_contracts
+        if isinstance(ct, dict)]
     if source_root is not None and focus_items:
         _stamp_contract_hashes(contracts, focus_items, source_root)
 
+    raw_bp = raw.get("bug_patterns") or []
+    if not isinstance(raw_bp, list):
+        raw_bp = []
     bug_patterns = [BugPattern(
             id=bp.get("id") or "",
             description=bp.get("description") or "",
             what_to_grep=bp.get("what_to_grep") or "",
             relevant_cwes=bp.get("relevant_cwes") or [],
-        ) for bp in raw.get("bug_patterns") or []]
+        ) for bp in raw_bp
+        if isinstance(bp, dict)]
 
+    raw_sa = raw.get("struct_annotations") or []
+    if not isinstance(raw_sa, list):
+        raw_sa = []
     struct_annotations: list[dict[str, Any]] = []
-    for sa in raw.get("struct_annotations") or []:
+    for sa in raw_sa:
         if not isinstance(sa, dict) or not sa.get("struct_name"):
             continue
         sname = sa["struct_name"]
@@ -4932,6 +4953,294 @@ def _derive_threat_frame_invariants(
     return added
 
 
+# ------------------------------------------------------------------
+# Phase 3b — cross-subsystem boundary synthesis
+# ------------------------------------------------------------------
+
+_CROSS_SUBSYSTEM_SYSTEM_PROMPT = """\
+You are a code comprehension expert studying the BOUNDARY between two \
+subsystems that share a data type. Your job is to identify the \
+ownership, aliasing, lifetime, and permission invariants that must \
+hold at the boundary — the rules that BOTH sides must respect for \
+correctness, and the concrete failure modes when they do not.
+
+Focus on:
+- Who owns the memory behind the shared type? Can both sides free it?
+- Can one side alias pages, buffers, or pointers that the other side \
+  mutates or frees? Under what conditions?
+- What lifetime contracts link the two sides? If subsystem A hands a \
+  reference to subsystem B, who extends or drops the refcount?
+- Does one side hold a pointer across an operation by the other side \
+  that may invalidate it (resize, realloc, splice, remap)?
+- Permission asymmetry: can one side write through a reference the \
+  other side assumed was read-only?
+
+Produce:
+- Concepts that describe the shared-type boundary semantics.
+- Invariants with a positive statement, a negation describing the \
+  concrete bug (use-after-free, double-free, data corruption, etc.), \
+  and relevant CWE IDs. Each invariant must reference a concept.
+"""
+
+_CROSS_SUBSYSTEM_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "concepts": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "description": {"type": "string"},
+                    "evidence": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "type": {"type": "string"},
+                                "file": {"type": "string"},
+                                "observation": {"type": "string"},
+                                "line": {"type": ["integer", "null"]},
+                                "item": {"type": ["string", "null"]},
+                                "quote": {
+                                    "type": "string",
+                                    "description": (
+                                        "VERBATIM snippet copied from the "
+                                        "provided definition that supports "
+                                        "this observation. Copy exactly — "
+                                        "a mechanical checker verifies the "
+                                        "quote exists at file:line and "
+                                        "DISCARDS the answer if it does "
+                                        "not. Do not paraphrase."
+                                    ),
+                                },
+                            },
+                            "required": ["type", "file", "observation"],
+                        },
+                    },
+                    "confidence": {
+                        "type": "string",
+                        "enum": [
+                            "inferred", "traced", "corroborated",
+                            "documented", "tested",
+                        ],
+                    },
+                },
+                "required": ["id", "description", "evidence", "confidence"],
+            },
+        },
+        "invariants": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "concept": {"type": "string"},
+                    "description": {
+                        "type": "string",
+                        "description": (
+                            "One-line summary of the invariant, "
+                            "15 words or fewer."
+                        ),
+                    },
+                    "statement": {"type": "string"},
+                    "negation": {"type": "string"},
+                    "confidence": {
+                        "type": "string",
+                        "enum": [
+                            "inferred", "traced", "corroborated",
+                            "documented", "tested",
+                        ],
+                    },
+                    "relevant_cwes": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "CWE IDs relevant when this invariant "
+                            "is violated. E.g. ['CWE-787', 'CWE-416']."
+                        ),
+                    },
+                    "evidence_file": {
+                        "type": "string",
+                        "description": (
+                            "File containing the code that "
+                            "establishes this invariant."
+                        ),
+                    },
+                    "evidence_line": {"type": ["integer", "null"]},
+                    "quote": {
+                        "type": "string",
+                        "description": (
+                            "VERBATIM snippet copied from the provided "
+                            "definitions that establishes this "
+                            "invariant. Copy exactly — a mechanical "
+                            "checker verifies it and DISCARDS the "
+                            "invariant if the quote is not found."
+                        ),
+                    },
+                },
+                "required": [
+                    "id", "concept", "statement", "negation", "confidence",
+                ],
+            },
+        },
+    },
+    "required": ["concepts", "invariants"],
+}
+
+
+def _build_cross_subsystem_prompt(
+    pair: dict[str, Any],
+    items_by_name: dict[str, StudyItem],
+) -> str:
+    """Build a directed prompt for one cross-subsystem interaction pair."""
+    type_name = pair["type_name"]
+    sub_a = pair["subsystem_a"]
+    sub_b = pair["subsystem_b"]
+    fns_a = pair.get("functions_a", [])
+    fns_b = pair.get("functions_b", [])
+
+    header = (
+        f"Subsystem **{sub_a}** and subsystem **{sub_b}** both operate "
+        f"on `struct {type_name}`. Identify the ownership, aliasing, "
+        f"lifetime, and permission invariants that must hold at this "
+        f"boundary.\n\n"
+        f"Focus areas:\n"
+        f"- Ownership: who allocates / frees the {type_name}? "
+        f"Can both subsystems free it?\n"
+        f"- Aliasing: can one side hold a reference while the other "
+        f"mutates or frees the underlying memory?\n"
+        f"- Lifetime: what refcount or scope discipline links the "
+        f"two sides?\n"
+        f"- Permission: does one side write through a pointer the "
+        f"other assumed read-only?\n\n"
+    )
+
+    parts = [header]
+
+    type_item = items_by_name.get(type_name)
+    if type_item:
+        parts.append(f"# Shared type: struct {type_name}\n")
+        parts.append(_format_item(type_item, role="focus"))
+        parts.append("\n---\n")
+
+    parts.append(f"\n# Subsystem {sub_a} — functions touching "
+                 f"struct {type_name}\n")
+    for fn_name in fns_a:
+        item = items_by_name.get(fn_name)
+        if item:
+            parts.append(_format_item(item, role="focus"))
+            parts.append("\n---\n")
+
+    parts.append(f"\n# Subsystem {sub_b} — functions touching "
+                 f"struct {type_name}\n")
+    for fn_name in fns_b:
+        item = items_by_name.get(fn_name)
+        if item:
+            parts.append(_format_item(item, role="focus"))
+            parts.append("\n---\n")
+
+    return "\n".join(parts)
+
+
+def _run_cross_subsystem_synthesis(
+    items: list[StudyItem],
+    output_dir: Path,
+    llm_client: Any,
+    *,
+    source_root: str = "",
+    on_progress: Any = None,
+    should_stop: Any = None,
+) -> tuple[list[Concept], list[Invariant]]:
+    """Phase 3b: directed LLM synthesis per cross-subsystem interaction.
+
+    Reads ``interactions.json`` (written by study-prep Phase 3a) from
+    ``output_dir``, prompts the LLM once per interaction pair with the
+    structural data from both subsystems, and returns the boundary
+    concepts and invariants for merging into Phase 3.
+    """
+    interactions_path = output_dir / "interactions.json"
+    if not interactions_path.is_file():
+        logger.debug("no interactions.json — skipping boundary synthesis")
+        return [], []
+
+    from core.json import load_json
+    raw = load_json(interactions_path, strict=False, max_bytes=8 * 1024 * 1024)
+    if not raw or not isinstance(raw, dict):
+        return [], []
+    pairs = raw.get("pairs", [])
+    if not pairs:
+        return [], []
+
+    items_by_name: dict[str, StudyItem] = {it.name: it for it in items}
+
+    all_concepts: list[Concept] = []
+    all_invariants: list[Invariant] = []
+    src_root = Path(source_root) if source_root else None
+
+    request_max_tokens = _study_max_output_tokens(
+        _client_model_name(llm_client),
+    )
+
+    for i, pair in enumerate(pairs):
+        if should_stop is not None and should_stop():
+            break
+
+        prompt = _build_cross_subsystem_prompt(pair, items_by_name)
+        if not prompt.strip():
+            continue
+
+        type_name = pair.get("type_name", "?")
+        sub_a = pair.get("subsystem_a", "?")
+        sub_b = pair.get("subsystem_b", "?")
+        logger.info(
+            "boundary synthesis %d/%d: struct %s (%s ↔ %s)",
+            i + 1, len(pairs), type_name, sub_a, sub_b,
+        )
+
+        try:
+            raw_resp = llm_client.generate_structured(
+                prompt, _CROSS_SUBSYSTEM_RESPONSE_SCHEMA,
+                system_prompt=_CROSS_SUBSYSTEM_SYSTEM_PROMPT,
+                task_type="study",
+                max_tokens=request_max_tokens,
+            )
+            result = structured_result(raw_resp)
+        except Exception:
+            logger.warning(
+                "boundary synthesis %d/%d failed", i + 1, len(pairs),
+                exc_info=True,
+            )
+            continue
+
+        if not isinstance(result, dict):
+            continue
+
+        concepts, invariants, _, _, _ = _parse_batch_response(
+            result, source_root=src_root,
+        )
+
+        for c in concepts:
+            c.id = f"xsub_{type_name}_{c.id}" if c.id else f"xsub_{type_name}"
+        for inv in invariants:
+            inv.id = (
+                f"xsub_{type_name}_{inv.id}"
+                if inv.id else f"xsub_{type_name}"
+            )
+
+        all_concepts.extend(concepts)
+        all_invariants.extend(invariants)
+
+    if on_progress and (all_concepts or all_invariants):
+        on_progress(
+            "boundary_synthesis",
+            f"Cross-subsystem synthesis: {len(all_concepts)} concepts, "
+            f"{len(all_invariants)} invariants from {len(pairs)} pair(s)",
+        )
+
+    return all_concepts, all_invariants
+
+
 def run_study(
     study_list_path: Path,
     output_dir: Path,
@@ -5114,6 +5423,16 @@ def run_study(
             f"Discarded {len(receipt_discards)} answer(s) — receipt "
             "verification failed",
         )
+
+    # Phase 3b: cross-subsystem boundary synthesis
+    xsub_concepts, xsub_invariants = _run_cross_subsystem_synthesis(
+        items, output_dir, llm_client,
+        source_root=source_root,
+        on_progress=on_progress,
+        should_stop=should_stop,
+    )
+    concepts.extend(xsub_concepts)
+    invariants.extend(xsub_invariants)
 
     # Merge skipped concepts back into Phase 3 input
     concepts = skipped_concepts + concepts
