@@ -156,6 +156,7 @@ class TestStudySpendDelta:
 
         config = OrchestratorConfig(
             target_path=tmp_path, out_dir=tmp_path,
+            immediate_verify=False,
             llm_budget_client=stub,
         )
         result = OrchestratorResult()
@@ -174,12 +175,16 @@ class TestStudySpendDelta:
 
         study_phase = result.cost_tracker.phases.get("study")
         assert study_phase is not None, "study spend must be booked"
-        assert abs(study_phase.cost_usd - 0.5) < 1e-9, (
-            f"study phase must book the class delta (0.5), "
+        # Two study calls: the eager pre-seeding run + the loop batch.
+        # Each adds 0.5 of study-class cost; the delta accounting must
+        # NOT book the whole client ledger (which also carries 15.17 of
+        # review spend).
+        assert abs(study_phase.cost_usd - 1.0) < 1e-9, (
+            f"study phase must book the class delta (2 × 0.5 = 1.0), "
             f"not the whole client ledger "
             f"(booked {study_phase.cost_usd})"
         )
-        assert abs(result.total_cost_usd - 0.5) < 1e-9
+        assert abs(result.total_cost_usd - 1.0) < 1e-9
 
 
 class TestTelemetryReplayReconciliation:

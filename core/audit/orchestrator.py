@@ -17285,6 +17285,7 @@ def _study_consumer_loop(
     runstudy_failed = 0
     runstudy_consec_failed = 0
     lane_truncation_failures = 0
+    _study_lane_disabled = False
     # Study-drain progress checkpointing: same interval discipline as
     # the executor's review loops. Resolved-question accounting is
     # cumulative over each batch's eligible keys (the cheap number
@@ -17407,48 +17408,123 @@ def _study_consumer_loop(
                             target_path=config.target_path,
                         )
                     # Initial unseeded study: full corpus → domain model
-                    # available for the first review pass.
-                    try:
-                        from core.concepts.study import run_study
-                        _eager_client = _run_llm_client(config)
-                        _eager_stop = (
-                            lambda: study_queue.stop_requested  # noqa: E731
-                        )
-                        run_study(
-                            study_list_path,
-                            config.out_dir,
-                            _eager_client,
-                            should_stop=_eager_stop,
-                        )
-                        _eager_cost = _client_class_cost(
-                            _eager_client, "study",
-                        )
-                        if _eager_cost:
-                            with result._lock:
-                                result.total_cost_usd += _eager_cost
-                            result.cost_tracker.record_call(
-                                "study", cost_usd=_eager_cost,
+                    # available for the first review pass.  Skip when
+                    # the queue is already done and empty: no reviews
+                    # will follow, so pre-seeding is wasted work.
+                    _eager_stats: dict = {}
+                    if not study_queue.is_done():
+                        try:
+                            from core.concepts.study import run_study
+                            _eager_client = _run_llm_client(config)
+                            _eager_stop = (
+                                lambda: study_queue.stop_requested  # noqa: E731
                             )
-                        runstudy_ok += 1
-                    except Exception:
-                        logger.debug(
-                            "eager study run failed", exc_info=True,
-                        )
+                            run_study(
+                                study_list_path,
+                                config.out_dir,
+                                _eager_client,
+                                should_stop=_eager_stop,
+                                phase_stats=_eager_stats,
+                            )
+                            _eager_cost = _client_class_cost(
+                                _eager_client, "study",
+                            )
+                            if _eager_cost:
+                                with result._lock:
+                                    result.total_cost_usd += _eager_cost
+                                result.cost_tracker.record_call(
+                                    "study", cost_usd=_eager_cost,
+                                )
+                            runstudy_ok += 1
+                            lane_truncation_failures += int(
+                                _eager_stats.get(
+                                    "truncation_failures",
+                                ) or 0)
+                            if _eager_stats.get("truncation_capped"):
+                                _announce_study_disabled(
+                                    "study phase hit the output-"
+                                    "truncation cap — output budget "
+                                    "misconfigured for this model",
+                                )
+                                _study_lane_disabled = True
+                        except Exception as _eager_exc:
+                            logger.debug(
+                                "eager study run failed",
+                                exc_info=True,
+                            )
+                            runstudy_failed += 1
+                            runstudy_consec_failed += 1
+                            lane_truncation_failures += int(
+                                _eager_stats.get(
+                                    "truncation_failures",
+                                ) or 0)
+                            _study_checkpoint()
+                            if _is_config_shaped_study_failure(
+                                _eager_exc,
+                            ):
+                                _announce_study_disabled(
+                                    "study-run failure is config-"
+                                    "shaped (persistent output "
+                                    "truncation) — the same "
+                                    "configuration re-buys the "
+                                    "same failure",
+                                )
+                                _study_lane_disabled = True
                 else:
-                    logger.warning(
-                        "eager study-prep produced no study-list.json",
+                    _announce_study_disabled(
+                        "study-prep produced no study-list.json",
                     )
+                    _study_lane_disabled = True
             else:
-                logger.warning(
-                    "eager study-prep failed (exit %d)",
-                    prep_result.returncode,
+                from core.security.log_sanitisation import (
+                    escape_nonprintable,
                 )
-        except (subprocess.TimeoutExpired, _StudyStopRequested):
-            logger.debug("eager study-prep interrupted", exc_info=True)
+                _stderr = (prep_result.stderr or "").strip()
+                if len(_stderr) > 200:
+                    _stderr_tail = (
+                        f"stderr tail (last 200 of "
+                        f"{len(_stderr)} chars): "
+                        + escape_nonprintable(_stderr[-200:])
+                    )
+                else:
+                    _stderr_tail = escape_nonprintable(_stderr)
+                _announce_study_disabled(
+                    f"study-prep failed "
+                    f"(exit {prep_result.returncode}): "
+                    f"{_stderr_tail}",
+                )
+                _study_lane_disabled = True
+        except subprocess.TimeoutExpired:
+            logger.debug("eager study-prep timed out", exc_info=True)
+            _kloc = _checklist_kloc(checklist)
+            _detail = f"cap sized for ~{_kloc:.0f} KLoC"
+            if config.max_seconds:
+                _remaining = max(
+                    0.0,
+                    config.max_seconds
+                    - (time.monotonic() - start_time),
+                )
+                _detail += (
+                    f"; needed >{prep_timeout}s, "
+                    f"{_remaining:.0f}s left of the run's "
+                    f"{config.max_seconds:.0f}s budget"
+                )
+            _announce_study_disabled(
+                f"study-prep timed out after {prep_timeout}s "
+                f"({_detail})",
+            )
+            _study_lane_disabled = True
+        except _StudyStopRequested:
+            logger.info(
+                "study-consumer: stop requested during eager "
+                "study-prep — exiting",
+            )
         except Exception:
             logger.debug("eager study-prep error", exc_info=True)
+            _announce_study_disabled("study-prep raised an error")
+            _study_lane_disabled = True
 
-    while not study_queue.is_done():
+    while not _study_lane_disabled and not study_queue.is_done():
         # Idle at the top of every iteration: the drain path uses the
         # working flag to tell "mid-batch, let it finish" apart from
         # "idle on the queue, nothing will ever happen".

@@ -677,6 +677,7 @@ MACHINE_BODY_MARKERS: tuple[str, ...] = (
     "[rationale-consistency demotion:",
     "[reused:",
     "[sarif-clean gate]",
+    "[secondary-dispatch:",
     "[secondary-hypothesis-confirmed via ",
     "[self-contradiction:",
     "[sink-unreachability:",
@@ -685,6 +686,7 @@ MACHINE_BODY_MARKERS: tuple[str, ...] = (
     "[suspicious-demotion:",
     "[suspicious-resolution:",
     "[sweep promoted via ",
+    "[sweep-promotion:",
     "[tool-confirmed]",
     "[tool-refuted]",
 )
@@ -738,7 +740,11 @@ PIPELINE_OWNED_REVIEW_KEYS: frozenset[str] = frozenset({
     "rationale_consistency_note", "refuted_hypothesis_confirmed",
     "secondary_confirmations", "secondary_hypothesis_confirmed",
     "security_impact", "smt_caller_gate", "study_receipts",
-    "synthesis_refused", "tool_evidence", "uncorrelated_tool_hits",
+    "ihv_all_refuted", "ihv_gate_blocked",
+    "ihv_hypotheses_confirmed", "ihv_hypotheses_total",
+    "ihv_refuted", "ihv_tools", "immediate_verified",
+    "synthesis_refused", "tool_evidence", "tools_confirmed",
+    "uncorrelated_tool_hits",
 })
 
 #: ``review_result`` keys the MODEL authors (review JSON schema fields,
@@ -747,7 +753,8 @@ PIPELINE_OWNED_REVIEW_KEYS: frozenset[str] = frozenset({
 #: (status, body, hypothesis, cwe, evidence_tool) — that is not
 #: authority, the model may set them too.
 MODEL_AUTHORED_REVIEW_KEYS: frozenset[str] = frozenset({
-    "anchor", "body", "bug_class", "callees", "callers", "claim",
+    "anchor", "body", "bug_class", "callees", "callers",
+    "chain_exhausted", "claim",
     "constraints", "counter_direction", "counter_hypothesis", "cwe",
     "dataflow_sink", "dataflow_source",
     "dangerous_callees", "edge_verdicts", "entry_point",

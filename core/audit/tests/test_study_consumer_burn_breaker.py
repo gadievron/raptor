@@ -101,6 +101,7 @@ def _config(tmp_path):
     # at first import.
     return OrchestratorConfig(
         target_path=tmp_path, out_dir=tmp_path,
+        immediate_verify=False,
         llm_budget_client=types.SimpleNamespace(
             total_cost=0.0,
             is_budget_exhausted=lambda: False,
@@ -417,7 +418,8 @@ class TestDrainProgressCheckpointPaths:
 
         assert writes, "loop exit must flush progress"
         progress = self._progress(tmp_path)["progress"]
-        assert progress["study"]["batches_completed"] == 1
+        # 2 completed: the eager pre-seeding study + the loop batch.
+        assert progress["study"]["batches_completed"] == 2
         assert progress["study"]["batches_failed"] == 0
 
     def test_no_invocation_writes_nothing(self, monkeypatch, tmp_path):

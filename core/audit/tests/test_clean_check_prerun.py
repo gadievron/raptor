@@ -251,6 +251,7 @@ class TestReviewLoopPrerun:
         config = OrchestratorConfig(
             target_path=target, out_dir=out,
             prefilter=False, max_refinements=0,
+            immediate_verify=False,
         )
         rec = EvidenceRecord(file="a.c", function="acl_worker")
         rec.joern_flows = [_FakeFlow()]

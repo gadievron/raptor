@@ -207,7 +207,7 @@ _LLM_PHASES = frozenset({
     # segment books the prior segments' spend as a pseudo-phase.
     # Both are ledger rows, not tool invocations (each warned as an
     # "unsandboxed tool" on a live run).
-    "checker_synthesis_ondemand", "prior_segments",
+    "checker_synthesis_ihv", "checker_synthesis_ondemand", "prior_segments",
     # Degraded-mode breaker trip: core.llm.breaker persists one $0
     # telemetry record (call_class="run_breaker") when it stops a run;
     # book_unbooked_classes imports it as a ledger row. A ledger row,

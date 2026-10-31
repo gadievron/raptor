@@ -61,6 +61,9 @@
     "core/audit/concept_discovery.py::discover_invariants::unsanitised_llm_value::top_apis": {
       "note": "invariant-candidate description slot consumed by prompts/domain model, not a terminal lane; API names extracted from LLM hypotheses"
     },
+    "core/audit/cwe_dispatch.py::route_hypothesis_to_checkers::unsanitised_llm_value::lib_lines": {
+      "note": "prompt-construction lane: lib_lines assembles library-candidate rationales (already escape_nonprintable'd) into the routing LLM prompt, not an operator render surface"
+    },
     "core/audit/context.py::_format_caller_contract::unsanitised_llm_value::line": {
       "note": "prompt/context construction — integer line-number field rendered into an LLM prompt block, not an operator render surface"
     },

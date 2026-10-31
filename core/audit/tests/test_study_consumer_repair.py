@@ -152,7 +152,10 @@ class TestPrepFailureDisablesLoudly:
     the whole prep from scratch on every subsequent batch."""
 
     def _config(self, tmp_path):
-        return OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path)
+        return OrchestratorConfig(
+            target_path=tmp_path, out_dir=tmp_path,
+            immediate_verify=False,
+        )
 
     def test_timeout_disables_once_and_stops(self, monkeypatch, tmp_path):
         import core.audit.orchestrator as _orch
