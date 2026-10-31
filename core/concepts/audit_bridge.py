@@ -2741,6 +2741,8 @@ def study_list_structural_context(
     data that the LLM-synthesised domain model does not carry.
     Returns None when no relevant data is available.
     """
+    from core.security.log_sanitisation import escape_nonprintable
+
     data = _load_study_list(out_dir)
     if not data:
         return None
@@ -2833,9 +2835,10 @@ def study_list_structural_context(
         if not si_defn:
             continue
         has_content = True
+        si_file = escape_nonprintable(si.get("file", "?"))
         parts.append(
             f"\n**Type `{type_name}`** "
-            f"({si.get('file', '?')}):\n```c\n{si_defn[:600]}\n```\n",
+            f"({si_file}):\n```c\n{si_defn[:600]}\n```\n",
         )
         si_fields = si.get("fields") or []
         if si_fields:
