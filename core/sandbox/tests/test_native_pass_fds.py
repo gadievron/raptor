@@ -1,5 +1,6 @@
 """Native exec preserves audited descriptors without leaking ambient capabilities."""
 import os
+from pathlib import Path
 import subprocess
 import sys
 
@@ -13,6 +14,7 @@ pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Linux fork back
 def test_exec_descriptor_sweep_preserves_only_declared_capabilities(tmp_path):
     driver = r'''
 import os, sys
+sys.path.insert(0, sys.argv[2])
 from core.sandbox._spawn import _prepare_exec_fds
 allowed = os.open(sys.argv[1], os.O_RDONLY)
 ambient = os.open(sys.argv[1], os.O_RDONLY)
@@ -38,8 +40,9 @@ for value in sys.argv[2:]:
 '''
     receipt = tmp_path / "receipt"
     receipt.write_bytes(b"receipt")
-    result = subprocess.run([sys.executable, "-c", driver, str(receipt)],
-                            capture_output=True, text=True, timeout=5)
+    root = Path(__file__).resolve().parents[3]
+    result = subprocess.run([sys.executable, "-I", "-c", driver, str(receipt), str(root)],
+                            cwd=tmp_path, capture_output=True, text=True, timeout=5)
     assert result.returncode == 0, result.stderr
 
 
@@ -113,3 +116,37 @@ def test_status_pipe_collision_refuses_before_changing_any_descriptors():
     finally:
         os.close(read_fd)
         os.close(status_fd)
+
+
+@requires_landlock
+@requires_mount
+@requires_userns
+@pytest.mark.parametrize("file_like", [False, True])
+def test_native_stdin_keeps_its_explicit_pass_fd_number(tmp_path, file_like):
+    from core.sandbox import sandbox
+    read_fd, write_fd = os.pipe()
+    stream = None
+    try:
+        os.write(write_fd, b"witness")
+        os.close(write_fd)
+        write_fd = -1
+        if file_like:
+            stream = os.fdopen(read_fd, "rb", closefd=False)
+        code = (
+            "import os,sys; fd=int(sys.argv[1]); "
+            "assert os.fstat(fd)==os.fstat(0); "
+            "assert os.read(fd,7)==b'witness'; "
+            "assert sys.stdin.read()==''; print('ok')")
+        with sandbox(profile="strict", target=str(tmp_path), output=str(tmp_path)) as run:
+            reply = run([os.path.realpath("/usr/bin/python3"), "-I", "-S", "-c", code, str(read_fd)],
+                        stdin=stream if file_like else read_fd, pass_fds=(read_fd,),
+                        capture_output=True, text=True, timeout=30)
+        assert reply.returncode == 0, reply.stderr
+        assert reply.stdout.strip() == "ok"
+        assert reply.sandbox_info["mount_ns_active"]
+    finally:
+        if stream is not None:
+            stream.close()
+        os.close(read_fd)
+        if write_fd >= 0:
+            os.close(write_fd)

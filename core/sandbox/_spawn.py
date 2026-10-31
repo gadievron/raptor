@@ -2751,8 +2751,9 @@ def run_sandboxed(
                     # O_CLOEXEC, in which case execvpe would leave both
                     # fds pointing at the same file). dup2 clears CLOEXEC
                     # on fd 0, which is what we want — stdin stays open
-                    # across exec.
-                    if stdin_fd != 0:
+                    # across exec. A descriptor explicitly in pass_fds
+                    # must also survive under its original number.
+                    if stdin_fd != 0 and stdin_fd not in pass_fds:
                         try:
                             os.close(stdin_fd)
                         except OSError:

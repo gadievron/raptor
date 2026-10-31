@@ -36,9 +36,8 @@ def _reset_term_state():
 
 
 def test_exit_stop_timeout_value_two_directions() -> None:
-    # Not lower: a sibling briefly holding the lifecycle file lock
-    # legitimately needs a few seconds — a sub-5s bound abandons
-    # releases that were about to succeed.
+    # Not lower: healthy controller teardown can legitimately take a few
+    # seconds — a sub-5s bound abandons releases about to succeed.
     assert orch._JOERN_EXIT_STOP_TIMEOUT_S >= 5.0
     # Not higher: the release shares the SIGTERM grace with the
     # ledger/journal flush and the salvage export — it must never be
@@ -55,8 +54,8 @@ def test_bounded_release_runs_release_to_completion() -> None:
 def test_bounded_release_abandons_a_hung_release(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A release wedged on the lifecycle file lock must not delay the
-    exit past the bound — it is abandoned with one warning."""
+    """A release awaiting teardown must not delay exit past the bound;
+    shutdown continues with one warning."""
     monkeypatch.setattr(orch, "_JOERN_EXIT_STOP_TIMEOUT_S", 0.2)
     hang = threading.Event()
     started = threading.Event()
@@ -65,17 +64,22 @@ def test_bounded_release_abandons_a_hung_release(
         started.set()
         hang.wait(30.0)
 
-    t0 = time.monotonic()
-    with caplog.at_level(logging.WARNING, logger=orch.__name__):
-        _bounded_joern_exit_release(_wedged)
-    elapsed = time.monotonic() - t0
-    assert started.is_set()
-    assert elapsed < 5.0  # returned at the bound, not the hang
-    warnings = [
-        r for r in caplog.records if "abandoning" in r.getMessage()
-    ]
-    assert len(warnings) == 1
-    hang.set()  # release the daemon worker
+    try:
+        t0 = time.monotonic()
+        with caplog.at_level(logging.WARNING, logger=orch.__name__):
+            _bounded_joern_exit_release(_wedged)
+        elapsed = time.monotonic() - t0
+        assert started.is_set()
+        assert elapsed < 5.0  # returned at the bound, not the hang
+        warnings = [
+            r for r in caplog.records
+            if r.name == orch.__name__
+            and r.funcName == _bounded_joern_exit_release.__name__
+            and r.levelno == logging.WARNING
+        ]
+        assert len(warnings) == 1
+    finally:
+        hang.set()  # release the daemon worker
 
 
 def test_bounded_release_under_bound_no_warning(
@@ -94,7 +98,10 @@ def test_bounded_release_under_bound_no_warning(
         _bounded_joern_exit_release(_slowish)
     assert calls == ["released"]
     assert not [
-        r for r in caplog.records if "abandoning" in r.getMessage()
+        r for r in caplog.records
+        if r.name == orch.__name__
+        and r.funcName == _bounded_joern_exit_release.__name__
+        and r.levelno == logging.WARNING
     ]
 
 
@@ -220,19 +227,24 @@ class TestExitReleaseWiring:
             orch._sigterm_event.set()  # drain from here on
             return _clean(ctx, config)
 
-        with caplog.at_level(logging.WARNING, logger=orch.__name__):
-            run_orchestrator(_config(target, out), _review)
-        assert attempts == [stub]  # the stop WAS attempted
-        # The bounding MECHANISM, not a stopwatch: run_orchestrator
-        # returned while the wedged stop was still hanging — the exit
-        # abandoned it at the bound instead of waiting it out. (A
-        # wall-clock ceiling on the whole run raced loaded-host
-        # scheduling; this cannot.)
-        assert not stop_returned.is_set()
-        assert [
-            r for r in caplog.records if "abandoning" in r.getMessage()
-        ]
-        hang.set()
+        try:
+            with caplog.at_level(logging.WARNING, logger=orch.__name__):
+                run_orchestrator(_config(target, out), _review)
+            assert attempts == [stub]  # the stop WAS attempted
+            # The bounding MECHANISM, not a stopwatch: run_orchestrator
+            # returned while the wedged stop was still hanging — the exit
+            # abandoned it at the bound instead of waiting it out. (A
+            # wall-clock ceiling on the whole run raced loaded-host
+            # scheduling; this cannot.)
+            assert not stop_returned.is_set()
+            assert [
+                r for r in caplog.records
+                if r.name == orch.__name__
+                and r.funcName == _bounded_joern_exit_release.__name__
+                and r.levelno == logging.WARNING
+            ]
+        finally:
+            hang.set()
 
     def test_caller_owned_server_never_stopped(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
