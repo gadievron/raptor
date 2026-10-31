@@ -733,6 +733,14 @@ def _table_pattern_entries(
                 yield (node.lineno, value)
         elif isinstance(node, ast.Call):
             func = node.func
+            # Report-writer AllowlistEntry rows are exact-match metadata;
+            # audit notes and file/function labels are never regex inputs.
+            # Actual re.* calls nested in a row are still collected by the
+            # independent call-site walk in _extract_sites.
+            if (isinstance(func, ast.Name) and func.id == "AllowlistEntry"
+                    and {"file", "func_name", "kind", "detail", "audit_note"}
+                    <= {kw.arg for kw in node.keywords}):
+                return
             if isinstance(func, ast.Attribute) and func.attr in _RE_FUNCS:
                 return
             if isinstance(func, ast.Name) and func.id in re_funcs:
@@ -2452,7 +2460,16 @@ def _scan_restart_members() -> dict[tuple[str, str], dict]:
         digest = hashlib.sha256(
             f"{site.flags}:{site.mode}:{site.pattern}".encode(),
         ).hexdigest()[:12]
-        record = members.setdefault(site.key, {
+        # Table offsets are extraction coordinates, not durable identities:
+        # inserting an unrelated registry entry must not invalidate a pin.
+        # Keep the table name, but identify its regex by the same content
+        # digest used by the verdict check. Identical entries share a pin;
+        # changed/new regexes still require independent oracle validation.
+        key = site.key
+        if site.origin == "table":
+            table = site.name.rsplit("[", 1)[0]
+            key = (site.key[0], f"{table}[sha256:{digest}]")
+        record = members.setdefault(key, {
             "digests": set(), "sites": [],
         })
         record["digests"].add(digest)

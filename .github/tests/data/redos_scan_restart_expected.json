@@ -8,14 +8,14 @@
    "exp": null,
    "verdict": "noattack"
   },
-  "core/analysis/binary_oracle_autodetect.py\u001f_RUST_TARGET_GLOBS[0]": {
+  "core/analysis/binary_oracle_autodetect.py\u001f_RUST_TARGET_GLOBS[sha256:b0fbc9a856ae]": {
    "digests": [
     "b0fbc9a856ae"
    ],
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/analysis/binary_oracle_autodetect.py\u001f_RUST_TARGET_GLOBS[1]": {
+  "core/analysis/binary_oracle_autodetect.py\u001f_RUST_TARGET_GLOBS[sha256:bfe348b024f8]": {
    "digests": [
     "bfe348b024f8"
    ],
@@ -346,7 +346,7 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/audit/compile_probe.py\u001flines[0]": {
+  "core/audit/compile_probe.py\u001flines[sha256:0f64f014c82d]": {
    "digests": [
     "0f64f014c82d"
    ],
@@ -711,18 +711,18 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/audit/dark_verify/_resolve.py\u001f_PY_EXT_SUFFIX_GLOBS[1]": {
-   "digests": [
-    "c7576fa032bf"
-   ],
-   "exp": 2.01,
-   "verdict": "adjudicated"
-  },
-  "core/audit/dark_verify/_resolve.py\u001f_PY_EXT_SUFFIX_GLOBS[3]": {
+  "core/audit/dark_verify/_resolve.py\u001f_PY_EXT_SUFFIX_GLOBS[sha256:9337696cf86c]": {
    "digests": [
     "9337696cf86c"
    ],
    "exp": 1.99,
+   "verdict": "adjudicated"
+  },
+  "core/audit/dark_verify/_resolve.py\u001f_PY_EXT_SUFFIX_GLOBS[sha256:c7576fa032bf]": {
+   "digests": [
+    "c7576fa032bf"
+   ],
+   "exp": 2.01,
    "verdict": "adjudicated"
   },
   "core/audit/decompiler_sanitise.py\u001f_CLASS_MEMBER_RE": {
@@ -873,7 +873,7 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/audit/joern_verify.py\u001fshapes[3]": {
+  "core/audit/joern_verify.py\u001fshapes[sha256:e54718418346]": {
    "digests": [
     "e54718418346"
    ],
@@ -1468,30 +1468,30 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/audit/strategy.py\u001fSTRATEGY_PRIMERS[11]": {
-   "digests": [
-    "aca84fd85a89"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
-  "core/audit/strategy.py\u001fSTRATEGY_PRIMERS[12]": {
+  "core/audit/strategy.py\u001fSTRATEGY_PRIMERS[sha256:2517ce9d343a]": {
    "digests": [
     "2517ce9d343a"
    ],
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/audit/strategy.py\u001fSTRATEGY_PRIMERS[13]": {
+  "core/audit/strategy.py\u001fSTRATEGY_PRIMERS[sha256:861377ab7ed9]": {
+   "digests": [
+    "861377ab7ed9"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/strategy.py\u001fSTRATEGY_PRIMERS[sha256:a26ffae70756]": {
    "digests": [
     "a26ffae70756"
    ],
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/audit/strategy.py\u001fSTRATEGY_PRIMERS[9]": {
+  "core/audit/strategy.py\u001fSTRATEGY_PRIMERS[sha256:aca84fd85a89]": {
    "digests": [
-    "861377ab7ed9"
+    "aca84fd85a89"
    ],
    "exp": 1.0,
    "verdict": "linear"
@@ -1644,7 +1644,7 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/concepts/library_detect.py\u001f_KNOWN_TARBALL_GLOBS[1]": {
+  "core/concepts/library_detect.py\u001f_KNOWN_TARBALL_GLOBS[sha256:d6de24158723]": {
    "digests": [
     "d6de24158723"
    ],
@@ -1679,7 +1679,7 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/dataflow/barrier_synth.py\u001f_SINK_CLASS_HINTS[10]": {
+  "core/dataflow/barrier_synth.py\u001f_SINK_CLASS_HINTS[sha256:ba64724c55eb]": {
    "digests": [
     "ba64724c55eb"
    ],
@@ -1742,16 +1742,16 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/git/validate.py\u001f_ALLOWED_PATTERNS[2]": {
+  "core/git/validate.py\u001f_ALLOWED_PATTERNS[sha256:09a17705fd7a]": {
    "digests": [
-    "4dab27a15098"
+    "09a17705fd7a"
    ],
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/git/validate.py\u001f_ALLOWED_PATTERNS[3]": {
+  "core/git/validate.py\u001f_ALLOWED_PATTERNS[sha256:4dab27a15098]": {
    "digests": [
-    "09a17705fd7a"
+    "4dab27a15098"
    ],
    "exp": 1.0,
    "verdict": "linear"
@@ -1763,21 +1763,21 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/inventory/exclusions.py\u001fGENERATED_MARKERS[10]": {
+  "core/inventory/exclusions.py\u001fGENERATED_MARKERS[sha256:37de29a408f1]": {
    "digests": [
     "37de29a408f1"
    ],
    "exp": 1.98,
    "verdict": "adjudicated"
   },
-  "core/inventory/extractors.py\u001fPATTERNS[1]": {
+  "core/inventory/extractors.py\u001fPATTERNS[sha256:922331e690c9]": {
    "digests": [
     "922331e690c9"
    ],
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/inventory/extractors.py\u001fPATTERNS[4]": {
+  "core/inventory/extractors.py\u001fPATTERNS[sha256:925bcf89fac2]": {
    "digests": [
     "925bcf89fac2"
    ],
@@ -1798,79 +1798,79 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/inventory/fixture_detection.py\u001f_FIXTURE_PATH_PATTERNS[10]": {
-   "digests": [
-    "2d14af8c2afa"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
-  "core/inventory/fixture_detection.py\u001f_FIXTURE_PATH_PATTERNS[11]": {
+  "core/inventory/fixture_detection.py\u001f_FIXTURE_PATH_PATTERNS[sha256:09d91e7ba020]": {
    "digests": [
     "09d91e7ba020"
    ],
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/inventory/fixture_detection.py\u001f_FIXTURE_PATH_PATTERNS[12]": {
-   "digests": [
-    "44d0e4615ec8"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
-  "core/inventory/fixture_detection.py\u001f_FIXTURE_PATH_PATTERNS[16]": {
-   "digests": [
-    "6ffbb755881b"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
-  "core/inventory/fixture_detection.py\u001f_FIXTURE_PATH_PATTERNS[18]": {
-   "digests": [
-    "d55d447e294c"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
-  "core/inventory/fixture_detection.py\u001f_FIXTURE_PATH_PATTERNS[19]": {
-   "digests": [
-    "cfe781f6b20c"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
-  "core/inventory/fixture_detection.py\u001f_FIXTURE_PATH_PATTERNS[20]": {
-   "digests": [
-    "f0f9084277e4"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
-  "core/inventory/fixture_detection.py\u001f_FIXTURE_PATH_PATTERNS[21]": {
-   "digests": [
-    "8ab5ac5a81e8"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
-  "core/inventory/fixture_detection.py\u001f_FIXTURE_PATH_PATTERNS[22]": {
-   "digests": [
-    "86a9d7ea6ce7"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
-  "core/inventory/fixture_detection.py\u001f_FIXTURE_PATH_PATTERNS[23]": {
+  "core/inventory/fixture_detection.py\u001f_FIXTURE_PATH_PATTERNS[sha256:0d18a3cb4c02]": {
    "digests": [
     "0d18a3cb4c02"
    ],
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/inventory/fixture_detection.py\u001f_FIXTURE_PATH_PATTERNS[24]": {
+  "core/inventory/fixture_detection.py\u001f_FIXTURE_PATH_PATTERNS[sha256:2d14af8c2afa]": {
+   "digests": [
+    "2d14af8c2afa"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/inventory/fixture_detection.py\u001f_FIXTURE_PATH_PATTERNS[sha256:44d0e4615ec8]": {
+   "digests": [
+    "44d0e4615ec8"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/inventory/fixture_detection.py\u001f_FIXTURE_PATH_PATTERNS[sha256:52d0f6457044]": {
    "digests": [
     "52d0f6457044"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/inventory/fixture_detection.py\u001f_FIXTURE_PATH_PATTERNS[sha256:6ffbb755881b]": {
+   "digests": [
+    "6ffbb755881b"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/inventory/fixture_detection.py\u001f_FIXTURE_PATH_PATTERNS[sha256:86a9d7ea6ce7]": {
+   "digests": [
+    "86a9d7ea6ce7"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/inventory/fixture_detection.py\u001f_FIXTURE_PATH_PATTERNS[sha256:8ab5ac5a81e8]": {
+   "digests": [
+    "8ab5ac5a81e8"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/inventory/fixture_detection.py\u001f_FIXTURE_PATH_PATTERNS[sha256:cfe781f6b20c]": {
+   "digests": [
+    "cfe781f6b20c"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/inventory/fixture_detection.py\u001f_FIXTURE_PATH_PATTERNS[sha256:d55d447e294c]": {
+   "digests": [
+    "d55d447e294c"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/inventory/fixture_detection.py\u001f_FIXTURE_PATH_PATTERNS[sha256:f0f9084277e4]": {
+   "digests": [
+    "f0f9084277e4"
    ],
    "exp": 1.0,
    "verdict": "linear"
@@ -1931,49 +1931,49 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/iris/specs.py\u001flines[1]": {
-   "digests": [
-    "5f33a892b9ad"
-   ],
-   "exp": 1.99,
-   "verdict": "adjudicated"
-  },
-  "core/iris/specs.py\u001flines[2]": {
-   "digests": [
-    "74f670123f14"
-   ],
-   "exp": 2.0,
-   "verdict": "adjudicated"
-  },
-  "core/iris/specs.py\u001flines[3]": {
+  "core/iris/specs.py\u001flines[sha256:0fb08c380bf3]": {
    "digests": [
     "0fb08c380bf3"
    ],
    "exp": 2.0,
    "verdict": "adjudicated"
   },
-  "core/iris/specs.py\u001flines[4]": {
-   "digests": [
-    "70e776e25c31"
-   ],
-   "exp": 1.99,
-   "verdict": "adjudicated"
-  },
-  "core/iris/specs.py\u001flines[5]": {
-   "digests": [
-    "88e933d23e53"
-   ],
-   "exp": 1.99,
-   "verdict": "adjudicated"
-  },
-  "core/iris/specs.py\u001flines[6]": {
+  "core/iris/specs.py\u001flines[sha256:29eb48db7b62]": {
    "digests": [
     "29eb48db7b62"
    ],
    "exp": 1.99,
    "verdict": "adjudicated"
   },
-  "core/iris/specs.py\u001flines[7]": {
+  "core/iris/specs.py\u001flines[sha256:5f33a892b9ad]": {
+   "digests": [
+    "5f33a892b9ad"
+   ],
+   "exp": 1.99,
+   "verdict": "adjudicated"
+  },
+  "core/iris/specs.py\u001flines[sha256:70e776e25c31]": {
+   "digests": [
+    "70e776e25c31"
+   ],
+   "exp": 1.99,
+   "verdict": "adjudicated"
+  },
+  "core/iris/specs.py\u001flines[sha256:74f670123f14]": {
+   "digests": [
+    "74f670123f14"
+   ],
+   "exp": 2.0,
+   "verdict": "adjudicated"
+  },
+  "core/iris/specs.py\u001flines[sha256:88e933d23e53]": {
+   "digests": [
+    "88e933d23e53"
+   ],
+   "exp": 1.99,
+   "verdict": "adjudicated"
+  },
+  "core/iris/specs.py\u001flines[sha256:8eba6201f599]": {
    "digests": [
     "8eba6201f599"
    ],
@@ -2143,21 +2143,21 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/project/project.py\u001f_TRUST_MARKER_HELP[3]": {
+  "core/project/project.py\u001f_TRUST_MARKER_HELP[sha256:ed3d99d46910]": {
    "digests": [
     "ed3d99d46910"
    ],
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/project/project.py\u001f_TRUST_MARKER_HELP[4]": {
+  "core/project/project.py\u001f_TRUST_MARKER_HELP[sha256:ed8ec352efc9]": {
    "digests": [
     "ed8ec352efc9"
    ],
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/recall/manifest.py\u001fPROFILES[6]": {
+  "core/recall/manifest.py\u001fPROFILES[sha256:4a8fe29aacc4]": {
    "digests": [
     "4a8fe29aacc4"
    ],
@@ -2192,14 +2192,7 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/sandbox/fingerprint.py\u001f_DMI_STORY[18]": {
-   "digests": [
-    "ad7f0a1fa492"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
-  "core/sandbox/fingerprint.py\u001f_DMI_STORY[26]": {
+  "core/sandbox/fingerprint.py\u001f_DMI_STORY[sha256:ad7f0a1fa492]": {
    "digests": [
     "ad7f0a1fa492"
    ],
@@ -2241,20 +2234,6 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/security/report_writer_audit.py\u001f_ALLOWLIST[409]": {
-   "digests": [
-    "c315f8693625"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
-  "core/security/report_writer_audit.py\u001f_ALLOWLIST[4]": {
-   "digests": [
-    "f382aedfd40d"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
   "core/smt_solver/canonicalise.py\u001f(?<=\\S)\\s+is\\s+null\\b": {
    "digests": [
     "d3f3a0a03200"
@@ -2290,16 +2269,16 @@
    "exp": null,
    "verdict": "noattack"
   },
-  "core/tp_harvest/candidates.py\u001flines[3]": {
+  "core/tp_harvest/candidates.py\u001flines[sha256:02ec1ad5e955]": {
    "digests": [
-    "890f9e60c72c"
+    "02ec1ad5e955"
    ],
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/tp_harvest/candidates.py\u001flines[4]": {
+  "core/tp_harvest/candidates.py\u001flines[sha256:890f9e60c72c]": {
    "digests": [
-    "02ec1ad5e955"
+    "890f9e60c72c"
    ],
    "exp": 1.0,
    "verdict": "linear"
@@ -2389,7 +2368,7 @@
    "exp": null,
    "verdict": "noattack"
   },
-  "packages/binary_analysis/hunt.py\u001fpayload[16]": {
+  "packages/binary_analysis/hunt.py\u001fpayload[sha256:4503988bbdc6]": {
    "digests": [
     "4503988bbdc6"
    ],
@@ -2417,14 +2396,14 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "packages/cve_diff/cve_diff/agent/tools.py\u001fTOOLS[49]": {
+  "packages/cve_diff/cve_diff/agent/tools.py\u001fTOOLS[sha256:1fa1e50f7027]": {
    "digests": [
     "1fa1e50f7027"
    ],
    "exp": 1.0,
    "verdict": "linear"
   },
-  "packages/cve_diff/cve_diff/agent/tools.py\u001fTOOLS[79]": {
+  "packages/cve_diff/cve_diff/agent/tools.py\u001fTOOLS[sha256:31707fe5166f]": {
    "digests": [
     "31707fe5166f"
    ],
@@ -2572,14 +2551,14 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "packages/exploit_feasibility/under_mitigations.py\u001f_DEFAULT_PROFILES[19]": {
+  "packages/exploit_feasibility/under_mitigations.py\u001f_DEFAULT_PROFILES[sha256:d85e3f17ea7d]": {
    "digests": [
     "d85e3f17ea7d"
    ],
    "exp": 1.0,
    "verdict": "linear"
   },
-  "packages/exploitability_validation/binary_substrate.py\u001flines[4]": {
+  "packages/exploitability_validation/binary_substrate.py\u001flines[sha256:003157c804da]": {
    "digests": [
     "003157c804da"
    ],
@@ -2593,30 +2572,30 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "packages/ghidra/decomp_tree.py\u001flines[1]": {
+  "packages/ghidra/decomp_tree.py\u001flines[sha256:db21eb0cc688]": {
    "digests": [
     "db21eb0cc688"
    ],
    "exp": 2.0,
    "verdict": "adjudicated"
   },
-  "packages/ghidra/ebpf_probe.py\u001fPROBE_OBJECTS[70]": {
+  "packages/ghidra/ebpf_probe.py\u001fPROBE_OBJECTS[sha256:209f0ae65cbc]": {
    "digests": [
-    "83dbe4d36e7b"
+    "209f0ae65cbc"
    ],
    "exp": 1.0,
    "verdict": "linear"
   },
-  "packages/ghidra/ebpf_probe.py\u001fPROBE_OBJECTS[83]": {
+  "packages/ghidra/ebpf_probe.py\u001fPROBE_OBJECTS[sha256:6def9273e387]": {
    "digests": [
     "6def9273e387"
    ],
    "exp": 1.0,
    "verdict": "linear"
   },
-  "packages/ghidra/ebpf_probe.py\u001fPROBE_OBJECTS[93]": {
+  "packages/ghidra/ebpf_probe.py\u001fPROBE_OBJECTS[sha256:83dbe4d36e7b]": {
    "digests": [
-    "209f0ae65cbc"
+    "83dbe4d36e7b"
    ],
    "exp": 1.0,
    "verdict": "linear"
@@ -2635,7 +2614,7 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "packages/llm_analysis/intent_match.py\u001fpatterns[1]": {
+  "packages/llm_analysis/intent_match.py\u001fpatterns[sha256:d2a9e57671cd]": {
    "digests": [
     "d2a9e57671cd"
    ],
@@ -2866,30 +2845,30 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "packages/web/fuzzer.py\u001fbasic_payloads[10]": {
-   "digests": [
-    "72e3ba71ae07"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
-  "packages/web/fuzzer.py\u001fbasic_payloads[11]": {
-   "digests": [
-    "9d331146a8b1"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
-  "packages/web/fuzzer.py\u001fbasic_payloads[12]": {
+  "packages/web/fuzzer.py\u001fbasic_payloads[sha256:31ef935a28f0]": {
    "digests": [
     "31ef935a28f0"
    ],
    "exp": 1.0,
    "verdict": "linear"
   },
-  "packages/web/fuzzer.py\u001fbasic_payloads[13]": {
+  "packages/web/fuzzer.py\u001fbasic_payloads[sha256:72e3ba71ae07]": {
+   "digests": [
+    "72e3ba71ae07"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/web/fuzzer.py\u001fbasic_payloads[sha256:856b9d79f725]": {
    "digests": [
     "856b9d79f725"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/web/fuzzer.py\u001fbasic_payloads[sha256:9d331146a8b1]": {
+   "digests": [
+    "9d331146a8b1"
    ],
    "exp": 1.0,
    "verdict": "linear"

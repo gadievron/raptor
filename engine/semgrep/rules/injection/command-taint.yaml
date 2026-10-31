@@ -48,6 +48,17 @@ rules:
         exact: true
       - pattern: shlex.join(...)
         exact: true
+      # Semgrep 1.177 needs the assignment result marked explicitly to
+      # preserve sanitization across statements. Match simple locals only;
+      # exact matching still leaves execution inside the RHS visible.
+      - patterns:
+          - pattern-either:
+              - pattern: $SAFE = shlex.quote(...)
+              - pattern: $SAFE = shlex.join(...)
+          - metavariable-regex:
+              metavariable: $SAFE
+              regex: ^[A-Za-z_][A-Za-z0-9_]*$
+        exact: true
     metadata:
       cwe: ["CWE-78"]
       owasp_top_10: ["A3:2021-Injection"]

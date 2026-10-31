@@ -29,12 +29,21 @@ os.system(shlex.join(["echo", input()]))
 quoted = shlex.quote(input())
 os.system("echo " + quoted)
 os.system(shlex.quote(input()) + input())  # unsafe
+joined = shlex.join(["echo", input()])
+os.system(joined)
+alias = quoted
+os.system("echo " + alias)
+quoted = input()
+os.system("echo " + quoted)  # unsafe
+joined += input()
+os.system(joined)  # unsafe
+nested = shlex.quote(os.system(input()))  # unsafe
 """
     target = tmp_path / "commands.py"
     target.write_text(source)
     proc = subprocess.run(
         ["semgrep", "scan", "--config", str(_RULE), "--metrics", "off",
-         "--disable-version-check", "--json", str(target)],
+         "--disable-version-check", "--jobs", "1", "--json", str(target)],
         env={**os.environ, "SEMGREP_SETTINGS_FILE": str(tmp_path / "settings.yml"),
              "SEMGREP_LOG_FILE": str(tmp_path / "semgrep.log")},
         capture_output=True, text=True, timeout=180, check=False,
@@ -44,18 +53,11 @@ os.system(shlex.quote(input()) + input())  # unsafe
     assert not data.get("errors"), data.get("errors")
     assert all(r["check_id"].endswith(_RULE_ID) for r in data["results"])
     expected = {i for i, line in enumerate(source.splitlines(), 1) if "# unsafe" in line}
-    assert {r["start"]["line"] for r in data["results"]} == expected
+    actual = {r["start"]["line"] for r in data["results"]}
+    assert actual == expected, f"Semgrep {data.get('version')}: {actual=} {expected=}"
 
 
-@pytest.mark.slow
-@pytest.mark.skipif(shutil.which("semgrep") is None, reason="semgrep not installed")
-def test_value_sanitizers_preserve_nested_sinks_across_rule_families(tmp_path):
-    """One real scan checks nested sinks and ordinary sanitization together.
-
-    Several grammars and configs in one process can exceed the default-tier
-    wall budget; the slow lane still exercises the production rule files.
-    """
-    cases = [
+_VALUE_SANITIZER_CASES = [
         ("eval.py", "injection/eval-taint.yaml", "raptor.injection.eval.taint.python", """
 import ast
 ast.literal_eval(eval(input()))  # unsafe
@@ -109,17 +111,22 @@ class Output {
 }
 """),
     ]
-    rules_root = _RULE.parents[1]
-    args = ["semgrep", "scan", "--metrics", "off", "--disable-version-check", "--json"]
-    for config in sorted({config for _, config, _, _ in cases}):
-        args.extend(["--config", str(rules_root / config)])
-    targets = []
-    for name, _, _, source in cases:
-        target = tmp_path / name
-        target.write_text(source)
-        targets.append(str(target))
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(shutil.which("semgrep") is None, reason="semgrep not installed")
+@pytest.mark.parametrize("name, config, rule_id, source", _VALUE_SANITIZER_CASES,
+                         ids=[case[0] for case in _VALUE_SANITIZER_CASES])
+def test_value_sanitizers_preserve_nested_sinks_across_rule_families(
+    tmp_path, name, config, rule_id, source,
+):
+    """Scan each fixture with its own rule family to bound analysis work."""
+    target = tmp_path / name
+    target.write_text(source)
     proc = subprocess.run(
-        [*args, *targets],
+        ["semgrep", "scan", "--config", str(_RULE.parents[1] / config),
+         "--metrics", "off", "--disable-version-check", "--jobs", "1",
+         "--json", str(target)],
         env={**os.environ, "SEMGREP_SETTINGS_FILE": str(tmp_path / "settings.yml"),
              "SEMGREP_LOG_FILE": str(tmp_path / "semgrep.log")},
         capture_output=True, text=True, timeout=180, check=False,
@@ -127,9 +134,9 @@ class Output {
     assert proc.returncode == 0, proc.stderr
     data = json.loads(proc.stdout)
     assert not data.get("errors"), data.get("errors")
-    for name, _, rule_id, source in cases:
-        expected = {i for i, line in enumerate(source.splitlines(), 1) if "// unsafe" in line or "# unsafe" in line}
-        assert expected, name
-        got = {r["start"]["line"] for r in data["results"]
-               if Path(r["path"]).name == name and r["check_id"].endswith(rule_id)}
-        assert got == expected, (name, rule_id, got, expected)
+    expected = {i for i, line in enumerate(source.splitlines(), 1)
+                if "// unsafe" in line or "# unsafe" in line}
+    assert expected, name
+    actual = {r["start"]["line"] for r in data["results"]
+              if r["check_id"].endswith(rule_id)}
+    assert actual == expected, (name, rule_id, data.get("version"), actual, expected)

@@ -157,15 +157,18 @@ def test_extent_aware_guards_stay_silent(tmp_path, index_type, body):
 
 
 def test_guarded_access_does_not_hide_another_access(tmp_path):
-    results = _run_rule(tmp_path, """
+    source = """
         int f(int idx) {
             int arr[4];
             if (idx >= 0 && idx < 4) { consume(arr[idx]); }
-            return arr[idx];
+            return arr[idx]; // unsafe
         }
-    """)
+    """
+    results = _run_rule(tmp_path, source)
     assert len(results) == 1
-    assert results[0]["line"] == 5
+    expected = [i for i, line in enumerate(textwrap.dedent(source).splitlines(), 1)
+                if "// unsafe" in line]
+    assert [result["line"] for result in results] == expected
 
 
 @pytest.mark.parametrize("body", [

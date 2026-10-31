@@ -66,9 +66,14 @@ function dynamic_class() {
     expected = {
         "selectors.php": {i for i, line in enumerate(source.splitlines(), 1)
                           if "// reflection" in line},
-        "unsafe_reflection_pos.php": {4, 8, 12, 16, 21},
+        "unsafe_reflection_pos.php": {
+            i for i, line in enumerate(
+                (_FIXTURES / "unsafe_reflection_pos.php").read_text().splitlines(), 1,
+            ) if "// reflection" in line
+        },
         "unsafe_reflection_neg.php": set(),
     }
+    assert expected["unsafe_reflection_pos.php"], "positive fixture needs reflection markers"
     actual = {name: set() for name in expected}
     for result in data["results"]:
         assert result["check_id"].endswith(_RULE_ID), result["check_id"]
