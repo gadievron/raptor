@@ -129,7 +129,7 @@ def _private_java_command(binary: str, flags: list[str], arguments: list[str], w
     launcher = Path(binary).resolve(strict=True)
     with launcher.open(encoding="utf-8") as stream:
         source = stream.read(65537)
-    match = re.search(r"^declare -a app_mainclass=\('([A-Za-z_$][\w.$]*)'\)$", source, re.MULTILINE)
+    match = re.search(r"^declare -a app_mainclass=\('([A-Za-z_$][\w.$]*)'\)\r?$", source, re.MULTILINE)
     library = launcher.parent.parent / "lib"
     if match is None or len(source) > 65536 or not library.is_dir() or not _java_path():
         raise RuntimeError("Joern distribution does not declare a supported secure Java entry point")

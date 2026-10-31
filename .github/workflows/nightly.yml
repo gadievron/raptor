@@ -50,7 +50,7 @@ env:
 jobs:
   slow-integration:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -186,18 +186,14 @@ jobs:
           key: apt-debs-${{ runner.os }}-llvm21-radare2-v1
 
       # RAPTOR_MAX_SESSION_SECONDS: tier wallclock tripwire (root
-      # conftest) — flags the session with a named summary when the
-      # slow tier exceeds its budget, instead of drifting silently
-      # toward the job timeout. Baseline at the time this was set:
-      # ~10-15 min on ubuntu-latest with the corpus-scale drivers in
-      # their own weekly tier; the budget carries the remaining
-      # headroom to the 45-min job timeout's slow-step share. If it
-      # fires without a starved runner, re-measure and either fix the
-      # drift or consciously raise the budget with the new baseline.
+      # conftest). Nightly #193 measured 1829s for the expanded slow tier.
+      # Allow 45 minutes for tests, with 15 additional minutes in the job
+      # timeout for setup and report uploads. Keep the tripwire enabled so
+      # further growth remains visible before the job is forcibly cancelled.
       - name: Run slow tests
         env:
           RAPTOR_RANDOMISE_TESTS: ${{ github.run_id }}
-          RAPTOR_MAX_SESSION_SECONDS: '1800'
+          RAPTOR_MAX_SESSION_SECONDS: '2700'
         run: |
           source $VENV_PATH/bin/activate
           # .github test dirs included for their slow-marked
