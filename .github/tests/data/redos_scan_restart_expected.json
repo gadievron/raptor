@@ -1644,6 +1644,13 @@
    "exp": 1.0,
    "verdict": "linear"
   },
+  "core/concepts/library_detect.py\u001f_KNOWN_TARBALL_GLOBS[1]": {
+   "digests": [
+    "d6de24158723"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
   "core/concepts/spot_check.py\u001f_QUESTION_VALUE_RE": {
    "digests": [
     "8fe688d1a940"

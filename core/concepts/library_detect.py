@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 # System include pattern — <header> only, not "header".
 _INCLUDE_RE = re.compile(
-    r'^\s*#\s*include\s+<([^>]+)>', re.MULTILINE,
+    r'^[^\S\n]*#\s*include\s+<([^>]+)>', re.MULTILINE,
 )
 
 # Extensions to scan for includes.
