@@ -1244,6 +1244,16 @@ _ALLOWLIST: tuple[AllowlistEntry, ...] = (
         ),
     ),
     AllowlistEntry(
+        file="libexec/raptor-study-prep",
+        func_name="_impl_chase",
+        kind="unsanitised_llm_value",
+        detail="_timed_out",
+        audit_note=(
+            "int counter of timed-out grep batches in the "
+            "ThreadPoolExecutor — no target/LLM content"
+        ),
+    ),
+    AllowlistEntry(
         file="packages/llm_analysis/orchestrator.py",
         func_name="orchestrate",
         kind="unsanitised_llm_value",
