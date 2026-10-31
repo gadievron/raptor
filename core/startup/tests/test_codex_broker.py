@@ -17,6 +17,12 @@ pytestmark = pytest.mark.skipif(sys.platform != 'linux', reason='Linux peer cred
 
 @pytest.fixture
 def host(tmp_path, monkeypatch):
+    # restore() writes these directly; register their original values before
+    # any child fixture can snapshot a restored value in monkeypatch. Empty
+    # markers isolate this fixture while guaranteeing teardown restores the
+    # caller's environment, including keys that were originally absent.
+    for key in ('CODEX', 'RAPTOR_CODEX_ENVIRONMENT'):
+        monkeypatch.setenv(key, '')
     home = tmp_path / 'home'
     home.mkdir(mode=0o700)
     monkeypatch.setenv('HOME', str(home))
@@ -41,8 +47,6 @@ def host(tmp_path, monkeypatch):
     try:
         yield sid, process, credential
     finally:
-        for key in ('CODEX', 'RAPTOR_CODEX_ENVIRONMENT'):
-            os.environ.pop(key, None)
         if not process.stdin.closed:
             process.stdin.close()
         process.wait(timeout=3)
