@@ -149,9 +149,10 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
 
             # Tier 3: Latest capable models (fallback)
             ("anthropic", "claude-sonnet-4-6", 70),
+            ("gemini", "gemini-4-argon", 69),
             ("gemini", "gemini-3.1-pro-preview", 68),
             ("gemini", "gemini-2.5-pro", 65),
-            ("gemini", "gemini-3.7-flash", 60),
+            ("gemini", "gemini-3.8-flash", 60),
             ("gemini", "gemini-3.6-flash", 58),
             ("gemini", "gemini-2.5-flash", 55),
         ]

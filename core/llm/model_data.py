@@ -18,6 +18,11 @@ than Haiku 4.5). Cache-read multiplier is model-specific on the 5.x lineup
 (5% for Opus/Sonnet 5.5, 2.5% for Fable/Mythos 5.1) vs the flat 10%
 tabulated here — conservative overcount, acceptable for now.
 
+2026-10-31 — Gemini refresh from ai.google.dev/gemini-api/docs/pricing. Added
+gemini-4-argon (flagship, introductory pricing through 2026-12-01) and
+gemini-3.8-flash (introductory through 2027-01-01). Removed gemini-3.7-flash
+and gemini-3.5-flash (no longer listed). gemini-2.5-* now limited-access.
+
 2026-08-15 — Gemini refresh from ai.google.dev/gemini-api/docs/pricing.
 Added gemini-3.7-flash, gemini-3.6-flash, gemini-3.5-flash-lite,
 gemini-3.1-pro-preview. Removed gemini-3-flash-preview (superseded by
@@ -176,14 +181,16 @@ MODEL_COSTS = {
     "o3-pro":                  {"input": 0.020,   "output": 0.080},
     "o4-mini":                 {"input": 0.0011,  "output": 0.0044},
     # Google Gemini (<=200K prompt tier for pro models)
-    # 3.7/3.6 Flash: introductory pricing through 2026-12-31; post-intro
-    # is 2× these rates — update when the introductory period ends.
-    "gemini-3.7-flash":        {"input": 0.00075, "output": 0.00375},
+    # gemini-4-argon: introductory pricing through 2026-12-01; post-intro
+    # is 2× ($0.004/$0.020). gemini-3.8/3.6-flash: introductory pricing
+    # through 2027-01-01; post-intro is 2× — update when periods end.
+    "gemini-4-argon":          {"input": 0.002,   "output": 0.010},
+    "gemini-3.8-flash":        {"input": 0.00075, "output": 0.00375},
     "gemini-3.6-flash":        {"input": 0.00075, "output": 0.00375},
-    "gemini-3.5-flash":        {"input": 0.0015,  "output": 0.009},
     "gemini-3.5-flash-lite":   {"input": 0.0003,  "output": 0.0025},
     "gemini-3.1-pro-preview":  {"input": 0.002,   "output": 0.012},
     "gemini-3.1-flash-lite":   {"input": 0.00025, "output": 0.0015},
+    # Google Gemini — limited access (existing users only)
     "gemini-2.5-pro":          {"input": 0.00125, "output": 0.010},
     "gemini-2.5-flash":        {"input": 0.0003,  "output": 0.0025},
     "gemini-2.5-flash-lite":   {"input": 0.0001,  "output": 0.0004},
@@ -270,12 +277,13 @@ MODEL_LIMITS = {
     "o3-pro":                  {"max_context": 200000,  "max_output": 100000, "rpm": 500},
     "o4-mini":                 {"max_context": 200000,  "max_output": 100000, "rpm": 1000},
     # Google Gemini
-    "gemini-3.7-flash":        {"max_context": 1048576, "max_output": 65536,  "rpm": 2000},
+    "gemini-4-argon":          {"max_context": 1048576, "max_output": 65536,  "rpm": 1000},
+    "gemini-3.8-flash":        {"max_context": 1048576, "max_output": 65536,  "rpm": 2000},
     "gemini-3.6-flash":        {"max_context": 1048576, "max_output": 65536,  "rpm": 2000},
-    "gemini-3.5-flash":        {"max_context": 1048576, "max_output": 65536,  "rpm": 2000},
     "gemini-3.5-flash-lite":   {"max_context": 1048576, "max_output": 65536,  "rpm": 10000},
     "gemini-3.1-pro-preview":  {"max_context": 1048576, "max_output": 65536,  "rpm": 1000},
     "gemini-3.1-flash-lite":   {"max_context": 1048576, "max_output": 65536,  "rpm": 10000},
+    # Google Gemini — limited access (existing users only)
     "gemini-2.5-pro":          {"max_context": 1048576, "max_output": 65536,  "rpm": 1000},
     "gemini-2.5-flash":        {"max_context": 1048576, "max_output": 65536,  "rpm": 2000},
     "gemini-2.5-flash-lite":   {"max_context": 1048576, "max_output": 65536,  "rpm": 10000},
