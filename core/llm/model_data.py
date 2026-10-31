@@ -5,7 +5,18 @@ Pure data, no logic. Updated during development from provider
 documentation. Changes at a different rate than code — when
 providers update pricing or release new models, edit this file.
 
-Last verified: 2026-08-15.
+Last verified: 2026-10-31.
+
+2026-10-31 — Anthropic refresh from platform.claude.com/docs/en/models/overview.
+Added claude-fable-5-1, claude-mythos-5-1, claude-opus-5-5, claude-sonnet-5-5,
+claude-haiku-5-5 (current lineup as of 2026-09-28). Removed claude-sonnet-4-5
+(deprecated, retires 2026-11-30). Removed claude-opus-4-1, claude-sonnet-4-0,
+claude-opus-4-0 (retired 2026-06-15). Previous "current" models reclassified
+as legacy per Anthropic's overview page. All current-lineup models are 1M
+context / 128K output. Haiku 5.5 pricing is $0.10/$0.50 per MTok (10× cheaper
+than Haiku 4.5). Cache-read multiplier is model-specific on the 5.x lineup
+(5% for Opus/Sonnet 5.5, 2.5% for Fable/Mythos 5.1) vs the flat 10%
+tabulated here — conservative overcount, acceptable for now.
 
 2026-08-15 — Gemini refresh from ai.google.dev/gemini-api/docs/pricing.
 Added gemini-3.7-flash, gemini-3.6-flash, gemini-3.5-flash-lite,
@@ -90,7 +101,7 @@ PROVIDER_DEFAULT_MODELS = {
 #
 # Cost-class ratio (input/output, per-1K, vs flagship default):
 #   Anthropic:  Opus  $0.005/$0.025  →  Haiku   $0.001/$0.005   (~5×)
-#   (Note: Sonnet 5 is now $0.002/$0.010 — cheaper than previous Sonnet tier)
+#   (Note: Sonnet 5/5.5 is $0.002/$0.010; Haiku 5.5 is $0.0001/$0.0005)
 #   OpenAI:     5.4   $0.0025/$0.015 →  4o-mini $0.00015/$0.0006 (~25×)
 #   Gemini:     Pro   $0.00125/$0.01 →  Flash-L $0.0001/$0.0004  (~25×)
 #   Mistral:    Large $0.002/$0.006  →  Small   $0.00015/$0.0006 (~13×)
@@ -115,23 +126,23 @@ PROVIDER_FAST_MODELS = {
 # Per-1K-token costs (USD), split input/output.
 # Thinking/reasoning tokens are billed at the output rate on all providers.
 MODEL_COSTS = {
-    # Anthropic — current
+    # Anthropic — current lineup (platform.claude.com/docs/en/models/overview)
+    "claude-fable-5-1":        {"input": 0.010,   "output": 0.050},
+    "claude-mythos-5-1":       {"input": 0.010,   "output": 0.050},
+    "claude-opus-5-5":         {"input": 0.004,   "output": 0.020},
+    "claude-sonnet-5-5":       {"input": 0.002,   "output": 0.010},
+    "claude-haiku-5-5":        {"input": 0.0001,  "output": 0.0005},
+    # Anthropic — legacy (still served via API)
     "claude-fable-5":          {"input": 0.010,   "output": 0.050},
     "claude-mythos-5":         {"input": 0.010,   "output": 0.050},
     "claude-opus-5":           {"input": 0.005,   "output": 0.025},
     "claude-opus-4-8":         {"input": 0.005,   "output": 0.025},
     "claude-opus-4-7":         {"input": 0.005,   "output": 0.025},
+    "claude-opus-4-6":         {"input": 0.005,   "output": 0.025},
+    "claude-opus-4-5":         {"input": 0.005,   "output": 0.025},
     "claude-sonnet-5":         {"input": 0.002,   "output": 0.010},
     "claude-sonnet-4-6":       {"input": 0.003,   "output": 0.015},
     "claude-haiku-4-5":        {"input": 0.001,   "output": 0.005},
-    # Anthropic — legacy (still served via API)
-    "claude-opus-4-6":         {"input": 0.005,   "output": 0.025},
-    "claude-sonnet-4-5":       {"input": 0.003,   "output": 0.015},
-    "claude-opus-4-5":         {"input": 0.005,   "output": 0.025},
-    "claude-opus-4-1":         {"input": 0.015,   "output": 0.075},
-    # Anthropic — deprecated (retired 2026-06-15, may still serve via API)
-    "claude-sonnet-4-0":       {"input": 0.003,   "output": 0.015},
-    "claude-opus-4-0":         {"input": 0.015,   "output": 0.075},
     # OpenAI — flagship (5.6/5.5/5.4 families)
     "gpt-5.6-sol":             {"input": 0.005,   "output": 0.030},
     "gpt-5.6-terra":           {"input": 0.0025,  "output": 0.015},
@@ -209,23 +220,23 @@ MODEL_COSTS = {
 #   Mistral:   operator-observed defaults (RPS × 60 → RPM).
 #              Large=4, Medium=50, Small=50.
 MODEL_LIMITS = {
-    # Anthropic — current
+    # Anthropic — current lineup
+    "claude-fable-5-1":        {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
+    "claude-mythos-5-1":       {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
+    "claude-opus-5-5":         {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
+    "claude-sonnet-5-5":       {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
+    "claude-haiku-5-5":        {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
+    # Anthropic — legacy (still served via API)
     "claude-fable-5":          {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
     "claude-mythos-5":         {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
     "claude-opus-5":           {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
     "claude-opus-4-8":         {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
     "claude-opus-4-7":         {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
+    "claude-opus-4-6":         {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
+    "claude-opus-4-5":         {"max_context": 200000,  "max_output": 64000,  "rpm": 1000},
     "claude-sonnet-5":         {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
     "claude-sonnet-4-6":       {"max_context": 1000000, "max_output": 64000,  "rpm": 1000},
     "claude-haiku-4-5":        {"max_context": 200000,  "max_output": 64000,  "rpm": 1000},
-    # Anthropic — legacy (still served via API)
-    "claude-opus-4-6":         {"max_context": 1000000, "max_output": 128000, "rpm": 1000},
-    "claude-sonnet-4-5":       {"max_context": 200000,  "max_output": 64000,  "rpm": 1000},
-    "claude-opus-4-5":         {"max_context": 200000,  "max_output": 64000,  "rpm": 1000},
-    "claude-opus-4-1":         {"max_context": 200000,  "max_output": 32000,  "rpm": 1000},
-    # Anthropic — deprecated (retired 2026-06-15, may still serve via API)
-    "claude-sonnet-4-0":       {"max_context": 200000,  "max_output": 64000,  "rpm": 1000},
-    "claude-opus-4-0":         {"max_context": 200000,  "max_output": 32000,  "rpm": 1000},
     # OpenAI — flagship
     "gpt-5.6-sol":             {"max_context": 1050000, "max_output": 128000, "rpm": 500},
     "gpt-5.6-terra":           {"max_context": 1050000, "max_output": 128000, "rpm": 500},
@@ -325,13 +336,18 @@ PROVIDER_ENV_KEYS = {
 # one of these, apply the 1.10× regional surcharge.  Extend as AWS
 # adds global-CRIS coverage; non-listed models stay at 1.0×.
 _BEDROCK_GLOBAL_CRIS_MODELS: frozenset[str] = frozenset({
+    "claude-fable-5-1",
     "claude-fable-5",
+    "claude-mythos-5-1",
     "claude-mythos-5",
+    "claude-opus-5-5",
     "claude-opus-5",
-    "claude-opus-4-7",
     "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-sonnet-5-5",
     "claude-sonnet-5",
     "claude-sonnet-4-6",
+    "claude-haiku-5-5",
     "claude-haiku-4-5",
 })
 _BEDROCK_REGIONAL_SURCHARGE = 1.10
@@ -554,7 +570,8 @@ def price_for(
 
 # Anthropic-specific cache pricing multipliers (vs base input rate).
 # Two write durations exist: 5-minute (1.25×) and 1-hour (2×).
-# Cache reads/refreshes are 0.1× regardless of write duration.
+# Cache reads are 0.1× for legacy models; 0.05× for Opus/Sonnet 5.5,
+# 0.025× for Fable/Mythos 5.1. The flat 0.1× below is conservative.
 # Used by AnthropicToolUseProvider to compute cost when the response
 # carries ``cache_creation_input_tokens`` / ``cache_read_input_tokens``.
 ANTHROPIC_CACHE_WRITE_5M_MULTIPLIER = 1.25

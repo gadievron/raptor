@@ -3642,7 +3642,7 @@ class AnthropicProvider(LLMProvider):
         if response.cache_read_tokens > 0 or response.cache_write_tokens > 0:
             return                                          # caching is working
         logger.warning(
-            "AnthropicProvider: model %r did not populate cache fields on a turn with cache_control opt-in and %s input tokens — cache savings won't apply for requests this size. Common causes: (1) this model's de-facto cacheable-region minimum is higher than the documented 1024 tokens; (2) the cacheable subset (system + tools when those are opted in) is below the model's minimum even though total input is above 8192. Try a different model (claude-opus-4-7, claude-sonnet-4-5-20250929) or increase the cacheable region size. This warning fires once per provider instance.", self.config.model_name, response.input_tokens
+            "AnthropicProvider: model %r did not populate cache fields on a turn with cache_control opt-in and %s input tokens — cache savings won't apply for requests this size. Common causes: (1) this model's de-facto cacheable-region minimum is higher than the documented 1024 tokens; (2) the cacheable subset (system + tools when those are opted in) is below the model's minimum even though total input is above 8192. Try a different model (claude-opus-4-7, claude-sonnet-5-5) or increase the cacheable region size. This warning fires once per provider instance.", self.config.model_name, response.input_tokens
         )
         self._caching_warning_emitted = True
 

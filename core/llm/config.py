@@ -134,7 +134,10 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
         # Define priority order for thinking models (best first)
         thinking_model_patterns = [
             # Tier 1: Most capable models
+            ("anthropic", "claude-fable-5-1", 130),
+            ("anthropic", "claude-opus-5-5", 120),
             ("anthropic", "claude-opus-4-6", 110),
+            ("anthropic", "claude-sonnet-5-5", 105),
             ("openai", "gpt-5.4-pro", 100),
             ("openai", "gpt-5.4", 95),
             ("openai", "o3", 90),

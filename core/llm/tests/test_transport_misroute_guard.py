@@ -36,7 +36,7 @@ class TestBedrockShapedModelId:
 
     @pytest.mark.parametrize("model_id", [
         "us.anthropic.claude-opus-4-8-v1:0",
-        "eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "eu.anthropic.claude-sonnet-4-6-20260115-v1:0",
         "global.anthropic.claude-haiku-4-5",
         "apac.amazon.nova-pro-v1:0",   # vendor without a Family mapping
         "anthropic.claude-opus-4-8",   # bare Mantle-surface id
@@ -51,7 +51,7 @@ class TestBedrockShapedModelId:
 
     @pytest.mark.parametrize("model_id", [
         "claude-opus-4-8",
-        "claude-sonnet-4-5-20250929",
+        "claude-sonnet-4-6-20260115",
         "session-default",             # claudecode sentinel
         "opus",                        # shorthand alias
         "sonnet[1m]",

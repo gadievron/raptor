@@ -165,10 +165,10 @@ def test_price_for_regional_bedrock_no_surcharge_when_geo_only():
     is the base — no 1.10× surcharge (per owen10380's nuance: geo-only
     models have no cheaper global baseline)."""
     from core.llm.model_data import price_for
-    # claude-opus-4-1 is older; assume no global. SKU until verified.
-    bare = price_for("claude-opus-4-1")
+    # claude-opus-4-5 is legacy; no global CRIS SKU verified.
+    bare = price_for("claude-opus-4-5")
     # Regional with bare-not-in-CRIS-list → 1.0× multiplier
-    assert price_for("us.anthropic.claude-opus-4-1") == bare
+    assert price_for("us.anthropic.claude-opus-4-5") == bare
 
 
 def test_regional_surcharge_applies_to_dated_ids():
@@ -192,7 +192,7 @@ def test_regional_surcharge_applies_to_dated_ids():
         "global.anthropic.claude-opus-4-7-20260115",
     ) == 1.0
     assert _bedrock_cost_multiplier(
-        "us.anthropic.claude-opus-4-1-20250805",
+        "us.anthropic.claude-opus-4-5-20250415",
     ) == 1.0
     assert _bedrock_cost_multiplier("claude-opus-4-7-20260115") == 1.0
 

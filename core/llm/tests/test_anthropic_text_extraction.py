@@ -186,7 +186,7 @@ def test_thinking_shares_output_budget_reasoning_tier(model):
 
 @pytest.mark.parametrize("model", [
     "claude-opus-4-6",
-    "claude-sonnet-4-5",
+    "claude-opus-4-5",
     "claude-haiku-4-5",
     "gpt-5.6-sol",
     "",

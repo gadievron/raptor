@@ -250,12 +250,12 @@ def test_resolve_provider_self_serves_dispatcher_for_bedrock(
     )
     with patch("cve_env.agent.core_loop.create_provider",
                return_value="prov") as mk:
-        out = core_loop._resolve_provider("anthropic.claude-opus-4-1")
+        out = core_loop._resolve_provider("anthropic.claude-opus-4-5")
     assert out == "prov"
     (mc,), _ = mk.call_args
     assert mc.provider == "bedrock"
     assert ensured == [
-        "bedrock:anthropic.claude-opus-4-1:cve-env-core-backend"]
+        "bedrock:anthropic.claude-opus-4-5:cve-env-core-backend"]
 
 
 

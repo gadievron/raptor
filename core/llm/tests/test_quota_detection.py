@@ -147,7 +147,7 @@ class TestQuotaGuidance:
 
     def test_anthropic_guidance_by_provider(self):
         """Should return Anthropic-specific detection message when provider is 'anthropic'."""
-        guidance = _get_quota_guidance("claude-sonnet-4.5", "anthropic")
+        guidance = _get_quota_guidance("claude-sonnet-5.5", "anthropic")
 
         assert "Anthropic rate limit exceeded" in guidance
 
@@ -174,7 +174,7 @@ class TestQuotaGuidance:
         providers_and_models = [
             ("gemini", "gemini-3-pro"),
             ("openai", "gpt-5.2"),
-            ("anthropic", "claude-sonnet-4.5"),
+            ("anthropic", "claude-sonnet-5.5"),
         ]
 
         for provider, model in providers_and_models:

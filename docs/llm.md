@@ -318,7 +318,7 @@ export RAPTOR_BEDROCK_API=mantle    # default
 export RAPTOR_BEDROCK_API=runtime
 
 # Per model in models.json (always wins over env var)
-{"provider": "bedrock", "model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0", "bedrock_api": "runtime"}
+{"provider": "bedrock", "model": "us.anthropic.claude-sonnet-5-5-v1:0", "bedrock_api": "runtime"}
 ```
 
 A geo-prefixed model id (`us.anthropic.*` etc.) infers `provider: bedrock` but

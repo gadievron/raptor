@@ -13,12 +13,11 @@ def test_opus_cutoff_at_4_7():
     assert supports_temperature("claude-opus-4-6") is True      # verified: accepts
     assert supports_temperature("claude-opus-4-7") is False     # verified: 400
     assert supports_temperature("claude-opus-4-8") is False     # verified: 400
-    assert supports_temperature("claude-opus-4-1") is True
+    assert supports_temperature("claude-opus-4-5") is True
 
 
 def test_other_tiers_below_cutoff_keep_temperature():
     assert supports_temperature("claude-sonnet-4-6") is True     # verified: accepts
-    assert supports_temperature("claude-sonnet-4-5") is True
     assert supports_temperature("claude-haiku-4-5") is True
 
 
@@ -75,4 +74,4 @@ def test_dated_snapshot_of_two_part_id_still_gates():
     date-suffix exclusion must not swallow a genuine minor."""
     assert supports_temperature("claude-sonnet-4-7-20260115") is False
     assert supports_temperature("claude-opus-4-7-20260301") is False
-    assert supports_temperature("claude-sonnet-4-5-20250929") is True
+    assert supports_temperature("claude-sonnet-4-6-20260115") is True

@@ -65,7 +65,7 @@ class TestResolutionLogic:
         via lex-max; better to 404 with the alias the user typed."""
         _seed_cache_for_tests([
             "claude-haiku-4-5-20251001",
-            "claude-opus-4-1-20260101",
+            "claude-opus-4-5-20260101",
             "claude-sonnet-4-6-20260201",
         ])
         assert resolve_anthropic("claude", "k") == "claude"
@@ -75,7 +75,7 @@ class TestResolutionLogic:
         segment is the major version digit, not a date. Verbatim."""
         _seed_cache_for_tests([
             "claude-opus-3-20240115",
-            "claude-opus-4-1-20260101",
+            "claude-opus-4-5-20260101",
         ])
         assert resolve_anthropic("claude-opus", "k") == "claude-opus"
 
@@ -83,7 +83,7 @@ class TestResolutionLogic:
         """``claude-opus-4`` spans multiple minor versions — next
         segment is the minor version digit, not a date. Verbatim."""
         _seed_cache_for_tests([
-            "claude-opus-4-1-20260101",
+            "claude-opus-4-5-20260101",
             "claude-opus-4-2-20260315",
         ])
         assert resolve_anthropic("claude-opus-4", "k") == "claude-opus-4"
@@ -94,7 +94,7 @@ class TestResolutionLogic:
         derail it."""
         _seed_cache_for_tests([
             "claude-haiku-4-5-20251001",
-            "claude-opus-4-1-20260101",
+            "claude-opus-4-5-20260101",
             "claude-sonnet-4-6-20260201",
         ])
         assert resolve_anthropic("claude-haiku-4-5", "k") == "claude-haiku-4-5-20251001"
