@@ -2,7 +2,7 @@
   "_source": {
     "fetched_at": "2026-11-01T12:59:42Z",
     "git_ref": "v2.4.0",
-    "license": "MIT (RAPTOR-generated scan output)",
+    "license": "MIT (RAPTOR-generated fields only; upstream advisory data retains its own terms)",
     "name": "RAPTOR SCA scan of cachet-2.4",
     "project_license": "BSD-3-Clause",
     "provenance": "Scan output produced by RAPTOR's SCA pipeline against https://github.com/CachetHQ/Cachet.git@v2.4.0. Project source not redistributed.",
@@ -12,29 +12,7 @@
     {
       "advisory": {
         "aliases": [],
-        "cwe_ids": [
-          "CWE-150",
-          "CWE-20",
-          "CWE-74"
-        ],
-        "fixed_versions": [
-          "3.371.4"
-        ],
-        "id": "GHSA-27qh-8cxx-2cr5",
-        "modified": "2026-09-10T03:50:36.325474+00:00",
-        "published": "2026-03-27T19:54:58+00:00",
-        "references": [
-          "https://github.com/aws/aws-sdk-php/security/advisories/GHSA-27qh-8cxx-2cr5",
-          "https://github.com/aws/aws-sdk-php",
-          "https://github.com/aws/aws-sdk-php/blob/master/src/CloudFront/Signer.php",
-          "https://github.com/aws/aws-sdk-php/releases/tag/3.371.4"
-        ],
-        "severity": {
-          "score": 7.7,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:N/SC:H/SI:N/SA:N"
-        },
-        "summary": "AWS SDK for PHP has CloudFront Policy Document Injection via Special Characters"
+        "id": "GHSA-27qh-8cxx-2cr5"
       },
       "cvss_score": 7.7,
       "dep_name": "aws/aws-sdk-php",
@@ -99,28 +77,7 @@
           "GHSA-73jg-4qh6-3f4g",
           "GO-2026-4390"
         ],
-        "cwe_ids": [
-          "CWE-22"
-        ],
-        "fixed_versions": [
-          "3.288.1"
-        ],
-        "id": "GHSA-557v-xcg6-rm5m",
-        "modified": "2026-02-04T07:36:06.785913+00:00",
-        "published": "2023-12-21T23:16:13+00:00",
-        "references": [
-          "https://github.com/aws/aws-sdk-php/security/advisories/GHSA-557v-xcg6-rm5m",
-          "https://nvd.nist.gov/vuln/detail/CVE-2023-51651",
-          "https://github.com/aws/aws-sdk-php/commit/aebc9f801438746ac4ade327551576cb75f635f2",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/aws/aws-sdk-php/CVE-2023-51651.yaml",
-          "https://github.com/aws/aws-sdk-php"
-        ],
-        "severity": {
-          "score": 6.0,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:N"
-        },
-        "summary": "Potential URI resolution path traversal in the AWS SDK for PHP"
+        "id": "GHSA-557v-xcg6-rm5m"
       },
       "cvss_score": 6.0,
       "dep_name": "aws/aws-sdk-php",
@@ -183,28 +140,7 @@
         "aliases": [
           "CVE-2025-14761"
         ],
-        "cwe_ids": [
-          "CWE-327"
-        ],
-        "fixed_versions": [
-          "3.368.0"
-        ],
-        "id": "GHSA-x8cp-jf6f-r4xh",
-        "modified": "2026-09-10T03:50:32.376347+00:00",
-        "published": "2025-12-18T18:52:34+00:00",
-        "references": [
-          "https://github.com/aws/aws-sdk-php/security/advisories/GHSA-x8cp-jf6f-r4xh",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-14761",
-          "https://github.com/aws/aws-sdk-php/commit/6827cac70397dca07e6e86f7cf630954ec2bc6bf",
-          "https://aws.amazon.com/security/security-bulletins/AWS-2025-032",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/aws/aws-sdk-php/CVE-2025-14761.yaml"
-        ],
-        "severity": {
-          "score": 6.0,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:L/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N"
-        },
-        "summary": "AWS SDK for PHP's S3 Encryption Client has a Key Commitment Issue"
+        "id": "GHSA-x8cp-jf6f-r4xh"
       },
       "cvss_score": 6.0,
       "dep_name": "aws/aws-sdk-php",
@@ -266,30 +202,7 @@
         "aliases": [
           "CVE-2026-67339"
         ],
-        "cwe_ids": [
-          "CWE-200",
-          "CWE-201",
-          "CWE-522"
-        ],
-        "fixed_versions": [
-          "7.14.2"
-        ],
-        "id": "GHSA-94pj-82f3-465w",
-        "modified": "2026-09-10T03:51:11.108946+00:00",
-        "published": "2026-07-20T21:46:02+00:00",
-        "references": [
-          "https://github.com/guzzle/guzzle/security/advisories/GHSA-94pj-82f3-465w",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-67339",
-          "https://github.com/guzzle/guzzle/pull/3876",
-          "https://github.com/guzzle/guzzle/commit/9e4580d4b9981e903dc6323fe37f50a96e85b05e",
-          "https://github.com/guzzle/guzzle"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"
-        },
-        "summary": "Guzzle: Proxy-Authorization headers can be sent to origin servers"
+        "id": "GHSA-94pj-82f3-465w"
       },
       "cvss_score": 5.3,
       "dep_name": "guzzlehttp/guzzle",
@@ -356,29 +269,7 @@
         "aliases": [
           "CVE-2026-55767"
         ],
-        "cwe_ids": [
-          "CWE-1286",
-          "CWE-346"
-        ],
-        "fixed_versions": [
-          "7.12.1"
-        ],
-        "id": "GHSA-cwxw-98qj-8qjx",
-        "modified": "2026-09-10T03:50:49.287156+00:00",
-        "published": "2026-06-19T14:37:29+00:00",
-        "references": [
-          "https://github.com/guzzle/guzzle/security/advisories/GHSA-cwxw-98qj-8qjx",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-55767",
-          "https://github.com/guzzle/guzzle/pull/3653",
-          "https://github.com/guzzle/guzzle/commit/7f537cded1912349abf5081258d6db19106d774d",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/guzzlehttp/guzzle/CVE-2026-55767.yaml"
-        ],
-        "severity": {
-          "score": 5.8,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:N/I:L/A:N"
-        },
-        "summary": "guzzlehttp/guzzle: Dot-Only Cookie Domains Match All Hosts"
+        "id": "GHSA-cwxw-98qj-8qjx"
       },
       "cvss_score": 5.8,
       "dep_name": "guzzlehttp/guzzle",
@@ -445,29 +336,7 @@
         "aliases": [
           "CVE-2026-67353"
         ],
-        "cwe_ids": [
-          "CWE-1325",
-          "CWE-770"
-        ],
-        "fixed_versions": [
-          "7.15.1"
-        ],
-        "id": "GHSA-f283-ghqc-fg79",
-        "modified": "2026-09-10T03:50:51.710471+00:00",
-        "published": "2026-07-20T23:27:02+00:00",
-        "references": [
-          "https://github.com/guzzle/guzzle/security/advisories/GHSA-f283-ghqc-fg79",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-67353",
-          "https://github.com/guzzle/guzzle/pull/3901",
-          "https://github.com/guzzle/guzzle/commit/7b68220d6543f6f80fe62e633361fc9d4ead14d4",
-          "https://github.com/guzzle/guzzle"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "Guzzle: Unbounded response cookies risk denial of service"
+        "id": "GHSA-f283-ghqc-fg79"
       },
       "cvss_score": 5.3,
       "dep_name": "guzzlehttp/guzzle",
@@ -534,31 +403,7 @@
         "aliases": [
           "CVE-2026-69245"
         ],
-        "cwe_ids": [
-          "CWE-180",
-          "CWE-346",
-          "CWE-384"
-        ],
-        "fixed_versions": [
-          "7.15.2",
-          "8.0.1"
-        ],
-        "id": "GHSA-f7vp-7xgx-4w4r",
-        "modified": "2026-09-10T03:51:13.889147+00:00",
-        "published": "2026-08-03T21:05:26+00:00",
-        "references": [
-          "https://github.com/guzzle/guzzle/security/advisories/GHSA-f7vp-7xgx-4w4r",
-          "https://github.com/guzzle/guzzle/pull/3907",
-          "https://github.com/guzzle/guzzle/pull/3908",
-          "https://github.com/guzzle/guzzle/commit/3aeea0406aab88cbbd86531313d7cebf8ae149a4",
-          "https://github.com/guzzle/guzzle/commit/744101956d78b7c1384d0cbf379db13e859167bf"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N"
-        },
-        "summary": "Guzzle: Noncanonical cookie domain keeps subdomain scope"
+        "id": "GHSA-f7vp-7xgx-4w4r"
       },
       "cvss_score": 6.5,
       "dep_name": "guzzlehttp/guzzle",
@@ -625,30 +470,7 @@
         "aliases": [
           "CVE-2026-59883"
         ],
-        "cwe_ids": [
-          "CWE-200",
-          "CWE-346",
-          "CWE-384"
-        ],
-        "fixed_versions": [
-          "7.12.3"
-        ],
-        "id": "GHSA-g446-98w2-8p5w",
-        "modified": "2026-09-10T03:50:51.915343+00:00",
-        "published": "2026-07-20T22:00:09+00:00",
-        "references": [
-          "https://github.com/guzzle/guzzle/security/advisories/GHSA-g446-98w2-8p5w",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-59883",
-          "https://github.com/guzzle/guzzle/pull/3694",
-          "https://github.com/guzzle/guzzle/commit/b9944c161b12d9ee9c9334cfc5b9659ecd7451f8",
-          "https://github.com/guzzle/guzzle"
-        ],
-        "severity": {
-          "score": 4.7,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:L/I:L/A:N"
-        },
-        "summary": "Guzzle: Cookie Disclosure and Injection via IP-Address Domains"
+        "id": "GHSA-g446-98w2-8p5w"
       },
       "cvss_score": 4.7,
       "dep_name": "guzzlehttp/guzzle",
@@ -715,29 +537,7 @@
         "aliases": [
           "CVE-2026-67354"
         ],
-        "cwe_ids": [
-          "CWE-201",
-          "CWE-212"
-        ],
-        "fixed_versions": [
-          "7.15.1"
-        ],
-        "id": "GHSA-h95v-h523-3mw8",
-        "modified": "2026-09-10T03:50:52.523072+00:00",
-        "published": "2026-07-20T23:28:36+00:00",
-        "references": [
-          "https://github.com/guzzle/guzzle/security/advisories/GHSA-h95v-h523-3mw8",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-67354",
-          "https://github.com/guzzle/guzzle/pull/3901",
-          "https://github.com/guzzle/guzzle/commit/7b68220d6543f6f80fe62e633361fc9d4ead14d4",
-          "https://github.com/guzzle/guzzle"
-        ],
-        "severity": {
-          "score": 5.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
-        },
-        "summary": "Guzzle: URI fragments disclosed in redirect Referer headers"
+        "id": "GHSA-h95v-h523-3mw8"
       },
       "cvss_score": 5.9,
       "dep_name": "guzzlehttp/guzzle",
@@ -804,32 +604,7 @@
         "aliases": [
           "CVE-2026-69246"
         ],
-        "cwe_ids": [
-          "CWE-180",
-          "CWE-436",
-          "CWE-918",
-          "CWE-941"
-        ],
-        "fixed_versions": [
-          "7.15.2",
-          "8.0.1"
-        ],
-        "id": "GHSA-v5mv-p594-2x33",
-        "modified": "2026-09-10T03:51:14.592158+00:00",
-        "published": "2026-08-03T21:07:26+00:00",
-        "references": [
-          "https://github.com/guzzle/guzzle/security/advisories/GHSA-v5mv-p594-2x33",
-          "https://github.com/guzzle/guzzle/pull/3907",
-          "https://github.com/guzzle/guzzle/pull/3908",
-          "https://github.com/guzzle/guzzle/commit/3aeea0406aab88cbbd86531313d7cebf8ae149a4",
-          "https://github.com/guzzle/guzzle/commit/744101956d78b7c1384d0cbf379db13e859167bf"
-        ],
-        "severity": {
-          "score": 7.2,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:L/I:L/A:N"
-        },
-        "summary": "Guzzle: Noncanonical host can bypass host-based checks"
+        "id": "GHSA-v5mv-p594-2x33"
       },
       "cvss_score": 7.2,
       "dep_name": "guzzlehttp/guzzle",
@@ -896,29 +671,7 @@
         "aliases": [
           "CVE-2026-67355"
         ],
-        "cwe_ids": [
-          "CWE-201",
-          "CWE-941"
-        ],
-        "fixed_versions": [
-          "7.15.1"
-        ],
-        "id": "GHSA-wm3w-8rrp-j577",
-        "modified": "2026-09-10T03:51:12.418606+00:00",
-        "published": "2026-07-20T23:27:49+00:00",
-        "references": [
-          "https://github.com/guzzle/guzzle/security/advisories/GHSA-wm3w-8rrp-j577",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-67355",
-          "https://github.com/guzzle/guzzle/pull/3901",
-          "https://github.com/guzzle/guzzle/commit/7b68220d6543f6f80fe62e633361fc9d4ead14d4",
-          "https://github.com/guzzle/guzzle"
-        ],
-        "severity": {
-          "score": 5.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
-        },
-        "summary": "Guzzle: Host-only cookie scope is not preserved"
+        "id": "GHSA-wm3w-8rrp-j577"
       },
       "cvss_score": 5.9,
       "dep_name": "guzzlehttp/guzzle",
@@ -985,27 +738,7 @@
         "aliases": [
           "CVE-2026-55568"
         ],
-        "cwe_ids": [
-          "CWE-311",
-          "CWE-319",
-          "CWE-636"
-        ],
-        "fixed_versions": [
-          "7.12.1"
-        ],
-        "id": "GHSA-wpwq-4j6v-78m3",
-        "modified": "2026-09-10T03:50:50.904385+00:00",
-        "published": "2026-06-19T14:17:59+00:00",
-        "references": [
-          "https://github.com/guzzle/guzzle/security/advisories/GHSA-wpwq-4j6v-78m3",
-          "https://github.com/guzzle/guzzle"
-        ],
-        "severity": {
-          "score": 5.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
-        },
-        "summary": "guzzlehttp/guzzle: Silent HTTPS-Proxy Downgrade to Cleartext"
+        "id": "GHSA-wpwq-4j6v-78m3"
       },
       "cvss_score": 5.9,
       "dep_name": "guzzlehttp/guzzle",
@@ -1072,28 +805,7 @@
         "aliases": [
           "CVE-2026-48998"
         ],
-        "cwe_ids": [
-          "CWE-20",
-          "CWE-918"
-        ],
-        "fixed_versions": [
-          "2.10.2"
-        ],
-        "id": "GHSA-34xg-wgjx-8xph",
-        "modified": "2026-09-10T03:51:07.670836+00:00",
-        "published": "2026-06-11T13:04:53+00:00",
-        "references": [
-          "https://github.com/guzzle/psr7/security/advisories/GHSA-34xg-wgjx-8xph",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-48998",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/guzzlehttp/psr7/CVE-2026-48998.yaml",
-          "https://github.com/guzzle/psr7"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"
-        },
-        "summary": "guzzlehttp/psr7 has Host Confusion via Authority Reinterpretation"
+        "id": "GHSA-34xg-wgjx-8xph"
       },
       "cvss_score": 5.3,
       "dep_name": "guzzlehttp/psr7",
@@ -1160,29 +872,7 @@
         "aliases": [
           "CVE-2026-59882"
         ],
-        "cwe_ids": [
-          "CWE-20",
-          "CWE-436"
-        ],
-        "fixed_versions": [
-          "2.12.3"
-        ],
-        "id": "GHSA-c2w2-prh8-qm98",
-        "modified": "2026-07-21T18:46:10.537345+00:00",
-        "published": "2026-07-21T18:35:25+00:00",
-        "references": [
-          "https://github.com/guzzle/psr7/security/advisories/GHSA-c2w2-prh8-qm98",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-59882",
-          "https://github.com/guzzle/psr7/pull/811",
-          "https://github.com/guzzle/psr7/commit/ddd64f17d4cc1f7e5ffe6fd2c989ec7221712580",
-          "https://github.com/guzzle/psr7"
-        ],
-        "severity": {
-          "score": 4.2,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:L/A:N"
-        },
-        "summary": "guzzlehttp/psr7: Host Confusion via Weak URI Host Validation"
+        "id": "GHSA-c2w2-prh8-qm98"
       },
       "cvss_score": 4.2,
       "dep_name": "guzzlehttp/psr7",
@@ -1249,29 +939,7 @@
         "aliases": [
           "CVE-2026-49214"
         ],
-        "cwe_ids": [
-          "CWE-113",
-          "CWE-20",
-          "CWE-93"
-        ],
-        "fixed_versions": [
-          "2.10.2"
-        ],
-        "id": "GHSA-hq7v-mx3g-29hw",
-        "modified": "2026-09-10T03:50:49.920925+00:00",
-        "published": "2026-06-11T13:04:47+00:00",
-        "references": [
-          "https://github.com/guzzle/psr7/security/advisories/GHSA-hq7v-mx3g-29hw",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-49214",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/guzzlehttp/psr7/CVE-2026-49214.yaml",
-          "https://github.com/guzzle/psr7"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N"
-        },
-        "summary": "guzzlehttp/psr7 has CRLF Injection via URI Host Component"
+        "id": "GHSA-hq7v-mx3g-29hw"
       },
       "cvss_score": 5.3,
       "dep_name": "guzzlehttp/psr7",
@@ -1338,26 +1006,7 @@
         "aliases": [
           "CVE-2026-55766"
         ],
-        "cwe_ids": [
-          "CWE-113",
-          "CWE-93"
-        ],
-        "fixed_versions": [
-          "2.12.1"
-        ],
-        "id": "GHSA-vm85-hxw5-5432",
-        "modified": "2026-09-10T03:51:09.646537+00:00",
-        "published": "2026-06-19T14:35:57+00:00",
-        "references": [
-          "https://github.com/guzzle/psr7/security/advisories/GHSA-vm85-hxw5-5432",
-          "https://github.com/guzzle/psr7"
-        ],
-        "severity": {
-          "score": 4.8,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:N"
-        },
-        "summary": "guzzlehttp/psr7: CRLF Injection in HTTP Start-Line Serialization"
+        "id": "GHSA-vm85-hxw5-5432"
       },
       "cvss_score": 4.8,
       "dep_name": "guzzlehttp/psr7",
@@ -1422,24 +1071,7 @@
     {
       "advisory": {
         "aliases": [],
-        "cwe_ids": [
-          "CWE-89"
-        ],
-        "fixed_versions": [
-          "8.40.0",
-          "6.20.26"
-        ],
-        "id": "GHSA-4mg9-vhxq-vm7j",
-        "modified": "2024-12-02T05:40:15.245335+00:00",
-        "published": "2021-04-29T21:52:53+00:00",
-        "references": [
-          "https://github.com/laravel/framework/security/advisories/GHSA-4mg9-vhxq-vm7j",
-          "https://github.com/laravel/framework",
-          "https://packagist.org/packages/illuminate/database",
-          "https://packagist.org/packages/laravel/framework"
-        ],
-        "severity": null,
-        "summary": "SQL Server LIMIT / OFFSET SQL Injection in laravel/framework and illuminate/database"
+        "id": "GHSA-4mg9-vhxq-vm7j"
       },
       "cvss_score": null,
       "dep_name": "laravel/framework",
@@ -1501,26 +1133,7 @@
         "aliases": [
           "CVE-2026-48019"
         ],
-        "cwe_ids": [
-          "CWE-93"
-        ],
-        "fixed_versions": [
-          "13.10.0",
-          "12.60.0"
-        ],
-        "id": "GHSA-5vg9-5847-vvmq",
-        "modified": "2026-09-10T03:50:48.526187+00:00",
-        "published": "2026-06-17T13:53:44+00:00",
-        "references": [
-          "https://github.com/laravel/framework/security/advisories/GHSA-5vg9-5847-vvmq",
-          "https://github.com/laravel/framework"
-        ],
-        "severity": {
-          "score": 8.9,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:C/C:H/I:H/A:L"
-        },
-        "summary": "Laravel Framework: CRLF injection in default email rule "
+        "id": "GHSA-5vg9-5847-vvmq"
       },
       "cvss_score": 8.9,
       "dep_name": "laravel/framework",
@@ -1582,31 +1195,7 @@
         "aliases": [
           "CVE-2021-43808"
         ],
-        "cwe_ids": [
-          "CWE-327",
-          "CWE-79"
-        ],
-        "fixed_versions": [
-          "6.20.42",
-          "7.30.6",
-          "8.75.0"
-        ],
-        "id": "GHSA-66hf-2p6w-jqfw",
-        "modified": "2026-07-08T06:27:53.544025+00:00",
-        "published": "2021-12-08T19:57:36+00:00",
-        "references": [
-          "https://github.com/laravel/framework/security/advisories/GHSA-66hf-2p6w-jqfw",
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-43808",
-          "https://github.com/laravel/framework/pull/39906",
-          "https://github.com/laravel/framework/pull/39908",
-          "https://github.com/laravel/framework/pull/39909"
-        ],
-        "severity": {
-          "score": 6.1,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
-        },
-        "summary": "Laravel Framework XSS in Blade templating engine"
+        "id": "GHSA-66hf-2p6w-jqfw"
       },
       "cvss_score": 6.1,
       "dep_name": "laravel/framework",
@@ -1669,30 +1258,7 @@
           "BIT-laravel-2025-27515",
           "CVE-2025-27515"
         ],
-        "cwe_ids": [
-          "CWE-155"
-        ],
-        "fixed_versions": [
-          "12.1.1",
-          "11.44.1",
-          "10.48.29"
-        ],
-        "id": "GHSA-78fx-h6xr-vch4",
-        "modified": "2026-09-10T03:49:48.526393+00:00",
-        "published": "2025-03-05T19:09:39+00:00",
-        "references": [
-          "https://github.com/laravel/framework/security/advisories/GHSA-78fx-h6xr-vch4",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-27515",
-          "https://github.com/laravel/framework/commit/2d133034fefddfb047838f4caca3687a3ba811a5",
-          "https://github.com/laravel/framework/commit/a4f7a8f9b83e21882abeef78c3174c66b0f4a26b",
-          "https://github.com/laravel/framework"
-        ],
-        "severity": {
-          "score": 6.9,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N"
-        },
-        "summary": "Laravel has a File Validation Bypass"
+        "id": "GHSA-78fx-h6xr-vch4"
       },
       "cvss_score": 6.9,
       "dep_name": "laravel/framework",
@@ -1752,29 +1318,7 @@
     {
       "advisory": {
         "aliases": [],
-        "cwe_ids": [
-          "CWE-116"
-        ],
-        "fixed_versions": [
-          "13.12.0",
-          "12.61.1"
-        ],
-        "id": "GHSA-crmm-hgp2-wgrp",
-        "modified": "2026-09-10T03:51:08.672624+00:00",
-        "published": "2026-06-17T13:54:13+00:00",
-        "references": [
-          "https://github.com/laravel/framework/security/advisories/GHSA-crmm-hgp2-wgrp",
-          "https://github.com/laravel/framework/pull/60137",
-          "https://github.com/laravel/framework/pull/60230",
-          "https://github.com/laravel/framework/pull/60350",
-          "https://github.com/laravel/framework"
-        ],
-        "severity": {
-          "score": 4.2,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:L/I:L/A:N"
-        },
-        "summary": "Laravel Framework: Temporary Signed URL Path Confusion"
+        "id": "GHSA-crmm-hgp2-wgrp"
       },
       "cvss_score": 4.2,
       "dep_name": "laravel/framework",
@@ -1836,30 +1380,7 @@
         "aliases": [
           "CVE-2026-114509"
         ],
-        "cwe_ids": [
-          "CWE-1287",
-          "CWE-287"
-        ],
-        "fixed_versions": [
-          "13.29.0",
-          "12.68.0"
-        ],
-        "id": "GHSA-f9x3-7vq9-cph6",
-        "modified": "2026-10-23T22:00:04.255898+00:00",
-        "published": "2026-10-23T21:50:27+00:00",
-        "references": [
-          "https://github.com/laravel/framework/security/advisories/GHSA-f9x3-7vq9-cph6",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-114509",
-          "https://github.com/laravel/framework/commit/8dbb08bccac1be095dba4a9d259a419620f1e8a5",
-          "https://github.com/laravel/framework/commit/9b21ce0a9bb2b2599978bc0b0df4abea952ad31c",
-          "https://github.com/laravel/framework"
-        ],
-        "severity": {
-          "score": 9.2,
-          "severity": "critical",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
-        },
-        "summary": "Laravel TokenGuard authentication bypass through non-string API credentials"
+        "id": "GHSA-f9x3-7vq9-cph6"
       },
       "cvss_score": 9.2,
       "dep_name": "laravel/framework",
@@ -1922,33 +1443,7 @@
           "BIT-laravel-2024-52301",
           "CVE-2024-52301"
         ],
-        "cwe_ids": [
-          "CWE-88"
-        ],
-        "fixed_versions": [
-          "6.20.45",
-          "7.30.7",
-          "8.83.28",
-          "9.52.17",
-          "10.48.23",
-          "11.31.0"
-        ],
-        "id": "GHSA-gv7v-rgg6-548h",
-        "modified": "2024-12-21T18:37:57.182411+00:00",
-        "published": "2024-11-12T22:08:42+00:00",
-        "references": [
-          "https://github.com/laravel/framework/security/advisories/GHSA-gv7v-rgg6-548h",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-52301",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/laravel/framework/CVE-2024-52301.yaml",
-          "https://github.com/advisories/GHSA-gv7v-rgg6-548h",
-          "https://github.com/laravel/framework"
-        ],
-        "severity": {
-          "score": 8.7,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N"
-        },
-        "summary": "Laravel environment manipulation via query string"
+        "id": "GHSA-gv7v-rgg6-548h"
       },
       "cvss_score": 8.7,
       "dep_name": "laravel/framework",
@@ -2010,29 +1505,7 @@
         "aliases": [
           "CVE-2026-102279"
         ],
-        "cwe_ids": [
-          "CWE-80"
-        ],
-        "fixed_versions": [
-          "12.69.0",
-          "13.30.0"
-        ],
-        "id": "GHSA-jh5r-qr3c-85q8",
-        "modified": "2026-09-29T18:30:41.196307+00:00",
-        "published": "2026-09-29T18:24:25+00:00",
-        "references": [
-          "https://github.com/laravel/framework/security/advisories/GHSA-jh5r-qr3c-85q8",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-102279",
-          "https://github.com/laravel/framework/pull/61381",
-          "https://github.com/laravel/framework/commit/b495ca2ec4e15a977e8700328bf13e8a79f29d12",
-          "https://github.com/laravel/framework"
-        ],
-        "severity": {
-          "score": 3.1,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:N/I:L/A:N"
-        },
-        "summary": "Laravel: XSS in Debug Page Information"
+        "id": "GHSA-jh5r-qr3c-85q8"
       },
       "cvss_score": 3.1,
       "dep_name": "laravel/framework",
@@ -2094,28 +1567,7 @@
         "aliases": [
           "CVE-2019-9081"
         ],
-        "cwe_ids": [
-          "CWE-502"
-        ],
-        "fixed_versions": [
-          "6.20.44"
-        ],
-        "id": "GHSA-pfg4-p438-p874",
-        "modified": "2024-02-16T08:24:40.221686+00:00",
-        "published": "2022-05-14T01:31:22+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2019-9081",
-          "https://github.com/Laworigin/Laworigin.github.io/blob/master/2019/02/21/laravelv5-7%E5%8F%8D%E5%BA%8F%E5%88%97%E5%8C%96rce/index.html",
-          "https://github.com/laravel/framework",
-          "https://github.com/laravel/framework/discussions/40184",
-          "https://laworigin.github.io/2019/02/21/laravelv5-7%E5%8F%8D%E5%BA%8F%E5%88%97%E5%8C%96rce"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Laravel Framework Deserialization Vulnerability"
+        "id": "GHSA-pfg4-p438-p874"
       },
       "cvss_score": 9.8,
       "dep_name": "laravel/framework",
@@ -2175,24 +1627,7 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [
-          "6.18.31",
-          "7.22.4"
-        ],
-        "id": "GHSA-qm5c-m76r-2hfr",
-        "modified": "2024-11-29T05:40:19.902767+00:00",
-        "published": "2024-05-15T22:16:52+00:00",
-        "references": [
-          "https://blog.laravel.com/laravel-cookie-security-releases",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/laravel/framework/2020-07-27-1.yaml",
-          "https://github.com/laravel/framework"
-        ],
-        "severity": {
-          "score": 9.9,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:C/C:H/I:H/A:H"
-        },
-        "summary": "Laravel RCE vulnerability in \"cookie\" session driver"
+        "id": "GHSA-qm5c-m76r-2hfr"
       },
       "cvss_score": 9.9,
       "dep_name": "laravel/framework",
@@ -2254,27 +1689,7 @@
         "aliases": [
           "CVE-2020-19316"
         ],
-        "cwe_ids": [
-          "CWE-78"
-        ],
-        "fixed_versions": [
-          "5.8.17"
-        ],
-        "id": "GHSA-w2pm-r78h-4m7v",
-        "modified": "2024-02-19T05:24:32.920369+00:00",
-        "published": "2022-01-06T23:13:42+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-19316",
-          "https://github.com/laravel/framework/commit/44c3feb604944599ad1c782a9942981c3991fa31",
-          "https://github.com/laravel/framework",
-          "http://www.netbytesec.com/advisories/OSCommandInjectionInLaravelFramework"
-        ],
-        "severity": {
-          "score": 8.8,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H"
-        },
-        "summary": "OS Command Injection in Laravel Framework"
+        "id": "GHSA-w2pm-r78h-4m7v"
       },
       "cvss_score": 8.8,
       "dep_name": "laravel/framework",
@@ -2337,27 +1752,7 @@
           "BIT-laravel-2020-24941",
           "CVE-2020-24941"
         ],
-        "cwe_ids": [
-          "CWE-863"
-        ],
-        "fixed_versions": [
-          "6.18.35",
-          "7.24.0"
-        ],
-        "id": "GHSA-w68r-5p45-5rqp",
-        "modified": "2023-12-06T01:00:24.436250+00:00",
-        "published": "2021-05-06T18:54:20+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-24941",
-          "https://github.com/laravel/framework/commit/897d107775737a958dbd0b2f3ea37877c7526371",
-          "https://blog.laravel.com/security-release-laravel-61835-7240"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
-        },
-        "summary": "Improper Input Validation in Laravel"
+        "id": "GHSA-w68r-5p45-5rqp"
       },
       "cvss_score": 7.5,
       "dep_name": "laravel/framework",
@@ -2417,29 +1812,7 @@
     {
       "advisory": {
         "aliases": [],
-        "cwe_ids": [
-          "CWE-74"
-        ],
-        "fixed_versions": [
-          "6.20.14",
-          "7.30.4",
-          "8.24.0"
-        ],
-        "id": "GHSA-x7p5-p2c9-phvg",
-        "modified": "2024-12-02T05:49:41.891932+00:00",
-        "published": "2021-02-02T15:47:08+00:00",
-        "references": [
-          "https://github.com/laravel/framework/security/advisories/GHSA-x7p5-p2c9-phvg",
-          "https://github.com/advisories/GHSA-3p32-j457-pg5x",
-          "https://packagist.org/packages/illuminate/database",
-          "https://packagist.org/packages/laravel/framework"
-        ],
-        "severity": {
-          "score": 7.2,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:L/I:L/A:N"
-        },
-        "summary": "Unexpected database bindings"
+        "id": "GHSA-x7p5-p2c9-phvg"
       },
       "cvss_score": 7.2,
       "dep_name": "laravel/framework",
@@ -2501,29 +1874,7 @@
         "aliases": [
           "CVE-2026-71478"
         ],
-        "cwe_ids": [
-          "CWE-692",
-          "CWE-79",
-          "CWE-86"
-        ],
-        "fixed_versions": [
-          "2.9.0"
-        ],
-        "id": "GHSA-29pj-957v-52mc",
-        "modified": "2026-08-21T05:28:22.850809+00:00",
-        "published": "2026-08-06T20:30:39+00:00",
-        "references": [
-          "https://github.com/thephpleague/commonmark/security/advisories/GHSA-29pj-957v-52mc",
-          "https://github.com/thephpleague/commonmark/commit/493a5aa7d65754b73846006eaff9c2c4431a8e2c",
-          "https://github.com/thephpleague/commonmark",
-          "https://github.com/thephpleague/commonmark/releases/tag/2.9.0"
-        ],
-        "severity": {
-          "score": 6.1,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
-        },
-        "summary": "league/commonmark: AttributesExtension href/src unsafe-link filter bypass via embedded control bytes"
+        "id": "GHSA-29pj-957v-52mc"
       },
       "cvss_score": 6.1,
       "dep_name": "league/commonmark",
@@ -2586,29 +1937,7 @@
         "aliases": [
           "CVE-2026-71488"
         ],
-        "cwe_ids": [
-          "CWE-1050",
-          "CWE-407"
-        ],
-        "fixed_versions": [
-          "2.9.0"
-        ],
-        "id": "GHSA-2q4p-g7hv-5rgv",
-        "modified": "2026-08-21T05:21:14.106549+00:00",
-        "published": "2026-08-06T20:37:20+00:00",
-        "references": [
-          "https://github.com/thephpleague/commonmark/security/advisories/GHSA-2q4p-g7hv-5rgv",
-          "https://github.com/thephpleague/commonmark/commit/a6ef6cdc308dfa39a34239c35818e75892a0e6a8",
-          "https://github.com/thephpleague/commonmark/commit/a70979ea0d7d3377bd7127536748454a922bf5eb",
-          "https://github.com/thephpleague/commonmark/commit/c97b02e5e652b992033b93ba5d6182f706343fc6",
-          "https://github.com/thephpleague/commonmark"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "league/commonmark: Quadratic-time denial of service when parsing crafted Markdown"
+        "id": "GHSA-2q4p-g7hv-5rgv"
       },
       "cvss_score": 7.5,
       "dep_name": "league/commonmark",
@@ -2670,27 +1999,7 @@
         "aliases": [
           "CVE-2025-46734"
         ],
-        "cwe_ids": [
-          "CWE-79"
-        ],
-        "fixed_versions": [
-          "2.7.0"
-        ],
-        "id": "GHSA-3527-qv2q-pfvx",
-        "modified": "2026-03-20T21:31:21.970036+00:00",
-        "published": "2025-05-05T20:40:36+00:00",
-        "references": [
-          "https://github.com/thephpleague/commonmark/security/advisories/GHSA-3527-qv2q-pfvx",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-46734",
-          "https://github.com/thephpleague/commonmark/commit/f0d626cf05ad3e99e6db26ebcb9091b6cd1cd89b",
-          "https://github.com/thephpleague/commonmark"
-        ],
-        "severity": {
-          "score": 6.4,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:C/C:L/I:L/A:N"
-        },
-        "summary": "league/commonmark contains a XSS vulnerability in Attributes extension"
+        "id": "GHSA-3527-qv2q-pfvx"
       },
       "cvss_score": 6.4,
       "dep_name": "league/commonmark",
@@ -2752,28 +2061,7 @@
         "aliases": [
           "CVE-2026-86428"
         ],
-        "cwe_ids": [
-          "CWE-1050",
-          "CWE-407"
-        ],
-        "fixed_versions": [
-          "2.10.0"
-        ],
-        "id": "GHSA-8rr7-cvq3-gmfh",
-        "modified": "2026-09-08T12:38:22.249941+00:00",
-        "published": "2026-09-01T20:28:40+00:00",
-        "references": [
-          "https://github.com/thephpleague/commonmark/security/advisories/GHSA-8rr7-cvq3-gmfh",
-          "https://github.com/thephpleague/commonmark/commit/f27eb720972490b5af4dbb635ad8634529faf9f2",
-          "https://github.com/thephpleague/commonmark",
-          "https://github.com/thephpleague/commonmark/releases/tag/2.10.0"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "league/commonmark: Denial of service via distinctly-named attributes in the Attributes extension"
+        "id": "GHSA-8rr7-cvq3-gmfh"
       },
       "cvss_score": 7.5,
       "dep_name": "league/commonmark",
@@ -2835,28 +2123,7 @@
         "aliases": [
           "CVE-2026-105829"
         ],
-        "cwe_ids": [
-          "CWE-78",
-          "CWE-79"
-        ],
-        "fixed_versions": [
-          "2.10.2"
-        ],
-        "id": "GHSA-97jj-33gv-5xf9",
-        "modified": "2026-10-09T02:56:07.054426+00:00",
-        "published": "2026-09-30T15:36:33+00:00",
-        "references": [
-          "https://github.com/thephpleague/commonmark/security/advisories/GHSA-97jj-33gv-5xf9",
-          "https://github.com/thephpleague/commonmark/commit/411afcc2a7402756d96c89af8882c724d12d47ca",
-          "https://github.com/thephpleague/commonmark",
-          "https://github.com/thephpleague/commonmark/releases/tag/2.10.2"
-        ],
-        "severity": {
-          "score": 6.1,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
-        },
-        "summary": "league/commonmark: DisallowedRawHtml bypassed when a disallowed tag name ends the raw-HTML literal"
+        "id": "GHSA-97jj-33gv-5xf9"
       },
       "cvss_score": 6.1,
       "dep_name": "league/commonmark",
@@ -2919,28 +2186,7 @@
         "aliases": [
           "CVE-2024-58382"
         ],
-        "cwe_ids": [
-          "CWE-407"
-        ],
-        "fixed_versions": [
-          "2.6.0"
-        ],
-        "id": "GHSA-c2pc-g5qf-rfrf",
-        "modified": "2026-09-10T03:56:06.190800+00:00",
-        "published": "2024-12-09T20:42:07+00:00",
-        "references": [
-          "https://github.com/github/cmark-gfm/security/advisories/GHSA-24f7-9frr-5h2r",
-          "https://github.com/github/cmark-gfm/security/advisories/GHSA-29g3-96g3-jg6c",
-          "https://github.com/github/cmark-gfm/security/advisories/GHSA-66g8-4hjf-77xh",
-          "https://github.com/github/cmark-gfm/security/advisories/GHSA-r572-jvj2-3m8p",
-          "https://github.com/github/cmark-gfm/security/advisories/GHSA-r8vr-c48j-fcc5"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "league/commonmark's quadratic complexity bugs may lead to a denial of service"
+        "id": "GHSA-c2pc-g5qf-rfrf"
       },
       "cvss_score": 7.5,
       "dep_name": "league/commonmark",
@@ -3000,27 +2246,7 @@
     {
       "advisory": {
         "aliases": [],
-        "cwe_ids": [
-          "CWE-407"
-        ],
-        "fixed_versions": [
-          "2.9.0"
-        ],
-        "id": "GHSA-g2gp-3wwq-f4ph",
-        "modified": "2026-08-06T20:45:15.558862+00:00",
-        "published": "2026-08-06T20:39:52+00:00",
-        "references": [
-          "https://github.com/thephpleague/commonmark/security/advisories/GHSA-g2gp-3wwq-f4ph",
-          "https://github.com/thephpleague/commonmark/commit/2d4c0fafa62501be919262064cffa6d71687430b",
-          "https://github.com/thephpleague/commonmark",
-          "https://github.com/thephpleague/commonmark/releases/tag/2.9.0"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "league/commonmark: Denial of service via adjacent inline attribute blocks"
+        "id": "GHSA-g2gp-3wwq-f4ph"
       },
       "cvss_score": 7.5,
       "dep_name": "league/commonmark",
@@ -3082,30 +2308,7 @@
         "aliases": [
           "CVE-2026-86430"
         ],
-        "cwe_ids": [
-          "CWE-1050",
-          "CWE-1333",
-          "CWE-407"
-        ],
-        "fixed_versions": [
-          "2.9.1"
-        ],
-        "id": "GHSA-j8pm-gj4c-rq4x",
-        "modified": "2026-09-08T12:38:32.269578+00:00",
-        "published": "2026-09-01T20:17:59+00:00",
-        "references": [
-          "https://github.com/thephpleague/commonmark/security/advisories/GHSA-j8pm-gj4c-rq4x",
-          "https://github.com/thephpleague/commonmark/commit/0768217751fbfaeb8d76762f6944e9af7114295e",
-          "https://github.com/thephpleague/commonmark/commit/d9375fadc308a63a02950a68d822417a6e4c33b2",
-          "https://github.com/thephpleague/commonmark/commit/e0036ef031fd36ec1c3c82db8743fc928b5271c8",
-          "https://github.com/thephpleague/commonmark"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "league/commonmark: Denial of service via crafted code fences, reference links, and emphasis delimiters"
+        "id": "GHSA-j8pm-gj4c-rq4x"
       },
       "cvss_score": 7.5,
       "dep_name": "league/commonmark",
@@ -3165,27 +2368,7 @@
     {
       "advisory": {
         "aliases": [],
-        "cwe_ids": [
-          "CWE-407"
-        ],
-        "fixed_versions": [
-          "2.9.0"
-        ],
-        "id": "GHSA-jfm3-95jq-q3rf",
-        "modified": "2026-08-06T20:45:15.564084+00:00",
-        "published": "2026-08-06T20:40:53+00:00",
-        "references": [
-          "https://github.com/thephpleague/commonmark/security/advisories/GHSA-jfm3-95jq-q3rf",
-          "https://github.com/thephpleague/commonmark/commit/66028124a17ba193da7b11cc3dfda92df21bfbf4",
-          "https://github.com/thephpleague/commonmark",
-          "https://github.com/thephpleague/commonmark/releases/tag/2.9.0"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "league/commonmark:  Denial of service via duplicate footnote definitions"
+        "id": "GHSA-jfm3-95jq-q3rf"
       },
       "cvss_score": 7.5,
       "dep_name": "league/commonmark",
@@ -3247,29 +2430,7 @@
         "aliases": [
           "CVE-2026-86429"
         ],
-        "cwe_ids": [
-          "CWE-1050",
-          "CWE-407"
-        ],
-        "fixed_versions": [
-          "2.9.1"
-        ],
-        "id": "GHSA-jjv6-8j6v-6j52",
-        "modified": "2026-09-08T12:38:13.841138+00:00",
-        "published": "2026-09-01T20:21:45+00:00",
-        "references": [
-          "https://github.com/thephpleague/commonmark/security/advisories/GHSA-jjv6-8j6v-6j52",
-          "https://github.com/thephpleague/commonmark/commit/04a5d11ef6bf2d0b927310810d6a2a85d3c184b9",
-          "https://github.com/thephpleague/commonmark/commit/2f611b599c51661b005dc45c16ceaa547546e687",
-          "https://github.com/thephpleague/commonmark",
-          "https://github.com/thephpleague/commonmark/releases/tag/2.9.1"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "league/commonmark: Denial of service in the SmartPunct and Attributes extensions"
+        "id": "GHSA-jjv6-8j6v-6j52"
       },
       "cvss_score": 7.5,
       "dep_name": "league/commonmark",
@@ -3331,29 +2492,7 @@
         "aliases": [
           "CVE-2021-32708"
         ],
-        "cwe_ids": [
-          "CWE-367"
-        ],
-        "fixed_versions": [
-          "1.1.4",
-          "2.1.1"
-        ],
-        "id": "GHSA-9f46-5r25-5wfm",
-        "modified": "2026-07-08T06:28:00.604230+00:00",
-        "published": "2021-06-29T03:13:28+00:00",
-        "references": [
-          "https://github.com/thephpleague/flysystem/security/advisories/GHSA-9f46-5r25-5wfm",
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-32708",
-          "https://github.com/thephpleague/flysystem/commit/a3c694de9f7e844b76f9d1b61296ebf6e8d89d74",
-          "https://github.com/thephpleague/flysystem/commit/f3ad69181b8afed2c9edf7be5a2918144ff4ea32",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/league/flysystem/CVE-2021-32708.yaml"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Time-of-check Time-of-use (TOCTOU) Race Condition in league/flysystem"
+        "id": "GHSA-9f46-5r25-5wfm"
       },
       "cvss_score": 9.8,
       "dep_name": "league/flysystem",
@@ -3415,28 +2554,7 @@
         "aliases": [
           "CVE-2026-102601"
         ],
-        "cwe_ids": [
-          "CWE-150"
-        ],
-        "fixed_versions": [
-          "3.35.3"
-        ],
-        "id": "GHSA-cxf4-7mrp-vvpr",
-        "modified": "2026-09-30T21:30:04.116870+00:00",
-        "published": "2026-09-29T18:10:14+00:00",
-        "references": [
-          "https://github.com/thephpleague/flysystem/security/advisories/GHSA-cxf4-7mrp-vvpr",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-102601",
-          "https://github.com/thephpleague/flysystem/commit/ef4a9a557d769b5d472c403125716706a0d9cc77",
-          "https://github.com/thephpleague/flysystem",
-          "https://github.com/thephpleague/flysystem/releases/tag/3.35.3"
-        ],
-        "severity": {
-          "score": 3.5,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:R/S:U/C:N/I:L/A:N"
-        },
-        "summary": "Flysystem: WhitespacePathNormalizer's control-character (CorruptedPathDetected) check is bypassed by malformed UTF-8 in the path, affecting every adapter"
+        "id": "GHSA-cxf4-7mrp-vvpr"
       },
       "cvss_score": 3.5,
       "dep_name": "league/flysystem",
@@ -3499,29 +2617,7 @@
         "aliases": [
           "CVE-2026-54133"
         ],
-        "cwe_ids": [
-          "CWE-116",
-          "CWE-20",
-          "CWE-94"
-        ],
-        "fixed_versions": [
-          "2.9.1"
-        ],
-        "id": "GHSA-pcw8-m77r-2528",
-        "modified": "2026-08-18T20:30:07.369159+00:00",
-        "published": "2026-08-18T20:16:38+00:00",
-        "references": [
-          "https://github.com/jmespath/jmespath.php/security/advisories/GHSA-pcw8-m77r-2528",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-54133",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/mtdowling/jmespath.php/CVE-2026-54133.yaml",
-          "https://github.com/jmespath/jmespath.php"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "jmespath.php has CompilerRuntime code injection via unescaped function names"
+        "id": "GHSA-pcw8-m77r-2528"
       },
       "cvss_score": 9.8,
       "dep_name": "mtdowling/jmespath.php",
@@ -3584,29 +2680,7 @@
         "aliases": [
           "CVE-2025-22145"
         ],
-        "cwe_ids": [
-          "CWE-98"
-        ],
-        "fixed_versions": [
-          "3.8.4",
-          "2.72.6"
-        ],
-        "id": "GHSA-j3f9-p6hm-5w6q",
-        "modified": "2025-02-25T18:48:28.814404+00:00",
-        "published": "2025-01-08T21:03:28+00:00",
-        "references": [
-          "https://github.com/CarbonPHP/carbon/security/advisories/GHSA-j3f9-p6hm-5w6q",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-22145",
-          "https://github.com/briannesbitt/Carbon/commit/129700ed449b1f02d70272d2ac802357c8c30c58",
-          "https://github.com/CarbonPHP/carbon",
-          "https://lists.debian.org/debian-lts-announce/2025/02/msg00032.html"
-        ],
-        "severity": {
-          "score": 6.3,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:L/VI:L/VA:L/SC:N/SI:N/SA:N"
-        },
-        "summary": "Carbon has an arbitrary file include via unvalidated input passed to Carbon::setLocale"
+        "id": "GHSA-j3f9-p6hm-5w6q"
       },
       "cvss_score": 6.3,
       "dep_name": "nesbot/carbon",
@@ -3668,32 +2742,7 @@
         "aliases": [
           "CVE-2026-24765"
         ],
-        "cwe_ids": [
-          "CWE-502"
-        ],
-        "fixed_versions": [
-          "8.5.52",
-          "9.6.33",
-          "10.5.62",
-          "11.5.50",
-          "12.5.8"
-        ],
-        "id": "GHSA-vvj3-c3rp-c85p",
-        "modified": "2026-05-05T15:55:47.547809+00:00",
-        "published": "2026-01-27T22:26:22+00:00",
-        "references": [
-          "https://github.com/sebastianbergmann/phpunit/security/advisories/GHSA-vvj3-c3rp-c85p",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-24765",
-          "https://github.com/sebastianbergmann/phpunit/commit/3141742e00620e2968d3d2e732d320de76685fda",
-          "https://github.com/sebastianbergmann/phpunit/commit/613d142f5a8471ca71623ce5ca2795f79248329e",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/phpunit/phpunit/CVE-2026-24765.yaml"
-        ],
-        "severity": {
-          "score": 7.8,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "PHPUnit Vulnerable to Unsafe Deserialization in PHPT Code Coverage Handling"
+        "id": "GHSA-vvj3-c3rp-c85p"
       },
       "cvss_score": 7.8,
       "dep_name": "phpunit/phpunit",
@@ -3762,29 +2811,7 @@
         "aliases": [
           "CVE-2026-25129"
         ],
-        "cwe_ids": [
-          "CWE-427"
-        ],
-        "fixed_versions": [
-          "0.12.19",
-          "0.11.23"
-        ],
-        "id": "GHSA-4486-gxhx-5mg7",
-        "modified": "2026-02-03T03:13:39.153449+00:00",
-        "published": "2026-01-30T21:28:44+00:00",
-        "references": [
-          "https://github.com/bobthecow/psysh/security/advisories/GHSA-4486-gxhx-5mg7",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-25129",
-          "https://github.com/bobthecow/psysh",
-          "https://github.com/bobthecow/psysh/releases/tag/v0.11.23",
-          "https://github.com/bobthecow/psysh/releases/tag/v0.12.19"
-        ],
-        "severity": {
-          "score": 6.7,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:R/S:U/C:H/I:H/A:H"
-        },
-        "summary": "PsySH has Local Privilege Escalation via CWD .psysh.php auto-load"
+        "id": "GHSA-4486-gxhx-5mg7"
       },
       "cvss_score": 6.7,
       "dep_name": "psy/psysh",
@@ -3847,30 +2874,7 @@
         "aliases": [
           "CVE-2025-64500"
         ],
-        "cwe_ids": [
-          "CWE-647"
-        ],
-        "fixed_versions": [
-          "5.4.50",
-          "6.4.29",
-          "7.3.7"
-        ],
-        "id": "GHSA-3rg7-wf37-54rm",
-        "modified": "2026-09-10T03:50:30.521562+00:00",
-        "published": "2025-11-12T21:50:37+00:00",
-        "references": [
-          "https://github.com/symfony/symfony/security/advisories/GHSA-3rg7-wf37-54rm",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-64500",
-          "https://github.com/symfony/symfony/commit/9962b91b12bb791322fa73836b350836b6db7cac",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/http-foundation/CVE-2025-64500.yaml",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2025-64500.yaml"
-        ],
-        "severity": {
-          "score": 7.3,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:L"
-        },
-        "summary": "Symfony's incorrect parsing of PATH_INFO can lead to limited authorization bypass"
+        "id": "GHSA-3rg7-wf37-54rm"
       },
       "cvss_score": 7.3,
       "dep_name": "symfony/http-foundation",
@@ -3939,30 +2943,7 @@
         "aliases": [
           "CVE-2024-50345"
         ],
-        "cwe_ids": [
-          "CWE-601"
-        ],
-        "fixed_versions": [
-          "5.4.46",
-          "6.4.14",
-          "7.1.7"
-        ],
-        "id": "GHSA-mrqx-rp3w-jpjp",
-        "modified": "2025-11-03T23:05:56.908103+00:00",
-        "published": "2024-11-06T15:22:09+00:00",
-        "references": [
-          "https://github.com/symfony/symfony/security/advisories/GHSA-mrqx-rp3w-jpjp",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-50345",
-          "https://github.com/symfony/symfony/commit/5a9b08e5740af795854b1b639b7d45b9cbfe8819",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/http-foundation/CVE-2024-50345.yaml",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2024-50345.yaml"
-        ],
-        "severity": {
-          "score": 3.1,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:N/A:N"
-        },
-        "summary": "Symfony vulnerable to open redirect via browser-sanitized URLs"
+        "id": "GHSA-mrqx-rp3w-jpjp"
       },
       "cvss_score": 3.1,
       "dep_name": "symfony/http-foundation",
@@ -4031,31 +3012,7 @@
         "aliases": [
           "CVE-2026-108082"
         ],
-        "cwe_ids": [
-          "CWE-1333"
-        ],
-        "fixed_versions": [
-          "6.4.46",
-          "7.4.19",
-          "8.1.7",
-          "5.4.54"
-        ],
-        "id": "GHSA-r925-mgvr-h9cc",
-        "modified": "2026-10-27T19:15:22.507345+00:00",
-        "published": "2026-10-27T19:01:39+00:00",
-        "references": [
-          "https://github.com/symfony/symfony/security/advisories/GHSA-r925-mgvr-h9cc",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-108082",
-          "https://github.com/symfony/symfony/pull/66048",
-          "https://github.com/symfony/symfony/pull/66491",
-          "https://github.com/symfony/symfony/commit/343a1772ce6ac03e48b228d2d7168d19750e3f36"
-        ],
-        "severity": {
-          "score": 8.7,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N"
-        },
-        "summary": "Symfony: ReDoS in HeaderUtils::split() Reachable Through the Cache-Control Request Header"
+        "id": "GHSA-r925-mgvr-h9cc"
       },
       "cvss_score": 8.7,
       "dep_name": "symfony/http-foundation",
@@ -4124,31 +3081,7 @@
         "aliases": [
           "CVE-2026-45067"
         ],
-        "cwe_ids": [
-          "CWE-93"
-        ],
-        "fixed_versions": [
-          "5.4.52",
-          "6.4.40",
-          "7.4.12",
-          "8.0.12"
-        ],
-        "id": "GHSA-qpmx-3rfj-7rhv",
-        "modified": "2026-09-10T03:50:47.380398+00:00",
-        "published": "2026-05-27T20:42:07+00:00",
-        "references": [
-          "https://github.com/symfony/symfony/security/advisories/GHSA-qpmx-3rfj-7rhv",
-          "https://github.com/symfony/symfony/commit/dc2dbd29211eb4ddc451373fa1374fb926e94604",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/mime/CVE-2026-45067.yaml",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2026-45067.yaml",
-          "https://github.com/symfony/symfony"
-        ],
-        "severity": {
-          "score": 7.1,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:L/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N"
-        },
-        "summary": "Symfony has Email Header / SMTP Command Injection via CRLF in Symfony\\Component\\Mime\\Address"
+        "id": "GHSA-qpmx-3rfj-7rhv"
       },
       "cvss_score": 7.1,
       "dep_name": "symfony/mime",
@@ -4217,31 +3150,7 @@
         "aliases": [
           "CVE-2026-45070"
         ],
-        "cwe_ids": [
-          "CWE-93"
-        ],
-        "fixed_versions": [
-          "5.4.52",
-          "6.4.40",
-          "7.4.12",
-          "8.0.12"
-        ],
-        "id": "GHSA-vqc8-7275-q272",
-        "modified": "2026-09-10T03:51:07.338405+00:00",
-        "published": "2026-05-27T21:09:12+00:00",
-        "references": [
-          "https://github.com/symfony/symfony/security/advisories/GHSA-vqc8-7275-q272",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/mime/CVE-2026-45070.yaml",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2026-45070.yaml",
-          "https://github.com/symfony/symfony",
-          "https://symfony.com/cve-2026-45070"
-        ],
-        "severity": {
-          "score": 4.9,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:L/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N/E:U"
-        },
-        "summary": "Symfony has Email Header Injection via Non-Token Characters in Mime Parameter Names"
+        "id": "GHSA-vqc8-7275-q272"
       },
       "cvss_score": 4.9,
       "dep_name": "symfony/mime",
@@ -4310,28 +3219,7 @@
         "aliases": [
           "CVE-2026-46644"
         ],
-        "cwe_ids": [
-          "CWE-1289"
-        ],
-        "fixed_versions": [
-          "1.38.1"
-        ],
-        "id": "GHSA-2xf4-cg6j-vhgq",
-        "modified": "2026-09-10T03:51:04.192819+00:00",
-        "published": "2026-05-28T19:52:36+00:00",
-        "references": [
-          "https://github.com/symfony/polyfill/security/advisories/GHSA-2xf4-cg6j-vhgq",
-          "https://github.com/symfony/polyfill/commit/1be936e2491ccebe152bd736dfc91eb1422c8bec",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/polyfill-intl-idn/CVE-2026-46644.yaml",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/polyfill/CVE-2026-46644.yaml",
-          "https://github.com/symfony/polyfill"
-        ],
-        "severity": {
-          "score": 2.7,
-          "severity": "low",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:N/SC:N/SI:L/SA:N/E:U"
-        },
-        "summary": "symfony/polyfill-intl-idn: xn-- labels with ASCII-only Punycode payloads are treated as equivalent to their decoded form"
+        "id": "GHSA-2xf4-cg6j-vhgq"
       },
       "cvss_score": 2.7,
       "dep_name": "symfony/polyfill-intl-idn",
@@ -4400,30 +3288,7 @@
         "aliases": [
           "CVE-2024-51736"
         ],
-        "cwe_ids": [
-          "CWE-77"
-        ],
-        "fixed_versions": [
-          "5.4.46",
-          "6.4.14",
-          "7.1.7"
-        ],
-        "id": "GHSA-qq5c-677p-737q",
-        "modified": "2026-09-10T03:50:21.051244+00:00",
-        "published": "2024-11-06T15:22:55+00:00",
-        "references": [
-          "https://github.com/symfony/symfony/security/advisories/GHSA-qq5c-677p-737q",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-51736",
-          "https://github.com/symfony/symfony/commit/18ecd03eda3917fdf901a48e72518f911c64a1c9",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/process/CVE-2024-51736.yaml",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2024-51736.yaml"
-        ],
-        "severity": {
-          "score": 8.6,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
-        },
-        "summary": "Symfony vulnerable to command execution hijack on Windows with Process class"
+        "id": "GHSA-qq5c-677p-737q"
       },
       "cvss_score": 8.6,
       "dep_name": "symfony/process",
@@ -4492,32 +3357,7 @@
         "aliases": [
           "CVE-2026-24739"
         ],
-        "cwe_ids": [
-          "CWE-88"
-        ],
-        "fixed_versions": [
-          "5.4.51",
-          "6.4.33",
-          "7.3.11",
-          "7.4.5",
-          "8.0.5"
-        ],
-        "id": "GHSA-r39x-jcww-82v6",
-        "modified": "2026-09-10T03:50:59.252205+00:00",
-        "published": "2026-01-28T21:28:10+00:00",
-        "references": [
-          "https://github.com/symfony/symfony/security/advisories/GHSA-r39x-jcww-82v6",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-24739",
-          "https://github.com/symfony/symfony/issues/62921",
-          "https://github.com/symfony/symfony/pull/63164",
-          "https://github.com/symfony/symfony/commit/35203939050e5abd3caf2202113b00cab5d379b3"
-        ],
-        "severity": {
-          "score": 6.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:N/UI:R/S:U/C:N/I:H/A:H"
-        },
-        "summary": "Symfony's incorrect argument escaping under MSYS2/Git Bash can lead to destructive file operations on Windows"
+        "id": "GHSA-r39x-jcww-82v6"
       },
       "cvss_score": 6.3,
       "dep_name": "symfony/process",
@@ -4586,28 +3426,7 @@
         "aliases": [
           "CVE-2026-45065"
         ],
-        "cwe_ids": [
-          "CWE-185",
-          "CWE-601"
-        ],
-        "fixed_versions": [
-          "5.4.52",
-          "6.4.40",
-          "7.4.12",
-          "8.0.12"
-        ],
-        "id": "GHSA-72xp-p242-47p9",
-        "modified": "2026-09-10T03:50:45.964420+00:00",
-        "published": "2026-05-27T16:55:16+00:00",
-        "references": [
-          "https://github.com/symfony/symfony/security/advisories/GHSA-72xp-p242-47p9",
-          "https://github.com/symfony/symfony/commit/bcf487c22f3240ba994124e0e0fe8616f3cfc47a",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/routing/CVE-2026-45065.yaml",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2026-45065.yaml",
-          "https://github.com/symfony/symfony"
-        ],
-        "severity": null,
-        "summary": "Symfony has a UrlGenerator Route-Requirement Bypass via Unanchored Regex Alternation → Off-Site //host URL Injection"
+        "id": "GHSA-72xp-p242-47p9"
       },
       "cvss_score": null,
       "dep_name": "symfony/routing",
@@ -4676,32 +3495,7 @@
         "aliases": [
           "CVE-2026-48784"
         ],
-        "cwe_ids": [
-          "CWE-172",
-          "CWE-601"
-        ],
-        "fixed_versions": [
-          "5.4.53",
-          "6.4.41",
-          "7.4.13",
-          "8.0.13"
-        ],
-        "id": "GHSA-h5x3-xfc9-m39h",
-        "modified": "2026-09-10T03:50:49.835469+00:00",
-        "published": "2026-06-15T17:33:46+00:00",
-        "references": [
-          "https://github.com/symfony/symfony/security/advisories/GHSA-h5x3-xfc9-m39h",
-          "https://github.com/symfony/symfony/commit/4b63c3a3f7af04ecd79c89a594b0b02a01990b1d",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/routing/CVE-2026-48784.yaml",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2026-48784.yaml",
-          "https://github.com/symfony/symfony"
-        ],
-        "severity": {
-          "score": 6.9,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:N/SC:L/SI:L/SA:N"
-        },
-        "summary": "Symfony: UrlGenerator Dot-Segment Encoding Skips Every Other Chained `../` or `./` → Generated URL Collapses Off-Route Under RFC 3986 Normalization"
+        "id": "GHSA-h5x3-xfc9-m39h"
       },
       "cvss_score": 6.9,
       "dep_name": "symfony/routing",
@@ -4770,27 +3564,7 @@
         "aliases": [
           "CVE-2026-46628"
         ],
-        "cwe_ids": [
-          "CWE-116"
-        ],
-        "fixed_versions": [
-          "3.26.0"
-        ],
-        "id": "GHSA-4j38-f5cw-54h7",
-        "modified": "2026-09-10T03:50:45.504087+00:00",
-        "published": "2026-05-21T21:21:35+00:00",
-        "references": [
-          "https://github.com/twigphp/Twig/security/advisories/GHSA-4j38-f5cw-54h7",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/twig/twig/CVE-2026-46628.yaml",
-          "https://github.com/twigphp/Twig",
-          "https://symfony.com/cve-2026-46628"
-        ],
-        "severity": {
-          "score": 1.3,
-          "severity": "low",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:P/VC:N/VI:N/VA:N/SC:L/SI:L/SA:N/E:U"
-        },
-        "summary": "Twig: The `spaceless` filter implicitly marks its output as safe"
+        "id": "GHSA-4j38-f5cw-54h7"
       },
       "cvss_score": 1.3,
       "dep_name": "twig/twig",
@@ -4856,27 +3630,7 @@
         "aliases": [
           "CVE-2026-49981"
         ],
-        "cwe_ids": [
-          "CWE-693",
-          "CWE-863"
-        ],
-        "fixed_versions": [
-          "3.27.0"
-        ],
-        "id": "GHSA-529h-vh3j-85hq",
-        "modified": "2026-09-10T03:51:10.402023+00:00",
-        "published": "2026-07-01T18:55:49+00:00",
-        "references": [
-          "https://github.com/twigphp/Twig/security/advisories/GHSA-529h-vh3j-85hq",
-          "https://github.com/twigphp/Twig",
-          "https://github.com/twigphp/Twig/releases/tag/v3.27.0"
-        ],
-        "severity": {
-          "score": 8.7,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N"
-        },
-        "summary": "Twig: Sandbox filter, tag and function allow-list bypass when sandbox state changes between renders for a cached `Template`"
+        "id": "GHSA-529h-vh3j-85hq"
       },
       "cvss_score": 8.7,
       "dep_name": "twig/twig",
@@ -4941,25 +3695,7 @@
         "aliases": [
           "CVE-2026-48806"
         ],
-        "cwe_ids": [
-          "CWE-693",
-          "CWE-863"
-        ],
-        "fixed_versions": [
-          "3.27.0"
-        ],
-        "id": "GHSA-5v5v-ww74-355v",
-        "modified": "2026-09-10T03:50:48.434648+00:00",
-        "published": "2026-06-30T18:42:49+00:00",
-        "references": [
-          "https://github.com/twigphp/Twig/security/advisories/GHSA-5v5v-ww74-355v",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/twig/twig/CVE-2026-48806.yaml",
-          "https://github.com/twigphp/Twig",
-          "https://github.com/twigphp/Twig/releases/tag/v3.27.0",
-          "https://symfony.com/blog/cve-2026-48806-sandbox-tostring-policy-bypass-via-dynamic-mapping-keys"
-        ],
-        "severity": null,
-        "summary": "Twig: Sandbox `__toString()` policy bypass via dynamic mapping keys"
+        "id": "GHSA-5v5v-ww74-355v"
       },
       "cvss_score": null,
       "dep_name": "twig/twig",
@@ -5024,29 +3760,7 @@
         "aliases": [
           "CVE-2024-51754"
         ],
-        "cwe_ids": [
-          "CWE-668"
-        ],
-        "fixed_versions": [
-          "3.11.2",
-          "3.14.1"
-        ],
-        "id": "GHSA-6377-hfv9-hqf6",
-        "modified": "2025-05-29T21:34:35.218736+00:00",
-        "published": "2024-11-06T19:52:31+00:00",
-        "references": [
-          "https://github.com/twigphp/Twig/security/advisories/GHSA-6377-hfv9-hqf6",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-51754",
-          "https://github.com/twigphp/Twig/commit/2bb8c2460a2c519c498df9b643d5277117155a73",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/twig/twig/CVE-2024-51754.yaml",
-          "https://github.com/twigphp/Twig"
-        ],
-        "severity": {
-          "score": 2.2,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:H/UI:N/S:U/C:L/I:N/A:N"
-        },
-        "summary": "Twig has unguarded calls to `__toString()` when nesting an object into an array"
+        "id": "GHSA-6377-hfv9-hqf6"
       },
       "cvss_score": 2.2,
       "dep_name": "twig/twig",
@@ -5111,31 +3825,7 @@
         "aliases": [
           "CVE-2024-45411"
         ],
-        "cwe_ids": [
-          "CWE-693"
-        ],
-        "fixed_versions": [
-          "1.44.8",
-          "2.16.1",
-          "3.14.0",
-          "3.11.1"
-        ],
-        "id": "GHSA-6j75-5wfj-gh66",
-        "modified": "2024-10-10T15:29:44.509458+00:00",
-        "published": "2024-09-09T20:19:26+00:00",
-        "references": [
-          "https://github.com/twigphp/Twig/security/advisories/GHSA-6j75-5wfj-gh66",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-45411",
-          "https://github.com/twigphp/Twig/commit/11f68e2aeb526bfaf638e30d4420d8a710f3f7c6",
-          "https://github.com/twigphp/Twig/commit/2102dd135986db79192d26fb5f5817a566e0a7de",
-          "https://github.com/twigphp/Twig/commit/41103dcdc2daab4c83cdd05b5b4fde5b7e41e635"
-        ],
-        "severity": {
-          "score": 8.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:C/C:H/I:H/A:H"
-        },
-        "summary": "Twig has a possible sandbox bypass"
+        "id": "GHSA-6j75-5wfj-gh66"
       },
       "cvss_score": 8.5,
       "dep_name": "twig/twig",
@@ -5200,28 +3890,7 @@
         "aliases": [
           "CVE-2026-46638"
         ],
-        "cwe_ids": [
-          "CWE-693"
-        ],
-        "fixed_versions": [
-          "3.26.0"
-        ],
-        "id": "GHSA-7fxw-r6jv-74c8",
-        "modified": "2026-09-10T03:50:46.108878+00:00",
-        "published": "2026-05-21T21:28:28+00:00",
-        "references": [
-          "https://github.com/twigphp/Twig/security/advisories/GHSA-7fxw-r6jv-74c8",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/twig/twig/CVE-2026-46638.yaml",
-          "https://github.com/advisories/GHSA-6j75-5wfj-gh66",
-          "https://github.com/twigphp/Twig",
-          "https://symfony.com/cve-2026-46638"
-        ],
-        "severity": {
-          "score": 5.8,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:L/UI:N/VC:N/VI:N/VA:N/SC:H/SI:H/SA:H"
-        },
-        "summary": "Twig: `{% sandbox %}{% include %}` skips checkSecurity() on cached templates (incomplete fix for CVE-2024-45411)"
+        "id": "GHSA-7fxw-r6jv-74c8"
       },
       "cvss_score": 5.8,
       "dep_name": "twig/twig",
@@ -5286,27 +3955,7 @@
         "aliases": [
           "CVE-2026-46633"
         ],
-        "cwe_ids": [
-          "CWE-94"
-        ],
-        "fixed_versions": [
-          "3.26.0"
-        ],
-        "id": "GHSA-7p85-w9px-jpjp",
-        "modified": "2026-09-10T03:50:46.236628+00:00",
-        "published": "2026-05-21T21:24:53+00:00",
-        "references": [
-          "https://github.com/twigphp/Twig/security/advisories/GHSA-7p85-w9px-jpjp",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/twig/twig/CVE-2026-46633.yaml",
-          "https://github.com/twigphp/Twig",
-          "https://symfony.com/cve-2026-46633"
-        ],
-        "severity": {
-          "score": 9.3,
-          "severity": "critical",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
-        },
-        "summary": "Twig: PHP code injection via `{% use %}` template name"
+        "id": "GHSA-7p85-w9px-jpjp"
       },
       "cvss_score": 9.3,
       "dep_name": "twig/twig",
@@ -5371,25 +4020,7 @@
         "aliases": [
           "CVE-2026-48807"
         ],
-        "cwe_ids": [
-          "CWE-693",
-          "CWE-863"
-        ],
-        "fixed_versions": [
-          "3.27.0"
-        ],
-        "id": "GHSA-8x9c-rmqh-456c",
-        "modified": "2026-09-10T03:51:08.226754+00:00",
-        "published": "2026-06-30T18:43:23+00:00",
-        "references": [
-          "https://github.com/twigphp/Twig/security/advisories/GHSA-8x9c-rmqh-456c",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/twig/twig/CVE-2026-48807.yaml",
-          "https://github.com/twigphp/Twig",
-          "https://github.com/twigphp/Twig/releases/tag/v3.27.0",
-          "https://symfony.com/blog/cve-2026-48807-sandbox-tostring-policy-bypass-via-traversable-in-join-replace-and-in-not-in-operators"
-        ],
-        "severity": null,
-        "summary": "Twig: Sandbox `__toString()` policy bypass via `Traversable` in `join` and `replace` filters"
+        "id": "GHSA-8x9c-rmqh-456c"
       },
       "cvss_score": null,
       "dep_name": "twig/twig",
@@ -5454,25 +4085,7 @@
         "aliases": [
           "CVE-2026-48808"
         ],
-        "cwe_ids": [
-          "CWE-693",
-          "CWE-863"
-        ],
-        "fixed_versions": [
-          "3.27.0"
-        ],
-        "id": "GHSA-h8vq-8gpg-mhcg",
-        "modified": "2026-09-10T03:50:49.791061+00:00",
-        "published": "2026-06-30T18:43:45+00:00",
-        "references": [
-          "https://github.com/twigphp/Twig/security/advisories/GHSA-h8vq-8gpg-mhcg",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/twig/twig/CVE-2026-48808.yaml",
-          "https://github.com/twigphp/Twig",
-          "https://github.com/twigphp/Twig/releases/tag/v3.27.0",
-          "https://symfony.com/blog/cve-2026-48808-sandbox-property-allowlist-bypass-via-the-column-filter-under-sourcepolicyinterface"
-        ],
-        "severity": null,
-        "summary": "Twig: Sandbox property allowlist bypass via the `column` filter under `SourcePolicyInterface`"
+        "id": "GHSA-h8vq-8gpg-mhcg"
       },
       "cvss_score": null,
       "dep_name": "twig/twig",
@@ -5537,29 +4150,7 @@
         "aliases": [
           "CVE-2024-51755"
         ],
-        "cwe_ids": [
-          "CWE-668"
-        ],
-        "fixed_versions": [
-          "3.11.2",
-          "3.14.1"
-        ],
-        "id": "GHSA-jjxq-ff2g-95vh",
-        "modified": "2024-11-12T19:45:48.742422+00:00",
-        "published": "2024-11-06T19:52:55+00:00",
-        "references": [
-          "https://github.com/twigphp/Twig/security/advisories/GHSA-jjxq-ff2g-95vh",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-51755",
-          "https://github.com/twigphp/Twig/commit/831c148e786178e5f2fde9db67266be3bf241c21",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/twig/twig/CVE-2024-51755.yaml",
-          "https://github.com/twigphp/Twig"
-        ],
-        "severity": {
-          "score": 2.2,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:H/UI:N/S:U/C:L/I:N/A:N"
-        },
-        "summary": "Twig has unguarded calls to `__isset()` and to array-accesses when the sandbox is enabled"
+        "id": "GHSA-jjxq-ff2g-95vh"
       },
       "cvss_score": 2.2,
       "dep_name": "twig/twig",
@@ -5624,24 +4215,7 @@
         "aliases": [
           "CVE-2026-48805"
         ],
-        "cwe_ids": [
-          "CWE-693"
-        ],
-        "fixed_versions": [
-          "3.27.0"
-        ],
-        "id": "GHSA-p42q-9prx-q5wq",
-        "modified": "2026-09-10T03:51:09.244982+00:00",
-        "published": "2026-06-30T18:41:30+00:00",
-        "references": [
-          "https://github.com/twigphp/Twig/security/advisories/GHSA-p42q-9prx-q5wq",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/twig/twig/CVE-2026-48805.yaml",
-          "https://github.com/twigphp/Twig",
-          "https://github.com/twigphp/Twig/releases/tag/v3.27.0",
-          "https://symfony.com/blog/cve-2026-48805-sandbox-state-regression-in-deprecated-internal-wrappers-in-src-resources-core-php"
-        ],
-        "severity": null,
-        "summary": "Twig: Sandbox state regression in deprecated internal wrappers in `src/Resources/core.php`"
+        "id": "GHSA-p42q-9prx-q5wq"
       },
       "cvss_score": null,
       "dep_name": "twig/twig",
@@ -5706,24 +4280,7 @@
         "aliases": [
           "CVE-2026-47732"
         ],
-        "cwe_ids": [
-          "CWE-20"
-        ],
-        "fixed_versions": [
-          "3.26.0"
-        ],
-        "id": "GHSA-pr2w-4gpj-cpq4",
-        "modified": "2026-09-10T03:51:09.316002+00:00",
-        "published": "2026-06-05T21:47:11+00:00",
-        "references": [
-          "https://github.com/twigphp/Twig/security/advisories/GHSA-pr2w-4gpj-cpq4",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/twig/twig/CVE-2026-47732.yaml",
-          "https://github.com/twigphp/Twig",
-          "https://github.com/twigphp/Twig/releases/tag/v3.26.0",
-          "https://symfony.com/cve-2026-47732"
-        ],
-        "severity": null,
-        "summary": "Twig: Sandbox: multiple `__toString()` policy bypasses via unguarded string coercion points"
+        "id": "GHSA-pr2w-4gpj-cpq4"
       },
       "cvss_score": null,
       "dep_name": "twig/twig",
@@ -5788,27 +4345,7 @@
         "aliases": [
           "CVE-2026-46635"
         ],
-        "cwe_ids": [
-          "CWE-863"
-        ],
-        "fixed_versions": [
-          "3.26.0"
-        ],
-        "id": "GHSA-vcc8-phrv-43wj",
-        "modified": "2026-09-10T03:50:47.571128+00:00",
-        "published": "2026-05-21T21:25:55+00:00",
-        "references": [
-          "https://github.com/twigphp/Twig/security/advisories/GHSA-vcc8-phrv-43wj",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/twig/twig/CVE-2026-46635.yaml",
-          "https://github.com/twigphp/Twig",
-          "https://symfony.com/cve-2026-46635"
-        ],
-        "severity": {
-          "score": 2.1,
-          "severity": "low",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:H/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N"
-        },
-        "summary": "Twig: Sandbox property allowlist bypass via the `column` filter (array_column on objects)"
+        "id": "GHSA-vcc8-phrv-43wj"
       },
       "cvss_score": 2.1,
       "dep_name": "twig/twig",
@@ -5873,28 +4410,7 @@
         "aliases": [
           "CVE-2026-44495"
         ],
-        "cwe_ids": [
-          "CWE-1321",
-          "CWE-94"
-        ],
-        "fixed_versions": [
-          "1.15.2",
-          "0.31.1"
-        ],
-        "id": "GHSA-3g43-6gmg-66jw",
-        "modified": "2026-09-10T03:51:04.440180+00:00",
-        "published": "2026-05-29T16:07:31+00:00",
-        "references": [
-          "https://github.com/axios/axios/security/advisories/GHSA-3g43-6gmg-66jw",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-44495",
-          "https://github.com/axios/axios"
-        ],
-        "severity": {
-          "score": 7.0,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:L/A:L"
-        },
-        "summary": "axios Vulnerable to Credential Theft and Response Hijacking via Prototype Pollution Gadget in Config Merge"
+        "id": "GHSA-3g43-6gmg-66jw"
       },
       "cvss_score": 7.0,
       "dep_name": "axios",
@@ -5960,30 +4476,7 @@
         "aliases": [
           "CVE-2025-62718"
         ],
-        "cwe_ids": [
-          "CWE-441",
-          "CWE-918"
-        ],
-        "fixed_versions": [
-          "1.15.0",
-          "0.31.0"
-        ],
-        "id": "GHSA-3p68-rc4w-qgx5",
-        "modified": "2026-09-10T03:50:42.452672+00:00",
-        "published": "2026-04-09T17:32:19+00:00",
-        "references": [
-          "https://github.com/axios/axios/security/advisories/GHSA-3p68-rc4w-qgx5",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-62718",
-          "https://github.com/axios/axios/pull/10661",
-          "https://github.com/axios/axios/pull/10688",
-          "https://github.com/axios/axios/commit/03cdfc99e8db32a390e12128208b6778492cee9c"
-        ],
-        "severity": {
-          "score": 6.3,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:L/VI:L/VA:N/SC:L/SI:L/SA:N"
-        },
-        "summary": "Axios has a NO_PROXY Hostname Normalization Bypass that Leads to SSRF"
+        "id": "GHSA-3p68-rc4w-qgx5"
       },
       "cvss_score": 6.3,
       "dep_name": "axios",
@@ -6049,30 +4542,7 @@
         "aliases": [
           "CVE-2026-25639"
         ],
-        "cwe_ids": [
-          "CWE-1321",
-          "CWE-754"
-        ],
-        "fixed_versions": [
-          "1.13.5",
-          "0.30.3"
-        ],
-        "id": "GHSA-43fc-jf86-j433",
-        "modified": "2026-09-10T03:50:34.100599+00:00",
-        "published": "2026-02-09T17:46:14+00:00",
-        "references": [
-          "https://github.com/axios/axios/security/advisories/GHSA-43fc-jf86-j433",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-25639",
-          "https://github.com/axios/axios/pull/7369",
-          "https://github.com/axios/axios/pull/7388",
-          "https://github.com/axios/axios/commit/28c721588c7a77e7503d0a434e016f852c597b57"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Axios is Vulnerable to Denial of Service via __proto__ Key in mergeConfig"
+        "id": "GHSA-43fc-jf86-j433"
       },
       "cvss_score": 7.5,
       "dep_name": "axios",
@@ -6137,28 +4607,7 @@
         "aliases": [
           "CVE-2020-28168"
         ],
-        "cwe_ids": [
-          "CWE-918"
-        ],
-        "fixed_versions": [
-          "0.21.1"
-        ],
-        "id": "GHSA-4w2v-q235-vp99",
-        "modified": "2026-09-10T03:49:13.774730+00:00",
-        "published": "2021-01-04T20:59:40+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-28168",
-          "https://github.com/axios/axios/issues/3369",
-          "https://github.com/axios/axios/commit/c7329fefc890050edd51e40e469a154d0117fc55",
-          "https://cert-portal.siemens.com/productcert/pdf/ssa-637483.pdf",
-          "https://lists.apache.org/thread.html/r25d53acd06f29244b8a103781b0339c5e7efee9099a4d52f0c230e4a@%3Ccommits.druid.apache.org%3E"
-        ],
-        "severity": {
-          "score": 5.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
-        },
-        "summary": "Axios vulnerable to Server-Side Request Forgery"
+        "id": "GHSA-4w2v-q235-vp99"
       },
       "cvss_score": 5.9,
       "dep_name": "axios",
@@ -6223,27 +4672,7 @@
         "aliases": [
           "CVE-2026-42034"
         ],
-        "cwe_ids": [
-          "CWE-770"
-        ],
-        "fixed_versions": [
-          "1.15.1",
-          "0.31.1"
-        ],
-        "id": "GHSA-5c9x-8gcm-mpgx",
-        "modified": "2026-09-10T03:50:45.707956+00:00",
-        "published": "2026-05-05T00:33:25+00:00",
-        "references": [
-          "https://github.com/axios/axios/security/advisories/GHSA-5c9x-8gcm-mpgx",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-42034",
-          "https://github.com/axios/axios"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "Axios' HTTP adapter-streamed uploads bypass maxBodyLength when maxRedirects: 0"
+        "id": "GHSA-5c9x-8gcm-mpgx"
       },
       "cvss_score": 5.3,
       "dep_name": "axios",
@@ -6309,29 +4738,7 @@
         "aliases": [
           "CVE-2026-42039"
         ],
-        "cwe_ids": [
-          "CWE-674"
-        ],
-        "fixed_versions": [
-          "1.15.1",
-          "0.31.1"
-        ],
-        "id": "GHSA-62hf-57xw-28j9",
-        "modified": "2026-09-10T03:50:45.703789+00:00",
-        "published": "2026-05-05T00:34:32+00:00",
-        "references": [
-          "https://github.com/axios/axios/security/advisories/GHSA-62hf-57xw-28j9",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-42039",
-          "https://github.com/axios/axios/commit/85132ffba1a77609ea5d101c8a413dea7174932f",
-          "https://github.com/axios/axios",
-          "https://github.com/axios/axios/releases/tag/v1.15.1"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Axios: unbounded recursion in toFormData causes DoS via deeply nested request data"
+        "id": "GHSA-62hf-57xw-28j9"
       },
       "cvss_score": 7.5,
       "dep_name": "axios",
@@ -6397,28 +4804,7 @@
         "aliases": [
           "CVE-2026-42035"
         ],
-        "cwe_ids": [
-          "CWE-113",
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "1.15.1",
-          "0.31.1"
-        ],
-        "id": "GHSA-6chq-wfr3-2hj9",
-        "modified": "2026-09-10T03:51:04.772235+00:00",
-        "published": "2026-05-05T00:25:47+00:00",
-        "references": [
-          "https://github.com/axios/axios/security/advisories/GHSA-6chq-wfr3-2hj9",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-42035",
-          "https://github.com/axios/axios"
-        ],
-        "severity": {
-          "score": 7.4,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N"
-        },
-        "summary": "Axios: Header Injection via Prototype Pollution"
+        "id": "GHSA-6chq-wfr3-2hj9"
       },
       "cvss_score": 7.4,
       "dep_name": "axios",
@@ -6484,29 +4870,7 @@
         "aliases": [
           "CVE-2026-67319"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "0.33.0",
-          "1.18.0"
-        ],
-        "id": "GHSA-7q8q-rj6j-mhjq",
-        "modified": "2026-09-10T03:51:10.872027+00:00",
-        "published": "2026-07-20T22:37:31+00:00",
-        "references": [
-          "https://github.com/axios/axios/security/advisories/GHSA-7q8q-rj6j-mhjq",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-67319",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-69123",
-          "https://github.com/axios/axios/pull/11000",
-          "https://github.com/axios/axios/pull/11001"
-        ],
-        "severity": {
-          "score": 6.3,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:N/VI:L/VA:N/SC:N/SI:L/SA:N"
-        },
-        "summary": "Axios: Nested axios option objects can consume polluted prototype values"
+        "id": "GHSA-7q8q-rj6j-mhjq"
       },
       "cvss_score": 6.3,
       "dep_name": "axios",
@@ -6572,28 +4936,7 @@
         "aliases": [
           "CVE-2026-44490"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "1.16.0",
-          "0.32.0"
-        ],
-        "id": "GHSA-898c-q2cr-xwhg",
-        "modified": "2026-09-10T03:51:04.811379+00:00",
-        "published": "2026-05-29T15:54:57+00:00",
-        "references": [
-          "https://github.com/axios/axios/security/advisories/GHSA-898c-q2cr-xwhg",
-          "https://nvd.nist.gov/vuln/detail/CVE-2018-16487",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-44490",
-          "https://github.com/axios/axios"
-        ],
-        "severity": {
-          "score": 4.8,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:L"
-        },
-        "summary": "axios has DoS & Header Injection via Prototype Pollution Read-Side Gadgets in axios merge functions"
+        "id": "GHSA-898c-q2cr-xwhg"
       },
       "cvss_score": 4.8,
       "dep_name": "axios",
@@ -6659,29 +5002,7 @@
         "aliases": [
           "CVE-2021-3749"
         ],
-        "cwe_ids": [
-          "CWE-1333",
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "0.21.2"
-        ],
-        "id": "GHSA-cph5-m8f7-6c5x",
-        "modified": "2026-09-10T03:49:08.788547+00:00",
-        "published": "2021-09-01T18:23:02+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-3749",
-          "https://github.com/axios/axios/commit/5b457116e31db0e88fede6c428e969e87f290929",
-          "https://www.oracle.com/security-alerts/cpujul2022.html",
-          "https://www.npmjs.com/package/axios",
-          "https://lists.apache.org/thread.html/rfc5c478053ff808671aef170f3d9fc9d05cc1fab8fb64431edc66103@%3Ccommits.druid.apache.org%3E"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "axios Inefficient Regular Expression Complexity vulnerability"
+        "id": "GHSA-cph5-m8f7-6c5x"
       },
       "cvss_score": 7.5,
       "dep_name": "axios",
@@ -6746,31 +5067,7 @@
         "aliases": [
           "CVE-2026-40175"
         ],
-        "cwe_ids": [
-          "CWE-113",
-          "CWE-444",
-          "CWE-918"
-        ],
-        "fixed_versions": [
-          "1.15.0",
-          "0.31.0"
-        ],
-        "id": "GHSA-fvcv-3m26-pcqx",
-        "modified": "2026-09-10T03:50:44.273401+00:00",
-        "published": "2026-04-10T19:47:16+00:00",
-        "references": [
-          "https://github.com/axios/axios/security/advisories/GHSA-fvcv-3m26-pcqx",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-40175",
-          "https://github.com/axios/axios/pull/10660",
-          "https://github.com/axios/axios/pull/10660#issuecomment-4224168081",
-          "https://github.com/axios/axios/pull/10688"
-        ],
-        "severity": {
-          "score": 4.8,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:N"
-        },
-        "summary": "Axios has Unrestricted Cloud Metadata Exfiltration via Header Injection Chain"
+        "id": "GHSA-fvcv-3m26-pcqx"
       },
       "cvss_score": 4.8,
       "dep_name": "axios",
@@ -6836,29 +5133,7 @@
         "aliases": [
           "CVE-2026-44496"
         ],
-        "cwe_ids": [
-          "CWE-1333",
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "1.16.0",
-          "0.32.0"
-        ],
-        "id": "GHSA-hfxv-24rg-xrqf",
-        "modified": "2026-09-10T03:50:49.732285+00:00",
-        "published": "2026-06-04T14:24:06+00:00",
-        "references": [
-          "https://github.com/axios/axios/security/advisories/GHSA-hfxv-24rg-xrqf",
-          "https://github.com/axios/axios",
-          "https://github.com/axios/axios/releases/tag/v0.32.0",
-          "https://github.com/axios/axios/releases/tag/v1.16.0"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Axios: Regular Expression Denial of Service (ReDoS) via Cookie Name Injection"
+        "id": "GHSA-hfxv-24rg-xrqf"
       },
       "cvss_score": 7.5,
       "dep_name": "axios",
@@ -6924,29 +5199,7 @@
         "aliases": [
           "CVE-2026-44486"
         ],
-        "cwe_ids": [
-          "CWE-200"
-        ],
-        "fixed_versions": [
-          "1.16.0",
-          "0.32.0"
-        ],
-        "id": "GHSA-j5f8-grm9-p9fc",
-        "modified": "2026-09-10T03:50:50.017253+00:00",
-        "published": "2026-06-04T14:15:01+00:00",
-        "references": [
-          "https://github.com/axios/axios/security/advisories/GHSA-j5f8-grm9-p9fc",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-44486",
-          "https://github.com/axios/axios/pull/10794",
-          "https://github.com/axios/axios/commit/afca61a070728e717203c2bc21e7b589b59b858b",
-          "https://github.com/axios/axios"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
-        },
-        "summary": "Axios: Proxy-Authorization header leaks to redirect target when proxy is re-evaluated to direct connection"
+        "id": "GHSA-j5f8-grm9-p9fc"
       },
       "cvss_score": 7.5,
       "dep_name": "axios",
@@ -7012,29 +5265,7 @@
         "aliases": [
           "CVE-2025-27152"
         ],
-        "cwe_ids": [
-          "CWE-918"
-        ],
-        "fixed_versions": [
-          "1.8.2",
-          "0.30.0"
-        ],
-        "id": "GHSA-jr5f-v2jv-69x6",
-        "modified": "2026-09-10T03:50:56.787685+00:00",
-        "published": "2025-03-07T15:16:00+00:00",
-        "references": [
-          "https://github.com/axios/axios/security/advisories/GHSA-jr5f-v2jv-69x6",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-27152",
-          "https://github.com/axios/axios/issues/6463",
-          "https://github.com/axios/axios/pull/6829",
-          "https://github.com/axios/axios/commit/02c3c69ced0f8fd86407c23203835892313d7fde"
-        ],
-        "severity": {
-          "score": 7.7,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N/E:P"
-        },
-        "summary": "axios Requests Vulnerable To Possible SSRF and Credential Leakage via Absolute URL"
+        "id": "GHSA-jr5f-v2jv-69x6"
       },
       "cvss_score": 7.7,
       "dep_name": "axios",
@@ -7100,27 +5331,7 @@
         "aliases": [
           "CVE-2026-42038"
         ],
-        "cwe_ids": [
-          "CWE-918"
-        ],
-        "fixed_versions": [
-          "1.15.1",
-          "0.31.1"
-        ],
-        "id": "GHSA-m7pr-hjqh-92cm",
-        "modified": "2026-09-10T03:51:06.293033+00:00",
-        "published": "2026-05-05T00:40:17+00:00",
-        "references": [
-          "https://github.com/axios/axios/security/advisories/GHSA-m7pr-hjqh-92cm",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-42038",
-          "https://github.com/axios/axios"
-        ],
-        "severity": {
-          "score": 6.8,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:C/C:H/I:N/A:N"
-        },
-        "summary": "Axios: no_proxy bypass via IP alias allows SSRF"
+        "id": "GHSA-m7pr-hjqh-92cm"
       },
       "cvss_score": 6.8,
       "dep_name": "axios",
@@ -7186,29 +5397,7 @@
         "aliases": [
           "CVE-2026-67316"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "1.18.0",
-          "0.33.0"
-        ],
-        "id": "GHSA-mmx7-hfxf-jppx",
-        "modified": "2026-09-10T03:50:52.753640+00:00",
-        "published": "2026-07-20T22:25:07+00:00",
-        "references": [
-          "https://github.com/axios/axios/security/advisories/GHSA-mmx7-hfxf-jppx",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-67316",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-68944",
-          "https://github.com/axios/axios/pull/11000",
-          "https://github.com/axios/axios/pull/11001"
-        ],
-        "severity": {
-          "score": 6.3,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:N/VI:L/VA:N/SC:N/SI:N/SA:N"
-        },
-        "summary": "Axios: Prototype pollution gadgets can alter axios request construction"
+        "id": "GHSA-mmx7-hfxf-jppx"
       },
       "cvss_score": 6.3,
       "dep_name": "axios",
@@ -7274,29 +5463,7 @@
         "aliases": [
           "CVE-2026-44487"
         ],
-        "cwe_ids": [
-          "CWE-201"
-        ],
-        "fixed_versions": [
-          "1.16.0",
-          "0.32.0"
-        ],
-        "id": "GHSA-p92q-9vqr-4j8v",
-        "modified": "2026-09-10T03:51:09.218790+00:00",
-        "published": "2026-06-04T14:19:53+00:00",
-        "references": [
-          "https://github.com/axios/axios/security/advisories/GHSA-p92q-9vqr-4j8v",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-44487",
-          "https://github.com/axios/axios",
-          "https://github.com/axios/axios/releases/tag/v0.32.0",
-          "https://github.com/axios/axios/releases/tag/v1.16.0"
-        ],
-        "severity": {
-          "score": 8.2,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N"
-        },
-        "summary": "Axios: Proxy-Authorization Credential Leak to Origin Server Across HTTP-to-HTTPS Redirect in Axios Node.js HTTP Adapter"
+        "id": "GHSA-p92q-9vqr-4j8v"
       },
       "cvss_score": 8.2,
       "dep_name": "axios",
@@ -7362,27 +5529,7 @@
         "aliases": [
           "CVE-2026-42033"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "1.15.1",
-          "0.31.1"
-        ],
-        "id": "GHSA-pf86-5x62-jrwf",
-        "modified": "2026-09-10T03:51:06.658921+00:00",
-        "published": "2026-05-05T00:26:29+00:00",
-        "references": [
-          "https://github.com/axios/axios/security/advisories/GHSA-pf86-5x62-jrwf",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-42033",
-          "https://github.com/axios/axios"
-        ],
-        "severity": {
-          "score": 7.4,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N"
-        },
-        "summary": "Axios: Prototype Pollution Gadgets - Response Tampering, Data Exfiltration, and Request Hijacking"
+        "id": "GHSA-pf86-5x62-jrwf"
       },
       "cvss_score": 7.4,
       "dep_name": "axios",
@@ -7448,30 +5595,7 @@
         "aliases": [
           "CVE-2026-44492"
         ],
-        "cwe_ids": [
-          "CWE-289",
-          "CWE-918"
-        ],
-        "fixed_versions": [
-          "1.16.0",
-          "0.32.0"
-        ],
-        "id": "GHSA-pjwm-pj3p-43mv",
-        "modified": "2026-09-10T03:51:06.693575+00:00",
-        "published": "2026-05-29T15:59:30+00:00",
-        "references": [
-          "https://github.com/axios/axios/security/advisories/GHSA-pjwm-pj3p-43mv",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-44492",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-62718",
-          "https://access.redhat.com/errata/RHSA-2026:36611",
-          "https://access.redhat.com/errata/RHSA-2026:36754"
-        ],
-        "severity": {
-          "score": 8.6,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:N/A:N"
-        },
-        "summary": "axios's shouldBypassProxy does not recognize IPv4-mapped IPv6 addresses, allowing NO_PROXY bypass (incomplete fix for CVE-2025-62718)"
+        "id": "GHSA-pjwm-pj3p-43mv"
       },
       "cvss_score": 8.6,
       "dep_name": "axios",
@@ -7537,29 +5661,7 @@
         "aliases": [
           "CVE-2026-42043"
         ],
-        "cwe_ids": [
-          "CWE-183",
-          "CWE-441",
-          "CWE-918"
-        ],
-        "fixed_versions": [
-          "1.15.1",
-          "0.31.1"
-        ],
-        "id": "GHSA-pmwg-cvhr-8vh7",
-        "modified": "2026-09-10T03:51:06.691311+00:00",
-        "published": "2026-05-05T00:20:58+00:00",
-        "references": [
-          "https://github.com/axios/axios/security/advisories/GHSA-pmwg-cvhr-8vh7",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-42043",
-          "https://github.com/axios/axios"
-        ],
-        "severity": {
-          "score": 7.2,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:L/I:L/A:N"
-        },
-        "summary": "Axios: Incomplete Fix for CVE-2025-62718 — NO_PROXY Protection Bypassed via RFC 1122 Loopback Subnet (127.0.0.0/8) in Axios 1.15.0"
+        "id": "GHSA-pmwg-cvhr-8vh7"
       },
       "cvss_score": 7.2,
       "dep_name": "axios",
@@ -7625,27 +5727,7 @@
         "aliases": [
           "CVE-2026-42036"
         ],
-        "cwe_ids": [
-          "CWE-770"
-        ],
-        "fixed_versions": [
-          "1.15.1",
-          "0.31.1"
-        ],
-        "id": "GHSA-vf2m-468p-8v99",
-        "modified": "2026-09-10T03:50:47.671121+00:00",
-        "published": "2026-05-05T00:26:57+00:00",
-        "references": [
-          "https://github.com/axios/axios/security/advisories/GHSA-vf2m-468p-8v99",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-42036",
-          "https://github.com/axios/axios"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "Axios: HTTP adapter streamed responses bypass maxContentLength"
+        "id": "GHSA-vf2m-468p-8v99"
       },
       "cvss_score": 5.3,
       "dep_name": "axios",
@@ -7711,28 +5793,7 @@
         "aliases": [
           "CVE-2026-42041"
         ],
-        "cwe_ids": [
-          "CWE-1321",
-          "CWE-287"
-        ],
-        "fixed_versions": [
-          "1.15.1",
-          "0.31.1"
-        ],
-        "id": "GHSA-w9j2-pvgh-6h63",
-        "modified": "2026-09-10T03:50:47.772907+00:00",
-        "published": "2026-05-05T00:21:39+00:00",
-        "references": [
-          "https://github.com/axios/axios/security/advisories/GHSA-w9j2-pvgh-6h63",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-42041",
-          "https://github.com/axios/axios"
-        ],
-        "severity": {
-          "score": 4.8,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:N"
-        },
-        "summary": "Axios: Authentication Bypass via Prototype Pollution Gadget in `validateStatus` Merge Strategy"
+        "id": "GHSA-w9j2-pvgh-6h63"
       },
       "cvss_score": 4.8,
       "dep_name": "axios",
@@ -7798,29 +5859,7 @@
         "aliases": [
           "CVE-2023-45857"
         ],
-        "cwe_ids": [
-          "CWE-352"
-        ],
-        "fixed_versions": [
-          "1.6.0",
-          "0.28.0"
-        ],
-        "id": "GHSA-wf5p-g6vw-rhxx",
-        "modified": "2026-09-10T03:49:47.742398+00:00",
-        "published": "2023-11-08T21:30:37+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2023-45857",
-          "https://github.com/axios/axios/issues/6006",
-          "https://github.com/axios/axios/issues/6022",
-          "https://github.com/axios/axios/pull/6028",
-          "https://github.com/axios/axios/pull/6091"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:N/A:N"
-        },
-        "summary": "Axios Cross-Site Request Forgery Vulnerability"
+        "id": "GHSA-wf5p-g6vw-rhxx"
       },
       "cvss_score": 6.5,
       "dep_name": "axios",
@@ -7886,28 +5925,7 @@
         "aliases": [
           "CVE-2026-42040"
         ],
-        "cwe_ids": [
-          "CWE-116",
-          "CWE-626"
-        ],
-        "fixed_versions": [
-          "1.15.1",
-          "0.31.1"
-        ],
-        "id": "GHSA-xhjh-pmcv-23jw",
-        "modified": "2026-09-10T03:50:48.032269+00:00",
-        "published": "2026-05-05T00:18:03+00:00",
-        "references": [
-          "https://github.com/axios/axios/security/advisories/GHSA-xhjh-pmcv-23jw",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-42040",
-          "https://github.com/axios/axios"
-        ],
-        "severity": {
-          "score": 3.7,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N"
-        },
-        "summary": "Axios: Null Byte Injection via Reverse-Encoding in AxiosURLSearchParams"
+        "id": "GHSA-xhjh-pmcv-23jw"
       },
       "cvss_score": 3.7,
       "dep_name": "axios",
@@ -7973,28 +5991,7 @@
         "aliases": [
           "CVE-2026-42042"
         ],
-        "cwe_ids": [
-          "CWE-183",
-          "CWE-201"
-        ],
-        "fixed_versions": [
-          "1.15.1",
-          "0.31.1"
-        ],
-        "id": "GHSA-xx6v-rp6x-q39c",
-        "modified": "2026-09-10T03:51:07.425895+00:00",
-        "published": "2026-05-05T00:25:22+00:00",
-        "references": [
-          "https://github.com/axios/axios/security/advisories/GHSA-xx6v-rp6x-q39c",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-42042",
-          "https://github.com/axios/axios"
-        ],
-        "severity": {
-          "score": 5.4,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:L/A:N"
-        },
-        "summary": "Axios: XSRF Token Cross-Origin Leakage via Prototype Pollution Gadget in `withXSRFToken` Boolean Coercion"
+        "id": "GHSA-xx6v-rp6x-q39c"
       },
       "cvss_score": 5.4,
       "dep_name": "axios",
@@ -8061,31 +6058,7 @@
           "BIT-drupal-2020-11022",
           "CVE-2020-11022"
         ],
-        "cwe_ids": [
-          "CWE-79"
-        ],
-        "fixed_versions": [
-          "3.5.0",
-          "4.4.0",
-          "1.19.0",
-          "4.0.1"
-        ],
-        "id": "GHSA-gxr4-xjj5-5px2",
-        "modified": "2026-09-10T03:48:45.850954+00:00",
-        "published": "2020-04-29T22:18:55+00:00",
-        "references": [
-          "https://github.com/jquery/jquery/security/advisories/GHSA-gxr4-xjj5-5px2",
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-11022",
-          "https://github.com/maximebf/php-debugbar/issues/447",
-          "https://github.com/jquery/jquery/commit/1d61fd9407e6fbe82fe55cb0b938307aa0791f77",
-          "https://github.com/maximebf/php-debugbar/commit/847216e60544258c881f2733d699bbcfeefac0fc"
-        ],
-        "severity": {
-          "score": 6.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:H/I:L/A:N"
-        },
-        "summary": "Potential XSS vulnerability in jQuery"
+        "id": "GHSA-gxr4-xjj5-5px2"
       },
       "cvss_score": 6.9,
       "dep_name": "jquery",
@@ -8152,29 +6125,7 @@
           "BIT-drupal-2020-11023",
           "CVE-2020-11023"
         ],
-        "cwe_ids": [
-          "CWE-79"
-        ],
-        "fixed_versions": [
-          "3.5.0",
-          "4.4.0"
-        ],
-        "id": "GHSA-jpcq-cgw6-v4j6",
-        "modified": "2026-09-10T03:48:45.809517+00:00",
-        "published": "2020-04-29T22:19:14+00:00",
-        "references": [
-          "https://github.com/jquery/jquery/security/advisories/GHSA-jpcq-cgw6-v4j6",
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-11023",
-          "https://github.com/jquery/jquery/commit/1d61fd9407e6fbe82fe55cb0b938307aa0791f77",
-          "https://lists.apache.org/thread.html/rda99599896c3667f2cc9e9d34c7b6ef5d2bbed1f4801e1d75a2b0679@%3Ccommits.nifi.apache.org%3E",
-          "https://lists.apache.org/thread.html/re4ae96fa5c1a2fe71ccbb7b7ac1538bd0cb677be270a2bf6e2f8d108%40%3Cissues.flink.apache.org%3E"
-        ],
-        "severity": {
-          "score": 6.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:H/I:L/A:N/E:H"
-        },
-        "summary": "Potential XSS vulnerability in jQuery"
+        "id": "GHSA-jpcq-cgw6-v4j6"
       },
       "cvss_score": 6.9,
       "dep_name": "jquery",
@@ -8240,29 +6191,7 @@
         "aliases": [
           "CVE-2020-28500"
         ],
-        "cwe_ids": [
-          "CWE-1333",
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "4.17.21"
-        ],
-        "id": "GHSA-29mw-wpgm-hmr9",
-        "modified": "2025-09-29T21:12:31.102523+00:00",
-        "published": "2022-01-06T20:30:46+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-28500",
-          "https://github.com/github/advisory-database/pull/6139",
-          "https://github.com/lodash/lodash/pull/5065",
-          "https://github.com/lodash/lodash/pull/5065/commits/02906b8191d3c100c193fe6f7b27d1c40f200bb7",
-          "https://github.com/lodash/lodash/commit/c4847ebe7d14540bb28a8b932a9ce1b9ecbfee1a"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "Regular Expression Denial of Service (ReDoS) in lodash"
+        "id": "GHSA-29mw-wpgm-hmr9"
       },
       "cvss_score": 5.3,
       "dep_name": "lodash",
@@ -8326,29 +6255,7 @@
         "aliases": [
           "CVE-2021-23337"
         ],
-        "cwe_ids": [
-          "CWE-77",
-          "CWE-94"
-        ],
-        "fixed_versions": [
-          "4.17.21"
-        ],
-        "id": "GHSA-35jh-r3h4-6jhm",
-        "modified": "2026-10-17T02:55:38.085813+00:00",
-        "published": "2021-05-06T16:05:51+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-23337",
-          "https://github.com/lodash/lodash/commit/3469357cff396a26c363f8c1b5a91dde28ba4b1c",
-          "https://www.oracle.com/security-alerts/cpuoct2021.html",
-          "https://www.oracle.com/security-alerts/cpujul2022.html",
-          "https://www.oracle.com/security-alerts/cpujan2022.html"
-        ],
-        "severity": {
-          "score": 7.2,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Command Injection in lodash"
+        "id": "GHSA-35jh-r3h4-6jhm"
       },
       "cvss_score": 7.2,
       "dep_name": "lodash",
@@ -8412,27 +6319,7 @@
         "aliases": [
           "CVE-2026-2950"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "4.18.0"
-        ],
-        "id": "GHSA-f23m-r3pf-42rh",
-        "modified": "2026-10-17T02:56:13.084362+00:00",
-        "published": "2026-04-01T23:50:27+00:00",
-        "references": [
-          "https://github.com/lodash/lodash/security/advisories/GHSA-f23m-r3pf-42rh",
-          "https://github.com/lodash/lodash/security/advisories/GHSA-xxjr-mmjv-4gpg",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-2950",
-          "https://github.com/lodash/lodash"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:L"
-        },
-        "summary": "lodash vulnerable to Prototype Pollution via array path bypass in `_.unset` and `_.omit`"
+        "id": "GHSA-f23m-r3pf-42rh"
       },
       "cvss_score": 6.5,
       "dep_name": "lodash",
@@ -8496,30 +6383,7 @@
         "aliases": [
           "CVE-2020-8203"
         ],
-        "cwe_ids": [
-          "CWE-1321",
-          "CWE-770"
-        ],
-        "fixed_versions": [
-          "4.17.19",
-          "4.17.20"
-        ],
-        "id": "GHSA-p6mc-m468-83gw",
-        "modified": "2025-08-12T21:56:17.174859+00:00",
-        "published": "2020-07-15T19:15:48+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-8203",
-          "https://github.com/lodash/lodash/issues/4744",
-          "https://github.com/lodash/lodash/issues/4874",
-          "https://github.com/github/advisory-database/pull/2884",
-          "https://github.com/lodash/lodash/commit/c84fe82760fb2d3e03a63379b297a1cc1a2fce12"
-        ],
-        "severity": {
-          "score": 7.4,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:H"
-        },
-        "summary": "Prototype Pollution in lodash"
+        "id": "GHSA-p6mc-m468-83gw"
       },
       "cvss_score": 7.4,
       "dep_name": "lodash",
@@ -8583,28 +6447,7 @@
         "aliases": [
           "CVE-2026-4800"
         ],
-        "cwe_ids": [
-          "CWE-94"
-        ],
-        "fixed_versions": [
-          "4.18.0"
-        ],
-        "id": "GHSA-r5fr-rjxr-66jc",
-        "modified": "2026-10-17T02:56:15.633068+00:00",
-        "published": "2026-04-01T23:51:12+00:00",
-        "references": [
-          "https://github.com/lodash/lodash/security/advisories/GHSA-r5fr-rjxr-66jc",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-4800",
-          "https://github.com/lodash/lodash/commit/3469357cff396a26c363f8c1b5a91dde28ba4b1c",
-          "https://cna.openjsf.org/security-advisories.html",
-          "https://github.com/advisories/GHSA-35jh-r3h4-6jhm"
-        ],
-        "severity": {
-          "score": 8.1,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "lodash vulnerable to Code Injection via `_.template` imports key names"
+        "id": "GHSA-r5fr-rjxr-66jc"
       },
       "cvss_score": 8.1,
       "dep_name": "lodash",
@@ -8668,28 +6511,7 @@
         "aliases": [
           "CVE-2025-13465"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "4.17.23"
-        ],
-        "id": "GHSA-xxjr-mmjv-4gpg",
-        "modified": "2026-10-17T02:55:54.229635+00:00",
-        "published": "2026-01-21T23:01:22+00:00",
-        "references": [
-          "https://github.com/lodash/lodash/security/advisories/GHSA-xxjr-mmjv-4gpg",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-13465",
-          "https://github.com/lodash/lodash/commit/edadd452146f7e4bad4ea684e955708931d84d81",
-          "https://cert-portal.siemens.com/productcert/html/ssa-253495.html",
-          "https://github.com/lodash/lodash"
-        ],
-        "severity": {
-          "score": 6.9,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:L/SC:H/SI:H/SA:H/E:P"
-        },
-        "summary": "Lodash has Prototype Pollution Vulnerability in `_.unset` and `_.omit` functions"
+        "id": "GHSA-xxjr-mmjv-4gpg"
       },
       "cvss_score": 6.9,
       "dep_name": "lodash",
@@ -8753,29 +6575,7 @@
         "aliases": [
           "CVE-2022-24785"
         ],
-        "cwe_ids": [
-          "CWE-22",
-          "CWE-27"
-        ],
-        "fixed_versions": [
-          "2.29.2"
-        ],
-        "id": "GHSA-8hfj-j24r-96c4",
-        "modified": "2026-09-10T03:49:28.830024+00:00",
-        "published": "2022-04-04T21:25:48+00:00",
-        "references": [
-          "https://github.com/moment/moment/security/advisories/GHSA-8hfj-j24r-96c4",
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-24785",
-          "https://github.com/moment/moment/commit/4211bfc8f15746be4019bba557e29a7ba83d54c5",
-          "https://github.com/moment/moment",
-          "https://lists.debian.org/debian-lts-announce/2023/01/msg00035.html"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
-        },
-        "summary": "Path Traversal: 'dir/../../filename' in moment.locale"
+        "id": "GHSA-8hfj-j24r-96c4"
       },
       "cvss_score": 7.5,
       "dep_name": "moment",
@@ -8837,29 +6637,7 @@
         "aliases": [
           "CVE-2022-31129"
         ],
-        "cwe_ids": [
-          "CWE-1333",
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "2.29.4"
-        ],
-        "id": "GHSA-wc69-rhjr-hc9g",
-        "modified": "2026-09-10T03:49:45.131249+00:00",
-        "published": "2022-07-06T18:38:49+00:00",
-        "references": [
-          "https://github.com/moment/moment/security/advisories/GHSA-wc69-rhjr-hc9g",
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-31129",
-          "https://github.com/moment/moment/pull/6015#issuecomment-1152961973",
-          "https://github.com/moment/moment/pull/6015/commits/4bbb9f3ccbe231de40207503f344fe5ce97584f4",
-          "https://github.com/moment/moment/pull/6015/commits/bfd4f2375d5c1a2106246721d693a9611dddfbfe"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Moment.js vulnerable to Inefficient Regular Expression Complexity"
+        "id": "GHSA-wc69-rhjr-hc9g"
       },
       "cvss_score": 7.5,
       "dep_name": "moment",
@@ -8922,24 +6700,7 @@
         "aliases": [
           "CVE-2024-6783"
         ],
-        "cwe_ids": [
-          "CWE-79"
-        ],
-        "fixed_versions": [],
-        "id": "GHSA-g3ch-rx76-35fx",
-        "modified": "2026-02-03T03:15:37.764047+00:00",
-        "published": "2024-07-23T15:31:09+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-6783",
-          "https://github.com/vuejs/vue",
-          "https://www.herodevs.com/vulnerability-directory/cve-2024-6783"
-        ],
-        "severity": {
-          "score": 4.2,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:L/I:L/A:N"
-        },
-        "summary": "vue-template-compiler vulnerable to client-side Cross-Site Scripting (XSS)"
+        "id": "GHSA-g3ch-rx76-35fx"
       },
       "cvss_score": 4.2,
       "dep_name": "vue-template-compiler",
@@ -9002,26 +6763,7 @@
         "aliases": [
           "CVE-2024-9506"
         ],
-        "cwe_ids": [
-          "CWE-1333"
-        ],
-        "fixed_versions": [
-          "3.0.0-alpha.0"
-        ],
-        "id": "GHSA-5j4c-8p2g-v4jx",
-        "modified": "2026-09-10T03:50:19.194870+00:00",
-        "published": "2024-10-15T18:30:50+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-9506",
-          "https://github.com/vuejs/core",
-          "https://www.herodevs.com/vulnerability-directory/cve-2024-9506"
-        ],
-        "severity": {
-          "score": 3.7,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "ReDoS vulnerability in vue package that is exploitable through inefficient regex evaluation in the parseHTML function"
+        "id": "GHSA-5j4c-8p2g-v4jx"
       },
       "cvss_score": 3.7,
       "dep_name": "vue",

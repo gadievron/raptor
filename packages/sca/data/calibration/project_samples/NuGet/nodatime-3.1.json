@@ -2,7 +2,7 @@
   "_source": {
     "fetched_at": "2026-10-29T21:59:41Z",
     "git_ref": "3.1.9",
-    "license": "MIT (RAPTOR-generated scan output)",
+    "license": "MIT (RAPTOR-generated fields only; upstream advisory data retains its own terms)",
     "name": "RAPTOR SCA scan of nodatime-3.1",
     "project_license": "Apache-2.0",
     "provenance": "Scan output produced by RAPTOR's SCA pipeline against https://github.com/nodatime/nodatime.git@3.1.9. Project source not redistributed.",
@@ -14,27 +14,7 @@
         "aliases": [
           "CVE-2026-44788"
         ],
-        "cwe_ids": [
-          "CWE-22"
-        ],
-        "fixed_versions": [
-          "0.48.0"
-        ],
-        "id": "GHSA-6c8g-7p36-r338",
-        "modified": "2026-07-21T20:15:26.449621+00:00",
-        "published": "2026-05-08T23:50:40+00:00",
-        "references": [
-          "https://github.com/adamhathcock/sharpcompress/security/advisories/GHSA-6c8g-7p36-r338",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-44788",
-          "https://github.com/adamhathcock/sharpcompress/commit/2021a06626d0555a4d69471386e763ca5f5d5dfb",
-          "https://github.com/adamhathcock/sharpcompress"
-        ],
-        "severity": {
-          "score": 5.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:N/I:H/A:L"
-        },
-        "summary": "SharpCompress has directory traversal via directory entries in WriteToDirectory (zip slip variant)"
+        "id": "GHSA-6c8g-7p36-r338"
       },
       "cvss_score": 5.9,
       "dep_name": "SharpCompress",

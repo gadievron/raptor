@@ -2,7 +2,7 @@
   "_source": {
     "fetched_at": "2026-11-01T12:59:48Z",
     "git_ref": "v1.0.0",
-    "license": "MIT (RAPTOR-generated scan output)",
+    "license": "MIT (RAPTOR-generated fields only; upstream advisory data retains its own terms)",
     "name": "RAPTOR SCA scan of meilisearch-1.0",
     "project_license": "MIT",
     "provenance": "Scan output produced by RAPTOR's SCA pipeline against https://github.com/meilisearch/meilisearch.git@v1.0.0. Project source not redistributed.",
@@ -14,25 +14,7 @@
         "aliases": [
           "CVE-2023-42366"
         ],
-        "fixed_versions": [
-          "1.35.0-r18",
-          "1.35.0-r30",
-          "1.36.1-r6",
-          "1.36.1-r16",
-          "1.36.1-r25"
-        ],
-        "id": "ALPINE-CVE-2023-42366",
-        "modified": "2026-10-26T17:17:58.640545+00:00",
-        "published": "2023-11-27T23:15:07.420000+00:00",
-        "references": [
-          "https://security.alpinelinux.org/vuln/CVE-2023-42366"
-        ],
-        "severity": {
-          "score": 5.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "ALPINE-CVE-2023-42366"
       },
       "cvss_score": 5.5,
       "dep_name": "busybox",
@@ -94,27 +76,7 @@
         "aliases": [
           "CVE-2025-26519"
         ],
-        "fixed_versions": [
-          "1.2.3-r4",
-          "1.2.3-r6",
-          "1.2.4-r3",
-          "1.2.4_git20230717-r5",
-          "1.2.5-r1",
-          "1.2.5-r9",
-          "1.2.5-r10"
-        ],
-        "id": "ALPINE-CVE-2025-26519",
-        "modified": "2026-08-27T22:18:02.852041+00:00",
-        "published": "2025-02-14T04:15:09.050000+00:00",
-        "references": [
-          "https://security.alpinelinux.org/vuln/CVE-2025-26519"
-        ],
-        "severity": {
-          "score": 7.0,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": ""
+        "id": "ALPINE-CVE-2025-26519"
       },
       "cvss_score": 7.0,
       "dep_name": "musl",
@@ -176,27 +138,7 @@
         "aliases": [
           "CVE-2025-26519"
         ],
-        "fixed_versions": [
-          "1.2.3-r4",
-          "1.2.3-r6",
-          "1.2.4-r3",
-          "1.2.4_git20230717-r5",
-          "1.2.5-r1",
-          "1.2.5-r9",
-          "1.2.5-r10"
-        ],
-        "id": "ALPINE-CVE-2025-26519",
-        "modified": "2026-08-27T22:18:02.852041+00:00",
-        "published": "2025-02-14T04:15:09.050000+00:00",
-        "references": [
-          "https://security.alpinelinux.org/vuln/CVE-2025-26519"
-        ],
-        "severity": {
-          "score": 7.0,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": ""
+        "id": "ALPINE-CVE-2025-26519"
       },
       "cvss_score": 7.0,
       "dep_name": "musl",
@@ -258,23 +200,7 @@
         "aliases": [
           "CVE-2023-2650"
         ],
-        "fixed_versions": [
-          "1.1.1u-r0",
-          "3.0.9-r0",
-          "3.1.1-r0"
-        ],
-        "id": "ALPINE-CVE-2023-2650",
-        "modified": "2026-10-26T17:17:58.614334+00:00",
-        "published": "2023-05-30T14:15:09.683000+00:00",
-        "references": [
-          "https://security.alpinelinux.org/vuln/CVE-2023-2650"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "ALPINE-CVE-2023-2650"
       },
       "cvss_score": 6.5,
       "dep_name": "openssl",
@@ -336,24 +262,7 @@
         "aliases": [
           "CVE-2023-3446"
         ],
-        "fixed_versions": [
-          "1.1.1u-r2",
-          "3.0.9-r3",
-          "3.1.1-r3",
-          "3.0.9-r2"
-        ],
-        "id": "ALPINE-CVE-2023-3446",
-        "modified": "2026-10-26T17:17:58.627788+00:00",
-        "published": "2023-07-19T12:15:10.003000+00:00",
-        "references": [
-          "https://security.alpinelinux.org/vuln/CVE-2023-3446"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": ""
+        "id": "ALPINE-CVE-2023-3446"
       },
       "cvss_score": 5.3,
       "dep_name": "openssl",
@@ -415,23 +324,7 @@
         "aliases": [
           "CVE-2023-5678"
         ],
-        "fixed_versions": [
-          "1.1.1w-r1",
-          "3.0.12-r1",
-          "3.1.4-r1"
-        ],
-        "id": "ALPINE-CVE-2023-5678",
-        "modified": "2026-10-26T17:17:58.669072+00:00",
-        "published": "2023-11-06T16:15:42.670000+00:00",
-        "references": [
-          "https://security.alpinelinux.org/vuln/CVE-2023-5678"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": ""
+        "id": "ALPINE-CVE-2023-5678"
       },
       "cvss_score": 5.3,
       "dep_name": "openssl",
@@ -493,27 +386,7 @@
         "aliases": [
           "CVE-2026-73051"
         ],
-        "cwe_ids": [
-          "CWE-444"
-        ],
-        "fixed_versions": [
-          "3.12.1"
-        ],
-        "id": "GHSA-xhj4-vrgc-hr34",
-        "modified": "2026-09-10T03:51:04.036233+00:00",
-        "published": "2026-04-22T14:37:30+00:00",
-        "references": [
-          "https://github.com/actix/actix-web/security/advisories/GHSA-xhj4-vrgc-hr34",
-          "https://github.com/actix/actix-web",
-          "https://github.com/actix/actix-web/releases/tag/http-v3.12.1",
-          "https://www.rfc-editor.org/rfc/rfc9112.html#name-message-body-length"
-        ],
-        "severity": {
-          "score": 6.3,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:L/VA:N/SC:N/SI:N/SA:N"
-        },
-        "summary": "actix-http has HTTP/1.1 CL.TE Request Smuggling "
+        "id": "GHSA-xhj4-vrgc-hr34"
       },
       "cvss_score": 6.3,
       "dep_name": "actix-http",
@@ -579,18 +452,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [],
         "id": "RUSTSEC-2025-0056",
-        "informational": "unmaintained",
-        "modified": "2025-09-05T09:05:48+00:00",
-        "published": "2025-09-05T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/adler",
-          "https://rustsec.org/advisories/RUSTSEC-2025-0056.html",
-          "https://github.com/jonas-schievink/adler"
-        ],
-        "severity": null,
-        "summary": "adler crate is unmaintained, use adler2 instead"
+        "informational": "unmaintained"
       },
       "cvss_score": null,
       "dep_name": "adler",
@@ -650,20 +513,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [
-          "1.0.103"
-        ],
         "id": "RUSTSEC-2026-0190",
-        "informational": "unsound",
-        "modified": "2026-06-29T14:15:03.650725+00:00",
-        "published": "2026-06-25T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/anyhow",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0190.html",
-          "https://github.com/dtolnay/anyhow/issues/451"
-        ],
-        "severity": null,
-        "summary": "Unsoundness in `Error::downcast_mut()`"
+        "informational": "unsound"
       },
       "cvss_score": null,
       "dep_name": "anyhow",
@@ -723,18 +574,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [],
         "id": "RUSTSEC-2023-0089",
-        "informational": "unmaintained",
-        "modified": "2025-04-29T08:31:10+00:00",
-        "published": "2023-07-11T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/atomic-polyfill",
-          "https://rustsec.org/advisories/RUSTSEC-2023-0089.html",
-          "https://github.com/embassy-rs/atomic-polyfill/commit/48e55c166684f37af0b00fbee5a0809b1a2bae8e"
-        ],
-        "severity": null,
-        "summary": "atomic-polyfill is unmaintained"
+        "informational": "unmaintained"
       },
       "cvss_score": null,
       "dep_name": "atomic-polyfill",
@@ -796,18 +637,7 @@
         "aliases": [
           "RUSTSEC-2021-0145"
         ],
-        "fixed_versions": [],
-        "id": "GHSA-g98v-hv3f-hcfr",
-        "modified": "2026-09-10T03:49:53.897184+00:00",
-        "published": "2023-06-30T20:21:59+00:00",
-        "references": [
-          "https://github.com/softprops/atty/issues/50",
-          "https://github.com/softprops/atty/pull/51",
-          "https://github.com/softprops/atty",
-          "https://rustsec.org/advisories/RUSTSEC-2021-0145.html"
-        ],
-        "severity": null,
-        "summary": "atty potential unaligned read"
+        "id": "GHSA-g98v-hv3f-hcfr"
       },
       "cvss_score": null,
       "dep_name": "atty",
@@ -867,18 +697,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [],
         "id": "RUSTSEC-2024-0375",
-        "informational": "unmaintained",
-        "modified": "2024-09-26T12:26:22+00:00",
-        "published": "2024-09-25T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/atty",
-          "https://rustsec.org/advisories/RUSTSEC-2024-0375.html",
-          "https://github.com/softprops/atty/issues/57"
-        ],
-        "severity": null,
-        "summary": "`atty` is unmaintained"
+        "informational": "unmaintained"
       },
       "cvss_score": null,
       "dep_name": "atty",
@@ -938,18 +758,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [],
         "id": "RUSTSEC-2025-0141",
-        "informational": "unmaintained",
-        "modified": "2026-01-16T11:07:28.867553+00:00",
-        "published": "2025-12-16T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/bincode",
-          "https://rustsec.org/advisories/RUSTSEC-2025-0141.html",
-          "https://git.sr.ht/~stygianentity/bincode/tree/v3.0/item/README.md"
-        ],
-        "severity": null,
-        "summary": "Bincode is unmaintained"
+        "informational": "unmaintained"
       },
       "cvss_score": null,
       "dep_name": "bincode",
@@ -1012,28 +822,7 @@
           "CVE-2026-25541",
           "RUSTSEC-2026-0007"
         ],
-        "cwe_ids": [
-          "CWE-680"
-        ],
-        "fixed_versions": [
-          "1.11.1"
-        ],
-        "id": "GHSA-434x-w66g-qw3r",
-        "modified": "2026-09-10T03:50:33.995841+00:00",
-        "published": "2026-02-03T19:17:46+00:00",
-        "references": [
-          "https://github.com/tokio-rs/bytes/security/advisories/GHSA-434x-w66g-qw3r",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-25541",
-          "https://github.com/tokio-rs/bytes/commit/d0293b0e35838123c51ca5dfdf468ecafee4398f",
-          "https://github.com/tokio-rs/bytes",
-          "https://github.com/tokio-rs/bytes/releases/tag/v1.11.1"
-        ],
-        "severity": {
-          "score": 5.5,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N/E:P"
-        },
-        "summary": "bytes has integer overflow in BytesMut::reserve"
+        "id": "GHSA-434x-w66g-qw3r"
       },
       "cvss_score": 5.5,
       "dep_name": "bytes",
@@ -1096,19 +885,7 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [
-          "0.9.20"
-        ],
-        "id": "RUSTSEC-2026-0204",
-        "modified": "2026-07-06T22:30:04.159269+00:00",
-        "published": "2026-07-06T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/crossbeam-epoch",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0204.html",
-          "https://github.com/crossbeam-rs/crossbeam/pull/1276"
-        ],
-        "severity": null,
-        "summary": "Invalid pointer dereference in `fmt::Pointer` impl for `Atomic` and `Shared` when the underlying pointer is invalid"
+        "id": "RUSTSEC-2026-0204"
       },
       "cvss_score": null,
       "dep_name": "crossbeam-epoch",
@@ -1168,18 +945,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [],
         "id": "RUSTSEC-2021-0153",
-        "informational": "unmaintained",
-        "modified": "2023-03-12T07:17:34+00:00",
-        "published": "2021-12-05T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/encoding",
-          "https://rustsec.org/advisories/RUSTSEC-2021-0153.html",
-          "https://github.com/lifthrasiir/rust-encoding/issues/127"
-        ],
-        "severity": null,
-        "summary": "`encoding` is unmaintained"
+        "informational": "unmaintained"
       },
       "cvss_score": null,
       "dep_name": "encoding",
@@ -1239,18 +1006,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [],
         "id": "RUSTSEC-2025-0057",
-        "informational": "unmaintained",
-        "modified": "2025-09-05T19:09:01+00:00",
-        "published": "2025-09-05T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/fxhash",
-          "https://rustsec.org/advisories/RUSTSEC-2025-0057.html",
-          "https://github.com/cbreeden/fxhash/issues/20"
-        ],
-        "severity": null,
-        "summary": "fxhash - no longer maintained"
+        "informational": "unmaintained"
       },
       "cvss_score": null,
       "dep_name": "fxhash",
@@ -1314,27 +1071,7 @@
           "GHSA-8643-3wh5-rmjq",
           "RUSTSEC-2023-0003"
         ],
-        "fixed_versions": [
-          "0.14.2",
-          "0.13.5",
-          "0.16.1"
-        ],
-        "id": "GHSA-m4ch-rfv5-x5g3",
-        "modified": "2026-10-14T17:07:22+00:00",
-        "published": "2023-01-20T23:36:41+00:00",
-        "references": [
-          "https://github.com/libgit2/libgit2/security/advisories/GHSA-8643-3wh5-rmjq",
-          "https://github.com/rust-lang/git2-rs/security/advisories/GHSA-m4ch-rfv5-x5g3",
-          "https://nvd.nist.gov/vuln/detail/CVE-2023-22742",
-          "https://github.com/rust-lang/git2-rs/commit/87934f87d36753ed702792ec063be7246444a8e1",
-          "https://github.com/rust-lang/git2-rs"
-        ],
-        "severity": {
-          "score": 6.8,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:H/I:H/A:N"
-        },
-        "summary": "git2-rs fails to verify SSH keys by default"
+        "id": "GHSA-m4ch-rfv5-x5g3"
       },
       "cvss_score": 6.8,
       "dep_name": "git2",
@@ -1396,20 +1133,8 @@
         "aliases": [
           "GHSA-j39j-6gw9-jw6h"
         ],
-        "fixed_versions": [
-          "0.20.4"
-        ],
         "id": "RUSTSEC-2026-0008",
-        "informational": "unsound",
-        "modified": "2026-02-05T06:56:18.869923+00:00",
-        "published": "2026-02-02T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/git2",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0008.html",
-          "https://github.com/rust-lang/git2-rs/pull/1213"
-        ],
-        "severity": null,
-        "summary": "Potential undefined behavior when dereferencing Buf struct"
+        "informational": "unsound"
       },
       "cvss_score": null,
       "dep_name": "git2",
@@ -1469,20 +1194,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [
-          "0.21.0"
-        ],
         "id": "RUSTSEC-2026-0183",
-        "informational": "unsound",
-        "modified": "2026-06-17T13:00:04.696626+00:00",
-        "published": "2026-05-12T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/git2",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0183.html",
-          "https://github.com/rust-lang/git2-rs/pull/1250"
-        ],
-        "severity": null,
-        "summary": "Potential undefined behavior when calling Remote::list()"
+        "informational": "unsound"
       },
       "cvss_score": null,
       "dep_name": "git2",
@@ -1542,20 +1255,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [
-          "0.21.0"
-        ],
         "id": "RUSTSEC-2026-0184",
-        "informational": "unsound",
-        "modified": "2026-06-17T14:00:05.672935+00:00",
-        "published": "2026-05-13T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/git2",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0184.html",
-          "https://github.com/rust-lang/git2-rs/pull/1254"
-        ],
-        "severity": null,
-        "summary": "Potential undefined behavior with Signature from a buffer-created BlameHunk"
+        "informational": "unsound"
       },
       "cvss_score": null,
       "dep_name": "git2",
@@ -1617,22 +1318,7 @@
         "aliases": [
           "RUSTSEC-2024-0003"
         ],
-        "fixed_versions": [
-          "0.3.24",
-          "0.4.2"
-        ],
-        "id": "GHSA-8r5v-vm4m-4g25",
-        "modified": "2026-09-10T03:50:09.232197+00:00",
-        "published": "2024-01-19T15:24:56+00:00",
-        "references": [
-          "https://github.com/hyperium/h2/pull/737",
-          "https://github.com/hyperium/h2/commit/59570e11ccddbec85f67a0c7aa353f7730c68854",
-          "https://github.com/hyperium/h2/commit/d919cd6fd8e0f4f5d1f6282fab0b38a1b4bf999c",
-          "https://github.com/hyperium/h2",
-          "https://rustsec.org/advisories/RUSTSEC-2024-0003.html"
-        ],
-        "severity": null,
-        "summary": "Resource exhaustion vulnerability in h2 may lead to Denial of Service (DoS)"
+        "id": "GHSA-8r5v-vm4m-4g25"
       },
       "cvss_score": null,
       "dep_name": "h2",
@@ -1695,24 +1381,7 @@
           "CVE-2023-26964",
           "RUSTSEC-2023-0034"
         ],
-        "cwe_ids": [
-          "CWE-770"
-        ],
-        "fixed_versions": [
-          "0.3.17"
-        ],
-        "id": "GHSA-f8vr-r385-rh5r",
-        "modified": "2023-11-08T04:12:03.011700+00:00",
-        "published": "2023-04-11T15:30:30+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2023-26964",
-          "https://github.com/hyperium/h2/issues/621",
-          "https://github.com/hyperium/hyper/issues/2877",
-          "https://github.com/hyperium/h2/pull/668",
-          "https://github.com/hyperium/hyper"
-        ],
-        "severity": null,
-        "summary": "h2 vulnerable to denial of service"
+        "id": "GHSA-f8vr-r385-rh5r"
       },
       "cvss_score": null,
       "dep_name": "h2",
@@ -1775,29 +1444,7 @@
         "aliases": [
           "RUSTSEC-2024-0332"
         ],
-        "cwe_ids": [
-          "CWE-400",
-          "CWE-770"
-        ],
-        "fixed_versions": [
-          "0.3.26",
-          "0.4.4"
-        ],
-        "id": "GHSA-q6cp-qfwq-4gcv",
-        "modified": "2026-09-10T03:49:18.784343+00:00",
-        "published": "2024-04-05T15:05:32+00:00",
-        "references": [
-          "https://github.com/hyperium/h2",
-          "https://rustsec.org/advisories/RUSTSEC-2024-0332.html",
-          "https://seanmonstar.com/blog/hyper-http2-continuation-flood",
-          "https://www.kb.cert.org/vuls/id/421644"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "h2 servers vulnerable to degradation of service with CONTINUATION Flood"
+        "id": "GHSA-q6cp-qfwq-4gcv"
       },
       "cvss_score": 5.3,
       "dep_name": "h2",
@@ -1859,19 +1506,7 @@
         "aliases": [
           "GHSA-q83h-524g-xf6h"
         ],
-        "fixed_versions": [
-          "0.4.16"
-        ],
-        "id": "RUSTSEC-2026-0258",
-        "modified": "2026-10-12T18:00:10.934581+00:00",
-        "published": "2026-08-17T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/h2",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0258.html",
-          "https://github.com/hyperium/h2/pull/935"
-        ],
-        "severity": null,
-        "summary": "h2 unbounded empty DATA frames"
+        "id": "RUSTSEC-2026-0258"
       },
       "cvss_score": null,
       "dep_name": "h2",
@@ -1934,28 +1569,7 @@
           "CVE-2024-12224",
           "RUSTSEC-2024-0421"
         ],
-        "cwe_ids": [
-          "CWE-1289",
-          "CWE-697"
-        ],
-        "fixed_versions": [
-          "1.0.0"
-        ],
-        "id": "GHSA-h97m-ww89-6jmq",
-        "modified": "2026-09-10T03:50:21.562272+00:00",
-        "published": "2024-12-09T20:41:10+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-12224",
-          "https://bugzilla.mozilla.org/show_bug.cgi?id=1887898",
-          "https://github.com/servo/rust-url",
-          "https://rustsec.org/advisories/RUSTSEC-2024-0421.html"
-        ],
-        "severity": {
-          "score": 6.3,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:H/AT:N/PR:N/UI:N/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N"
-        },
-        "summary": "`idna` accepts Punycode labels that do not produce any non-ASCII when decoded"
+        "id": "GHSA-h97m-ww89-6jmq"
       },
       "cvss_score": 6.3,
       "dep_name": "idna",
@@ -2016,19 +1630,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [],
         "id": "RUSTSEC-2024-0384",
-        "informational": "unmaintained",
-        "modified": "2024-11-10T13:10:28+00:00",
-        "published": "2024-09-01T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/instant",
-          "https://rustsec.org/advisories/RUSTSEC-2024-0384.html",
-          "https://crates.io/crates/instant/0.1.13",
-          "https://github.com/sebcrozet/instant/issues/52"
-        ],
-        "severity": null,
-        "summary": "`instant` is unmaintained"
+        "informational": "unmaintained"
       },
       "cvss_score": null,
       "dep_name": "instant",
@@ -2090,27 +1693,7 @@
         "aliases": [
           "CVE-2026-25537"
         ],
-        "cwe_ids": [
-          "CWE-843"
-        ],
-        "fixed_versions": [
-          "10.3.0"
-        ],
-        "id": "GHSA-h395-gr6q-cpjc",
-        "modified": "2026-09-10T03:50:35.169824+00:00",
-        "published": "2026-02-03T18:47:40+00:00",
-        "references": [
-          "https://github.com/Keats/jsonwebtoken/security/advisories/GHSA-h395-gr6q-cpjc",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-25537",
-          "https://github.com/Keats/jsonwebtoken/commit/abbc3076742c4161347bc6b8bf4aa5eb86e1dc01",
-          "https://github.com/Keats/jsonwebtoken"
-        ],
-        "severity": {
-          "score": 5.5,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:N/SC:N/SI:N/SA:N/E:P"
-        },
-        "summary": "jsonwebtoken has Type Confusion that leads to potential authorization bypass"
+        "id": "GHSA-h395-gr6q-cpjc"
       },
       "cvss_score": 5.5,
       "dep_name": "jsonwebtoken",
@@ -2176,24 +1759,7 @@
         "aliases": [
           "RUSTSEC-2024-0013"
         ],
-        "fixed_versions": [
-          "0.16.2"
-        ],
-        "id": "GHSA-22q8-ghmq-63vf",
-        "modified": "2026-09-10T03:50:05.143860+00:00",
-        "published": "2024-02-12T15:42:14+00:00",
-        "references": [
-          "https://github.com/rust-lang/git2-rs/pull/1017",
-          "https://github.com/rust-lang/git2-rs/commit/9e57876be78924c1e5f3f268bb599e3981fe58bb",
-          "https://github.com/rust-lang/git2-rs",
-          "https://rustsec.org/advisories/RUSTSEC-2024-0013.html"
-        ],
-        "severity": {
-          "score": 8.6,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:L/A:L"
-        },
-        "summary": "libgit2-sys affected by memory corruption, denial of service, and arbitrary code execution in libgit2"
+        "id": "GHSA-22q8-ghmq-63vf"
       },
       "cvss_score": 8.6,
       "dep_name": "libgit2-sys",
@@ -2257,27 +1823,7 @@
           "GHSA-8643-3wh5-rmjq",
           "RUSTSEC-2023-0003"
         ],
-        "fixed_versions": [
-          "0.14.2",
-          "0.13.5",
-          "0.16.1"
-        ],
-        "id": "GHSA-m4ch-rfv5-x5g3",
-        "modified": "2026-10-14T17:07:22+00:00",
-        "published": "2023-01-20T23:36:41+00:00",
-        "references": [
-          "https://github.com/libgit2/libgit2/security/advisories/GHSA-8643-3wh5-rmjq",
-          "https://github.com/rust-lang/git2-rs/security/advisories/GHSA-m4ch-rfv5-x5g3",
-          "https://nvd.nist.gov/vuln/detail/CVE-2023-22742",
-          "https://github.com/rust-lang/git2-rs/commit/87934f87d36753ed702792ec063be7246444a8e1",
-          "https://github.com/rust-lang/git2-rs"
-        ],
-        "severity": {
-          "score": 6.8,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:H/I:H/A:N"
-        },
-        "summary": "git2-rs fails to verify SSH keys by default"
+        "id": "GHSA-m4ch-rfv5-x5g3"
       },
       "cvss_score": 6.8,
       "dep_name": "libgit2-sys",
@@ -2339,19 +1885,7 @@
         "aliases": [
           "GHSA-8p3x-q3q3-q3v5"
         ],
-        "fixed_versions": [
-          "1.1.31"
-        ],
-        "id": "RUSTSEC-2026-0418",
-        "modified": "2026-10-29T14:15:02.333141+00:00",
-        "published": "2026-10-28T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/libz-sys",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0418.html",
-          "https://github.com/rust-lang/libz-sys/pull/280"
-        ],
-        "severity": null,
-        "summary": "libz-sys build script leaks environment variables in the build directory"
+        "id": "RUSTSEC-2026-0418"
       },
       "cvss_score": null,
       "dep_name": "libz-sys",
@@ -2411,21 +1945,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [
-          "0.9.11"
-        ],
         "id": "RUSTSEC-2026-0186",
-        "informational": "unsound",
-        "modified": "2026-06-22T18:15:03.600280+00:00",
-        "published": "2026-06-20T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/memmap2",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0186.html",
-          "https://github.com/RazrFalcon/memmap2-rs/issues/169",
-          "https://github.com/RazrFalcon/memmap2-rs/pull/170"
-        ],
-        "severity": null,
-        "summary": "Unchecked pointer offset in crate `memmap2`"
+        "informational": "unsound"
       },
       "cvss_score": null,
       "dep_name": "memmap2",
@@ -2487,23 +2008,7 @@
         "aliases": [
           "RUSTSEC-2022-0094"
         ],
-        "fixed_versions": [
-          "0.1.39"
-        ],
-        "id": "GHSA-g23h-7vf9-xc25",
-        "modified": "2026-09-10T03:50:20.648792+00:00",
-        "published": "2024-11-12T21:21:36+00:00",
-        "references": [
-          "https://github.com/purpleprotocol/mimalloc_rust/issues/87",
-          "https://github.com/purpleprotocol/mimalloc_rust",
-          "https://rustsec.org/advisories/RUSTSEC-2022-0094.html"
-        ],
-        "severity": {
-          "score": 5.5,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:N/SC:N/SI:N/SA:N/E:P"
-        },
-        "summary": "Mimalloc Can Allocate Memory with Bad Alignment"
+        "id": "GHSA-g23h-7vf9-xc25"
       },
       "cvss_score": 5.5,
       "dep_name": "mimalloc",
@@ -2566,29 +2071,7 @@
           "CVE-2024-27308",
           "RUSTSEC-2024-0019"
         ],
-        "cwe_ids": [
-          "CWE-416",
-          "CWE-672"
-        ],
-        "fixed_versions": [
-          "0.8.11"
-        ],
-        "id": "GHSA-r8w9-5wcg-vfj7",
-        "modified": "2026-09-10T03:50:10.693636+00:00",
-        "published": "2024-03-04T20:44:35+00:00",
-        "references": [
-          "https://github.com/tokio-rs/mio/security/advisories/GHSA-r8w9-5wcg-vfj7",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-27308",
-          "https://github.com/tokio-rs/tokio/issues/6369",
-          "https://github.com/tokio-rs/mio/pull/1760",
-          "https://github.com/tokio-rs/mio/commit/90d4fe00df870acd3d38f3dc4face9aacab8fbb9"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
-        },
-        "summary": "Mio's tokens for named pipes may be delivered after deregistration"
+        "id": "GHSA-r8w9-5wcg-vfj7"
       },
       "cvss_score": 7.5,
       "dep_name": "mio",
@@ -2649,18 +2132,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [],
         "id": "RUSTSEC-2024-0436",
-        "informational": "unmaintained",
-        "modified": "2026-01-27T22:03:15.694766+00:00",
-        "published": "2024-10-07T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/paste",
-          "https://rustsec.org/advisories/RUSTSEC-2024-0436.html",
-          "https://github.com/dtolnay/paste"
-        ],
-        "severity": null,
-        "summary": "paste - no longer maintained"
+        "informational": "unmaintained"
       },
       "cvss_score": null,
       "dep_name": "paste",
@@ -2720,18 +2193,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [],
         "id": "RUSTSEC-2024-0370",
-        "informational": "unmaintained",
-        "modified": "2026-06-07T20:00:03.923932+00:00",
-        "published": "2024-09-01T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/proc-macro-error",
-          "https://rustsec.org/advisories/RUSTSEC-2024-0370.html",
-          "https://gitlab.com/CreepySkeleton/proc-macro-error/-/issues/20"
-        ],
-        "severity": null,
-        "summary": "proc-macro-error is unmaintained"
+        "informational": "unmaintained"
       },
       "cvss_score": null,
       "dep_name": "proc-macro-error",
@@ -2794,29 +2257,7 @@
           "CVE-2025-53605",
           "RUSTSEC-2024-0437"
         ],
-        "cwe_ids": [
-          "CWE-20",
-          "CWE-770"
-        ],
-        "fixed_versions": [
-          "3.7.2"
-        ],
-        "id": "GHSA-2gh3-rmm4-6rq5",
-        "modified": "2026-09-10T03:50:06.154902+00:00",
-        "published": "2025-03-07T20:02:37+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-53605",
-          "https://github.com/stepancheg/rust-protobuf/issues/749",
-          "https://github.com/stepancheg/rust-protobuf/commit/f06992f46771c0a092593b9ebf7afd48740b3ed6",
-          "https://github.com/stepancheg/rust-protobuf",
-          "https://rustsec.org/advisories/RUSTSEC-2024-0437.html"
-        ],
-        "severity": {
-          "score": 6.6,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N/E:U"
-        },
-        "summary": "Crash due to uncontrolled recursion in protobuf crate"
+        "id": "GHSA-2gh3-rmm4-6rq5"
       },
       "cvss_score": 6.6,
       "dep_name": "protobuf",
@@ -2878,24 +2319,7 @@
         "aliases": [
           "RUSTSEC-2026-0097"
         ],
-        "cwe_ids": [
-          "CWE-20"
-        ],
-        "fixed_versions": [
-          "0.9.3",
-          "0.10.1",
-          "0.8.6"
-        ],
-        "id": "GHSA-cq8v-f236-94qc",
-        "modified": "2026-09-10T03:50:43.958966+00:00",
-        "published": "2026-04-14T01:03:36+00:00",
-        "references": [
-          "https://github.com/rust-random/rand/pull/1763",
-          "https://github.com/rust-random/rand",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0097.html"
-        ],
-        "severity": null,
-        "summary": "Rand is unsound with a custom logger using rand::rng()"
+        "id": "GHSA-cq8v-f236-94qc"
       },
       "cvss_score": null,
       "dep_name": "rand",
@@ -2957,24 +2381,7 @@
         "aliases": [
           "RUSTSEC-2023-0018"
         ],
-        "cwe_ids": [
-          "CWE-366",
-          "CWE-367"
-        ],
-        "fixed_versions": [
-          "0.8.0"
-        ],
-        "id": "GHSA-mc8h-8q98-g5hr",
-        "modified": "2026-09-10T03:49:52.047436+00:00",
-        "published": "2023-02-24T16:23:59+00:00",
-        "references": [
-          "https://github.com/XAMPPRocky/remove_dir_all/security/advisories/GHSA-mc8h-8q98-g5hr",
-          "https://github.com/XAMPPRocky/remove_dir_all/commit/7247a8b6ee59fc99bbb69ca6b3ca4bfd8c809ead",
-          "https://github.com/XAMPPRocky/remove_dir_all",
-          "https://rustsec.org/advisories/RUSTSEC-2023-0018.html"
-        ],
-        "severity": null,
-        "summary": "Race Condition Enabling Link Following and Time-of-check Time-of-use (TOCTOU) Race Condition in remove_dir_all"
+        "id": "GHSA-mc8h-8q98-g5hr"
       },
       "cvss_score": null,
       "dep_name": "remove_dir_all",
@@ -3039,28 +2446,7 @@
           "GO-2025-3678",
           "RUSTSEC-2025-0009"
         ],
-        "cwe_ids": [
-          "CWE-770"
-        ],
-        "fixed_versions": [
-          "0.17.12"
-        ],
-        "id": "GHSA-4p46-pwfr-66x6",
-        "modified": "2026-09-10T03:50:56.900994+00:00",
-        "published": "2025-03-07T16:23:50+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-4432",
-          "https://github.com/briansmith/ring/pull/2447",
-          "https://github.com/briansmith/ring/commit/ec2d3cf1d91f148c84e4806b4f0b3c98f6df3b38",
-          "https://access.redhat.com/security/cve/CVE-2025-4432",
-          "https://bugzilla.redhat.com/show_bug.cgi?id=2350655"
-        ],
-        "severity": {
-          "score": 6.6,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N/E:U"
-        },
-        "summary": "Some AES functions may panic when overflow checking is enabled in ring"
+        "id": "GHSA-4p46-pwfr-66x6"
       },
       "cvss_score": 6.6,
       "dep_name": "ring",
@@ -3120,20 +2506,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [
-          "0.17.0"
-        ],
         "id": "RUSTSEC-2025-0010",
-        "informational": "unmaintained",
-        "modified": "2025-03-07T15:46:47+00:00",
-        "published": "2025-03-05T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/ring",
-          "https://rustsec.org/advisories/RUSTSEC-2025-0010.html",
-          "https://github.com/briansmith/ring/discussions/2450"
-        ],
-        "severity": null,
-        "summary": "Versions of *ring* prior to 0.17 are unmaintained."
+        "informational": "unmaintained"
       },
       "cvss_score": null,
       "dep_name": "ring",
@@ -3195,31 +2569,7 @@
         "aliases": [
           "CVE-2024-43806"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "0.35.15",
-          "0.36.16",
-          "0.37.25",
-          "0.38.19"
-        ],
-        "id": "GHSA-c827-hfw6-qwvm",
-        "modified": "2026-09-10T03:50:03.698097+00:00",
-        "published": "2023-10-18T18:27:47+00:00",
-        "references": [
-          "https://github.com/bytecodealliance/rustix/security/advisories/GHSA-c827-hfw6-qwvm",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-43806",
-          "https://github.com/imsnif/bandwhich/issues/284",
-          "https://github.com/imsnif/bandwhich/issues/284#issuecomment-1754321993",
-          "https://github.com/bytecodealliance/rustix/commit/31fd98ca723b93cc6101a3e29843ea5cf094e159"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "rustix's `rustix::fs::Dir` iterator with the `linux_raw` backend can cause memory explosion"
+        "id": "GHSA-c827-hfw6-qwvm"
       },
       "cvss_score": 6.5,
       "dep_name": "rustix",
@@ -3280,18 +2630,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [],
         "id": "RUSTSEC-2025-0134",
-        "informational": "unmaintained",
-        "modified": "2025-12-05T19:07:59.622592+00:00",
-        "published": "2025-11-28T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/rustls-pemfile",
-          "https://rustsec.org/advisories/RUSTSEC-2025-0134.html",
-          "https://github.com/rustls/pemfile/issues/61"
-        ],
-        "severity": null,
-        "summary": "rustls-pemfile is unmaintained"
+        "informational": "unmaintained"
       },
       "cvss_score": null,
       "dep_name": "rustls-pemfile",
@@ -3355,29 +2695,7 @@
         "aliases": [
           "RUSTSEC-2026-0346"
         ],
-        "cwe_ids": [
-          "CWE-212"
-        ],
-        "fixed_versions": [
-          "0.23.46",
-          "0.24.0-dev.2"
-        ],
-        "id": "GHSA-c8m5-c952-6cm4",
-        "modified": "2026-10-27T16:15:05.354395+00:00",
-        "published": "2026-10-27T16:08:47+00:00",
-        "references": [
-          "https://github.com/rustls/rustls/security/advisories/GHSA-c8m5-c952-6cm4",
-          "https://github.com/rustls/rustls/pull/3299",
-          "https://github.com/rustls/rustls/pull/3354",
-          "https://github.com/rustls/rustls/commit/dcdb9464d376f45f42a94a5f837cda1506449f23",
-          "https://github.com/rustls/rustls/commit/f5f7bf5078a7edcbd81a9e82a97f2bd14dc1c855"
-        ],
-        "severity": {
-          "score": 4.0,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:H/UI:R/S:U/C:H/I:N/A:N"
-        },
-        "summary": "Rustls: Session Debug formatting exposes TLS master secrets and resumption PSKs"
+        "id": "GHSA-c8m5-c952-6cm4"
       },
       "cvss_score": 4.0,
       "dep_name": "rustls",
@@ -3439,29 +2757,7 @@
         "aliases": [
           "RUSTSEC-2026-0348"
         ],
-        "cwe_ids": [
-          "CWE-770"
-        ],
-        "fixed_versions": [
-          "0.23.46",
-          "0.24.0-dev.2"
-        ],
-        "id": "GHSA-h2v8-394m-p7vv",
-        "modified": "2026-10-27T16:15:05.337819+00:00",
-        "published": "2026-10-27T16:08:36+00:00",
-        "references": [
-          "https://github.com/rustls/rustls/security/advisories/GHSA-h2v8-394m-p7vv",
-          "https://github.com/rustls/rustls/pull/3297",
-          "https://github.com/rustls/rustls/pull/3354",
-          "https://github.com/rustls/rustls/commit/1aa987af37d0d79b98781d345895ac0059ce345c",
-          "https://github.com/rustls/rustls/commit/402b7b78b7ae87d59e19cf07ee07f3fc19e6537e"
-        ],
-        "severity": {
-          "score": 3.7,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "Rustls: Brotli certificate decompression can allocate an attacker-controlled amount of memory up to 1 GiB before authentication."
+        "id": "GHSA-h2v8-394m-p7vv"
       },
       "cvss_score": 3.7,
       "dep_name": "rustls",
@@ -3523,29 +2819,7 @@
         "aliases": [
           "RUSTSEC-2026-0349"
         ],
-        "cwe_ids": [
-          "CWE-757"
-        ],
-        "fixed_versions": [
-          "0.23.46",
-          "0.24.0-dev.2"
-        ],
-        "id": "GHSA-w44r-93j7-qv28",
-        "modified": "2026-10-27T16:15:05.340347+00:00",
-        "published": "2026-10-27T16:08:54+00:00",
-        "references": [
-          "https://github.com/rustls/rustls/security/advisories/GHSA-w44r-93j7-qv28",
-          "https://github.com/rustls/rustls/pull/3355",
-          "https://github.com/rustls/rustls/commit/8fa0dc5d517a63411ad1e528249bdf5b098ae5e4",
-          "https://github.com/rustls/rustls/commit/f04804fa13341a9b1dc02b5d1dd8a746f2c4b7fb",
-          "https://github.com/rustls/rustls"
-        ],
-        "severity": {
-          "score": 3.7,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:N"
-        },
-        "summary": "rustls: An unauthenticated ServerHello poisons the per-name key-exchange record, so later ClientHellos carry only a classical X25519 share"
+        "id": "GHSA-w44r-93j7-qv28"
       },
       "cvss_score": 3.7,
       "dep_name": "rustls",
@@ -3608,25 +2882,7 @@
           "CVE-2024-32650",
           "GHSA-6g7w-8wpp-frhj"
         ],
-        "fixed_versions": [
-          "0.21.11",
-          "0.22.4",
-          "0.23.5"
-        ],
-        "id": "RUSTSEC-2024-0336",
-        "modified": "2026-10-12T18:00:07.054681+00:00",
-        "published": "2024-04-19T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/rustls",
-          "https://rustsec.org/advisories/RUSTSEC-2024-0336.html",
-          "https://github.com/rustls/rustls/commit/2123576840aa31043a31b0770e6572136fbe0c2d"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "`rustls::ConnectionCommon::complete_io` could fall into an infinite loop based on network input"
+        "id": "RUSTSEC-2024-0336"
       },
       "cvss_score": 7.5,
       "dep_name": "rustls",
@@ -3686,17 +2942,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [],
         "id": "RUSTSEC-2026-0215",
-        "informational": "unmaintained",
-        "modified": "2026-07-23T07:30:03.466694+00:00",
-        "published": "2026-07-22T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/smallstr",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0215.html"
-        ],
-        "severity": null,
-        "summary": "smallstr is unmaintained"
+        "informational": "unmaintained"
       },
       "cvss_score": null,
       "dep_name": "smallstr",
@@ -3756,18 +3003,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [],
         "id": "RUSTSEC-2026-0249",
-        "informational": "unmaintained",
-        "modified": "2026-08-10T19:45:04.526670+00:00",
-        "published": "2026-05-03T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/smartstring",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0249.html",
-          "https://github.com/bodil/smartstring"
-        ],
-        "severity": null,
-        "summary": "smartstring is unmaintained"
+        "informational": "unmaintained"
       },
       "cvss_score": null,
       "dep_name": "smartstring",
@@ -3829,19 +3066,7 @@
         "aliases": [
           "RUSTSEC-2023-0031"
         ],
-        "fixed_versions": [
-          "0.9.8"
-        ],
-        "id": "GHSA-2qv5-7mw5-j3cg",
-        "modified": "2026-09-10T03:49:53.155588+00:00",
-        "published": "2023-04-03T22:53:18+00:00",
-        "references": [
-          "https://github.com/mvdnes/spin-rs/issues/148",
-          "https://github.com/mvdnes/spin-rs",
-          "https://rustsec.org/advisories/RUSTSEC-2023-0031.html"
-        ],
-        "severity": null,
-        "summary": "spin-rs initialisation failure in `Once::try_call_once` can lead to undefined behaviour for other initialisers"
+        "id": "GHSA-2qv5-7mw5-j3cg"
       },
       "cvss_score": null,
       "dep_name": "spin",
@@ -3901,25 +3126,7 @@
     {
       "advisory": {
         "aliases": [],
-        "cwe_ids": [
-          "CWE-20",
-          "CWE-843"
-        ],
-        "fixed_versions": [
-          "0.4.46"
-        ],
-        "id": "GHSA-3pv8-6f4r-ffg2",
-        "modified": "2026-09-10T03:51:04.454810+00:00",
-        "published": "2026-05-29T19:16:12+00:00",
-        "references": [
-          "https://github.com/composefs/tar-rs/security/advisories/GHSA-3pv8-6f4r-ffg2",
-          "https://github.com/composefs/tar-rs/pull/454",
-          "https://github.com/composefs/tar-rs/commit/bab14dd84b411ac16ecb56d4f2d2f7bfb88a9838",
-          "https://github.com/composefs/tar-rs",
-          "https://github.com/composefs/tar-rs/releases/tag/0.4.46"
-        ],
-        "severity": null,
-        "summary": "tar has a PAX header desynchronization issue"
+        "id": "GHSA-3pv8-6f4r-ffg2"
       },
       "cvss_score": null,
       "dep_name": "tar",
@@ -3982,28 +3189,7 @@
           "CVE-2026-33055",
           "RUSTSEC-2026-0068"
         ],
-        "cwe_ids": [
-          "CWE-843"
-        ],
-        "fixed_versions": [
-          "0.4.45"
-        ],
-        "id": "GHSA-gchp-q4r4-x4ff",
-        "modified": "2026-09-10T03:50:39.204912+00:00",
-        "published": "2026-03-20T17:25:05+00:00",
-        "references": [
-          "https://github.com/alexcrichton/tar-rs/security/advisories/GHSA-gchp-q4r4-x4ff",
-          "https://github.com/composefs/tar-rs/security/advisories/GHSA-gchp-q4r4-x4ff",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-33055",
-          "https://github.com/alexcrichton/tar-rs/commit/de1a5870e603758f430073688691165f21a33946",
-          "https://github.com/alexcrichton/tar-rs"
-        ],
-        "severity": {
-          "score": 8.1,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:N"
-        },
-        "summary": "tar-rs incorrectly ignores PAX size headers if header size is nonzero"
+        "id": "GHSA-gchp-q4r4-x4ff"
       },
       "cvss_score": 8.1,
       "dep_name": "tar",
@@ -4067,28 +3253,7 @@
           "CVE-2026-33056",
           "RUSTSEC-2026-0067"
         ],
-        "cwe_ids": [
-          "CWE-61"
-        ],
-        "fixed_versions": [
-          "0.4.45"
-        ],
-        "id": "GHSA-j4xf-2g29-59ph",
-        "modified": "2026-09-10T03:50:39.751471+00:00",
-        "published": "2026-03-20T17:25:09+00:00",
-        "references": [
-          "https://github.com/alexcrichton/tar-rs/security/advisories/GHSA-j4xf-2g29-59ph",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-33056",
-          "https://github.com/alexcrichton/tar-rs/commit/17b1fd84e632071cb8eef9d3709bf347bd266446",
-          "https://github.com/alexcrichton/tar-rs",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0067.html"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:H/A:N"
-        },
-        "summary": "tar-rs `unpack_in` can chmod arbitrary directories by following symlinks"
+        "id": "GHSA-j4xf-2g29-59ph"
       },
       "cvss_score": 6.5,
       "dep_name": "tar",
@@ -4151,28 +3316,7 @@
           "CVE-2026-25727",
           "RUSTSEC-2026-0009"
         ],
-        "cwe_ids": [
-          "CWE-121"
-        ],
-        "fixed_versions": [
-          "0.3.47"
-        ],
-        "id": "GHSA-r6v5-fh4h-64xc",
-        "modified": "2026-09-10T03:50:35.583241+00:00",
-        "published": "2026-02-05T17:57:55+00:00",
-        "references": [
-          "https://github.com/time-rs/time/security/advisories/GHSA-r6v5-fh4h-64xc",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-25727",
-          "https://github.com/time-rs/time/commit/1c63dc7985b8fa26bd8c689423cc56b7a03841ee",
-          "https://github.com/time-rs/time",
-          "https://github.com/time-rs/time/blob/main/CHANGELOG.md#0347-2026-02-05"
-        ],
-        "severity": {
-          "score": 6.8,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:H/AT:N/PR:L/UI:A/VC:N/VI:N/VA:H/SC:N/SI:N/SA:H"
-        },
-        "summary": "time vulnerable to stack exhaustion Denial of Service attack"
+        "id": "GHSA-r6v5-fh4h-64xc"
       },
       "cvss_score": 6.8,
       "dep_name": "time",
@@ -4234,21 +3378,7 @@
         "aliases": [
           "RUSTSEC-2023-0005"
         ],
-        "fixed_versions": [
-          "1.24.2",
-          "1.20.4",
-          "1.18.5"
-        ],
-        "id": "GHSA-4q83-7cq4-p6wg",
-        "modified": "2026-09-10T03:49:56.588581+00:00",
-        "published": "2023-02-04T00:30:37+00:00",
-        "references": [
-          "https://github.com/tokio-rs/tokio/issues/5372",
-          "https://github.com/tokio-rs/tokio",
-          "https://rustsec.org/advisories/RUSTSEC-2023-0005.html"
-        ],
-        "severity": null,
-        "summary": "`tokio::io::ReadHalf<T>::unsplit` is Unsound"
+        "id": "GHSA-4q83-7cq4-p6wg"
       },
       "cvss_score": null,
       "dep_name": "tokio",
@@ -4310,23 +3440,8 @@
         "aliases": [
           "GHSA-rr8g-9fpq-6wmg"
         ],
-        "fixed_versions": [
-          "1.38.2",
-          "1.42.1",
-          "1.43.1",
-          "1.44.2"
-        ],
         "id": "RUSTSEC-2025-0023",
-        "informational": "unsound",
-        "modified": "2025-10-28T06:29:26.130595+00:00",
-        "published": "2025-04-07T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/tokio",
-          "https://rustsec.org/advisories/RUSTSEC-2025-0023.html",
-          "https://github.com/tokio-rs/tokio/pull/7232"
-        ],
-        "severity": null,
-        "summary": "Broadcast channel calls clone in parallel, but does not require `Sync`"
+        "informational": "unsound"
       },
       "cvss_score": null,
       "dep_name": "tokio",
@@ -4386,23 +3501,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [
-          "1.51.6",
-          "1.53.3"
-        ],
         "id": "RUSTSEC-2026-0386",
-        "informational": "unsound",
-        "modified": "2026-10-23T14:45:03.847864+00:00",
-        "published": "2026-10-13T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/tokio",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0386.html",
-          "https://github.com/tokio-rs/tokio/pull/8587",
-          "https://github.com/tokio-rs/tokio/issues/8538",
-          "https://github.com/tokio-rs/tokio/issues/8539"
-        ],
-        "severity": null,
-        "summary": "`AsyncFd::new` and related constructors violate I/O safety"
+        "informational": "unsound"
       },
       "cvss_score": null,
       "dep_name": "tokio",
@@ -4468,22 +3568,7 @@
           "RUSTSEC-2026-0382",
           "RUSTSEC-2026-0383"
         ],
-        "fixed_versions": [
-          "0.26.11",
-          "1.0.10"
-        ],
-        "id": "RUSTSEC-2026-0381",
-        "modified": "2026-10-29T10:55:54.096394+00:00",
-        "published": "2026-10-19T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/webpki-roots",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0381.html",
-          "https://github.com/rustls/webpki-roots/pull/133",
-          "https://emudhra.we-have-a-problem.com/",
-          "https://bugzilla.mozilla.org/show_bug.cgi?id=2083449"
-        ],
-        "severity": null,
-        "summary": "Bundled root certificates allow trust in distrusted emSign intermediates"
+        "id": "RUSTSEC-2026-0381"
       },
       "cvss_score": null,
       "dep_name": "webpki-roots",
@@ -4545,28 +3630,7 @@
         "aliases": [
           "RUSTSEC-2023-0052"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "0.22.2"
-        ],
-        "id": "GHSA-8qv2-5vq6-g2g7",
-        "modified": "2026-09-10T03:50:02.806918+00:00",
-        "published": "2023-08-25T00:12:39+00:00",
-        "references": [
-          "https://github.com/briansmith/webpki/issues/69",
-          "https://github.com/briansmith/webpki/issues/69#issuecomment-1699894848",
-          "https://github.com/briansmith/webpki/commit/30a108e0802fd09585e0d071013f24b8272d139b",
-          "https://github.com/briansmith/webpki",
-          "https://github.com/crypto-com/sgx-vendor"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "webpki: CPU denial of service in certificate path building"
+        "id": "GHSA-8qv2-5vq6-g2g7"
       },
       "cvss_score": 7.5,
       "dep_name": "webpki",
@@ -4626,18 +3690,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [],
         "id": "RUSTSEC-2024-0320",
-        "informational": "unmaintained",
-        "modified": "2024-11-01T12:31:51+00:00",
-        "published": "2024-03-20T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/yaml-rust",
-          "https://rustsec.org/advisories/RUSTSEC-2024-0320.html",
-          "https://github.com/rustsec/advisory-db/issues/1921"
-        ],
-        "severity": null,
-        "summary": "yaml-rust is unmaintained."
+        "informational": "unmaintained"
       },
       "cvss_score": null,
       "dep_name": "yaml-rust",
@@ -4700,26 +3754,7 @@
           "GHSA-rjhf-4mh8-9xjq",
           "RUSTSEC-2023-0074"
         ],
-        "fixed_versions": [
-          "0.2.9",
-          "0.3.2",
-          "0.4.1",
-          "0.5.2",
-          "0.6.6",
-          "0.7.31"
-        ],
-        "id": "GHSA-3mv5-343c-w2qg",
-        "modified": "2024-02-12T15:57:36+00:00",
-        "published": "2023-12-15T03:48:38+00:00",
-        "references": [
-          "https://github.com/google/zerocopy/security/advisories/GHSA-3mv5-343c-w2qg",
-          "https://github.com/google/zerocopy/issues/679",
-          "https://github.com/google/zerocopy/issues/716",
-          "https://github.com/google/zerocopy",
-          "https://rustsec.org/advisories/RUSTSEC-2023-0074.html"
-        ],
-        "severity": null,
-        "summary": "Ref methods into_ref, into_mut, into_slice, and into_slice_mut are unsound when used with cell::Ref or cell::RefMut"
+        "id": "GHSA-3mv5-343c-w2qg"
       },
       "cvss_score": null,
       "dep_name": "zerocopy",
@@ -4781,29 +3816,7 @@
         "aliases": [
           "CVE-2026-115906"
         ],
-        "cwe_ids": [
-          "CWE-1284",
-          "CWE-354"
-        ],
-        "fixed_versions": [
-          "9.0.0"
-        ],
-        "id": "GHSA-8hxf-qr8p-62x4",
-        "modified": "2026-10-29T17:00:04.188177+00:00",
-        "published": "2026-10-29T16:40:07+00:00",
-        "references": [
-          "https://github.com/zip-rs/zip2/security/advisories/GHSA-8hxf-qr8p-62x4",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-115906",
-          "https://github.com/zip-rs/zip2/commit/ec265db0b0602f8ffb9479327397bddefb7e2216",
-          "https://github.com/zip-rs/zip2",
-          "https://github.com/zip-rs/zip2/releases/tag/v9.0.0"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:H/A:N"
-        },
-        "summary": "zip: AES Entry HMAC Authentication Bypass on Premature EOF"
+        "id": "GHSA-8hxf-qr8p-62x4"
       },
       "cvss_score": 6.5,
       "dep_name": "zip",
@@ -4866,29 +3879,7 @@
         "aliases": [
           "CVE-2026-115905"
         ],
-        "cwe_ids": [
-          "CWE-20",
-          "CWE-436"
-        ],
-        "fixed_versions": [
-          "9.0.5"
-        ],
-        "id": "GHSA-m665-v7pm-7grj",
-        "modified": "2026-10-28T21:30:05.902127+00:00",
-        "published": "2026-10-28T21:09:50+00:00",
-        "references": [
-          "https://github.com/zip-rs/zip2/security/advisories/GHSA-m665-v7pm-7grj",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-115905",
-          "https://github.com/zip-rs/zip2/commit/8068ab480ccf8daa7411424e365fcdbe6d09443e",
-          "https://github.com/zip-rs/zip2",
-          "https://github.com/zip-rs/zip2/releases/tag/v9.0.5"
-        ],
-        "severity": {
-          "score": 10.0,
-          "severity": "critical",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:H/SI:H/SA:L"
-        },
-        "summary": "zip: Critical Parser Differential & Security Control Bypass via Dual-Header Inconsistencies (Zip Cloaking) Leading to Arbitrary File Overwrite & RCE"
+        "id": "GHSA-m665-v7pm-7grj"
       },
       "cvss_score": 10.0,
       "dep_name": "zip",
@@ -4950,22 +3941,7 @@
         "aliases": [
           "GHSA-vv5m-jxxh-4627"
         ],
-        "fixed_versions": [
-          "9.0.0"
-        ],
-        "id": "RUSTSEC-2026-0367",
-        "modified": "2026-10-16T23:30:02.392172+00:00",
-        "published": "2026-10-09T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/zip",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0367.html"
-        ],
-        "severity": {
-          "score": 7.3,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:R/S:U/C:H/I:H/A:H"
-        },
-        "summary": " Insecure Preservation of SUID/SGID Bits during ZIP Extraction Leading to Potential Privilege Escalation"
+        "id": "RUSTSEC-2026-0367"
       },
       "cvss_score": 7.3,
       "dep_name": "zip",
@@ -5027,18 +4003,7 @@
         "aliases": [
           "GHSA-4v9h-p7m9-rh26"
         ],
-        "fixed_versions": [
-          "9.0.0"
-        ],
-        "id": "RUSTSEC-2026-0368",
-        "modified": "2026-10-16T23:30:02.383750+00:00",
-        "published": "2026-10-09T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/zip",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0368.html"
-        ],
-        "severity": null,
-        "summary": "zip: `ZipArchive::extract` creates symbolic links whose attacker-controlled targets are outside the destination directory"
+        "id": "RUSTSEC-2026-0368"
       },
       "cvss_score": null,
       "dep_name": "zip",
@@ -5100,22 +4065,7 @@
         "aliases": [
           "GHSA-4684-h2q9-2vcp"
         ],
-        "fixed_versions": [
-          "9.0.0"
-        ],
-        "id": "RUSTSEC-2026-0369",
-        "modified": "2026-10-16T23:30:02.387698+00:00",
-        "published": "2026-10-10T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/zip",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0369.html"
-        ],
-        "severity": {
-          "score": 9.1,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:H"
-        },
-        "summary": "ZipStreamReader::extract() and ZipArchive::extract() apply Unix permissions through symlinks without confining the target"
+        "id": "RUSTSEC-2026-0369"
       },
       "cvss_score": 9.1,
       "dep_name": "zip",
@@ -5175,21 +4125,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [
-          "8.2.0"
-        ],
         "id": "RUSTSEC-2026-0395",
-        "informational": "unsound",
-        "modified": "2026-10-26T14:00:06.388344+00:00",
-        "published": "2026-10-16T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/zstd-safe",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0395.html",
-          "https://github.com/gyscos/zstd-rs/commit/53a8a290d8cfb52ff5b29fb6e04a40b5a174cc65",
-          "https://github.com/gyscos/zstd-rs/pull/384"
-        ],
-        "severity": null,
-        "summary": "Use-after-free with `CParameter::StableInBuffer`"
+        "informational": "unsound"
       },
       "cvss_score": null,
       "dep_name": "zstd-safe",
@@ -5249,21 +4186,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [
-          "8.2.0"
-        ],
         "id": "RUSTSEC-2026-0397",
-        "informational": "unsound",
-        "modified": "2026-10-26T14:00:05.089587+00:00",
-        "published": "2026-10-16T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/zstd-safe",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0397.html",
-          "https://github.com/gyscos/zstd-rs/commit/5827de2459b8ac430e87e860f00c7f3c13023833",
-          "https://github.com/gyscos/zstd-rs/pull/384"
-        ],
-        "severity": null,
-        "summary": "`OutBuffer::around_pos` exposes uninitialized memory"
+        "informational": "unsound"
       },
       "cvss_score": null,
       "dep_name": "zstd-safe",
@@ -5323,21 +4247,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [
-          "8.2.0"
-        ],
         "id": "RUSTSEC-2026-0399",
-        "informational": "unsound",
-        "modified": "2026-10-26T14:00:05.792431+00:00",
-        "published": "2026-10-16T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/zstd-safe",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0399.html",
-          "https://github.com/gyscos/zstd-rs/commit/e00e7928e3e98953fc43418af6d73f6aae2378fb",
-          "https://github.com/gyscos/zstd-rs/pull/384"
-        ],
-        "severity": null,
-        "summary": "Use-after-free through `init_using_cdict` and `init_using_ddict`"
+        "informational": "unsound"
       },
       "cvss_score": null,
       "dep_name": "zstd-safe",
@@ -5397,21 +4308,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [
-          "8.2.0"
-        ],
         "id": "RUSTSEC-2026-0400",
-        "informational": "unsound",
-        "modified": "2026-10-26T14:00:05.692077+00:00",
-        "published": "2026-10-16T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/zstd-safe",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0400.html",
-          "https://github.com/gyscos/zstd-rs/commit/d34502a0ed07f80ab2aa4c65059578e0466f2467",
-          "https://github.com/gyscos/zstd-rs/pull/384"
-        ],
-        "severity": null,
-        "summary": "Use-after-free of a dictionary after a one-shot call on a context with an open stream"
+        "informational": "unsound"
       },
       "cvss_score": null,
       "dep_name": "zstd-safe",
@@ -5471,21 +4369,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [
-          "8.2.0"
-        ],
         "id": "RUSTSEC-2026-0401",
-        "informational": "unsound",
-        "modified": "2026-10-26T14:00:04.231502+00:00",
-        "published": "2026-10-16T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/zstd-safe",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0401.html",
-          "https://github.com/gyscos/zstd-rs/commit/781ea454191dbf178d09c1daf6fc896d15fbaa2f",
-          "https://github.com/gyscos/zstd-rs/pull/384"
-        ],
-        "severity": null,
-        "summary": "Out-of-bounds read in `train_from_buffer` when sample sizes overflow"
+        "informational": "unsound"
       },
       "cvss_score": null,
       "dep_name": "zstd-safe",
@@ -5545,21 +4430,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [
-          "8.2.0"
-        ],
         "id": "RUSTSEC-2026-0402",
-        "informational": "unsound",
-        "modified": "2026-10-26T14:00:05.685817+00:00",
-        "published": "2026-10-16T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/zstd-safe",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0402.html",
-          "https://github.com/gyscos/zstd-rs/commit/682b8b2967cf4aba5cfe2d940d1e381a3e23211a",
-          "https://github.com/gyscos/zstd-rs/pull/384"
-        ],
-        "severity": null,
-        "summary": "Heap buffer overflow in `CCtx::try_clone` on a multithreaded context"
+        "informational": "unsound"
       },
       "cvss_score": null,
       "dep_name": "zstd-safe",
@@ -5619,20 +4491,7 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [
-          "8.2.0"
-        ],
-        "id": "RUSTSEC-2026-0403",
-        "modified": "2026-10-26T14:00:05.787441+00:00",
-        "published": "2026-10-16T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/zstd-safe",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0403.html",
-          "https://github.com/gyscos/zstd-rs/commit/006e1d1ad1eeaf6b5d4c28329e70217adabcec43",
-          "https://github.com/gyscos/zstd-rs/pull/384"
-        ],
-        "severity": null,
-        "summary": "Uninitialized memory exposed when streaming decompression of a legacy frame fails"
+        "id": "RUSTSEC-2026-0403"
       },
       "cvss_score": null,
       "dep_name": "zstd-safe",
@@ -5692,21 +4551,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [
-          "8.2.0"
-        ],
         "id": "RUSTSEC-2026-0404",
-        "informational": "unsound",
-        "modified": "2026-10-26T14:00:05.092817+00:00",
-        "published": "2026-10-16T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/zstd-safe",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0404.html",
-          "https://github.com/gyscos/zstd-rs/commit/cee6529b553ec600a8e152aaca15a91598820ecf",
-          "https://github.com/gyscos/zstd-rs/pull/384"
-        ],
-        "severity": null,
-        "summary": "Double free in `DCtx::try_clone`"
+        "informational": "unsound"
       },
       "cvss_score": null,
       "dep_name": "zstd-safe",
@@ -5766,21 +4612,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [
-          "8.2.0"
-        ],
         "id": "RUSTSEC-2026-0406",
-        "informational": "unsound",
-        "modified": "2026-10-26T14:00:05.095427+00:00",
-        "published": "2026-10-16T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/zstd-safe",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0406.html",
-          "https://github.com/gyscos/zstd-rs/commit/e224018a2389915d68ed17f30109bebad36e9734",
-          "https://github.com/gyscos/zstd-rs/pull/384"
-        ],
-        "severity": null,
-        "summary": "Use-after-free when changing a multithreaded context with an unfinished frame"
+        "informational": "unsound"
       },
       "cvss_score": null,
       "dep_name": "zstd-safe",

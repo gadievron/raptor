@@ -345,3 +345,34 @@ def test_same_modulo_fetched_at() -> None:
     assert not _same_modulo_fetched_at(old, new_data)
     assert not _same_modulo_fetched_at(None, new_ts_only)
     assert not _same_modulo_fetched_at([], new_ts_only)
+
+
+def test_sanitise_advisory_preserves_join_keys_and_drops_unused_prose(tmp_path):
+    from copy import deepcopy
+    from packages.sca.calibration.validate import _extract_cve_ids
+    findings = _fake_findings(tmp_path)
+    advisory = {
+        "id": "GHSA-test", "osv_id": "CVE-2024-1234", "aliases": ["CVE-2024-1234"],
+        "cves": ["CVE-2024-1234"], "cve_id": "CVE-2024-1234", "informational": False,
+        "summary": "unused advisory prose", "details": "unused full description",
+        "references": ["https://example.org/advisory"], "fixed_versions": ["2.0"],
+        "published": "2024-01-01", "future_description": "must also be omitted",
+    }
+    findings[0]["sca"]["advisory"] = advisory
+    original = deepcopy(findings)
+    result = _sanitise_findings(findings, tmp_path)[0]["advisory"]
+    assert result == {key: advisory[key] for key in
+                      ("id", "osv_id", "aliases", "cves", "cve_id", "informational")}
+    assert _extract_cve_ids(result) == _extract_cve_ids(advisory)
+    assert findings == original
+    advisory["informational"] = "unmaintained"
+    result = _sanitise_findings(findings, tmp_path)[0]["advisory"]
+    assert result["informational"] == "unmaintained"
+    assert _extract_cve_ids(result) == []
+
+
+@pytest.mark.parametrize("advisory", [None, "malformed", []])
+def test_sanitise_advisory_handles_missing_or_invalid_blocks(tmp_path, advisory):
+    findings = _fake_findings(tmp_path)
+    findings[0]["sca"]["advisory"] = advisory
+    assert _sanitise_findings(findings, tmp_path)[0]["advisory"] is None

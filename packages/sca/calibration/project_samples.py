@@ -935,7 +935,7 @@ def _collect_one(
         "_source": {
             "name": f"RAPTOR SCA scan of {sample.name}",
             "url": sample.repo_url,
-            "license": "MIT (RAPTOR-generated scan output)",
+            "license": "MIT (RAPTOR-generated fields only; upstream advisory data retains its own terms)",
             "fetched_at": _utcnow(),
             "git_ref": sample.git_ref,
             "project_license": sample.license_spdx,
@@ -1014,7 +1014,7 @@ def _sanitise_findings(
             "dep_name": sca.get("name"),
             "dep_version": sca.get("version"),
             "purl": sca.get("purl"),
-            "advisory": sca.get("advisory"),
+            "advisory": _advisory_scrubbed(sca.get("advisory")),
             "in_kev": sca.get("in_kev"),
             "epss": sca.get("epss"),
             "cvss_score": sca.get("cvss_score"),
@@ -1068,6 +1068,14 @@ def _sanitise_findings(
         f.get("dep_version") or "",
     ))
     return out
+
+
+def _advisory_scrubbed(raw: Any) -> dict[str, Any] | None:
+    """Keep calibration join keys and flags, excluding upstream prose/metadata."""
+    if not isinstance(raw, dict):
+        return None
+    keys = {"id", "osv_id", "aliases", "informational", "cves", "cve_id"}
+    return {key: value for key, value in raw.items() if key in keys}
 
 
 def _confidence_scrubbed(raw: Any) -> dict[str, Any] | None:

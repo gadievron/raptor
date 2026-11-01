@@ -2,7 +2,7 @@
   "_source": {
     "fetched_at": "2026-10-29T21:47:32Z",
     "git_ref": "3.21.2",
-    "license": "MIT (RAPTOR-generated scan output)",
+    "license": "MIT (RAPTOR-generated fields only; upstream advisory data retains its own terms)",
     "name": "RAPTOR SCA scan of express-3",
     "project_license": "MIT",
     "provenance": "Scan output produced by RAPTOR's SCA pipeline against https://github.com/expressjs/express.git@3.21.2. Project source not redistributed.",
@@ -14,23 +14,7 @@
         "aliases": [
           "CVE-2024-47764"
         ],
-        "cwe_ids": [
-          "CWE-74"
-        ],
-        "fixed_versions": [
-          "0.7.0"
-        ],
-        "id": "GHSA-pxg6-pf52-xh8x",
-        "modified": "2026-09-10T03:50:19.898971+00:00",
-        "published": "2024-10-04T20:31:00+00:00",
-        "references": [
-          "https://github.com/jshttp/cookie/security/advisories/GHSA-pxg6-pf52-xh8x",
-          "https://github.com/jshttp/cookie/pull/167",
-          "https://github.com/jshttp/cookie/commit/e10042845354fea83bd8f34af72475eed1dadf5c",
-          "https://github.com/jshttp/cookie"
-        ],
-        "severity": null,
-        "summary": "cookie accepts cookie name, path, and domain with out of bounds characters"
+        "id": "GHSA-pxg6-pf52-xh8x"
       },
       "cvss_score": null,
       "dep_name": "cookie",
@@ -94,29 +78,7 @@
         "aliases": [
           "CVE-2017-20165"
         ],
-        "cwe_ids": [
-          "CWE-1333"
-        ],
-        "fixed_versions": [
-          "3.1.0",
-          "2.6.9"
-        ],
-        "id": "GHSA-9vvw-cc9w-f27h",
-        "modified": "2023-11-08T03:59:17.780578+00:00",
-        "published": "2023-01-09T12:30:19+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2017-20165",
-          "https://github.com/debug-js/debug/pull/504",
-          "https://github.com/debug-js/debug/commit/c38a0166c266a679c8de012d4eaccec3f944e685",
-          "https://github.com/debug-js/debug/commit/f53962e944a87e6ca9bb622a2a12dffc22a9bb5a",
-          "https://github.com/debug-js/debug"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "debug Inefficient Regular Expression Complexity vulnerability"
+        "id": "GHSA-9vvw-cc9w-f27h"
       },
       "cvss_score": 7.5,
       "dep_name": "debug",
@@ -181,31 +143,7 @@
         "aliases": [
           "CVE-2017-16137"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "2.6.9",
-          "3.1.0",
-          "3.2.7",
-          "4.3.1"
-        ],
-        "id": "GHSA-gxpj-cx7g-858c",
-        "modified": "2026-09-10T03:47:07.070123+00:00",
-        "published": "2018-08-09T20:18:07+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2017-16137",
-          "https://github.com/debug-js/debug/issues/797",
-          "https://github.com/visionmedia/debug/issues/501",
-          "https://github.com/visionmedia/debug/pull/504",
-          "https://github.com/debug-js/debug/commit/4e2150207c568adb9ead8f4c4528016081c88020"
-        ],
-        "severity": {
-          "score": 3.7,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "Regular Expression Denial of Service in debug"
+        "id": "GHSA-gxpj-cx7g-858c"
       },
       "cvss_score": 3.7,
       "dep_name": "debug",
@@ -270,27 +208,7 @@
         "aliases": [
           "CVE-2017-1000228"
         ],
-        "cwe_ids": [
-          "CWE-20"
-        ],
-        "fixed_versions": [
-          "2.5.5"
-        ],
-        "id": "GHSA-3w5v-p54c-f74x",
-        "modified": "2023-11-08T03:58:44.472757+00:00",
-        "published": "2017-11-30T23:15:19+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2017-1000228",
-          "https://github.com/advisories/GHSA-3w5v-p54c-f74x",
-          "https://snyk.io/vuln/npm:ejs:20161128",
-          "https://web.archive.org/web/20171123041219/http://www.securityfocus.com/bid/101897"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "ejs is vulnerable to remote code execution due to weak input validation"
+        "id": "GHSA-3w5v-p54c-f74x"
       },
       "cvss_score": 9.8,
       "dep_name": "ejs",
@@ -356,28 +274,7 @@
         "aliases": [
           "CVE-2017-1000189"
         ],
-        "cwe_ids": [
-          "CWE-20"
-        ],
-        "fixed_versions": [
-          "2.5.5"
-        ],
-        "id": "GHSA-6x77-rpqf-j6mw",
-        "modified": "2023-11-08T03:58:43.801910+00:00",
-        "published": "2018-03-05T18:54:33+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2017-1000189",
-          "https://github.com/mde/ejs/commit/49264e0037e313a0a3e033450b5c184112516d8f",
-          "https://github.com/advisories/GHSA-6x77-rpqf-j6mw",
-          "https://github.com/mde/ejs",
-          "https://web.archive.org/web/20171123041449/http://www.securityfocus.com/bid/101893"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "ejs vulnerable to DoS due to weak input validation"
+        "id": "GHSA-6x77-rpqf-j6mw"
       },
       "cvss_score": 7.5,
       "dep_name": "ejs",
@@ -443,29 +340,7 @@
         "aliases": [
           "CVE-2024-33883"
         ],
-        "cwe_ids": [
-          "CWE-1321",
-          "CWE-693"
-        ],
-        "fixed_versions": [
-          "3.1.10"
-        ],
-        "id": "GHSA-ghr5-ch3p-vcr6",
-        "modified": "2026-09-10T03:50:11.217600+00:00",
-        "published": "2024-04-28T18:30:31+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-33883",
-          "https://github.com/mde/ejs/commit/e469741dca7df2eb400199e1cdb74621e3f89aa5",
-          "https://github.com/mde/ejs",
-          "https://github.com/mde/ejs/compare/v3.1.9...v3.1.10",
-          "https://security.netapp.com/advisory/ntap-20240605-0003"
-        ],
-        "severity": {
-          "score": 6.9,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
-        },
-        "summary": "ejs lacks certain pollution protection"
+        "id": "GHSA-ghr5-ch3p-vcr6"
       },
       "cvss_score": 6.9,
       "dep_name": "ejs",
@@ -531,28 +406,7 @@
         "aliases": [
           "CVE-2017-1000188"
         ],
-        "cwe_ids": [
-          "CWE-79"
-        ],
-        "fixed_versions": [
-          "2.5.5"
-        ],
-        "id": "GHSA-hwcf-pp87-7x6p",
-        "modified": "2023-11-08T03:58:43.740712+00:00",
-        "published": "2017-11-30T23:15:05+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2017-1000188",
-          "https://github.com/mde/ejs/commit/49264e0037e313a0a3e033450b5c184112516d8f",
-          "https://github.com/advisories/GHSA-hwcf-pp87-7x6p",
-          "https://github.com/mde/ejs",
-          "https://web.archive.org/web/20200227134555/http://www.securityfocus.com/bid/101889"
-        ],
-        "severity": {
-          "score": 6.1,
-          "severity": "medium",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
-        },
-        "summary": "mde ejs vulnerable to XSS"
+        "id": "GHSA-hwcf-pp87-7x6p"
       },
       "cvss_score": 6.1,
       "dep_name": "ejs",
@@ -618,28 +472,7 @@
         "aliases": [
           "CVE-2022-29078"
         ],
-        "cwe_ids": [
-          "CWE-74"
-        ],
-        "fixed_versions": [
-          "3.1.7"
-        ],
-        "id": "GHSA-phwq-j96m-2c2q",
-        "modified": "2023-11-08T04:09:07.883219+00:00",
-        "published": "2022-04-26T00:00:40+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-29078",
-          "https://github.com/mde/ejs/commit/15ee698583c98dadc456639d6245580d17a24baf",
-          "https://eslam.io/posts/ejs-server-side-template-injection-rce",
-          "https://github.com/mde/ejs",
-          "https://github.com/mde/ejs/releases"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "ejs template injection vulnerability"
+        "id": "GHSA-phwq-j96m-2c2q"
       },
       "cvss_score": 9.8,
       "dep_name": "ejs",
@@ -705,26 +538,7 @@
         "aliases": [
           "CVE-2017-16119"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "0.5.2"
-        ],
-        "id": "GHSA-9qj9-36jm-prpv",
-        "modified": "2023-11-08T03:59:05.953225+00:00",
-        "published": "2018-07-24T20:16:57+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2017-16119",
-          "https://github.com/advisories/GHSA-9qj9-36jm-prpv",
-          "https://www.npmjs.com/advisories/526"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Regular Expression Denial of Service in fresh"
+        "id": "GHSA-9qj9-36jm-prpv"
       },
       "cvss_score": 7.5,
       "dep_name": "fresh",
@@ -788,28 +602,7 @@
         "aliases": [
           "CVE-2022-21681"
         ],
-        "cwe_ids": [
-          "CWE-1333"
-        ],
-        "fixed_versions": [
-          "4.0.10"
-        ],
-        "id": "GHSA-5v2h-r2cx-5xgj",
-        "modified": "2026-09-10T03:49:10.576912+00:00",
-        "published": "2022-01-14T21:04:46+00:00",
-        "references": [
-          "https://github.com/markedjs/marked/security/advisories/GHSA-5v2h-r2cx-5xgj",
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-21681",
-          "https://github.com/markedjs/marked/commit/8f806573a3f6c6b7a39b8cdb66ab5ebb8d55a5f5",
-          "https://github.com/markedjs/marked/commit/c4a3ccd344b6929afa8a1d50ac54a721e57012c0",
-          "https://github.com/markedjs/marked"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Inefficient Regular Expression Complexity in marked"
+        "id": "GHSA-5v2h-r2cx-5xgj"
       },
       "cvss_score": 7.5,
       "dep_name": "marked",
@@ -874,28 +667,7 @@
         "aliases": [
           "CVE-2017-1000427"
         ],
-        "cwe_ids": [
-          "CWE-79"
-        ],
-        "fixed_versions": [
-          "0.3.7"
-        ],
-        "id": "GHSA-7px7-7xjx-hxm8",
-        "modified": "2023-11-08T03:58:46.365782+00:00",
-        "published": "2018-01-04T21:04:19+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2017-1000427",
-          "https://github.com/advisories/GHSA-7px7-7xjx-hxm8",
-          "https://github.com/markedjs/marked",
-          "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/BO2RMVVZVV6NFTU46B5RYRK7ZCXYARZS",
-          "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/M6BJG6RGDH7ZWVVAUFBFI5L32RSMQN2S"
-        ],
-        "severity": {
-          "score": 6.1,
-          "severity": "medium",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
-        },
-        "summary": "Marked vulnerable to XSS from data URIs"
+        "id": "GHSA-7px7-7xjx-hxm8"
       },
       "cvss_score": 6.1,
       "dep_name": "marked",
@@ -960,28 +732,7 @@
         "aliases": [
           "CVE-2018-25110"
         ],
-        "cwe_ids": [
-          "CWE-1333"
-        ],
-        "fixed_versions": [
-          "0.3.17"
-        ],
-        "id": "GHSA-p9wx-2529-fp83",
-        "modified": "2025-05-27T15:27:40.131270+00:00",
-        "published": "2025-05-23T15:31:16+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2018-25110",
-          "https://github.com/markedjs/marked/issues/1070",
-          "https://github.com/markedjs/marked/pull/1083",
-          "https://github.com/markedjs/marked/commit/20bfc106013ed45713a21672ad4a34df94dcd485",
-          "https://github.com/Checkmarx/Vulnerabilities-Proofs-of-Concept/tree/main/2018/CVE-2018-25110"
-        ],
-        "severity": {
-          "score": 6.9,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
-        },
-        "summary": "Marked allows Regular Expression Denial of Service (ReDoS) attacks"
+        "id": "GHSA-p9wx-2529-fp83"
       },
       "cvss_score": 6.9,
       "dep_name": "marked",
@@ -1047,29 +798,7 @@
         "aliases": [
           "CVE-2022-21680"
         ],
-        "cwe_ids": [
-          "CWE-1333",
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "4.0.10"
-        ],
-        "id": "GHSA-rrrm-qjm4-v8hf",
-        "modified": "2026-09-10T03:49:11.241428+00:00",
-        "published": "2022-01-14T21:04:41+00:00",
-        "references": [
-          "https://github.com/markedjs/marked/security/advisories/GHSA-rrrm-qjm4-v8hf",
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-21680",
-          "https://github.com/markedjs/marked/commit/c4a3ccd344b6929afa8a1d50ac54a721e57012c0",
-          "https://github.com/markedjs/marked",
-          "https://github.com/markedjs/marked/releases/tag/v4.0.10"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Inefficient Regular Expression Complexity in marked"
+        "id": "GHSA-rrrm-qjm4-v8hf"
       },
       "cvss_score": 7.5,
       "dep_name": "marked",
@@ -1134,28 +863,7 @@
         "aliases": [
           "CVE-2016-10531"
         ],
-        "cwe_ids": [
-          "CWE-79"
-        ],
-        "fixed_versions": [
-          "0.3.6"
-        ],
-        "id": "GHSA-vfvf-mqq8-rwqc",
-        "modified": "2023-11-08T03:58:10.903030+00:00",
-        "published": "2019-02-18T23:58:20+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2016-10531",
-          "https://github.com/chjj/marked/pull/592",
-          "https://github.com/chjj/marked/pull/592/commits/2cff85979be8e7a026a9aca35542c470cf5da523",
-          "https://github.com/advisories/GHSA-vfvf-mqq8-rwqc",
-          "https://www.npmjs.com/advisories/101"
-        ],
-        "severity": {
-          "score": 6.1,
-          "severity": "medium",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
-        },
-        "summary": "Sanitization bypass using HTML Entities in marked"
+        "id": "GHSA-vfvf-mqq8-rwqc"
       },
       "cvss_score": 6.1,
       "dep_name": "marked",
@@ -1220,27 +928,7 @@
         "aliases": [
           "CVE-2017-16114"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "0.3.9"
-        ],
-        "id": "GHSA-x5pg-88wf-qq4p",
-        "modified": "2023-11-08T03:59:05.647192+00:00",
-        "published": "2018-07-24T20:10:52+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2017-16114",
-          "https://github.com/chjj/marked/issues/937",
-          "https://github.com/advisories/GHSA-x5pg-88wf-qq4p",
-          "https://www.npmjs.com/advisories/531"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Regular Expression Denial of Service in marked"
+        "id": "GHSA-x5pg-88wf-qq4p"
       },
       "cvss_score": 7.5,
       "dep_name": "marked",
@@ -1305,28 +993,7 @@
         "aliases": [
           "CVE-2024-43799"
         ],
-        "cwe_ids": [
-          "CWE-79"
-        ],
-        "fixed_versions": [
-          "0.19.0"
-        ],
-        "id": "GHSA-m6fv-jmcg-4jfg",
-        "modified": "2026-09-10T03:50:18.939403+00:00",
-        "published": "2024-09-10T19:42:41+00:00",
-        "references": [
-          "https://github.com/pillarjs/send/security/advisories/GHSA-m6fv-jmcg-4jfg",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-43799",
-          "https://github.com/pillarjs/send/commit/ae4f2989491b392ae2ef3b0015a019770ae65d35",
-          "https://github.com/pillarjs/send",
-          "https://lists.debian.org/debian-lts-announce/2025/06/msg00022.html"
-        ],
-        "severity": {
-          "score": 5.0,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:L/A:L"
-        },
-        "summary": "send vulnerable to template injection that can lead to XSS"
+        "id": "GHSA-m6fv-jmcg-4jfg"
       },
       "cvss_score": 5.0,
       "dep_name": "send",

@@ -2,7 +2,7 @@
   "_source": {
     "fetched_at": "2026-10-29T21:47:37Z",
     "git_ref": "1.11.29",
-    "license": "MIT (RAPTOR-generated scan output)",
+    "license": "MIT (RAPTOR-generated fields only; upstream advisory data retains its own terms)",
     "name": "RAPTOR SCA scan of django-1.11",
     "project_license": "BSD-3-Clause",
     "provenance": "Scan output produced by RAPTOR's SCA pipeline against https://github.com/django/django.git@1.11.29. Project source not redistributed.",
@@ -14,28 +14,7 @@
         "aliases": [
           "CVE-2022-0436"
         ],
-        "cwe_ids": [
-          "CWE-22"
-        ],
-        "fixed_versions": [
-          "1.5.2"
-        ],
-        "id": "GHSA-j383-35pm-c5h4",
-        "modified": "2026-09-10T03:49:18.059750+00:00",
-        "published": "2022-04-13T00:00:16+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-0436",
-          "https://github.com/gruntjs/grunt/pull/1743",
-          "https://github.com/gruntjs/grunt/commit/aad3d4521c3098fb255fb2db8f2e1d691a033665",
-          "https://github.com/gruntjs/grunt/commit/b0ec6e12426fc8d5720dee1702f6a67455c5986c",
-          "https://github.com/gruntjs/grunt"
-        ],
-        "severity": {
-          "score": 5.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N"
-        },
-        "summary": "Path Traversal in Grunt"
+        "id": "GHSA-j383-35pm-c5h4"
       },
       "cvss_score": 5.5,
       "dep_name": "grunt",
@@ -97,28 +76,7 @@
         "aliases": [
           "CVE-2020-7729"
         ],
-        "cwe_ids": [
-          "CWE-1188"
-        ],
-        "fixed_versions": [
-          "1.3.0"
-        ],
-        "id": "GHSA-m5pj-vjjf-4m3h",
-        "modified": "2026-09-10T03:49:05.039322+00:00",
-        "published": "2021-05-06T18:27:18+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-7729",
-          "https://github.com/gruntjs/grunt/commit/e350cea1724eb3476464561a380fb6a64e61e4e7",
-          "https://github.com/gruntjs/grunt/blob/master/lib/grunt/file.js%23L249",
-          "https://lists.debian.org/debian-lts-announce/2020/09/msg00008.html",
-          "https://snyk.io/vuln/SNYK-JAVA-ORGWEBJARSNPM-607922"
-        ],
-        "severity": {
-          "score": 7.1,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:L/UI:R/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Arbitrary Code Execution in grunt"
+        "id": "GHSA-m5pj-vjjf-4m3h"
       },
       "cvss_score": 7.1,
       "dep_name": "grunt",
@@ -180,28 +138,7 @@
         "aliases": [
           "CVE-2022-1537"
         ],
-        "cwe_ids": [
-          "CWE-367"
-        ],
-        "fixed_versions": [
-          "1.5.3"
-        ],
-        "id": "GHSA-rm36-94g8-835r",
-        "modified": "2026-09-10T03:49:40.619385+00:00",
-        "published": "2022-05-11T00:01:37+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-1537",
-          "https://github.com/gruntjs/grunt/commit/58016ffac5ed9338b63ecc2a63710f5027362bae",
-          "https://github.com/gruntjs/grunt",
-          "https://huntr.dev/bounties/0179c3e5-bc02-4fc9-8491-a1a319b51b4d",
-          "https://lists.debian.org/debian-lts-announce/2023/04/msg00006.html"
-        ],
-        "severity": {
-          "score": 7.0,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Race Condition in Grunt"
+        "id": "GHSA-rm36-94g8-835r"
       },
       "cvss_score": 7.0,
       "dep_name": "grunt",

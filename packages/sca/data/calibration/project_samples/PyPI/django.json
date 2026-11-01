@@ -2,7 +2,7 @@
   "_source": {
     "fetched_at": "2026-10-29T21:47:06Z",
     "git_ref": "4.2.7",
-    "license": "MIT (RAPTOR-generated scan output)",
+    "license": "MIT (RAPTOR-generated fields only; upstream advisory data retains its own terms)",
     "name": "RAPTOR SCA scan of django",
     "project_license": "BSD-3-Clause",
     "provenance": "Scan output produced by RAPTOR's SCA pipeline against https://github.com/django/django.git@4.2.7. Project source not redistributed.",
@@ -14,28 +14,7 @@
         "aliases": [
           "CVE-2026-114134"
         ],
-        "cwe_ids": [
-          "CWE-829"
-        ],
-        "fixed_versions": [
-          "26.10.1"
-        ],
-        "id": "GHSA-cg8m-r9f2-5wm2",
-        "modified": "2026-10-22T16:30:30.132713+00:00",
-        "published": "2026-10-22T16:18:57+00:00",
-        "references": [
-          "https://github.com/psf/black/security/advisories/GHSA-cg8m-r9f2-5wm2",
-          "https://github.com/psf/black/pull/5510",
-          "https://github.com/psf/black/commit/ac1f71563aeccf73cf13ece00f231d9d6c66a514",
-          "https://github.com/psf/black",
-          "https://github.com/psf/black/releases/tag/26.10.1"
-        ],
-        "severity": {
-          "score": 8.7,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:L/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
-        },
-        "summary": "Black: GitHub Action installs unvalidated required-version from pyproject.toml"
+        "id": "GHSA-cg8m-r9f2-5wm2"
       },
       "cvss_score": 8.7,
       "dep_name": "black",
@@ -98,29 +77,7 @@
           "CVE-2024-21503",
           "PYSEC-2024-48"
         ],
-        "cwe_ids": [
-          "CWE-1333",
-          "CWE-75"
-        ],
-        "fixed_versions": [
-          "24.3.0"
-        ],
-        "id": "GHSA-fj7x-q9j7-g6q6",
-        "modified": "2026-09-10T03:50:10.486429+00:00",
-        "published": "2024-03-19T06:30:52+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-21503",
-          "https://github.com/psf/black/commit/f00093672628d212b8965a8993cee8bedf5fe9b8",
-          "https://github.com/psf/black",
-          "https://github.com/psf/black/releases/tag/24.3.0",
-          "https://github.com/pypa/advisory-database/tree/main/vulns/black/PYSEC-2024-48.yaml"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "Black vulnerable to Regular Expression Denial of Service (ReDoS)"
+        "id": "GHSA-fj7x-q9j7-g6q6"
       },
       "cvss_score": 5.3,
       "dep_name": "black",
@@ -184,22 +141,7 @@
           "CVE-2026-31900",
           "GHSA-v53h-f6m7-xcgm"
         ],
-        "fixed_versions": [
-          "26.3.0"
-        ],
-        "id": "PYSEC-2026-2120",
-        "modified": "2026-07-13T07:15:15.712525+00:00",
-        "published": "2026-03-11T20:16:15.960000+00:00",
-        "references": [
-          "https://github.com/psf/black/security/advisories/GHSA-v53h-f6m7-xcgm",
-          "https://github.com/psf/black/commit/0a2560b981364dde4c8cf8ce9d164c40669a8611"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": ""
+        "id": "PYSEC-2026-2120"
       },
       "cvss_score": 9.8,
       "dep_name": "black",
@@ -262,25 +204,7 @@
           "CVE-2026-32274",
           "GHSA-3936-cmfr-pm3m"
         ],
-        "fixed_versions": [
-          "26.3.1"
-        ],
-        "id": "PYSEC-2026-2121",
-        "modified": "2026-07-13T07:15:15.715288+00:00",
-        "published": "2026-03-12T20:16:06.350000+00:00",
-        "references": [
-          "https://access.redhat.com/security/cve/CVE-2026-32274",
-          "https://security.access.redhat.com/data/csaf/v2/vex/2026/cve-2026-32274.json",
-          "https://access.redhat.com/errata/RHSA-2026:10184",
-          "https://access.redhat.com/errata/RHSA-2026:13545",
-          "https://access.redhat.com/errata/RHSA-2026:13553"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
-        },
-        "summary": ""
+        "id": "PYSEC-2026-2121"
       },
       "cvss_score": 7.5,
       "dep_name": "black",
@@ -344,28 +268,7 @@
           "CVE-2025-47273",
           "PYSEC-2025-49"
         ],
-        "cwe_ids": [
-          "CWE-22"
-        ],
-        "fixed_versions": [
-          "78.1.1"
-        ],
-        "id": "GHSA-5rjg-fvgr-3xxf",
-        "modified": "2026-09-10T03:50:24.253527+00:00",
-        "published": "2025-05-19T16:52:43+00:00",
-        "references": [
-          "https://github.com/pypa/setuptools/security/advisories/GHSA-5rjg-fvgr-3xxf",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-47273",
-          "https://github.com/pypa/setuptools/issues/4946",
-          "https://github.com/pypa/setuptools/commit/250a6d17978f9f6ac3ac887091f2d32886fbbb0b",
-          "https://github.com/pypa/advisory-database/tree/main/vulns/setuptools/PYSEC-2025-49.yaml"
-        ],
-        "severity": {
-          "score": 7.7,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N/E:P"
-        },
-        "summary": "setuptools has a path traversal vulnerability in PackageIndex.download that leads to Arbitrary File Write"
+        "id": "GHSA-5rjg-fvgr-3xxf"
       },
       "cvss_score": 7.7,
       "dep_name": "setuptools",
@@ -433,28 +336,7 @@
           "CVE-2024-6345",
           "PYSEC-2026-1918"
         ],
-        "cwe_ids": [
-          "CWE-94"
-        ],
-        "fixed_versions": [
-          "70.0.0"
-        ],
-        "id": "GHSA-cx63-2mw6-8hw5",
-        "modified": "2026-09-10T03:50:16.663495+00:00",
-        "published": "2024-07-15T03:30:57+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-6345",
-          "https://github.com/pypa/setuptools/pull/4332",
-          "https://github.com/pypa/setuptools/commit/88807c7062788254f654ea8c03427adc859321f0",
-          "https://github.com/pypa/setuptools",
-          "https://huntr.com/bounties/d6362117-ad57-4e83-951f-b8141c6e7ca5"
-        ],
-        "severity": {
-          "score": 8.8,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H"
-        },
-        "summary": "setuptools vulnerable to Command Injection via package URL"
+        "id": "GHSA-cx63-2mw6-8hw5"
       },
       "cvss_score": 8.8,
       "dep_name": "setuptools",
@@ -522,29 +404,7 @@
           "CVE-2026-59890",
           "PYSEC-2026-3447"
         ],
-        "cwe_ids": [
-          "CWE-176",
-          "CWE-697"
-        ],
-        "fixed_versions": [
-          "83.0.0"
-        ],
-        "id": "GHSA-h35f-9h28-mq5c",
-        "modified": "2026-09-10T03:50:52.323347+00:00",
-        "published": "2026-07-21T19:09:21+00:00",
-        "references": [
-          "https://github.com/pypa/setuptools/security/advisories/GHSA-h35f-9h28-mq5c",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-59890",
-          "https://github.com/pypa/setuptools/commit/dd9f436a36486b4cb8a4c70a2321548b0be09b8f",
-          "https://github.com/pypa/advisory-database/tree/main/vulns/setuptools/PYSEC-2026-3447.yaml",
-          "https://github.com/pypa/setuptools"
-        ],
-        "severity": {
-          "score": 6.1,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:L/A:N"
-        },
-        "summary": "setuptools: MANIFEST.in exclusion bypass in sdist via Unicode normalization collision (NFC/NFD) on macOS APFS/HFS+"
+        "id": "GHSA-h35f-9h28-mq5c"
       },
       "cvss_score": 6.1,
       "dep_name": "setuptools",
@@ -612,28 +472,7 @@
           "CVE-2022-40897",
           "PYSEC-2022-43012"
         ],
-        "cwe_ids": [
-          "CWE-1333"
-        ],
-        "fixed_versions": [
-          "65.5.1"
-        ],
-        "id": "GHSA-r9hx-vwmv-q579",
-        "modified": "2026-08-07T08:12:25.181519+00:00",
-        "published": "2022-12-23T00:30:23+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-40897",
-          "https://github.com/pypa/setuptools/issues/3659",
-          "https://github.com/pypa/setuptools/commit/43a9c9bfa6aa626ec2a22540bea28d2ca77964be",
-          "https://setuptools.pypa.io/en/latest",
-          "https://security.netapp.com/advisory/ntap-20240621-0006"
-        ],
-        "severity": {
-          "score": 8.7,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:L/SI:L/SA:N"
-        },
-        "summary": "pypa/setuptools vulnerable to Regular Expression Denial of Service (ReDoS)"
+        "id": "GHSA-r9hx-vwmv-q579"
       },
       "cvss_score": 8.7,
       "dep_name": "setuptools",
@@ -696,28 +535,7 @@
     {
       "advisory": {
         "aliases": [],
-        "cwe_ids": [
-          "CWE-22"
-        ],
-        "fixed_versions": [
-          "84.1.0"
-        ],
-        "id": "GHSA-xmj3-9gf7-h52w",
-        "modified": "2026-10-23T22:00:03.739009+00:00",
-        "published": "2026-10-23T21:44:11+00:00",
-        "references": [
-          "https://github.com/pypa/setuptools/security/advisories/GHSA-xmj3-9gf7-h52w",
-          "https://github.com/pypa/setuptools/pull/5329",
-          "https://github.com/pypa/setuptools/commit/6d07b8d17890dda58d944ac51e58f54af92d52af",
-          "https://github.com/pypa/setuptools",
-          "https://github.com/pypa/setuptools/releases/tag/v84.1.0"
-        ],
-        "severity": {
-          "score": 1.0,
-          "severity": "low",
-          "vector": "CVSS:4.0/AV:L/AC:H/AT:P/PR:L/UI:A/VC:N/VI:L/VA:L/SC:N/SI:N/SA:N"
-        },
-        "summary": "setuptools: Windows path escape via namespace_packages.txt during legacy wheel installation  Description"
+        "id": "GHSA-xmj3-9gf7-h52w"
       },
       "cvss_score": 1.0,
       "dep_name": "setuptools",
@@ -780,27 +598,7 @@
     {
       "advisory": {
         "aliases": [],
-        "cwe_ids": [
-          "CWE-770"
-        ],
-        "fixed_versions": [
-          "0.5.4"
-        ],
-        "id": "GHSA-27jp-wm6q-gp25",
-        "modified": "2026-09-10T03:50:33.710557+00:00",
-        "published": "2026-02-13T16:16:11+00:00",
-        "references": [
-          "https://github.com/andialbrecht/sqlparse/security/advisories/GHSA-27jp-wm6q-gp25",
-          "https://github.com/andialbrecht/sqlparse/commit/40ed3aa958657fa4a82055927fa9de70ab903360",
-          "https://github.com/andialbrecht/sqlparse",
-          "https://github.com/andialbrecht/sqlparse/releases/tag/0.5.4"
-        ],
-        "severity": {
-          "score": 6.9,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:N/SC:N/SI:N/SA:N"
-        },
-        "summary": "sqlparse: formatting list of tuples leads to denial of service"
+        "id": "GHSA-27jp-wm6q-gp25"
       },
       "cvss_score": 6.9,
       "dep_name": "sqlparse",
@@ -867,28 +665,7 @@
           "CVE-2024-4340",
           "PYSEC-2026-1940"
         ],
-        "cwe_ids": [
-          "CWE-674"
-        ],
-        "fixed_versions": [
-          "0.5.0"
-        ],
-        "id": "GHSA-2m57-hf25-phgg",
-        "modified": "2026-09-10T03:50:10.904279+00:00",
-        "published": "2024-04-15T20:21:25+00:00",
-        "references": [
-          "https://github.com/andialbrecht/sqlparse/security/advisories/GHSA-2m57-hf25-phgg",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-4340",
-          "https://github.com/andialbrecht/sqlparse/commit/b4a39d9850969b4e1d6940d32094ee0b42a2cf03",
-          "https://github.com/andialbrecht/sqlparse",
-          "https://research.jfrog.com/vulnerabilities/sqlparse-stack-exhaustion-dos-jfsa-2024-001031292"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "sqlparse parsing heavily nested list leads to Denial of Service"
+        "id": "GHSA-2m57-hf25-phgg"
       },
       "cvss_score": 7.5,
       "dep_name": "sqlparse",
@@ -956,26 +733,7 @@
           "CVE-2026-59894",
           "PYSEC-2026-3696"
         ],
-        "cwe_ids": [
-          "CWE-94"
-        ],
-        "fixed_versions": [
-          "0.6.0"
-        ],
-        "id": "GHSA-3496-9g83-7v6x",
-        "modified": "2026-09-10T03:51:12.861315+00:00",
-        "published": "2026-08-17T17:20:11+00:00",
-        "references": [
-          "https://github.com/andialbrecht/sqlparse/security/advisories/GHSA-3496-9g83-7v6x",
-          "https://github.com/andialbrecht/sqlparse/commit/53ff44b53e27cff78259acc1af015506fea60f63",
-          "https://github.com/andialbrecht/sqlparse"
-        ],
-        "severity": {
-          "score": 6.2,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:P/VC:N/VI:N/VA:N/SC:H/SI:H/SA:L"
-        },
-        "summary": "sqlparse: Generated Python and PHP snippets allow SQL string breakout through unescaped backslashes"
+        "id": "GHSA-3496-9g83-7v6x"
       },
       "cvss_score": 6.2,
       "dep_name": "sqlparse",
@@ -1042,27 +800,7 @@
           "CVE-2026-84305",
           "PYSEC-2026-3923"
         ],
-        "cwe_ids": [
-          "CWE-407"
-        ],
-        "fixed_versions": [
-          "0.6.0"
-        ],
-        "id": "GHSA-cfqr-cjx5-5jcm",
-        "modified": "2026-09-10T12:25:55.468982+00:00",
-        "published": "2026-09-01T21:20:11+00:00",
-        "references": [
-          "https://github.com/andialbrecht/sqlparse/security/advisories/GHSA-cfqr-cjx5-5jcm",
-          "https://github.com/andialbrecht/sqlparse/commit/a51df6d9e2d31b44be9adb6bc8732517db6bf96b",
-          "https://github.com/andialbrecht/sqlparse",
-          "https://github.com/andialbrecht/sqlparse/releases/tag/0.6.0"
-        ],
-        "severity": {
-          "score": 5.1,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
-        },
-        "summary": "sqlparse: Reindentation of tuple lists causes near-cap quadratic CPU consumption"
+        "id": "GHSA-cfqr-cjx5-5jcm"
       },
       "cvss_score": 5.1,
       "dep_name": "sqlparse",
@@ -1130,27 +868,7 @@
           "CVE-2026-71491",
           "PYSEC-2026-3697"
         ],
-        "cwe_ids": [
-          "CWE-400",
-          "CWE-407"
-        ],
-        "fixed_versions": [
-          "0.6.0"
-        ],
-        "id": "GHSA-f2ff-p2ww-7p4p",
-        "modified": "2026-09-10T03:51:13.976175+00:00",
-        "published": "2026-08-17T17:21:00+00:00",
-        "references": [
-          "https://github.com/andialbrecht/sqlparse/security/advisories/GHSA-f2ff-p2ww-7p4p",
-          "https://github.com/andialbrecht/sqlparse/commit/ef2012a5eeb491e604dea2b00d516904a3830c87",
-          "https://github.com/andialbrecht/sqlparse"
-        ],
-        "severity": {
-          "score": 8.7,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N"
-        },
-        "summary": "sqlparse: Quadratic O(n²) DoS in group_comments"
+        "id": "GHSA-f2ff-p2ww-7p4p"
       },
       "cvss_score": 8.7,
       "dep_name": "sqlparse",
@@ -1217,26 +935,7 @@
           "CVE-2026-59893",
           "PYSEC-2026-3698"
         ],
-        "cwe_ids": [
-          "CWE-1333"
-        ],
-        "fixed_versions": [
-          "0.6.0"
-        ],
-        "id": "GHSA-prg7-hcfm-mfcr",
-        "modified": "2026-09-10T03:50:53.903808+00:00",
-        "published": "2026-08-17T17:49:55+00:00",
-        "references": [
-          "https://github.com/andialbrecht/sqlparse/security/advisories/GHSA-prg7-hcfm-mfcr",
-          "https://github.com/andialbrecht/sqlparse/commit/d1d80602741f77ec78e5a04ce4719244cf32352e",
-          "https://github.com/andialbrecht/sqlparse"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "sqlparse: Inefficient Regex Handling of Dollar-Quoted SQL Literals Leads to ReDoS (Denial of Service)"
+        "id": "GHSA-prg7-hcfm-mfcr"
       },
       "cvss_score": 7.5,
       "dep_name": "sqlparse",
@@ -1304,27 +1003,7 @@
           "CVE-2026-54284",
           "PYSEC-2026-3699"
         ],
-        "cwe_ids": [
-          "CWE-1333",
-          "CWE-407"
-        ],
-        "fixed_versions": [
-          "0.6.0"
-        ],
-        "id": "GHSA-pwgv-4x5q-6m9f",
-        "modified": "2026-09-10T03:50:53.865279+00:00",
-        "published": "2026-08-17T17:49:47+00:00",
-        "references": [
-          "https://github.com/andialbrecht/sqlparse/security/advisories/GHSA-pwgv-4x5q-6m9f",
-          "https://github.com/andialbrecht/sqlparse/commit/939b129e24c0ad5d51368b1aa72fffcaca76f06f",
-          "https://github.com/andialbrecht/sqlparse"
-        ],
-        "severity": {
-          "score": 8.7,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N"
-        },
-        "summary": "sqlparse: TokenList.__init__ materializes O(subtree) value per group, causing CPU DoS before depth/token caps trigger"
+        "id": "GHSA-pwgv-4x5q-6m9f"
       },
       "cvss_score": 8.7,
       "dep_name": "sqlparse",
@@ -1392,28 +1071,7 @@
           "CVE-2023-30608",
           "PYSEC-2023-87"
         ],
-        "cwe_ids": [
-          "CWE-1333"
-        ],
-        "fixed_versions": [
-          "0.4.4"
-        ],
-        "id": "GHSA-rrm6-wvj7-cwh2",
-        "modified": "2025-11-04T17:36:56.468880+00:00",
-        "published": "2023-04-21T20:24:21+00:00",
-        "references": [
-          "https://github.com/andialbrecht/sqlparse/security/advisories/GHSA-rrm6-wvj7-cwh2",
-          "https://nvd.nist.gov/vuln/detail/CVE-2023-30608",
-          "https://github.com/andialbrecht/sqlparse/commit/c457abd5f097dd13fb21543381e7cfafe7d31cfb",
-          "https://github.com/andialbrecht/sqlparse/commit/e75e35869473832a1eb67772b1adfee2db11b85a",
-          "https://github.com/andialbrecht/sqlparse"
-        ],
-        "severity": {
-          "score": 6.9,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:A/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N"
-        },
-        "summary": "sqlparse contains a regular expression that is vulnerable to Regular Expression Denial of Service"
+        "id": "GHSA-rrm6-wvj7-cwh2"
       },
       "cvss_score": 6.9,
       "dep_name": "sqlparse",

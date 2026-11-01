@@ -2,7 +2,7 @@
   "_source": {
     "fetched_at": "2026-11-01T12:49:54Z",
     "git_ref": "3.0.0",
-    "license": "MIT (RAPTOR-generated scan output)",
+    "license": "MIT (RAPTOR-generated fields only; upstream advisory data retains its own terms)",
     "name": "RAPTOR SCA scan of flask",
     "project_license": "BSD-3-Clause",
     "provenance": "Scan output produced by RAPTOR's SCA pipeline against https://github.com/pallets/flask.git@3.0.0. Project source not redistributed.",
@@ -14,28 +14,7 @@
         "aliases": [
           "CVE-2026-114134"
         ],
-        "cwe_ids": [
-          "CWE-829"
-        ],
-        "fixed_versions": [
-          "26.10.1"
-        ],
-        "id": "GHSA-cg8m-r9f2-5wm2",
-        "modified": "2026-10-22T16:30:30.132713+00:00",
-        "published": "2026-10-22T16:18:57+00:00",
-        "references": [
-          "https://github.com/psf/black/security/advisories/GHSA-cg8m-r9f2-5wm2",
-          "https://github.com/psf/black/pull/5510",
-          "https://github.com/psf/black/commit/ac1f71563aeccf73cf13ece00f231d9d6c66a514",
-          "https://github.com/psf/black",
-          "https://github.com/psf/black/releases/tag/26.10.1"
-        ],
-        "severity": {
-          "score": 8.7,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:L/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
-        },
-        "summary": "Black: GitHub Action installs unvalidated required-version from pyproject.toml"
+        "id": "GHSA-cg8m-r9f2-5wm2"
       },
       "cvss_score": 8.7,
       "dep_name": "black",
@@ -98,29 +77,7 @@
           "CVE-2024-21503",
           "PYSEC-2024-48"
         ],
-        "cwe_ids": [
-          "CWE-1333",
-          "CWE-75"
-        ],
-        "fixed_versions": [
-          "24.3.0"
-        ],
-        "id": "GHSA-fj7x-q9j7-g6q6",
-        "modified": "2026-09-10T03:50:10.486429+00:00",
-        "published": "2024-03-19T06:30:52+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-21503",
-          "https://github.com/psf/black/commit/f00093672628d212b8965a8993cee8bedf5fe9b8",
-          "https://github.com/psf/black",
-          "https://github.com/psf/black/releases/tag/24.3.0",
-          "https://github.com/pypa/advisory-database/tree/main/vulns/black/PYSEC-2024-48.yaml"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "Black vulnerable to Regular Expression Denial of Service (ReDoS)"
+        "id": "GHSA-fj7x-q9j7-g6q6"
       },
       "cvss_score": 5.3,
       "dep_name": "black",
@@ -184,22 +141,7 @@
           "CVE-2026-31900",
           "GHSA-v53h-f6m7-xcgm"
         ],
-        "fixed_versions": [
-          "26.3.0"
-        ],
-        "id": "PYSEC-2026-2120",
-        "modified": "2026-07-13T07:15:15.712525+00:00",
-        "published": "2026-03-11T20:16:15.960000+00:00",
-        "references": [
-          "https://github.com/psf/black/security/advisories/GHSA-v53h-f6m7-xcgm",
-          "https://github.com/psf/black/commit/0a2560b981364dde4c8cf8ce9d164c40669a8611"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": ""
+        "id": "PYSEC-2026-2120"
       },
       "cvss_score": 9.8,
       "dep_name": "black",
@@ -262,25 +204,7 @@
           "CVE-2026-32274",
           "GHSA-3936-cmfr-pm3m"
         ],
-        "fixed_versions": [
-          "26.3.1"
-        ],
-        "id": "PYSEC-2026-2121",
-        "modified": "2026-07-13T07:15:15.715288+00:00",
-        "published": "2026-03-12T20:16:06.350000+00:00",
-        "references": [
-          "https://access.redhat.com/security/cve/CVE-2026-32274",
-          "https://security.access.redhat.com/data/csaf/v2/vex/2026/cve-2026-32274.json",
-          "https://access.redhat.com/errata/RHSA-2026:10184",
-          "https://access.redhat.com/errata/RHSA-2026:13545",
-          "https://access.redhat.com/errata/RHSA-2026:13553"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
-        },
-        "summary": ""
+        "id": "PYSEC-2026-2121"
       },
       "cvss_score": 7.5,
       "dep_name": "black",
@@ -343,29 +267,7 @@
           "CVE-2023-30861",
           "PYSEC-2023-62"
         ],
-        "cwe_ids": [
-          "CWE-539"
-        ],
-        "fixed_versions": [
-          "2.3.2",
-          "2.2.5"
-        ],
-        "id": "GHSA-m2qf-hxjv-5gpq",
-        "modified": "2026-09-10T03:50:01.763387+00:00",
-        "published": "2023-05-01T19:22:20+00:00",
-        "references": [
-          "https://github.com/pallets/flask/security/advisories/GHSA-m2qf-hxjv-5gpq",
-          "https://nvd.nist.gov/vuln/detail/CVE-2023-30861",
-          "https://github.com/pallets/flask/commit/70f906c51ce49c485f1d355703e9cc3386b1cc2b",
-          "https://github.com/pallets/flask/commit/afd63b16170b7c047f5758eb910c416511e9c965",
-          "https://github.com/pallets/flask"
-        ],
-        "severity": {
-          "score": 8.7,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N"
-        },
-        "summary": "Flask vulnerable to possible disclosure of permanent session cookie due to missing Vary: Cookie header"
+        "id": "GHSA-m2qf-hxjv-5gpq"
       },
       "cvss_score": 8.7,
       "dep_name": "flask",
@@ -435,23 +337,7 @@
           "CVE-2026-27205",
           "GHSA-68rp-wp8r-4726"
         ],
-        "fixed_versions": [
-          "3.1.3"
-        ],
-        "id": "PYSEC-2026-2151",
-        "modified": "2026-07-13T07:15:25.033843+00:00",
-        "published": "2026-02-21T06:17:00.910000+00:00",
-        "references": [
-          "https://github.com/pallets/flask/releases/tag/3.1.3",
-          "https://github.com/pallets/flask/security/advisories/GHSA-68rp-wp8r-4726",
-          "https://github.com/pallets/flask/commit/089cb86dd22bff589a4eafb7ab8e42dc357623b4"
-        ],
-        "severity": {
-          "score": 4.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:N/A:N"
-        },
-        "summary": ""
+        "id": "PYSEC-2026-2151"
       },
       "cvss_score": 4.3,
       "dep_name": "flask",
@@ -521,23 +407,7 @@
           "CVE-2026-27205",
           "GHSA-68rp-wp8r-4726"
         ],
-        "fixed_versions": [
-          "3.1.3"
-        ],
-        "id": "PYSEC-2026-2151",
-        "modified": "2026-07-13T07:15:25.033843+00:00",
-        "published": "2026-02-21T06:17:00.910000+00:00",
-        "references": [
-          "https://github.com/pallets/flask/releases/tag/3.1.3",
-          "https://github.com/pallets/flask/security/advisories/GHSA-68rp-wp8r-4726",
-          "https://github.com/pallets/flask/commit/089cb86dd22bff589a4eafb7ab8e42dc357623b4"
-        ],
-        "severity": {
-          "score": 4.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:N/A:N"
-        },
-        "summary": ""
+        "id": "PYSEC-2026-2151"
       },
       "cvss_score": 4.3,
       "dep_name": "flask",
@@ -607,28 +477,7 @@
           "CVE-2025-27516",
           "PYSEC-2026-1471"
         ],
-        "cwe_ids": [
-          "CWE-1336"
-        ],
-        "fixed_versions": [
-          "3.1.6"
-        ],
-        "id": "GHSA-cpwx-vrp4-4pq7",
-        "modified": "2026-09-10T03:49:48.526758+00:00",
-        "published": "2025-03-05T20:40:14+00:00",
-        "references": [
-          "https://github.com/pallets/jinja/security/advisories/GHSA-cpwx-vrp4-4pq7",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-27516",
-          "https://github.com/pallets/jinja/commit/90457bbf33b8662926ae65cdde4c4c32e756e403",
-          "https://github.com/pallets/jinja",
-          "https://lists.debian.org/debian-lts-announce/2025/04/msg00022.html"
-        ],
-        "severity": {
-          "score": 5.4,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:L/AC:L/AT:P/PR:L/UI:P/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
-        },
-        "summary": "Jinja2 vulnerable to sandbox breakout through attr filter selecting format method"
+        "id": "GHSA-cpwx-vrp4-4pq7"
       },
       "cvss_score": 5.4,
       "dep_name": "jinja2",
@@ -697,28 +546,7 @@
           "CVE-2024-56201",
           "PYSEC-2026-1472"
         ],
-        "cwe_ids": [
-          "CWE-150"
-        ],
-        "fixed_versions": [
-          "3.1.5"
-        ],
-        "id": "GHSA-gmj6-6f8f-6699",
-        "modified": "2026-09-10T03:50:56.152882+00:00",
-        "published": "2024-12-23T17:54:12+00:00",
-        "references": [
-          "https://github.com/pallets/jinja/security/advisories/GHSA-gmj6-6f8f-6699",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-56201",
-          "https://github.com/pallets/jinja/issues/1792",
-          "https://github.com/pallets/jinja/commit/767b23617628419ae3709ccfb02f9602ae9fe51f",
-          "https://github.com/pallets/jinja"
-        ],
-        "severity": {
-          "score": 8.8,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Jinja has a sandbox breakout through malicious filenames"
+        "id": "GHSA-gmj6-6f8f-6699"
       },
       "cvss_score": 8.8,
       "dep_name": "jinja2",
@@ -787,28 +615,7 @@
           "CVE-2024-22195",
           "PYSEC-2026-1473"
         ],
-        "cwe_ids": [
-          "CWE-79"
-        ],
-        "fixed_versions": [
-          "3.1.3"
-        ],
-        "id": "GHSA-h5c8-rqwp-cp95",
-        "modified": "2026-09-10T03:50:00.236017+00:00",
-        "published": "2024-01-11T15:20:48+00:00",
-        "references": [
-          "https://github.com/pallets/jinja/security/advisories/GHSA-h5c8-rqwp-cp95",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-22195",
-          "https://github.com/pallets/jinja/commit/716795349a41d4983a9a4771f7d883c96ea17be7",
-          "https://github.com/pallets/jinja",
-          "https://github.com/pallets/jinja/releases/tag/3.1.3"
-        ],
-        "severity": {
-          "score": 5.4,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:L/A:N"
-        },
-        "summary": "Jinja vulnerable to HTML attribute injection when passing user input as keys to xmlattr filter"
+        "id": "GHSA-h5c8-rqwp-cp95"
       },
       "cvss_score": 5.4,
       "dep_name": "jinja2",
@@ -877,28 +684,7 @@
           "CVE-2024-34064",
           "PYSEC-2026-1474"
         ],
-        "cwe_ids": [
-          "CWE-79"
-        ],
-        "fixed_versions": [
-          "3.1.4"
-        ],
-        "id": "GHSA-h75v-3vvj-5mfj",
-        "modified": "2026-09-10T03:50:13.786450+00:00",
-        "published": "2024-05-06T14:20:59+00:00",
-        "references": [
-          "https://github.com/pallets/jinja/security/advisories/GHSA-h75v-3vvj-5mfj",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-34064",
-          "https://github.com/pallets/jinja/commit/0668239dc6b44ef38e7a6c9f91f312fd4ca581cb",
-          "https://github.com/pallets/jinja",
-          "https://lists.debian.org/debian-lts-announce/2024/12/msg00009.html"
-        ],
-        "severity": {
-          "score": 5.4,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:L/A:N"
-        },
-        "summary": "Jinja vulnerable to HTML attribute injection when passing user input as keys to xmlattr filter"
+        "id": "GHSA-h75v-3vvj-5mfj"
       },
       "cvss_score": 5.4,
       "dep_name": "jinja2",
@@ -967,28 +753,7 @@
           "CVE-2024-56326",
           "PYSEC-2026-1475"
         ],
-        "cwe_ids": [
-          "CWE-693"
-        ],
-        "fixed_versions": [
-          "3.1.5"
-        ],
-        "id": "GHSA-q2x7-8rv6-6q7h",
-        "modified": "2026-09-10T03:50:21.662855+00:00",
-        "published": "2024-12-23T17:56:08+00:00",
-        "references": [
-          "https://github.com/pallets/jinja/security/advisories/GHSA-q2x7-8rv6-6q7h",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-56326",
-          "https://github.com/pallets/jinja/commit/48b0687e05a5466a91cd5812d604fa37ad0943b4",
-          "https://github.com/pallets/jinja",
-          "https://github.com/pallets/jinja/releases/tag/3.1.5"
-        ],
-        "severity": {
-          "score": 7.8,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Jinja has a sandbox breakout through indirect reference to format method"
+        "id": "GHSA-q2x7-8rv6-6q7h"
       },
       "cvss_score": 7.8,
       "dep_name": "jinja2",
@@ -1057,28 +822,7 @@
           "CVE-2026-27199",
           "PYSEC-2026-2320"
         ],
-        "cwe_ids": [
-          "CWE-67"
-        ],
-        "fixed_versions": [
-          "3.1.6"
-        ],
-        "id": "GHSA-29vq-49wr-vm6x",
-        "modified": "2026-09-10T03:50:33.709103+00:00",
-        "published": "2026-02-19T20:32:45+00:00",
-        "references": [
-          "https://github.com/pallets/werkzeug/security/advisories/GHSA-29vq-49wr-vm6x",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-27199",
-          "https://github.com/pallets/werkzeug/commit/f407712fdc60a09c2b3f4fe7db557703e5d9338d",
-          "https://github.com/pallets/werkzeug",
-          "https://github.com/pallets/werkzeug/releases/tag/3.1.6"
-        ],
-        "severity": {
-          "score": 6.3,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
-        },
-        "summary": " Werkzeug safe_join() allows Windows special device names"
+        "id": "GHSA-29vq-49wr-vm6x"
       },
       "cvss_score": 6.3,
       "dep_name": "werkzeug",
@@ -1148,28 +892,7 @@
           "CVE-2024-34069",
           "PYSEC-2026-2043"
         ],
-        "cwe_ids": [
-          "CWE-352"
-        ],
-        "fixed_versions": [
-          "3.0.3"
-        ],
-        "id": "GHSA-2g68-c3qc-8985",
-        "modified": "2026-09-10T03:50:13.189126+00:00",
-        "published": "2024-05-06T14:21:27+00:00",
-        "references": [
-          "https://github.com/pallets/werkzeug/security/advisories/GHSA-2g68-c3qc-8985",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-34069",
-          "https://github.com/pallets/werkzeug/commit/3386395b24c7371db11a5b8eaac0c91da5362692",
-          "https://github.com/pallets/werkzeug",
-          "https://lists.debian.org/debian-lts-announce/2025/02/msg00026.html"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Werkzeug debugger vulnerable to remote execution when interacting with attacker controlled domain"
+        "id": "GHSA-2g68-c3qc-8985"
       },
       "cvss_score": 7.5,
       "dep_name": "werkzeug",
@@ -1241,27 +964,7 @@
           "CVE-2026-21860",
           "PYSEC-2026-2044"
         ],
-        "cwe_ids": [
-          "CWE-67"
-        ],
-        "fixed_versions": [
-          "3.1.5"
-        ],
-        "id": "GHSA-87hc-h4r5-73f7",
-        "modified": "2026-09-10T03:50:32.862525+00:00",
-        "published": "2026-01-08T19:51:21+00:00",
-        "references": [
-          "https://github.com/pallets/werkzeug/security/advisories/GHSA-87hc-h4r5-73f7",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-21860",
-          "https://github.com/pallets/werkzeug/commit/7ae1d254e04a0c33e241ac1cca4783ce6c875ca3",
-          "https://github.com/pallets/werkzeug"
-        ],
-        "severity": {
-          "score": 6.3,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
-        },
-        "summary": " Werkzeug safe_join() allows Windows special device names with compound extensions"
+        "id": "GHSA-87hc-h4r5-73f7"
       },
       "cvss_score": 6.3,
       "dep_name": "werkzeug",
@@ -1331,28 +1034,7 @@
           "CVE-2024-49766",
           "PYSEC-2026-2045"
         ],
-        "cwe_ids": [
-          "CWE-22"
-        ],
-        "fixed_versions": [
-          "3.0.6"
-        ],
-        "id": "GHSA-f9vj-2wh5-fj8j",
-        "modified": "2026-09-10T03:50:19.894904+00:00",
-        "published": "2024-10-25T19:43:41+00:00",
-        "references": [
-          "https://github.com/pallets/werkzeug/security/advisories/GHSA-f9vj-2wh5-fj8j",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-49766",
-          "https://github.com/pallets/werkzeug/commit/2767bcb10a7dd1c297d812cc5e6d11a474c1f092",
-          "https://github.com/pallets/werkzeug",
-          "https://github.com/pallets/werkzeug/releases/tag/3.0.6"
-        ],
-        "severity": {
-          "score": 6.3,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:H/AT:N/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N"
-        },
-        "summary": "Werkzeug safe_join not safe on Windows"
+        "id": "GHSA-f9vj-2wh5-fj8j"
       },
       "cvss_score": 6.3,
       "dep_name": "werkzeug",
@@ -1422,28 +1104,7 @@
           "CVE-2026-102598",
           "PYSEC-2026-4312"
         ],
-        "cwe_ids": [
-          "CWE-67"
-        ],
-        "fixed_versions": [
-          "3.1.9"
-        ],
-        "id": "GHSA-g6x2-hccm-hh4m",
-        "modified": "2026-10-15T14:56:11.020811+00:00",
-        "published": "2026-10-05T23:48:39+00:00",
-        "references": [
-          "https://github.com/pallets/werkzeug/security/advisories/GHSA-g6x2-hccm-hh4m",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-102598",
-          "https://github.com/pallets/werkzeug/pull/3309",
-          "https://github.com/pallets/werkzeug/commit/8d77320bcdf3a34941ec06dcf16b03c065cd21b6",
-          "https://github.com/pallets/werkzeug"
-        ],
-        "severity": {
-          "score": 6.3,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
-        },
-        "summary": "Werkzeug safe_join() allows Windows special device names"
+        "id": "GHSA-g6x2-hccm-hh4m"
       },
       "cvss_score": 6.3,
       "dep_name": "werkzeug",
@@ -1513,28 +1174,7 @@
           "CVE-2025-66221",
           "PYSEC-2026-2046"
         ],
-        "cwe_ids": [
-          "CWE-67"
-        ],
-        "fixed_versions": [
-          "3.1.4"
-        ],
-        "id": "GHSA-hgf8-39gv-g3f2",
-        "modified": "2026-09-10T03:50:31.900494+00:00",
-        "published": "2025-12-02T00:27:38+00:00",
-        "references": [
-          "https://github.com/pallets/werkzeug/security/advisories/GHSA-hgf8-39gv-g3f2",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-66221",
-          "https://github.com/pallets/werkzeug/commit/4b833376a45c323a189cd11d2362bcffdb1c0c13",
-          "https://github.com/pallets/werkzeug",
-          "https://github.com/pallets/werkzeug/releases/tag/3.1.4"
-        ],
-        "severity": {
-          "score": 6.3,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
-        },
-        "summary": "Werkzeug safe_join() allows Windows special device names"
+        "id": "GHSA-hgf8-39gv-g3f2"
       },
       "cvss_score": 6.3,
       "dep_name": "werkzeug",
@@ -1605,29 +1245,7 @@
           "PYSEC-2026-1860",
           "PYSEC-2026-3417"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "3.0.6",
-          "0.20.0"
-        ],
-        "id": "GHSA-q34m-jh98-gwm2",
-        "modified": "2026-09-10T03:50:19.984825+00:00",
-        "published": "2024-10-25T19:44:43+00:00",
-        "references": [
-          "https://github.com/pallets/werkzeug/security/advisories/GHSA-q34m-jh98-gwm2",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-49767",
-          "https://github.com/pallets/quart/commit/5e78c4169b8eb66b91ead3e62d44721b9e1644ee",
-          "https://github.com/pallets/quart/commit/abb04a512496206de279225340ed022852fbf51f",
-          "https://github.com/pallets/werkzeug/commit/50cfeebcb0727e18cc52ffbeb125f4a66551179b"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Werkzeug possible resource exhaustion when parsing file data in forms"
+        "id": "GHSA-q34m-jh98-gwm2"
       },
       "cvss_score": 7.5,
       "dep_name": "werkzeug",
@@ -1697,25 +1315,7 @@
           "CVE-2023-46136",
           "GHSA-hrfv-mqp8-q5rw"
         ],
-        "fixed_versions": [
-          "f3c803b3ade485a45f12b6d6617595350c0f03e2",
-          "f2300208d5e2a5076cbbb4c2aad71096fd040ef9",
-          "2.3.8",
-          "3.0.1"
-        ],
-        "id": "PYSEC-2023-221",
-        "modified": "2023-11-08T18:38:34.170214+00:00",
-        "published": "2023-10-25T18:17:00+00:00",
-        "references": [
-          "https://github.com/pallets/werkzeug/commit/f3c803b3ade485a45f12b6d6617595350c0f03e2",
-          "https://github.com/pallets/werkzeug/security/advisories/GHSA-hrfv-mqp8-q5rw"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "PYSEC-2023-221"
       },
       "cvss_score": 7.5,
       "dep_name": "werkzeug",
@@ -1785,28 +1385,7 @@
           "CVE-2026-27199",
           "PYSEC-2026-2320"
         ],
-        "cwe_ids": [
-          "CWE-67"
-        ],
-        "fixed_versions": [
-          "3.1.6"
-        ],
-        "id": "GHSA-29vq-49wr-vm6x",
-        "modified": "2026-09-10T03:50:33.709103+00:00",
-        "published": "2026-02-19T20:32:45+00:00",
-        "references": [
-          "https://github.com/pallets/werkzeug/security/advisories/GHSA-29vq-49wr-vm6x",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-27199",
-          "https://github.com/pallets/werkzeug/commit/f407712fdc60a09c2b3f4fe7db557703e5d9338d",
-          "https://github.com/pallets/werkzeug",
-          "https://github.com/pallets/werkzeug/releases/tag/3.1.6"
-        ],
-        "severity": {
-          "score": 6.3,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
-        },
-        "summary": " Werkzeug safe_join() allows Windows special device names"
+        "id": "GHSA-29vq-49wr-vm6x"
       },
       "cvss_score": 6.3,
       "dep_name": "werkzeug",
@@ -1876,28 +1455,7 @@
           "CVE-2024-34069",
           "PYSEC-2026-2043"
         ],
-        "cwe_ids": [
-          "CWE-352"
-        ],
-        "fixed_versions": [
-          "3.0.3"
-        ],
-        "id": "GHSA-2g68-c3qc-8985",
-        "modified": "2026-09-10T03:50:13.189126+00:00",
-        "published": "2024-05-06T14:21:27+00:00",
-        "references": [
-          "https://github.com/pallets/werkzeug/security/advisories/GHSA-2g68-c3qc-8985",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-34069",
-          "https://github.com/pallets/werkzeug/commit/3386395b24c7371db11a5b8eaac0c91da5362692",
-          "https://github.com/pallets/werkzeug",
-          "https://lists.debian.org/debian-lts-announce/2025/02/msg00026.html"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Werkzeug debugger vulnerable to remote execution when interacting with attacker controlled domain"
+        "id": "GHSA-2g68-c3qc-8985"
       },
       "cvss_score": 7.5,
       "dep_name": "werkzeug",
@@ -1969,27 +1527,7 @@
           "CVE-2026-21860",
           "PYSEC-2026-2044"
         ],
-        "cwe_ids": [
-          "CWE-67"
-        ],
-        "fixed_versions": [
-          "3.1.5"
-        ],
-        "id": "GHSA-87hc-h4r5-73f7",
-        "modified": "2026-09-10T03:50:32.862525+00:00",
-        "published": "2026-01-08T19:51:21+00:00",
-        "references": [
-          "https://github.com/pallets/werkzeug/security/advisories/GHSA-87hc-h4r5-73f7",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-21860",
-          "https://github.com/pallets/werkzeug/commit/7ae1d254e04a0c33e241ac1cca4783ce6c875ca3",
-          "https://github.com/pallets/werkzeug"
-        ],
-        "severity": {
-          "score": 6.3,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
-        },
-        "summary": " Werkzeug safe_join() allows Windows special device names with compound extensions"
+        "id": "GHSA-87hc-h4r5-73f7"
       },
       "cvss_score": 6.3,
       "dep_name": "werkzeug",
@@ -2059,28 +1597,7 @@
           "CVE-2024-49766",
           "PYSEC-2026-2045"
         ],
-        "cwe_ids": [
-          "CWE-22"
-        ],
-        "fixed_versions": [
-          "3.0.6"
-        ],
-        "id": "GHSA-f9vj-2wh5-fj8j",
-        "modified": "2026-09-10T03:50:19.894904+00:00",
-        "published": "2024-10-25T19:43:41+00:00",
-        "references": [
-          "https://github.com/pallets/werkzeug/security/advisories/GHSA-f9vj-2wh5-fj8j",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-49766",
-          "https://github.com/pallets/werkzeug/commit/2767bcb10a7dd1c297d812cc5e6d11a474c1f092",
-          "https://github.com/pallets/werkzeug",
-          "https://github.com/pallets/werkzeug/releases/tag/3.0.6"
-        ],
-        "severity": {
-          "score": 6.3,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:H/AT:N/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N"
-        },
-        "summary": "Werkzeug safe_join not safe on Windows"
+        "id": "GHSA-f9vj-2wh5-fj8j"
       },
       "cvss_score": 6.3,
       "dep_name": "werkzeug",
@@ -2150,28 +1667,7 @@
           "CVE-2026-102598",
           "PYSEC-2026-4312"
         ],
-        "cwe_ids": [
-          "CWE-67"
-        ],
-        "fixed_versions": [
-          "3.1.9"
-        ],
-        "id": "GHSA-g6x2-hccm-hh4m",
-        "modified": "2026-10-15T14:56:11.020811+00:00",
-        "published": "2026-10-05T23:48:39+00:00",
-        "references": [
-          "https://github.com/pallets/werkzeug/security/advisories/GHSA-g6x2-hccm-hh4m",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-102598",
-          "https://github.com/pallets/werkzeug/pull/3309",
-          "https://github.com/pallets/werkzeug/commit/8d77320bcdf3a34941ec06dcf16b03c065cd21b6",
-          "https://github.com/pallets/werkzeug"
-        ],
-        "severity": {
-          "score": 6.3,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
-        },
-        "summary": "Werkzeug safe_join() allows Windows special device names"
+        "id": "GHSA-g6x2-hccm-hh4m"
       },
       "cvss_score": 6.3,
       "dep_name": "werkzeug",
@@ -2241,28 +1737,7 @@
           "CVE-2025-66221",
           "PYSEC-2026-2046"
         ],
-        "cwe_ids": [
-          "CWE-67"
-        ],
-        "fixed_versions": [
-          "3.1.4"
-        ],
-        "id": "GHSA-hgf8-39gv-g3f2",
-        "modified": "2026-09-10T03:50:31.900494+00:00",
-        "published": "2025-12-02T00:27:38+00:00",
-        "references": [
-          "https://github.com/pallets/werkzeug/security/advisories/GHSA-hgf8-39gv-g3f2",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-66221",
-          "https://github.com/pallets/werkzeug/commit/4b833376a45c323a189cd11d2362bcffdb1c0c13",
-          "https://github.com/pallets/werkzeug",
-          "https://github.com/pallets/werkzeug/releases/tag/3.1.4"
-        ],
-        "severity": {
-          "score": 6.3,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
-        },
-        "summary": "Werkzeug safe_join() allows Windows special device names"
+        "id": "GHSA-hgf8-39gv-g3f2"
       },
       "cvss_score": 6.3,
       "dep_name": "werkzeug",
@@ -2333,29 +1808,7 @@
           "PYSEC-2026-1860",
           "PYSEC-2026-3417"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "3.0.6",
-          "0.20.0"
-        ],
-        "id": "GHSA-q34m-jh98-gwm2",
-        "modified": "2026-09-10T03:50:19.984825+00:00",
-        "published": "2024-10-25T19:44:43+00:00",
-        "references": [
-          "https://github.com/pallets/werkzeug/security/advisories/GHSA-q34m-jh98-gwm2",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-49767",
-          "https://github.com/pallets/quart/commit/5e78c4169b8eb66b91ead3e62d44721b9e1644ee",
-          "https://github.com/pallets/quart/commit/abb04a512496206de279225340ed022852fbf51f",
-          "https://github.com/pallets/werkzeug/commit/50cfeebcb0727e18cc52ffbeb125f4a66551179b"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Werkzeug possible resource exhaustion when parsing file data in forms"
+        "id": "GHSA-q34m-jh98-gwm2"
       },
       "cvss_score": 7.5,
       "dep_name": "werkzeug",
@@ -2425,25 +1878,7 @@
           "CVE-2023-46136",
           "GHSA-hrfv-mqp8-q5rw"
         ],
-        "fixed_versions": [
-          "f3c803b3ade485a45f12b6d6617595350c0f03e2",
-          "f2300208d5e2a5076cbbb4c2aad71096fd040ef9",
-          "2.3.8",
-          "3.0.1"
-        ],
-        "id": "PYSEC-2023-221",
-        "modified": "2023-11-08T18:38:34.170214+00:00",
-        "published": "2023-10-25T18:17:00+00:00",
-        "references": [
-          "https://github.com/pallets/werkzeug/commit/f3c803b3ade485a45f12b6d6617595350c0f03e2",
-          "https://github.com/pallets/werkzeug/security/advisories/GHSA-hrfv-mqp8-q5rw"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "PYSEC-2023-221"
       },
       "cvss_score": 7.5,
       "dep_name": "werkzeug",

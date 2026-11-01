@@ -2,7 +2,7 @@
   "_source": {
     "fetched_at": "2026-11-01T12:54:33Z",
     "git_ref": "v0.13.0",
-    "license": "MIT (RAPTOR-generated scan output)",
+    "license": "MIT (RAPTOR-generated fields only; upstream advisory data retains its own terms)",
     "name": "RAPTOR SCA scan of alacritty-0.13",
     "project_license": "Apache-2.0",
     "provenance": "Scan output produced by RAPTOR's SCA pipeline against https://github.com/alacritty/alacritty.git@v0.13.0. Project source not redistributed.",
@@ -12,18 +12,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [],
         "id": "RUSTSEC-2025-0056",
-        "informational": "unmaintained",
-        "modified": "2025-09-05T09:05:48+00:00",
-        "published": "2025-09-05T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/adler",
-          "https://rustsec.org/advisories/RUSTSEC-2025-0056.html",
-          "https://github.com/jonas-schievink/adler"
-        ],
-        "severity": null,
-        "summary": "adler crate is unmaintained, use adler2 instead"
+        "informational": "unmaintained"
       },
       "cvss_score": null,
       "dep_name": "adler",
@@ -85,19 +75,7 @@
         "aliases": [
           "RUSTSEC-2024-0404"
         ],
-        "fixed_versions": [
-          "0.6.8"
-        ],
-        "id": "GHSA-2rxc-gjrp-vjhx",
-        "modified": "2026-09-10T03:50:21.162155+00:00",
-        "published": "2024-12-04T18:31:31+00:00",
-        "references": [
-          "https://github.com/rust-cli/anstyle/issues/156",
-          "https://github.com/rust-cli/anstyle",
-          "https://rustsec.org/advisories/RUSTSEC-2024-0404.html"
-        ],
-        "severity": null,
-        "summary": "Unsoundness in anstream"
+        "id": "GHSA-2rxc-gjrp-vjhx"
       },
       "cvss_score": null,
       "dep_name": "anstream",
@@ -160,28 +138,7 @@
           "CVE-2026-25541",
           "RUSTSEC-2026-0007"
         ],
-        "cwe_ids": [
-          "CWE-680"
-        ],
-        "fixed_versions": [
-          "1.11.1"
-        ],
-        "id": "GHSA-434x-w66g-qw3r",
-        "modified": "2026-09-10T03:50:33.995841+00:00",
-        "published": "2026-02-03T19:17:46+00:00",
-        "references": [
-          "https://github.com/tokio-rs/bytes/security/advisories/GHSA-434x-w66g-qw3r",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-25541",
-          "https://github.com/tokio-rs/bytes/commit/d0293b0e35838123c51ca5dfdf468ecafee4398f",
-          "https://github.com/tokio-rs/bytes",
-          "https://github.com/tokio-rs/bytes/releases/tag/v1.11.1"
-        ],
-        "severity": {
-          "score": 5.5,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N/E:P"
-        },
-        "summary": "bytes has integer overflow in BytesMut::reserve"
+        "id": "GHSA-434x-w66g-qw3r"
       },
       "cvss_score": 5.5,
       "dep_name": "bytes",
@@ -242,21 +199,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [
-          "0.9.11"
-        ],
         "id": "RUSTSEC-2026-0186",
-        "informational": "unsound",
-        "modified": "2026-06-22T18:15:03.600280+00:00",
-        "published": "2026-06-20T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/memmap2",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0186.html",
-          "https://github.com/RazrFalcon/memmap2-rs/issues/169",
-          "https://github.com/RazrFalcon/memmap2-rs/pull/170"
-        ],
-        "severity": null,
-        "summary": "Unchecked pointer offset in crate `memmap2`"
+        "informational": "unsound"
       },
       "cvss_score": null,
       "dep_name": "memmap2",
@@ -319,29 +263,7 @@
           "CVE-2024-27308",
           "RUSTSEC-2024-0019"
         ],
-        "cwe_ids": [
-          "CWE-416",
-          "CWE-672"
-        ],
-        "fixed_versions": [
-          "0.8.11"
-        ],
-        "id": "GHSA-r8w9-5wcg-vfj7",
-        "modified": "2026-09-10T03:50:10.693636+00:00",
-        "published": "2024-03-04T20:44:35+00:00",
-        "references": [
-          "https://github.com/tokio-rs/mio/security/advisories/GHSA-r8w9-5wcg-vfj7",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-27308",
-          "https://github.com/tokio-rs/tokio/issues/6369",
-          "https://github.com/tokio-rs/mio/pull/1760",
-          "https://github.com/tokio-rs/mio/commit/90d4fe00df870acd3d38f3dc4face9aacab8fbb9"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
-        },
-        "summary": "Mio's tokens for named pipes may be delivered after deregistration"
+        "id": "GHSA-r8w9-5wcg-vfj7"
       },
       "cvss_score": 7.5,
       "dep_name": "mio",
@@ -402,25 +324,7 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [
-          "0.41.0"
-        ],
-        "id": "RUSTSEC-2026-0194",
-        "modified": "2026-07-02T08:00:03.849273+00:00",
-        "published": "2026-06-29T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/quick-xml",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0194.html",
-          "https://github.com/tafia/quick-xml/issues/969",
-          "https://github.com/tafia/quick-xml/pull/971",
-          "https://github.com/tafia/quick-xml/commit/07f3db8343cf152f5bc3483ef5b3164582489bea"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Quadratic run time when checking a start tag for duplicate attribute names"
+        "id": "RUSTSEC-2026-0194"
       },
       "cvss_score": 7.5,
       "dep_name": "quick-xml",
@@ -480,24 +384,7 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [
-          "0.41.0"
-        ],
-        "id": "RUSTSEC-2026-0195",
-        "modified": "2026-07-02T09:00:04.037478+00:00",
-        "published": "2026-06-29T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/quick-xml",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0195.html",
-          "https://github.com/tafia/quick-xml/issues/970",
-          "https://github.com/tafia/quick-xml/commit/7ca25266e94987210daa864889ab15c9332c8a2a"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Unbounded namespace-declaration allocation in `NsReader` enables memory-exhaustion denial of service"
+        "id": "RUSTSEC-2026-0195"
       },
       "cvss_score": 7.5,
       "dep_name": "quick-xml",
@@ -557,18 +444,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [],
         "id": "RUSTSEC-2025-0059",
-        "informational": "unmaintained",
-        "modified": "2025-09-08T09:09:54+00:00",
-        "published": "2025-09-08T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/servo-fontconfig",
-          "https://rustsec.org/advisories/RUSTSEC-2025-0059.html",
-          "https://github.com/rustsec/advisory-db/issues/1998"
-        ],
-        "severity": null,
-        "summary": "servo-fontconfig crate is unmaintained"
+        "informational": "unmaintained"
       },
       "cvss_score": null,
       "dep_name": "servo-fontconfig",
@@ -628,18 +505,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [],
         "id": "RUSTSEC-2024-0449",
-        "informational": "unmaintained",
-        "modified": "2026-10-12T11:45:02.518189+00:00",
-        "published": "2024-03-25T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/unsafe-libyaml",
-          "https://rustsec.org/advisories/RUSTSEC-2024-0449.html",
-          "https://github.com/dtolnay/unsafe-libyaml"
-        ],
-        "severity": null,
-        "summary": "unsafe-libyaml is unmaintained"
+        "informational": "unmaintained"
       },
       "cvss_score": null,
       "dep_name": "unsafe-libyaml",
