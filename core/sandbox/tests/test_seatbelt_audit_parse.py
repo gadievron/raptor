@@ -491,14 +491,19 @@ def test_require_scope_drops_records_before_registration(tmp_path):
     """require_scope=True: nothing may be attributed to this run
     until the caller registers its child — the streamer-start-to-
     registration window must not stamp foreign host events."""
-    streamer = seatbelt_audit.LogStreamer(tmp_path, require_scope=True)
+    streamer = seatbelt_audit.LogStreamer(
+        tmp_path, require_scope=True, lineage_poll_interval=0,
+    )
     assert streamer._record_in_scope(_scope_record(4444)) is False
 
 
 def test_require_scope_accepts_registered_pid(tmp_path, monkeypatch):
     _no_pgid(monkeypatch)
-    streamer = seatbelt_audit.LogStreamer(tmp_path, require_scope=True)
+    streamer = seatbelt_audit.LogStreamer(
+        tmp_path, require_scope=True, lineage_poll_interval=0,
+    )
     streamer.register_target_pid(1234)
+    assert streamer._lineage_poller is None
     assert streamer._record_in_scope(_scope_record(1234)) is True
     assert streamer._record_in_scope(_scope_record(4444)) is False
 
@@ -724,7 +729,9 @@ def test_ambiguous_counter_counts_a_buffered_record_once(tmp_path):
     gate double-counted it — inflating the operator-facing tamper
     diagnostic a forensic reader compares against the JSONL's flagged
     rows, and double-firing the one-shot spoofing warning."""
-    streamer = seatbelt_audit.LogStreamer(tmp_path, require_scope=True)
+    streamer = seatbelt_audit.LogStreamer(
+        tmp_path, require_scope=True, lineage_poll_interval=0,
+    )
     import os as _os
     rec = {"path": "/tmp/x", "type": "read",
            "target_pid": _os.getpid(), "parse_ambiguous": True}
@@ -733,6 +740,7 @@ def test_ambiguous_counter_counts_a_buffered_record_once(tmp_path):
         "a buffered (not yet evaluated) record must not be counted")
     assert len(streamer._pending) == 1
     streamer.register_target_pid(_os.getpid())  # parent-thread flush
+    assert streamer._lineage_poller is None
     assert streamer._ambiguous_records == 1, (
         "one record, one count — the flush re-entry double-counted")
     assert streamer._ambiguous_admitted == 1
@@ -853,8 +861,11 @@ def test_ambiguous_record_appended_and_counted(tmp_path, monkeypatch):
         seatbelt_audit, "_announce_credential_path_touch",
         lambda path, pid: announced.append((path, pid)))
     _no_pgid(monkeypatch)
-    streamer = seatbelt_audit.LogStreamer(tmp_path, require_scope=True)
+    streamer = seatbelt_audit.LogStreamer(
+        tmp_path, require_scope=True, lineage_poll_interval=0,
+    )
     streamer.register_target_pid(4242)
+    assert streamer._lineage_poller is None
     rec = seatbelt_audit.parse_log_entry(_kext_entry(msg=_SPOOF_NAME_MSG))
     streamer._filter_and_append(rec)
     jsonl = evidence_mod.resolve_read_path(
