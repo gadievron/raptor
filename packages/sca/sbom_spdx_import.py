@@ -38,7 +38,7 @@ def _objects(data: dict, field: str) -> list[dict]:
     return value
 
 
-def _text(data: dict, field: str, *, required: bool = True) -> str | None:
+def _string_field(data: dict, field: str, *, required: bool = True) -> str | None:
     value = data.get(field)
     if value is None and not required and field not in data:
         return None
@@ -114,28 +114,28 @@ def _licence(value: str, licences: set[str], external: set[str]) -> None:
 def _references(data: dict, items: list[dict]) -> tuple[set[str], set[str], set[str]]:
     known = {"SPDXRef-DOCUMENT"}
     for item in items:
-        ref = _text(item, "SPDXID")
+        ref = _string_field(item, "SPDXID")
         if not _LOCAL_ID.fullmatch(ref) or ref in known:
             raise ValueError("invalid or duplicate SPDXID")
         known.add(ref)
     external: set[str] = set()
     for entry in _objects(data, "externalDocumentRefs"):
-        ref = _text(entry, "externalDocumentId")
+        ref = _string_field(entry, "externalDocumentId")
         if not _DOCUMENT_ID.fullmatch(ref) or ref in external:
             raise ValueError("invalid or duplicate SPDX external document ID")
-        _text(entry, "spdxDocument")
+        _string_field(entry, "spdxDocument")
         checksum = entry.get("checksum")
         if not isinstance(checksum, dict):
             raise ValueError("SPDX external document checksum must be an object")
-        _text(checksum, "algorithm")
-        _text(checksum, "checksumValue")
+        _string_field(checksum, "algorithm")
+        _string_field(checksum, "checksumValue")
         external.add(ref)
     licences: set[str] = set()
     for entry in _objects(data, "hasExtractedLicensingInfos"):
-        ref = _text(entry, "licenseId")
+        ref = _string_field(entry, "licenseId")
         if not re.fullmatch(r"LicenseRef-[A-Za-z0-9.-]+", ref) or ref in licences:
             raise ValueError("invalid or duplicate SPDX LicenseRef definition")
-        _text(entry, "extractedText")
+        _string_field(entry, "extractedText")
         licences.add(ref)
     return known, external, licences
 
@@ -155,9 +155,9 @@ def _depths(data: dict, known: set[str], external: set[str]) -> dict[str, int]:
             roots.add(ref)
     graph: dict[str, set[str]] = {}
     for relation in _objects(data, "relationships"):
-        source = _text(relation, "spdxElementId")
-        target = _text(relation, "relatedSpdxElement")
-        kind = _text(relation, "relationshipType")
+        source = _string_field(relation, "spdxElementId")
+        target = _string_field(relation, "relatedSpdxElement")
+        kind = _string_field(relation, "relationshipType")
         endpoint(source)
         if target not in {"NONE", "NOASSERTION"}:
             endpoint(target)
@@ -187,14 +187,14 @@ def _read_spdx(data: dict, path: Path) -> ImportedBom:
         raise ValueError("SPDX document SPDXID must be SPDXRef-DOCUMENT")
     if data.get("dataLicense") != "CC0-1.0":
         raise ValueError("SPDX 2.3 dataLicense must be CC0-1.0")
-    _text(data, "name")
-    namespace = _text(data, "documentNamespace")
+    _string_field(data, "name")
+    namespace = _string_field(data, "documentNamespace")
     if not re.match(r"[A-Za-z][A-Za-z0-9+.-]*:", namespace) or "#" in namespace or any(c.isspace() or ord(c) < 32 for c in namespace):
         raise ValueError("invalid SPDX documentNamespace")
     creation = data.get("creationInfo")
     if not isinstance(creation, dict):
         raise ValueError("SPDX creationInfo must be an object")
-    created = _text(creation, "created")
+    created = _string_field(creation, "created")
     try:
         if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", created):
             raise ValueError("expected a UTC timestamp")
@@ -210,14 +210,14 @@ def _read_spdx(data: dict, path: Path) -> ImportedBom:
         raise ValueError("SPDX element count exceeds 100000")
     known, external, licences = _references(data, items)
     for file in files:
-        _text(file, "fileName")
+        _string_field(file, "fileName")
     file_ids = {f["SPDXID"] for f in files}
     for snippet in snippets:
-        if _text(snippet, "snippetFromFile") not in file_ids:
+        if _string_field(snippet, "snippetFromFile") not in file_ids:
             raise ValueError("dangling SPDX snippetFromFile reference")
     for item in items:
         for field in ("licenseDeclared", "licenseConcluded"):
-            value = _text(item, field, required=False)
+            value = _string_field(item, field, required=False)
             if value is not None:
                 _licence(value, licences, external)
         for field in ("licenseInfoFromFiles", "licenseInfoInFiles", "licenseInfoInSnippets"):
@@ -236,21 +236,21 @@ def _read_spdx(data: dict, path: Path) -> ImportedBom:
         gaps.append("SPDX files and snippets are retained; vulnerability matching and licence policy cover package declarations only")
     deps, inventory, refs = [], [], {}
     for package in packages:
-        name = _text(package, "name")
-        version = _text(package, "versionInfo", required=False)
-        _text(package, "downloadLocation")
+        name = _string_field(package, "name")
+        version = _string_field(package, "versionInfo", required=False)
+        _string_field(package, "downloadLocation")
         if "filesAnalyzed" in package and type(package["filesAnalyzed"]) is not bool:
             raise ValueError("SPDX filesAnalyzed must be a boolean")
-        declared = _text(package, "licenseDeclared", required=False)
-        conclusion = _text(package, "licenseConcluded", required=False)
+        declared = _string_field(package, "licenseDeclared", required=False)
+        conclusion = _string_field(package, "licenseConcluded", required=False)
         declaration = declared if declared not in {None, "NONE", "NOASSERTION"} else None
         if conclusion not in {None, "NONE", "NOASSERTION", declared}:
             gaps.append(f"package {name}: distinct concluded licence retained; policy evaluates the declared licence only")
         purls = set()
         for ref in _objects(package, "externalRefs"):
-            _text(ref, "referenceCategory")
-            kind = _text(ref, "referenceType")
-            locator = _text(ref, "referenceLocator")
+            _string_field(ref, "referenceCategory")
+            kind = _string_field(ref, "referenceType")
+            locator = _string_field(ref, "referenceLocator")
             if kind in {"purl", "http://spdx.org/rdf/references/purl", "https://spdx.org/rdf/references/purl"}:
                 if ref["referenceCategory"] != "PACKAGE-MANAGER":
                     raise ValueError("SPDX purl must use PACKAGE-MANAGER referenceCategory")
