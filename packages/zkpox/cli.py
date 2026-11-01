@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 import tempfile
 from core.json import load_json, save_json
+from core.security.log_sanitisation import sanitise_for_terminal
 
 # manifest.json is a small bundle descriptor.
 _MAX_MANIFEST_BYTES = 8 * 1024 * 1024
@@ -155,7 +156,7 @@ def _cmd_reproduce(args) -> int:
 
     print(render_bundle(bundle))
     print(f"  reproduced: {result.reproduced} "
-          f"(attempted={result.attempted}, {result.reason})")
+          f"(attempted={result.attempted}, {sanitise_for_terminal(result.reason)})")
     # Per-run diagnostics: name the lane and shape of every run so a
     # divergent run (isolation degradation, clean-exit-with-no-input)
     # is diagnosable straight from the report/CI log.
@@ -166,7 +167,7 @@ def _cmd_reproduce(args) -> int:
         line = f"    run {rec.get('run', '?')}: {rec.get('outcome', '?')}"
         if extras:
             line += f" ({extras})"
-        print(line)
+        print(sanitise_for_terminal(line, max_len=2048))
     # Exit 0 when it reproduced; 1 when attempted-but-not; 2 when
     # not attempted (couldn't run) — so scripts can branch.
     if result.reproduced:
@@ -379,7 +380,7 @@ def _cmd_verify(args) -> int:
                 summary["transparency_verification"] = anchor_status
                 print(json.dumps(summary, indent=2))
             else:
-                sys.stderr.write(result.stderr)
+                sys.stderr.write(sanitise_for_terminal(result.stderr, max_len=8192) + "\n")
         elif anchor_status["status"] == "verified_inclusion":
             print("Rekor v2 inclusion verified against pinned log key; no timestamp asserted.")
         return result.returncode

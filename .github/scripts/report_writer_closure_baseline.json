@@ -496,9 +496,6 @@
     "libexec/raptor-startup-check::main::unsanitised_llm_value::resolved": {
       "note": "machine-contract stdout line (RAPTOR_RESOLVED_PROJECT=...) parsed by the launcher, value is a charset-validated project name or empty — escaping here would corrupt the contract"
     },
-    "libexec/raptor-zkpox::_cmd_reproduce::unsanitised_llm_value::reason": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
-    },
     "packages/binary_analysis/crash_analyser.py::CrashAnalyser._get_disassembly::unsanitised_llm_value::line": {
       "note": "disassembly lines feed the analysis data structure (artifact); the rendering chokepoints in this package are registered"
     },

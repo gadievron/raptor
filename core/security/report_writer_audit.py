@@ -539,6 +539,9 @@ _REPORT_CONSTRUCTORS = frozenset({"ReportSection"})
 # writer needs an explicit add (forcing a security review at file-add
 # time).
 _REPORT_WRITER_FILES = (
+    # ZKPoX CLI: reproduction details and verifier diagnostics are bounded
+    # and escaped before terminal output; JSON uses ASCII-escaped encoding.
+    "packages/zkpox/cli.py",
     # Cleanup records include operator/target-influenced paths. Terminal-only
     # output uses the canonical bounded sanitizer, loaded from this checkout.
     "core/security/scratch_lifecycle.py",
