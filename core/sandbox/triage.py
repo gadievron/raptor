@@ -997,7 +997,7 @@ def _check_dns_exfil_indicator(proxy_events: list[dict]) -> list[dict]:
                 # from the valid hosts in this same run.
                 invalid_hosts += 1
                 continue
-            if boundary is not None:
+            if boundary is not None and boundary.registrable_domain is not None:
                 parent = boundary.registrable_domain
                 parent_map[parent].add(boundary.hostname)
                 if boundary.source == "default":

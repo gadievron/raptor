@@ -15,7 +15,7 @@ from .client import GraphClient
 from .tunables import JoernTunables
 
 logger = logging.getLogger(__name__)
-_borrowers = weakref.WeakValueDictionary()
+_borrowers: weakref.WeakValueDictionary[str, GraphClient] = weakref.WeakValueDictionary()
 _lock = threading.Lock()
 
 

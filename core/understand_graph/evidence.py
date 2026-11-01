@@ -148,15 +148,15 @@ def ingest_web_evidence(run_dir: Path, target_path: str | None = None, *, graph_
     # Keep those findings separately, without inventing N*M confirmations.
     unique_findings = {short_hash(f): f for f in findings}
     unique_outcomes = {short_hash(o): o for o in outcomes}
-    by_id = {}
+    by_id: dict[str, list[str]] = {}
     for digest, finding in unique_findings.items():
         ref = str(finding.get("id") or finding.get("finding_id") or digest)
         by_id.setdefault(ref, []).append(digest)
-    by_finding = {}
+    by_finding: dict[str, list[tuple[str, dict[str, Any]]]] = {}
     for digest, outcome in unique_outcomes.items():
-        ref = outcome.get("finding_id") or outcome.get("source_finding_id")
-        if ref is not None:
-            by_finding.setdefault(str(ref), []).append((digest, outcome))
+        outcome_ref = outcome.get("finding_id") or outcome.get("source_finding_id")
+        if outcome_ref is not None:
+            by_finding.setdefault(str(outcome_ref), []).append((digest, outcome))
     records = []
     for digest, finding in unique_findings.items():
         ref = str(finding.get("id") or finding.get("finding_id") or digest)

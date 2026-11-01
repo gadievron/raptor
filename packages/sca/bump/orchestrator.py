@@ -297,6 +297,8 @@ def run_bump(
         policy_current, policy_target = cand.current_version, cand.target_version
         if cand.kind == 'github_release_pin':
             from ..parsers.github_release_pins import version_suffix
+            if cand.extra is None:
+                raise ValueError('release pin candidate lacks tool metadata')
             tool = cand.extra['old_tool']
             policy_current = version_suffix(tool, policy_current)
             policy_target = version_suffix(tool, policy_target)
@@ -730,9 +732,15 @@ def _enumerate_candidates(
                 if suffix is None:
                     raise ValueError('current release tag is not stable semver')
                 current = parse_stable(suffix)
+                if current is None:
+                    raise ValueError('current release tag is not stable semver')
                 release = latest_tool_release(tool, http=http, cache=cache, github_token=github_token)
                 proposed = release_tool(tool, release)
-                if parse_stable(version_suffix(tool, proposed['version'])) > current:
+                proposed_suffix = version_suffix(tool, proposed['version'])
+                proposed_version = parse_stable(proposed_suffix) if proposed_suffix is not None else None
+                if proposed_version is None:
+                    raise ValueError('proposed release tag is not stable semver')
+                if proposed_version > current:
                     candidates.append(BumpCandidate(
                         kind='github_release_pin', locator=tool_id,
                         file=manifest.path, current_version=tool['version'],

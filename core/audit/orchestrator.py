@@ -24616,7 +24616,7 @@ def _try_ihv_synthesis(
 
         synth = synthesize_verification_rule(
             outcome, config, cwe=cwe,
-            source_snippet=source,
+            source_snippet=source or "",
             synthesis_count=result.ondemand_synthesized,
         )
         if synth is not None and synth.confirmed and synth.stamp:

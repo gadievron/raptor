@@ -70,7 +70,8 @@ class GraphClient(JoernServer):
         endpoint = self._endpoint or discover(Path(self._runtime) if self._runtime else runtime_base())
         self._last_post_error = ""
         try:
-            self._lease = BrokerLease.acquire(*endpoint, cpg, tunables)
+            broker_root, broker_token = endpoint
+            self._lease = BrokerLease.acquire(broker_root, broker_token, cpg, tunables)
             status = self._lease.status()
             if not status["ready"]:
                 status = self._lease.recover()

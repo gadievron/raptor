@@ -1627,7 +1627,7 @@ class JoernServer:
                     shutil.rmtree(directory, ignore_errors=True)
                     setattr(self, attribute, None)
             self._release_heap_reservation()
-            return
+            return None
 
         pid = self._proc.pid
         pgid = self._pgid or pid
@@ -1779,6 +1779,7 @@ class JoernServer:
         # session via the lifecycle state file) are covered by the
         # ledger's dead-row eviction instead.
         self._release_heap_reservation()
+        return None
 
     def _release_heap_reservation(self) -> None:
         if self._heap_reservation is not None:

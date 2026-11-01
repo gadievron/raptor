@@ -401,6 +401,8 @@ def _register_lifecycle(metadata: Path, owner_pid: int) -> None:
     # must not create operator state. Isolated launchers load only adjacent code.
     spec = importlib.util.spec_from_file_location('raptor_scratch_lifecycle',
                                                   Path(__file__).with_name('scratch_lifecycle.py'))
+    if spec is None or spec.loader is None:
+        raise RuntimeError("scratch lifecycle module could not be loaded")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     module.register(metadata, owner_pid)

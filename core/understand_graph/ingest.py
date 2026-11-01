@@ -8,7 +8,7 @@ import sqlite3
 import sys
 from itertools import islice
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 from core.json import load_json as _load_json_uncapped
 from core.security.capped_read import read_capped
@@ -1326,7 +1326,7 @@ def rebuild_graph(project_dir: Path) -> Optional[Path]:
         if isinstance(run_meta, dict):
             target = target or str(run_meta.get("target_path") or "")
 
-        lanes = []
+        lanes: list[Callable[..., Any]] = []
         command = run_meta.get("command") if isinstance(run_meta, dict) else None
         agentic_run = (command == "agentic"
                        or (d / "raptor_agentic_report.json").exists()
@@ -1359,9 +1359,9 @@ def rebuild_graph(project_dir: Path) -> Optional[Path]:
         for lane in lanes:
             replay_lane(lane, d, run_target)
 
-        for child in ("sca", "sca_deep"):
-            if (d / child / "findings.json").is_file():
-                replay_lane(ingest_sca_evidence, d / child, run_target)
+        for sca_child in ("sca", "sca_deep"):
+            if (d / sca_child / "findings.json").is_file():
+                replay_lane(ingest_sca_evidence, d / sca_child, run_target)
 
     if (project_dir / "threat-model.json").is_file():
         replay_lane(ingest_threat_model, project_dir, "")

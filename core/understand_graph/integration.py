@@ -92,7 +92,7 @@ def agentic_graph_groups(run_dir: Path, target_path: str, findings: list[dict]) 
         if graph is None:
             return []
         allowed = {str(f.get("finding_id") or f.get("id")) for f in findings}
-        groups = []
+        groups: list[dict] = []
         current_snapshot = _scan_snapshot_id(run_dir, str(target_path), findings)
         for chain in scan_dedup_chains(
                 graph, target_path, run_dir=run_dir, scan_snapshot=current_snapshot):

@@ -37,7 +37,7 @@ def toolchain_identity() -> str:
     """
     from .prereqs import _java_path, _joern_parse_path, _joern_path
 
-    entries = []
+    entries: list[tuple[str, int, int, int] | tuple[str, None] | None] = []
     for index, executable in enumerate((_joern_path(), _joern_parse_path(), _java_path())):
         if executable is None:
             entries.append(None)

@@ -513,6 +513,8 @@ class FuzzingOrchestrator:
                 if path.suffix != ".py":
                     continue
                 text = read_capped_text(path, max_bytes=1024 * 1024)
+                if text is None:
+                    continue
                 tree = ast.parse(text)
                 node = FuzzingOrchestrator._unambiguous_python_function(tree, candidate["function"])
                 if node is None:

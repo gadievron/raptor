@@ -48,7 +48,7 @@ def _read_entry(directory: Path) -> dict:
         report_verified = report is not None and verify_triage_report(report, directory) == "verified"
     except (ValueError, TypeError, RecursionError):
         report_verified = False
-    if report_verified:
+    if report_verified and report is not None:
         # One-way only: an authenticated degraded report can condemn a missing
         # marker, never excuse missing or unverified summary evidence.
         marker = marker or bool(report.get("audit_degraded"))
@@ -62,7 +62,7 @@ def _read_entry(directory: Path) -> dict:
                         or bool(meta.get("sandbox_triage"))
                         or _artifact_present(directory / PROXY_EVENTS_FILENAME)
                         or _artifact_present(directory / PROXY_EVENTS_COUNT_FILENAME))
-    entry = {"run": directory.name, "ts": str(meta.get("started_at") or meta.get("timestamp") or ""),
+    entry: dict[str, Any] = {"run": directory.name, "ts": str(meta.get("started_at") or meta.get("timestamp") or ""),
              "target": str(meta.get("target_path") or "unknown"),
              "integrity": "missing", "complete": False, "reason": "no denial summary",
              "evidence_present": evidence_present, "counts": Counter(), "labels": {},
@@ -186,7 +186,7 @@ def correlate_campaign(run_dirs: list[Path]) -> dict[str, Any] | None:
                 label for cat, label in labels.values() if cat == category})[:10]
         verified = sum(e["integrity"] == "verified" for e in runs)
         unknown = sum(not e["complete"] for e in runs)
-        severity = max((e["severity"] or "routine" for e in runs), key=_SEVERITY_RANK.get)
+        severity = max((e["severity"] or "routine" for e in runs), key=lambda level: _SEVERITY_RANK[level])
         if verified >= 4 and any(
             s["category"] != "routine" and s["runs_seen"] / len(runs) > 0.5
             for s in signatures.values()
@@ -202,6 +202,6 @@ def correlate_campaign(run_dirs: list[Path]) -> dict[str, Any] | None:
                                  for e in runs[-50:]],
         }
     return {"schema_version": 2, "campaign_severity": max((t["campaign_severity"] for t in targets.values()),
-                                      key=_SEVERITY_RANK.get),
+                                      key=lambda level: _SEVERITY_RANK[level]),
             "integrity": "degraded" if any(t["runs_unknown"] for t in targets.values()) else "verified",
             "targets": targets}

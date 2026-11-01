@@ -460,7 +460,7 @@ def _admit_locked(
 
 
 
-_active_reservation = ContextVar("joern_heap_admission", default=None)
+_active_reservation: ContextVar[HeapReservation | None] = ContextVar("joern_heap_admission", default=None)
 
 
 def reservation_fds():
