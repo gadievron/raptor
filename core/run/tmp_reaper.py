@@ -98,6 +98,9 @@ _DIR_PREFIXES = (
     # IRIS per-refinement CodeQL pack scratch (core/iris/codeql_runner.py);
     # rmtree'd in the runner's finally.
     "raptor-iris-codeql-",
+    # Offline Semgrep cache-check scratch; TemporaryDirectory cleans it
+    # on normal exit, while killed checks leave it for the reaper.
+    "raptor-semgrep-check-",
     # Line-checker build scratch (packages/binary_analysis/
     # blamed_lines.py TemporaryDirectory); cleaned on exit, leaked on
     # SIGKILL/OOM.

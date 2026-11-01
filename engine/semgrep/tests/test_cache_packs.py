@@ -495,6 +495,8 @@ def test_registry_fetch_disabled_offline(monkeypatch):
 def test_check_is_strict_local_scan_with_network_denied(tmp_path, monkeypatch):
     from types import SimpleNamespace
     from core import sandbox
+    import shutil
+    monkeypatch.setattr(shutil, 'which', lambda name: '/usr/bin/semgrep')
     mod = _load_tool()
     mod.CACHE_DIR = tmp_path / 'cache'
     mod.CACHE_DIR.mkdir()
@@ -515,10 +517,23 @@ def test_check_is_strict_local_scan_with_network_denied(tmp_path, monkeypatch):
 def test_check_refuses_rule_errors_even_with_zero_exit(tmp_path, monkeypatch):
     from types import SimpleNamespace
     from core import sandbox
+    import shutil
+    monkeypatch.setattr(shutil, 'which', lambda name: '/usr/bin/semgrep')
     mod = _load_tool()
     mod.CACHE_DIR = tmp_path
     (tmp_path / mod.cache_filename('secrets')).write_text('{"rules":[{"id":"r"}]}')
     monkeypatch.setattr(sandbox, 'run', lambda *a, **kw: SimpleNamespace(
         returncode=0, stdout='{"errors":[{"message":"invalid rule"}]}', stderr=''))
     with pytest.raises(SystemExit, match='rule errors'):
+        mod.cmd_check(argparse.Namespace(packs='secrets'))
+
+
+def test_check_refuses_missing_semgrep(tmp_path, monkeypatch):
+    import shutil
+    from core import sandbox
+    mod = _load_tool()
+    mod.CACHE_DIR = tmp_path
+    monkeypatch.setattr(shutil, 'which', lambda name: None)
+    monkeypatch.setattr(sandbox, 'run', lambda *a, **kw: pytest.fail('missing binary must not execute'))
+    with pytest.raises(SystemExit, match='Install Semgrep'):
         mod.cmd_check(argparse.Namespace(packs='secrets'))
