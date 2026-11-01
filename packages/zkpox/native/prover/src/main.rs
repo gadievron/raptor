@@ -1,7 +1,7 @@
 //! `zkpox-prove` — native CLI that loads a witness, runs the SP1 guest
 //! in execute or prove mode against target #1, and emits a JSON record
 //! with both the `crash_only` and `oob_write` gadgets' verdicts (one
-//! invocation yields both — see core/zkpox/guest/src/main.rs).
+//! invocation yields both — see packages/zkpox/native/guest/src/main.rs).
 //!
 //! Usage:
 //!   zkpox-prove --witness <FILE> --execute
@@ -24,8 +24,11 @@ use clap::{Parser, ValueEnum};
 use serde::Serialize;
 use sp1_sdk::{
     blocking::{ProveRequest, Prover, ProverClient},
-    include_elf, Elf, ProvingKey, SP1Stdin,
+    include_elf, Elf, HashableKey, ProvingKey, SP1Stdin,
 };
+
+use sha2::{Digest, Sha256};
+use zkpox_statement::{Statement, INPUT_HEADER_LEN, MAX_WITNESS, VERSION};
 
 const GUEST_ELF: Elf = include_elf!("zkpox-guest");
 
@@ -71,12 +74,20 @@ impl TargetSel {
 #[derive(Parser, Debug)]
 #[command(about = "zkpox-prove — SP1 driver for the multi-target guest")]
 struct Args {
-    #[arg(long, value_name = "FILE")]
-    witness: PathBuf,
+    #[arg(long, value_name = "FILE", required_unless_present_any = ["install_artifacts", "check_runtime"])]
+    witness: Option<PathBuf>,
+
+    /// Provision public SP1 circuit files before sandboxed proving (no witness is read).
+    #[arg(long, conflicts_with_all = ["execute", "prove", "witness"])]
+    install_artifacts: bool,
+
+    /// Check sparse shared-memory file limits before initializing SP1.
+    #[arg(long, conflicts_with_all = ["execute", "prove", "witness", "install_artifacts"])]
+    check_runtime: bool,
 
     /// Which C target the witness belongs to. The prover prepends a
     /// one-byte selector to the witness bytes; the guest dispatches on
-    /// it (see core/zkpox/guest/src/main.rs).
+    /// it (see packages/zkpox/native/guest/src/main.rs).
     #[arg(long, value_enum, default_value_t = TargetSel::T01)]
     target: TargetSel,
 
@@ -85,6 +96,14 @@ struct Args {
 
     #[arg(long, conflicts_with = "execute")]
     prove: bool,
+
+    /// Selected violation predicate: 1 = uniform canary, 2 = varying canary.
+    #[arg(long, default_value_t = 2, value_parser = clap::value_parser!(u32).range(1..=2))]
+    gadget: u32,
+
+    /// Private, random 32-byte salt; required when generating a proof.
+    #[arg(long, value_name = "FILE", required_if_eq("prove", "true"))]
+    salt: Option<PathBuf>,
 
     /// Proof wrap (only meaningful with --prove).
     #[arg(long, value_enum, default_value_t = Wrap::Core)]
@@ -123,34 +142,65 @@ struct BenchRecord<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     wrap: Option<Wrap>,
     verdicts: Verdicts,
+    statement: serde_json::Value,
+    harness_hash: String,
+    verifier_key_hash: Option<String>,
     cycles: Option<u64>,
     wall_secs: f64,
     proof_bytes: Option<usize>,
     verified: Option<bool>,
 }
 
-fn read_verdicts(public_values: &mut sp1_sdk::SP1PublicValues) -> Verdicts {
-    // Order must match the five `commit(...)` calls in the guest
-    // (core/zkpox/guest/src/main.rs).
-    let target_id: u32 = public_values.read::<u32>();
-    let crash_only_crashed: bool = public_values.read::<bool>();
-    let oob_detected: bool = public_values.read::<bool>();
-    let oob_count: u32 = public_values.read::<u32>();
-    let oob_first_offset: i32 = public_values.read::<i32>();
-    Verdicts {
-        target_id,
-        crash_only_crashed,
-        oob_detected,
-        oob_count,
-        oob_first_offset,
+fn read_statement(public_values: &sp1_sdk::SP1PublicValues) -> Result<(Verdicts, serde_json::Value)> {
+    let s = Statement::decode(public_values.as_slice()).map_err(|e| anyhow!(e))?;
+    let verdicts = Verdicts {
+        target_id: s.target, crash_only_crashed: s.flags & 1 != 0,
+        oob_detected: s.flags & 2 != 0, oob_count: s.count,
+        oob_first_offset: s.first_offset,
+    };
+    let statement = serde_json::json!({
+        "version": VERSION, "target_id": s.target, "gadget_id": s.gadget,
+        "flags": s.flags, "oob_count": s.count, "oob_first_offset": s.first_offset,
+        "witness_commitment": format!("sha256:{}", hex::encode(s.witness_commitment)),
+        "target_source_hash": format!("sha256:{}", hex::encode(s.target_hash)),
+    });
+    Ok((verdicts, statement))
+}
+
+// SP1 6.5 uses MAX_JIT_LOG_ADDR=40 and a twice-address-space sparse backing.
+// Keep the Python proving-job file-size allowance in sync.
+const JIT_SHARED_MEMORY_BYTES: u64 = 1u64 << 41;
+
+fn check_runtime() -> Result<()> {
+    #[cfg(unix)] {
+        let mut limits = std::mem::MaybeUninit::<libc::rlimit>::uninit();
+        // getrlimit initializes both fields on success.
+        anyhow::ensure!(unsafe { libc::getrlimit(libc::RLIMIT_FSIZE, limits.as_mut_ptr()) } == 0,
+                        "could not inspect the file-size resource limit");
+        let limits = unsafe { limits.assume_init() };
+        anyhow::ensure!(limits.rlim_cur == libc::RLIM_INFINITY || limits.rlim_cur as u64 >= JIT_SHARED_MEMORY_BYTES,
+            "SP1 6.5 needs a 2 TiB sparse shared-memory object; this job's max_file_mb must be at least 2097152 (logical size, not disk allocation)");
     }
+    Ok(())
 }
 
 fn main() -> Result<()> {
+    // A worker panic can otherwise leave its async caller waiting forever.
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        previous(info);
+        std::process::exit(1);
+    }));
     sp1_sdk::utils::setup_logger();
 
     let args = Args::parse();
-    if !args.execute && !args.prove {
+    if args.check_runtime {
+        check_runtime()?;
+        println!("{{\"runtime_ready\":true,\"jit_shared_memory_bytes\":{JIT_SHARED_MEMORY_BYTES}}}");
+        return Ok(());
+    }
+    if args.prove { check_runtime()?; }
+    if !args.execute && !args.prove && !args.install_artifacts {
         return Err(anyhow!("specify either --execute or --prove"));
     }
 
@@ -160,53 +210,69 @@ fn main() -> Result<()> {
     // upstream proving — discovered during Phase 1.2 bench. The download
     // is ~6 GB compressed (~15 GB extracted); subsequent runs hit the cache
     // and skip silently.
-    if args.prove && args.wrap == Wrap::Groth16 {
+    if args.install_artifacts {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .context("spinning a tokio runtime for artifact install")?;
         rt.block_on(sp1_sdk::install::try_install_circuit_artifacts("groth16"))
             .context("installing SP1 groth16 circuit artifacts")?;
+        return Ok(());
     }
 
-    let witness = std::fs::read(&args.witness)
-        .with_context(|| format!("reading witness {}", args.witness.display()))?;
+    let witness_path = args.witness.as_ref().context("--witness is required")?;
+    use std::io::Read;
+    let mut witness = Vec::new();
+    std::fs::File::open(witness_path)?.take(MAX_WITNESS as u64 + 1).read_to_end(&mut witness)?;
     let witness_bytes = witness.len() as u64;
 
-    // Prepend the target-id byte so the guest's dispatch picks the
-    // right C victim binding. Phase 1.6+ schema: [target_id: u8] || witness.
-    let mut framed = Vec::with_capacity(witness.len() + 1);
-    framed.push(args.target.id_byte());
+    anyhow::ensure!(witness.len() <= MAX_WITNESS, "witness exceeds supported size");
+    let salt: [u8; 32] = match &args.salt {
+        Some(path) => std::fs::read(path)?.try_into()
+            .map_err(|_| anyhow!("salt must contain exactly 32 bytes"))?,
+        None if args.prove => return Err(anyhow!("--salt is required for proof generation")),
+        None => [0; 32], // Execute-only diagnostics never produce a disclosure proof.
+    };
+    let mut framed = Vec::with_capacity(INPUT_HEADER_LEN + witness.len());
+    for value in [VERSION, u32::from(args.target.id_byte()), args.gadget] {
+        framed.extend_from_slice(&value.to_le_bytes());
+    }
+    framed.extend_from_slice(&salt);
     framed.extend_from_slice(&witness);
-
     let mut stdin = SP1Stdin::new();
     stdin.write(&framed);
-
-    let client = ProverClient::from_env();
+    // Never select a remote or mock prover implicitly from the environment.
+    let harness_hash = format!("sha256:{}", hex::encode(Sha256::digest(&GUEST_ELF[..])));
 
     let record = if args.execute {
+        let client = ProverClient::builder().light().build();
         let start = Instant::now();
-        let (mut output, report) = client
+        let (output, report) = client
             .execute(GUEST_ELF, stdin)
             .run()
             .map_err(|e| anyhow!("execute failed: {e}"))?;
         let wall = start.elapsed().as_secs_f64();
-        let verdicts = read_verdicts(&mut output);
+        let (verdicts, statement) = read_statement(&output)?;
 
         BenchRecord {
             tag: &args.tag,
-            witness: args.witness.display().to_string(),
+            witness: witness_path.display().to_string(),
             witness_bytes,
             mode: "execute",
             wrap: None,
             verdicts,
+            statement,
+            harness_hash,
+            verifier_key_hash: None,
             cycles: Some(report.total_instruction_count()),
             wall_secs: wall,
             proof_bytes: None,
             verified: None,
         }
     } else {
-        let pk = client.setup(GUEST_ELF).expect("failed to setup guest ELF");
+        let client = ProverClient::builder().cpu().build();
+        let pk = client.setup(GUEST_ELF).context("setting up guest ELF")?;
+        let verifier_key_hash = format!("sp1-vk:{}", pk.verifying_key().bytes32().trim_start_matches("0x"));
 
         let start = Instant::now();
         let proof = match args.wrap {
@@ -216,36 +282,26 @@ fn main() -> Result<()> {
         .map_err(|e| anyhow!("prove ({:?}) failed: {e}", args.wrap))?;
         let wall = start.elapsed().as_secs_f64();
 
-        let mut public_values = proof.public_values.clone();
-        let verdicts = read_verdicts(&mut public_values);
+        let (verdicts, statement) = read_statement(&proof.public_values)?;
 
-        // Persist the proof so we can measure size. If --proof-out was
-        // given, keep it; otherwise write to a temp path and unlink.
-        let (proof_path, persistent) = match &args.proof_out {
-            Some(p) => (p.clone(), true),
-            None => (
-                std::env::temp_dir()
-                    .join(format!("zkpox-{}.proof", std::process::id())),
-                false,
-            ),
-        };
-        let proof_bytes = match proof.save(&proof_path) {
-            Ok(()) => std::fs::metadata(&proof_path).ok().map(|m| m.len() as usize),
-            Err(_) => None,
-        };
-        if !persistent {
-            let _ = std::fs::remove_file(&proof_path);
+        client.verify(&proof, pk.verifying_key(), None)
+            .map_err(|e| anyhow!("in-process verification failed: {e:?}"))?;
+        let proof_bytes = Some(bincode::serialized_size(&proof)? as usize);
+        if let Some(path) = &args.proof_out {
+            proof.save(path).context("saving proof artifact")?;
         }
-
-        let verified = client.verify(&proof, pk.verifying_key(), None).is_ok();
+        let verified = true;
 
         BenchRecord {
             tag: &args.tag,
-            witness: args.witness.display().to_string(),
+            witness: witness_path.display().to_string(),
             witness_bytes,
             mode: "prove",
             wrap: Some(args.wrap),
             verdicts,
+            statement,
+            harness_hash,
+            verifier_key_hash: Some(verifier_key_hash),
             cycles: None,
             wall_secs: wall,
             proof_bytes,

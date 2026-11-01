@@ -1,3 +1,5 @@
+> Historical design/experiment notes. The supported v2 implementation and commands are documented in [the package guide](../README.md) and [current scope](zkpox-scope.md).
+
 # Design Proposal: ZKPoX Phase 1.5.x — Closing the Credibility Gap
 
 *Status: Design proposal. Targets the work that moves ZKPoX from "the
@@ -28,7 +30,7 @@ The work is **integration, not research.** Everything 1.5.x needs
 exists in the workspace today: the prover already links `sp1-sdk
 6.0.1` with the full proving / verifying-key API. The verifier
 deliberately omits it (compile-time concern, noted in
-`core/zkpox/verifier/Cargo.toml`). 1.5.x is wiring + design choices,
+`packages/zkpox/native/verifier/Cargo.toml`). 1.5.x is wiring + design choices,
 not novel cryptography.
 
 ---
@@ -121,7 +123,7 @@ Minimal — one new required field, one version bump:
 ```
 
 `_to_dict` / `_from_dict` in `packages/zkpox/disclosure.py` gain one
-key per direction. The Rust verifier (`core/zkpox/verifier/src/main.rs`)
+key per direction. The Rust verifier (`packages/zkpox/native/verifier/src/main.rs`)
 already walks the CBOR map by name and ignores unknown keys, so 1.5.x
 bundles are readable by older verifiers — they just can't enforce the
 new gadget binding (which is why `--strict` requires `1.1` and rejects
@@ -136,7 +138,7 @@ bundle) stays exactly as is.
 
 ## 6. Component-by-Component Changes
 
-### 6.1 `core/zkpox/prover/src/main.rs` (Rust prover)
+### 6.1 `packages/zkpox/native/prover/src/main.rs` (Rust prover)
 
 Add two lines to the JSON record emitted by `--record`:
 
@@ -175,7 +177,7 @@ No other prover changes; the proving path itself is unchanged.
 - Update `disclosure_from_manifest` signature to require
   `gadget_code_hash` alongside `gadget_id_hash`.
 
-### 6.4 `core/zkpox/verifier/src/main.rs` (Rust verifier — the rock)
+### 6.4 `packages/zkpox/native/verifier/src/main.rs` (Rust verifier — the rock)
 
 Add two Cargo features:
 
@@ -231,7 +233,7 @@ def verify_inclusion_proof(
   (`log2026-1.rekor.sigstore.dev` at write time; operator-overridable
   via `ZKPOX_REKOR_URL`).
 
-### 6.6 `core/zkpox/verifier/src/main.rs` (Rekor side)
+### 6.6 `packages/zkpox/native/verifier/src/main.rs` (Rekor side)
 
 Mirror the Python Merkle verification in Rust so the standalone
 verifier doesn't require Python at verify time, and can optionally
@@ -318,7 +320,7 @@ harness" even before the verifier independently re-runs anything.
 
 | § | Item | Files | Effort |
 |---|---|---|---|
-| 1 | Emit `vkey_digest` + `guest_elf_hash` in `prove-record.json` | `core/zkpox/prover/src/main.rs` | 1 d |
+| 1 | Emit `vkey_digest` + `guest_elf_hash` in `prove-record.json` | `packages/zkpox/native/prover/src/main.rs` | 1 d |
 | 2 | Thread both into `ProveResult`; `cmd_prove` uses them | `prove.py`, `raptor_zkpox.py` | 1 d |
 | 3 | Compute `gadget_code_hash` from gadget files | `raptor_zkpox.py` + new helper | 1–2 d |
 | 4 | Add `gadget_code_hash` to schema; bump `BUNDLE_VERSION` to `1.1` | `disclosure.py`, tests | 1 d |
@@ -343,7 +345,7 @@ not by crypto.
 | 3 | Embed guest ELF; vkey derivation + hash check | `verifier/src/main.rs` | 2–3 d |
 | 4 | `sp1-sdk` proof verify (`Groth16` + `core` paths) | `verifier/src/main.rs` | 1–2 d |
 | 5 | Update `summary.stark_verification` JSON; flip `--strict` default | `verifier/src/main.rs` | ½ d |
-| 6 | Extend `core/zkpox/test/run-tests.sh` to cover `full-verify` against the corpus | `core/zkpox/test/` | 1 d |
+| 6 | Extend `packages/zkpox/native/test/run-tests.sh` to cover `full-verify` against the corpus | `packages/zkpox/native/test/` | 1 d |
 | 7 | Build-cache strategy for `full-verify` verifier; CI fast tier uses `structural` | `.github/workflows/`, `Cargo.toml` | 1 d |
 
 **Phase 1.5.2 exit criteria:** `zkpox-verify --strict bundle.cbor`

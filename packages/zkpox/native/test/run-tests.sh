@@ -24,7 +24,7 @@ cd "$(dirname "$0")"
 MODE="--execute"
 CI_SUBSET=0
 # Default binary path: ../target/release/zkpox-prove (workspace target dir
-# at core/zkpox/target/, this script runs from core/zkpox/test/).
+# at packages/zkpox/native/target/, this script runs from packages/zkpox/native/test/).
 BIN="../target/release/zkpox-prove"
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -39,7 +39,7 @@ done
 
 if [[ ! -x "$BIN" ]]; then
     echo "harness not built: $BIN" >&2
-    echo "build it with: (cd harness/host && cargo build --release)" >&2
+    echo "build it with: cargo build --release --locked --manifest-path packages/zkpox/native/Cargo.toml" >&2
     exit 2
 fi
 
@@ -118,6 +118,11 @@ fi
 PARALLEL="${ZKPOX_TEST_PARALLEL:-4}"
 TMPDIR=$(mktemp -d -t zkpox-regression-XXXXXX)
 trap "rm -rf '$TMPDIR'" EXIT
+SALT_ARGS=()
+if [[ "$MODE" == "--prove" ]]; then
+    head -c 32 /dev/urandom > "$TMPDIR/salt.bin"
+    SALT_ARGS=(--salt "$TMPDIR/salt.bin")
+fi
 
 # Phase 1: spawn all SP1 invocations in parallel (throttled), one
 # stdout + rc file per witness. Skip witnesses with no target prefix
@@ -133,7 +138,7 @@ for w in "${witness_set[@]}"; do
 
     (
         RAYON_NUM_THREADS=1 "$BIN" --witness "$w" "--target=$target" \
-                $MODE --tag "regression:$base" \
+                "$MODE" "${SALT_ARGS[@]}" --tag "regression:$base" \
             > "$TMPDIR/$base.out" 2>/dev/null
         echo "$?" > "$TMPDIR/$base.rc"
     ) &

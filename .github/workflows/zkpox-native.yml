@@ -1,0 +1,53 @@
+name: ZKPoX native checks
+on:
+  pull_request:
+    paths:
+      - 'packages/zkpox/**'
+      - 'core/witness/**'
+      - 'libexec/raptor-zkpox'
+      - 'raptor_zkpox.py'
+      - '.github/workflows/zkpox-native.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'packages/zkpox/**'
+      - '.github/workflows/zkpox-native.yml'
+  workflow_dispatch:
+    inputs:
+      full_proofs:
+        description: 'Run real Groth16 positive/negative checks on a provisioned SP1 runner'
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: zkpox-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  statement-and-parser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      RUSTUP_TOOLCHAIN: '1.95.0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install 1.95.0 --profile minimal
+      - run: cargo test --locked --manifest-path packages/zkpox/native/Cargo.toml -p zkpox-statement
+      - run: cargo test --locked --manifest-path packages/zkpox/native/Cargo.toml -p zkpox-verify --no-default-features --features structural
+  full-proofs:
+    if: github.event_name == 'workflow_dispatch' && inputs.full_proofs
+    runs-on: [self-hosted, linux, x64, sp1]
+    timeout-minutes: 120
+    env:
+      RUSTUP_TOOLCHAIN: '1.95.0'
+      _RAPTOR_TRUSTED: '1'
+      ZKPOX_FULL_PROOFS: '1'
+      ZKPOX_CLI_ROUNDTRIP: '1'
+      RAPTOR_NET_TESTS: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The runner must have SP1 6.5.0, clang, protoc, a preinstalled
+      # Groth16 circuit cache, the RAPTOR Python environment and a usable
+      # mount-namespace sandbox. See packages/zkpox/README.md.
+      - run: cargo build --release --locked --manifest-path packages/zkpox/native/Cargo.toml
+      - run: python3 -m pytest packages/zkpox/tests/test_full_verify_e2e.py -m slow -v

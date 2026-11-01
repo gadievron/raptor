@@ -1,3 +1,5 @@
+> Historical design/experiment notes. The supported v2 implementation and commands are documented in [the package guide](../README.md) and [current scope](zkpox-scope.md).
+
 # Design Proposal: ZKPoX — Zero-Knowledge Proof of Exploit Module for RAPTOR
 
 *Status: Design proposal for community review. Targets inclusion alongside `/exploit` and `/patch` in the Raptor agentic workflow.*
@@ -211,7 +213,7 @@ Following Cheesecloth's lessons, every gadget specifies what it leaks beyond "ex
 
 The `crash-only` gadget is deliberately the cheapest and most boring — for many low-severity bugs that's all the researcher wants to prove, and it sets a strong floor on what RAPTOR can claim publicly.
 
-The catalogue is the **product surface**. New gadgets are PRs to `core/zkpox/violation-gadgets/`. This is also the design surface where security review concentrates: a bug in a gadget undermines the proofs that depend on it. Each gadget ships with its own test corpus of known-good and known-bad witnesses.
+The catalogue is the **product surface**. New gadgets are PRs to `packages/zkpox/native/violation-gadgets/`. This is also the design surface where security review concentrates: a bug in a gadget undermines the proofs that depend on it. Each gadget ships with its own test corpus of known-good and known-bad witnesses.
 
 ---
 
@@ -422,7 +424,7 @@ an HTML one-pager suitable for posting to a public CVE record.
 - Pick the time-lock implementation (tlock-rs from Drand is the obvious choice).
 
 **Phase 1 — MVP (4–6 weeks).**
-- `core/zkpox/` Rust crate with the SP1 guest program and 3 gadgets (`crash-only`, `memory-safety::oob-write`, `memory-safety::stack-canary`).
+- `packages/zkpox/native/` Rust crate with the SP1 guest program and 3 gadgets (`crash-only`, `memory-safety::oob-write`, `memory-safety::stack-canary`).
 - `packages/zkpox/` Python orchestration.
 - `/prove-exploit` and `/verify-exploit-proof` commands, basic `.claude/skills/zkpox/`.
 - CBOR bundle + Sigstore anchoring + Drand tlock.

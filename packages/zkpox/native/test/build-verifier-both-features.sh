@@ -19,7 +19,7 @@
 
 set -euo pipefail
 
-cd "$(dirname "$0")/.."   # core/zkpox
+cd "$(dirname "$0")/.."   # packages/zkpox/native
 
 echo "==> structural-only build (no sp1-sdk)"
 if ! cargo build --release \

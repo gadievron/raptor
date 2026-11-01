@@ -1,3 +1,5 @@
+> Historical design/experiment notes. The supported v2 implementation and commands are documented in [the package guide](../README.md) and [current scope](zkpox-scope.md).
+
 # ZKPoX Phase 0 — Research Spike
 
 Throwaway prototype tree. **Not** part of RAPTOR's runtime surface. Source material

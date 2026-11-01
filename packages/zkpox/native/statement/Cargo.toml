@@ -1,0 +1,8 @@
+[package]
+name = "zkpox-statement"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sha2 = { version = "0.10", default-features = false }

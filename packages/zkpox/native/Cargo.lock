@@ -5870,6 +5870,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "sp1-zkvm",
+ "zkpox-statement",
 ]
 
 [[package]]
@@ -5877,13 +5878,24 @@ name = "zkpox-prover"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bincode",
  "clap",
+ "hex",
+ "libc",
  "serde",
  "serde_json",
  "sha2",
  "sp1-build",
  "sp1-sdk",
  "tokio",
+ "zkpox-statement",
+]
+
+[[package]]
+name = "zkpox-statement"
+version = "0.1.0"
+dependencies = [
+ "sha2",
 ]
 
 [[package]]
@@ -5895,11 +5907,13 @@ dependencies = [
  "ciborium",
  "clap",
  "hex",
+ "libc",
  "serde",
  "serde_json",
  "sha2",
  "sp1-build",
  "sp1-sdk",
+ "zkpox-statement",
 ]
 
 [[package]]

@@ -73,3 +73,7 @@ def require_proving_stack() -> None:
             "`verify`."
         )
         raise ProvingStackUnavailable(msg)
+
+
+# SP1 6.5 reserves a sparse 2 TiB shared-memory file; this is a logical limit.
+SP1_JIT_FILE_LIMIT_MB = 2 * 1024 * 1024
