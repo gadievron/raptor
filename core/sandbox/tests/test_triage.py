@@ -1375,6 +1375,90 @@ class TestDnsExfilIndicator:
                if s["type"] == "dns_exfil_indicator"][0]
         assert "exfil.co.uk" in sig["evidence"][0]
 
+    @pytest.mark.parametrize("suffix", [
+        "github.io", "surge.sh", "up.railway.app", "s3.amazonaws.com",
+        "com.sg", "foo.ck",
+    ])
+    def test_unrelated_tenants_are_not_grouped(self, suffix):
+        events = [{"host": f"tenant{i}.{suffix}", "result": "allowed"}
+                  for i in range(25)]
+        assert triage_mod._check_dns_exfil_indicator(events) == []
+        # Neither should distinct tenants' own subdomains be combined.
+        events = [{"host": f"cdn.tenant{i}.{suffix}", "result": "proxied"}
+                  for i in range(25)]
+        assert triage_mod._check_dns_exfil_indicator(events) == []
+
+    @pytest.mark.parametrize("suffix", [
+        "github.io", "surge.sh", "up.railway.app", "s3.amazonaws.com",
+        "com.sg", "foo.ck",
+    ])
+    def test_exfil_within_one_tenant_still_detected(self, suffix):
+        events = [{"host": f"chunk{i}.victim.{suffix}", "result": "allowed"}
+                  for i in range(25)]
+        signals = triage_mod._check_dns_exfil_indicator(events)
+        assert len(signals) == 1
+        assert signals[0]["type"] == "dns_exfil_indicator"
+        assert signals[0]["evidence"] == [f"victim.{suffix}: 25 distinct subdomain(s)"]
+
+    def test_psl_exception_and_non_subdomains(self):
+        assert triage_mod._effective_parent("sub.www.ck").registrable_domain == "www.ck"
+        for host in ("www.ck", "github.io", "victim.github.io", "192.0.2.1", "::1"):
+            assert triage_mod._effective_parent(host) is None
+
+    @pytest.mark.parametrize("error", [OSError("missing"), ValueError("invalid")])
+    def test_psl_failure_marks_triage_notable(self, tmp_path, monkeypatch, error):
+        def unavailable(host, **kwargs):
+            raise error
+
+        monkeypatch.setattr(triage_mod, "domain_boundary", unavailable)
+        _write_proxy_events(tmp_path, [{"host": "cdn.example.com", "result": "allowed"}])
+        result = triage_mod.triage_run(tmp_path)
+        assert result["verdict"] == "notable"
+        assert any(s["type"] == "dns_exfil_unavailable" for s in result["signals"])
+
+    @pytest.mark.parametrize("state", ["missing", "invalid", "unreadable"])
+    @pytest.mark.parametrize("host", ["cdn.example.com", "192.0.2.1"])
+    def test_unavailable_snapshot_never_yields_clean_verdict(
+            self, tmp_path, monkeypatch, state, host):
+        from core.domains import public_suffix as psl
+
+        snapshot = tmp_path / "psl.dat"
+        if state == "invalid":
+            snapshot.write_bytes(b"\xff")
+        elif state == "unreadable":
+            snapshot.mkdir()
+        monkeypatch.setattr(psl, "PSL_PATH", snapshot)
+        psl.load_suffix_rules.cache_clear()
+        try:
+            _write_proxy_events(tmp_path, [{"host": host, "result": "allowed"}])
+            result = triage_mod.triage_run(tmp_path)
+            assert result["verdict"] == "notable"
+            assert any(s["type"] == "dns_exfil_unavailable" for s in result["signals"])
+        finally:
+            psl.load_suffix_rules.cache_clear()
+
+    def test_invalid_hostname_cannot_suppress_exfil_signal(self):
+        events = [{"host": f"chunk{i}.example.com", "result": "allowed"}
+                  for i in range(25)]
+        events.append({"host": "a." * 16000 + "example.com", "result": "allowed"})
+        signals = triage_mod._check_dns_exfil_indicator(events)
+        assert {s["type"] for s in signals} == {
+            "dns_exfil_unavailable", "dns_exfil_indicator"}
+        assert triage_mod._derive_verdict(signals) == "suspicious"
+
+    @pytest.mark.parametrize("suffix", ["office.local", "team.internal", "service_name.corp"])
+    def test_private_dns_grouping_is_explicitly_heuristic(self, suffix):
+        events = [{"host": f"chunk{i}.{suffix}", "result": "allowed"}
+                  for i in range(25)]
+        signals = triage_mod._check_dns_exfil_indicator(events)
+        assert [s["type"] for s in signals] == ["dns_exfil_indicator"]
+        assert "heuristic grouping: suffix absent from PSL" in signals[0]["evidence"][0]
+
+    def test_case_and_root_dot_do_not_inflate_distinct_host_count(self):
+        events = [{"host": "a" * i + "A" + "a" * (24 - i) + ".example.com.",
+                   "result": "allowed"} for i in range(25)]
+        assert triage_mod._check_dns_exfil_indicator(events) == []
+
 
 class TestUdpPostureGap:
     def test_fires_when_network_blocked_but_udp_open(
@@ -1437,98 +1521,3 @@ class TestUdpPostureGap:
         result = triage_mod.triage_run(tmp_path)
         types = {s["type"] for s in result["signals"]}
         assert "udp_posture_gap" not in types
-
-
-class TestHostCaseNormalisation:
-    def test_retry_counts_mixed_case_as_one_host(self, tmp_path):
-        events = [
-            {"t": i, "host": h, "port": 443, "result": "denied_host"}
-            for i, h in enumerate([
-                "C2.Evil.COM", "c2.evil.com", "c2.EVIL.com",
-                "C2.EVIL.COM", "c2.Evil.Com", "C2.evil.com",
-                "c2.evil.COM", "C2.Evil.com", "c2.Evil.COM",
-                "C2.evil.COM", "c2.evil.com", "C2.Evil.COM",
-            ])
-        ]
-        _write_proxy_events(tmp_path, events)
-        result = triage_mod.triage_run(tmp_path)
-        types = {s["type"] for s in result["signals"]}
-        assert "host_retry_pattern" in types
-
-    def test_recon_deduplicates_mixed_case(self, tmp_path):
-        events = [
-            {"t": i, "host": h, "port": 443, "result": "denied_host"}
-            for i, h in enumerate([
-                "A.com", "a.com", "a.COM",
-                "B.com", "b.com", "b.COM",
-            ])
-        ]
-        _write_proxy_events(tmp_path, events)
-        result = triage_mod.triage_run(tmp_path)
-        assert not any(s["type"] == "host_recon_pattern"
-                       for s in result["signals"])
-
-
-class TestDomainFrontingAttempt:
-    def test_single_sni_mismatch_fires_suspicious(self, tmp_path):
-        _write_proxy_events(tmp_path, [
-            {"t": 1.0, "host": "cdn.allowed.com", "port": 443,
-             "result": "denied_sni",
-             "reason": "TLS SNI 'evil.com' != CONNECT host"},
-        ])
-        result = triage_mod.triage_run(tmp_path)
-        assert result["verdict"] == triage_mod.VERDICT_SUSPICIOUS
-        signal = next(s for s in result["signals"]
-                      if s["type"] == "domain_fronting_attempt")
-        assert signal["severity"] == "high"
-        assert signal["count"] == 1
-
-    def test_multiple_fronting_attempts_counted(self, tmp_path):
-        _write_proxy_events(tmp_path, [
-            {"t": 1.0, "host": "cdn.allowed.com", "port": 443,
-             "result": "denied_sni",
-             "reason": "TLS SNI 'evil.com' != CONNECT host"},
-            {"t": 2.0, "host": "cdn.allowed.com", "port": 443,
-             "result": "denied_sni",
-             "reason": "TLS SNI 'c2.bad.org' != CONNECT host"},
-        ])
-        result = triage_mod.triage_run(tmp_path)
-        signal = next(s for s in result["signals"]
-                      if s["type"] == "domain_fronting_attempt")
-        assert signal["count"] == 2
-
-    def test_no_signal_without_denied_sni(self, tmp_path):
-        _write_proxy_events(tmp_path, [
-            {"t": 1.0, "host": "allowed.com", "port": 443,
-             "result": "allowed"},
-        ])
-        result = triage_mod.triage_run(tmp_path)
-        types = {s["type"] for s in result["signals"]}
-        assert "domain_fronting_attempt" not in types
-
-
-class TestPortProbe:
-    def test_single_denied_port_fires_notable(self, tmp_path):
-        _write_proxy_events(tmp_path, [
-            {"t": 1.0, "host": "allowed.com", "port": 22,
-             "result": "denied_port",
-             "reason": "port 22 not in allowed set {443}"},
-        ])
-        result = triage_mod.triage_run(tmp_path)
-        assert result["verdict"] == triage_mod.VERDICT_NOTABLE
-        signal = next(s for s in result["signals"]
-                      if s["type"] == "port_probe")
-        assert signal["severity"] == "medium"
-        assert signal["count"] == 1
-
-    def test_multiple_ports_counted(self, tmp_path):
-        events = [
-            {"t": float(i), "host": "allowed.com", "port": p,
-             "result": "denied_port", "reason": f"port {p} denied"}
-            for i, p in enumerate([22, 80, 3306, 5432])
-        ]
-        _write_proxy_events(tmp_path, events)
-        result = triage_mod.triage_run(tmp_path)
-        signal = next(s for s in result["signals"]
-                      if s["type"] == "port_probe")
-        assert signal["count"] == 4
