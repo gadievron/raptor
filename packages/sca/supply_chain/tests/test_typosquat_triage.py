@@ -533,3 +533,65 @@ def test_apply_auto_legit_concurrent_writers_lose_nothing(tmp_path):
         t.join()
     raw = json.loads(rl.read_text(encoding="utf-8"))
     assert sorted(raw["npm"].keys()) == sorted(names)
+
+
+def _reviewed_notice():
+    return {'notice': 'Use maintained-package instead.', 'decided_by': 'human', 'date': '2026-11-01'}
+
+
+def _deprecated_doc(notice='Use maintained-package instead.'):
+    return {'dist-tags': {'latest': '1.0'}, 'versions': {'1.0': {'deprecated': notice}}}
+
+
+def test_reaudit_acknowledges_only_exact_human_reviewed_notice(tmp_path):
+    rl = tmp_path / 'reviewed.json'
+    rl.write_text(json.dumps({'npm': {'reserved-name': {'reviewed_deprecation': _reviewed_notice()}}}))
+    assert reaudit_reviewed_legit(rl, ['npm'], get_metadata=lambda *args: _deprecated_doc()) == {}
+    flagged = reaudit_reviewed_legit(rl, ['npm'], get_metadata=lambda *args: _deprecated_doc('Package compromised'))
+    assert 'deprecated' in dict(flagged['npm'])['reserved-name']
+
+
+def test_acknowledged_deprecation_still_flags_removal_and_malware(tmp_path):
+    rl = tmp_path / 'reviewed.json'
+    rl.write_text(json.dumps({'npm': {'reserved-name': {'reviewed_deprecation': _reviewed_notice()}}}))
+    removed = reaudit_reviewed_legit(rl, ['npm'], get_metadata=lambda *args: None)
+    assert 'removed' in dict(removed['npm'])['reserved-name']
+    malicious = reaudit_reviewed_legit(rl, ['npm'], get_metadata=lambda *args: _deprecated_doc(),
+                                      osv_malicious_fn=lambda *args: {'reserved-name'})
+    assert dict(malicious['npm'])['reserved-name'] == 'now carries a malicious (MAL-) advisory'
+
+
+def test_malformed_or_automated_acknowledgements_never_suppress(tmp_path):
+    bad_acks = [None, True, 'any deprecation', {},
+                {**_reviewed_notice(), 'decided_by': 'llm'},
+                {**_reviewed_notice(), 'date': 'not-a-date'},
+                {**_reviewed_notice(), 'date': None},
+                {**_reviewed_notice(), 'notice': True}]
+    rl = tmp_path / 'reviewed.json'
+    for ack in bad_acks:
+        rl.write_text(json.dumps({'npm': {'reserved-name': {'reviewed_deprecation': ack}}}))
+        flagged = reaudit_reviewed_legit(rl, ['npm'], get_metadata=lambda *args: _deprecated_doc())
+        assert 'deprecated' in dict(flagged['npm'])['reserved-name']
+
+
+def test_reviewed_notice_is_scoped_to_package_and_ecosystem(tmp_path):
+    rl = tmp_path / 'reviewed.json'
+    rl.write_text(json.dumps({'npm': {'reviewed': {'reviewed_deprecation': _reviewed_notice()}, 'other': {}},
+                             'PyPI': {'reviewed': {'reviewed_deprecation': _reviewed_notice()}}}))
+    flagged = reaudit_reviewed_legit(rl, ['npm', 'PyPI'], get_metadata=lambda eco, name:
+                                    _deprecated_doc() if eco == 'npm' else {'info': {'yanked': True}})
+    assert set(dict(flagged['npm'])) == {'other'}
+    assert 'deprecated' in dict(flagged['PyPI'])['reviewed']
+
+
+def test_bundled_uglifyjs_notice_matches_review_without_denylisting():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2] / 'data'
+    entry = json.loads((root / 'typosquat_reviewed_legit.json').read_text())['npm']['uglifyjs']
+    assert entry['near_twin'] == 'uglify-js'
+    notice = entry['reviewed_deprecation']['notice']
+    assert 'uglifyjs' not in json.loads((root / 'typosquat_denylist.json').read_text())['npm']
+    assert not reaudit_reviewed_legit(root / 'typosquat_reviewed_legit.json', ['npm'],
+                                     get_metadata=lambda eco, name: _deprecated_doc(notice) if name == 'uglifyjs'
+                                     else {'dist-tags': {'latest': '1.0'}, 'versions': {'1.0': {}}})
