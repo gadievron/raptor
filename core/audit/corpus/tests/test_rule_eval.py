@@ -1154,6 +1154,36 @@ class TestAnalysisAccounting:
         assert outcome.unconfigured_rules == {"callback"}
         assert outcome.errors == []
 
+    @pytest.mark.parametrize("kind", ["oversized", "invalid_utf8", "fifo"])
+    def test_refused_rule_metadata_is_failed_and_not_executed(
+        self, tmp_path, monkeypatch, kind,
+    ):
+        from packages.coccinelle import runner
+
+        (tmp_path / "x.c").write_text("int f(void) { return 0; }\n")
+        rule = tmp_path / "refused.cocci"
+        if kind == "oversized":
+            rule.write_bytes(b"/" * (runner._RULE_MAX_BYTES + 1))
+        elif kind == "invalid_utf8":
+            rule.write_bytes(b"// \xff\n")
+        else:
+            import os
+            if not hasattr(os, "mkfifo"):
+                pytest.skip("FIFOs unavailable")
+            os.mkfifo(rule)
+
+        monkeypatch.setattr(runner, "is_available", lambda: True)
+        monkeypatch.setattr(
+            runner, "run_rule",
+            lambda *a, **kw: pytest.fail("refused metadata must not execute"),
+        )
+        outcome = run_cocci_engine(tmp_path, rules_dir=tmp_path)
+        assert outcome.failed_rules == {"refused"}
+        assert outcome.unconfigured_rules == set()
+        assert outcome.invocations == 0
+        assert len(outcome.errors) == 1
+        assert "cannot read rule metadata" in outcome.errors[0]
+
 
 class TestDefinitionAttribution:
     def test_context_neighbour_and_hit_end_cannot_claim_target(self, tmp_path):
