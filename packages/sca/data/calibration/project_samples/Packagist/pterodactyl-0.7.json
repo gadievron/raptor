@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-10-29T21:56:43Z",
+    "fetched_at": "2026-11-01T12:59:36Z",
     "git_ref": "v0.7.19",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of pterodactyl-0.7",
@@ -7638,7 +7638,7 @@
       "dep_version": "1.647-1ubuntu0.26.04.4",
       "direct": true,
       "ecosystem": "Ubuntu",
-      "epss": 0.00275,
+      "epss": 0.00254,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7654,7 +7654,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/libdbi-perl@1.647-1ubuntu0.26.04.4",
-      "raptor_risk_estimate": 4.389790447845562,
+      "raptor_risk_estimate": 4.3888291675882645,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -7669,10 +7669,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440463075,
+        "epss_multiplier": 0.440366622,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.389790447845562,
+        "final": 4.3888291675882645,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -7710,7 +7710,7 @@
       "dep_version": "1.647-1ubuntu0.26.04.4",
       "direct": true,
       "ecosystem": "Ubuntu",
-      "epss": 0.00176,
+      "epss": 0.00327,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7726,7 +7726,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/libdbi-perl@1.647-1ubuntu0.26.04.4",
-      "raptor_risk_estimate": 4.385258698061159,
+      "raptor_risk_estimate": 4.392170760863633,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -7741,10 +7741,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440008368,
+        "epss_multiplier": 0.440701911,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.385258698061159,
+        "final": 4.392170760863633,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,

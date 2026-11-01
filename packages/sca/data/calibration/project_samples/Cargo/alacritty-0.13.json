@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-10-29T21:52:27Z",
+    "fetched_at": "2026-11-01T12:54:33Z",
     "git_ref": "v0.13.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of alacritty-0.13",
@@ -188,7 +188,7 @@
       "dep_version": "1.5.0",
       "direct": false,
       "ecosystem": "Cargo",
-      "epss": 0.0061,
+      "epss": 0.00601,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -204,7 +204,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:cargo/bytes@1.5.0",
-      "raptor_risk_estimate": 11.29466833705585,
+      "raptor_risk_estimate": 11.293612034165253,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -219,10 +219,10 @@
         "cvss_base": 55.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44200173,
+        "epss_multiplier": 0.441960393,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 11.29466833705585,
+        "final": 11.293612034165253,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,

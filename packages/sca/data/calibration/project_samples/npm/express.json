@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-10-29T21:46:56Z",
+    "fetched_at": "2026-11-01T12:50:01Z",
     "git_ref": "4.18.2",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of express",
@@ -464,7 +464,7 @@
       "dep_version": "4.2.0",
       "direct": true,
       "ecosystem": "npm",
-      "epss": 0.01131,
+      "epss": 0.00982,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -480,7 +480,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/hbs@4.2.0",
-      "raptor_risk_estimate": 5.130101952795557,
+      "raptor_risk_estimate": 5.122201720600139,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -495,10 +495,10 @@
         "cvss_base": 40.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44439468299999996,
+        "epss_multiplier": 0.443710326,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 5.130101952795557,
+        "final": 5.122201720600139,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,

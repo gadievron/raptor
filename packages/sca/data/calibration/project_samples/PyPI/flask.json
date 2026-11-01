@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-10-29T21:46:53Z",
+    "fetched_at": "2026-11-01T12:49:54Z",
     "git_ref": "3.0.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of flask",
@@ -1541,7 +1541,7 @@
       "dep_version": "2.3.3",
       "direct": true,
       "ecosystem": "PyPI",
-      "epss": 0.00511,
+      "epss": 0.00547,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1557,7 +1557,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:pypi/werkzeug@2.3.3",
-      "raptor_risk_estimate": 11.297366937100126,
+      "raptor_risk_estimate": 11.301597510359622,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1579,10 +1579,10 @@
         "cvss_base": 63.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441547023,
+        "epss_multiplier": 0.441712371,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 11.297366937100126,
+        "final": 11.301597510359622,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2269,7 +2269,7 @@
       "dep_version": "3.0.0",
       "direct": true,
       "ecosystem": "PyPI",
-      "epss": 0.00511,
+      "epss": 0.00547,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2285,7 +2285,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:pypi/werkzeug@3.0.0",
-      "raptor_risk_estimate": 11.297366937100126,
+      "raptor_risk_estimate": 11.301597510359622,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -2307,10 +2307,10 @@
         "cvss_base": 63.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441547023,
+        "epss_multiplier": 0.441712371,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 11.297366937100126,
+        "final": 11.301597510359622,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,

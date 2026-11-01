@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-10-29T21:56:32Z",
+    "fetched_at": "2026-11-01T12:59:33Z",
     "git_ref": "v1.5.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of bagisto-1.5",
@@ -4755,7 +4755,7 @@
       "dep_version": "1.28.0",
       "direct": false,
       "ecosystem": "Packagist",
-      "epss": 0.00221,
+      "epss": 0.00339,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4771,7 +4771,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/phpoffice/phpspreadsheet@1.28.0",
-      "raptor_risk_estimate": 11.249012578784393,
+      "raptor_risk_estimate": 11.262861883350029,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -4786,10 +4786,10 @@
         "cvss_base": 64.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44021505299999997,
+        "epss_multiplier": 0.44075702699999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 11.249012578784393,
+        "final": 11.262861883350029,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -4844,7 +4844,7 @@
       "dep_version": "1.28.0",
       "direct": false,
       "ecosystem": "Packagist",
-      "epss": 0.00483,
+      "epss": 0.00625,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4860,7 +4860,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/phpoffice/phpspreadsheet@1.28.0",
-      "raptor_risk_estimate": 8.632190159822944,
+      "raptor_risk_estimate": 8.644944421931289,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -4875,10 +4875,10 @@
         "cvss_base": 88.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.441418419,
+        "epss_multiplier": 0.442070625,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 8.632190159822944,
+        "final": 8.644944421931289,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -5277,7 +5277,7 @@
       "dep_version": "1.28.0",
       "direct": false,
       "ecosystem": "Packagist",
-      "epss": 0.00393,
+      "epss": 0.00396,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5293,7 +5293,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/phpoffice/phpspreadsheet@1.28.0",
-      "raptor_risk_estimate": 11.269199700693623,
+      "raptor_risk_estimate": 11.269551801657157,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -5308,10 +5308,10 @@
         "cvss_base": 61.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.441005049,
+        "epss_multiplier": 0.441018828,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 11.269199700693623,
+        "final": 11.269551801657157,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -6051,7 +6051,7 @@
       "dep_version": "1.28.0",
       "direct": false,
       "ecosystem": "Packagist",
-      "epss": 0.00407,
+      "epss": 0.0066,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6067,7 +6067,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/phpoffice/phpspreadsheet@1.28.0",
-      "raptor_risk_estimate": 16.342722115858994,
+      "raptor_risk_estimate": 16.3857781953497,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -6082,10 +6082,10 @@
         "cvss_base": 86.99999999999999,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.441069351,
+        "epss_multiplier": 0.44223137999999995,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 16.342722115858994,
+        "final": 16.3857781953497,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -11538,7 +11538,7 @@
       "dep_version": "0.21.0",
       "direct": true,
       "ecosystem": "npm",
-      "epss": 0.00708,
+      "epss": 0.00729,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -11554,7 +11554,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/axios@0.21.0",
-      "raptor_risk_estimate": 27.502072767957483,
+      "raptor_risk_estimate": 27.508068126459566,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -11575,10 +11575,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.442451844,
+        "epss_multiplier": 0.442548297,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 27.502072767957483,
+        "final": 27.508068126459566,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -13621,7 +13621,7 @@
       "dep_version": "0.21.4",
       "direct": true,
       "ecosystem": "npm",
-      "epss": 0.00708,
+      "epss": 0.00729,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -13637,7 +13637,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/axios@0.21.4",
-      "raptor_risk_estimate": 27.502072767957483,
+      "raptor_risk_estimate": 27.508068126459566,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -13658,10 +13658,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.442451844,
+        "epss_multiplier": 0.442548297,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 27.502072767957483,
+        "final": 27.508068126459566,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -15704,7 +15704,7 @@
       "dep_version": "0.24.0",
       "direct": true,
       "ecosystem": "npm",
-      "epss": 0.00708,
+      "epss": 0.00729,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -15720,7 +15720,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/axios@0.24.0",
-      "raptor_risk_estimate": 27.502072767957483,
+      "raptor_risk_estimate": 27.508068126459566,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -15741,10 +15741,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.442451844,
+        "epss_multiplier": 0.442548297,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 27.502072767957483,
+        "final": 27.508068126459566,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -18509,7 +18509,7 @@
       "dep_version": "1.1.2",
       "direct": true,
       "ecosystem": "npm",
-      "epss": 0.00708,
+      "epss": 0.00729,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -18525,7 +18525,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/axios@1.1.2",
-      "raptor_risk_estimate": 27.502072767957483,
+      "raptor_risk_estimate": 27.508068126459566,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -18546,10 +18546,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.442451844,
+        "epss_multiplier": 0.442548297,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 27.502072767957483,
+        "final": 27.508068126459566,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
