@@ -205,7 +205,37 @@ class TestVendoredStdlibRoots:
         from packages.codeql import query_runner as qr
 
         monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr(qr, "_bundled_stdlib_roots", lambda _lang: [])
         assert qr._vendored_stdlib_roots("cpp") == []
+
+    def test_falls_through_to_bundled(self, monkeypatch, tmp_path):
+        from packages.codeql import query_runner as qr
+
+        bundled = tmp_path / "codeql-queries" / "cpp" / "ql" / "lib"
+        bundled.mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr(qr, "_bundled_stdlib_roots", lambda _lang: [bundled])
+        assert qr._vendored_stdlib_roots("cpp") == [bundled]
+
+    def test_bundled_resolves_from_cli(self, monkeypatch, tmp_path):
+        from packages.codeql import query_runner as qr
+
+        dist = tmp_path / "codeql"
+        dist.mkdir()
+        cli = dist / "codeql"
+        cli.touch()
+        lib_root = tmp_path / "codeql-queries" / "cpp" / "ql" / "lib"
+        lib_root.mkdir(parents=True)
+        (lib_root / "qlpack.yml").write_text("name: codeql/cpp-all\n")
+        monkeypatch.setenv("CODEQL_CLI", str(cli))
+        assert qr._bundled_stdlib_roots("cpp") == [lib_root]
+
+    def test_bundled_empty_when_no_cli(self, monkeypatch):
+        from packages.codeql import query_runner as qr
+
+        monkeypatch.delenv("CODEQL_CLI", raising=False)
+        monkeypatch.setattr("shutil.which", lambda _name: None)
+        assert qr._bundled_stdlib_roots("cpp") == []
 
 
 class TestCodeqlCliFlag:
