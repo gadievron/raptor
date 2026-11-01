@@ -159,7 +159,32 @@ def _extract(archive: Path, destination: Path) -> Path:
     return destination / 'codeql'
 
 
-def ensure_installed(*, force: bool = False, install: bool = True) -> Path:
+def _copy_verified_archive(source: Path, destination: Path | None, digest: str, size: int) -> None:
+    """Verify a regular local file while copying the exact bytes to private staging."""
+    fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as incoming:
+        info = os.fstat(incoming.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size != size:
+            raise RuntimeError('local CodeQL bundle is not a regular file of the pinned size')
+        hasher = hashlib.sha256()
+        received = 0
+        output = destination.open('xb') if destination is not None else None
+        try:
+            while chunk := incoming.read(1024 * 1024):
+                received += len(chunk)
+                if received > size:
+                    raise RuntimeError('local CodeQL bundle exceeds the pinned size')
+                hasher.update(chunk)
+                if output is not None:
+                    output.write(chunk)
+        finally:
+            if output is not None:
+                output.close()
+        if received != size or hasher.hexdigest() != digest:
+            raise RuntimeError('local CodeQL bundle SHA-256 verification failed; nothing installed')
+
+
+def ensure_installed(*, force: bool = False, install: bool = True, local_archive: Path | None = None) -> Path:
     asset, digest, size = _asset()
     cache = _cache_root()
     target = cache / VERSION / asset.removesuffix(".tar.gz") / "codeql"
@@ -168,10 +193,14 @@ def ensure_installed(*, force: bool = False, install: bool = True) -> Path:
         raise RuntimeError(f"CodeQL cache must be a private, user-owned directory: {cache}")
     existing = _installed_path(target, digest)
     if existing:
+        if local_archive is not None:
+            _copy_verified_archive(local_archive, None, digest, size)
         return existing
     if not install:
         raise RuntimeError('CodeQL is not installed; run codeql --raptor-install before probing its version')
-    if not force and os.environ.get("RAPTOR_CODEQL_AUTO_INSTALL", "1").lower() in ("0", "false", "no"):
+    if local_archive is None and os.environ.get('RAPTOR_CODEQL_OFFLINE', '').lower() in ('1', 'true', 'yes'):
+        raise RuntimeError('offline mode: import the pinned bundle with codeql --raptor-install-from <archive.tar.gz>')
+    if local_archive is None and not force and os.environ.get("RAPTOR_CODEQL_AUTO_INSTALL", "1").lower() in ("0", "false", "no"):
         raise RuntimeError("automatic CodeQL installation disabled; run codeql --raptor-install to install explicitly")
     cache.mkdir(parents=True, exist_ok=True, mode=0o700)
     if cache.is_symlink() or cache.stat().st_uid != os.getuid() or cache.stat().st_mode & 0o022:
@@ -183,15 +212,21 @@ def ensure_installed(*, force: bool = False, install: bool = True) -> Path:
         fcntl.flock(lock, fcntl.LOCK_EX)
         existing = _installed_path(target, digest)
         if existing:
+            if local_archive is not None:
+                _copy_verified_archive(local_archive, None, digest, size)
             return existing
         if target.exists() or target.is_symlink():
             raise RuntimeError(f"incomplete CodeQL cache at {target}; remove that directory and retry")
-        sys.stderr.write(f"Installing CodeQL {VERSION} for this user directly from GitHub ({size // 1_000_000} MB).\n"
+        origin = 'a verified local bundle' if local_archive is not None else 'GitHub'
+        sys.stderr.write(f"Installing CodeQL {VERSION} for this user from {origin} ({size // 1_000_000} MB).\n"
                          f"Use is subject to GitHub's CodeQL terms: {TERMS_URL}\n")
         with tempfile.TemporaryDirectory(prefix=".install-", dir=cache) as temporary:
             stage = Path(temporary)
             archive = stage / asset
-            _download(archive, asset, digest, size)
+            if local_archive is None:
+                _download(archive, asset, digest, size)
+            else:
+                _copy_verified_archive(local_archive, archive, digest, size)
             extracted = _extract(archive, stage / "unpacked")
             cli = extracted / "codeql"
             if not cli.is_file() or cli.is_symlink() or not os.access(cli, os.X_OK):
@@ -210,6 +245,17 @@ def ensure_installed(*, force: bool = False, install: bool = True) -> Path:
 
 def main(argv: list[str]) -> int:
     try:
+        if argv[:1] == ['--raptor-install-from']:
+            if len(argv) != 2:
+                raise RuntimeError('usage: codeql --raptor-install-from <archive.tar.gz>')
+            print(ensure_installed(force=True, local_archive=Path(argv[1])))
+            return 0
+        if (os.environ.get('RAPTOR_CODEQL_OFFLINE', '').lower() in ('1', 'true', 'yes')
+                and (tuple(argv[:2]) in {('pack', command) for command in
+                     ('install', 'download', 'add', 'upgrade', 'ci', 'publish')}
+                     or '--download' in argv or any(arg.startswith('--download=') and
+                         arg.split('=', 1)[1].lower() not in ('false', '0', 'no') for arg in argv))):
+            raise RuntimeError('offline mode: registry commands and --download are disabled; import prepared assets instead')
         if argv == ["--raptor-status"]:
             asset, digest, _ = _asset()
             path = _installed_path(_cache_root() / VERSION / asset.removesuffix(".tar.gz") / "codeql", digest)

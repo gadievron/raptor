@@ -398,3 +398,49 @@ def test_tar_extraction_bound_is_enforced_before_writing(installer, tmp_path, mo
     with pytest.raises(RuntimeError, match='extraction bounds'):
         state['_extract'](archive, tmp_path / 'stage')
     assert not (tmp_path / 'stage/codeql/codeql').exists()
+
+
+def test_local_bundle_install_is_verified_and_never_downloads(installer, tmp_path, monkeypatch):
+    state, payload, calls = installer
+    archive = tmp_path / 'bundle.tar.gz'
+    archive.write_bytes(payload)
+    monkeypatch.setenv('RAPTOR_CODEQL_OFFLINE', '1')
+    monkeypatch.setenv('RAPTOR_CODEQL_AUTO_INSTALL', '0')
+    cli = state['ensure_installed'](local_archive=archive)
+    assert cli.is_file() and not calls
+    assert state['ensure_installed'](local_archive=archive) == cli
+    archive.write_bytes(payload[:-1] + b'!')
+    with pytest.raises(RuntimeError, match='SHA-256'):
+        state['ensure_installed'](local_archive=archive)
+
+
+def test_offline_mode_forbids_even_explicit_network_install(installer, monkeypatch):
+    state, _, calls = installer
+    monkeypatch.setenv('RAPTOR_CODEQL_OFFLINE', '1')
+    with pytest.raises(RuntimeError, match='offline mode'):
+        state['ensure_installed'](force=True)
+    assert not calls and not state['_cache_root']().exists()
+
+
+def test_local_bundle_rejects_symlink_and_fifo(installer, tmp_path):
+    state, payload, calls = installer
+    original = tmp_path / 'archive.tar.gz'
+    original.write_bytes(payload)
+    link = tmp_path / 'symlink'
+    link.symlink_to(original)
+    fifo = tmp_path / 'fifo'
+    os.mkfifo(fifo)
+    for source in (link, fifo):
+        with pytest.raises((OSError, RuntimeError)):
+            state['ensure_installed'](force=True, local_archive=source)
+    assert not calls
+
+
+@pytest.mark.parametrize('args', [['pack', 'install'], ['pack', 'download', 'codeql/python-queries'],
+                                  ['database', 'analyze', 'db', '--download']])
+def test_offline_launcher_refuses_registry_commands(installer, monkeypatch, args):
+    state, _, calls = installer
+    monkeypatch.setenv('RAPTOR_CODEQL_OFFLINE', '1')
+    monkeypatch.setattr(state['os'], 'execv', lambda *args: pytest.fail('registry command executed'))
+    assert state['main'](args) == 1
+    assert not calls

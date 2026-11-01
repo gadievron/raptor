@@ -553,7 +553,8 @@ class QueryRunner:
             success = result.returncode == 0
 
             # Auto-download missing query packs (needs network) and retry in sandbox
-            if not success and "cannot be found" in (result.stderr or "").lower():
+            if (not success and "cannot be found" in (result.stderr or "").lower()
+                    and not RaptorConfig.CODEQL_OFFLINE):
                 pack_name = _extract_missing_pack(result.stderr)  # type: ignore[assignment]
                 if pack_name:
                     logger.info("Query pack '%s' not found — downloading...", pack_name)
@@ -660,6 +661,8 @@ class QueryRunner:
 
             if not success:
                 errors.append(f"Analysis failed with exit code {result.returncode}")
+                if RaptorConfig.CODEQL_OFFLINE:
+                    errors.append('Offline CodeQL: run engine/codeql/tools/offline.py check for the selected language and modes')
                 if result.stderr:
                     errors.append(result.stderr[:1000])
                 logger.error("✗ Analysis failed for %s", language)
@@ -1180,7 +1183,8 @@ class QueryRunner:
         # avoids both the subprocess and the sandbox network-permit
         # round-trip. Sandboxed CI environments without a populated
         # pack cache fall through to the install attempt as before.
-        if skip_install or _iris_pack_deps_already_resolved(pack_dir):
+        if (skip_install or _iris_pack_deps_already_resolved(pack_dir)
+                or RaptorConfig.CODEQL_OFFLINE):
             logger.debug(
                 "%s pack (%s): deps already resolvable, skipping install",
                 label, lang,

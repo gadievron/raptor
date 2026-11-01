@@ -334,6 +334,11 @@ class RaptorConfig:
         """
         return cls._tuning().codeql_enabled
 
+    @classproperty
+    def CODEQL_OFFLINE(cls):
+        """Operator opt-in: use local CodeQL assets without registry downloads."""
+        return os.environ.get('RAPTOR_CODEQL_OFFLINE', '').lower() in ('1', 'true', 'yes')
+
     # CodeQL DB cache: grace period before _evict_stale_canonical evicts
     # a canonical that has no metadata yet. The promote sequence has a
     # gap between os.rename(staging, canonical) and save_metadata
@@ -580,6 +585,10 @@ class RaptorConfig:
         # Preserve the operator's first-use download opt-out through launchers
         # and diagnostic subprocesses. This flag only disables installation.
         "RAPTOR_CODEQL_AUTO_INSTALL",
+        "RAPTOR_CODEQL_OFFLINE",
+        # Explicit operator tool selection; needed by imported offline CLIs
+        # that are cached outside PATH. Same operator-controlled axis as PATH.
+        "CODEQL_CLI",
         "_RAPTOR_JOERN_TMP_BASE", "_RAPTOR_SERVICE_TMP_BASE",
         #   RAPTOR_TARGET_KIND  operator's target-classification override
         #                    (auto|library|hybrid|application). Must survive

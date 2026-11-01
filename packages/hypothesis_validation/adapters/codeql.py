@@ -24,6 +24,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from core.sarif.parser import load_sarif
+from core.config import RaptorConfig
 from packages.codeql.tunables import CodeQLTunables
 
 from .base import ToolAdapter, ToolCapability, ToolEvidence, make_sandbox_runner
@@ -83,6 +84,8 @@ def _ensure_pack_installed(
     a transient failure (e.g. network blocked for this run) must not
     suppress the retry once the environment is fixed.
     """
+    if RaptorConfig.CODEQL_OFFLINE:
+        return
     pack_dir = _find_pack_dir(Path(query_path))
     if pack_dir is None:
         return
@@ -644,7 +647,6 @@ class CodeQLAdapter(ToolAdapter):
             )
 
         if env is None:
-            from core.config import RaptorConfig
             # preserve_proxy: the `codeql pack install` step (which
             # runs unsandboxed — see below) fetches dep packs from the
             # registry; CodeQL's Java stack honours the lowercase
@@ -708,17 +710,18 @@ class CodeQLAdapter(ToolAdapter):
                 # build the lockfile, which the sandbox's network block
                 # would deny. Only the analyze below, which executes
                 # the LLM query, runs sandboxed.
-                try:
-                    subprocess.run(
-                        [self._codeql_bin, "pack", "install", str(pack_dir)],
-                        capture_output=True, text=True,
-                        timeout=120, env=env,
-                    )
-                except (OSError, subprocess.SubprocessError) as e:
-                    logger.warning(
-                        "codeql pack install on %s failed: %s — analyze may fail with a clearer error",
-                        pack_dir, e,
-                    )
+                if not RaptorConfig.CODEQL_OFFLINE:
+                    try:
+                        subprocess.run(
+                            [self._codeql_bin, "pack", "install", str(pack_dir)],
+                            capture_output=True, text=True,
+                            timeout=120, env=env,
+                        )
+                    except (OSError, subprocess.SubprocessError) as e:
+                        logger.warning(
+                            "codeql pack install on %s failed: %s — analyze may fail with a clearer error",
+                            pack_dir, e,
+                        )
 
                 sarif_path = Path(tmp) / "result.sarif"
                 cmd = [
