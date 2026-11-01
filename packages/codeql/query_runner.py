@@ -87,47 +87,79 @@ def _iris_pack_deps_already_resolved(pack_dir: Path) -> bool:
     return True
 
 
-def _vendored_stdlib_roots(lang: str) -> list[Path]:
-    """Library-pack roots vendored inside cached standard query packs.
+def _bundled_stdlib_roots(lang: str) -> list[Path]:
+    """Find the ``<lang>-all`` library pack bundled with the CodeQL CLI.
 
-    `codeql pack download codeql/<lang>-queries` (which the standard
-    suite performs on demand) vendors the `<lang>-all` library pack
-    under `.codeql/libraries/codeql/` inside the downloaded pack.
-    Pointing `--additional-packs` at that root lets in-repo query
-    packs without a committed lockfile resolve `import <lang>` on
-    hosts with no registry egress. Returns the newest cached version's
-    root, or an empty list when nothing usable is cached.
+    Standard CodeQL installations place the CLI at ``<prefix>/codeql/``
+    with queries at ``<prefix>/codeql-queries/<lang>/ql/lib/``.  The
+    library pack there contains ``qlpack.yml`` naming ``codeql/<lang>-all``
+    and is already known to ``codeql resolve qlpacks``, but invisible to
+    the package cache that ``_iris_pack_deps_already_resolved`` checks.
     """
-    base = Path.home() / ".codeql" / "packages" / "codeql" / f"{lang}-queries"
-    if not base.is_dir():
+    import shutil
+    cli = os.environ.get("CODEQL_CLI") or shutil.which("codeql")
+    if not cli:
         return []
-
-    def _version_key(p: Path) -> tuple:
-        try:
-            return tuple(int(part) for part in p.name.split("."))
-        except ValueError:
-            return (0,)
-
     try:
-        versions = sorted(
-            (d for d in base.iterdir() if d.is_dir()),
-            key=_version_key, reverse=True,
-        )
-    except OSError:
-        return []
-    for version_dir in versions:
-        cand = version_dir / ".codeql" / "libraries" / "codeql"
-        if cand.is_dir():
-            return [cand]
+        dist_dir = Path(cli).resolve().parent          # <prefix>/codeql/
+        lib_root = dist_dir.parent / "codeql-queries" / lang / "ql" / "lib"
+        if (lib_root / "qlpack.yml").is_file():
+            return [lib_root]
+    except (OSError, ValueError):
+        pass
     return []
+
+
+def _vendored_stdlib_roots(lang: str) -> list[Path]:
+    """Library-pack roots usable as ``--additional-packs`` for offline
+    stdlib resolution.
+
+    Checked in order:
+
+    1. **Cached query pack** — ``~/.codeql/packages/codeql/<lang>-queries/
+       <version>/.codeql/libraries/codeql/``.  This is the vendored
+       ``<lang>-all`` library pack inside a previously downloaded standard
+       query pack.
+
+    2. **Bundled distribution pack** — the ``<lang>-all`` library pack
+       shipped alongside the CodeQL CLI (``<dist>/../codeql-queries/
+       <lang>/ql/lib/``).  Present in every standard CodeQL installation
+       but invisible to the package cache.
+
+    Returns a one-element list on the first hit, or ``[]`` when nothing
+    usable is found.
+    """
+    # --- path 1: cached query pack ---
+    base = Path.home() / ".codeql" / "packages" / "codeql" / f"{lang}-queries"
+    if base.is_dir():
+
+        def _version_key(p: Path) -> tuple:
+            try:
+                return tuple(int(part) for part in p.name.split("."))
+            except ValueError:
+                return (0,)
+
+        try:
+            versions = sorted(
+                (d for d in base.iterdir() if d.is_dir()),
+                key=_version_key, reverse=True,
+            )
+        except OSError:
+            versions = []
+        for version_dir in versions:
+            cand = version_dir / ".codeql" / "libraries" / "codeql"
+            if cand.is_dir():
+                return [cand]
+
+    # --- path 2: bundled distribution pack ---
+    return _bundled_stdlib_roots(lang)
 
 
 def vendored_stdlib_roots(lang: str) -> list[Path]:
     """Public seam over ``_vendored_stdlib_roots`` for out-of-package
-    consumers (``core.iris.codeql_runner``): the vendored ``<lang>-all``
-    root inside a cached standard query pack is the only
-    network-free way to resolve a generated query pack's stdlib
-    dependency under ``block_network`` analyzes."""
+    consumers (``core.iris.codeql_runner``): returns an
+    ``--additional-packs``-compatible root that resolves the
+    ``<lang>-all`` stdlib dependency without registry egress."""
     return _vendored_stdlib_roots(lang)
 
 
