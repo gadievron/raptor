@@ -41,6 +41,7 @@ This page is split into:
 | Code scanning | GitHub CodeQL Advanced | Python, C/C++, GitHub Actions |
 | Slash-command metadata lint | In-tree Python checker | `.claude/commands/*.md` dispatch metadata |
 | Dependency regression gate | RAPTOR SCA | PR merge result versus `main` dependency surface |
+| ZKPoX native checks | Cargo + Pytest | Path-filtered native statement/parser checks; opt-in full-proof validation on a provisioned SP1 runner |
 | Corpus label schema lint | In-tree Python linter | Corpus label JSON files |
 | Corpus label pin lint (PR) | In-tree Python linter | Changed label files in a PR |
 | SARIF known-FP suppressions | In-tree Python script | CodeQL SARIF output |
@@ -58,61 +59,14 @@ This page is split into:
 
 ### Gate details and local reproduction
 
-- **Python lint gate** — [`lint.yml`](../.github/workflows/lint.yml) on `pull_request` and `merge_group`. Rules `F401`, `F811`, `F821`, `F841`; Python 3.12 target (config in `pyproject.toml`).
-
-  **Run locally:**
-
-  ```bash
-  ruff check <changed .py files>
-  ```
-
-- **Full-tree Python lint audit** — [`lint.yml`](../.github/workflows/lint.yml) on main pushes affecting Ruff inputs, weekly cron and manual runs. The existing metadata job scopes both Ruff jobs before runner allocation. Known non-Python edits skip Ruff; configuration/discovery changes, deletions, indirect inputs and unavailable history retain full-tree coverage. Custom discovery, nested Ruff configuration and unreviewed Ruff releases also retain full linting. PR filenames use a NUL-delimited, bounded argument handoff, including spaces, newlines and leading option/argfile characters. Same rule set as the PR gate.
-
-  **Run locally:**
-
-  ```bash
-  ruff check .
-  ```
-
-- **Fast Python test suite** — [`tests.yml`](../.github/workflows/tests.yml) on PRs, pushes, merge queue; tiers computed by [`test_scope.py`](../.github/scripts/test_scope.py). Default excludes `slow` and `integration` (markers in `pytest.ini`); `RAPTOR_MAX_TEST_SECONDS=10` per-test wall-clock guard.
-- **SCA runner sizing** — `tests.yml` uses `sca_test_matrix.py` to choose one to four pytest-split groups from selected files’ recorded time and case count. Missing or invalid timing data retains four groups; sizing never filters tests.
-
-  **Run locally:** `python3 -m pytest core packages engine` (the `engine/` rule-precision tests skip themselves when coccinelle/semgrep are not installed).
-
-- **ReDoS census ownership** — `lint.yml` runs the default census on every PR, main push, and merge-queue event. The CI-script unit batch excludes that duplicate suite; manual and scheduled full Test Suite runs retain it in a dedicated step. Both owners enforce a 120-second session budget and reject any skipped check.
-
-- **Sandbox and feasibility parallelism** — broad selections use two pytest workers on the existing runner, with `--dist loadfile` keeping each module and its fixtures together. A single selected file stays serial. Job names and scoped test selections are unchanged.
-
-- **Engine and source-intelligence worker sizing** — these tiers use two workers for multi-file selections on the existing runner. Engine uses `--dist worksteal` to balance individual cases; its tests have no shared module/class setup; source-intelligence retains `--dist loadfile` for shared module fixtures. A single selected file stays serial. Their scoped file lists are unchanged.
-
-- **Combined Coccinelle controls** — the shipped/rendered resource-cleanup corpus checks attribution across many functions with the real matcher. These two integration cases run in the scoped engine job's native phase and the existing nightly integration lane. Their fixture and assertions are retained; the fast phase keeps its 10-second guard.
-
-- **Semgrep native fixtures** — real CLI validation, positive/negative scans, and whole-pack performance checks in `test_rule_fixtures.py` run in the scoped engine job's integration phase and the existing nightly `semgrep-regressions` owner. Pure metadata checks stay in the default tier. The original fixtures and assertions remain in place.
-
-- **Source-intelligence native tier** — the scoped `source_intel` job in [`tests.yml`](../.github/workflows/tests.yml) runs its selected files with the worker sizing above. The default phase retains the 10-second guard; a separate `-m "(slow or integration) and not corpus"` phase runs real-tool coverage even if the first phase fails. Either failure fails the job, and skip accounting includes both JUnit reports. Axis-specific tests run only the shipped rules they assert; full-dispatch and mixed-axis cases retain the default rule root. Missing optional tools still skip on the runner fallback. Other tiers retain their default selection unless they set `native_pytest_markers`.
-
-  **Run locally:** `python3 -m pytest -n 2 --dist loadfile packages/source_intel/tests`, then `RAPTOR_MAX_TEST_SECONDS= python3 -m pytest -n 2 --dist loadfile -m "(slow or integration) and not corpus" packages/source_intel/tests`.
-
-- **Sandbox slow/integration tier** — [`tests.yml`](../.github/workflows/tests.yml), sandbox job on sandbox-gated PRs, with a package-scoped mirror step in the exploit-feasibility job for PRs that fire only that gate. When both gates fire, the sandbox job covers this tier once. Any CI-equivalent local gate run must include it: `python3 -m pytest -n 2 --dist loadfile -m "slow or integration" core/sandbox packages/exploit_feasibility`.
-
-- **Native macOS sandbox tier** — [`tests.yml`](../.github/workflows/tests.yml) uses [`macos_test_scope.py`](../.github/scripts/macos_test_scope.py) to remove affected files whose module-level markers prove that macOS skips them. Shared files, unknown conditions and unrecognised mutations stay selected. Forced-full and unknown scopes preserve the complete macOS backstop. Scoped Linux-only test changes can therefore skip this macOS job. SCA matrix-planner edits dispatch SCA and CI checks rather than forcing every test tier. The slow native audit runs only when its test file is affected. The 15-minute job limit remains; test phases have 8- and 4-minute deadlines, with logs and JUnit reports retained on failure. Artifact upload has a separate two-minute limit and cannot turn passing tests red on an artifact-service outage.
-
-- **Darwin-emulation gate** — [`tests.yml`](../.github/workflows/tests.yml), sandbox job on sandbox-gated PRs. Re-runs the sandbox test files with `RAPTOR_TEST_EMULATE_PLATFORM=darwin` so Linux-authored assertions against platform-resolved values (or the Linux tmp layout) fail in the cheap Linux lane instead of on the macOS runner; `*_native`-marked tests are deselected because emulation never stacks on real kernel behaviour.
-
-  **Run locally:** `RAPTOR_TEST_EMULATE_PLATFORM=darwin python3 -m pytest -n 2 --dist loadfile core/sandbox`.
-
-- **Sandbox feature-matrix PR subset** — [`tests.yml`](../.github/workflows/tests.yml), `sandbox-feature-matrix` job, on sandbox-gated PRs. Runs the u24 × {`full`, `default`} cells of the weekly feature matrix against the prebuilt GHCR image (published by [`sandbox-matrix-image.yml`](../.github/workflows/sandbox-matrix-image.yml); the package is owner-managed and private, like `raptor-ci-deps`). Fork PRs cannot pull it and build the image on the runner instead (slower, never blocked); the weekly matrix is the unfiltered backstop.
-
-  **Run locally:** `core/sandbox/scripts/feature-matrix/run-matrix.sh --image 24 --lanes full,default` (drop `--skip-build` unless the image is already built).
-
-- **Prompt-envelope audit** — [`tests.yml`](../.github/workflows/tests.yml), `python-prompt-audit` job. Narrow AST-based audit.
-
-  **Run locally:**
-
-  ```bash
-  python3 -m pytest core/security/tests/test_prompt_envelope_audit.py -q
-  ```
-
+- **ZKPoX native checks** — [`zkpox-native.yml`](../.github/workflows/zkpox-native.yml) on PRs touching the configured ZKPoX/witness paths, pushes to `main` touching the package/workflow paths, and manual dispatch. The hosted `statement-and-parser` job uses Rust 1.95.0 and locked dependencies to test the shared statement and structural verifier, including inspection-mode CLI behavior. Real Groth16 positive/negative, production CLI and delivery tests run when manually dispatched with `full_proofs=true`, on a provisioned `[self-hosted, linux, x64, sp1]` runner; setup is documented in [`packages/zkpox/README.md`](../packages/zkpox/README.md). Locally: `cargo test --locked --manifest-path packages/zkpox/native/Cargo.toml -p zkpox-statement` and `cargo test --locked --manifest-path packages/zkpox/native/Cargo.toml -p zkpox-verify --no-default-features --features structural`.
+- **Python lint gate** — [`lint.yml`](../.github/workflows/lint.yml) on `pull_request` and `merge_group`. Rules `F401`, `F811`, `F821`, `F841`; Python 3.12 target (config in `pyproject.toml`). Locally: `ruff check <changed .py files>`.
+- **Full-tree Python lint audit** — [`lint.yml`](../.github/workflows/lint.yml) on `push: main`, weekly cron, manual run. Same rule set as the PR gate. Locally: `ruff check .`.
+- **Fast Python test suite** — [`tests.yml`](../.github/workflows/tests.yml) on PRs, pushes, merge queue; tiers computed by [`test_scope.py`](../.github/scripts/test_scope.py). Default excludes `slow` and `integration` (markers in `pytest.ini`); `RAPTOR_MAX_TEST_SECONDS=10` per-test wall-clock guard. Locally: `python3 -m pytest core packages engine` (the `engine/` rule-precision tests skip themselves when coccinelle/semgrep are not installed).
+- **Sandbox slow/integration tier** — [`tests.yml`](../.github/workflows/tests.yml), second step of the sandbox job on sandbox-gated PRs, with a package-scoped mirror step in the exploit-feasibility job for PRs that fire only that gate. Any CI-equivalent local gate run must include it: `python3 -m pytest -m "slow or integration" core/sandbox packages/exploit_feasibility` (~90s serial).
+- **Darwin-emulation gate** — [`tests.yml`](../.github/workflows/tests.yml), third step of the sandbox job on sandbox-gated PRs. Re-runs the sandbox test files with `RAPTOR_TEST_EMULATE_PLATFORM=darwin` so Linux-authored assertions against platform-resolved values (or the Linux tmp layout) fail in the cheap Linux lane instead of on the macOS runner; `*_native`-marked tests are deselected because emulation never stacks on real kernel behaviour. Locally: `RAPTOR_TEST_EMULATE_PLATFORM=darwin python3 -m pytest core/sandbox` (~45s serial).
+- **Sandbox feature-matrix PR subset** — [`tests.yml`](../.github/workflows/tests.yml), `sandbox-feature-matrix` job, on sandbox-gated PRs. Runs the u24 × {`full`, `default`} cells of the weekly feature matrix against the prebuilt GHCR image (published by [`sandbox-matrix-image.yml`](../.github/workflows/sandbox-matrix-image.yml); the package is owner-managed and private, like `raptor-ci-deps`). Fork PRs cannot pull it and build the image on the runner instead (slower, never blocked); the weekly matrix is the unfiltered backstop. Locally: `core/sandbox/scripts/feature-matrix/run-matrix.sh --image 24 --lanes full,default` (drop `--skip-build` unless the image is already built).
+- **Prompt-envelope audit** — [`tests.yml`](../.github/workflows/tests.yml), `python-prompt-audit` job. Narrow AST-based audit. Locally: `python3 -m pytest core/security/tests/test_prompt_envelope_audit.py -q`.
 - **Code scanning** — [`codeql.yml`](../.github/workflows/codeql.yml) on PRs, pushes, merge queue, weekly cron. Languages `python`, `c-cpp`, `actions`; path exclusions in [`codeql-config.yml`](../.github/codeql/codeql-config.yml); import-graph scope narrowing via [`codeql_scope.py`](../.github/scripts/codeql_scope.py) for PRs. Local CodeQL requires the CLI and packs — use the GitHub workflow.
 
 - **Slash-command metadata lint** — [`lint.yml`](../.github/workflows/lint.yml) on every lint run. Validates `dispatch:` targets and exclusion-list drift.
