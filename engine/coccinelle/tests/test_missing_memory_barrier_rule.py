@@ -1,13 +1,4 @@
-"""Fixture tests for the missing_memory_barrier rule.
-
-Negatives pin the load-endpoint discipline: the second access must be
-a genuine READ (a bare expression endpoint also matches the left-hand
-side of an assignment, so consecutive field initialisation — two
-stores — fired the rule) and the argument-taking barrier helpers
-(``smp_store_mb`` etc.) must suppress like the zero-argument ones.
-Positives keep the genuine shape firing: store to one field then an
-unordered read of another field through the same pointer.
-"""
+"""A publication lead requires explicit producer/consumer protocol evidence."""
 
 from __future__ import annotations
 
@@ -35,6 +26,7 @@ def _run_rule(tmp_path: Path, source: str) -> list[dict]:
         ["spatch", "--sp-file", str(_RULE), str(src), "--no-show-diff"],
         capture_output=True, text=True, timeout=120,
     )
+    assert proc.returncode == 0, proc.stderr
     results = []
     for stream in (proc.stdout, proc.stderr):
         for line in stream.splitlines():
@@ -43,86 +35,69 @@ def _run_rule(tmp_path: Path, source: str) -> list[dict]:
     return results
 
 
+def _protocol(publisher, *, tag="shared", payload="data", flag="ready"):
+    return f"""
+        void publish(struct shared *p, int value) {{ {publisher} }}
+        int consume(struct {tag} *p) {{
+            if (READ_ONCE(p->{flag})) {{ return p->{payload}; }}
+            return 0;
+        }}
+    """
+
+
 class TestPositives:
-    def test_store_then_assignment_read_fires(self, tmp_path):
-        results = _run_rule(tmp_path, """\
-            int pub(struct s *p, int v)
-            {
-                int r;
-                p->data = v;
-                r = p->flag;
-                return r;
-            }
-        """)
+    def test_write_once_flag_without_release_fires(self, tmp_path):
+        results = _run_rule(tmp_path, _protocol("p->data = value; WRITE_ONCE(p->ready, 1);"))
         assert len(results) == 1
         assert results[0]["rule"] == "missing_memory_barrier"
 
-    def test_store_then_condition_read_fires(self, tmp_path):
-        results = _run_rule(tmp_path, """\
-            void pub(struct s *p, int v)
-            {
-                p->data = v;
-                if (p->ready)
-                    consume(p);
-            }
-        """)
-        assert len(results) == 1
-
-    def test_store_then_call_argument_read_fires(self, tmp_path):
-        results = _run_rule(tmp_path, """\
-            void pub(struct s *p, int v)
-            {
-                p->data = v;
-                notify(p->waiters);
-            }
-        """)
-        assert len(results) == 1
-
 
 class TestNegatives:
-    def test_consecutive_field_stores_do_not_fire(self, tmp_path):
-        # Two stores, no load: plain struct initialisation.
-        results = _run_rule(tmp_path, """\
-            void init(struct s *p)
-            {
+    @pytest.mark.parametrize("publisher", [
+        "p->data = value; smp_wmb(); WRITE_ONCE(p->ready, 1);",
+        "p->data = value; smp_store_release(&p->ready, 1);",
+        "spin_lock(&p->lock); p->data = value; WRITE_ONCE(p->ready, 1); spin_unlock(&p->lock);",
+        "write_lock_bh(&p->lock); p->data = value; WRITE_ONCE(p->ready, 1); write_unlock_bh(&p->lock);",
+        "p = allocate(); p->data = value; WRITE_ONCE(p->ready, 1);",
+        "p->data = value; unknown_helper(p); WRITE_ONCE(p->ready, 1);",
+        "p->data = value; p->ready = 1;",
+        "p->data = value; WRITE_ONCE(p->ready, 1); handoff(p);",
+    ])
+    def test_synchronized_private_or_unknown_publisher_refuses(self, tmp_path, publisher):
+        assert _run_rule(tmp_path, _protocol(publisher)) == []
+
+    @pytest.mark.parametrize("kwargs", [
+        {"tag": "different"}, {"payload": "other"}, {"flag": "other"},
+    ])
+    def test_consumer_must_bind_same_type_and_fields(self, tmp_path, kwargs):
+        source = _protocol("p->data = value; WRITE_ONCE(p->ready, 1);", **kwargs)
+        assert _run_rule(tmp_path, source) == []
+
+    def test_no_consumer_is_not_protocol_evidence(self, tmp_path):
+        assert _run_rule(tmp_path, """
+            void publish(struct shared *p, int value) {
+                p->data = value;
+                WRITE_ONCE(p->ready, 1);
+            }
+        """) == []
+
+    def test_plain_field_access_and_stack_object_are_not_concurrency(self, tmp_path):
+        assert _run_rule(tmp_path, """
+            struct pair { int a; int b; };
+            int local(void) {
+                struct pair object = {0};
+                struct pair *p = &object;
+                int value;
                 p->a = 1;
-                p->b = 2;
+                value = p->b;
+                return value;
             }
-        """)
-        assert results == []
-
-    def test_smp_store_mb_suppresses(self, tmp_path):
-        # smp_store_mb takes arguments — it must both suppress the
-        # rule and never be reported as the unordered load itself.
-        results = _run_rule(tmp_path, """\
-            void ok(struct s *p, int v)
-            {
-                p->data = v;
-                smp_store_mb(p->flag, 1);
+            int locked(struct pair *p) {
+                int value;
+                spin_lock(&p->lock);
+                p->a = 1;
+                value = p->b;
+                spin_unlock(&p->lock);
+                return value;
             }
-        """)
-        assert results == []
-
-    def test_smp_wmb_between_accesses_suppresses(self, tmp_path):
-        results = _run_rule(tmp_path, """\
-            int ok(struct s *p, int v)
-            {
-                int r;
-                p->data = v;
-                smp_wmb();
-                r = p->flag;
-                return r;
-            }
-        """)
-        assert results == []
-
-    def test_read_once_load_does_not_fire(self, tmp_path):
-        results = _run_rule(tmp_path, """\
-            void ok(struct s *p, int v)
-            {
-                p->data = v;
-                if (READ_ONCE(p->ready))
-                    consume(p);
-            }
-        """)
-        assert results == []
+        """) == []

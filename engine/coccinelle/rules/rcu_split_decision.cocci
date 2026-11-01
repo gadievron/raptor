@@ -5,24 +5,32 @@
 // The target can change credentials or dumpability between the two
 // reads (commit_creds() pairs a write barrier with this exact
 // window), so the composite access check is not atomic — the
-// checked-credential half no longer holds when the dumpability half
-// is read. Detection-grade lead for CWE-362/CWE-287-style access
+// checked-credential half may no longer order the dumpability read.
+// A read/full barrier after the unlock orders the pair; metadata-only
+// void helpers do not make an allow/deny decision and are excluded. Detection-grade lead for CWE-362/CWE-287-style access
 // check races; never promotes on its own.
 // @role: detection
 
 @rcusplit exists@
 expression E, T;
-identifier mmv;
+identifier mmv, fn;
 position p;
 @@
 
+int fn(...) {
+<...
 rcu_read_lock();
 ... when != rcu_read_unlock();
 E = __task_cred(T);
-...
+... when != smp_rmb();
+    when != smp_mb();
 rcu_read_unlock();
 ... when != rcu_read_lock();
+    when != smp_rmb();
+    when != smp_mb();
 mmv = T->mm@p;
+...>
+}
 
 @script:python@
 p << rcusplit.p;

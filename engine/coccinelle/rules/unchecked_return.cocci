@@ -15,7 +15,16 @@
 //   The bare emission script skips itself in targeted runs (and the
 //   targeted rules are dependency-skipped in bare runs), so each mode
 //   reports exactly once.
+// Bare inference uses adjacent assignment/checks, not Boolean-only uses.
+// Results consumed by assignment, arguments, return, or void discard are
+// not ignored. File-keyed aggregation avoids cross-caller native joins.
 // @role: detection
+
+@initialize:python@
+@@
+checked_returns = set()
+ignored_returns = {}
+
 
 // ---- Targeted mode (-D func=<name>) ----
 
@@ -67,74 +76,51 @@ for _p in p:
 
 @ur_checked_any@
 position p;
-identifier r;
-identifier fn;
-@@
-
-r = fn@p(...);
-... when != return ...;
-\(if (\(r < 0\|r == 0\|!r\|r != 0\|r > 0\|r == NULL\|r != NULL\)) { ... }
-\|if (\(r < 0\|r == 0\|!r\|r != 0\|r > 0\|r == NULL\|r != NULL\)) return ...;
-\)
-
-@ur_checked_decl_any@
-position p;
-identifier r;
-identifier ur_checked_any.fn;
+identifier fn, r;
 type T;
+statement S;
 @@
-
-T r = fn@p(...);
-... when != return ...;
-\(if (\(r < 0\|r == 0\|!r\|r != 0\|r > 0\|r == NULL\|r != NULL\)) { ... }
-\|if (\(r < 0\|r == 0\|!r\|r != 0\|r > 0\|r == NULL\|r != NULL\)) return ...;
-\)
-
-// A return value consumed without an intermediate variable is not
-// ignored: direct-condition use (if/while/for guards), propagation to
-// the caller, and the explicit (void) discard idiom are all "checked
-// enough" for CWE-252 and must never be flagged just because another
-// call site in the file stores and tests the value. Only condition
-// slots bind here — a value-ignored call inside a branch or loop BODY
-// still flags.
-@ur_used_any@
-position p;
-statement S1, S2;
-expression e1, e2;
-identifier ur_checked_any.fn;
-@@
-
 (
-  if (<+... fn@p(...) ...+>) S1
+r = fn@p(...);
+if (\(r < 0\|r <= 0\|r == 0\|!r\|r != 0\|r > 0\|r >= 0\|r == NULL\|r != NULL\)) S
 |
-  if (<+... fn@p(...) ...+>) S1 else S2
-|
-  while (<+... fn@p(...) ...+>) S1
-|
-  for (e1; <+... fn@p(...) ...+>; e2) S1
-|
-  return fn@p(...);
-|
-  (void)fn@p(...);
+T r = fn@p(...);
+if (\(r < 0\|r <= 0\|r == 0\|!r\|r != 0\|r > 0\|r >= 0\|r == NULL\|r != NULL\)) S
 )
 
-@ur_unchecked_any@
-position p != {ur_checked_any.p, ur_checked_decl_any.p, ur_used_any.p};
-identifier ur_checked_any.fn;
-@@
-
-fn@p(...)
-
 @script:python@
-p << ur_unchecked_any.p;
+p << ur_checked_any.p;
 fn << ur_checked_any.fn;
 target << virtual.func = "";
 @@
-
-import json, sys
-# Targeted runs report through the virtual.func rules above; skip the
-# bare leg entirely so a position is never double-emitted.
 if not target:
-    for _p in p:
-        _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column), "line_end": int(_p.line_end), "col_end": int(_p.column_end), "rule": "unchecked_return", "message": "Return value of %s not checked (checked at other call sites in this file)" % fn}
-        sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
+    for pos in p:
+        checked_returns.add((str(pos.file), str(fn)))
+
+@ur_ignored_any@
+position p;
+identifier fn;
+@@
+fn@p(...);
+
+@script:python@
+p << ur_ignored_any.p;
+fn << ur_ignored_any.fn;
+target << virtual.func = "";
+@@
+if not target:
+    for pos in p:
+        key = (str(pos.file), str(fn))
+        result = {"file": pos.file, "line": int(pos.line), "col": int(pos.column),
+                  "line_end": int(pos.line_end), "col_end": int(pos.column_end),
+                  "rule": "unchecked_return",
+                  "message": "Return value of %s discarded (checked at other call sites in this file)" % fn}
+        ignored_returns.setdefault(key, []).append(result)
+
+@finalize:python@
+@@
+import json, sys
+for key in sorted(ignored_returns):
+    if key in checked_returns:
+        for result in sorted(ignored_returns[key], key=lambda item: (item["line"], item["col"])):
+            sys.stderr.write("COCCIRESULT:" + json.dumps(result) + "\n")

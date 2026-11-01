@@ -227,3 +227,59 @@ class TestTargetedMode:
             tmp_path, _MIXED_CALLERS, defines={"func": "unrelated_fn"},
         )
         assert results == []
+
+
+@pytest.mark.parametrize("use", [
+    "int result = do_io(); store(result);",
+    "result = do_io(); store(result);",
+    "store(do_io());",
+])
+def test_consumed_value_is_not_an_ignored_call(tmp_path, use):
+    source = """
+        int checked(void) { int n = do_io(); if (n <= 0) return -1; return n; }
+        void consumer(void) { int result; %s }
+    """ % use
+    results, rc = _run_rule(tmp_path, source)
+    assert rc == 0
+    assert results == []
+
+
+def test_declaration_only_checked_sibling_seeds_detection(tmp_path):
+    source = """
+        int checked(void) { int n = do_io(); if (n <= 0) return -1; return n; }
+        void ignored(void) { do_io(); }
+    """
+    results, rc = _run_rule(tmp_path, source)
+    assert rc == 0
+    assert len(results) == 1
+
+
+def test_checked_evidence_does_not_leak_between_function_names(tmp_path):
+    results, rc = _run_rule(tmp_path, """
+        int checked(void) { int n = do_io(); if (n <= 0) return -1; return n; }
+        void ignored(void) { do_io(); fire_and_forget(); }
+    """)
+    assert rc == 0
+    assert len(results) == 1
+    assert "do_io" in results[0]["message"]
+
+
+def test_checked_evidence_is_scoped_to_its_source_file(tmp_path):
+    (tmp_path / "checked.c").write_text(
+        "int checked(void) { int n = do_io(); if (n < 0) return -1; return n; }\n")
+    (tmp_path / "ignored.c").write_text("void ignored(void) { do_io(); }\n")
+    result = subprocess.run(["spatch", "--sp-file", str(_RULE), "--dir", str(tmp_path),
+                             "--no-show-diff"], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert "COCCIRESULT:" not in result.stdout + result.stderr
+
+
+def test_boolean_use_alone_does_not_imply_required_return(tmp_path):
+    # Diagnostic predicates can return a flag AND perform their intended
+    # side effect. Boolean use does not establish a must-check contract.
+    results, rc = _run_rule(tmp_path, """
+        int diagnostic(void) { if (warn(1)) return -1; return 0; }
+        void notify(void) { warn(2); }
+    """)
+    assert rc == 0
+    assert results == []
