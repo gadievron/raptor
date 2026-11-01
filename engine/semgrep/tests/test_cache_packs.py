@@ -431,3 +431,94 @@ def test_cmd_list_bounds_cache_reads(
     jwt_row = next(line for line in out.splitlines() if "p/jwt" in line)
     assert "oversize" in jwt_row
     assert "1 rules" not in jwt_row
+
+
+def _verified_bundle(tmp_path, mod, monkeypatch):
+    import hashlib
+    monkeypatch.setattr(mod, 'fetch_pack', lambda pid: b'{"rules":[{"id":"r"}]}')
+    bundle = tmp_path / 'kit.zip'
+    mod.cmd_fetch(argparse.Namespace(packs='secrets,jwt', output=str(bundle)))
+    digest = hashlib.sha256(bundle.read_bytes()).hexdigest()
+    mod.CACHE_DIR = tmp_path / 'cache'
+    return bundle, digest
+
+
+def test_verified_fetch_import_roundtrip(tmp_path, monkeypatch):
+    mod = _load_tool()
+    bundle, digest = _verified_bundle(tmp_path, mod, monkeypatch)
+    mod.cmd_import(argparse.Namespace(zipfile=str(bundle), sha256=digest))
+    assert sorted(p.name for p in mod.CACHE_DIR.iterdir()) == ['c.p.jwt.json', 'c.p.secrets.json']
+
+
+@pytest.mark.parametrize('mutation', ['checksum', 'incomplete', 'digest', 'duplicate', 'unexpected', 'empty'])
+def test_verified_import_rejects_before_writing(tmp_path, monkeypatch, mutation):
+    import hashlib
+    import json
+    mod = _load_tool()
+    bundle, digest = _verified_bundle(tmp_path, mod, monkeypatch)
+    if mutation == 'checksum':
+        digest = '0' * 64
+    else:
+        with zipfile.ZipFile(bundle) as zf:
+            members = {n: zf.read(n) for n in zf.namelist()}
+        manifest = json.loads(members['manifest.json'])
+        if mutation == 'incomplete':
+            del members['c.p.jwt.json']
+        elif mutation == 'digest':
+            members['c.p.jwt.json'] = b'{"rules":[{"id":"changed"}]}'
+        elif mutation == 'unexpected':
+            members['../outside.json'] = b'{}'
+        elif mutation == 'empty':
+            members['c.p.jwt.json'] = b'{"rules":[]}'
+            manifest['files']['c.p.jwt.json'] = {
+                'size': len(members['c.p.jwt.json']),
+                'sha256': hashlib.sha256(members['c.p.jwt.json']).hexdigest()}
+            members['manifest.json'] = json.dumps(manifest).encode()
+        bundle.write_bytes(_make_bundle(members))
+        if mutation == 'duplicate':
+            with zipfile.ZipFile(bundle, 'a') as zf:
+                zf.writestr('c.p.jwt.json', members['c.p.jwt.json'])
+        digest = hashlib.sha256(bundle.read_bytes()).hexdigest()
+    with pytest.raises(SystemExit):
+        mod.cmd_import(argparse.Namespace(zipfile=str(bundle), sha256=digest))
+    assert not mod.CACHE_DIR.exists()
+
+
+def test_registry_fetch_disabled_offline(monkeypatch):
+    mod = _load_tool()
+    monkeypatch.setenv('RAPTOR_SEMGREP_OFFLINE', '1')
+    monkeypatch.setattr(mod, 'urlopen', lambda *a, **kw: pytest.fail('network attempted'))
+    with pytest.raises(SystemExit, match='disabled'):
+        mod.fetch_pack('secrets')
+
+
+def test_check_is_strict_local_scan_with_network_denied(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from core import sandbox
+    mod = _load_tool()
+    mod.CACHE_DIR = tmp_path / 'cache'
+    mod.CACHE_DIR.mkdir()
+    (mod.CACHE_DIR / mod.cache_filename('secrets')).write_text('{"rules":[{"id":"r"}]}')
+    calls = []
+    def run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return SimpleNamespace(returncode=0, stdout='{"errors":[]}', stderr='')
+    monkeypatch.setattr(sandbox, 'run', run)
+    mod.cmd_check(argparse.Namespace(packs='secrets'))
+    cmd, policy = calls[0]
+    assert '--strict' in cmd and '--validate' not in cmd
+    assert 'p/secrets' not in cmd
+    assert policy['block_network'] is True
+    assert policy['fake_home'] is True
+
+
+def test_check_refuses_rule_errors_even_with_zero_exit(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from core import sandbox
+    mod = _load_tool()
+    mod.CACHE_DIR = tmp_path
+    (tmp_path / mod.cache_filename('secrets')).write_text('{"rules":[{"id":"r"}]}')
+    monkeypatch.setattr(sandbox, 'run', lambda *a, **kw: SimpleNamespace(
+        returncode=0, stdout='{"errors":[{"message":"invalid rule"}]}', stderr=''))
+    with pytest.raises(SystemExit, match='rule errors'):
+        mod.cmd_check(argparse.Namespace(packs='secrets'))

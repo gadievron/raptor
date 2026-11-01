@@ -161,6 +161,10 @@ def _drop_unreachable_registry_packs(
     clean-but-quiet scan. Each drop prints an operator banner and is
     accumulated in ``_dropped_registry_packs`` for scan_metrics.json.
     """
+    if RaptorConfig.SEMGREP_OFFLINE:
+        # Resolve every requested pack before probing or dropping coverage.
+        return [(name, RaptorConfig.get_semgrep_config(config))
+                for name, config in configs]
     needs_network = [
         (n, c) for n, c in configs
         if c.startswith(("p/", "category/"))
@@ -1014,6 +1018,8 @@ def run_single_semgrep(
     Returns:
         Tuple of (sarif_path, success)
     """
+    if RaptorConfig.SEMGREP_OFFLINE:
+        config = RaptorConfig.get_semgrep_config(config)
     suffix = _sanitize_pack_name(name)
     sarif = out_dir / f"semgrep_{suffix}.sarif"
     json_out = out_dir / f"semgrep_{suffix}.json"
@@ -1179,7 +1185,7 @@ def run_single_semgrep(
             # The child's write grant is its work subdir, NOT out_dir
             # (see child_dir above); the fake HOME lands inside it.
             target=str(repo_path), output=str(child_dir),
-            proxy_hosts=_ph.proxy_hosts_for_semgrep(),
+            proxy_hosts=None if RaptorConfig.SEMGREP_OFFLINE else _ph.proxy_hosts_for_semgrep(),
             caller_label="scanner-semgrep",
             fake_home=True,
             readable_paths=_pack_readable or None,
@@ -3983,7 +3989,7 @@ def main() -> None:
         # semgrep pack failed (CI-gate signal — exit 4 distinct from
         # the sandbox-engagement-failure exit code which is reserved
         # for the SandboxSetupError path at __main__).
-        sys.exit(4 if all_semgrep_failed else 0)
+        sys.exit(4 if all_semgrep_failed or (RaptorConfig.SEMGREP_OFFLINE and semgrep_failed) else 0)
     finally:
         if not args.keep:
             try:

@@ -118,6 +118,27 @@ def is_available() -> bool:
     return shutil.which(_SEMGREP_BIN) is not None
 
 
+def _version_probe():
+    from core.config import RaptorConfig
+    if not RaptorConfig.SEMGREP_OFFLINE:
+        return probe(_SEMGREP_BIN)
+    from core.run.toolprobe import ToolInfo
+    binary = shutil.which(_SEMGREP_BIN)
+    if binary is None:
+        return None
+    runner = _default_sandbox_runner(Path.cwd(), "")
+    if runner is None:
+        return None
+    result = runner(
+        [str(Path(binary).resolve()), "--version", "--metrics", "off", "--disable-version-check"],
+        env=RaptorConfig.get_safe_env(), capture_output=True, text=True, timeout=15,
+    )
+    if result.returncode:
+        return None
+    return ToolInfo(name=_SEMGREP_BIN, path=binary, returncode=result.returncode,
+                    stdout=result.stdout, stderr=result.stderr)
+
+
 def version() -> str | None:
     """Return the semgrep version string, or None if unavailable.
 
@@ -126,7 +147,7 @@ def version() -> str | None:
     time). Uncached: a diagnostic surface, and tests patch
     ``subprocess.run`` per-test.
     """
-    info = probe(_SEMGREP_BIN)
+    info = _version_probe()
     return info.first_line if info is not None else None
 
 
@@ -137,7 +158,7 @@ def scope_isolation_available() -> bool:
     ``.semgrepignore`` files.  Callers should log a warning and pass
     ``scope_isolation=False`` to :func:`build_cmd`.
     """
-    info = probe(_SEMGREP_BIN)
+    info = _version_probe()
     if info is None:
         return False
     vt = info.version_tuple()
@@ -182,6 +203,9 @@ def build_cmd(
     Returns:
         argv list ready for subprocess.run.
     """
+    from core.config import RaptorConfig
+    if RaptorConfig.SEMGREP_OFFLINE:
+        config = RaptorConfig.get_semgrep_config(config)
     bin_path = semgrep_bin or shutil.which(_SEMGREP_BIN) or _SEMGREP_BIN
     cmd: list[str] = [
         bin_path,
@@ -234,6 +258,9 @@ def build_cmd(
         "--no-git-ignore",
         "--timeout", str(rule_timeout),
     ]
+    if RaptorConfig.SEMGREP_OFFLINE:
+        # Partial rule/config errors must fail the pack, even with findings.
+        cmd.append("--strict")
     if scope_isolation:
         cmd.insert(cmd.index("--no-git-ignore") + 1,
                    "--x-ignore-semgrepignore-files")
@@ -242,6 +269,12 @@ def build_cmd(
     if json_output_path is not None:
         cmd.extend(["--json-output", str(json_output_path)])
     if extra_args:
+        if RaptorConfig.SEMGREP_OFFLINE and any(
+            arg in {"--config", "-c", "--pro", "--pro-intrafile", "--pro-languages", "--no-strict"}
+            or arg.startswith(("--config=", "-c=", "--metrics", "--enable-version-check"))
+            for arg in extra_args
+        ):
+            raise ValueError("Offline Semgrep refuses acquisition/telemetry overrides in extra_args")
         cmd.extend(extra_args)
     cmd.append(str(target))
     cmd.extend(str(t) for t in extra_targets)
@@ -318,7 +351,9 @@ def _default_sandbox_runner(target: Path, config: str):
     except ImportError:  # pragma: no cover - platform-dependent import
         return None
 
-    needs_registry = str(config).startswith(("p/", "category/"))
+    from core.config import RaptorConfig
+    offline = RaptorConfig.SEMGREP_OFFLINE
+    needs_registry = not offline and str(config).startswith(("p/", "category/"))
     if needs_registry:
         from ._proxy_hosts import proxy_hosts_for_semgrep
         net_kwargs: dict = {
@@ -329,6 +364,14 @@ def _default_sandbox_runner(target: Path, config: str):
         net_kwargs = {"block_network": True}
 
     def _runner(cmd, **kwargs):
+        if offline:
+            from core.sandbox.python_paths import python_runtime_tool_paths
+            binary = Path(shutil.which(cmd[0]) or cmd[0]).resolve()
+            cmd = [str(binary), *cmd[1:]]
+            paths = [str(binary.parent), *python_runtime_tool_paths()]
+            if config and Path(config).exists():
+                paths.append(str(Path(config).resolve()))
+            kwargs.setdefault("tool_paths", paths)
         # Fake HOME in a per-invocation scratch dir: semgrep
         # unconditionally appends to ``~/.semgrep/semgrep.log`` (and
         # reads/writes ``~/.semgrep/settings.yml``); the operator's
@@ -414,6 +457,13 @@ def run_rule(
     """
     target = Path(target)
     name = name or _config_to_name(config)
+    from core.config import RaptorConfig
+    if RaptorConfig.SEMGREP_OFFLINE:
+        try:
+            config = RaptorConfig.get_semgrep_config(config)
+        except ValueError as exc:
+            return SemgrepResult(name=name, config=config, target=str(target),
+                                 errors=[str(exc)], returncode=-1)
 
     if not is_available():
         return SemgrepResult(
@@ -458,7 +508,6 @@ def run_rule(
         )
 
         if env is None:
-            from core.config import RaptorConfig
             # Registry configs (p/..., category/...) are fetched from
             # semgrep.dev at run time — semgrep honours proxy env, so
             # the operator's proxy must survive for those or every
