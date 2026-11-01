@@ -376,6 +376,7 @@ def run_sca(
             scan_root=target,
         ),
     )
+    imported_bom = None
     try:
         if options.sbom_input is not None:
             # Bypass discovery + parser dispatch: import the SBOM
@@ -383,17 +384,15 @@ def run_sca(
             # (cargo auditable, Maven cyclonedx-plugin, etc.) and
             # we want to scan the exact resolved deps the build
             # produced rather than re-parse the manifests.
-            from .sbom_import import parse_cyclonedx
-            try:
-                raw_deps, sbom_warnings = parse_cyclonedx(
-                    options.sbom_input,
-                )
-            except ValueError as e:
-                logger.error("sca.pipeline: SBOM import failed: %s", e)
-                raw_deps = []
-                sbom_warnings = [str(e)]
-            for w in sbom_warnings:
-                logger.warning("sca.pipeline: SBOM: %s", w)
+            from .sbom_import import read_cyclonedx
+            imported_bom = read_cyclonedx(options.sbom_input)
+            raw_deps = imported_bom.dependencies
+            from core.run.gaps import record_analysis_gap
+            for warning in imported_bom.coverage_gaps:
+                record_analysis_gap(output_dir, file_path=str(options.sbom_input),
+                                    reason="sbom_projection_gap", tool="sca", detail=warning)
+            for notice in imported_bom.notices:
+                logger.warning("sca.pipeline: SBOM: %s", notice)
             manifests = []   # no manifests when SBOM-imported
             parse_failures: list = []
         else:
@@ -723,7 +722,8 @@ def run_sca(
                     "evaluation will rely on existing declared_license",
                     exc_info=True,
                 )
-        license_findings = evaluate_license(joined, policy)
+        license_inventory = joined + (imported_bom.license_dependencies if imported_bom else [])
+        license_findings = evaluate_license(license_inventory, policy)
         progress.done(f"{len(license_findings)} findings")
 
     # 3. Canonical dep set: lockfile-preferred, deduped per (eco, name, ver).
@@ -1146,6 +1146,7 @@ def run_sca(
         target_name=target.name,
         image_fingerprints=image_fingerprints or None,
         project_license=project_license,
+        source_bom=imported_bom,
     )
 
     # Optional SPDX 2.3 SBOM alongside CycloneDX. Some compliance
@@ -1154,6 +1155,10 @@ def run_sca(
     # require one). Default off because most tooling consumes
     # CycloneDX directly.
     if options.emit_spdx_sbom:
+        if imported_bom is not None:
+            record_analysis_gap(output_dir, file_path=str(options.sbom_input),
+                                reason="sbom_format_projection", tool="sca",
+                                detail="SPDX output contains the scan projection; full imported inventory and evidence remain in CycloneDX output")
         from .sbom_spdx import write_sbom_spdx_json
         write_sbom_spdx_json(
             output_dir / "sbom.spdx.json",
@@ -2143,6 +2148,17 @@ def select_canonical_for_osv(
     def _keep(triple: tuple[str, str, str], r: Dependency) -> None:
         kept = kept_by_version.get(triple)
         if kept is not None:
+            if kept.source_kind == r.source_kind == "sbom_import":
+                # Keep the most exposed scan context while the retained BOM
+                # preserves every occurrence and its original graph edges.
+                kept.direct = kept.direct or r.direct
+                depths = [depth for depth in (kept.transitive_depth, r.transitive_depth)
+                          if depth is not None]
+                kept.transitive_depth = 0 if kept.direct else min(depths, default=None)
+                rank = {"main": 0, "peer": 0, "build": 1, "optional": 1,
+                        "dev": 1, "test": 1, "excluded": 2}
+                if rank.get(r.scope, 1) < rank.get(kept.scope, 1):
+                    kept.scope = r.scope
             # Collapsed duplicate. Don't lose the npm-alias spelling to
             # first-seen order: a manifest declaring the package both
             # plain and aliased ("lodash" + "my-lodash": "npm:lodash@…")

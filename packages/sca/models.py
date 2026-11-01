@@ -126,7 +126,8 @@ class Dependency:
     direct: bool                 # True if declared, False if transitive
     purl: str                    # pkg:maven/group/artifact@version
     parser_confidence: Confidence  # exact (POM XML) | heuristic (Gradle DSL)
-    declared_license: str | None = None  # SPDX expr; SBOM use only
+    declared_license: str | None = None  # single declaration/expression;
+                                        # multiple entries use license_declarations
     commented_out: bool = False    # True when extracted from a commented
                                     # line (e.g. `# z3-solver==4.16.0.0`); the
                                     # findings layer downgrades severity to
@@ -199,6 +200,10 @@ class Dependency:
     version_ceiling: str | None = None   # tightest upper bound
                                             # (``<`` / ``<=``) — the
                                             # upgrade ceiling.
+
+    transitive_depth: int | None = None  # graph-derived depth, when known
+    license_declarations: tuple[str, ...] = ()  # separate upstream declarations;
+                                                # no inferred AND/OR relationship
 
     def __post_init__(self) -> None:
         # Provenance correction: lockfile-parsed rows that don't set an

@@ -12,8 +12,9 @@ Two top-level arrays:
 
 Layout follows CycloneDX 1.5 — see
 https://cyclonedx.org/docs/1.5/json/ — with only the fields we can
-populate from the mechanical pipeline. Optional fields we leave out
-(hashes, externalReferences, evidence) can land in a follow-up.
+populate from the mechanical pipeline. Imported documents retain their
+original components, evidence, references, relationships, and root identity;
+only scan metadata and VEX assertions are enriched.
 
 Why one combined SBOM+VEX file rather than two: most downstream tooling
 (Dependency-Track, OWASP CycloneDX CLI) accepts the merged shape, and
@@ -23,6 +24,7 @@ emitting twice doubles operator confusion about which is canonical.
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 import uuid
 from collections import OrderedDict
 from datetime import datetime, timezone
@@ -34,7 +36,8 @@ from core.security.prompt_output_sanitise import sanitise_string
 
 if TYPE_CHECKING:
     from .models import Advisory, Dependency, VulnFinding
-    from collections.abc import Iterable, Sequence
+    from .sbom_import import ImportedBom
+    from collections.abc import Iterable, Mapping, Sequence
     from pathlib import Path
 
 # Cap on advisory text in CycloneDX vulnerability.description. Larger
@@ -57,6 +60,7 @@ _SCOPE_MAP = {
     "test": "optional",
     "peer": "required",
     "optional": "optional",
+    "excluded": "excluded",
 }
 
 
@@ -69,13 +73,14 @@ def write_sbom_json(
     serial_number: str | None = None,
     image_fingerprints: dict[str, Any] | None = None,
     project_license: str | None = None,
+    source_bom: ImportedBom | None = None,
 ) -> int:
     """Atomically write the merged SBOM+VEX document; return component count."""
     bom = build_bom(deps=deps, vuln_findings=vuln_findings,
                     target_name=target_name,
                     serial_number=serial_number,
                     image_fingerprints=image_fingerprints,
-                    project_license=project_license)
+                    project_license=project_license, source_bom=source_bom)
     save_json(path, bom)
     return len(bom.get("components", []))
 
@@ -89,6 +94,7 @@ def build_bom(
     serial_number: str | None = None,
     image_fingerprints: dict[str, Any] | None = None,
     project_license: str | None = None,
+    source_bom: ImportedBom | None = None,
 ) -> dict[str, Any]:
     """Return the CycloneDX 1.5 BOM dict (in serialisation order).
 
@@ -104,6 +110,8 @@ def build_bom(
     license only ever comes from data that describes that dep.
     """
     generated_at = generated_at or datetime.now(timezone.utc)
+    if source_bom is not None:
+        return _enrich_imported_bom(source_bom, vuln_findings, generated_at)
     if serial_number is None:
         serial_number = f"urn:uuid:{uuid.uuid4()}"
     components, by_key = _build_components(
@@ -165,10 +173,12 @@ def _build_components(
         if bom_ref in seen:
             # Merge: prefer rows with version present + license declared.
             existing = seen[bom_ref]
+            scopes = [existing.get("scope", "optional"), _SCOPE_MAP.get(d.scope, "optional")]
+            existing["scope"] = min(scopes, key={"required": 0, "optional": 1, "excluded": 2}.__getitem__)
             if not existing.get("version") and d.version:
                 existing["version"] = d.version
-            if not existing.get("licenses") and d.declared_license:
-                existing["licenses"] = _license_block(d.declared_license)
+            if not existing.get("licenses") and (d.declared_license or d.license_declarations):
+                existing["licenses"] = _dependency_licenses(d)
             by_key[d.key()] = bom_ref
             continue
         comp: dict[str, Any] = {
@@ -181,8 +191,8 @@ def _build_components(
         if d.purl:
             comp["purl"] = d.purl
         comp["scope"] = _SCOPE_MAP.get(d.scope, "optional")
-        if d.declared_license:
-            comp["licenses"] = _license_block(d.declared_license)
+        if d.declared_license or d.license_declarations:
+            comp["licenses"] = _dependency_licenses(d)
         comp["properties"] = [
             {"name": "raptor:ecosystem", "value": d.ecosystem},
             {"name": "raptor:direct", "value": "true" if d.direct else "false"},
@@ -221,6 +231,66 @@ def _build_components(
         seen[bom_ref] = comp
         by_key[d.key()] = bom_ref
     return list(seen.values()), by_key
+
+
+def _enrich_imported_bom(
+    source: ImportedBom, findings: Iterable[VulnFinding], generated_at: datetime,
+) -> dict[str, Any]:
+    """Preserve inventory/evidence; add this scan's VEX using original refs."""
+    # read_cyclonedx bounds document depth before deepcopy is reached.
+    bom = deepcopy(source.document)
+    bom.pop("signature", None)  # modifying the document invalidates its signature
+    bom["version"] = bom.get("version", 1) + 1
+    metadata = bom.setdefault("metadata", {})
+    metadata["timestamp"] = generated_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+    tool = {"vendor": "raptor", "name": "sca", "version": "0.1"}
+    tools = metadata.setdefault("tools", [])
+    if isinstance(tools, list):
+        if tool not in tools:
+            tools.append(tool)
+    elif isinstance(tools, dict):
+        components = tools.setdefault("components", [])
+        component = {"type": "application", "name": "raptor-sca", "version": "0.1"}
+        if component not in components:
+            components.append(component)
+    from .sbom_import import _components, _reference_changes, _references
+    components = _components(bom)
+    if len(components) != len(source.component_refs):
+        raise ValueError("SBOM component inventory changed after import")
+    changed = _reference_changes(components, metadata.get("component", {}))
+    for comp, ref in zip(components, source.component_refs):
+        comp.setdefault("bom-ref", ref)
+        if id(comp) in changed:
+            comp.pop("signature", None)
+    if id(metadata.get("component")) in changed:
+        metadata["component"].pop("signature", None)
+    used = _references(bom)
+    new_findings = _build_vulnerabilities(findings, source.refs_by_key)
+    for entry in new_findings:
+        original_ref = entry["bom-ref"]
+        ref = original_ref
+        collision = 0
+        while ref in used:
+            collision += 1
+            ref = f"{original_ref}:sca:{collision}"
+        entry["bom-ref"] = ref
+        used.add(ref)
+    if new_findings:
+        bom.setdefault("vulnerabilities", []).extend(new_findings)
+    return bom
+
+
+def _dependency_licenses(dep: Dependency) -> list[dict[str, Any]]:
+    declarations = dep.license_declarations or (dep.declared_license,)
+    result = []
+    for declaration in declarations:
+        if not declaration:
+            continue
+        block = _license_block(declaration)
+        if len(declarations) > 1 and "expression" in block[0]:
+            raise ValueError("multiple licence declarations cannot mix with SPDX expressions")
+        result.extend(block)
+    return result
 
 
 def _fingerprint_properties(
@@ -318,7 +388,7 @@ def _looks_like_spdx_id(text: str) -> bool:
 
 def _build_vulnerabilities(
     vuln_findings: Iterable[VulnFinding],
-    by_key: dict[str, str],
+    by_key: Mapping[str, str | list[str]],
 ) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for f in vuln_findings:
@@ -354,7 +424,8 @@ def _build_vulnerabilities(
                 "vector": primary.severity.vector,
             }]
         if bom_ref:
-            entry["affects"] = [{"ref": bom_ref}]
+            refs = bom_ref if isinstance(bom_ref, list) else [bom_ref]
+            entry["affects"] = [{"ref": ref} for ref in refs]
         analysis: dict[str, Any] = {}
         if f.reachability.verdict == "likely_called":
             analysis["state"] = "exploitable"

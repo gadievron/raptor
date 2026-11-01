@@ -179,7 +179,13 @@ def _package_block(dep: Dependency, spdx_id: str) -> dict[str, Any]:
     # says) vs concluded (what the analyser concluded). Without
     # a separate concluded-license analysis pass, we use NOASSERTION
     # for ``licenseConcluded`` per SPDX best practice.
-    if dep.declared_license:
+    if len(dep.license_declarations) > 1:
+        pkg["licenseDeclared"] = "NOASSERTION"
+        pkg["licenseComments"] = (
+            "Separate upstream declarations; relationship unspecified: "
+            + "; ".join(dep.license_declarations)
+        )
+    elif dep.declared_license:
         pkg["licenseDeclared"] = _spdx_license_value(dep.declared_license)
     else:
         pkg["licenseDeclared"] = "NOASSERTION"
