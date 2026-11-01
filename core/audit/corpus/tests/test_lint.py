@@ -720,6 +720,23 @@ class TestDefinitionIdentity:
         check = self.check(tmp_path, "int target_fn(void) { return ???; }\n")
         assert check.outcome == lint.PIN_UNVERIFIABLE
 
+    @pytest.mark.parametrize("suffix,text", [
+        (".c", "int target_fn(void) { return 0; }\n"),
+        (".go", "package p\nfunc target_fn() {}\n"),
+    ])
+    def test_missing_native_parser_refuses_validation_and_stamping(self, tmp_path, monkeypatch, suffix, text):
+        from core.inventory import extractors
+        monkeypatch.setattr(extractors, "_ts_parser_for", lambda language: None)
+        check = self.check(tmp_path, text, suffix=suffix)
+        assert check.outcome == lint.PIN_UNVERIFIABLE
+        assert "parser unavailable" in check.detail
+        assert not check.current_span_sha
+        monkeypatch.setattr(lint, "verify_pins", lambda *a, **kw: [check])
+        path = tmp_path / "l.label.json"
+        before = path.read_bytes()
+        assert lint.main(["--mode", "pins", "--stamp", str(path)]) == lint.EXIT_LINT
+        assert path.read_bytes() == before
+
     def test_unverifiable_cli_fails_even_without_require_fixtures(self, tmp_path, monkeypatch):
         check = self.check(tmp_path, "function target_fn() {}\n", suffix=".js")
         monkeypatch.setattr(lint, "verify_pins", lambda *a, **kw: [check])
