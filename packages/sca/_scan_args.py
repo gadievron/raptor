@@ -96,7 +96,7 @@ def add_scan_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--sbom",
         help=(
-            "import a CycloneDX SBOM as the dep list, bypassing "
+            "import CycloneDX 1.5 or SPDX 2.3 JSON as the dep list, bypassing "
             "manifest discovery + parser dispatch. Useful when the "
             "build system already emits an SBOM (cargo auditable, "
             "Maven cyclonedx-plugin, Trivy, Snyk export, etc.) and "
@@ -184,8 +184,7 @@ def add_scan_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--spdx", action="store_true",
         help="write an SPDX 2.3 SBOM (sbom.spdx.json) alongside "
-             "the CycloneDX one. Some compliance programmes (NTIA "
-             "Minimum Elements, FedRAMP) mandate SPDX.",
+             "the CycloneDX one; always preserved for SPDX input.",
     )
     parser.add_argument(
         "--include-commented", action="store_true",

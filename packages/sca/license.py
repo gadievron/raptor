@@ -314,6 +314,13 @@ def _evaluate_one(
     #            for now. (Per-exception policy is a future
     #            refinement; today we evaluate the left side.)
     spdx = spdx.strip()
+    if len(spdx) > _MAX_SPDX_EXPR_LEN:
+        return _unparseable_finding(dep, spdx, policy)
+    # Normalize expression formatting in the evaluation view only. Producers
+    # use tabs/newlines and operators adjacent to parentheses; treating those
+    # as a single unknown ID could bypass a deny rule under default=allow.
+    if re.search(r"(?<![A-Za-z0-9.+-])(?:AND|OR|WITH)(?![A-Za-z0-9.+-])", spdx):
+        spdx = " ".join(spdx.replace("(", " ( ").replace(")", " ) ").split())
     # Strict leaf validation only for paren-bearing expressions: those
     # went through structural decomposition, so a leaf that is not a
     # well-formed SPDX id means the decomposition hit garbage (e.g.
@@ -601,6 +608,11 @@ def _unknown_finding(
     if policy.on_unknown == "allow":
         return None
     severity = "high" if policy.on_unknown == "deny" else "info"
+    spdx_input = dep.source_extra is not None and "spdx_license_declared" in dep.source_extra
+    reason = ("SPDX package has no usable declared licence" if spdx_input
+              else "declared_license is None after enrichment")
+    detail = (f"SPDX licenseDeclared is {dep.source_extra['spdx_license_declared']!r}"
+              if spdx_input else "registry returned no SPDX field")
     return LicenseFinding(
         finding_id=_finding_id(dep, "license_unknown"),
         kind="license_unknown",
@@ -608,12 +620,12 @@ def _unknown_finding(
         spdx=None,
         detail=(
             f"No license metadata for {dep.ecosystem}:{dep.name}"
-            f"@{dep.version or '*'} — registry returned no SPDX field"
+            f"@{dep.version or '*'} — {detail}"
         ),
         severity=severity,  # type: ignore[arg-type]
         confidence=Confidence(
             "medium",
-            reason="declared_license is None after enrichment",
+            reason=reason,
         ),
     )
 

@@ -1169,3 +1169,14 @@ def test_authoritative_404_stays_negative_cached(fetch, args):
     assert list(cache.store.values()) == [""]
     # Second call is served from the cached negative — no refetch.
     assert fn(*args, http=_BoomHttp(), cache=cache) is None
+
+
+@pytest.mark.parametrize("expression", [
+    "MIT\nAND\tGPL-3.0-only", "(GPL-3.0-only)OR(GPL-2.0-only)",
+])
+def test_expression_whitespace_and_parenthesis_spacing_preserve_policy(expression):
+    dep = _dep(license=expression)
+    findings = evaluate([dep], LicensePolicy(deny={"GPL-3.0-only", "GPL-2.0-only"}))
+    assert findings
+    assert all(f.kind == "license_denied" for f in findings)
+    assert dep.declared_license == expression

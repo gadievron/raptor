@@ -1,4 +1,4 @@
-"""Import a CycloneDX SBOM as scan input.
+"""Import CycloneDX 1.5 or SPDX 2.3 JSON as scan input.
 
 Operators with an existing SBOM (from Trivy, Snyk, Anchore, etc.)
 can feed it directly to raptor-sca instead of relying on manifest
@@ -27,7 +27,7 @@ dispatch phases are SKIPPED when ``--sbom`` is set.
 
 The full document is retained separately from the scannable Dependency view.
 Non-package inventory and provenance therefore survive CycloneDX enrichment.
-Only CycloneDX 1.5 is supported; unsupported versions fail explicitly.
+SPDX uses a separate adapter; unsupported versions fail explicitly.
 """
 
 from __future__ import annotations
@@ -97,11 +97,15 @@ def read_cyclonedx(path: Path) -> ImportedBom:
     Errors that prevent the entire SBOM from being read (bad
     JSON, wrong shape) raise ``ValueError``.
     """
+    return _read_cyclonedx(_read_document(path), path)
+
+
+def _read_document(path: Path) -> dict:
     # Bounded read: an SBOM is target/operator-supplied input, and an
     # unbounded read_text is a memory-exhaustion primitive. The 50 MB
     # package cap comfortably covers legitimate monorepo SBOMs.
     # follow_symlinks=True is deliberate: this path is OPERATOR-NAMED
-    # (--sbom-input on the CLI), not discovered in the scanned tree,
+    # (--sbom on the CLI), not discovered in the scanned tree,
     # and build-emitted SBOMs legitimately sit behind build-dir
     # symlinks. Tree-discovered manifests keep the hardened default.
     try:
@@ -134,14 +138,29 @@ def read_cyclonedx(path: Path) -> ImportedBom:
         msg = f"SBOM root must be a JSON object, got {type(data).__name__}"
         raise ValueError(msg)
 
+    _check_document(data)
+    return data
+
+
+def read_sbom(path: Path) -> ImportedBom:
+    """Read CycloneDX 1.5 or SPDX 2.3 JSON without fetching external content."""
+    data = _read_document(path)
+    if "bomFormat" in data and "spdxVersion" in data:
+        raise ValueError("ambiguous SBOM format markers")
+    if "spdxVersion" in data:
+        from .sbom_spdx_import import _read_spdx
+        return _read_spdx(data, path)
+    return _read_cyclonedx(data, path)
+
+
+def _read_cyclonedx(data: dict, path: Path) -> ImportedBom:
     # Sanity: bomFormat must be "CycloneDX". Operators who pass
     # an SPDX SBOM see a clear error rather than a silent miss.
     bom_format = data.get("bomFormat")
     if bom_format != "CycloneDX":
         msg = (
             f"SBOM at {path} is not CycloneDX (bomFormat={bom_format!r}); "
-            f"SPDX or other formats are not supported. Convert with "
-            f"`cyclonedx-cli convert` first if needed."
+            "expected a supported JSON SBOM format marker."
         )
         raise ValueError(msg)
 
@@ -149,7 +168,6 @@ def read_cyclonedx(path: Path) -> ImportedBom:
         raise ValueError("unsupported CycloneDX specVersion; expected 1.5")
     if "version" in data and (type(data["version"]) is not int or data["version"] < 1):
         raise ValueError("CycloneDX document version must be a positive integer")
-    _check_document(data)
     metadata = data.get("metadata", {})
     if not isinstance(metadata, dict) or not isinstance(metadata.get("component", {}), dict):
         raise ValueError("CycloneDX metadata/component must be objects")
@@ -236,6 +254,7 @@ class ImportedBom:
     component_refs: list[str]
     license_dependencies: list[Dependency]
     notices: list[str]
+    format: str = "CycloneDX"
 
     @property
     def warnings(self) -> list[str]:
@@ -268,13 +287,13 @@ def _check_document(data: dict) -> None:
     while stack:
         value, depth = stack.pop()
         if depth > 64:
-            raise ValueError("CycloneDX document exceeds supported nesting depth")
+            raise ValueError("SBOM document exceeds supported nesting depth")
         if isinstance(value, dict):
             stack.extend((v, depth + 1) for v in value.values())
         elif isinstance(value, list):
             stack.extend((v, depth + 1) for v in value)
         elif isinstance(value, float) and not math.isfinite(value):
-            raise ValueError("non-finite number in CycloneDX document")
+            raise ValueError("non-finite number in SBOM document")
         elif isinstance(value, str):
             try:
                 value.encode("utf-8")
@@ -400,7 +419,7 @@ def _component_to_dep(
     if version is None:
         version = comp.get("version")
     elif comp.get("version") is not None and comp["version"] != version:
-        raise ValueError("CycloneDX component version conflicts with its purl")
+        raise ValueError("SBOM component version conflicts with its purl")
 
     scope_raw = comp.get("scope", "required")
     scope = _SCOPE_MAP.get(scope_raw, "main")
@@ -572,4 +591,4 @@ def _license_declarations(block) -> tuple[str, ...]:
     return tuple(result)
 
 
-__all__ = ["parse_cyclonedx", "read_cyclonedx", "ImportedBom"]
+__all__ = ["parse_cyclonedx", "read_cyclonedx", "read_sbom", "ImportedBom"]
