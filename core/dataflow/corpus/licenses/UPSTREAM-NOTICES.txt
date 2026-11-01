@@ -1,0 +1,433 @@
+Retained upstream notices for the RAPTOR dataflow corpus
+=======================================================
+
+Scope: snippet fields in core/dataflow/corpus/findings/*.json whose
+file_path identifies one of the fixture paths listed below. See SOURCES.md
+for the licence mapping and the upstream revisions used by the corpus.
+
+RAPTOR adaptation: selected source lines are embedded as JSON strings;
+surrounding source context is omitted and JSON escaping is applied.
+The original upstream comments below are reproduced without alteration.
+This attribution bundle was added on 2026-11-01. Original extraction dates
+and subsequent corpus changes are recorded in RAPTOR's Git history.
+
+These notices and the accompanying licence texts must travel with copies
+of the excerpt collection. RAPTOR-authored code and independent annotations
+retain RAPTOR's MIT licence; the upstream snippets retain their own terms.
+
+Juice Shop codefix files have no leading copyright header; the applicable
+project copyright and MIT permission notice are in Juice-Shop.txt.
+
+OWASP-Benchmark/BenchmarkJava
+-----------------------------
+
+Fixture path: out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/helpers/SeparateClassRequest.java
+Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava/blob/b06d6efaebd577a327514364951916e7df3290b4/src/main/java/org/owasp/benchmark/helpers/SeparateClassRequest.java
+
+Original notice:
+
+/**
+ * OWASP Benchmark Project
+ *
+ * <p>This file is part of the Open Web Application Security Project (OWASP) Benchmark Project For
+ * details, please see <a
+ * href="https://owasp.org/www-project-benchmark/">https://owasp.org/www-project-benchmark/</a>.
+ *
+ * <p>The OWASP Benchmark is free software: you can redistribute it and/or modify it under the terms
+ * of the GNU General Public License as published by the Free Software Foundation, version 2.
+ *
+ * <p>The OWASP Benchmark is distributed in the hope that it will be useful, but WITHOUT ANY
+ * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
+ * PURPOSE. See the GNU General Public License for more details
+ *
+ * @author Dave Wichers
+ * @created 2015
+ */
+
+OWASP-Benchmark/BenchmarkJava
+-----------------------------
+
+Fixture path: out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/helpers/Thing1.java
+Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava/blob/b06d6efaebd577a327514364951916e7df3290b4/src/main/java/org/owasp/benchmark/helpers/Thing1.java
+
+Original notice:
+
+/**
+ * OWASP Benchmark Project
+ *
+ * <p>This file is part of the Open Web Application Security Project (OWASP) Benchmark Project For
+ * details, please see <a
+ * href="https://owasp.org/www-project-benchmark/">https://owasp.org/www-project-benchmark/</a>.
+ *
+ * <p>The OWASP Benchmark is free software: you can redistribute it and/or modify it under the terms
+ * of the GNU General Public License as published by the Free Software Foundation, version 2.
+ *
+ * <p>The OWASP Benchmark is distributed in the hope that it will be useful, but WITHOUT ANY
+ * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
+ * PURPOSE. See the GNU General Public License for more details
+ *
+ * @author Nick Sanidas
+ * @created 2015
+ */
+
+OWASP-Benchmark/BenchmarkJava
+-----------------------------
+
+Fixture path: out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest00093.java
+Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava/blob/b06d6efaebd577a327514364951916e7df3290b4/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest00093.java
+Fixture path: out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest00177.java
+Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava/blob/b06d6efaebd577a327514364951916e7df3290b4/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest00177.java
+Fixture path: out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest00306.java
+Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava/blob/b06d6efaebd577a327514364951916e7df3290b4/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest00306.java
+Fixture path: out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest00310.java
+Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava/blob/b06d6efaebd577a327514364951916e7df3290b4/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest00310.java
+Fixture path: out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest00412.java
+Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava/blob/b06d6efaebd577a327514364951916e7df3290b4/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest00412.java
+Fixture path: out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest00567.java
+Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava/blob/b06d6efaebd577a327514364951916e7df3290b4/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest00567.java
+Fixture path: out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest00657.java
+Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava/blob/b06d6efaebd577a327514364951916e7df3290b4/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest00657.java
+Fixture path: out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest00659.java
+Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava/blob/b06d6efaebd577a327514364951916e7df3290b4/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest00659.java
+Fixture path: out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest00825.java
+Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava/blob/b06d6efaebd577a327514364951916e7df3290b4/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest00825.java
+Fixture path: out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest00827.java
+Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava/blob/b06d6efaebd577a327514364951916e7df3290b4/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest00827.java
+Fixture path: out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest00909.java
+Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava/blob/b06d6efaebd577a327514364951916e7df3290b4/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest00909.java
+Fixture path: out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01864.java
+Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava/blob/b06d6efaebd577a327514364951916e7df3290b4/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01864.java
+Fixture path: out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01939.java
+Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava/blob/b06d6efaebd577a327514364951916e7df3290b4/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01939.java
+Fixture path: out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01943.java
+Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava/blob/b06d6efaebd577a327514364951916e7df3290b4/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01943.java
+Fixture path: out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest02059.java
+Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava/blob/b06d6efaebd577a327514364951916e7df3290b4/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest02059.java
+Fixture path: out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest02253.java
+Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava/blob/b06d6efaebd577a327514364951916e7df3290b4/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest02253.java
+Fixture path: out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest02344.java
+Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava/blob/b06d6efaebd577a327514364951916e7df3290b4/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest02344.java
+Fixture path: out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest02429.java
+Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava/blob/b06d6efaebd577a327514364951916e7df3290b4/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest02429.java
+Fixture path: out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest02512.java
+Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava/blob/b06d6efaebd577a327514364951916e7df3290b4/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest02512.java
+Fixture path: out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest02513.java
+Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava/blob/b06d6efaebd577a327514364951916e7df3290b4/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest02513.java
+Fixture path: out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest02518.java
+Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava/blob/b06d6efaebd577a327514364951916e7df3290b4/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest02518.java
+Fixture path: out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest02612.java
+Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava/blob/b06d6efaebd577a327514364951916e7df3290b4/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest02612.java
+
+Original notice:
+
+/**
+ * OWASP Benchmark Project v1.2
+ *
+ * <p>This file is part of the Open Web Application Security Project (OWASP) Benchmark Project. For
+ * details, please see <a
+ * href="https://owasp.org/www-project-benchmark/">https://owasp.org/www-project-benchmark/</a>.
+ *
+ * <p>The OWASP Benchmark is free software: you can redistribute it and/or modify it under the terms
+ * of the GNU General Public License as published by the Free Software Foundation, version 2.
+ *
+ * <p>The OWASP Benchmark is distributed in the hope that it will be useful, but WITHOUT ANY
+ * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
+ * PURPOSE. See the GNU General Public License for more details.
+ *
+ * @author Nick Sanidas
+ * @created 2015
+ */
+
+OWASP-Benchmark/BenchmarkJava
+-----------------------------
+
+Fixture path: out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest00982.java
+Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava/blob/b06d6efaebd577a327514364951916e7df3290b4/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest00982.java
+Fixture path: out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01286.java
+Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava/blob/b06d6efaebd577a327514364951916e7df3290b4/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01286.java
+Fixture path: out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01288.java
+Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava/blob/b06d6efaebd577a327514364951916e7df3290b4/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01288.java
+Fixture path: out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01362.java
+Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava/blob/b06d6efaebd577a327514364951916e7df3290b4/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01362.java
+Fixture path: out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01517.java
+Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava/blob/b06d6efaebd577a327514364951916e7df3290b4/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01517.java
+Fixture path: out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01609.java
+Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava/blob/b06d6efaebd577a327514364951916e7df3290b4/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01609.java
+Fixture path: out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java
+Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava/blob/b06d6efaebd577a327514364951916e7df3290b4/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java
+
+Original notice:
+
+/**
+ * OWASP Benchmark Project v1.2
+ *
+ * <p>This file is part of the Open Web Application Security Project (OWASP) Benchmark Project. For
+ * details, please see <a
+ * href="https://owasp.org/www-project-benchmark/">https://owasp.org/www-project-benchmark/</a>.
+ *
+ * <p>The OWASP Benchmark is free software: you can redistribute it and/or modify it under the terms
+ * of the GNU General Public License as published by the Free Software Foundation, version 2.
+ *
+ * <p>The OWASP Benchmark is distributed in the hope that it will be useful, but WITHOUT ANY
+ * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
+ * PURPOSE. See the GNU General Public License for more details.
+ *
+ * @author Dave Wichers
+ * @created 2015
+ */
+
+WebGoat/WebGoat
+---------------
+
+Fixture path: out/dataflow-corpus-fixtures/webgoat/src/main/java/org/owasp/webgoat/lessons/idor/IDORViewOtherProfile.java
+Upstream: https://github.com/WebGoat/WebGoat/blob/7d3343d08c360d4751e5298e1fe910463b7731a1/src/main/java/org/owasp/webgoat/lessons/idor/IDORViewOtherProfile.java
+Fixture path: out/dataflow-corpus-fixtures/webgoat/src/main/java/org/owasp/webgoat/lessons/sqlinjection/introduction/SqlInjectionLesson2.java
+Upstream: https://github.com/WebGoat/WebGoat/blob/7d3343d08c360d4751e5298e1fe910463b7731a1/src/main/java/org/owasp/webgoat/lessons/sqlinjection/introduction/SqlInjectionLesson2.java
+Fixture path: out/dataflow-corpus-fixtures/webgoat/src/main/java/org/owasp/webgoat/lessons/sqlinjection/mitigation/SqlOnlyInputValidation.java
+Upstream: https://github.com/WebGoat/WebGoat/blob/7d3343d08c360d4751e5298e1fe910463b7731a1/src/main/java/org/owasp/webgoat/lessons/sqlinjection/mitigation/SqlOnlyInputValidation.java
+Fixture path: out/dataflow-corpus-fixtures/webgoat/src/main/java/org/owasp/webgoat/lessons/ssrf/SSRFTask1.java
+Upstream: https://github.com/WebGoat/WebGoat/blob/7d3343d08c360d4751e5298e1fe910463b7731a1/src/main/java/org/owasp/webgoat/lessons/ssrf/SSRFTask1.java
+
+Original notice:
+
+/*
+ * SPDX-FileCopyrightText: Copyright © 2014 WebGoat authors
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
+
+WebGoat/WebGoat
+---------------
+
+Fixture path: out/dataflow-corpus-fixtures/webgoat/src/main/java/org/owasp/webgoat/lessons/pathtraversal/ProfileUploadFix.java
+Upstream: https://github.com/WebGoat/WebGoat/blob/7d3343d08c360d4751e5298e1fe910463b7731a1/src/main/java/org/owasp/webgoat/lessons/pathtraversal/ProfileUploadFix.java
+Fixture path: out/dataflow-corpus-fixtures/webgoat/src/main/java/org/owasp/webgoat/lessons/pathtraversal/ProfileUploadRemoveUserInput.java
+Upstream: https://github.com/WebGoat/WebGoat/blob/7d3343d08c360d4751e5298e1fe910463b7731a1/src/main/java/org/owasp/webgoat/lessons/pathtraversal/ProfileUploadRemoveUserInput.java
+
+Original notice:
+
+/*
+ * SPDX-FileCopyrightText: Copyright © 2020 WebGoat authors
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
+
+WebGoat/WebGoat
+---------------
+
+Fixture path: out/dataflow-corpus-fixtures/webgoat/src/main/java/org/owasp/webgoat/lessons/sqlinjection/mitigation/SqlInjectionLesson10a.java
+Upstream: https://github.com/WebGoat/WebGoat/blob/7d3343d08c360d4751e5298e1fe910463b7731a1/src/main/java/org/owasp/webgoat/lessons/sqlinjection/mitigation/SqlInjectionLesson10a.java
+Fixture path: out/dataflow-corpus-fixtures/webgoat/src/main/java/org/owasp/webgoat/lessons/sqlinjection/mitigation/SqlInjectionLesson13.java
+Upstream: https://github.com/WebGoat/WebGoat/blob/7d3343d08c360d4751e5298e1fe910463b7731a1/src/main/java/org/owasp/webgoat/lessons/sqlinjection/mitigation/SqlInjectionLesson13.java
+
+Original notice:
+
+/*
+ * SPDX-FileCopyrightText: Copyright © 2017 WebGoat authors
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
+
+curl/curl
+---------
+
+Fixture path: out/dataflow-corpus-fixtures/curl/lib/curl_ntlm_core.c
+Upstream: https://github.com/curl/curl/blob/19ebc282172ff204648f350c6e716197d5b4d221/lib/curl_ntlm_core.c
+
+Original notice:
+
+/***************************************************************************
+ *                                  _   _ ____  _
+ *  Project                     ___| | | |  _ \| |
+ *                             / __| | | | |_) | |
+ *                            | (__| |_| |  _ <| |___
+ *                             \___|\___/|_| \_\_____|
+ *
+ * Copyright (C) 1998 - 2018, Daniel Stenberg, <daniel@haxx.se>, et al.
+ *
+ * This software is licensed as described in the file COPYING, which
+ * you should have received as part of this distribution. The terms
+ * are also available at https://curl.haxx.se/docs/copyright.html.
+ *
+ * You may opt to use, copy, modify, merge, publish, distribute and/or sell
+ * copies of the Software, and permit persons to whom the Software is
+ * furnished to do so, under the terms of the COPYING file.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ ***************************************************************************/
+
+torvalds/linux
+--------------
+
+Fixture path: out/dataflow-corpus-fixtures/linux-cve-2019-12614/arch/powerpc/platforms/pseries/dlpar.c
+Upstream: https://github.com/torvalds/linux/blob/v5.1/arch/powerpc/platforms/pseries/dlpar.c
+
+Original notice:
+
+/*
+ * Support for dynamic reconfiguration for PCI, Memory, and CPU
+ * Hotplug and Dynamic Logical Partitioning on RPA platforms.
+ *
+ * Copyright (C) 2009 Nathan Fontenot
+ * Copyright (C) 2009 IBM Corporation
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License version
+ * 2 as published by the Free Software Foundation.
+ */
+
+torvalds/linux
+--------------
+
+Fixture path: out/dataflow-corpus-fixtures/linux-cve-2019-12615/arch/sparc/kernel/mdesc.c
+Upstream: https://github.com/torvalds/linux/blob/v5.1/arch/sparc/kernel/mdesc.c
+
+Original notice:
+
+// SPDX-License-Identifier: GPL-2.0
+/* mdesc.c: Sun4V machine description handling.
+ *
+ * Copyright (C) 2007, 2008 David S. Miller <davem@davemloft.net>
+ */
+
+torvalds/linux
+--------------
+
+Fixture path: out/dataflow-corpus-fixtures/linux-cve-2019-12382/drivers/gpu/drm/drm_edid_load.c
+Upstream: https://github.com/torvalds/linux/blob/v5.1/drivers/gpu/drm/drm_edid_load.c
+
+Original notice:
+
+/*
+   drm_edid_load.c: use a built-in EDID data set or load it via the firmware
+		    interface
+
+   Copyright (C) 2012 Carsten Emde <C.Emde@osadl.org>
+
+   This program is free software; you can redistribute it and/or
+   modify it under the terms of the GNU General Public License
+   as published by the Free Software Foundation; either version 2
+   of the License, or (at your option) any later version.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program; if not, write to the Free Software
+   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA.
+*/
+
+torvalds/linux
+--------------
+
+Fixture path: out/dataflow-corpus-fixtures/linux-cve-2019-15291/drivers/media/usb/b2c2/flexcop-usb.c
+Upstream: https://github.com/torvalds/linux/blob/d52741728a518afe536d22dc6e9b60193c5fa942/drivers/media/usb/b2c2/flexcop-usb.c
+
+Original notice:
+
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Linux driver for digital TV devices equipped with B2C2 FlexcopII(b)/III
+ * flexcop-usb.c - covers the USB part
+ * see flexcop.c for copyright information
+ */
+
+torvalds/linux
+--------------
+
+Fixture path: out/dataflow-corpus-fixtures/linux-cve-2021-37159/drivers/net/usb/hso.c
+Upstream: https://github.com/torvalds/linux/blob/6206b7981a36476f4695d661ae139f7db36a802d/drivers/net/usb/hso.c
+
+Original notice:
+
+// SPDX-License-Identifier: GPL-2.0-only
+/******************************************************************************
+ *
+ * Driver for Option High Speed Mobile Devices.
+ *
+ *  Copyright (C) 2008 Option International
+ *                     Filip Aben <f.aben@option.com>
+ *                     Denis Joseph Barrow <d.barow@option.com>
+ *                     Jan Dumon <j.dumon@option.com>
+ *  Copyright (C) 2007 Andrew Bird (Sphere Systems Ltd)
+ *  			<ajb@spheresystems.co.uk>
+ *  Copyright (C) 2008 Greg Kroah-Hartman <gregkh@suse.de>
+ *  Copyright (C) 2008 Novell, Inc.
+ *
+ *****************************************************************************/
+
+/******************************************************************************
+ *
+ * Description of the device:
+ *
+ * Interface 0:	Contains the IP network interface on the bulk end points.
+ *		The multiplexed serial ports are using the interrupt and
+ *		control endpoints.
+ *		Interrupt contains a bitmap telling which multiplexed
+ *		serialport needs servicing.
+ *
+ * Interface 1:	Diagnostics port, uses bulk only, do not submit urbs until the
+ *		port is opened, as this have a huge impact on the network port
+ *		throughput.
+ *
+ * Interface 2:	Standard modem interface - circuit switched interface, this
+ *		can be used to make a standard ppp connection however it
+ *              should not be used in conjunction with the IP network interface
+ *              enabled for USB performance reasons i.e. if using this set
+ *              ideally disable_net=1.
+ *
+ *****************************************************************************/
+
+torvalds/linux
+--------------
+
+Fixture path: out/dataflow-corpus-fixtures/linux-cve-2017-7541/drivers/net/wireless/broadcom/brcm80211/brcmfmac/cfg80211.c
+Upstream: https://github.com/torvalds/linux/blob/76b825ab870be3281edac4ae8a414da6e54b0d3a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/cfg80211.c
+
+Original notice:
+
+/*
+ * Copyright (c) 2010 Broadcom Corporation
+ *
+ * Permission to use, copy, modify, and/or distribute this software for any
+ * purpose with or without fee is hereby granted, provided that the above
+ * copyright notice and this permission notice appear in all copies.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
+ * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
+ * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
+ * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ */
+
+/* Toplevel file. Relies on dhd_linux.c to send commands to the dongle. */
+
+torvalds/linux
+--------------
+
+Fixture path: out/dataflow-corpus-fixtures/linux-cve-2022-32250/net/netfilter/nf_tables_api.c
+Upstream: https://github.com/torvalds/linux/blob/6c465408a7709cf180cde7569e141191b67a175c/net/netfilter/nf_tables_api.c
+
+Original notice:
+
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2007-2009 Patrick McHardy <kaber@trash.net>
+ *
+ * Development of this code funded by Astaro AG (http://www.astaro.com/)
+ */
+
+Additional copyright reference for flexcop-usb.c
+-----------------------------------------------
+
+The GPL-2.0-only USB file's header directs readers to flexcop.c for
+copyright information. The referenced copyright lines are preserved here;
+no flexcop.c implementation is included in the corpus.
+
+Upstream: https://github.com/torvalds/linux/blob/d52741728a518afe536d22dc6e9b60193c5fa942/drivers/media/common/b2c2/flexcop.c
+
+ * Copyright (C) 2004-9 Patrick Boettcher <patrick.boettcher@posteo.de>
+ * based on skystar2-driver Copyright (C) 2003 Vadim Catana, skystar@moldova.cc
