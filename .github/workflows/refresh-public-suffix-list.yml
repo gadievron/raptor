@@ -1,0 +1,71 @@
+name: Refresh Public Suffix List
+
+on:
+  schedule:
+    - cron: '23 7 * * 2'
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - 'core/domains/**'
+      - '.github/scripts/refresh_public_suffix_list.py'
+      - '.github/workflows/refresh-public-suffix-list.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-suffix-list-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+      - run: python -m unittest discover -s core/domains/tests
+
+  refresh:
+    if: github.event_name != 'pull_request' && (github.repository == 'gadievron/raptor' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+      - name: Download and validate list
+        run: python .github/scripts/refresh_public_suffix_list.py
+      - name: Test refreshed boundaries
+        run: python -m unittest discover -s core/domains/tests
+      - name: Open or update refresh PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          if git diff --quiet -- core/domains/data/public_suffix_list.dat; then
+            exit 0
+          fi
+          branch=auto/public-suffix-list-refresh
+          gh auth setup-git
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -B "$branch"
+          git add core/domains/data/public_suffix_list.dat
+          git commit -m 'chore(security): refresh Public Suffix List'
+          git push --force origin "HEAD:refs/heads/$branch"
+          if [ "$(gh pr list --repo "$REPO" --head "$branch" --json number --jq length)" = 0 ]; then
+            gh pr create --repo "$REPO" --head "$branch" \
+              --title 'chore(security): refresh Public Suffix List' \
+              --body 'Updates the bundled Mozilla Public Suffix List, including private hosting suffixes. Boundary regression tests passed against the refreshed list. Review suffix changes before merging.'
+          fi
