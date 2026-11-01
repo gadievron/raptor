@@ -250,24 +250,13 @@ class AtherisRunner(LibFuzzerRunner):
         return env
 
     def _sandbox_tool_paths(self) -> list[str]:
-        # Interpreter runtime roots (venv prefixes, framework installs)
-        # that the sandbox read allowlist must include for python to
-        # start at all. python_runtime_tool_paths() inspects the
-        # RUNNING interpreter — when the operator points the campaign
-        # at a different one (a venv that has atheris), that venv's
-        # own prefix tree (site-packages with atheris) must be
-        # readable too.
+        # Inspect the selected interpreter without executing it. A custom
+        # venv may be rooted in HOME; never grant that entire prefix.
+        from core.sandbox.python_paths import python_tool_paths
         paths = python_runtime_tool_paths()
-        # UNRESOLVED path for the venv-root derivation: a venv's
-        # python symlinks to the base interpreter, and resolving first
-        # would derive the base prefix instead of the venv tree that
-        # actually holds atheris.
-        exe = Path(self.python_executable).absolute()
-        if _is_other_interpreter(self.python_executable) \
-                and len(exe.parents) >= 2:
-            venv_root = str(exe.parents[1])
-            if venv_root not in paths:
-                paths.append(venv_root)
+        for path in python_tool_paths(self.python_executable):
+            if path not in paths:
+                paths.append(path)
         return paths
 
     def _readable_paths(self) -> list[str]:

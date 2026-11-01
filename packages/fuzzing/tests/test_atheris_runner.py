@@ -257,7 +257,7 @@ class TestAtherisRunnerContract(unittest.TestCase):
         # The symlink target outside the run dir was not written to.
         self.assertEqual((tmp / "outside.txt").read_text(), "precious")
 
-    def test_custom_interpreter_venv_root_joins_tool_paths(self):
+    def test_custom_interpreter_uses_narrow_tool_paths(self):
         # python_runtime_tool_paths() inspects the RUNNING interpreter;
         # a campaign pointed at a different venv's python must get that
         # venv's prefix (site-packages with atheris) into the sandbox
@@ -273,8 +273,9 @@ class TestAtherisRunnerContract(unittest.TestCase):
                 harness, target_dir=target, output_dir=tmp / "out",
                 python_executable=str(venv_python),
             )
-        self.assertIn(str((tmp / "venv").absolute()),
-                      runner._sandbox_tool_paths())
+        paths = runner._sandbox_tool_paths()
+        self.assertIn(str(venv_python.parent), paths)
+        self.assertNotIn(str((tmp / "venv").absolute()), paths)
 
     def test_venv_symlink_python_counts_as_other_interpreter(self):
         # A venv's python is a SYMLINK to the base interpreter;
@@ -293,8 +294,9 @@ class TestAtherisRunnerContract(unittest.TestCase):
                 harness, target_dir=target, output_dir=tmp / "out",
                 python_executable=str(venv_python),
             )
-        self.assertIn(str((tmp / "venv").absolute()),
-                      runner._sandbox_tool_paths())
+        paths = runner._sandbox_tool_paths()
+        self.assertIn(str(venv_python.parent), paths)
+        self.assertNotIn(str((tmp / "venv").absolute()), paths)
 
     def test_harness_needs_no_executable_bit(self):
         tmp = _tmpdir(self)

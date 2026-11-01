@@ -327,7 +327,7 @@ def _reset_sandbox_scratch() -> None:
         _scratch_parent = None
 
 
-def _default_sandbox_runner(target: Path, config: str):
+def _default_sandbox_runner(target: Path, config: str, *, extra_targets=()):
     """subprocess.run-shaped wrapper over core.sandbox.run, or None.
 
     Returns None when core.sandbox is unavailable on this host — the
@@ -385,15 +385,30 @@ def _default_sandbox_runner(target: Path, config: str):
         # invocations would reopen the fake-home symlink-TOCTOU
         # window); the parent's atexit rmtree reclaims them all, and
         # semgrep's stderr still carries any real failure.
+        from core.sandbox.python_paths import python_tool_paths
+        tool_paths = python_tool_paths(cmd[0]) if cmd else []
+        # Local rules are outside target/output in common run_rule calls.
+        # Declare the exact rule path; do not expose its parent directory.
+        if not needs_registry and Path(config).exists():
+            tool_paths.append(str(Path(config).absolute()))
+        options = {k: v for k, v in kwargs.items() if k != "shell"}
+        tool_paths.extend(options.pop("tool_paths", []) or [])
+        # A single-file scan needs an exact read-only bind, not its parent:
+        # scanning ~/file.py must not expose sibling credentials in HOME.
+        sandbox_target = str(target) if target.is_dir() else None
+        if sandbox_target is None:
+            tool_paths.append(str(target.absolute()))
+        tool_paths.extend(str(Path(path).absolute()) for path in extra_targets)
         return sandbox_run(
             cmd,
-            target=str(target),
+            target=sandbox_target,
             caller_label="semgrep-runner",
             env_caller_filtered=True,
             output=_invocation_scratch_dir(),
             fake_home=True,
+            tool_paths=list(dict.fromkeys(tool_paths)),
             **net_kwargs,
-            **{k: v for k, v in kwargs.items() if k != "shell"},
+            **options,
         )
 
     return _runner
@@ -455,7 +470,14 @@ def run_rule(
         SemgrepResult with parsed findings, files_examined, files_failed,
         and raw SARIF/JSON for caller persistence.
     """
-    target = Path(target)
+    # The private bind tree need not carry the caller's working directory.
+    # Preserve file identity while making scan/rule arguments cwd-independent.
+    target = Path(target).absolute()
+    extra_targets = tuple(Path(path).absolute() for path in extra_targets)
+    # Registry identifiers keep their meaning even if a hostile working
+    # directory plants a colliding local p/<pack> or category/<name> path.
+    if not str(config).startswith(("p/", "category/")) and Path(config).exists():
+        config = str(Path(config).absolute())
     name = name or _config_to_name(config)
     from core.config import RaptorConfig
     if RaptorConfig.SEMGREP_OFFLINE:
@@ -521,7 +543,7 @@ def run_rule(
             if unsandboxed:
                 runner = subprocess.run
             else:
-                runner = _default_sandbox_runner(target, config)
+                runner = _default_sandbox_runner(target, config, extra_targets=extra_targets)
                 if runner is None:
                     return SemgrepResult(
                         name=name, config=config, target=str(target),

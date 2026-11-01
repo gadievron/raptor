@@ -21,7 +21,7 @@ def _resolve_cli() -> str | None:
     env = os.environ.get("CODEQL_CLI")
     if env:
         if os.path.isfile(env) and os.access(env, os.X_OK):
-            return env
+            return os.path.realpath(env)
         # Loud, like DatabaseManager._detect_codeql_cli on the same
         # condition: a typo'd operator override silently probed
         # whichever codeql was on PATH here while the DM path warned —
@@ -31,7 +31,8 @@ def _resolve_cli() -> str | None:
             "CODEQL_CLI=%r is not an executable file — ignoring the "
             "override and falling back to PATH lookup", env,
         )
-    return shutil.which("codeql")
+    found = shutil.which("codeql")
+    return os.path.realpath(found) if found else None
 
 
 def is_available() -> bool:

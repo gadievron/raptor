@@ -150,3 +150,134 @@ class TestPythonRuntimeToolPaths:
             result = python_runtime_tool_paths()
         assert str(real.resolve()) in result
         assert str(link) not in result
+
+
+def test_selected_tool_home_rooted_venv_does_not_grant_home(tmp_path, monkeypatch):
+    from core.sandbox.python_paths import python_tool_paths
+    home = tmp_path / 'home'
+    binary = home / 'bin'
+    binary.mkdir(parents=True)
+    base = tmp_path / 'base'
+    (base / 'bin').mkdir(parents=True)
+    python = base / 'bin/python3.14'
+    python.write_text('#!/bin/sh\ntouch should-never-execute\n')
+    python.chmod(0o755)
+    (binary / 'python3').symlink_to(python)
+    (home / 'pyvenv.cfg').write_text('home = ' + str(base / 'bin'))
+    library = home / 'lib/python3.14'
+    library.mkdir(parents=True)
+    (base / 'lib/python3.14').mkdir(parents=True)
+    (home / '.aws').mkdir()
+    tool = binary / 'semgrep'
+    tool.write_text('#!' + str(binary / 'python3') + '\n')
+    tool.chmod(0o755)
+    monkeypatch.setenv('HOME', str(home))
+    paths = python_tool_paths(str(tool))
+    assert str(binary) in paths
+    assert str(library) in paths
+    assert str(home / 'pyvenv.cfg') in paths
+    assert str(base / 'lib/python3.14') in paths
+    assert str(home) not in paths
+    assert str(home / '.aws') not in paths
+    assert not (tmp_path / 'should-never-execute').exists()
+
+
+def test_selected_tool_env_shebang_and_symlink_launcher(tmp_path, monkeypatch):
+    from core.sandbox.python_paths import python_tool_paths
+    binary = tmp_path / 'venv/bin'
+    binary.mkdir(parents=True)
+    python = binary / 'python3.14'
+    python.write_text('not executed')
+    python.chmod(0o755)
+    tool = binary / 'semgrep'
+    tool.write_text('#!/usr/bin/env -S python3.14 -I\n')
+    tool.chmod(0o755)
+    links = tmp_path / 'links'
+    links.mkdir()
+    (links / 'semgrep').symlink_to(tool)
+    library = tmp_path / 'venv/lib/python3.14'
+    library.mkdir(parents=True)
+    monkeypatch.setenv('PATH', str(binary))
+    paths = python_tool_paths(str(links / 'semgrep'))
+    assert str(links) in paths
+    assert str(binary) in paths
+    assert str(library) in paths
+
+
+def test_selected_tool_does_not_read_non_regular_launcher(tmp_path):
+    import os
+    from core.sandbox.python_paths import python_tool_paths
+    fifo = tmp_path / 'tool'
+    os.mkfifo(fifo)
+    assert python_tool_paths(str(fifo)) == [str(tmp_path)]
+
+
+def test_selected_tool_library_alias_cannot_expose_home(tmp_path, monkeypatch):
+    from core.sandbox.python_paths import python_tool_paths
+    home = tmp_path / 'home'
+    home.mkdir()
+    monkeypatch.setenv('HOME', str(home))
+    environment = tmp_path / 'venv'
+    (environment / 'bin').mkdir(parents=True)
+    (environment / 'lib').mkdir()
+    (environment / 'lib/python3.14').symlink_to(home, target_is_directory=True)
+    python = environment / 'bin/python3.14'
+    python.write_text('not executed')
+    python.chmod(0o755)
+    paths = python_tool_paths(str(python))
+    assert str(home) not in paths
+    assert str(environment / 'lib/python3.14') not in paths
+
+
+def test_running_home_rooted_python_never_grants_home(tmp_path, monkeypatch):
+    import sysconfig
+    home = tmp_path / 'home'
+    (home / 'bin').mkdir(parents=True)
+    library = home / 'lib' / ('python' + sysconfig.get_python_version())
+    library.mkdir(parents=True)
+    (home / 'pyvenv.cfg').write_text('home = /usr/bin')
+    monkeypatch.setenv('HOME', str(home))
+    with patch('core.sandbox.python_paths.sys') as runtime:
+        runtime.prefix = runtime.exec_prefix = str(home)
+        runtime.base_prefix = runtime.base_exec_prefix = '/usr'
+        runtime.executable = str(home / 'bin/python3')
+        paths = python_runtime_tool_paths()
+    assert str(home) not in paths
+    assert str(home / 'bin') in paths
+    assert str(library) in paths
+    assert str(home / 'pyvenv.cfg') in paths
+
+
+def test_running_python_rejects_runtime_alias_to_home(tmp_path, monkeypatch):
+    import sysconfig
+    home = tmp_path / 'home'
+    home.mkdir()
+    (home / 'lib').mkdir()
+    (home / 'lib' / ('python' + sysconfig.get_python_version())).symlink_to(home)
+    monkeypatch.setenv('HOME', str(home))
+    with patch('core.sandbox.python_paths.sys') as runtime:
+        runtime.prefix = runtime.exec_prefix = str(home)
+        runtime.base_prefix = runtime.base_exec_prefix = '/usr'
+        runtime.executable = '/usr/bin/python3'
+        assert str(home) not in python_runtime_tool_paths()
+
+
+def test_home_override_does_not_expose_account_home_prefix(tmp_path, monkeypatch):
+    import sysconfig
+    from types import SimpleNamespace
+    account = tmp_path / 'account'
+    (account / 'bin').mkdir(parents=True)
+    library = account / 'lib' / ('python' + sysconfig.get_python_version())
+    library.mkdir(parents=True)
+    configured = tmp_path / 'configured-home'
+    configured.mkdir()
+    monkeypatch.setenv('HOME', str(configured))
+    with patch('pwd.getpwuid', return_value=SimpleNamespace(pw_dir=str(account))), \
+            patch('core.sandbox.python_paths.sys') as runtime:
+        runtime.prefix = runtime.exec_prefix = str(account)
+        runtime.base_prefix = runtime.base_exec_prefix = '/usr'
+        runtime.executable = str(account / 'bin/python3')
+        paths = python_runtime_tool_paths()
+    assert str(account) not in paths
+    assert str(account / 'bin') in paths
+    assert str(library) in paths
