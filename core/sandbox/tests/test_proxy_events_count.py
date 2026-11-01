@@ -336,16 +336,20 @@ class TestAnchoredOverflow:
         guard's doctrine.
 
         The thresholds are BYTE bounds, so the synthesis crosses them
-        with fat events rather than many: ~16 KiB hosts keep every
-        line inside the triage per-line cap (64 KiB) while needing
-        ~100x fewer per-event writer mints and verifier parses than
-        the short-host shape, which burned ~40s of pure per-event
-        overhead in CI for the same byte crossing."""
+        with fat events rather than many: a ~16 KiB ``_pad`` field
+        (ignored by triage but written through by the MAC'd persist)
+        keeps every line inside the triage per-line cap (64 KiB) while
+        needing ~100x fewer per-event writer mints and verifier parses
+        than the short-host shape, which burned ~40s of pure per-event
+        overhead in CI for the same byte crossing. Hostnames stay
+        within the 254-char DNS limit so domain_boundary doesn't reject
+        them as InvalidHostname (which would trip dns_exfil_unavailable
+        and turn the verdict notable)."""
         run = _run_dir(tmp_path)
         n_batches, per_batch = 4, 1_400
-        pad = "pad" * 5_330  # ~16 KiB of host, line well under 64 KiB
+        pad = "x" * 15_900  # ~16 KiB line padding (in _pad field, not hostname)
         batch_hosts = [
-            f"{pad}.host-{i:06d}.example" for i in range(per_batch)
+            f"host-{i:06d}.example" for i in range(per_batch)
         ]
         for b in range(n_batches):
             if b == n_batches - 1:
@@ -360,7 +364,8 @@ class TestAnchoredOverflow:
                 )
             ctx._persist_proxy_events(
                 [{"host": h, "result": "allowed",
-                  "resolved_ip": "10.0.0.1"} for h in batch_hosts],
+                  "resolved_ip": "10.0.0.1", "_pad": pad}
+                 for h in batch_hosts],
                 output=str(run),
             )
         size = (run / PROXY_EVENTS_FILENAME).stat().st_size
