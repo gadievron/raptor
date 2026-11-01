@@ -1,3 +1,6 @@
+# Header writers are matched by API shape; a flow is not proof of response
+# splitting. Modern framework/server writers may reject CR/LF themselves.
+# Sanitizer contracts assume standard string replacement implementations.
 rules:
   # ---------------------------------------------------------------------------
   # Python — taint: web framework sources → HTTP response header value
@@ -5,9 +8,9 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.injection.header-injection.taint.python
     message: >-
-      Untrusted data flows into an HTTP response header value. An attacker
-      can inject CRLF sequences to split the response and inject arbitrary
-      headers or body content. Validate and sanitise header values.
+      Untrusted data flows into an HTTP response header value. CR/LF can split
+      responses when the receiving header writer does not reject or neutralize
+      these characters. Verify the concrete API and validate header values.
     languages: [python]
     severity: HIGH
     mode: taint
@@ -51,11 +54,84 @@ rules:
           - focus-metavariable: $VALUE
     # A sanitizer must handle BOTH \n and \r — a single-character
     # replace (or a "\r\n" pair replace) still lets the other bare
-    # character through and the response still splits.
+    # character through. Whether this splits a response depends on the writer.
+    # Only literal replacements proven to remove both controls qualify.
+    # The first step may normalize into the control removed by the second.
+    # Dynamic/encoded literals stay tainted; regex replacements cannot use $.
+    # Assignment-result branches preserve safe locals on Semgrep 1.177;
+    # local-only destinations avoid clearing an entire object/container.
     pattern-sanitizers:
-      - pattern: $X.replace("\n", ...).replace("\r", ...)
+      - patterns:
+          - pattern-either:
+              - pattern: $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+              - pattern: $X.replace($FIRST, $INNER).replace($SECOND, $OUTER, -1)
+              - pattern: $X.replace($FIRST, $INNER, -1).replace($SECOND, $OUTER)
+              - pattern: $X.replace($FIRST, $INNER, -1).replace($SECOND, $OUTER, -1)
+              - patterns:
+                  - pattern-either:
+                      - pattern: $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+                      - pattern: $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER, -1)
+                      - pattern: $SAFE = $X.replace($FIRST, $INNER, -1).replace($SECOND, $OUTER)
+                      - pattern: $SAFE = $X.replace($FIRST, $INNER, -1).replace($SECOND, $OUTER, -1)
+                  - metavariable-regex:
+                      metavariable: $SAFE
+                      regex: ^[A-Za-z_$][A-Za-z0-9_$]*$
+          - metavariable-regex:
+              metavariable: $INNER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n]|\\[\\"tr])*"|'(?:[^'\\\r\n]|\\[\\'tr])*')$
+          - metavariable-regex:
+              metavariable: $OUTER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n]|\\[\\"t])*"|'(?:[^'\\\r\n]|\\[\\'t])*')$
+          - metavariable-regex:
+              metavariable: $FIRST
+              constant-propagation: false
+              regex: >-
+                ^(?:"\\n"|'\\n')$
+          - metavariable-regex:
+              metavariable: $SECOND
+              constant-propagation: false
+              regex: >-
+                ^(?:"\\r"|'\\r')$
         exact: true
-      - pattern: $X.replace("\r", ...).replace("\n", ...)
+      - patterns:
+          - pattern-either:
+              - pattern: $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+              - pattern: $X.replace($FIRST, $INNER).replace($SECOND, $OUTER, -1)
+              - pattern: $X.replace($FIRST, $INNER, -1).replace($SECOND, $OUTER)
+              - pattern: $X.replace($FIRST, $INNER, -1).replace($SECOND, $OUTER, -1)
+              - patterns:
+                  - pattern-either:
+                      - pattern: $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+                      - pattern: $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER, -1)
+                      - pattern: $SAFE = $X.replace($FIRST, $INNER, -1).replace($SECOND, $OUTER)
+                      - pattern: $SAFE = $X.replace($FIRST, $INNER, -1).replace($SECOND, $OUTER, -1)
+                  - metavariable-regex:
+                      metavariable: $SAFE
+                      regex: ^[A-Za-z_$][A-Za-z0-9_$]*$
+          - metavariable-regex:
+              metavariable: $INNER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n]|\\[\\"tn])*"|'(?:[^'\\\r\n]|\\[\\'tn])*')$
+          - metavariable-regex:
+              metavariable: $OUTER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n]|\\[\\"t])*"|'(?:[^'\\\r\n]|\\[\\'t])*')$
+          - metavariable-regex:
+              metavariable: $FIRST
+              constant-propagation: false
+              regex: >-
+                ^(?:"\\r"|'\\r')$
+          - metavariable-regex:
+              metavariable: $SECOND
+              constant-propagation: false
+              regex: >-
+                ^(?:"\\n"|'\\n')$
         exact: true
     metadata:
       cwe: ["CWE-113"]
@@ -67,9 +143,9 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.injection.header-injection.taint.go
     message: >-
-      Untrusted data flows into an HTTP response header value. An attacker
-      can inject CRLF sequences to split the response. Validate and
-      sanitise header values before setting them.
+      Untrusted data flows into an HTTP response header value. CR/LF can split
+      responses when the receiving header writer does not reject or neutralize
+      these characters. Verify the concrete API and validate header values.
     languages: [go]
     severity: HIGH
     mode: taint
@@ -108,10 +184,73 @@ rules:
           - focus-metavariable: $VALUE
     # Both \n and \r must be handled — a single ReplaceAll leaves the
     # other character usable for splitting.
+    # Only literal replacements proven to remove both controls qualify.
+    # The first step may normalize into the control removed by the second.
+    # Dynamic/encoded literals stay tainted; regex replacements cannot use $.
+    # Assignment-result branches preserve safe locals on Semgrep 1.177;
+    # local-only destinations avoid clearing an entire object/container.
     pattern-sanitizers:
-      - pattern: strings.ReplaceAll(strings.ReplaceAll($X, "\n", ...), "\r", ...)
+      - patterns:
+          - pattern-either:
+              - pattern: strings.ReplaceAll(strings.ReplaceAll($X, $FIRST, $INNER), $SECOND, $OUTER)
+              - patterns:
+                  - pattern-either:
+                      - pattern: $SAFE := strings.ReplaceAll(strings.ReplaceAll($X, $FIRST, $INNER), $SECOND, $OUTER)
+                      - pattern: $SAFE = strings.ReplaceAll(strings.ReplaceAll($X, $FIRST, $INNER), $SECOND, $OUTER)
+                  - metavariable-regex:
+                      metavariable: $SAFE
+                      regex: ^[A-Za-z_$][A-Za-z0-9_$]*$
+          - metavariable-regex:
+              metavariable: $INNER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n]|\\[\\"tr])*")$
+          - metavariable-regex:
+              metavariable: $OUTER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n]|\\[\\"t])*")$
+          - metavariable-regex:
+              metavariable: $FIRST
+              constant-propagation: false
+              regex: >-
+                ^(?:"\\n")$
+          - metavariable-regex:
+              metavariable: $SECOND
+              constant-propagation: false
+              regex: >-
+                ^(?:"\\r")$
         exact: true
-      - pattern: strings.ReplaceAll(strings.ReplaceAll($X, "\r", ...), "\n", ...)
+      - patterns:
+          - pattern-either:
+              - pattern: strings.ReplaceAll(strings.ReplaceAll($X, $FIRST, $INNER), $SECOND, $OUTER)
+              - patterns:
+                  - pattern-either:
+                      - pattern: $SAFE := strings.ReplaceAll(strings.ReplaceAll($X, $FIRST, $INNER), $SECOND, $OUTER)
+                      - pattern: $SAFE = strings.ReplaceAll(strings.ReplaceAll($X, $FIRST, $INNER), $SECOND, $OUTER)
+                  - metavariable-regex:
+                      metavariable: $SAFE
+                      regex: ^[A-Za-z_$][A-Za-z0-9_$]*$
+          - metavariable-regex:
+              metavariable: $INNER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n]|\\[\\"tn])*")$
+          - metavariable-regex:
+              metavariable: $OUTER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n]|\\[\\"t])*")$
+          - metavariable-regex:
+              metavariable: $FIRST
+              constant-propagation: false
+              regex: >-
+                ^(?:"\\r")$
+          - metavariable-regex:
+              metavariable: $SECOND
+              constant-propagation: false
+              regex: >-
+                ^(?:"\\n")$
         exact: true
     metadata:
       cwe: ["CWE-113"]
@@ -123,9 +262,9 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.injection.header-injection.taint.java
     message: >-
-      Untrusted data flows into an HTTP response header value. An attacker
-      can inject CRLF sequences to split the response. Validate and
-      sanitise header values before setting them.
+      Untrusted data flows into an HTTP response header value. CR/LF can split
+      responses when the receiving header writer does not reject or neutralize
+      these characters. Verify the concrete API and validate header values.
     languages: [java]
     severity: HIGH
     mode: taint
@@ -150,14 +289,94 @@ rules:
           - focus-metavariable: $VALUE
     # Both \n and \r must be handled — the regex-class replaceAll does,
     # single-character replaces only qualify chained in both orders.
+    # Only literal replacements proven to remove both controls qualify.
+    # The first step may normalize into the control removed by the second.
+    # Dynamic/encoded literals stay tainted; regex replacements cannot use $.
+    # Assignment-result branches preserve safe locals on Semgrep 1.177;
+    # local-only destinations avoid clearing an entire object/container.
     pattern-sanitizers:
-      - pattern: $X.replaceAll("[\n\r]", ...)
+      - patterns:
+          - pattern-either:
+              - pattern: $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+              - patterns:
+                  - pattern-either:
+                      - pattern: $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER);
+                      - pattern: String $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER);
+                  - metavariable-regex:
+                      metavariable: $SAFE
+                      regex: ^[A-Za-z_$][A-Za-z0-9_$]*$
+          - metavariable-regex:
+              metavariable: $INNER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n]|\\[\\"tr])*")$
+          - metavariable-regex:
+              metavariable: $OUTER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n]|\\[\\"t])*")$
+          - metavariable-regex:
+              metavariable: $FIRST
+              constant-propagation: false
+              regex: >-
+                ^(?:"\\n")$
+          - metavariable-regex:
+              metavariable: $SECOND
+              constant-propagation: false
+              regex: >-
+                ^(?:"\\r")$
         exact: true
-      - pattern: $X.replaceAll("[\r\n]", ...)
+      - patterns:
+          - pattern-either:
+              - pattern: $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+              - patterns:
+                  - pattern-either:
+                      - pattern: $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER);
+                      - pattern: String $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER);
+                  - metavariable-regex:
+                      metavariable: $SAFE
+                      regex: ^[A-Za-z_$][A-Za-z0-9_$]*$
+          - metavariable-regex:
+              metavariable: $INNER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n]|\\[\\"tn])*")$
+          - metavariable-regex:
+              metavariable: $OUTER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n]|\\[\\"t])*")$
+          - metavariable-regex:
+              metavariable: $FIRST
+              constant-propagation: false
+              regex: >-
+                ^(?:"\\r")$
+          - metavariable-regex:
+              metavariable: $SECOND
+              constant-propagation: false
+              regex: >-
+                ^(?:"\\n")$
         exact: true
-      - pattern: $X.replace("\n", ...).replace("\r", ...)
-        exact: true
-      - pattern: $X.replace("\r", ...).replace("\n", ...)
+      - patterns:
+          - pattern-either:
+              - pattern: $X.replaceAll($SEARCH, $OUTER)
+              - patterns:
+                  - pattern-either:
+                      - pattern: $SAFE = $X.replaceAll($SEARCH, $OUTER);
+                      - pattern: String $SAFE = $X.replaceAll($SEARCH, $OUTER);
+                  - metavariable-regex:
+                      metavariable: $SAFE
+                      regex: ^[A-Za-z_$][A-Za-z0-9_$]*$
+          - metavariable-regex:
+              metavariable: $SEARCH
+              constant-propagation: false
+              regex: >-
+                ^"\[(?:\\{1,2}r\\{1,2}n|\\{1,2}n\\{1,2}r)\]"$
+          - metavariable-regex:
+              metavariable: $OUTER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n$]|\\[\\"t])*")$
         exact: true
     metadata:
       cwe: ["CWE-113"]
@@ -169,9 +388,9 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.injection.header-injection.taint.javascript
     message: >-
-      Untrusted data flows into an HTTP response header value. An attacker
-      can inject CRLF sequences to split the response. Validate and
-      sanitise header values before setting them.
+      Untrusted data flows into an HTTP response header value. CR/LF can split
+      responses when the receiving header writer does not reject or neutralize
+      these characters. Verify the concrete API and validate header values.
     languages: [javascript, typescript]
     severity: HIGH
     mode: taint
@@ -225,14 +444,100 @@ rules:
     # Both \n and \r must be handled — the character-class replace
     # does, single-character replaces only qualify chained in both
     # orders.
+    # Only literal replacements proven to remove both controls qualify.
+    # The first step may normalize into the control removed by the second.
+    # Dynamic/encoded literals stay tainted; regex replacements cannot use $.
+    # Assignment-result branches preserve safe locals on Semgrep 1.177;
+    # local-only destinations avoid clearing an entire object/container.
     pattern-sanitizers:
-      - pattern: $X.replace(/[\r\n]/g, ...)
+      - patterns:
+          - pattern-either:
+              - pattern: $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+              - patterns:
+                  - pattern-either:
+                      - pattern: $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+                      - pattern: const $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+                      - pattern: let $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+                      - pattern: var $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+                  - metavariable-regex:
+                      metavariable: $SAFE
+                      regex: ^[A-Za-z_$][A-Za-z0-9_$]*$
+          - metavariable-regex:
+              metavariable: $INNER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n$]|\\[\\"tr])*"|'(?:[^'\\\r\n$]|\\[\\'tr])*')$
+          - metavariable-regex:
+              metavariable: $OUTER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n$]|\\[\\"t])*"|'(?:[^'\\\r\n$]|\\[\\'t])*')$
+          - metavariable-regex:
+              metavariable: $FIRST
+              constant-propagation: false
+              regex: >-
+                ^/\\n/(?=[gimsu]*g)[gimsu]*$
+          - metavariable-regex:
+              metavariable: $SECOND
+              constant-propagation: false
+              regex: >-
+                ^/\\r/(?=[gimsu]*g)[gimsu]*$
         exact: true
-      - pattern: $X.replace(/[\n\r]/g, ...)
+      - patterns:
+          - pattern-either:
+              - pattern: $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+              - patterns:
+                  - pattern-either:
+                      - pattern: $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+                      - pattern: const $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+                      - pattern: let $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+                      - pattern: var $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+                  - metavariable-regex:
+                      metavariable: $SAFE
+                      regex: ^[A-Za-z_$][A-Za-z0-9_$]*$
+          - metavariable-regex:
+              metavariable: $INNER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n$]|\\[\\"tn])*"|'(?:[^'\\\r\n$]|\\[\\'tn])*')$
+          - metavariable-regex:
+              metavariable: $OUTER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n$]|\\[\\"t])*"|'(?:[^'\\\r\n$]|\\[\\'t])*')$
+          - metavariable-regex:
+              metavariable: $FIRST
+              constant-propagation: false
+              regex: >-
+                ^/\\r/(?=[gimsu]*g)[gimsu]*$
+          - metavariable-regex:
+              metavariable: $SECOND
+              constant-propagation: false
+              regex: >-
+                ^/\\n/(?=[gimsu]*g)[gimsu]*$
         exact: true
-      - pattern: $X.replace(/\n/g, ...).replace(/\r/g, ...)
-        exact: true
-      - pattern: $X.replace(/\r/g, ...).replace(/\n/g, ...)
+      - patterns:
+          - pattern-either:
+              - pattern: $X.replace($CLASS, $OUTER)
+              - patterns:
+                  - pattern-either:
+                      - pattern: $SAFE = $X.replace($CLASS, $OUTER)
+                      - pattern: const $SAFE = $X.replace($CLASS, $OUTER)
+                      - pattern: let $SAFE = $X.replace($CLASS, $OUTER)
+                      - pattern: var $SAFE = $X.replace($CLASS, $OUTER)
+                  - metavariable-regex:
+                      metavariable: $SAFE
+                      regex: ^[A-Za-z_$][A-Za-z0-9_$]*$
+          - metavariable-regex:
+              metavariable: $CLASS
+              constant-propagation: false
+              regex: >-
+                ^/\[(?:\\r\\n|\\n\\r)\]/(?=[gimsu]*g)[gimsu]*$
+          - metavariable-regex:
+              metavariable: $OUTER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n$]|\\[\\"t])*"|'(?:[^'\\\r\n$]|\\[\\'t])*')$
         exact: true
     metadata:
       cwe: ["CWE-113"]
