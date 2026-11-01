@@ -1,4 +1,4 @@
-"""Regression integration test — subprocesses core/zkpox/test/run-tests.sh.
+"""Regression integration test — subprocesses packages/zkpox/native/test/run-tests.sh.
 
 This wraps the shell harness so CI gets a single `pytest` entry point
 covering all targets × all witnesses × execute mode. Prove mode is too
@@ -22,8 +22,8 @@ from packages.zkpox import proving_stack_available
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-ZKPOX_TEST_DIR = REPO_ROOT / "core" / "zkpox" / "test"
-PROVE_BIN = REPO_ROOT / "core" / "zkpox" / "target" / "release" / "zkpox-prove"
+ZKPOX_TEST_DIR = REPO_ROOT / "packages" / "zkpox" / "native" / "test"
+PROVE_BIN = REPO_ROOT / "packages" / "zkpox" / "native" / "target" / "release" / "zkpox-prove"
 
 
 @pytest.mark.slow
@@ -35,7 +35,7 @@ PROVE_BIN = REPO_ROOT / "core" / "zkpox" / "target" / "release" / "zkpox-prove"
     not PROVE_BIN.exists(),
     reason=(
         f"zkpox-prove not built (expected at {PROVE_BIN}). Build with: "
-        "cargo build --release --manifest-path core/zkpox/Cargo.toml"
+        "cargo build --release --manifest-path packages/zkpox/native/Cargo.toml"
     ),
 )
 def test_regression_full_corpus():

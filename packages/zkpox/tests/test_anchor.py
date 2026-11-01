@@ -139,8 +139,8 @@ def test_rekor_url_env_override(monkeypatch):
 # ---------------------------------------------------------------------------
 
 net_rekor = pytest.mark.skipif(
-    os.environ.get("RAPTOR_NET_TESTS") != "1",
-    reason="set RAPTOR_NET_TESTS=1 to run network tests (writes a public Rekor entry)",
+    not (os.environ.get("ZKPOX_PUBLISH_LOG_TESTS") == "1" and os.environ.get("ZKPOX_LEGACY_V1_TEST_URL")),
+    reason="legacy log writes need explicit ZKPOX_PUBLISH_LOG_TESTS=1 and ZKPOX_LEGACY_V1_TEST_URL",
 )
 
 
@@ -156,7 +156,7 @@ def test_anchor_and_confirm_round_trip():
     bundle = _fresh_bundle()
     pre_hash = bundle_hash_pre_timestamp(bundle).hex()
 
-    anchored, _kp = anchor_bundle(bundle)
+    anchored, _kp = anchor_bundle(bundle, rekor=os.environ["ZKPOX_LEGACY_V1_TEST_URL"])
 
     assert anchored.timestamp is not None
     assert anchored.timestamp.rekor_log_index > 0
@@ -167,7 +167,7 @@ def test_anchor_and_confirm_round_trip():
     assert bundle_hash_pre_timestamp(anchored).hex() == pre_hash
 
     # And Rekor's record matches what we sent.
-    assert confirm_anchor_matches(anchored) is True
+    assert confirm_anchor_matches(anchored, rekor=os.environ["ZKPOX_LEGACY_V1_TEST_URL"]) is True
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +198,7 @@ from packages.zkpox.anchor import (
 
 def _build_tree(leaves: list[bytes], idx: int) -> tuple[str, list[str]]:
     """RFC 6962 reference tree + audit path. Same shape the Rust mirror
-    in ``core/zkpox/verifier/src/rekor.rs`` builds; both crash if they
+    in ``packages/zkpox/native/verifier/src/rekor.rs`` builds; both crash if they
     disagree on a single bit (pinning algorithmic parity across the
     Python and Rust sides)."""
 

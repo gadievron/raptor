@@ -1846,15 +1846,17 @@ For more information, visit: https://github.com/gadievron/raptor
 
 def mode_zkpox(args: list) -> int:
     """Run ZKPoX zero-knowledge proof of exploit."""
-    script_root = Path(__file__).parent
-    zkpox_script = script_root / "raptor_zkpox.py"
+    zkpox_script = Path(__file__).parent / "raptor_zkpox.py"
+    # Carry SDK configuration across the generic worker environment scrub.
+    if args and args[0] == "prove" and not any(
+            arg == "--circuit-cache" or arg.startswith("--circuit-cache=") for arg in args):
+        cache = os.environ.get("SP1_GROTH16_CIRCUIT_PATH") or str(
+            Path.home() / ".sp1/circuits/groth16")
+        args = [*args, "--circuit-cache", cache]
+    if args and args[0] in ("bundle", "prove"):
+        return _run_with_lifecycle("zkpox", zkpox_script, args, "Running ZKPoX...")
+    return _run_script(zkpox_script, args)
 
-    if not zkpox_script.exists():
-        print(f"\u2717 ZKPoX script not found: {zkpox_script}", file=sys.stderr)
-        return 1
-
-    return _run_with_lifecycle("zkpox", zkpox_script, args,
-                              "Running ZKPoX...")
 
 def main():
     """Main entry point for unified RAPTOR launcher."""
@@ -1935,6 +1937,10 @@ def main():
     # lifecycle, no dispatcher). Gated to the modes show_mode_help knows
     # how to render; 'doctor' parses --help inside its own handler and
     # 'sca' has no subprocess help script, so both fall through.
+    # ZKPoX has subcommand help; preserve its arguments for argparse.
+    if mode == "zkpox" and _wants_help(remaining):
+        return mode_zkpox(remaining)
+
     if mode in _HELP_RENDER_MODES and _wants_help(remaining):
         show_mode_help(mode, preamble=False)
         return 0

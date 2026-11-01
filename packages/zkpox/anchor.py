@@ -36,7 +36,6 @@ import base64
 import json
 import os
 from dataclasses import dataclass
-from pathlib import Path
 from urllib.parse import urlencode, urlparse
 
 from cryptography.exceptions import InvalidSignature
@@ -57,23 +56,10 @@ from .disclosure import (
 )
 
 
-# Default Rekor log target. Phase 1.5.3 migrates this to the v2
-# annual-shard convention (``log2026-1.rekor.sigstore.dev`` at write
-# time — current shard rolls each year, see
-# https://docs.sigstore.dev/logging/overview/). Verifiers reading
-# legacy v1 bundles still find them via ``ZKPOX_REKOR_URL`` =
-# ``https://rekor.sigstore.dev`` (Sigstore keeps v1 running in
-# parallel for the read path).
-#
-# Overridable so private / self-hosted instances drop in —
-# RAPTOR-internal CI may want to anchor elsewhere; vendors with an
-# internal CVD pipeline may have their own log.
-DEFAULT_REKOR_URL = "https://log2026-1.rekor.sigstore.dev"
-
-# Phase 1.5.3 — read path for legacy v1 anchors. Kept available as
-# an explicit override for verifiers reconciling old bundles whose
-# ``timestamp`` field references the v1 instance.
-LEGACY_V1_REKOR_URL = "https://rekor.sigstore.dev"
+# Legacy v1 read endpoint. New disclosures use rekor_v2 with an explicit
+# service URL and pinned checkpoint key; never infer the active shard by year.
+DEFAULT_REKOR_URL = "https://rekor.sigstore.dev"
+LEGACY_V1_REKOR_URL = DEFAULT_REKOR_URL
 
 
 def rekor_url() -> str:
@@ -131,15 +117,6 @@ class Ed25519Keypair:
 
 def gen_ed25519_keypair() -> Ed25519Keypair:
     sk = Ed25519PrivateKey.generate()
-    return Ed25519Keypair(private_key=sk, public_key=sk.public_key())
-
-
-def load_ed25519_secret_pem(pem_path: Path) -> Ed25519Keypair:
-    """Load a PEM-encoded ed25519 private key from disk."""
-    data = Path(pem_path).read_bytes()
-    sk = serialization.load_pem_private_key(data, password=None)
-    if not isinstance(sk, Ed25519PrivateKey):
-        raise ValueError(f"{pem_path} is not an ed25519 private key")
     return Ed25519Keypair(private_key=sk, public_key=sk.public_key())
 
 
@@ -239,6 +216,10 @@ def anchor_bundle(
     `http` overrides the HTTP client; default builds an egress-proxied
     client allowlisted to the Rekor host. Tests inject a stub here.
     """
+    if bundle.transparency is not None:
+        raise AnchorError("legacy v1 timestamps cannot be mixed with v2 inclusion")
+    if rekor is None and not os.environ.get("ZKPOX_REKOR_URL"):
+        raise AnchorError("legacy v1 writes require an explicit compatible service URL; use rekor_v2 for current Sigstore logs")
     kp = keypair or gen_ed25519_keypair()
     log_url = (rekor or rekor_url()).rstrip("/")
     client = http or _default_http_for(log_url)

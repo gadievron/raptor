@@ -1,0 +1,19 @@
+# ZKPoX v2 CPU toolchain (Linux x86-64 validation environment)
+# Rust dependencies are locked in Cargo.lock. The guest is shared by both hosts.
+
+host Rust/Cargo: 1.95.0
+SP1 SDK / sp1-build / sp1-zkvm: =6.5.0
+cargo-prove release asset: v6.5.0 linux_amd64
+SP1 guest compiler: rustc 1.94.0-dev, LLVM 21.1.8
+  Installed by cargo-prove v6.5.0 install-toolchain.
+  This upstream build reports its compiler commit as unknown.
+SP1 Groth16 circuit version: v6.1.0
+  This is the circuit version selected by SDK 6.5.0, not a stale SDK pin.
+clang: Ubuntu 21.1.8
+protoc: 29.3
+Go: 1.26.8
+age / age-keygen: 1.3.2
+tle (github.com/drand/tlock): 1.2.0
+
+Build/provisioning and supported-runner requirements: ../README.md.
+The historical macOS Phase 0 benchmarks remain in ../docs/zkpox-phase0-findings.md.

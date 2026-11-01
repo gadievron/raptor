@@ -6,8 +6,8 @@ run-lifecycle (`libexec/raptor-run-lifecycle`) so prove invocations
 appear in the project's run history.
 
 The prover binary is the `zkpox-prove` workspace member at
-`core/zkpox/prover/`; we expect it built via
-`cargo build --release --manifest-path core/zkpox/Cargo.toml`.
+`packages/zkpox/native/prover/`; we expect it built via
+`cargo build --release --manifest-path packages/zkpox/native/Cargo.toml`.
 """
 
 from __future__ import annotations
@@ -20,11 +20,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core.sandbox import run_untrusted
+from .proving_deps import SP1_JIT_FILE_LIMIT_MB
 
-from packages.zkpox.proving_deps import require_proving_stack
 
 
-# Repo root resolution. The Rust workspace lives at <repo>/core/zkpox/.
+# Repo root resolution. The Rust workspace lives at <repo>/packages/zkpox/native/.
 # Fall back to walking up from this file's location so the package works
 # regardless of whether RAPTOR_DIR is set (it is for runtime; not always
 # in tests / one-off CLI use).
@@ -37,7 +37,7 @@ def _repo_root() -> Path:
 
 
 def _default_binary() -> Path:
-    return _repo_root() / "core" / "zkpox" / "target" / "release" / "zkpox-prove"
+    return _repo_root() / "packages" / "zkpox" / "native" / "target" / "release" / "zkpox-prove"
 
 
 @dataclass(frozen=True)
@@ -58,7 +58,7 @@ class Verdicts:
 @dataclass(frozen=True)
 class ProveResult:
     """Result of one prover invocation. Mirrors the JSON record the
-    Rust binary emits; see core/zkpox/prover/src/main.rs for the
+    Rust binary emits; see packages/zkpox/native/prover/src/main.rs for the
     canonical schema."""
 
     tag: str
@@ -98,14 +98,12 @@ def run(
     # "binary not found". An explicit ``binary=`` overrides — tests
     # (and any future stub-prover use) supply their own path and
     # legitimately don't need cargo-prove / SP1 installed.
-    if binary is None:
-        require_proving_stack()
     bin_path = Path(binary) if binary else _default_binary()
     if not bin_path.exists():
         raise ProverError(
             f"prover binary not found: {bin_path}\n"
             f"build it with: cargo build --release "
-            f"--manifest-path core/zkpox/Cargo.toml"
+            f"--manifest-path packages/zkpox/native/Cargo.toml"
         )
 
     cmd: list[str] = [
@@ -118,19 +116,25 @@ def run(
 
     # Sandboxed via run_untrusted: full env hygiene, Landlock-scoped FS
     # (witness read-only, per-call temp dir for SP1 scratch), no network.
-    # The prover lives under core/zkpox/target/release/ which is not on
+    # The prover lives under packages/zkpox/native/target/release/ which is not on
     # the default safe-bin path, so tool_paths is mandatory here.
     witness_dir = Path(witness).resolve().parent
     sandbox_workdir = tempfile.mkdtemp(prefix="zkpox-prove-")
     try:
+        if mode == "prove":
+            salt_path = Path(sandbox_workdir) / "salt.bin"
+            salt_path.write_bytes(os.urandom(32))
+            salt_path.chmod(0o600)
+            cmd += ["--salt", str(salt_path)]
         completed = run_untrusted(
-            cmd,
+            ["/usr/bin/env", f"TMPDIR={sandbox_workdir}", *cmd],
             target=str(witness_dir),
             output=sandbox_workdir,
             readable_paths=[str(witness_dir)],
             tool_paths=[str(bin_path.parent)],
             caller_label="zkpox-prove",
             capture_output=True, text=True, timeout=timeout,
+            limits={"max_file_mb": SP1_JIT_FILE_LIMIT_MB} if mode == "prove" else None,
         )
     finally:
         shutil.rmtree(sandbox_workdir, ignore_errors=True)
@@ -147,7 +151,20 @@ def run(
             f"stdout:\n{completed.stdout}"
         )
 
+    return parse_record(record)
+
+
+def parse_record(record: dict) -> ProveResult:
+    """Parse trusted native-driver output without bool/int coercion."""
     v = record.get("verdicts") or {}
+    for key in ("crash_only_crashed", "oob_detected"):
+        if type(v.get(key)) is not bool:
+            raise ProverError(f"invalid verdict boolean: {key}")
+    for key in ("target_id", "oob_count", "oob_first_offset"):
+        if type(v.get(key)) is not int:
+            raise ProverError(f"invalid verdict integer: {key}")
+    if record.get("verified") is not None and type(record["verified"]) is not bool:
+        raise ProverError("invalid verified boolean")
     return ProveResult(
         tag=record["tag"],
         witness=Path(record["witness"]),

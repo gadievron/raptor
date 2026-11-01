@@ -38,11 +38,12 @@ from typing import Any
 import cbor2  # type: ignore[import-untyped]
 
 from .bundle import ZKPoXBundle
+from .statement import Statement
 from .envelope import Envelope
 
 
-BUNDLE_VERSION = "zkpox-1.1"
-ENVELOPE_SCHEME = "zkpox-aes256gcm+age+tlock-drand-quicknet/v1"
+BUNDLE_VERSION = "zkpox-2.0"
+ENVELOPE_SCHEME = "zkpox-aes256gcm+age+tlock-drand-quicknet/v2"
 
 
 # ---------------------------------------------------------------------------
@@ -124,18 +125,11 @@ class DisclosureBundle:
     vendor_envelope: VendorEnvelope
     researcher: Researcher | None = None
     timestamp: "Timestamp | None" = None
-    # Tier 0/1 + 1.5 provenance carried over from the source
-    # ``ZKPoXBundle`` manifest (witness hash/len, source, observed
-    # outcome, the Tier-1 attestation claim, and the Tier 1.5
-    # reproduction block). Optional + omitted-when-None in CBOR, like
-    # ``researcher`` / ``timestamp`` — a bundle built without going
-    # through ``disclosure_from_manifest`` simply has none. The Rust
-    # verifier reads the bundle as a generic CBOR map and ignores keys
-    # it doesn't recognise, so this stays wire-compatible. Populated by
-    # :func:`disclosure_from_manifest` so the reproduction evidence
-    # reaches the disclosure bundle instead of being dropped.
+    # Optional caller-supplied public context; canonical factories omit private manifests.
     provenance: dict[str, Any] | None = None
     experimental: bool = True
+    statement: dict[str, Any] | None = None
+    transparency: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -243,90 +237,39 @@ def _normalize_sha256(h: str | None) -> str | None:
     return h if h.startswith("sha256:") else f"sha256:{h}"
 
 
-def disclosure_from_manifest(
-    manifest: ZKPoXBundle,
-    *,
-    proof: Proof,
-    vendor_envelope: VendorEnvelope,
-    harness: HarnessRef,
-    vuln_class: str,
-    gadget_id: str,
-    gadget_id_hash: str,
-    gadget_code_hash: str | None = None,
-    leaked_fields: list[str] | None = None,
-    target_kind: str = "elf",
-    target_url: str | None = None,
-    researcher: Researcher | None = None,
-) -> DisclosureBundle:
-    """Project a Tier 0/1 ``ZKPoXBundle`` manifest into a Tier 2/3 CBOR
-    :class:`DisclosureBundle`.
+def disclosure_from_statement(statement: Statement, *, proof: Proof,
+    vendor_envelope: VendorEnvelope, harness: HarnessRef,
+    target_url: str | None = None, researcher: Researcher | None = None) -> DisclosureBundle:
+    """Assemble public v2 fields; verification is separate. Private provenance stays private."""
+    from .statement import SYSTEM
+    statement.validate()
+    if proof.system != SYSTEM:
+        raise ValueError("v2 disclosure requires the supported Groth16 proof system")
+    gadget_id = {1: "crash_only", 2: "oob_write"}[statement.gadget_id]
+    return DisclosureBundle(version=BUNDLE_VERSION,
+        target=Target("source", "sha256:" + statement.target_source_hash.hex(), url=target_url),
+        vulnerability=Vulnerability("memory-safety", gadget_id, sha256_bytes(gadget_id.encode())),
+        proof=proof, harness=harness, vendor_envelope=vendor_envelope, researcher=researcher,
+        statement=statement.to_dict())
 
-    The manifest is authoritative for everything it already carries: the
-    target artefact hash (the binary/source that was triaged and
-    reproduced), the observed outcome, the Tier-1 attestation claim, and
-    the Tier 1.5 reproduction block. Those are derived here, NOT
-    re-supplied by the caller — so the disclosure proof can never
-    silently bind to a different artifact than the one the manifest
-    attests to. The caller supplies only the genuinely-new Tier 2/3
-    material: the SP1 ``proof``, the (optional) ``vendor_envelope``, the
-    ``harness`` reference, and the vulnerability classification.
 
-    The manifest's full Tier 0/1 + 1.5 evidence — including the
-    reproduction block — is carried into the bundle's ``provenance``
-    field rather than discarded.
-
-    ``target_binary_hash`` / ``target_source_hash`` are normalised from
-    the manifest's bare-hex form to ``sha256:HEX``; a binary hash wins
-    when both are present (the stronger commitment).
-    """
-    target_hash = _normalize_sha256(
-        manifest.target_binary_hash or manifest.target_source_hash
-    )
-    if target_hash is None:
-        raise ValueError(
-            "manifest has neither target_binary_hash nor "
-            "target_source_hash; cannot bind a disclosure proof to an "
-            "artifact"
-        )
-
-    provenance: dict[str, Any] = {
-        "witness_hash": manifest.witness_hash,
-        "witness_len": manifest.witness_len,
-        "source": manifest.source,
-        "observed_outcome": manifest.observed_outcome,
-        "outcome_detail": dict(manifest.outcome_detail),
-        "attestation": dict(manifest.attestation),
-        "tier": manifest.tier,
-    }
-    if manifest.reproduction is not None:
-        provenance["reproduction"] = dict(manifest.reproduction)
-
-    return DisclosureBundle(
-        version=BUNDLE_VERSION,
-        target=Target(
-            kind=target_kind,
-            hash=target_hash,
-            url=target_url,
-            metadata={
-                "witness_bytes": manifest.witness_len,
-                "target_artefact_kind": (
-                    "binary" if manifest.target_binary_hash else "source"
-                ),
-            },
-        ),
-        vulnerability=Vulnerability(
-            cls=vuln_class,
-            gadget_id=gadget_id,
-            gadget_id_hash=gadget_id_hash,
-            gadget_code_hash=gadget_code_hash,
-            leaked_fields=list(leaked_fields or []),
-        ),
-        proof=proof,
-        harness=harness,
-        vendor_envelope=vendor_envelope,
-        researcher=researcher,
-        provenance=provenance,
-    )
+def disclosure_from_manifest(manifest: ZKPoXBundle, *, statement: Statement,
+    proof: Proof, vendor_envelope: VendorEnvelope, harness: HarnessRef,
+    vuln_class: str, gadget_id: str, gadget_id_hash: str,
+    gadget_code_hash: str | None = None, leaked_fields: list[str] | None = None,
+    target_kind: str = "source", target_url: str | None = None,
+    researcher: Researcher | None = None) -> DisclosureBundle:
+    """Bind the recorded source to a v2 statement without exporting the private manifest."""
+    if _normalize_sha256(manifest.target_source_hash) != "sha256:" + statement.target_source_hash.hex():
+        raise ValueError("manifest source hash does not match the proven source")
+    result = disclosure_from_statement(statement, proof=proof, vendor_envelope=vendor_envelope,
+        harness=harness, target_url=target_url, researcher=researcher)
+    if (target_kind != "source" or vuln_class != result.vulnerability.cls
+            or gadget_id != result.vulnerability.gadget_id
+            or gadget_id_hash != result.vulnerability.gadget_id_hash
+            or gadget_code_hash is not None or leaked_fields):
+        raise ValueError("supplied claim metadata does not match the v2 statement")
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -334,11 +277,28 @@ def disclosure_from_manifest(
 # ---------------------------------------------------------------------------
 
 def to_cbor(bundle: DisclosureBundle) -> bytes:
-    return cbor2.dumps(_to_dict(bundle))
+    payload = _to_dict(bundle)
+    _validate_profile(payload)
+    encoded = cbor2.dumps(payload, canonical=True)
+    if len(encoded) > 64 * 1024 * 1024:
+        raise ValueError("bundle exceeds CBOR size limit")
+    return encoded
 
 
 def from_cbor(blob: bytes) -> DisclosureBundle:
-    return _from_dict(cbor2.loads(blob))
+    if type(blob) is not bytes or len(blob) > 64 * 1024 * 1024:
+        raise ValueError("bundle exceeds CBOR size limit")
+    _scan_cbor_profile(blob)
+    payload = cbor2.loads(blob)
+    _validate_profile(payload)
+    if cbor2.dumps(payload, canonical=True) != blob:
+        raise ValueError("bundle must use canonical CBOR without duplicates or trailing data")
+    if type(payload) is not dict:
+        raise ValueError("bundle must be a CBOR map")
+    result = _from_dict(payload)
+    if result.version == BUNDLE_VERSION and cbor2.dumps(_to_dict(result), canonical=True) != blob:
+        raise ValueError("unsupported or non-normalized disclosure fields")
+    return result
 
 
 def bundle_hash_pre_timestamp(bundle: DisclosureBundle) -> bytes:
@@ -373,6 +333,8 @@ def _replace_timestamp(bundle: DisclosureBundle, ts: "Timestamp | None") -> Disc
         timestamp=ts,
         provenance=bundle.provenance,
         experimental=bundle.experimental,
+        statement=bundle.statement,
+        transparency=bundle.transparency,
     )
 
 
@@ -450,6 +412,10 @@ def _to_dict(bundle: DisclosureBundle) -> dict[str, Any]:
     # binds the Tier 0/1 + 1.5 evidence too, not just the proof bytes.
     if bundle.provenance is not None:
         payload["provenance"] = dict(bundle.provenance)
+    if bundle.statement is not None:
+        payload["statement"] = dict(bundle.statement)
+    if bundle.transparency is not None:
+        payload["transparency"] = dict(bundle.transparency)
     payload["experimental"] = bundle.experimental
     return payload
 
@@ -522,4 +488,70 @@ def _from_dict(d: dict[str, Any]) -> DisclosureBundle:
         ),
         provenance=(None if provenance_d is None else dict(provenance_d)),
         experimental=experimental,
+        statement=d.get("statement"),
+        transparency=d.get("transparency"),
     )
+
+
+def _validate_profile(value: Any, depth: int = 0) -> None:
+    if depth > 64:
+        raise ValueError("CBOR nesting exceeds limit")
+    kind = type(value)
+    if kind is dict:
+        for key, child in value.items():
+            if type(key) is not str:
+                raise ValueError("CBOR map keys must be text")
+            _validate_profile(child, depth + 1)
+    elif kind in (list, tuple):
+        for child in value:
+            _validate_profile(child, depth + 1)
+    elif kind is int:
+        if not -(2**64) <= value < 2**64:
+            raise ValueError("CBOR integer exceeds profile")
+    elif kind not in (str, bytes, bool, type(None)):
+        raise ValueError("unsupported CBOR disclosure type")
+
+
+def _scan_cbor_profile(blob: bytes) -> None:
+    """Bound framing and reject semantic tags before cbor2 constructs objects."""
+    size = len(blob)
+    def walk(offset: int, depth: int) -> int:
+        if depth > 64:
+            raise ValueError("CBOR nesting exceeds limit")
+        if offset >= size:
+            raise ValueError("truncated CBOR value")
+        header = blob[offset]
+        offset += 1
+        major, extra = header >> 5, header & 31
+        if major == 6:
+            raise ValueError("CBOR semantic tags are not permitted")
+        if major == 7:
+            if extra not in (20, 21, 22):
+                raise ValueError("unsupported CBOR simple/float value")
+            return offset
+        if extra < 24:
+            argument = extra
+        elif extra <= 27:
+            width = 1 << (extra - 24)
+            if offset + width > size:
+                raise ValueError("truncated CBOR argument")
+            argument = int.from_bytes(blob[offset:offset + width], "big")
+            offset += width
+            if argument < (24,256,65536,4294967296)[extra-24]:
+                raise ValueError("nonminimal CBOR argument")
+        else:
+            raise ValueError("indefinite/reserved CBOR framing is not permitted")
+        if major <= 1:
+            return offset
+        if major in (2,3):
+            if argument > size-offset:
+                raise ValueError("truncated CBOR string")
+            return offset+argument
+        count = argument*(2 if major == 5 else 1)
+        if count > size-offset:
+            raise ValueError("CBOR container count exceeds available input")
+        for _ in range(count):
+            offset=walk(offset,depth+1)
+        return offset
+    if walk(0,0) != size:
+        raise ValueError("trailing CBOR data")

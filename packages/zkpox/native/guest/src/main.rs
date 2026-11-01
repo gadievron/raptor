@@ -1,37 +1,11 @@
 //! SP1 guest — target dispatch + gadget invocations.
 //!
-//! ## Witness layout
-//!
-//! Witnesses sent into the guest are bytes prefixed by a 1-byte
-//! `target_id`. The host (`zkpox-prove --target {01,02,03}`) prepends
-//! this byte; `core/zkpox/test/run-tests.sh` and `raptor_zkpox.py`
-//! both go through the host so the prepend stays in one place.
-//!
-//! `target_id == 0x01`  →  target #1 (stack BOF, buf_size = 16)
-//! `target_id == 0x02`  →  target #2 (off-by-one, buf_size = 16)
-//! `target_id == 0x03`  →  target #3 (CVE-2017-9047 extraction, buf_size = 32)
-//! any other value (including empty witness) → falls back to target 01
-//! for backward compatibility with pre-1.6 callers.
-//!
-//! ## Adding target #N
-//!
-//! 1. Drop the freestanding C at `targets/0N-<shape>.c`.
-//! 2. Add an entry to `targets: Vec<...>` in `guest/build.rs`.
-//! 3. Add an `extern "C"` binding here and a match arm in `dispatch()`.
-//! 4. If the target needs its own buffer geometry, add a per-arm
-//!    `buf_size` (see target 03 for the precedent — its CVE-shape
-//!    needs `buf_size = 32` for the buggy bypass window to be reachable).
-//! 5. Bump the witness corpus.
-//!
-//! ## Public-values schema (5 fields, in commit order)
-//!
-//! ```text
-//! target_id              : u32   (cast from u8, see TargetId enum)
-//! crash_only_crashed     : bool
-//! oob_detected           : bool
-//! oob_count              : u32
-//! oob_first_offset       : i32
-//! ```
+//! Private input: version/target/gadget (u32 little-endian), random salt
+//! (32 bytes), then witness. Unsupported selectors are rejected.
+//! Public output: the fixed 88-byte v2 statement from zkpox-statement.
+//! It commits to the source, predicate, verdict and salted witness digest.
+//! The verifier must require a positive selected verdict; valid execution
+//! proofs of benign inputs are intentionally possible for negative tests.
 
 #![no_main]
 sp1_zkvm::entrypoint!(main);
@@ -114,20 +88,24 @@ fn dispatch(target: TargetId, witness: &[u8]) -> (Scan, Scan) {
 }
 
 pub fn main() {
+    use zkpox_statement::{commitment, target_hash, Statement, VERSION, MAX_WITNESS, INPUT_HEADER_LEN};
     let raw: Vec<u8> = sp1_zkvm::io::read::<Vec<u8>>();
-    let (target_id, witness) = match raw.split_first() {
-        Some((head, tail)) => (TargetId::from_byte(*head), tail.to_vec()),
-        None => (TargetId::T01, raw),
+    assert!(raw.len() >= INPUT_HEADER_LEN && raw.len() <= INPUT_HEADER_LEN + MAX_WITNESS);
+    let word = |i: usize| u32::from_le_bytes(raw[i*4..i*4+4].try_into().unwrap());
+    assert_eq!(word(0), VERSION);
+    let target = word(1);
+    let gadget = word(2);
+    assert!((1..=3).contains(&target));
+    assert!((1..=2).contains(&gadget));
+    let salt: [u8;32] = raw[12..44].try_into().unwrap();
+    let witness = &raw[44..];
+    let target_id = TargetId::from_byte(target as u8);
+    let (crash_only, oob_write) = dispatch(target_id, witness);
+    let statement = Statement {
+        target, gadget, flags: (crash_only.dirty as u32) | ((oob_write.dirty as u32) << 1),
+        count: oob_write.count, first_offset: oob_write.first_offset,
+        witness_commitment: commitment(target, gadget, &salt, witness),
+        target_hash: target_hash(target).unwrap(),
     };
-
-    let (crash_only, oob_write) = dispatch(target_id, &witness);
-
-    // Public-values layout (host reads in the same order). target_id
-    // is committed as u32 so SP1's u8-as-public-value handling stays
-    // out of the schema's load path.
-    sp1_zkvm::io::commit(&(target_id as u32));
-    sp1_zkvm::io::commit(&crash_only.dirty);
-    sp1_zkvm::io::commit(&oob_write.dirty);
-    sp1_zkvm::io::commit(&oob_write.count);
-    sp1_zkvm::io::commit(&oob_write.first_offset);
+    sp1_zkvm::io::commit_slice(&statement.encode());
 }

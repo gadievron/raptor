@@ -1,10 +1,12 @@
+> Historical design/experiment notes. The supported v2 implementation and commands are documented in [the package guide](../README.md) and [current scope](zkpox-scope.md).
+
 # Design Proposal: ZKPoX libxml2 Fidelity Differential
 
 *Status: Design proposal / planned work. Closes the single largest
 credibility gap remaining after the Phase 1.7 target-03 PR.*
 
 *Related: `docs/proposals/zkpox-phase-1.5.x.md` (verification gap),
-`docs/zkpox-scope.md` (scope-of-trust), `core/zkpox/targets/03-libxml2-cve-2017-9047.c`
+`docs/zkpox-scope.md` (scope-of-trust), `packages/zkpox/native/targets/03-libxml2-cve-2017-9047.c`
 (the extraction this proposal validates).*
 
 ---
@@ -75,7 +77,7 @@ n < 2 + prefix_len + name_len               → no-op (victim returns early)
 
 ## 5. Deliverables
 
-### 5.1 Vendored pre-fix slice — `core/zkpox/test/fixtures/libxml2-slice/`
+### 5.1 Vendored pre-fix slice — `packages/zkpox/native/test/fixtures/libxml2-slice/`
 
 Vendor the **real** `xmlSnprintfElementContent` from `valid.c` at commit
 `0741801`, plus the minimal surrounding declarations needed to compile
@@ -91,7 +93,7 @@ hash, and a note that **only** the slice was vendored, unmodified except
 for compile glue. The whole point is byte-faithfulness to upstream — any
 edit to the function body voids the differential.
 
-### 5.2 ASan driver — `core/zkpox/test/fixtures/libxml2-driver.c` (~30 lines)
+### 5.2 ASan driver — `packages/zkpox/native/test/fixtures/libxml2-driver.c` (~30 lines)
 
 - Read a witness file (argv) into a buffer.
 - Decode `(prefix_len, name_len, prefix, name)` per §4.
@@ -106,7 +108,7 @@ edit to the function body voids the differential.
 
 ### 5.3 Differential harness step
 
-Extend `core/zkpox/test/run-tests.sh` (new `--fidelity` mode, or fold
+Extend `packages/zkpox/native/test/run-tests.sh` (new `--fidelity` mode, or fold
 into the default 03 sweep):
 
 1. Build the ASan driver once.
@@ -185,5 +187,5 @@ verified on every PR."
 
 *Filed from the 2026-05-11 non-cryptographer review of the zkpox-dev PR
 (reviewer Q1). Verified against current tree 2026-05-31: target 03 and
-the 15 `03-*` witnesses present; `core/zkpox/test/fixtures/` not yet
+the 15 `03-*` witnesses present; `packages/zkpox/native/test/fixtures/` not yet
 created.*

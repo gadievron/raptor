@@ -1,66 +1,34 @@
-//! `zkpox-verify` — standalone CBOR bundle verifier.
-//!
-//! Two build modes, gated by Cargo features:
-//!
-//! - **`full-verify`** (default): the structural pass below plus the
-//!   Phase 1.5.2 SP1 STARK verification. The verifier embeds the
-//!   same guest ELF the prover uses (via ``include_elf!``), re-derives
-//!   the verifying key, hashes it, compares against the bundle's
-//!   ``proof.verifier_key_hash``, hashes the embedded ELF and
-//!   compares against ``harness.hash``, then runs sp1-sdk's
-//!   ``client.verify`` on the bundle's ``proof.bytes``. Tampering
-//!   with any of the three (proof, vkey hash, harness hash) produces
-//!   a clean non-zero exit. The trust root is the verifier binary
-//!   itself — see ``docs/proposals/zkpox-phase-1.5.x.md`` §7 (Option A).
-//!
-//! - **`structural`** (``--no-default-features --features structural``):
-//!   the 1.3/1.5 behaviour — CBOR shape, envelope fingerprint, version
-//!   binding, and a deferred ``stark_verification`` field. Used by
-//!   CI's fast tier and any environment without the SP1 build chain.
-//!
-//! Structural checks that BOTH features run:
-//!   - Bundle parses as CBOR with the expected top-level fields.
-//!   - `version` matches a supported value (``zkpox-1.0`` or
-//!     ``zkpox-1.1``).
-//!   - `vendor_envelope.vendor_pubkey_fingerprint` is the sha256 of
-//!     `vendor_envelope.vendor_pubkey`.
-//!   - `proof.bytes` is non-empty and `proof.verifier_key_hash` is a
-//!     well-formed sha256 marker.
-//!
-//! Still deferred at Phase 1.5.2 (lands in 1.5.3):
-//!   - The Sigstore Rekor inclusion proof (Merkle path + STH signature).
-//!   - The vendor envelope round-trip (the verifier doesn't have the
-//!     vendor's age secret key; it can only check the wrapping is
-//!     well-formed, which is what the structural pass does).
+//! Standalone v2 ZKPoX proof verifier. The embedded guest is the trust root.
+//! Real Groth16 verification additionally requires an exact positive public
+//! statement matching the claimed curated source, predicate and commitment.
+//! Explicit inspection never verifies a proof. Optional log evidence and
+//! encrypted delivery have separate statuses and are not authenticated here.
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, Result};
 use clap::Parser;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 mod rekor;
+mod canonical;
 
-/// Bundle versions this verifier accepts. ``zkpox-1.0`` is the
-/// Phase 1.5 (placeholder-hashes) shape; ``zkpox-1.1`` adds the
-/// ``vulnerability.gadget_code_hash`` field from Phase 1.5.1. The
-/// verifier reads both — strict-mode enforcement of the new field
-/// lands in Phase 1.5.4.
-const SUPPORTED_VERSIONS: &[&str] = &["zkpox-1.0", "zkpox-1.1"];
+/// Only v2 has a target/predicate/witness-bound public statement.
+const SUPPORTED_VERSIONS: &[&str] = &["zkpox-2.0"];
 
 /// The current envelope scheme; bundles whose `vendor_envelope.scheme`
 /// starts with anything else MUST be rejected by a v1 verifier. Without
 /// this check a future v2 envelope could be replayed under v1 framing
 /// (the AAD mismatch would surface as an AES-GCM authentication failure
 /// but only on decrypt — too late for the structural pass).
-const SUPPORTED_ENVELOPE_PREFIX: &str = "zkpox-aes256gcm+age+tlock-drand-quicknet/v1";
+const SUPPORTED_ENVELOPE_PREFIX: &str = "zkpox-aes256gcm+age+tlock-drand-quicknet/v2";
 /// "No envelope" sentinel — Phase 1.5 `cmd_prove` writes this when the
 /// caller omits `--vendor-pubkey`. Structurally distinct from a real v1
 /// envelope and from a future v2.
-const SENTINEL_ENVELOPE_NONE: &str = "zkpox-none/v1";
+const SENTINEL_ENVELOPE_NONE: &str = "zkpox-none/v2";
 
 #[derive(Parser, Debug)]
-#[command(about = "Verify a zkpox CBOR disclosure bundle (structural; STARK verification is Phase 1.5.x)")]
+#[command(about = "Verify a v2 ZKPoX Groth16 disclosure against the embedded guest")]
 struct Args {
     /// Path to the CBOR bundle.
     bundle: PathBuf,
@@ -69,13 +37,13 @@ struct Args {
     #[arg(long)]
     json: bool,
 
-    /// Exit non-zero on any DEFERRED check (STARK, Rekor inclusion).
-    /// Default off in Phase 1.5; becomes the default once 1.5.x lands
-    /// the deferred checks. Use this in CI / automated disclosure
-    /// pipelines so a structural-only pass is not silently treated as
-    /// "the bundle is verified."
-    #[arg(long)]
+    /// Compatibility flag: verification is already required by default.
+    #[arg(long, conflicts_with = "inspect")]
     strict: bool,
+
+    /// Inspect metadata without claiming cryptographic verification.
+    #[arg(long)]
+    inspect: bool,
 }
 
 #[derive(Serialize)]
@@ -113,12 +81,14 @@ struct Summary {
     #[serde(skip_serializing_if = "Option::is_none")]
     timestamp: Option<TimestampSummary>,
     structural_checks_passed: bool,
+    proof_verification_status: String,
     // Phase 1.5.2: ``String`` so a ``full-verify`` build can surface
     // dynamic OK / FAIL messages (e.g. with the verifier's expected
     // vkey hash). The structural-only build still emits a fixed
     // ``DEFERRED ...`` string here.
     stark_verification: String,
     rekor_inclusion_verification: String,
+    delivery_verification: String,
 }
 
 #[derive(Serialize)]
@@ -177,7 +147,7 @@ mod full_verify {
     /// Setup is fast (~ms) — it doesn't run the proving stack, just
     /// derives the vkey from the ELF.
     pub fn verifying_key_hash() -> Result<String> {
-        let client = ProverClient::from_env();
+        let client = ProverClient::builder().light().build();
         let pk = client
             .setup(GUEST_ELF)
             .map_err(|e| anyhow!("sp1-sdk setup against embedded GUEST_ELF failed: {e:?}"))?;
@@ -192,34 +162,37 @@ mod full_verify {
     /// ``SP1ProofWithPublicValues::save`` writes) and run sp1-sdk's
     /// ``verify`` against the embedded ELF's verifying key. Returns
     /// ``Ok(())`` iff the STARK proof verifies.
-    pub fn verify_proof(proof_bytes: &[u8]) -> Result<()> {
-        let proof: SP1ProofWithPublicValues = bincode::deserialize(proof_bytes)
+    pub fn verify_proof(proof_bytes: &[u8]) -> Result<zkpox_statement::Statement> {
+        use bincode::Options;
+        let proof: SP1ProofWithPublicValues = bincode::DefaultOptions::new()
+            .with_fixint_encoding().with_limit(64 * 1024 * 1024)
+            .reject_trailing_bytes().deserialize(proof_bytes)
             .map_err(|e| anyhow!("failed to deserialise proof.bytes (bincode): {e}"))?;
-        let client = ProverClient::from_env();
+        anyhow::ensure!(matches!(&proof.proof, sp1_sdk::SP1Proof::Groth16(_)), "disclosure requires an actual Groth16 proof");
+        let client = ProverClient::builder().light().build();
         let pk = client
             .setup(GUEST_ELF)
             .map_err(|e| anyhow!("sp1-sdk setup against embedded GUEST_ELF failed: {e:?}"))?;
         client
             .verify(&proof, pk.verifying_key(), None)
-            .map_err(|e| anyhow!("STARK verification failed: {e:?}"))
+            .map_err(|e| anyhow!("SP1 verification failed: {e:?}"))?;
+        let statement = zkpox_statement::Statement::decode(proof.public_values.as_slice())
+            .map_err(|e| anyhow!(e))?;
+        statement.validate().map_err(|e| anyhow!(e))?;
+        Ok(statement)
     }
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    let blob = std::fs::read(&args.bundle)
-        .with_context(|| format!("reading bundle {}", args.bundle.display()))?;
-
-    // Parse top-level value.
-    let value: ciborium::Value =
-        ciborium::de::from_reader(blob.as_slice()).context("parsing CBOR")?;
+    let value = canonical::read(&args.bundle)?;
     let map = match value {
         ciborium::Value::Map(m) => m,
         _ => bail!("bundle is not a CBOR map"),
     };
 
-    let summary = inspect(&map)?;
+    let summary = inspect(&map, !args.inspect)?;
 
     if args.json {
         let out = serde_json::to_string_pretty(&summary)?;
@@ -227,36 +200,10 @@ fn main() -> Result<()> {
     } else {
         print_human(&summary);
         if summary.experimental {
-            // Always-on beta marker — fires even with --strict so an
-            // operator running a strict pipeline still sees "this
-            // bundle was produced by an experimental version of the
-            // toolchain." Suppressed in --json so automated consumers
-            // parse the `experimental` field instead.
-            eprintln!();
-            eprintln!(
-                "  EXPERIMENTAL BUNDLE — produced by Phase 1.5 (beta) zkpox."
-            );
-            eprintln!(
-                "  Bundle format and verifier semantics are subject to change."
-            );
-            eprintln!(
-                "  Do NOT use this bundle for real CVE disclosure."
-            );
-            eprintln!(
-                "  Scope: docs/zkpox-scope.md"
-            );
+            eprintln!("Experimental ZKPoX v2 format. Scope: packages/zkpox/docs/zkpox-scope.md");
         }
-        if !args.strict {
-            // Loud banner so a casual reader doesn't mistake exit 0
-            // for "the bundle is verified." Suppressed in --json so
-            // automated consumers parse the verdict fields instead.
-            eprintln!();
-            eprintln!(
-                "  MODE: structural-only — STARK proof and Rekor inclusion checks are DEFERRED."
-            );
-            eprintln!(
-                "        Pass --strict to fail on any deferred check."
-            );
+        if args.inspect {
+            eprintln!("Inspection only; the proof was not verified.");
         }
     }
 
@@ -266,8 +213,8 @@ fn main() -> Result<()> {
     // --strict treats any DEFERRED check as a hard failure. Phase 1.5
     // ships with both STARK and Rekor inclusion deferred; in 1.5.x the
     // strict path narrows as each lands.
-    if args.strict {
-        let stark_done = !summary.stark_verification.starts_with("DEFERRED");
+    if args.strict || !args.inspect {
+        let stark_done = summary.proof_verification_status == "verified";
         let rekor_done = summary.timestamp.is_none()
             || !summary.rekor_inclusion_verification.starts_with("DEFERRED");
         if !stark_done || !rekor_done {
@@ -288,7 +235,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn inspect(map: &[(ciborium::Value, ciborium::Value)]) -> Result<Summary> {
+fn inspect(map: &[(ciborium::Value, ciborium::Value)], verify_crypto: bool) -> Result<Summary> {
     let version = string_at(map, "version")?;
     if !SUPPORTED_VERSIONS.contains(&version.as_str()) {
         bail!(
@@ -332,7 +279,7 @@ fn inspect(map: &[(ciborium::Value, ciborium::Value)]) -> Result<Summary> {
     // future v2 envelope could be replayed under v1 framing — the AAD
     // mismatch would only surface on the decrypt path, far too late for
     // the structural pass to catch.
-    let envelope_ok = envelope_scheme.starts_with(SUPPORTED_ENVELOPE_PREFIX)
+    let envelope_ok = envelope_scheme == SUPPORTED_ENVELOPE_PREFIX
         || envelope_scheme == SENTINEL_ENVELOPE_NONE;
     if !envelope_ok {
         eprintln!(
@@ -341,14 +288,23 @@ fn inspect(map: &[(ciborium::Value, ciborium::Value)]) -> Result<Summary> {
         checks_passed = false;
     }
 
+    if envelope_scheme == SENTINEL_ENVELOPE_NONE {
+        if !aes_blob.is_empty() || !ct_age.is_empty() || !ct_tlock.is_empty() || !vendor_pubkey.is_empty() {
+            bail!("absent envelope must not contain ciphertext or a vendor key");
+        }
+    } else if aes_blob.len() < 28 || ct_age.is_empty() || ct_tlock.is_empty()
+        || !vendor_pubkey.starts_with("age1") || vendor_pubkey.len() > 200 {
+        bail!("incomplete vendor envelope");
+    }
+
     // Sanity: proof bytes non-empty.
     if proof_bytes.is_empty() {
         eprintln!("FAIL: proof.bytes is empty");
         checks_passed = false;
     }
     // Sanity: verifier_key_hash starts with the sha256: prefix.
-    if !verifier_key_hash.starts_with("sha256:") {
-        eprintln!("FAIL: proof.verifier_key_hash missing sha256: prefix");
+    if !verifier_key_hash.starts_with("sp1-vk:") {
+        eprintln!("FAIL: proof.verifier_key_hash missing sp1-vk: prefix");
         checks_passed = false;
     }
 
@@ -386,12 +342,14 @@ fn inspect(map: &[(ciborium::Value, ciborium::Value)]) -> Result<Summary> {
     // Any of the three failing turns ``stark_verification`` into a
     // ``FAIL (reason)`` string and clears ``structural_checks_passed``.
     // ``--strict`` (in main) then exits non-zero.
-    let stark_verification = stark_verification_outcome(
-        &harness_hash,
-        &verifier_key_hash,
-        proof_bytes,
-        &mut checks_passed,
-    );
+    let stark_verification = if verify_crypto {
+        stark_verification_outcome(&harness_hash, &verifier_key_hash, proof_bytes, map, &mut checks_passed)
+    } else {
+        "NOT_VERIFIED — inspection only".to_string()
+    };
+    let proof_verification_status = if stark_verification.starts_with("OK") { "verified" }
+        else if stark_verification.starts_with("FAIL") { "failed" }
+        else { "not_verified" }.to_string();
 
     Ok(Summary {
         version,
@@ -409,11 +367,13 @@ fn inspect(map: &[(ciborium::Value, ciborium::Value)]) -> Result<Summary> {
         harness_hash,
         envelope_scheme,
         envelope_aes_blob_len: aes_blob.len(),
+        delivery_verification: if aes_blob.is_empty() { "absent" } else { "encrypted_unchecked" }.to_string(),
         envelope_ct_k_age_len: ct_age.len(),
         envelope_ct_k_tlock_len: ct_tlock.len(),
         drand_round_min: optional_int_at(envelope, "drand_round_min"),
         timestamp,
         structural_checks_passed: checks_passed,
+        proof_verification_status,
         stark_verification,
         rekor_inclusion_verification:
             "DEFERRED — Phase 1.5.3 wires Merkle path + STH validation".to_string(),
@@ -434,6 +394,7 @@ fn stark_verification_outcome(
     harness_hash: &str,
     verifier_key_hash: &str,
     proof_bytes: &[u8],
+    map: &[(ciborium::Value, ciborium::Value)],
     checks_passed: &mut bool,
 ) -> String {
     // 1. ``harness.hash`` MUST match the embedded ELF.
@@ -458,23 +419,48 @@ fn stark_verification_outcome(
         }
     };
     let supplied_vk = verifier_key_hash
-        .strip_prefix("sha256:")
+        .strip_prefix("sp1-vk:")
         .unwrap_or(verifier_key_hash);
     if supplied_vk != expected_vk {
         *checks_passed = false;
         return format!(
-            "FAIL: proof.verifier_key_hash sha256:{supplied_vk} does \
-             not match the verifier's derived vkey (sha256:{expected_vk}).",
+            "FAIL: proof.verifier_key_hash sp1-vk:{supplied_vk} does \
+             not match the verifier's derived vkey (sp1-vk:{expected_vk}).",
         );
     }
     // 3. The actual cryptographic STARK verification.
-    if let Err(e) = full_verify::verify_proof(proof_bytes) {
+    let checked = (|| -> Result<()> {
+        let statement = full_verify::verify_proof(proof_bytes)?;
+        let claims = submap(map, "statement")?;
+        for (key, expected) in [
+            ("version", zkpox_statement::VERSION as i64),
+            ("target_id", statement.target as i64), ("gadget_id", statement.gadget as i64),
+            ("flags", statement.flags as i64), ("oob_count", statement.count as i64),
+            ("oob_first_offset", statement.first_offset as i64),
+        ] {
+            anyhow::ensure!(required_int_at(claims, key)? == expected, "public statement mismatch: {key}");
+        }
+        let source_hash = format!("sha256:{}", hex::encode(statement.target_hash));
+        anyhow::ensure!(string_at(claims, "target_source_hash")? == source_hash, "statement source mismatch");
+        anyhow::ensure!(string_at(claims, "witness_commitment")? == format!("sha256:{}", hex::encode(statement.witness_commitment)), "witness commitment mismatch");
+        let target = submap(map, "target")?;
+        anyhow::ensure!(string_at(target, "kind")? == "source" && string_at(target, "hash")? == source_hash, "target must identify the proven curated source");
+        anyhow::ensure!(string_at(submap(map, "proof")?, "system")? == zkpox_statement::SYSTEM, "incorrect proof system");
+        let expected_gadget = match statement.gadget { 1 => "crash_only", 2 => "oob_write", _ => unreachable!() };
+        let vulnerability = submap(map, "vulnerability")?;
+        anyhow::ensure!(string_at(vulnerability, "gadget_id")? == expected_gadget, "gadget label mismatch");
+        anyhow::ensure!(string_at(vulnerability, "class")? == "memory-safety", "unsupported vulnerability class");
+        anyhow::ensure!(string_at(vulnerability, "gadget_id_hash")? == format!("sha256:{}", sha256_hex(expected_gadget.as_bytes())), "gadget identifier hash mismatch");
+        anyhow::ensure!(optional_string_at(vulnerability, "gadget_code_hash").is_none(), "v2 binds implementation through harness.hash; separate gadget code hash is unsupported");
+        Ok(())
+    })();
+    if let Err(e) = checked {
         *checks_passed = false;
         return format!("FAIL: {e}");
     }
     format!(
         "OK — sp1-sdk verified against embedded guest ELF (sha256:{expected_elf}, \
-         vkey sha256:{expected_vk})",
+         vkey sp1-vk:{expected_vk})",
     )
 }
 
@@ -483,6 +469,7 @@ fn stark_verification_outcome(
     _harness_hash: &str,
     _verifier_key_hash: &str,
     _proof_bytes: &[u8],
+    _map: &[(ciborium::Value, ciborium::Value)],
     _checks_passed: &mut bool,
 ) -> String {
     // Structural-only build: no sp1-sdk linked, no embedded ELF. The
