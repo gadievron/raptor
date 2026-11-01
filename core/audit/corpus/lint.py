@@ -546,7 +546,7 @@ def _check_span(
     text = "\n".join(lines)
     wanted = function_name(label.function_id, qualified=True)
     try:
-        candidates = [d for d in definitions(text, rel_file)
+        candidates = [d for d in definitions(text, rel_file, kernel_extensions=src.repo == "linux-kernel")
                       if d.name == wanted or (
                           "." not in wanted and d.name.rsplit(".", 1)[-1] == wanted)]
     except (ImportError, ValueError, SyntaxError, RuntimeError) as exc:

@@ -29,7 +29,7 @@ class Definition:
     uncertain: bool = False
 
 
-def definitions(text: str, filename: str) -> list[Definition]:
+def definitions(text: str, filename: str, *, kernel_extensions: bool = False) -> list[Definition]:
     """Return actual Python/C/Go definitions, or raise if unavailable.
 
     Conditional C definitions remain distinct. Parsing errors within a
@@ -58,6 +58,9 @@ def definitions(text: str, filename: str) -> list[Definition]:
     parser = _ts_parser_for(language)
     if parser is None:
         raise ValueError(f"{language} definition parser unavailable")
+    if language == "c" and kernel_extensions:
+        from .kernel_syntax import kernel_parse_view
+        text = kernel_parse_view(text, parser)
     data = text.encode("utf-8")
     tree = parser.parse(data)
     if tree is None:
@@ -71,9 +74,12 @@ def definitions(text: str, filename: str) -> list[Definition]:
         if node.child_by_field_name("body") is None:
             continue
         ident = node.child_by_field_name("name")
+        explicit_function = True
         if language == "c":
+            explicit_function = False
             ident = node.child_by_field_name("declarator")
             while ident is not None and ident.type != "identifier":
+                explicit_function |= ident.type == "function_declarator"
                 ident = ident.child_by_field_name("declarator")
         if ident is None:
             continue
@@ -87,5 +93,5 @@ def definitions(text: str, filename: str) -> list[Definition]:
                     name = data[part.start_byte:part.end_byte].decode("utf-8") + "." + name
                     break
                 pending.extend(reversed(part.named_children))
-        found.append(Definition(name, node.start_point.row + 1, node.end_point.row + 1, node.has_error))
+        found.append(Definition(name, node.start_point.row + 1, node.end_point.row + 1, node.has_error or not explicit_function))
     return found
