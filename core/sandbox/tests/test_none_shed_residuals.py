@@ -21,28 +21,31 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_branded_tmpdir_survives_operator_disable(tmp_path, monkeypatch):
+@pytest.mark.parametrize("session_scratch", [False, True])
+def test_operator_disable_preserves_trusted_safe_env_tmpdir(tmp_path, monkeypatch, session_scratch):
+    from core.config import RaptorConfig
     from core.sandbox import context, state
+    from core.security import env_sanitisation
 
     monkeypatch.setattr(state, "_cli_sandbox_profile", "none")
     monkeypatch.setattr(state, "_cli_sandbox_disabled", True)
-    branded = "/tmp/raptor-session-test-shed"
-    monkeypatch.setenv("TMPDIR", branded)
+    selected = str(tmp_path / "raptor-session-test-shed") if session_scratch else "/tmp"
+    if session_scratch:
+        (tmp_path / "raptor-session-test-shed").mkdir()
+    monkeypatch.setattr(env_sanitisation, "_subprocess_tmpdir", selected)
+    monkeypatch.setenv("TMPDIR", "/tmp/raptor-session-injected-later")
+    baseline = RaptorConfig.get_safe_env()
+    assert baseline["TMPDIR"] == selected
 
     res = context.run(
         ["/bin/sh", "-c", "echo TMPDIR=${TMPDIR-unset}"],
         capture_output=True, text=True, timeout=30,
     )
     assert res.returncode == 0
-    # The safe-env allowlist legitimately drops TMPDIR (that IS
-    # bare-subprocess-through-get_safe_env behaviour); what must not
-    # happen is the anti-fingerprint overlay REINTRODUCING it as
-    # TMPDIR=/tmp — the disable's one residual env mutation.
-    assert "TMPDIR=/tmp\n" not in res.stdout, (
-        f"disabled run carried the branded-TMPDIR overlay (got "
-        f"{res.stdout!r}) — --sandbox none must not mutate the child "
-        f"env beyond the safe-env allowlist"
-    )
+    # Disabled execution must preserve the trusted safe-env value, including
+    # a legitimate /tmp default. A branded session value must not be rewritten
+    # by the anti-fingerprint overlay, nor replaced by the later ambient value.
+    assert res.stdout == f"TMPDIR={baseline['TMPDIR']}\n", res.stderr
 
 
 @requires_network_block_backend
