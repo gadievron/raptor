@@ -128,6 +128,12 @@ list refresh refuses an upstream feed that would replace more than
 half of the existing reference set (supply-chain guard against a
 poisoned feed); `--allow-churn` overrides after review.
 
+For a known-benign npm deprecation, the reviewed-legit list can record
+`reviewed_deprecation` with the exact `notice`, `decided_by: "human"`, and an
+ISO `date`. Only that unchanged notice is acknowledged; changed notices,
+registry removal, and malicious advisories still trigger re-review. Other
+ecosystems' yanked/abandoned flags are not suppressed by this acknowledgement.
+
 Maven coordinates parsed from Gradle DSL files use the canonical
 `group:artifact` (colon) shape. Findings from historical runs that
 recorded the old slash shape will not correlate with new runs — those

@@ -84,7 +84,12 @@
       "near_twin": "uglify-js",
       "decided_by": "human",
       "date": "2026-10-05",
-      "note": "defensive name reservation by alexlamsl, who also maintains uglify-js; same owner"
+      "note": "defensive name reservation by alexlamsl, who also maintains uglify-js; same owner",
+      "reviewed_deprecation": {
+        "notice": "uglifyjs is deprecated - use uglify-js instead.",
+        "decided_by": "human",
+        "date": "2026-11-01"
+      }
     },
     "extend2": {
       "near_twin": "extend",

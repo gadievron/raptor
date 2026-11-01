@@ -40,7 +40,7 @@ from collections.abc import Callable
 from core.json import load_json_bounded, save_json
 
 from ..parsers import _safe_read
-from .typosquat_audit import Candidate, _load_name_set
+from .typosquat_audit import Candidate, _load_name_meta
 
 logger = logging.getLogger(__name__)
 
@@ -607,6 +607,27 @@ def osv_malicious(http, ecosystem: str, names: list[str]) -> set:
     return mal
 
 
+def _reviewed_deprecation_matches(entry: dict, ecosystem: str, meta: dict) -> bool:
+    """Suppress only an explicitly human-reviewed, exact npm notice.
+
+    Other ecosystems currently expose only yanked/abandoned booleans here,
+    which cannot distinguish a reviewed reason from a new one.
+    """
+    if ecosystem != 'npm':
+        return False
+    ack = entry.get('reviewed_deprecation')
+    if not isinstance(ack, dict) or ack.get('decided_by') != 'human':
+        return False
+    try:
+        datetime.date.fromisoformat(ack.get('date', ''))
+    except (ValueError, TypeError):
+        return False
+    latest = _as_dict(meta.get('dist-tags')).get('latest')
+    vm = _as_dict(_as_dict(meta.get('versions')).get(latest)) if isinstance(latest, str) else {}
+    notice = vm.get('deprecated')
+    return isinstance(notice, str) and bool(notice) and notice == ack.get('notice')
+
+
 def reaudit_reviewed_legit(
     reviewed_legit_path: Path,
     ecosystems: list[str],
@@ -621,7 +642,8 @@ def reaudit_reviewed_legit(
     injected so this is tested without network."""
     out: dict = {}
     for eco in ecosystems:
-        names = sorted(_load_name_set(reviewed_legit_path, eco))
+        entries = _load_name_meta(reviewed_legit_path, eco)
+        names = sorted(entries)
         if not names:
             continue
         flags: dict = {}
@@ -636,8 +658,8 @@ def reaudit_reviewed_legit(
                 continue
             ev = collect_evidence(Candidate(name, "", 0, 0, 0), eco,
                                   lambda _n, _meta=meta: _meta)  # type: ignore[misc]
-            if ev.deprecated:
-                flags.setdefault(name, []).append("now deprecated")
+            if ev.deprecated and not _reviewed_deprecation_matches(entries[name], eco, meta):
+                flags.setdefault(name, []).append("deprecated (requires review)")
         if osv_malicious_fn is not None:
             for name in osv_malicious_fn(eco, names):
                 flags.setdefault(name, []).append(
