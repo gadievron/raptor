@@ -237,7 +237,8 @@ _LLM_PHASES = frozenset({
     # literals) that no pass-ledger phase name covers: the IRIS
     # refinement health-gate skip marker, the tier-1 edge-contract
     # review class, and the adversarial-refuter pass.
-    "adversarial", "edge_review", "iris_refinement_skipped",
+    "adversarial", "eager_compile", "edge_review",
+    "iris_refinement_skipped",
 })
 
 
