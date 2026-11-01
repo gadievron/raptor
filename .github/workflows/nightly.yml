@@ -424,12 +424,13 @@ jobs:
         run: |
           set -euo pipefail
           source "$VENV_PATH/bin/activate"
-          # Focus on the header/log changes rather than the broader
-          # command/PHP sanitizer matrix. Require both patches on the ref
-          # so a missing log regression cannot silently pass selection.
+          # Focus on the header/log/narrowing regressions. Require every
+          # test file on the ref so missing patches cannot silently pass
+          # selection. The JUnit check below rejects tool-related skips.
           scan_tests=(
             engine/semgrep/tests/test_header_sanitizer_precision.py
             engine/semgrep/tests/test_log_sanitizer_precision.py
+            engine/semgrep/tests/test_go_narrowing_precision.py
           )
           for scan_test in "${scan_tests[@]}"; do
             if [ ! -f "$scan_test" ]; then
