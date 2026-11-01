@@ -1138,6 +1138,7 @@ def format_context_for_prompt(
     # did not elide.  Cleared before ANY early return so a glance-path
     # or budget-0 re-entry cannot carry a stale stamp forward.
     ctx.pop("prompt_budget_event", None)
+    ctx.pop("cross_entry_rendered", None)
 
     if ctx.get("triage_bucket") == "glance":
         return _format_glance_prompt(ctx)
@@ -1729,6 +1730,18 @@ def format_context_for_prompt(
                 origin="audit-dispatch-table",
             ),
             2,
+        ))
+
+    if ctx.get("cross_entry_analysis"):
+        sections.append(PromptSection(
+            "cross_entry_analysis",
+            "\n### Shared-state protocol investigation (conditional evidence)\n"
+            + wrap_untrusted(
+                str(ctx["cross_entry_analysis"]),
+                kind="cross-entry-analysis",
+                origin="audit-cross-entry-study",
+            ),
+            1,
         ))
 
     if ctx.get("co_accessor_analysis"):
@@ -2856,8 +2869,12 @@ def format_context_for_prompt(
                     for e in report.elisions
                 ],
             }
+        if ctx.get("cross_entry_analysis"):
+            ctx["cross_entry_rendered"] = any(s.label == "cross_entry_analysis" for s in kept)
         return "\n".join(s.text for s in kept)
 
+    if ctx.get("cross_entry_analysis"):
+        ctx["cross_entry_rendered"] = True
     return "\n".join(s.text for s in sections)
 
 

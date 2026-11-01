@@ -936,6 +936,16 @@ class OrchestratorConfig:
     # unchanged reviewed functions are suppressed, nothing imported.
     # ``force=True`` bypasses both (everything re-reviews).
     verdict_reuse: bool = True
+    cross_entry: str = "off"
+    cross_entry_max_calls: int = 8
+    cross_entry_max_files: int = 200
+    cross_entry_root: Path | None = None
+    cross_entry_include_dirs: list[Path] = field(default_factory=list)
+    cross_entry_drain_index: bool = False
+    cross_entry_max_slices: int = 40
+    cross_entry_source_chars: int = 24_000
+    cross_entry_input_tokens: int = 12_000
+    cross_entry_index_batch_files: int = 200
     # Cross-function edge obligations (--edges, flag-gated until the
     # CopyFail/DirtyFrag validation bar passes): scope tier-1/tier-2
     # edge obligations from the checklist adjacency + context-map,
@@ -3504,6 +3514,11 @@ def review_one_function(
     func_name = gap.get("name", "")
     func_file = gap.get("file", "")
 
+    cross_entry_context = shared.cross_entry_contexts.get(f"{func_file}:{func_name}")
+    if cross_entry_context:
+        ctx["cross_entry_analysis"] = cross_entry_context
+        ctx["cross_entry_receipt"] = shared.cross_entry_receipts.get(f"{func_file}:{func_name}")
+
     if shared.capability_displacements:
         func_displacements = [
             d for d in shared.capability_displacements
@@ -6066,6 +6081,12 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
             logger.warning(
                 "--seed-rereview resolution skipped", exc_info=True,
             )
+    _cross_entry_pending = set()
+    if getattr(config, "cross_entry", "off") in {"context","study"}:
+        from .cross_entry.progress import pending_report_keys
+        _cross_entry_pending = pending_report_keys(config.out_dir,
+            selection_key=repr((config.models,config.scope,config.functions)),target=config.target_path)
+        _seed_rereview_keys = set(_seed_rereview_keys or ()) | _cross_entry_pending
     gaps = compute_gaps(
         checklist,
         [] if config.force else coverage_records,
@@ -6489,6 +6510,50 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
         logger.debug("ops-struct entry point extraction failed", exc_info=True)
 
     sinks_set = extract_context_map_set(context_map, "sinks")
+    cross_entry_contexts: dict[str, str] = {}
+    cross_entry_receipts: dict[str, dict[str, str]] = {}
+    if getattr(config, "cross_entry", "off") != "off":
+        _phase("prep_cross_entry")
+        try:
+            from .cross_entry.integration import prepare_cross_entry
+            from .cross_entry.model import Limits as CrossEntryLimits
+
+            _cross_report_gaps = gaps
+            if not _cross_report_gaps:
+                from core.json import load_json as _load_cross_progress
+                _cross_progress = _load_cross_progress(config.out_dir / "cross-entry-progress.json")
+                if (isinstance(_cross_progress, dict)
+                        and _cross_progress.get("selection_key") == repr((config.models,config.scope,config.functions))
+                        and _cross_progress.get("target") == str(config.target_path.resolve())):
+                    _cross_report_gaps = _cross_progress.get("report_requests", [])
+
+            cross_entry_contexts = prepare_cross_entry(
+                config.target_path, _cross_report_gaps, mode=config.cross_entry,
+                out_dir=config.out_dir,
+                limits=CrossEntryLimits(max_calls=config.cross_entry_max_calls,
+                                        max_files=config.cross_entry_max_files,
+                                        max_slices=config.cross_entry_max_slices,
+                                        source_chars=config.cross_entry_source_chars,
+                                        input_tokens=config.cross_entry_input_tokens,
+                                        index_batch_files=config.cross_entry_index_batch_files),
+                client=_run_llm_client(config) if config.cross_entry == "study" else None,
+                entry_points=entry_points,
+                model_key=repr((config.models,config.scope,config.functions)),
+                context_root=config.cross_entry_root,
+                include_dirs=config.cross_entry_include_dirs,
+                drain_index=config.cross_entry_drain_index,
+                delivery_receipts=cross_entry_receipts,
+                should_stop=lambda: (
+                    is_shutdown_requested()
+                    or (config.run_deadline_monotonic is not None
+                        and time.monotonic() >= config.run_deadline_monotonic)
+                ),
+            )
+        except Exception as exc:
+            logger.warning("cross-entry preparation failed: %s", type(exc).__name__, exc_info=True)
+            from core.json import save_json as _save_cross_entry_error
+            _save_cross_entry_error(config.out_dir / "cross-entry-error.json",
+                                    {"status": "error", "error": type(exc).__name__})
     trust_boundary_set = extract_context_map_set(
         context_map,
         "trust_boundaries",
@@ -7371,6 +7436,8 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
         "sibling_postcond_violations": sibling_postcond_violations,
         "capability_displacements": capability_displacements,
         "struct_accessor_index": struct_accessor_index,
+        "cross_entry_contexts": cross_entry_contexts,
+        "cross_entry_receipts": cross_entry_receipts,
         "semantic_findings": semantic_findings,
         "mechanical_findings": mechanical_findings,
         "consistency_prepass": consistency_prepass,
@@ -8863,7 +8930,7 @@ def _run_audit_body(
     guard_clean_resolved = 0
     for gap in gaps:
         key = f"{gap['file']}:{gap['name']}"
-        if key in reviewed_set:
+        if key in reviewed_set and not gap.get("seed_rereview"):
             result.skipped += 1
             continue
         # --functions filter first, so a kept gap carries force_review
@@ -9284,6 +9351,8 @@ def _run_audit_body(
         expansion_budget=expansion_budget,
     )
     shared.inject_resolver = inject_resolver
+    shared.cross_entry_contexts = _prep.get("cross_entry_contexts", {})
+    shared.cross_entry_receipts = _prep.get("cross_entry_receipts", {})
     shared.consistency_census = consistency_prepass.get("census")
     shared.discovered_evidence = discovered_evidence
     shared.session_observations = session_observations
@@ -14086,6 +14155,10 @@ def _commit_outcome(
         entry["prompt_budget"] = rr["prompt_budget_event"]
     if rr.get("relies_on"):
         entry["relies_on"] = rr["relies_on"]
+    if "cross_entry_rendered" in rr:
+        entry["cross_entry_rendered"] = rr["cross_entry_rendered"]
+    if rr.get("cross_entry_receipt"):
+        entry["cross_entry_receipt"] = rr["cross_entry_receipt"]
     strategies = gap.get("strategies")
     if strategies:
         entry["strategies"] = strategies

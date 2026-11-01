@@ -60,6 +60,14 @@ full flag table.
 | `--model <name>` | Model ID (repeatable for multi-model consensus) |
 | `--adversarial` | Adversarial reviewer that challenges positive verdicts (requires `--model` x2+) |
 | `--rank-gaps` | LLM re-rank of the gap-queue head, strictly within priority tiers, before pins and the budget cut. Ordering only — never drops a gap; spend lands on the `--max-cost` ledger; the order is deterministic across resume segments |
+| `--cross-entry {off,index,shadow,context,study}` | Experimental C/C++ shared-state analysis (default: `off`): `index` builds a retrieval catalogue; `shadow` writes artifacts only; `context` adds structural evidence to reviews; `study` adds semantic analysis and refutation |
+| `--cross-entry-max-files <N>` | Source files per typed context view (default: 200); additional candidate files remain queued |
+| `--cross-entry-max-calls <N>` | Study, retrieval, and refutation calls per continuation (default: 8); spend counts against `--max-cost` |
+| `--cross-entry-index-batch-files <N>` / `--cross-entry-drain-index` | Indexing quantum (default: 200 files); drain continues indexing until finished or stopped |
+| `--cross-entry-max-slices <N>` | Context slices per continuation (default: 40) |
+| `--cross-entry-source-chars <N>` / `--cross-entry-input-tokens <N>` | Source and total input limits per study prompt (defaults: 24000 / 12000) |
+| `--cross-entry-root <path>` | Larger source root containing the target for shared-state context; report scope stays unchanged |
+| `--cross-entry-include-dir <path>` | Additional header search directory (repeatable); follows referenced headers within the source budget without expanding report scope or walking the header tree |
 | `--edges` | Cross-function edge obligations (beta): tier-1 boundary edges reviewed as dedicated contract units before the function loop; tier-2 on-path edges folded into caller reviews as `edge_verdicts` — contract review of aliasing/ownership classes needs a populated domain model (study pass or seeded concepts); its absence is stated as a degradation in the report |
 | `--no-validate` | Skip the /validate post-pass |
 | `--include-kinds <list>` | Item kinds beyond functions/methods (default: `top_level`, `macro`, `global`). Positive list overrides the defaults; `-kind` opts one out; `none` restricts to functions/methods |
@@ -77,6 +85,18 @@ full flag table.
 | `--no-vendored-triage` | Disable the vendored/generated-code triage tier (corroborated generated files → skip tier, uncorroborated banners / vendored paths / generated-shape structure → glance tier; every decision leaves a `suppressions.jsonl` record and the run summary counts them) |
 | `--no-auto-siblings` | Binary targets only: skip the automatic sibling-consistency pass (default: on for binary targets; source targets never run it) — see [Hypothesis seeds](#hypothesis-seeds). Also accepted by `resume` for a single segment |
 | `--annotations-dir <dir>` | Annotations directory (default: project-level `annotations/`, falling back to `<out>/annotations`) |
+
+
+Cross-entry analysis supplies context about state established or changed by
+other calls, including helpers and repeated calls. Its hypotheses remain
+conditional and pass through the existing review and verification gates.
+Missing source and budget truncation are recorded in `cross-entry-*.json`
+artifacts in the run directory. Detection quality is still being evaluated.
+Indexing, candidate studies, retrieval, and refutation resume from durable
+checkpoints. `cross-entry-progress.json` distinguishes unfinished indexing,
+queued or blocked studies, and results awaiting delivery to review. Prompt
+limits can still block oversized evidence; increasing a work quantum alone
+does not resolve those blocks. An exhausted queue is not a safety proof.
 
 
 ## Pipeline

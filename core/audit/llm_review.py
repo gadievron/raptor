@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import sqlite3
 import time
 from typing import Any, TYPE_CHECKING
 
@@ -1438,6 +1439,16 @@ def make_review_fn(
         budget_event = ctx.get("prompt_budget_event")
         if budget_event and isinstance(result, dict):
             result["prompt_budget_event"] = budget_event
+        if "cross_entry_rendered" in ctx and isinstance(result, dict):
+            result["cross_entry_rendered"] = ctx.get("cross_entry_rendered")
+            receipt = ctx.get("cross_entry_receipt")
+            if receipt and ctx.get("cross_entry_rendered"):
+                from .cross_entry.progress import acknowledge_delivery
+                try:
+                    acknowledge_delivery(config.out_dir, receipt)
+                    result["cross_entry_receipt"] = receipt
+                except (OSError, sqlite3.Error) as exc:
+                    logger.warning("Cross-entry delivery acknowledgement failed: %s", exc)
 
         status = result.get("status", "suspicious")
         if status not in ("clean", "suspicious", "finding", "dormant"):

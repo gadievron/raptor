@@ -2210,6 +2210,16 @@ def cmd_run(args: argparse.Namespace) -> int:
         ),
         adversarial=args.adversarial,
         rank_gaps=getattr(args, "rank_gaps", False),
+        cross_entry=getattr(args, "cross_entry", "off"),
+        cross_entry_max_calls=getattr(args, "cross_entry_max_calls", 8),
+        cross_entry_max_files=getattr(args, "cross_entry_max_files", 200),
+        cross_entry_root=Path(args.cross_entry_root) if getattr(args, "cross_entry_root", None) else None,
+        cross_entry_include_dirs=[Path(p) for p in getattr(args,"cross_entry_include_dir",[])],
+        cross_entry_drain_index=getattr(args, "cross_entry_drain_index", False),
+        cross_entry_max_slices=getattr(args, "cross_entry_max_slices", 40),
+        cross_entry_source_chars=getattr(args, "cross_entry_source_chars", 24000),
+        cross_entry_input_tokens=getattr(args, "cross_entry_input_tokens", 12000),
+        cross_entry_index_batch_files=getattr(args, "cross_entry_index_batch_files", 200),
         edges=args.edges,
         open_discovery=not getattr(args, "no_open_discovery", False),
         **({"discovery_budget_fraction": args.discovery_budget}
@@ -3587,6 +3597,16 @@ def cmd_resume(args: argparse.Namespace) -> int:
             else (True if run_cfg.get("dynamic") else None)
         ),
         verdict_reuse=bool(run_cfg.get("verdict_reuse", True)),
+        cross_entry=run_cfg.get("cross_entry", "off"),
+        cross_entry_max_calls=run_cfg.get("cross_entry_max_calls", 8),
+        cross_entry_max_files=run_cfg.get("cross_entry_max_files", 200),
+        cross_entry_root=Path(run_cfg["cross_entry_root"]) if run_cfg.get("cross_entry_root") else None,
+        cross_entry_include_dirs=[Path(p) for p in run_cfg.get("cross_entry_include_dirs",[])],
+        cross_entry_drain_index=bool(run_cfg.get("cross_entry_drain_index", False)),
+        cross_entry_max_slices=run_cfg.get("cross_entry_max_slices", 40),
+        cross_entry_source_chars=run_cfg.get("cross_entry_source_chars", 24000),
+        cross_entry_input_tokens=run_cfg.get("cross_entry_input_tokens", 12000),
+        cross_entry_index_batch_files=run_cfg.get("cross_entry_index_batch_files", 200),
         edges=bool(run_cfg.get("edges")),
         open_discovery=bool(run_cfg.get("open_discovery", True)),
         pre_scan=bool(run_cfg.get("pre_scan")),
@@ -3872,6 +3892,17 @@ def _run_config_from_args(
         "include_kinds": args.include_kinds,
         "adversarial": args.adversarial,
         "rank_gaps": getattr(args, "rank_gaps", False),
+        "cross_entry": getattr(args, "cross_entry", "off"),
+        "cross_entry_max_calls": getattr(args, "cross_entry_max_calls", 8),
+        "cross_entry_max_files": getattr(args, "cross_entry_max_files", 200),
+        "cross_entry_include_dirs": [str(Path(p).resolve()) for p in getattr(args,"cross_entry_include_dir",[])],
+        "cross_entry_root": (str(Path(args.cross_entry_root).resolve())
+                             if getattr(args, "cross_entry_root", None) else None),
+        "cross_entry_drain_index": getattr(args, "cross_entry_drain_index", False),
+        "cross_entry_max_slices": getattr(args, "cross_entry_max_slices", 40),
+        "cross_entry_source_chars": getattr(args, "cross_entry_source_chars", 24000),
+        "cross_entry_input_tokens": getattr(args, "cross_entry_input_tokens", 12000),
+        "cross_entry_index_batch_files": getattr(args, "cross_entry_index_batch_files", 200),
         "edges": args.edges,
         "open_discovery": not getattr(args, "no_open_discovery", False),
         "max_propagation_depth": args.max_propagation_depth,
@@ -4660,6 +4691,27 @@ def main() -> int:
                        help="LLM re-rank of the gap-queue head within "
                             "priority tiers before pins/budget "
                             "(ordering only; spend on the run ledger)")
+    p_run.add_argument("--cross-entry", choices=["off", "index", "shadow", "context", "study"], default="off",
+                       help="Experimental shared-state study: receipts only (shadow), "
+                            "structural review context (context), or semantic study (study)")
+    p_run.add_argument("--cross-entry-max-calls", type=int, default=8,
+                       help="Total cross-entry study/retrieval/refutation call cap (default 8)")
+    p_run.add_argument("--cross-entry-max-files", type=int, default=200,
+                       help="Cross-entry context source-file cap (default 200)")
+    p_run.add_argument("--cross-entry-root", default=None, metavar="PATH",
+                       help="Explicit larger source root for shared-state context; report scope is unchanged")
+    p_run.add_argument("--cross-entry-include-dir",action="append",default=[],metavar="PATH",
+                       help="Header search directory; follows referenced headers without scanning the directory (repeatable)")
+    p_run.add_argument("--cross-entry-drain-index", action="store_true",
+                       help="Continue repository catalogue batches until discovery completes or the run stops")
+    p_run.add_argument("--cross-entry-index-batch-files", type=int, default=200,
+                       help="Files per resumable repository indexing batch (default 200)")
+    p_run.add_argument("--cross-entry-max-slices", type=int, default=40,
+                       help="Study items assembled per continuation; remaining work stays queued (default 40)")
+    p_run.add_argument("--cross-entry-source-chars", type=int, default=24000,
+                       help="Source characters per shared-state study context (default 24000)")
+    p_run.add_argument("--cross-entry-input-tokens", type=int, default=12000,
+                       help="Estimated input tokens per shared-state study call (default 12000)")
     p_run.add_argument("--edges", action="store_true",
                        help="Review cross-function edge obligations: "
                             "tier-1 boundary edges as dedicated "

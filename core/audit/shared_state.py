@@ -86,6 +86,9 @@ class SharedState:
     # Struct-field co-accessor index: field_name → [AccessorRecord, ...].
     struct_accessor_index: dict[str, list[Any]] = field(default_factory=dict)
 
+    cross_entry_contexts: dict[str, str] = field(default_factory=dict)
+    cross_entry_receipts: dict[str, dict[str, str]] = field(default_factory=dict)
+
     # Sibling peer groups for semantic-consistency and paired-operation checks.
     peer_groups: list[Any] = field(default_factory=list)
 

@@ -130,6 +130,16 @@ class AuditPipelineOpts:
     # prior-run verdicts for functions whose source hash is unchanged
     # instead of silently suppressing them.
     verdict_reuse: bool = True
+    cross_entry: str = "off"
+    cross_entry_max_calls: int = 8
+    cross_entry_max_files: int = 200
+    cross_entry_root: Path | None = None
+    cross_entry_include_dirs: list[Path] = field(default_factory=list)
+    cross_entry_drain_index: bool = False
+    cross_entry_max_slices: int = 40
+    cross_entry_source_chars: int = 24_000
+    cross_entry_input_tokens: int = 12_000
+    cross_entry_index_batch_files: int = 200
     # Cross-function edge obligations (--edges): flag-gated review of
     # tier-1 edge contracts + tier-2 folded edge verdicts.
     edges: bool = False
@@ -454,6 +464,16 @@ def _build_orchestrator_config(
         dynamic_validation=_resolve_dynamic(opts),
         repo_trusted=_resolve_repo_trust(opts),
         verdict_reuse=opts.verdict_reuse,
+        cross_entry=opts.cross_entry,
+        cross_entry_max_calls=opts.cross_entry_max_calls,
+        cross_entry_max_files=opts.cross_entry_max_files,
+        cross_entry_root=opts.cross_entry_root,
+        cross_entry_include_dirs=opts.cross_entry_include_dirs,
+        cross_entry_drain_index=opts.cross_entry_drain_index,
+        cross_entry_max_slices=opts.cross_entry_max_slices,
+        cross_entry_source_chars=opts.cross_entry_source_chars,
+        cross_entry_input_tokens=opts.cross_entry_input_tokens,
+        cross_entry_index_batch_files=opts.cross_entry_index_batch_files,
         edges=opts.edges,
         open_discovery=opts.open_discovery,
         discovery_budget_fraction=opts.discovery_budget_fraction,
