@@ -1,8 +1,8 @@
 name: Restore or rebuild the project venv
 description: >
-  Restore the uv-built project venv from the actions cache with the
-  429-resilient retry ladder, rebuilding from uv.lock as the last
-  resort, then re-point the venv's python symlinks at the current
+  Restore the uv-built project venv from the actions cache with
+  retries for reported restore failures and a locked rebuild when
+  no cache is usable, then re-point the python symlinks at the current
   setup-python interpreter. Requires the calling job to have run
   actions/setup-python and to expose PYTHON_VERSION and VENV_PATH in
   its environment (both are workflow-level env in every caller).
@@ -17,13 +17,13 @@ description: >
        across time so the backend serialises reads instead of
        rate-limiting them.  Common path: this prevents the 429
        and attempt 1 succeeds.
-    2. Retry with restore-keys -- 30s backoff + prefix-match
-       fallback so a transient 429 OR an evicted exact-key
-       both recover by reusing a slightly older venv.  The
-       prefix fallback is suppressed for self-saving flavoured
-       venvs (save-on-rebuild) -- see the attempt-2 step.
-    3. Rebuild -- install uv + ``uv pip install``.  Last-resort
-       backstop; runs only if all restore attempts failed.
+    2. Retry reported restore failures after 30s. Normal misses
+       do not back off: default caches try their prefix fallback
+       immediately; self-saving flavoured caches rebuild directly
+       so a changed lockfile cannot leave them permanently stale.
+    3. Rebuild -- install uv + ``uv pip install`` whenever neither
+       attempt successfully restored a key. Cache-library warnings
+       reported as misses also take this fallback.
 
 inputs:
   cache-key-prefix:
@@ -67,7 +67,7 @@ runs:
       with:
         path: ${{ env.VENV_PATH }}
         key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
-        fail-on-cache-miss: true
+        fail-on-cache-miss: false
 
     - name: Backoff before retry
       if: steps.cache-1.outcome == 'failure'
@@ -76,7 +76,9 @@ runs:
 
     - name: Restore venv from cache (attempt 2, exact-or-prefix key)
       id: cache-2
-      if: steps.cache-1.outcome == 'failure'
+      if: >-
+        steps.cache-1.outcome == 'failure' ||
+        (steps.cache-1.outputs.cache-matched-key == '' && inputs.save-on-rebuild != 'true')
       continue-on-error: true
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
       with:
@@ -93,12 +95,17 @@ runs:
         # a real key change falls through to the rebuild backstop.
         restore-keys: ${{ inputs.save-on-rebuild != 'true' && format('{0}-{1}-py{2}-', inputs.cache-key-prefix, runner.os, env.PYTHON_VERSION) || '' }}
 
-    - name: Install uv (rebuild fallback when both restore attempts failed)
-      if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
+    - name: Install uv (rebuild fallback when no cache was restored)
+      if: >-
+        ${{ !((steps.cache-1.outcome == 'success' && steps.cache-1.outputs.cache-matched-key != '') ||
+              (steps.cache-2.outcome == 'success' && steps.cache-2.outputs.cache-matched-key != '')) }}
       uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
 
-    - name: Rebuild venv (rebuild fallback when both restore attempts failed)
-      if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
+    - name: Rebuild venv (rebuild fallback when no cache was restored)
+      id: rebuild
+      if: >-
+        ${{ !((steps.cache-1.outcome == 'success' && steps.cache-1.outputs.cache-matched-key != '') ||
+              (steps.cache-2.outcome == 'success' && steps.cache-2.outputs.cache-matched-key != '')) }}
       shell: bash
       env:
         UV_EXPORT_EXTRA_ARGS: ${{ inputs.uv-export-extra-args }}
@@ -115,8 +122,7 @@ runs:
       continue-on-error: true
       if: >-
         inputs.save-on-rebuild == 'true' &&
-        steps.cache-1.outcome == 'failure' &&
-        steps.cache-2.outputs.cache-matched-key == ''
+        steps.rebuild.outcome == 'success'
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
       with:
         path: ${{ env.VENV_PATH }}
