@@ -733,32 +733,10 @@ def run(cmd, cwd=None, timeout=RaptorConfig.DEFAULT_TIMEOUT, env=None,
         if proxy_hosts else
         {"block_network": True}
     )
-    # tool_paths: speculative best-guess bind set so mount-ns isolation
-    # can engage. For Python tools we need (a) the script's bin dir
-    # and (b) the interpreter's stdlib dir at sys.prefix/lib/pythonX.Y.
-    #
-    # Outcome depends on the operator's install layout:
-    #
-    #   /usr/bin/semgrep (system install): cmd[0] already in mount
-    #     tree, helper returns []; mount-ns engages cleanly, full
-    #     isolation, silent.
-    #
-    #   ~/.local/bin/semgrep (pip --user) or /opt/homebrew/bin
-    #     (brew): helper returns [bin_dir, stdlib_dir]; mount-ns
-    #     tries with these. If semgrep then exec's native deps not
-    #     in the bind set (semgrep-core, etc.), context.py's
-    #     speculative-C retry catches the 126/empty-stderr and
-    #     falls back to Landlock-only. Workflow proceeds; debug-
-    #     level diagnostic only.
-    # Exec via the binary's REAL path: pip-style installs land a
-    # symlink in a user bin dir while the actual script, interpreter
-    # and native deps live under the venv the tool-path helper binds.
-    # The mount-ns visibility check (correctly) refuses a cmd[0] whose
-    # own path isn't in the bind tree, so invoking via the symlink
-    # dropped every such tool to the Landlock-only fallback — where
-    # netns proxy connectivity is deliberately not re-plumbed, which
-    # is why registry pack fetches (p/...) always failed on pip-
-    # installed semgrep.
+    # Declare the selected tool's runtime without granting a whole HOME-
+    # rooted venv. Resolve argv[0] too: both executable spelling and its
+    # dependencies must be visible in the bind tree. Unknown dependencies
+    # can still cause a mountless retry, subject to the unchanged floor.
     _resolved0 = shutil.which(cmd[0]) or cmd[0]
     _real0 = os.path.realpath(_resolved0)
     if _real0 != cmd[0] and os.path.isfile(_real0):
@@ -809,111 +787,9 @@ def run(cmd, cwd=None, timeout=RaptorConfig.DEFAULT_TIMEOUT, env=None,
 
 
 def _compute_python_tool_paths(cmd) -> list:
-    """Best-guess bind dirs for a Python-tool sandbox call.
-
-    Reads cmd[0]'s shebang to find the interpreter, then computes:
-      - script's bin dir (so cmd[0] resolves)
-      - interpreter's bin dir (often same dir)
-      - interpreter's stdlib dir, derived from interpreter path +
-        version (e.g. /home/USER/bin/python3.13 →
-        /home/USER/lib/python3.13)
-
-    All paths are absolute. Skips dirs that already lie under a
-    standard mount-ns bind prefix (/usr, /lib, etc.) — no point
-    asking for a bind that's already there.
-
-    Returns [] when cmd is empty, the shebang can't be read, or
-    the layout doesn't match a recognisable Python install.
-    Speculative: a wrong guess is caught by context.py's
-    speculative-C retry (re-runs without tool_paths if the call
-    exits 126/127 with empty stderr).
-    """
-    import re
-    from pathlib import Path
-    if not cmd:
-        return []
-    cmd0 = cmd[0]
-    # Prefix-skip set — paths already in the mount-ns bind tree.
-    _SYS_PREFIXES = ("/usr/", "/lib/", "/lib64/", "/etc/", "/bin/", "/sbin/")
-    def _interesting(p: str) -> bool:
-        return p and not any(p == s.rstrip("/") or p.startswith(s)
-                             for s in _SYS_PREFIXES)
-    paths = set()
-    # 1. Script's bin dir.
-    if Path(cmd0).is_absolute():
-        bin_dir = str(Path(cmd0).resolve().parent)
-        if _interesting(bin_dir):
-            paths.add(bin_dir)
-    # 2. Read shebang to find the interpreter.
-    #
-    # Pre-fix `f.readline()` was unbounded — `readline` reads
-    # until newline OR EOF. A file at `cmd0` with no newline
-    # (a binary, a corrupted script, an attacker-planted file
-    # at the resolved path) would read the WHOLE file into RSS
-    # before we noticed it wasn't a shebang. For multi-MB
-    # binaries that happen to live at `cmd[0]` (semgrep itself
-    # is a Python wrapper but some installs ship a compiled
-    # bin), the readline allocated the binary's full contents.
-    #
-    # Cap at 4 KB. POSIX shebangs are limited to 127 chars on
-    # Linux + 512 on most BSDs anyway; 4 KB is well above any
-    # legitimate shebang line.
-    _SHEBANG_READ_CAP = 4096
-    interp = None
-    try:
-        with open(cmd0, "rb") as f:
-            first_line = f.readline(_SHEBANG_READ_CAP).decode(
-                "utf-8", errors="ignore"
-            ).strip()
-        if first_line.startswith("#!"):
-            interp = first_line[2:].split()[0]
-    except (OSError, IndexError, UnicodeDecodeError):
-        pass
-    # 3. Interpreter's bin dir + stdlib dir.
-    # CRITICAL: use the UNRESOLVED interp path for stdlib computation,
-    # NOT Path.resolve(). Python's sys.prefix is computed from the path
-    # used to invoke the interpreter (i.e. sys.executable, which equals
-    # the unresolved shebang path). For an interpreter at
-    # /home/U/bin/python3.13 that's a symlink to /usr/bin/python3.13,
-    # Python sets sys.prefix=/home/U and looks for stdlib at
-    # /home/U/lib/python3.13. If we bind-mount the resolved location
-    # (/usr/lib/python3.13 — already in mount tree) Python won't find
-    # its stdlib because it's looking at sys.prefix-relative path.
-    # The bin dir IS still added via Path.resolve() (so symlink targets
-    # outside the mount tree get added too), but stdlib derivation
-    # MUST follow the unresolved path.
-    if interp and Path(interp).is_absolute() and Path(interp).is_file():
-        # Bin dir for the interpreter. Add both the resolved AND
-        # unresolved bin dirs so we cover the full symlink chain.
-        for p in {str(Path(interp).parent), str(Path(interp).resolve().parent)}:
-            if _interesting(p):
-                paths.add(p)
-        # Extract version from interpreter name. Try the SHEBANG name
-        # first (typically `python3.13` — version-stamped); fall back
-        # to the resolved name if the shebang name lacks a version.
-        candidate_names = [Path(interp).name, Path(interp).resolve().name]
-        ver = None
-        for name in candidate_names:
-            m = re.match(r"python(\d+\.\d+)", name)
-            if m:
-                ver = m.group(1)
-                break
-        if ver:
-            # Stdlib at sys.prefix/lib/pythonX.Y where sys.prefix is
-            # derived from the UNRESOLVED interp path (Python's view).
-            stdlib = Path(interp).parent.parent / "lib" / f"python{ver}"
-            if stdlib.is_dir() and _interesting(str(stdlib)):
-                paths.add(str(stdlib))
-        # A venv interpreter needs its pyvenv.cfg (at the venv root)
-        # visible, or Python won't activate venv mode and the venv's
-        # site-packages is dropped from sys.path — ModuleNotFoundError
-        # under mount-ns for pipx / venv installs. bin/ and
-        # lib/pythonX.Y/ are already bound above, but pyvenv.cfg lives
-        # one level up at the venv root and was never in the bind set.
-        venv_root = Path(interp).parent.parent
-        if (venv_root / "pyvenv.cfg").is_file() and _interesting(str(venv_root)):
-            paths.add(str(venv_root))
-    return sorted(paths)
+    """Declare the selected launcher and narrow Python runtime paths."""
+    from core.sandbox.python_paths import python_tool_paths
+    return python_tool_paths(cmd[0]) if cmd else []
 
 
 def _semgrep_jobs_per_worker(

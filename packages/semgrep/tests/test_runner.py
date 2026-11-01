@@ -991,3 +991,83 @@ class TestBudgetMeasuresBytes:
         assert not result.ok
         assert any("budget" in e and "bytes" in e for e in result.errors)
         assert result.sarif == ""
+
+
+def test_home_tool_runtime_and_exact_local_config_are_declared(tmp_path):
+    from packages.semgrep.runner import _default_sandbox_runner
+    configuration = tmp_path / 'private-rules/rule.yml'
+    configuration.parent.mkdir()
+    configuration.write_text('rules: []')
+    (tmp_path / 'target').mkdir()
+    with patch('core.sandbox.python_paths.python_tool_paths', return_value=['/tool/bin', '/tool/lib']), \
+            patch('core.sandbox.context.run') as run:
+        wrapper = _default_sandbox_runner(tmp_path / 'target', str(configuration))
+        wrapper(['/tool/bin/semgrep'], tool_paths=['/explicit-dependency'], capture_output=True)
+    paths = run.call_args.kwargs['tool_paths']
+    assert paths == ['/tool/bin', '/tool/lib', str(configuration), '/explicit-dependency']
+    assert str(configuration.parent) not in paths
+    assert run.call_args.kwargs['block_network'] is True
+
+
+def test_single_file_scan_binds_exact_file_without_changing_scan_argv(tmp_path):
+    from packages.semgrep.runner import _default_sandbox_runner
+    source = tmp_path / 'source'
+    source.mkdir()
+    target = source / 'fixture.py'
+    target.write_text('print(42)')
+    command = ['/usr/bin/semgrep', '--config', 'p/x', str(target)]
+    with patch('core.sandbox.context.run') as run:
+        wrapper = _default_sandbox_runner(target, 'p/x')
+        wrapper(command, capture_output=True)
+    assert run.call_args.kwargs['target'] is None
+    assert str(target) in run.call_args.kwargs['tool_paths']
+    assert str(source) not in run.call_args.kwargs['tool_paths']
+    assert run.call_args.args[0] == command
+    assert run.call_args.kwargs['output'] != str(source)
+
+
+def test_extra_target_gets_its_own_exact_readonly_bind(tmp_path):
+    from packages.semgrep.runner import _default_sandbox_runner
+    target = tmp_path / 'fixture.py'
+    target.write_text('print(42)')
+    additional = tmp_path / 'separate/control.py'
+    with patch('core.sandbox.context.run') as run:
+        wrapper = _default_sandbox_runner(target, 'p/x', extra_targets=[additional])
+        wrapper(['/usr/bin/semgrep', str(target), str(additional)])
+    assert str(additional) in run.call_args.kwargs['tool_paths']
+    assert str(additional.parent) not in run.call_args.kwargs['tool_paths']
+
+
+def test_relative_file_rule_and_extra_target_are_independent_of_sandbox_cwd(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    Path('fixture.py').write_text('print(42)')
+    Path('rule.yml').write_text('rules: []')
+    invocation = MagicMock(return_value=MagicMock(stdout='', stderr='', returncode=0))
+    with patch('packages.semgrep.runner.is_available', return_value=True), \
+            patch('packages.semgrep.runner.scope_isolation_available', return_value=True):
+        run_rule(Path('fixture.py'), 'rule.yml', extra_targets=[Path('control.py')],
+                 subprocess_runner=invocation)
+    command = invocation.call_args.args[0]
+    assert command[-2:] == [str(tmp_path / 'fixture.py'), str(tmp_path / 'control.py')]
+    assert command[command.index('--config') + 1] == str(tmp_path / 'rule.yml')
+
+
+@pytest.mark.parametrize('configuration', ['p/security-audit', 'category/security'])
+def test_registry_identifier_is_not_rewritten_by_local_path_collision(tmp_path, monkeypatch, configuration):
+    monkeypatch.chdir(tmp_path)
+    Path(configuration).mkdir(parents=True)
+    target = tmp_path / 'fixture.py'
+    target.write_text('print(42)')
+    invocation = MagicMock(return_value=MagicMock(stdout='', stderr='', returncode=0))
+    with patch('packages.semgrep.runner.is_available', return_value=True), \
+            patch('packages.semgrep.runner.scope_isolation_available', return_value=True):
+        run_rule(target, configuration, subprocess_runner=invocation)
+    command = invocation.call_args.args[0]
+    assert command[command.index('--config') + 1] == configuration
+
+    from packages.semgrep.runner import _default_sandbox_runner
+    with patch('core.sandbox.context.run') as run:
+        wrapper = _default_sandbox_runner(target, configuration)
+        wrapper(['/usr/bin/semgrep', '--config', configuration, str(target)])
+    assert run.call_args.kwargs['use_egress_proxy'] is True
+    assert str(Path(configuration).absolute()) not in run.call_args.kwargs['tool_paths']

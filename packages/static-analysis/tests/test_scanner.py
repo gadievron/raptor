@@ -250,6 +250,7 @@ class TestComputePythonToolPaths:
         """Path doesn't exist as a file → no shebang, but the bin
         dir IS still added (absolute path is recoverable)."""
         bogus = tmp_path / "subdir" / "bogus-binary"
+        bogus.parent.mkdir()
         result = _compute_python_tool_paths([str(bogus)])
         # Subdir is the bin dir.
         assert any(p == str(tmp_path / "subdir") for p in result), \
@@ -314,20 +315,20 @@ class TestComputePythonToolPaths:
             )
         return script, bin_dir, lib_dir
 
-    def test_venv_layout_with_pyvenv_cfg_includes_venv_root(
+    def test_venv_layout_binds_cfg_without_whole_prefix(
             self, tmp_path):
         """pyvenv.cfg visibility is the PEP 405 venv-activation
         toggle; without it the interpreter falls back to the base
         prefix and drops the venv site-packages. A layout WITH
-        pyvenv.cfg must therefore get the venv root (where the cfg
-        lives) into the bind set, alongside bin/ and lib/pythonX.Y/."""
+        pyvenv.cfg gets its own exact bind alongside bin/ and libraries;
+        the prefix itself must not be exposed."""
         venv = tmp_path / "venv"
         venv.mkdir()
         script, bin_dir, lib_dir = self._fake_prefix_layout(
             venv, with_pyvenv_cfg=True)
         result = _compute_python_tool_paths([str(script)])
-        assert str(venv) in result, \
-            f"venv root missing from {result!r}"
+        assert str(venv) not in result
+        assert str(venv / 'pyvenv.cfg') in result
         assert str(bin_dir) in result, \
             f"bin dir missing from {result!r}"
         assert str(lib_dir) in result, \

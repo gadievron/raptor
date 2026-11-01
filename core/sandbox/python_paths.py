@@ -8,8 +8,9 @@ but framework installs (Homebrew, Xcode), pyenv, Nix,
 conda, and virtualenvs place the interpreter and its shared libraries
 outside those prefixes.
 
-This module provides a single ``python_runtime_tool_paths()`` helper
-that all sandbox call sites use instead of ad-hoc discovery.
+Use ``python_runtime_tool_paths()`` for the running interpreter, or
+``python_tool_paths()`` for a selected tool launcher without executing it.
+The latter avoids granting a whole HOME-rooted virtualenv prefix.
 """
 
 from __future__ import annotations
@@ -19,6 +20,17 @@ import sys
 from pathlib import Path
 
 _SYSTEM_PREFIXES = ("/usr/", "/lib/", "/lib64/", "/etc/", "/bin/", "/sbin/")
+
+
+def _home_roots() -> tuple[Path, ...]:
+    """Include account HOME even when a tool/test overrides the environment."""
+    homes = [Path.home().resolve()]
+    try:
+        import pwd
+        homes.append(Path(pwd.getpwuid(os.getuid()).pw_dir).resolve())
+    except (ImportError, KeyError):
+        pass
+    return tuple(dict.fromkeys(homes))
 
 
 def python_runtime_tool_paths() -> list[str]:
@@ -44,7 +56,10 @@ def python_runtime_tool_paths() -> list[str]:
     are excluded — they're already readable.  Non-absolute, non-existent,
     and duplicate paths are silently dropped.
 
-    Returns a deduplicated list of absolute directory paths, stable order.
+    A HOME-rooted prefix is narrowed to bin, versioned Python libraries
+    and the exact pyvenv.cfg file. Never grant HOME or its ancestors.
+
+    Returns a deduplicated list of absolute runtime paths, stable order.
     """
     candidates: list[str] = []
 
@@ -57,12 +72,28 @@ def python_runtime_tool_paths() -> list[str]:
     if isinstance(exe, str) and exe:
         candidates.append(str(Path(exe).parent))
 
-    paths: list[str] = []
+    # A prefix may be HOME itself (python -m venv ~). Never translate
+    # that into a recursive read grant for credentials and account state.
+    import sysconfig
+    homes = _home_roots()
+    narrow_candidates: list[str] = []
     for raw in candidates:
+        prefix = Path(os.path.realpath(raw))
+        if any(prefix == home or prefix in home.parents for home in homes):
+            narrow_candidates.extend(str(prefix / item) for item in (
+                'bin', 'lib/python' + sysconfig.get_python_version(),
+                'lib64/python' + sysconfig.get_python_version(), 'pyvenv.cfg'))
+        else:
+            narrow_candidates.append(raw)
+    paths: list[str] = []
+    for raw in narrow_candidates:
         resolved = os.path.realpath(raw)
         if not os.path.isabs(resolved):
             continue
-        if not os.path.isdir(resolved):
+        if not (os.path.isdir(resolved) or (Path(raw).name == 'pyvenv.cfg' and os.path.isfile(resolved))):
+            continue
+        node = Path(resolved)
+        if any(node == home or node in home.parents for home in homes):
             continue
         if _under_system_prefix(resolved):
             continue
@@ -78,3 +109,73 @@ def _under_system_prefix(path: str) -> bool:
         path == prefix.rstrip("/") or path.startswith(prefix)
         for prefix in _SYSTEM_PREFIXES
     )
+
+
+def python_tool_paths(executable: str) -> list[str]:
+    """Declare an operator-selected tool's runtime without executing it.
+
+    Unlike running-interpreter prefix discovery, this keeps a HOME-rooted
+    virtualenv narrow: bin/, lib/pythonX.Y/ and pyvenv.cfg, never HOME itself.
+    Unknown launcher layouts still require explicit caller tool paths.
+    """
+    import re
+    import shlex
+    import shutil
+    from core.source.contained import open_regular
+
+    selected = shutil.which(executable) or executable
+    if not os.path.isabs(selected):
+        return []
+    script = Path(selected)
+    paths: list[str] = []
+    homes = _home_roots()
+
+    def add(path: Path) -> None:
+        resolved = path.resolve()
+        # Check both spellings before adding either: binding a library
+        # symlink to HOME would expose HOME through the library alias.
+        if any(resolved == home or resolved in home.parents for home in homes):
+            return
+        for candidate in (path, resolved):
+            value = str(candidate)
+            if not candidate.exists() or _under_system_prefix(value):
+                continue
+            if value not in paths:
+                paths.append(value)
+
+    add(script.parent)
+    add(script.resolve().parent)
+    interpreter = script if re.fullmatch(r'python\d*(?:\.\d+)*', script.name) else None
+    if interpreter is None:
+        stream = open_regular(script.resolve(), 'rb')
+        if stream is not None:
+            with stream:
+                first = stream.readline(4096)
+            if first.startswith(b'#!'):
+                try:
+                    words = shlex.split(first[2:].decode('utf-8').strip())
+                except (UnicodeDecodeError, ValueError):
+                    words = []
+                if words and Path(words[0]).name == 'env':
+                    words = words[1:]
+                    if words and words[0] == '-S':
+                        words = words[1:]
+                    if words:
+                        resolved = shutil.which(words[0])
+                        words = [resolved] if resolved else []
+                if words and re.fullmatch(r'python\d*(?:\.\d+)*', Path(words[0]).name):
+                    interpreter = Path(words[0])
+    if interpreter is None or not interpreter.is_absolute() or not interpreter.is_file():
+        return paths
+    for binary in (interpreter, interpreter.resolve()):
+        add(binary.parent)
+    version = next((match.group(1) for name in (interpreter.name, interpreter.resolve().name)
+                    if (match := re.fullmatch(r'python(\d+\.\d+)(?:\.\d+)*', name))), None)
+    for prefix in dict.fromkeys((interpreter.parent.parent, interpreter.resolve().parent.parent)):
+        configuration = prefix / 'pyvenv.cfg'
+        if configuration.is_file():
+            add(configuration)
+        if version:
+            for library in ('lib', 'lib64'):
+                add(prefix / library / ('python' + version))
+    return paths

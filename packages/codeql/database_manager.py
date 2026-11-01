@@ -402,7 +402,8 @@ class DatabaseManager:
         """Mount-ns bind dirs needed for codeql to run. See QueryRunner
         equivalent — same rationale (codeql install root rarely lives
         in /usr/bin)."""
-        return [str(Path(self.codeql_cli).resolve().parent)]  # type: ignore[arg-type]
+        from .tool_paths import codeql_tool_paths
+        return codeql_tool_paths(self.codeql_cli)
 
     def _detect_codeql_cli(self) -> str | None:
         """Detect CodeQL CLI path.
@@ -423,7 +424,7 @@ class DatabaseManager:
         env_cli = os.environ.get("CODEQL_CLI")
         if env_cli:
             if os.path.isfile(env_cli) and os.access(env_cli, os.X_OK):
-                return env_cli
+                return os.path.realpath(env_cli)
             logger.warning(
                 "CODEQL_CLI=%r is not an executable file; "
                 "falling back to PATH lookup for 'codeql'",
@@ -433,7 +434,7 @@ class DatabaseManager:
         # Check PATH (shutil.which already requires X_OK)
         cli_path = shutil.which("codeql")
         if cli_path:
-            return cli_path
+            return os.path.realpath(cli_path)
 
         return None
 

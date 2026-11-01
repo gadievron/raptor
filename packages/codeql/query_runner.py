@@ -275,8 +275,8 @@ class QueryRunner:
         `_cmd_visible_in_mount_tree` check) because codeql is rarely
         in /usr/bin.
         """
-        from pathlib import Path
-        return [str(Path(self.codeql_cli).resolve().parent)]  # type: ignore[arg-type]
+        from .tool_paths import codeql_tool_paths
+        return codeql_tool_paths(self.codeql_cli)
 
     def _codeql_version(self) -> str | None:
         """CLI version string (e.g. ``"2.26.3"``), cached per instance.
