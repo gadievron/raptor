@@ -52,6 +52,69 @@ updates the release tag and both architecture-specific archive hashes and sizes
 in `.devcontainer/github-release-pins.json` together. This uses SCA's generic
 GitHub release pin manifest support. The terms link follows the pinned release.
 
+### Airgapped setup
+
+On a connected Linux machine, prepare the languages and query modes you need:
+
+```sh
+python3 engine/codeql/tools/offline.py prepare \
+  --languages python java --modes standard iris curated \
+  --out /path/to/codeql-offline
+```
+
+This downloads the pinned platform bundle, resolves dependencies in an isolated
+cache, and checks the selected queries with network connections denied. It
+leaves the source checkout unchanged. Retain the printed manifest SHA-256
+separately, then transfer the complete output directory to the airgapped machine.
+Use the same architecture, pinned CodeQL release, and RAPTOR query sources there.
+
+`standard` covers the bundled standard suite, `iris` the shipped LocalFlowSource
+companion packs, and `curated` the shipped hand-written query packs. Custom or
+ad-hoc packs are not included automatically.
+
+```sh
+python3 engine/codeql/tools/offline.py import /media/codeql-offline \
+  --sha256 <manifest-sha256-from-prepare>
+# Apply the export commands printed by import before running RAPTOR.
+```
+
+Import verifies the manifest, every transferred file, the official bundle's
+pinned hash, and the matching local query sources. It installs cached pack
+versions and the prepared dependency locks, then checks the selected queries
+without network access. Conflicting cached versions and changed local locks
+are refused. Keep the manifest hash from the connected preparation step rather
+than accepting a replacement hash supplied with an untrusted transfer.
+Import prints `CODEQL_CLI`, `PATH`, and `RAPTOR_CODEQL_OFFLINE` export commands
+for the target machine; apply them so RAPTOR and its tool probes use the
+imported CLI even outside a container.
+
+To diagnose missing dependencies or recheck the selected setup later:
+
+```sh
+python3 engine/codeql/tools/offline.py check \
+  --languages python java --modes standard iris curated
+```
+
+`RAPTOR_CODEQL_OFFLINE=1` prevents automatic CLI downloads and pack-install or
+pack-download retries during analysis. Missing packs remain analysis failures.
+Failed database creation or enabled IRIS/curated passes also fail the offline
+CodeQL workflow, even when another language or the standard suite succeeds.
+Both import and check require a working network-denying RAPTOR sandbox for
+their query checks. Target build dependencies and LLM services need separate
+offline provisioning.
+For a fully airgapped workflow, configure local-only model providers and enforce
+host or container egress denial as well. The CodeQL flag controls CLI and pack
+acquisition; it is not a framework-wide no-egress mode.
+
+To install only an already downloaded official bundle:
+
+```sh
+codeql --raptor-install-from /media/codeql-bundle-linux64.tar.gz
+```
+
+That verifies the same pinned hash and performs no download. It installs the
+standard packs; use the preparation workflow for RAPTOR's additional packs.
+
 ## Usage
 
 ```

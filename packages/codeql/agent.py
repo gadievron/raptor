@@ -242,11 +242,17 @@ def _collapse_shared_extractor_languages(
         js_info.confidence = max(js_info.confidence, ts_info.confidence)
 
 
-def _workflow_success(analysis_results: dict[str, QueryResult]) -> bool:
+def _workflow_success(analysis_results: dict[str, QueryResult], *, additional_results=(), database_results=None) -> bool:
     """Workflow success means at least one language's ANALYSIS
     succeeded. The previous any-SARIF rule let additive lanes (IRIS,
     curated packs, learned models) turn a run whose every analyze
-    failed into success=True / exit 0."""
+    failed into success=True / exit 0. Offline runs additionally require every
+    requested database and enabled query pass to succeed."""
+    if RaptorConfig.CODEQL_OFFLINE:
+        # Offline setup is coverage-specific: a missing language or selected
+        # companion pack cannot be reported as a successful partial scan.
+        groups = (analysis_results, *additional_results, database_results or {})
+        return bool(analysis_results) and all(r.success for group in groups for r in group.values())
     return any(r.success for r in analysis_results.values())
 
 
@@ -719,7 +725,8 @@ class CodeQLAgent:
             # java XXE, ...). Empty dict when no curated pack exists
             # for any of the languages we built DBs for. Failures
             # degrade to a warning inside the runner; they never kill
-            # the scan.
+            # the scan in connected mode. Offline mode treats missing
+            # coverage as failure below.
             curated_results = self.query_runner.analyze_curated_packs(
                 successful_dbs, self.out_dir,
             )
@@ -763,6 +770,13 @@ class CodeQLAgent:
             # with threat models AND the IRIS pass produced SARIFs,
             # log the per-(lang, CWE) counts. Pure diagnostics for the
             # "is IRIS subsumed by --threat-model=local?" question.
+            if RaptorConfig.CODEQL_OFFLINE:
+                for label, results in (('IRIS', iris_results), ('curated', curated_results)):
+                    for language, result in results.items():
+                        if not result.success:
+                            errors.append(f'Offline {label} analysis failed for {language}')
+                            errors.extend(result.errors)
+
             threat_model_overlap = None
             if self.query_runner.active_threat_models():
                 iris_langs = [
@@ -808,7 +822,9 @@ class CodeQLAgent:
             logger.info("%s", '=' * 70)
 
             workflow_result = CodeQLWorkflowResult(
-                success=_workflow_success(analysis_results),
+                success=_workflow_success(analysis_results,
+                                          additional_results=(iris_results, curated_results),
+                                          database_results=db_results),
                 repo_path=str(self.repo_path),
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 duration_seconds=time.time() - self.start_time,

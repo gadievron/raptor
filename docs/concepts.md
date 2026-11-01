@@ -352,6 +352,14 @@ python3 engine/semgrep/tools/cache-packs.py import semgrep-cache-2026-07-16.zip
 Once cached, the scanner resolves pack IDs locally.  Without the cache, RAPTOR
 drops uncached packs and runs with custom rules only.
 
+For CodeQL, use the [offline preparation and import workflow](codeql.md#airgapped-setup)
+to transfer the pinned CLI bundle and dependencies for the selected shipped
+query packs. Import checks the transferred files and query sources, then
+validates the selected queries with network connections denied. Apply the
+printed environment settings before analysis. `RAPTOR_CODEQL_OFFLINE=1`
+controls CodeQL acquisition; local-only model configuration and host/container
+egress denial are separate requirements for a fully airgapped run.
+
 Note that Claude Code itself requires a network connection -- fully airgapped
 use means running through the Python CLI (`python3 raptor.py scan --repo ...`)
 with a local Ollama model for analysis dispatch.
