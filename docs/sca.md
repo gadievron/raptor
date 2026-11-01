@@ -204,6 +204,40 @@ scan the exact resolved deps the build produced rather than re-parsing
 manifests. When combined with `--repo`, RAPTOR uses the source tree for
 reachability analysis while taking the dep list from the SBOM.
 
+Import currently supports CycloneDX **1.5 JSON**. Unsupported versions,
+malformed input, duplicate JSON keys or BOM references, conflicting package
+versions, and dangling dependency references fail the scan. Invalid UTF-8 is
+rejected rather than replacing bytes in licence or provenance evidence.
+
+The full inventory is retained separately from the vulnerability-matching
+view. `sbom.cdx.json` preserves nested components, repeated package instances,
+source references, licence text/URLs, hashes, root image identity, and the
+original dependency graph. Components without a supported package URL remain
+in that inventory and participate in licence-policy checks; they are not
+sent to vulnerability registries. Matching gaps are logged and recorded in
+`analysis-gaps.jsonl`. External BOM links are preserved but not fetched;
+their inventory is reported as outside the matching coverage.
+
+Direct/transitive status and depth come from the root dependency graph when
+available. SCA's own directness properties are also recognized. Without either,
+directness is recorded as unknown and risk scoring conservatively treats the
+package as direct. Repeated instances remain separate in the inventory;
+aggregated scanning uses their most exposed context. Distro PURLs distinguish
+Debian from Ubuntu and use Alpine
+release qualifiers; missing binary-to-source package correspondence is not
+inferred from a binary name.
+
+Multiple licence declarations remain separate declarations; SCA evaluates
+each without inventing an AND/OR expression. Imported SPDX expressions retain
+their stated AND/OR semantics. Enrichment increments the document version and
+updates its scan metadata. A document signature is removed from the modified
+output; the input file remains untouched. Component signatures are also
+removed if adding missing component references changes their signed content.
+
+`--spdx` still emits the scan projection rather than a complete cross-format
+conversion of an imported document. A diagnostic records that limitation;
+the full retained inventory and evidence remain in `sbom.cdx.json`.
+
 ---
 
 ## Reachability Analysis

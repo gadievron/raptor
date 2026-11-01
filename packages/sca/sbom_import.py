@@ -14,9 +14,9 @@ discovery. Useful when:
     and compare findings.
 
 The importer maps CycloneDX 1.5 ``components`` → SCA
-``Dependency`` rows. Each component must have a ``purl`` (the
-canonical identifier we key on); components without one are
-skipped with a warning. The ``purl`` carries the ecosystem
+``Dependency`` rows. Components need a supported ``purl`` to enter vulnerability matching;
+other components stay in the retained inventory and licence-policy view,
+with a diagnostic explaining the matching gap. The ``purl`` carries the ecosystem
 (``pkg:pypi/...``, ``pkg:npm/...``, etc.) and authoritative
 name + version.
 
@@ -25,20 +25,17 @@ seam ``parse_manifest`` does — join → OSV → KEV → EPSS →
 hygiene → supply-chain → report. The discovery + parser-
 dispatch phases are SKIPPED when ``--sbom`` is set.
 
-Limitations (documented):
-
-  * SPDX SBOMs not supported — different schema. Convert via
-    ``cyclonedx-cli`` first if needed.
-  * Component ``properties`` extension fields are NOT preserved
-    in the Dependency row. The find-and-route code only needs
-    purl + version + scope.
-  * Transitive expansion is skipped when an SBOM provides
-    transitives — the SBOM's component list is authoritative.
+The full document is retained separately from the scannable Dependency view.
+Non-package inventory and provenance therefore survive CycloneDX enrichment.
+Only CycloneDX 1.5 is supported; unsupported versions fail explicitly.
 """
 
 from __future__ import annotations
 
 import json
+import math
+from collections import deque
+from dataclasses import dataclass, replace
 import logging
 import re
 import urllib.parse
@@ -93,11 +90,10 @@ _SCOPE_MAP = {
 }
 
 
-def parse_cyclonedx(path: Path) -> tuple[list[Dependency], list[str]]:
+def read_cyclonedx(path: Path) -> ImportedBom:
     """Parse a CycloneDX 1.5 JSON file at ``path``.
 
-    Returns ``(deps, warnings)`` — the parsed dep list and a list
-    of human-readable diagnostics (skipped-component reasons).
+    Return the retained document, scan projection, and coverage diagnostics.
     Errors that prevent the entire SBOM from being read (bad
     JSON, wrong shape) raise ``ValueError``.
     """
@@ -108,7 +104,10 @@ def parse_cyclonedx(path: Path) -> tuple[list[Dependency], list[str]]:
     # (--sbom-input on the CLI), not discovered in the scanned tree,
     # and build-emitted SBOMs legitimately sit behind build-dir
     # symlinks. Tree-discovered manifests keep the hardened default.
-    text = _safe_read.read_bounded(path, follow_symlinks=True)
+    try:
+        text = _safe_read.read_bounded(path, follow_symlinks=True, strict_utf8=True)
+    except UnicodeDecodeError as exc:
+        raise ValueError("SBOM must contain valid UTF-8") from exc
     if text is None:
         cap = _safe_read._MAX_PARSER_BYTES
         try:
@@ -126,7 +125,7 @@ def parse_cyclonedx(path: Path) -> tuple[list[Dependency], list[str]]:
         raise ValueError(msg)
 
     try:
-        data = json.loads(text)
+        data = json.loads(text, object_pairs_hook=_unique_object)
     except (json.JSONDecodeError, *PARSE_ESCAPE_ERRORS) as e:  # type: ignore[misc]  # hostile-input escape classes
         msg = f"invalid JSON in SBOM {path}: {e}"
         raise ValueError(msg) from e
@@ -146,27 +145,237 @@ def parse_cyclonedx(path: Path) -> tuple[list[Dependency], list[str]]:
         )
         raise ValueError(msg)
 
-    components = data.get("components")
-    if not isinstance(components, list):
-        # No components is technically valid CycloneDX (empty SBOM),
-        # but it produces zero deps; emit empty + warning.
-        return [], [f"SBOM at {path} has no components array"]
-
-    deps: list[Dependency] = []
-    warnings: list[str] = []
+    if data.get("specVersion") != "1.5":
+        raise ValueError("unsupported CycloneDX specVersion; expected 1.5")
+    if "version" in data and (type(data["version"]) is not int or data["version"] < 1):
+        raise ValueError("CycloneDX document version must be a positive integer")
+    _check_document(data)
+    metadata = data.get("metadata", {})
+    if not isinstance(metadata, dict) or not isinstance(metadata.get("component", {}), dict):
+        raise ValueError("CycloneDX metadata/component must be objects")
+    tools = metadata.get("tools", [])
+    if not isinstance(tools, (list, dict)) or (isinstance(tools, dict) and not isinstance(tools.get("components", []), list)):
+        raise ValueError("invalid CycloneDX metadata tools")
+    if not isinstance(data.get("vulnerabilities", []), list):
+        raise ValueError("CycloneDX vulnerabilities must be an array")
+    components = _components(data)
+    known_refs = _references(data)
+    external_refs: set[str] = set()
+    depths = _graph_depths(data, known_refs, external_refs)
+    component_refs: list[str] = []
     for i, comp in enumerate(components):
-        if not isinstance(comp, dict):
-            warnings.append(f"component #{i}: not a dict, skipping")
-            continue
+        ref = comp.get("bom-ref")
+        if ref is None:
+            ref = f"urn:sca:component:{i}"
+            while ref in known_refs:
+                ref += ":imported"
+            known_refs.add(ref)
+        component_refs.append(ref)
+    deps: list[Dependency] = []
+    diagnostics: list[str] = []
+    if external_refs:
+        diagnostics.append("external BOM references are retained; their components were not loaded for vulnerability matching")
+    refs: dict[str, list[str]] = {}
+    license_deps: list[Dependency] = []
+    for comp, component_ref in zip(components, component_refs):
         dep = _component_to_dep(comp, sbom_path=path)
         if dep is None:
-            name = comp.get("name", f"component #{i}")
-            warnings.append(
-                f"component {name}: no usable purl, skipped"
+            diagnostics.append(
+                f"component {comp.get('name', component_ref)}: no usable purl; "
+                "retained in inventory, not vulnerability-matched"
             )
+            declarations = _license_declarations(comp.get("licenses"))
+            license_deps.append(Dependency(
+                ecosystem="SBOM", name=comp["name"], version=comp.get("version"),
+                declared_in=path, scope=_SCOPE_MAP[comp.get("scope", "required")],
+                is_lockfile=True, pin_style=PinStyle.UNKNOWN, direct=True,
+                purl=comp.get("purl", ""), parser_confidence=Confidence("high", reason="SBOM inventory declaration"),
+                declared_license=declarations[0] if len(declarations) == 1 else None,
+                license_declarations=declarations, source_kind="sbom_import",
+                source_extra={"sbom_ref": component_ref},
+            ))
             continue
+        if not dep.version:
+            diagnostics.append(f"component {comp['name']}: no resolved version; vulnerability coverage is incomplete")
+        depth = depths.get(component_ref)
+        direct_claims = [p.get("value") for p in comp.get("properties", [])
+                         if p.get("name") == "raptor:direct"]
+        if any(value not in {"true", "false"} for value in direct_claims) or len(set(direct_claims)) > 1:
+            raise ValueError("invalid or contradictory SBOM directness property")
+        if depth is not None:
+            dep.direct = depth == 1
+            dep.transitive_depth = max(0, depth - 1)
+            if direct_claims and (direct_claims[0] == "true") != dep.direct:
+                raise ValueError("SBOM directness property conflicts with its dependency graph")
+        elif direct_claims:
+            dep.direct = direct_claims[0] == "true"
+        dep.source_extra = {"sbom_ref": component_ref,
+                            "sbom_directness": "graph" if depth is not None else "property" if direct_claims else "unknown"}
+        if depth is None and not direct_claims:
+            dep.parser_confidence = replace(dep.parser_confidence, reason=(
+                dep.parser_confidence.reason + "; directness unknown, conservatively treated as direct"))
+        refs.setdefault(dep.key(), []).append(component_ref)
         deps.append(dep)
-    return deps, warnings
+    notices: list[str] = []
+    if "signature" in data:
+        notices.append("document signature is retained on input but removed from modified output")
+    changed = _reference_changes(components, metadata.get("component", {}))
+    if any("signature" in c and id(c) in changed for c in components + [metadata.get("component", {})]):
+        notices.append("component signatures are retained on input but removed where output adds component references")
+    return ImportedBom(data, deps, diagnostics, refs, component_refs, license_deps, notices)
+
+
+@dataclass
+class ImportedBom:
+    """A complete inventory plus its explicitly separate vulnerability-scan view."""
+
+    document: dict
+    dependencies: list[Dependency]
+    coverage_gaps: list[str]
+    refs_by_key: dict[str, list[str]]
+    component_refs: list[str]
+    license_dependencies: list[Dependency]
+    notices: list[str]
+
+    @property
+    def warnings(self) -> list[str]:
+        return self.coverage_gaps + self.notices
+
+
+def parse_cyclonedx(path: Path) -> tuple[list[Dependency], list[str]]:
+    """Compatibility API returning the scan projection and its diagnostics."""
+    imported = read_cyclonedx(path)
+    return imported.dependencies, imported.warnings
+
+
+def _unique_object(pairs: list[tuple[str, object]]) -> dict:
+    result: dict = {}
+    for key, value in pairs:
+        try:
+            key.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise ValueError("invalid Unicode scalar in SBOM object key") from exc
+        if key in result:
+            raise ValueError(f"duplicate SBOM object key {key[:80]!r}")
+        result[key] = value
+    return result
+
+
+def _check_document(data: dict) -> None:
+    # Structural validation, not a claim of complete JSON-schema validation.
+    # Traverse iteratively and bound nesting before copy/export touches input.
+    stack = [(data, 0)]
+    while stack:
+        value, depth = stack.pop()
+        if depth > 64:
+            raise ValueError("CycloneDX document exceeds supported nesting depth")
+        if isinstance(value, dict):
+            stack.extend((v, depth + 1) for v in value.values())
+        elif isinstance(value, list):
+            stack.extend((v, depth + 1) for v in value)
+        elif isinstance(value, float) and not math.isfinite(value):
+            raise ValueError("non-finite number in CycloneDX document")
+        elif isinstance(value, str):
+            try:
+                value.encode("utf-8")
+            except UnicodeEncodeError as exc:
+                raise ValueError("invalid Unicode scalar in SBOM document") from exc
+
+
+def _components(data: dict) -> list[dict]:
+    values = data.get("components", [])
+    if not isinstance(values, list):
+        raise ValueError("CycloneDX components must be an array")
+    root_children = data.get("metadata", {}).get("component", {}).get("components", [])
+    if not isinstance(root_children, list):
+        raise ValueError("CycloneDX nested components must be arrays")
+    stack = list(reversed(values + root_children))
+    result = []
+    while stack:
+        comp = stack.pop()
+        if not isinstance(comp, dict):
+            raise ValueError("CycloneDX component must be an object")
+        if not isinstance(comp.get("name"), str) or not comp["name"]:
+            raise ValueError("CycloneDX component must have a nonempty name")
+        if not isinstance(comp.get("scope", "required"), str) or comp.get("scope", "required") not in _SCOPE_MAP:
+            raise ValueError("unsupported CycloneDX component scope")
+        for field in ("purl", "version"):
+            if field in comp and not isinstance(comp[field], str):
+                raise ValueError(f"CycloneDX component {field} must be a string")
+        properties = comp.get("properties", [])
+        if not isinstance(properties, list) or any(not isinstance(p, dict) or not isinstance(p.get("name"), str)
+                                                 or not isinstance(p.get("value"), str) for p in properties):
+            raise ValueError("invalid CycloneDX component properties")
+        _license_declarations(comp.get("licenses"))
+        children = comp.get("components", [])
+        if not isinstance(children, list):
+            raise ValueError("CycloneDX nested components must be arrays")
+        if len(result) >= 100_000:
+            raise ValueError("CycloneDX component count exceeds 100000")
+        result.append(comp)
+        stack.extend(reversed(children))
+    return result
+
+
+def _reference_changes(components: list[dict], root: dict) -> set[int]:
+    """Objects whose signed content changes when missing refs are assigned."""
+    changed: set[int] = set()
+    for component in reversed(components):
+        if "bom-ref" not in component or any(id(c) in changed for c in component.get("components", [])):
+            changed.add(id(component))
+    if any(id(c) in changed for c in root.get("components", [])):
+        changed.add(id(root))
+    return changed
+
+
+def _references(data: dict) -> set[str]:
+    refs: set[str] = set()
+    stack = [data]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            if "bom-ref" in item:
+                ref = item["bom-ref"]
+                if not isinstance(ref, str) or not ref or ref in refs:
+                    raise ValueError("empty, invalid, or duplicate CycloneDX bom-ref")
+                refs.add(ref)
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    return refs
+
+
+def _graph_depths(data: dict, known_refs: set[str], external_refs: set[str]) -> dict[str, int]:
+    graph = data.get("dependencies", [])
+    if not isinstance(graph, list):
+        raise ValueError("CycloneDX dependencies must be an array")
+    edges: dict[str, list[str]] = {}
+    for entry in graph:
+        if not isinstance(entry, dict) or not isinstance(entry.get("ref"), str):
+            raise ValueError("invalid CycloneDX dependency graph entry")
+        ref, children = entry["ref"], entry.get("dependsOn", [])
+        if not isinstance(children, list) or any(not isinstance(c, str) for c in children):
+            raise ValueError("invalid CycloneDX dependsOn array")
+        if ref in edges:
+            raise ValueError("duplicate CycloneDX dependency graph entry")
+        for target in [ref, *children]:
+            if target not in known_refs:
+                if not re.fullmatch(r"urn:cdx:[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}/[1-9][0-9]*(?:#.+)?", target):
+                    raise ValueError("dangling CycloneDX dependency reference")
+                external_refs.add(target)
+        edges[ref] = children
+    root = data.get("metadata", {}).get("component", {}).get("bom-ref")
+    if root not in edges:
+        return {}
+    depths = {root: 0}
+    pending = deque([root])
+    while pending:
+        current = pending.popleft()
+        for child in edges.get(current, []):
+            if child not in depths:
+                depths[child] = depths[current] + 1
+                pending.append(child)
+    return depths
 
 
 def _component_to_dep(
@@ -174,8 +383,8 @@ def _component_to_dep(
 ) -> Dependency | None:
     """Convert one CycloneDX component → SCA ``Dependency``.
 
-    Returns ``None`` when the component lacks the minimum
-    information we need (purl OR name+version+ecosystem-hint).
+    Returns ``None`` when the PURL cannot identify a supported matching
+    ecosystem. The original component remains in the inventory.
     """
     purl = comp.get("purl")
     if purl:
@@ -188,11 +397,17 @@ def _component_to_dep(
         # is unguessable without purl, so skip.
         return None
 
+    if version is None:
+        version = comp.get("version")
+    elif comp.get("version") is not None and comp["version"] != version:
+        raise ValueError("CycloneDX component version conflicts with its purl")
+
     scope_raw = comp.get("scope", "required")
     scope = _SCOPE_MAP.get(scope_raw, "main")
 
-    # ``licenses`` → first SPDX expression / id we find.
-    declared_license = _extract_license(comp.get("licenses"))
+    # Keep every declaration; the compatibility field represents only a single choice.
+    declarations = _license_declarations(comp.get("licenses"))
+    declared_license = declarations[0] if len(declarations) == 1 else None
 
     # Type → pin_style + direct heuristic.
     # CycloneDX ``type`` is library/application/framework/etc.; we
@@ -216,15 +431,15 @@ def _component_to_dep(
             reason="imported from CycloneDX SBOM",
         ),
         declared_license=declared_license,
+        license_declarations=declarations,
         source_kind="sbom_import",
     )
 
 
 # Compact purl parser. Spec is at https://github.com/package-url/purl-spec
 # Format: ``pkg:type/namespace/name@version?qualifiers#subpath``
-# We extract: type, name (with namespace prefix where applicable),
-# version. Subpath + qualifiers are dropped — SCA's matcher keys
-# on the (eco, name, version) triple.
+# Extract matching coordinates and the distro context used by advisory feeds.
+# The complete PURL, including qualifiers/subpath, remains on the Dependency.
 _PURL_RE = re.compile(
     r"^pkg:(?P<type>[A-Za-z0-9.+-]+)"
     r"/(?P<path_and_version>[^?#]+)"
@@ -236,6 +451,8 @@ def _parse_purl(purl: str) -> tuple[str, str, str | None] | None:
     """Return ``(ecosystem, name, version)`` parsed from a purl,
     or ``None`` for malformed / unsupported ecosystems."""
     if not isinstance(purl, str):
+        return None
+    if re.search(r"%(?![0-9A-Fa-f]{2})", purl):
         return None
     m = _PURL_RE.match(purl)
     if m is None:
@@ -250,23 +467,65 @@ def _parse_purl(purl: str) -> tuple[str, str, str | None] | None:
         )
         return None
     path_and_version = m.group("path_and_version")
+    package_path = path_and_version.rsplit("@", 1)[0] if "@" in path_and_version else path_and_version
+    try:
+        namespace = urllib.parse.unquote(package_path.split("/", 1)[0], errors="strict").lower() if "/" in package_path else ""
+    except UnicodeDecodeError:
+        return None
+    query = purl.partition("?")[2].partition("#")[0]
+    try:
+        qualifiers = urllib.parse.parse_qs(query, keep_blank_values=True,
+                                         strict_parsing=True, max_num_fields=64,
+                                         errors="strict")
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if any(len(values) != 1 for values in qualifiers.values()):
+        return None
+    distro = qualifiers.get("distro", [""])[0].lower()
+    if type_lc == "deb":
+        if (namespace == "debian" and distro.startswith("ubuntu-")) or (namespace == "ubuntu" and distro.startswith("debian-")):
+            return None
+        if namespace == "ubuntu" or distro.startswith("ubuntu-"):
+            ecosystem = "Ubuntu"
+        elif namespace not in {"", "debian"}:
+            return None
+    elif type_lc == "apk":
+        release = re.fullmatch(r"alpine-([0-9]+)\.([0-9]+)(?:\.[0-9]+)?", distro)
+        if release:
+            ecosystem = f"Alpine:v{release[1]}.{release[2]}"
+        else:
+            return None
+    elif type_lc == "rpm" and namespace not in {"", "redhat", "rhel", "centos", "rocky", "almalinux"}:
+        return None
     last_at = path_and_version.rfind("@")
     if last_at > 0:
         path = path_and_version[:last_at]
         # purl components are percent-encoded (spec: a literal ``%``
         # is ``%25``) — rpm versions carry the epoch as ``1%3A...``,
         # and a literal ``%3A`` never matches any advisory range.
-        version: str | None = urllib.parse.unquote(
-            path_and_version[last_at + 1:])
+        try:
+            version: str | None = urllib.parse.unquote(
+                path_and_version[last_at + 1:], errors="strict")
+        except UnicodeDecodeError:
+            return None
+        if not version:
+            return None
     else:
         path = path_and_version
         version = None
+
+    try:
+        path = urllib.parse.unquote(path, errors="strict")
+    except UnicodeDecodeError:
+        return None
 
     # Maven uses ``pkg:maven/<group>/<artifact>@<version>`` — recombine
     # group + artifact with ``:`` (SCA's canonical Maven name).
     if ecosystem == "Maven" and "/" in path:
         group, artifact = path.rsplit("/", 1)
         name = f"{group}:{artifact}"
+    elif ecosystem == "GitHub" and "/" in path:
+        name = path  # repository identity includes its owner
     elif ecosystem == "Go" and "/" in path:
         # Go modules: ``pkg:golang/<host>/<owner>/<repo>@<version>``
         # → the FULL path is the import path; keep it intact.
@@ -284,35 +543,33 @@ def _parse_purl(purl: str) -> tuple[str, str, str | None] | None:
     return (ecosystem, name, version)
 
 
-def _extract_license(licenses_block) -> str | None:
-    """Pull the first license expression / SPDX id from a CycloneDX
-    licenses array.
-
-    CycloneDX license shape is one of:
-      ``[{"license": {"id": "Apache-2.0"}}]``
-      ``[{"license": {"name": "Custom"}}]``
-      ``[{"expression": "Apache-2.0 OR MIT"}]``
-
-    Returns the first non-empty value or ``None``."""
-    if not isinstance(licenses_block, list):
-        return None
-    for entry in licenses_block:
+def _license_declarations(block) -> tuple[str, ...]:
+    """Keep each declaration; a list does not invent an AND/OR expression."""
+    if block is None:
+        return ()
+    if not isinstance(block, list):
+        raise ValueError("CycloneDX licenses must be an array")
+    result = []
+    expression = False
+    for entry in block:
         if not isinstance(entry, dict):
-            continue
-        # Expression form
-        expr = entry.get("expression")
-        if expr:
-            return str(expr).strip()
-        # License-object form
-        lic = entry.get("license")
-        if isinstance(lic, dict):
-            for key in ("id", "name"):
-                val = lic.get(key)
-                if val:
-                    return str(val).strip()
-    return None
+            raise ValueError("CycloneDX license choice must be an object")
+        if "expression" in entry:
+            value = entry["expression"]
+            expression = True
+            if "license" in entry:
+                raise ValueError("ambiguous CycloneDX license choice")
+        else:
+            license_object = entry.get("license")
+            if not isinstance(license_object, dict) or ("id" in license_object) == ("name" in license_object):
+                raise ValueError("CycloneDX license requires either id or name")
+            value = license_object.get("id", license_object.get("name"))
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("CycloneDX license must be a nonempty string")
+        result.append(value.strip())
+    if expression and len(result) != 1:
+        raise ValueError("CycloneDX license expression must be the only choice")
+    return tuple(result)
 
 
-__all__ = [
-    "parse_cyclonedx",
-]
+__all__ = ["parse_cyclonedx", "read_cyclonedx", "ImportedBom"]

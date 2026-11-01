@@ -103,8 +103,13 @@ _MAX_PARSER_BYTES = 50 * 1024 * 1024
 def read_bounded(
     path: Path, *, max_bytes: int = _MAX_PARSER_BYTES,
     follow_symlinks: bool = False,
+    strict_utf8: bool = False,
 ) -> str | None:
     """Read ``path`` as UTF-8 text, capped at ``max_bytes``.
+
+    ``strict_utf8=True`` raises UnicodeDecodeError rather than silently
+    replacing invalid bytes; useful for evidence-preserving document imports.
+    Other parsers retain replacement decoding by default.
 
     Returns ``None`` and logs at warning level when:
 
@@ -220,7 +225,7 @@ def read_bounded(
             path, e,
         )
         return None
-    return raw.decode("utf-8", errors="replace")
+    return raw.decode("utf-8", errors="strict" if strict_utf8 else "replace")
 
 
 def read_head_bytes(path: Path, *, max_bytes: int) -> bytes | None:

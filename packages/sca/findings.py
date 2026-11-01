@@ -693,7 +693,7 @@ def _assemble_finding(
         cvss_vector=cvss_vector,
         severity=severity_str,
         exposure_factor=0.0,        # populated by reachability layer
-        transitive_depth=0 if dep.direct else 1,
+        transitive_depth=dep.transitive_depth if dep.transitive_depth is not None else (0 if dep.direct else 1),
         ssvc_exploitation=ssvc_exploitation,
         ssvc_automatable=ssvc_automatable,
         related_findings=related_ids,

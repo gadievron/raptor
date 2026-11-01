@@ -59,9 +59,10 @@ to compliance ship a tighter policy.
 from __future__ import annotations
 
 import logging
+import hashlib
 import re
 import urllib.parse
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -257,28 +258,36 @@ def evaluate(
     deps: list[Dependency],
     policy: LicensePolicy,
 ) -> list[LicenseFinding]:
-    """Classify each dep's declared_license against the policy.
+    """Classify each upstream licence declaration against the policy.
 
-    Dedups by (ecosystem, name, version) — no point reporting the
-    same dep twice when it appears in multiple manifests; the dep
-    keys are stable across appearances.
+    Deduplicate identical declarations per dependency key across manifests;
+    distinct declarations remain independently visible.
 
-    Ecosystems lacking package-level SPDX metadata (GitHub Actions,
-    Debian, OCI, Inline) are skipped entirely — see
-    :data:`_SPDX_SUPPORTED_ECOSYSTEMS` for the allowlist.
+    Explicit declarations are evaluated for any ecosystem. Ecosystems without
+    registry licence metadata skip only the unknown-licence fallback. Separate
+    declarations are evaluated individually without inventing AND/OR semantics.
     """
-    seen: set[str] = set()
+    declarations_by_key: dict[str, set[str | None]] = {}
+    for dep in deps:
+        declarations_by_key.setdefault(dep.key(), set()).update(dep.license_declarations or (dep.declared_license,))
+    seen: set[tuple[str, str | None]] = set()
     out: list[LicenseFinding] = []
     for d in deps:
-        if d.ecosystem not in _SPDX_SUPPORTED_ECOSYSTEMS:
+        if d.ecosystem not in _SPDX_SUPPORTED_ECOSYSTEMS and not (d.declared_license or d.license_declarations) and d.source_kind != "sbom_import":
             continue
-        key = d.key()
-        if key in seen:
-            continue
-        seen.add(key)
-        finding = _evaluate_one(d, policy)
-        if finding is not None:
-            out.append(finding)
+        declarations = d.license_declarations or (d.declared_license,)
+        for declaration in declarations:
+            key = (d.key(), declaration)
+            if key in seen:
+                continue
+            seen.add(key)
+            candidate = replace(d, declared_license=declaration)
+            finding = _evaluate_one(candidate, policy)
+            if finding is not None:
+                if len(declarations_by_key[d.key()]) > 1:
+                    suffix = hashlib.sha256((declaration or "").encode("utf-8")).hexdigest()[:16]
+                    finding = replace(finding, finding_id=f"{finding.finding_id}:{suffix}")
+                out.append(finding)
     return out
 
 
@@ -703,7 +712,7 @@ def enrich_licenses(
     # Grafana's 50+ workspace manifests each declared the same
     # ``@grafana/plugin-configs``. Same dedup pattern as
     # ``supply_chain.registry_metadata.scan_deps``.
-    work_all = [d for d in deps if not d.declared_license]
+    work_all = [d for d in deps if not d.declared_license and not d.license_declarations]
     if not work_all:
         return 0
     _seen_lic: set = set()
@@ -794,7 +803,7 @@ def enrich_licenses(
             license_map[(d.ecosystem, d.name)] = d.declared_license
     if license_map:
         for d in work_all:
-            if d.declared_license:
+            if d.declared_license or d.license_declarations:
                 continue
             spdx = license_map.get((d.ecosystem, d.name))
             if spdx:
