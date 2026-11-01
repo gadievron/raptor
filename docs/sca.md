@@ -236,6 +236,14 @@ updates its scan metadata. A document signature is removed from the modified
 output; the input file remains untouched. Component signatures are also
 removed if adding missing component references changes their signed content.
 
+CycloneDX components explicitly classified as `file` remain in the retained
+inventory, including their hashes, licence declarations, evidence and graph
+references. They do not enter package vulnerability matching or licence policy,
+even when they carry a PURL. One diagnostic reports the number of retained file
+components and that file-level analysis is outside coverage. Other components
+without usable PURLs still enter licence policy. Classification follows the
+producer's declaration; RAPTOR does not infer file type from a name or path.
+
 For CycloneDX input, `--spdx` emits the scan projection rather than a complete
 cross-format conversion. A diagnostic records that limitation; the full
 retained inventory and evidence remain in `sbom.cdx.json`.

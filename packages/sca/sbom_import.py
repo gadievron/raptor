@@ -15,8 +15,9 @@ discovery. Useful when:
 
 The importer maps CycloneDX 1.5 ``components`` → SCA
 ``Dependency`` rows. Components need a supported ``purl`` to enter vulnerability matching;
-other components stay in the retained inventory and licence-policy view,
-with a diagnostic explaining the matching gap. The ``purl`` carries the ecosystem
+other non-file components stay in the retained inventory and licence-policy view,
+with a diagnostic explaining the matching gap. File components remain inventory
+evidence outside package vulnerability and licence policy. The ``purl`` carries the ecosystem
 (``pkg:pypi/...``, ``pkg:npm/...``, etc.) and authoritative
 name + version.
 
@@ -84,8 +85,15 @@ _PURL_ECO_MAP = {
 # explicitly documented visibility-only label ("GitHub" → OSS-Fuzz
 # fallback; "Container" → image-scan path).
 
-# CycloneDX ``scope`` enum → SCA scope. CycloneDX has fewer
-# values; map conservatively.
+# Explicit component classifications supported by CycloneDX 1.5.
+_COMPONENT_TYPES = frozenset({
+    "application", "framework", "library", "container", "platform",
+    "operating-system", "device", "device-driver", "firmware", "file",
+    "machine-learning-model", "data",
+})
+
+
+# CycloneDX ``scope`` enum → SCA scope. Map conservatively.
 _SCOPE_MAP = {
     "required": "main",
     "optional": "optional",
@@ -196,9 +204,17 @@ def _read_cyclonedx(data: dict, path: Path) -> ImportedBom:
     diagnostics: list[str] = []
     if external_refs:
         diagnostics.append("external BOM references are retained; their components were not loaded for vulnerability matching")
+    file_count = sum(comp.get("type") == "file" for comp in components)
+    if file_count:
+        diagnostics.append(
+            f"{file_count} CycloneDX file component(s) retained as inventory evidence; "
+            "file vulnerability matching and file-level licence policy are outside analysis coverage"
+        )
     refs: dict[str, list[str]] = {}
     license_deps: list[Dependency] = []
     for comp, component_ref in zip(components, component_refs):
+        if comp.get("type") == "file":
+            continue
         dep = _component_to_dep(comp, sbom_path=path)
         if dep is None:
             diagnostics.append(
@@ -319,6 +335,10 @@ def _components(data: dict) -> list[dict]:
         comp = stack.pop()
         if not isinstance(comp, dict):
             raise ValueError("CycloneDX component must be an object")
+        # Keep accepting legacy input without a type, but never silently treat
+        # an invalid explicit classification as a package or file.
+        if "type" in comp and (not isinstance(comp["type"], str) or comp["type"] not in _COMPONENT_TYPES):
+            raise ValueError("unsupported CycloneDX component type")
         if not isinstance(comp.get("name"), str) or not comp["name"]:
             raise ValueError("CycloneDX component must have a nonempty name")
         if not isinstance(comp.get("scope", "required"), str) or comp.get("scope", "required") not in _SCOPE_MAP:
@@ -407,9 +427,11 @@ def _component_to_dep(
 ) -> Dependency | None:
     """Convert one CycloneDX component → SCA ``Dependency``.
 
-    Returns ``None`` when the PURL cannot identify a supported matching
-    ecosystem. The original component remains in the inventory.
+    Returns ``None`` for files or when the PURL cannot identify a supported
+    matching ecosystem. The original component remains in the inventory.
     """
+    if comp.get("type") == "file":
+        return None
     purl = comp.get("purl")
     if purl:
         parsed = _parse_purl(purl)
