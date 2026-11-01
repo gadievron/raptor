@@ -317,7 +317,12 @@ class TestSandboxContextManager(unittest.TestCase):
                 result = run(["env"], capture_output=True, text=True)
             from core.config import RaptorConfig
             for var, evil in dangerous.items():
-                if var in RaptorConfig.GIT_ENV_VARS:
+                if var == "TMPDIR" and os.name == "posix":
+                    # Scratch remains usable, but the attacker-chosen value
+                    # must never reach the child.
+                    self.assertNotIn(f"TMPDIR={evil}", result.stdout)
+                    self.assertIn("TMPDIR=", result.stdout)
+                elif var in RaptorConfig.GIT_ENV_VARS:
                     # Git config vars are REPLACED with the pinned safe
                     # value, not stripped — the malicious value must
                     # not survive either way.

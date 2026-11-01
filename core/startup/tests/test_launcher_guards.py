@@ -84,7 +84,7 @@ def _launch(
     if term is not None:
         env["TERM"] = term
     return subprocess.run(
-        ["bash", str(LAUNCHER), *args],
+        ["bash", str(LAUNCHER), "--allow-degraded-cleanup", *args],
         capture_output=True,
         text=True,
         timeout=120,

@@ -130,9 +130,10 @@ probe binaries, PoC stubs) is consolidated under a single family:
 <base>/raptor-<uid>/session-<pid>-<rand>/
 ```
 
-`<base>` is `RAPTOR_WORK_DIR` if set, else `TMPDIR`, else `/tmp` (see
-docs/environment.md). The `bin/raptor` launcher points the per-session
-`TMPDIR` there; processes started outside the launcher consolidate to the
+`<base>` is `RAPTOR_WORK_DIR` if set, else the operator’s `TMPDIR`, else
+`/tmp` on Linux or the OS-provided private temporary directory on macOS
+(see docs/environment.md). The `bin/raptor` launcher points the per-session
+`TMPDIR` at the `tmp/` subdirectory there; processes started outside the launcher consolidate to the
 same family via `core.run.workdir`. Setting `RAPTOR_WORK_DIR` to a
 dedicated directory (e.g. `/opt/raptor-work`) gives your endpoint team
 one stable, documentable path prefix.

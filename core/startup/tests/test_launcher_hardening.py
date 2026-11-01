@@ -103,7 +103,7 @@ def _run_launcher(
         **(extra_env or {}),
     }
     return subprocess.run(
-        ["bash", str(LAUNCHER), *args],
+        ["bash", str(LAUNCHER), "--allow-degraded-cleanup", *args],
         capture_output=True,
         text=True,
         timeout=120,
@@ -123,7 +123,8 @@ def _make_stub_claude(tmp_path: Path) -> Path:
         "echo STUB_CLAUDE_RAN\n"
         'echo "UMASK=$(umask)"\n'
         'echo "ULIMIT_C=$(ulimit -S -c)"\n'
-        'echo "TMPDIR_SEEN=${TMPDIR:-}"\n',
+        'echo "TMPDIR_SEEN=${TMPDIR:-}"\n'
+        'echo "JOERN_BASE_SEEN=${_RAPTOR_JOERN_TMP_BASE:-}"\n',
         encoding="utf-8",
     )
     stub.chmod(0o755)
@@ -422,15 +423,13 @@ def _uid_base(tmp_path: Path) -> Path:
     return tmp_path / "tmp" / f"raptor-{os.getuid()}"
 
 
-def test_session_dir_created_under_custom_tmpdir(tmp_path):
+def test_help_does_not_allocate_a_session_directory(tmp_path):
     r = _run_launcher(tmp_path, "-h")
     assert r.returncode == 0, r.stderr
     base = _uid_base(tmp_path)
     assert base.is_dir()
     assert (base.stat().st_mode & 0o777) == 0o700
-    sessions = list(base.glob("session-*-*"))
-    assert len(sessions) == 1
-    assert (sessions[0].stat().st_mode & 0o777) == 0o700
+    assert not list(base.glob("session-*"))
 
 
 def test_stale_dead_pid_session_swept_live_kept(tmp_path):
@@ -489,7 +488,7 @@ def test_squatted_base_disables_session_tmpdir(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _run_full_launch(tmp_path: Path, umask: str = "0") -> subprocess.CompletedProcess:
+def _run_full_launch(tmp_path: Path, umask: str = "0", *, extra_env=None) -> subprocess.CompletedProcess:
     stub_dir = _make_stub_claude(tmp_path)
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
@@ -501,11 +500,12 @@ def _run_full_launch(tmp_path: Path, umask: str = "0") -> subprocess.CompletedPr
         "TMPDIR": str(tmpdir),
         "TERM": "xterm",
     }
+    env.update(extra_env or {})
     # Outer bash loosens umask + core limit; the launcher must
     # restore the floor / cap before exec'ing the stub.
     script = (
         f"umask {umask}; ulimit -S -c unlimited 2>/dev/null; "
-        f"exec bash '{LAUNCHER}'"
+        f"exec bash '{LAUNCHER}' --allow-degraded-cleanup"
     )
     return subprocess.run(
         ["bash", "-c", script],
@@ -545,8 +545,9 @@ def test_exec_boundary_session_tmpdir_exported(tmp_path):
     assert "STUB_CLAUDE_RAN" in r.stdout, (r.stdout, r.stderr)
     seen = _stub_value(r.stdout, "TMPDIR_SEEN")
     base = _uid_base(tmp_path)
-    assert Path(seen).parent == base
-    assert Path(seen).name.startswith("session-")
+    assert Path(seen).name == "tmp"
+    assert Path(seen).parent.parent == base
+    assert Path(seen).parent.name.startswith("session-")
 
 
 def test_soft_core_cap_child_can_reraise(tmp_path):
@@ -572,7 +573,7 @@ def test_soft_core_cap_child_can_reraise(tmp_path):
     tmpdir = tmp_path / "tmp"
     tmpdir.mkdir(exist_ok=True)
     r = subprocess.run(
-        ["bash", str(LAUNCHER)],
+        ["bash", str(LAUNCHER), "--allow-degraded-cleanup"],
         capture_output=True, text=True, timeout=120, check=False,
         env={
             "PATH": ":".join([str(stub_dir)] + _system_path_dirs()),
@@ -592,3 +593,17 @@ def test_launcher_passes_bash_syntax_check():
         capture_output=True, text=True, timeout=30, check=False,
     )
     assert r.returncode == 0, r.stderr
+
+
+@pytest.mark.parametrize('no_hardening', [False, True])
+def test_service_base_is_not_nested_on_supervisor_reentry(tmp_path, no_hardening):
+    extra = {'RAPTOR_NO_LAUNCHER_HARDENING': '1'} if no_hardening else {}
+    result = _run_full_launch(tmp_path, extra_env=extra)
+    assert 'STUB_CLAUDE_RAN' in result.stdout, result.stderr
+    observed = Path(_stub_value(result.stdout, 'JOERN_BASE_SEEN'))
+    # The test host has no writable delegation, so this is the portable path.
+    # A tracked session's override is covered by the gated child test.
+    original = tmp_path / 'tmp'
+    private = Path(_stub_value(result.stdout, 'TMPDIR_SEEN'))
+    assert observed in {original, private}
+    assert private.parent.parent == original / f'raptor-{os.geteuid()}'

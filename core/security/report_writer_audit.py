@@ -539,6 +539,9 @@ _REPORT_CONSTRUCTORS = frozenset({"ReportSection"})
 # writer needs an explicit add (forcing a security review at file-add
 # time).
 _REPORT_WRITER_FILES = (
+    # Cleanup records include operator/target-influenced paths. Terminal-only
+    # output uses the canonical bounded sanitizer, loaded from this checkout.
+    "core/security/scratch_lifecycle.py",
     # Confined Joern worker launcher: runtime/path errors are terminal text,
     # sanitised through sanitise_for_terminal before printing.
     "packages/joern/worker_guard.py",

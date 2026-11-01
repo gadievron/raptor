@@ -21,7 +21,7 @@ from core.security.credential_env import (
     CREDENTIAL_GENERAL_BLOCKLIST_VARS,
     is_credential_env_pattern_member,
 )
-from core.security.env_sanitisation import normalise_proxy_url, strip_env_vars
+from core.security.env_sanitisation import normalise_proxy_url, strip_env_vars, subprocess_tmpdir
 from core.security.rule_of_two import is_ci
 
 
@@ -625,7 +625,7 @@ class RaptorConfig:
         # grants. Target-bound envs strip both via
         # TARGET_ENV_STRIP_SET (sandboxed code never sees the
         # credential; see core/sandbox/context.py).
-        "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN",
+        "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN", "_RAPTOR_SCRATCH_AUTH",
         #   RAPTOR_REGISTRY_HOME  operator-registry relocation override
         #                    (core.project.registry_home — projects
         #                    registry, .active bookmark, sessions.d,
@@ -684,7 +684,7 @@ class RaptorConfig:
     TARGET_ENV_STRIP_SET = frozenset({
         "CLAUDECODE", "_RAPTOR_TRUSTED",
         "_RAPTOR_JOERN_TMP_BASE", "_RAPTOR_SERVICE_TMP_BASE",
-        "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN",
+        "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN", "_RAPTOR_SCRATCH_AUTH",
         "RAPTOR_ALLOW_DEGRADED_UNTRUSTED",
         # Sandbox-disable consent nonce. Deliberately NOT in
         # SAFE_ENV_ALLOWLIST (a pinning test holds that direction):
@@ -707,7 +707,7 @@ class RaptorConfig:
         # that leaks the operator's registry layout. No target
         # consumes it; RAPTOR's own children ride the keep-trust
         # dispatch arm.
-        "RAPTOR_REGISTRY_HOME",
+        "RAPTOR_REGISTRY_HOME", "_RAPTOR_LAUNCH_METADATA",
         # LLM transcript seam: framework tell plus a host path that
         # leaks the run layout. No target consumes it; RAPTOR's own
         # LLM-calling children ride the keep-trust dispatch arm.
@@ -1214,6 +1214,12 @@ class RaptorConfig:
         # Belt + braces: strip anything dangerous that somehow made it
         # through (either allowlisted explicitly or matching a prefix).
         env = strip_env_vars(env, RaptorConfig.DANGEROUS_ENV_VARS)
+        # Replace ambient TMPDIR with the launcher-owned session workspace.
+        # Do not initialize it here: this path also runs inside restricted,
+        # post-fork children where imports/mkdir and inherited locks are unsafe.
+        child_tmpdir = subprocess_tmpdir()
+        if child_tmpdir is not None:
+            env["TMPDIR"] = child_tmpdir
         # Stamp the parent's CI verdict so the interactivity gate in
         # children never depends on which vendor markers survived the
         # scrub (allowlist churn must not be able to reopen the

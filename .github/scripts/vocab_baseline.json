@@ -1993,6 +1993,11 @@
     "count": 17,
     "kind": "literal"
   },
+  "core/security/scratch_lifecycle.py::value": {
+    "count": 16,
+    "kind": "literal",
+    "note": "Persistent scratch ownership record schema: filesystem identity pins, supervisor birth identity, lifecycle state and cleanup authorization. Fixed serialization keys validated by scratch_lifecycle._validate, not a learned target-name vocabulary."
+  },
   "core/smt_solver/path_feasibility.py::_CALL_SUMMARIES": {
     "count": 11,
     "kind": "literal",
