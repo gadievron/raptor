@@ -2,8 +2,8 @@
 and GIT-range exclusion.
 
 OSV suffixes release streams onto distro ecosystems ("Debian:11",
-"Alpine:v3.18") — both the ingest and query sides must compare on the
-base identifier or a distro bucket ingests and matches nothing. GIT
+"Alpine:v3.18"). Dumps use the base identifier; matching requires the
+applicable release stream. GIT
 ranges carry commit SHAs, which are not version-comparable and must
 never reach a version comparator.
 """
@@ -87,9 +87,9 @@ def test_suffixed_debian_record_ingests_and_matches(tmp_path) -> None:
     assert len(stats) == 1
     assert stats[0].advisories == 1
 
-    vulnerable = db.query("Debian", "openssl", "1.1.1k-1+deb11u1")
+    vulnerable = db.query("Debian:11", "openssl", "1.1.1k-1+deb11u1")
     assert [a.osv_id for a in vulnerable] == ["DSA-TEST-1"]
-    fixed = db.query("Debian", "openssl", "1.1.1n-0+deb11u1")
+    fixed = db.query("Debian:11", "openssl", "1.1.1n-0+deb11u1")
     assert fixed == []
 
 
@@ -103,7 +103,7 @@ def test_wrong_ecosystem_record_still_rejected(tmp_path) -> None:
 
     assert len(stats) == 1
     assert stats[0].advisories == 0
-    assert db.query("Debian", "lodash", "4.17.20") == []
+    assert db.query("Debian:11", "lodash", "4.17.20") == []
 
 
 def test_suffixed_query_ecosystem_reads_base_bucket(tmp_path) -> None:
@@ -126,10 +126,10 @@ def test_suffixed_query_ecosystem_reads_base_bucket(tmp_path) -> None:
     assert [a.osv_id for a in hits] == ["ALPINE-1"]
 
 
-def test_release_agnostic_block_matches_suffixed_query() -> None:
-    """A bare-'Alpine' block applies to every release stream."""
+def test_invalid_bare_alpine_block_does_not_claim_any_release() -> None:
+    """OSV requires Alpine's release suffix; absence is not universal scope."""
     rec = _record("ALPINE-3", "Alpine", "zlib", fixed="1.2.12-r0")
-    assert _record_matches_version(rec, "Alpine:v3.18", "1.2.11-r3")
+    assert not _record_matches_version(rec, "Alpine:v3.18", "1.2.11-r3")
     assert not _record_matches_version(rec, "Alpine:v3.18", "1.2.12-r0")
 
 
@@ -160,7 +160,7 @@ def test_online_ecosystems_have_bucket_mappings() -> None:
 
 def test_ubuntu_and_gha_ingest_from_their_buckets(tmp_path) -> None:
     rec_ubuntu = _record(
-        "USN-1", "Ubuntu:22.04", "curl", fixed="7.81.0-1ubuntu1.10")
+        "USN-1", "Ubuntu:22.04:LTS", "curl", fixed="7.81.0-1ubuntu1.10")
     rec_gha = _record(
         "GHSA-GHA-1", "GitHub Actions", "actions/checkout", fixed="4.1.7")
     http = _ZipServingHttp({
@@ -168,11 +168,11 @@ def test_ubuntu_and_gha_ingest_from_their_buckets(tmp_path) -> None:
         "GitHub%20Actions": _make_zip([rec_gha]),
     })
     db = OsvOfflineDB(tmp_path / "osv.sqlite", http=http)
-    stats = db.ensure_fresh(["Ubuntu:22.04", "GitHub Actions"])
+    stats = db.ensure_fresh(["Ubuntu:22.04:LTS", "GitHub Actions"])
 
     assert sorted(s.ecosystem for s in stats) == ["GitHub Actions", "Ubuntu"]
     assert all(s.advisories == 1 for s in stats)
-    assert db.query("Ubuntu:22.04", "curl", "7.81.0-1ubuntu1.4")
+    assert db.query("Ubuntu:22.04:LTS", "curl", "7.81.0-1ubuntu1.4")
     assert db.query("GitHub Actions", "actions/checkout", "v4.1.0")
     assert not db.query("GitHub Actions", "actions/checkout", "v4.1.7")
 
@@ -219,8 +219,8 @@ def test_git_only_range_never_matches() -> None:
         "GIT-ONLY-1", "Debian:11", "openssl",
         introduced=_SHA_A, fixed=_SHA_B, range_type="GIT",
     )
-    assert not _record_matches_version(rec, "Debian", "1.1.1k-1")
-    assert not _record_matches_version(rec, "Debian", "9a")
+    assert not _record_matches_version(rec, "Debian:11", "1.1.1k-1")
+    assert not _record_matches_version(rec, "Debian:11", "9a")
 
 
 def test_git_range_skip_keeps_ecosystem_range_matching() -> None:
@@ -238,8 +238,8 @@ def test_git_range_skip_keeps_ecosystem_range_matching() -> None:
             ],
         }],
     }
-    assert _record_matches_version(rec, "Debian", "1.1.1k-1")
-    assert not _record_matches_version(rec, "Debian", "1.1.1n-1")
+    assert _record_matches_version(rec, "Debian:11", "1.1.1k-1")
+    assert not _record_matches_version(rec, "Debian:11", "1.1.1n-1")
 
 
 def test_explicit_versions_array_still_matches() -> None:
@@ -254,8 +254,8 @@ def test_explicit_versions_array_still_matches() -> None:
             "versions": ["1.1.1k-1"],
         }],
     }
-    assert _record_matches_version(rec, "Debian", "1.1.1k-1")
-    assert not _record_matches_version(rec, "Debian", "1.1.1m-1")
+    assert _record_matches_version(rec, "Debian:11", "1.1.1k-1")
+    assert not _record_matches_version(rec, "Debian:11", "1.1.1m-1")
 
 
 if __name__ == "__main__":

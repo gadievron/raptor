@@ -225,9 +225,9 @@ available. SCA's own directness properties are also recognized. Without either,
 directness is recorded as unknown and risk scoring conservatively treats the
 package as direct. Repeated instances remain separate in the inventory;
 aggregated scanning uses their most exposed context. Distro PURLs distinguish
-Debian from Ubuntu and use Alpine
-release qualifiers; missing binary-to-source package correspondence is not
-inferred from a binary name.
+Debian, Ubuntu and Alpine releases, including Ubuntu's LTS stream.
+Unknown release context is reported as incomplete advisory coverage; it does
+not enter a broad cross-release query.
 
 Multiple licence declarations remain separate declarations; SCA evaluates
 each without inventing an AND/OR expression. Imported SPDX expressions retain
@@ -262,10 +262,32 @@ licences remain evidence outside package-policy coverage, with a diagnostic.
 Dependency depth uses `documentDescribes`/`DESCRIBES` roots and `DEPENDS_ON` or
 inverse dependency relationships. `CONTAINS` and source relationships do not
 imply dependency depth. Unconnected packages have unknown directness and are
-conservatively treated as direct. Distro packages without an explicit source
-package purpose receive a diagnostic that binary-to-source correspondence has
-not been established; retained source relationships do not imply a resolved
-advisory mapping. Generated SPDX 2.3 documents retain the
+conservatively treated as direct. Distro PURL `upstream` qualifiers identify a
+source package and, when supplied, its source version. Queries use those
+coordinates while the inventory retains its binary name, version and PURL.
+Native image extraction uses dpkg's versioned `Source` field for the same
+purpose. Missing source declarations remain a coverage gap; arbitrary source
+relationships are not used to infer a mapping.
+
+Distro advisory ranges and fixes are restricted to the matching source package
+and release. Standard Ubuntu, Pro and FIPS streams remain distinct. Missing or
+contradictory release data, known foreign vendor versions (such as NodeSource
+packages labelled as Debian), and unavailable advisory records produce
+`analysis-gaps.jsonl` events and scan-health findings. `lookup_failed()` also
+marks those package results unavailable for candidate-safety consumers. A
+completed scan can still exit successfully under the existing threshold rules;
+its scan-health findings must be checked when complete coverage is required.
+Namespace/version metadata does not independently prove package origin.
+
+When query coordinates differ from the inventory, findings carry an
+`advisory_package` object and reports label the source identity and **source
+fix**. That fix is a source-package version, not an instruction to install or
+downgrade the binary to the same string. Source-package matches identify a
+source release covered by an advisory; they do not establish that every
+binary built from it contains the affected code. Findings distinguish these
+with `advisory_match_scope: source_package`. For example, kernel-source
+advisories associated with development headers are not evidence that a
+container ships or runs the vulnerable kernel. Generated SPDX 2.3 documents retain the
 required `CC0-1.0` metadata licence; this does not change component licences.
 
 ---

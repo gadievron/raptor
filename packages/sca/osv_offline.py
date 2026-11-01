@@ -37,7 +37,9 @@ from dataclasses import dataclass
 from io import BytesIO
 
 from core.zip import ZipEntryCountExceeded, ZipOpenError, extract_files_from_zip
-from .osv import _canonical_name, parse_osv_record
+from core.oci.distro import context_error, ecosystem_matches
+from .osv import (_canonical_name, parse_osv_record, _record_to_advisory,
+                  _scope_distro_record, _shared_parse_record)
 from .versions import VersionError, in_range as _in_range
 from typing import TYPE_CHECKING
 
@@ -178,6 +180,9 @@ class OsvOfflineDB:
         caller can't filter by range without a version, but knowing
         "this dep has any advisories at all" is still useful).
         """
+        error = context_error(ecosystem, version)
+        if error:
+            raise ValueError(error)
         self._init_db()
         rows = self._lookup_rows(ecosystem, name)
         if not rows:
@@ -189,7 +194,11 @@ class OsvOfflineDB:
                 record = loads(raw_json)
             except ValueError:
                 continue
-            if version is None or _record_matches_version(
+            if ecosystem.split(":", 1)[0] in {"Debian", "Ubuntu", "Alpine"}:
+                selected = _scope_distro_record(_shared_parse_record(record), ecosystem, name, version)
+                if selected is not None:
+                    out.append(_record_to_advisory(selected))
+            elif version is None or _record_matches_version(
                 record, ecosystem, version, name=name,
             ):
                 out.append(parse_osv_record(record))
@@ -466,14 +475,12 @@ def _record_matches_version(
     """True if ``version`` falls inside any of the record's affected
     ranges for this ecosystem (and package ``name`` when given).
 
-    Ecosystem comparison is on the base identifier — OSV suffixes
-    release streams onto distro ecosystems ("Debian:11"), mirroring
-    the online client's handling. When BOTH the query ecosystem and
-    the affected block carry a release suffix, the suffixes must
-    match (a "Debian:11"-only advisory does not apply to a
-    "Debian:12" dep); when either side is release-agnostic, the base
-    match suffices — the recall-safe reading.
+    Distro matching uses explicit release/stream identity. A publisher's
+    release-independent Debian block may apply across known releases; a
+    missing Alpine/Ubuntu suffix is not evidence of universal scope.
     """
+    if context_error(ecosystem, version):
+        return False
     query_base, _, query_release = ecosystem.partition(":")
     query_base = _our_ecosystem(query_base)
     affected = record.get("affected") or []
@@ -489,7 +496,11 @@ def _record_matches_version(
         blk_base, _, blk_release = blk_eco_raw.partition(":")
         if _our_ecosystem(blk_base) != query_base:
             continue
-        if query_release and blk_release and blk_release != query_release:
+        if query_base in {"Debian", "Ubuntu", "Alpine"}:
+            if not ecosystem_matches(query_base + (":" + query_release if query_release else ""),
+                                     _our_ecosystem(blk_base) + (":" + blk_release if blk_release else "")):
+                continue
+        elif query_release and blk_release and blk_release != query_release:
             continue
         if name is not None:
             blk_name = pkg.get("name")

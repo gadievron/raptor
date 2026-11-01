@@ -176,7 +176,7 @@ def test_distro_context_is_preserved_without_claiming_source_correspondence(tmp_
     document["packages"] = [package("SPDXRef-image", "libssl3", purl)]
     document["relationships"] = []
     source = imported(tmp_path, document)
-    assert source.dependencies[0].ecosystem == "Ubuntu"
+    assert source.dependencies[0].ecosystem == "Ubuntu:22.04:LTS"
     assert source.dependencies[0].purl == purl
     assert any("binary-to-source" in gap for gap in source.coverage_gaps)
     assert render_sbom_spdx(deps=source.dependencies, target_name="x", source_bom=source) == document

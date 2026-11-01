@@ -478,6 +478,10 @@ class VulnFinding:
     suppressed: bool = False
     suppression_reason: str | None = None
 
+    # Query identity when a binary inventory package is matched through its
+    # source package or a more precise release. Fixed versions use this stream.
+    advisory_package: dict[str, str | None] | None = None
+
 
 @dataclass(frozen=True)
 class ExploitEvidence:

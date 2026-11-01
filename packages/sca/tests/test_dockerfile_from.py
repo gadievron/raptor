@@ -535,7 +535,7 @@ def test_packages_to_deps_emits_correct_shape():
     assert all(d.pin_style == PinStyle.EXACT for d in deps)
     assert all(d.parser_confidence.level == "high" for d in deps)
     assert {d.purl for d in deps} == {
-        "pkg:deb/zlib1g@1:1.2.13.dfsg-1",
+        "pkg:deb/debian/zlib1g@1%3A1.2.13.dfsg-1?arch=source",
         "pkg:apk/musl@1.2.4-r2",
     }
 

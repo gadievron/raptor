@@ -614,8 +614,13 @@ def _render_one_vuln(
         (f"{heading} {label} — {neutralize_inline(dep.name)} "
          f"{neutralize_inline(dep.version or '*')}"),
     ]
+    query = f.advisory_package
+    source_fix = bool(query and (query["name"], query["version"]) != (dep.name, dep.version))
+    if source_fix:
+        head_parts.append(f" [source {neutralize_inline(query['name'])} {neutralize_inline(query['version'] or '*')}]")
     if f.fixed_version:
-        head_parts.append(f" → fix: {neutralize_inline(f.fixed_version)}")
+        fix_label = "source fix" if source_fix else "fix"
+        head_parts.append(f" → {fix_label}: {neutralize_inline(f.fixed_version)}")
     if f.suppressed:
         reason = neutralize_inline(f.suppression_reason or 'no reason')
         head_parts.append(f" _(suppressed: {reason})_")

@@ -54,7 +54,7 @@ import logging
 import re
 import urllib.parse
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from core.http import HttpClient
@@ -67,6 +67,8 @@ from packages.osv import OsvRecord
 from packages.osv import parse_record as _shared_parse_record
 from packages.osv.client import OSV_BASE_URL
 
+from core.oci.distro import context_error, ecosystem_matches
+from .distro import advisory_dependency
 from .naming import fold_name
 from .models import (
     Advisory,
@@ -167,9 +169,10 @@ def _matches_corridor(rec: OsvRecord, dep: Dependency) -> bool:
     for blk in rec.affected:
         pkg = blk.package or {}
         blk_eco = str(pkg.get("ecosystem") or "")
-        # OSV suffixes release streams onto some ecosystems
-        # ("Debian:11") — compare the base identifier.
-        if blk_eco.split(":", 1)[0] != osv_eco:
+        if eco.split(":", 1)[0] in {"Debian", "Ubuntu", "Alpine"}:
+            if not ecosystem_matches(osv_eco, blk_eco):
+                continue
+        elif blk_eco.split(":", 1)[0] != osv_eco:
             continue
         blk_name = pkg.get("name")
         if (
@@ -283,6 +286,7 @@ class OsvClient:
         # ``lookup_failed()`` per key; a later successful lookup for
         # the same key clears it.
         self._failed_keys: set[str] = set()
+        self.coverage_gaps: dict[str, str] = {}
 
     @property
     def degraded(self) -> bool:
@@ -305,6 +309,42 @@ class OsvClient:
             self.failed_dep_keys.append(dep_key)
 
     def query_batch(self, deps: Sequence[Dependency]) -> list[OsvResult]:
+        """Query explicit source/release coordinates, returning inventory keys."""
+        self.coverage_gaps.clear()
+        plans: dict[str, Dependency] = {}
+        for dep in deps:
+            if dep.version is None and not _has_corridor(dep):
+                continue
+            try:
+                plans[dep.key()] = advisory_dependency(dep)
+                self.coverage_gaps.pop(dep.key(), None)
+            except ValueError as exc:
+                self.coverage_gaps[dep.key()] = str(exc)
+                self._record_failed_lookup(dep.key())
+        results = {r.dep_key: r for r in self._query_batch(list(plans.values()))}
+        output = []
+        seen = set()
+        for dep in deps:
+            key = dep.key()
+            if key in seen or (dep.version is None and not _has_corridor(dep)):
+                continue
+            seen.add(key)
+            query = plans.get(key)
+            if query is None:
+                output.append(OsvResult(key, []))
+                continue
+            if query.key() in self._failed_keys:
+                self._failed_keys.add(key)
+                if query.key() in self.coverage_gaps:
+                    self.coverage_gaps[key] = self.coverage_gaps[query.key()]
+            else:
+                self._failed_keys.discard(key)
+            output.append(OsvResult(key, results.get(query.key(), OsvResult(key, [])).advisories))
+        inventory_keys = {dep.key() for dep in deps}
+        self.coverage_gaps = {key: reason for key, reason in self.coverage_gaps.items() if key in inventory_keys}
+        return output
+
+    def _query_batch(self, deps: Sequence[Dependency]) -> list[OsvResult]:
         """Look up advisories for every dep that has a known version.
 
         Deps with ``version=None`` (unpinned manifest entries) are
@@ -513,18 +553,19 @@ class OsvClient:
                         "sca.osv: offline DB query failed for %s: %s",
                         dep.key(), e,
                     )
+                    self._record_failed_lookup(dep.key())
+                    self.coverage_gaps[dep.key()] = "offline advisory data could not be evaluated"
                     advs = []
                 offline_db_advisories[dep.key()] = advs
 
         # Pass 2: hydrate unique vuln IDs via shared client. Raw
-        # records are retained only for IDs that corridor deps
-        # reference — their per-dep filter below needs the per-package
-        # affected blocks, which ``Advisory`` flattens away.
+        # records are retained for corridor and distro queries: their filters
+        # need package/release blocks before Advisory flattens fix ranges.
         all_ids = sorted({i for ids in dep_to_ids.values() for i in ids})
         corridor_ids = {
             i
             for key, dep in unique_keys.items()
-            if dep.version is None
+            if dep.version is None or dep.ecosystem.split(":", 1)[0] in {"Debian", "Ubuntu", "Alpine"}
             for i in dep_to_ids.get(key, [])
         }
         vuln_records: dict[str, Advisory] = {}
@@ -576,6 +617,26 @@ class OsvClient:
             seen_keys.add(d.key())
             ids = dep_to_ids.get(d.key(), [])
             advisories = [vuln_records[i] for i in ids if i in vuln_records]
+            if d.ecosystem.split(":", 1)[0] in {"Debian", "Ubuntu", "Alpine"}:
+                if any(identifier not in vuln_records for identifier in ids):
+                    self._record_failed_lookup(d.key())
+                    self.coverage_gaps[d.key()] = "distro advisory record unavailable for release validation"
+                scoped = []
+                for advisory in advisories:
+                    record = corridor_records.get(advisory.osv_id)
+                    if record is None:
+                        self._record_failed_lookup(d.key())
+                        self.coverage_gaps[d.key()] = "distro advisory record unavailable for release validation"
+                        continue
+                    try:
+                        selected = _scope_distro_record(record, d.ecosystem, d.name, d.version)
+                    except ValueError as exc:
+                        self._record_failed_lookup(d.key())
+                        self.coverage_gaps[d.key()] = str(exc)
+                        continue
+                    if selected is not None:
+                        scoped.append(_record_to_advisory(selected))
+                advisories = scoped
             if d.version is None and advisories:
                 # Corridor dep — the batch query was version-less, so
                 # prune to advisories whose vulnerable intervals reach
@@ -608,6 +669,8 @@ class OsvClient:
         # single path segment. Encoding change invalidates entries
         # written under the old keys — acceptable; they just re-fetch.
         eco = _encode_key_component(dep.ecosystem)
+        if dep.ecosystem.split(":", 1)[0] in {"Debian", "Ubuntu", "Alpine"}:
+            eco = "distro-v2-" + eco
         name = _encode_key_component(dep.name)
         # Corridor deps (version=None) issue whole-package queries and
         # cache the package's FULL ID list; a literal version="*" dep
@@ -764,6 +827,68 @@ def _oss_fuzz_candidates(dep: Dependency) -> list[str]:
             return [repo] if repo else []
         return [dep.name] if dep.name else []
     return []
+
+
+def _scope_distro_record(
+    record: OsvRecord, ecosystem: str, name: str, version: str | None,
+) -> OsvRecord | None:
+    """Select matching package/release blocks before flattening fix ranges.
+
+    A missing block is not affected. Unreadable matching evidence is unknown,
+    and must be surfaced as degraded coverage instead of a clean result.
+    """
+    from .versions import in_range
+
+    if record.raw.get("withdrawn"):
+        return None
+    if not record.affected:
+        raise ValueError(f"distro advisory {record.id} has no affected package data")
+    matching = []
+    unknown_context = False
+    for block in record.affected:
+        package = block.package
+        if not package or not package.get("name") or not package.get("ecosystem"):
+            unknown_context = True
+            continue
+        if package["name"] != "*" and _canonical_name(ecosystem, package["name"]) != _canonical_name(ecosystem, name):
+            continue
+        block_ecosystem = package["ecosystem"]
+        if block_ecosystem != "Debian" and context_error(block_ecosystem):
+            unknown_context = True
+            continue
+        if ecosystem_matches(ecosystem, block_ecosystem):
+            matching.append(block)
+    selected = tuple(matching)
+    if not selected:
+        if unknown_context:
+            raise ValueError(f"distro advisory {record.id} has incomplete package/release context")
+        return None
+    if version is not None:
+        comparable, unknown = False, unknown_context
+        matches = False
+        for block in selected:
+            if version in block.versions:
+                matches = True
+            if block.versions:
+                comparable = True
+            for entry in block.ranges:
+                if entry.type not in {"ECOSYSTEM", "SEMVER"} or not entry.events:
+                    unknown = True
+                    continue
+                try:
+                    matches |= in_range(ecosystem, version, list(entry.events))
+                    comparable = True
+                except VersionError:
+                    unknown = True
+        if not matches:
+            if unknown or not comparable:
+                raise ValueError(f"cannot evaluate distro advisory {record.id} for the supplied source version")
+            return None
+    # Package-version remediation must not choose a GIT commit as an upgrade.
+    selected = tuple(replace(block, ranges=tuple(entry for entry in block.ranges
+                                                if entry.type in {"ECOSYSTEM", "SEMVER"}))
+                     for block in selected)
+    return replace(record, affected=selected)
 
 
 def parse_osv_record(record: dict[str, Any]) -> Advisory:

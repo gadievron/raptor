@@ -766,6 +766,17 @@ def run_sca(
     )
     osv_results = osv_client.query_batch(canonical)
     progress.tick(done=len(canonical))
+    if osv_client.coverage_gaps:
+        from core.run.gaps import record_analysis_gap
+        # Aggregate systematic context errors rather than flooding the run's
+        # bounded gap trail once per installed package.
+        by_reason: dict[str, list[str]] = {}
+        for key, reason in osv_client.coverage_gaps.items():
+            by_reason.setdefault(reason, []).append(key)
+        for reason, keys in by_reason.items():
+            record_analysis_gap(output_dir, file_path=str(options.sbom_input or target),
+                                reason="distro_advisory_context", tool="sca",
+                                detail=f"{reason}; {len(keys)} package(s); sample: {', '.join(keys[:5])}")
     affected = sum(1 for r in osv_results if r.advisories)
     scan_health: list[dict] = []
     if osv_client.degraded:
@@ -781,11 +792,12 @@ def run_sca(
         # can key on the ``sca:scan_health:osv_lookup_degraded`` row.
         sample = ", ".join(osv_client.failed_dep_keys[:5])
         detail = (
-            f"OSV lookups failed transiently for "
+            f"OSV lookups could not complete for "
             f"{osv_client.failed_lookups} query slot(s) out of "
             f"{len(canonical)} deps; advisories for those deps may be "
             f"missing from this run. Failed lookups were not cached "
-            f"and will retry on the next run. Sample: {sample}"
+            f"and will retry on the next run; missing distro context must "
+            f"be supplied before those queries can succeed. Sample: {sample}"
         )
         logger.warning("sca.pipeline: %s", detail)
         scan_health.append({

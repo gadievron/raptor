@@ -24,6 +24,8 @@ its input as already deduped and does not re-collapse.
 
 from __future__ import annotations
 
+from core.security.prompt_output_sanitise import sanitise_string
+
 import json as _json
 import logging
 import re
@@ -341,7 +343,9 @@ def _filter_fork_tag_false_positives(
             continue
         filtered: list[list[Advisory]] = []
         for group in groups:
-            if _group_is_fork_tag_fp(dep, group, in_range, VersionError):
+            from .distro import advisory_dependency
+            query_dep = advisory_dependency(dep, require_context=False)
+            if _group_is_fork_tag_fp(query_dep, group, in_range, VersionError):
                 continue
             filtered.append(group)
         out[key] = filtered
@@ -600,13 +604,18 @@ def _assemble_finding(
         elif any((d.automatable or "").lower() == "no" for d in decisions):
             ssvc_automatable = "no"
 
+    from .distro import advisory_dependency
+    # Findings retain the binary inventory identity; fix versions are compared
+    # in the source-package stream that produced the scoped advisory.
+    query_dep = advisory_dependency(dep, require_context=False)
+
     # Highest of each member's own smallest-applicable fix: upgrading
     # further than one record suggests is safe; an attacker-lowered
     # fix version (crafted record claiming fix=1.0.0) is not.
     fix_candidates = [
         f for f in (
             _smallest_applicable_fix(
-                dep.ecosystem, dep.version, a.fixed_versions,
+                query_dep.ecosystem, query_dep.version, a.fixed_versions,
             )
             for a in group
         ) if f
@@ -680,6 +689,8 @@ def _assemble_finding(
     f = VulnFinding(
         finding_id=this_id,
         dependency=dep,
+        advisory_package=({"ecosystem": query_dep.ecosystem, "name": query_dep.name,
+                           "version": query_dep.version} if query_dep.key() != dep.key() else None),
         # Representative first — consumers reading ``advisories[0]``
         # get the record that drove severity / summary / CVSS; the
         # rest of the merged group rides along for transparency.
@@ -994,6 +1005,7 @@ def _row_envelope(
 
 
 def _vuln_finding_to_row(f: VulnFinding) -> dict[str, Any]:
+    query_coordinates = f.advisory_package
     primary = f.advisories[0] if f.advisories else None
     title = _vuln_title(f, primary)
     return _row_envelope(
@@ -1020,6 +1032,9 @@ def _vuln_finding_to_row(f: VulnFinding) -> dict[str, Any]:
             "declared_in": str(f.dependency.declared_in)
                             if f.dependency.declared_in else None,
             "source_kind": f.dependency.source_kind,
+            **({"advisory_package": query_coordinates,
+                "advisory_match_scope": "source_package" if (query_coordinates["name"], query_coordinates["version"]) != (f.dependency.name, f.dependency.version) else "package_release"}
+               if query_coordinates else {}),
             "advisory": _advisory_summary(primary),
             "all_advisories": [_advisory_summary(a) for a in f.advisories],
             "in_kev": f.in_kev,
@@ -1193,6 +1208,9 @@ def _vuln_title(f: VulnFinding, primary: Advisory | None) -> str:
     ``description`` field carries the richer one-liner already.
     """
     head = f"{f.dependency.name}@{f.dependency.version or '*'}"
+    query = f.advisory_package
+    if query and (query["name"], query["version"]) != (f.dependency.name, f.dependency.version):
+        return f"{head} — source package advisory"
     if primary is None or not primary.summary:
         return f"{head} — vulnerable"
     # Strip trailing periods so titles don't end with double-stops
@@ -1220,6 +1238,9 @@ def _describe_vuln(f: VulnFinding) -> str:
     parts = [
         f"{f.dependency.name}@{f.dependency.version or '*'}: {head}",
     ]
+    query = f.advisory_package
+    if query and (query["name"], query["version"]) != (f.dependency.name, f.dependency.version):
+        parts.append(f"[source package {sanitise_string(query['name'])}@{sanitise_string(query['version'] or '*')}; fix versions refer to the source package]")
     if primary.aliases:
         parts.append(f"({', '.join(primary.aliases[:3])})")
     if f.in_kev:

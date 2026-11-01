@@ -124,6 +124,12 @@ def test_parse_dpkg_ecosystem_is_debian():
     assert all(p.ecosystem == "Debian" for p in pkgs)
 
 
+def test_dpkg_source_version_wins_over_binary_rebuild_version():
+    packages = parse_dpkg_status(b"Package: bash\nStatus: install ok installed\n"
+                                 b"Version: 5.2.15-2+b13\nSource: bash (5.2.15-2)\n")
+    assert [(p.name, p.version) for p in packages] == [("bash", "5.2.15-2")]
+
+
 def test_parse_dpkg_handles_missing_fields():
     """A stanza missing ``Package`` or ``Version`` is silently
     skipped — defends against partial corruption without aborting
@@ -521,7 +527,7 @@ def test_dpkg_rows_resolve_to_ubuntu_from_os_release():
         "etc/os-release": b'ID=ubuntu\nVERSION_ID="18.04"\n',
     })
     (pkg,) = res.packages
-    assert pkg.ecosystem == "Ubuntu"
+    assert pkg.ecosystem == "Ubuntu:18.04:LTS"
     assert pkg.name == "openssl"
 
 
@@ -561,9 +567,8 @@ def test_apk_rows_without_release_stay_bare():
     assert pkg.ecosystem == "Alpine"
 
 
-def test_dpkg_rows_resolve_ubuntu_derivatives_via_id_like():
-    """Mint / Pop!_OS ship Ubuntu package builds — ID_LIKE carries
-    ``ubuntu`` and must route to the Ubuntu feed, not Debian's."""
+def test_dpkg_rows_do_not_guess_parent_release_from_id_like():
+    """A derivative's own VERSION_ID is not its parent's release number."""
     from core.oci.sbom import packages_from_layer_files
     res = packages_from_layer_files({
         "var/lib/dpkg/status": (
@@ -575,4 +580,4 @@ def test_dpkg_rows_resolve_ubuntu_derivatives_via_id_like():
         ),
     })
     (pkg,) = res.packages
-    assert pkg.ecosystem == "Ubuntu"
+    assert pkg.ecosystem == "Debian"

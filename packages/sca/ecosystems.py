@@ -26,8 +26,8 @@ KNOWN_ECOSYSTEMS = (
 # Distro package ecosystems for image-derived rows (base-image layer
 # package DBs via ``core.oci.sbom``; never parsed from operator
 # manifests, so deliberately NOT in KNOWN_ECOSYSTEMS). OSV indexes
-# all four: Debian / Ubuntu / Red Hat release-agnostically by source
-# package name, Alpine sharded per release ("Alpine:v3.16").
+# distro packages by source name. Debian, Ubuntu and Alpine queries
+# require release context; the family label alone is not query coverage.
 DISTRO_ECOSYSTEM_BASES = ("Alpine", "Debian", "Red Hat", "Ubuntu")
 
 

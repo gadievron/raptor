@@ -19,6 +19,7 @@ from html import escape
 from urllib.parse import urlparse
 
 from core.security.log_sanitisation import escape_nonprintable
+from core.security.prompt_output_sanitise import sanitise_string
 
 from .findings import severity_rank
 from typing import TYPE_CHECKING
@@ -309,9 +310,14 @@ def _vuln_card(f: VulnFinding) -> str:
          f"{escape(_SEV_LABEL.get(f.severity, f.severity.title()))}"
          f"</span> {escape(dep.name)} {escape(dep.version or '*')}"),
     ]
+    query = f.advisory_package
+    source_fix = bool(query and (query["name"], query["version"]) != (dep.name, dep.version))
+    if source_fix:
+        parts.append(f" [source {sanitise_string(escape(query['name']))} {sanitise_string(escape(query['version'] or '*'))}]")
     if f.fixed_version:
+        fix_label = "source fix" if source_fix else "fix"
         parts.append(
-            f" → <em>fix:</em> <code>{escape(f.fixed_version)}</code>"
+            f" → <em>{fix_label}:</em> <code>{escape(f.fixed_version)}</code>"
         )
     if f.suppressed:
         reason = f.suppression_reason or "no reason"
