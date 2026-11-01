@@ -103,7 +103,7 @@ def collect_sources(target: Path, report_files: Iterable[str], limits: Limits, *
             if key in processed:
                 continue
             processed.add(key)
-            for match in re.finditer(r'^\s*#\s*include\s*[<"]([^>"\n]+)[>"]',sources[key],re.MULTILINE):
+            for match in re.finditer(r'^[ \t]*#[ \t]*include[ \t]*[<"]([^>"\n]+)[>"]',sources[key],re.MULTILINE):
                 name = match.group(1)
                 choices = [root/Path(key).parent/name,root/name,root/"include"/name]+[p/name for p in include_dirs]
                 def permitted(path):

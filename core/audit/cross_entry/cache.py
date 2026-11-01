@@ -17,10 +17,10 @@ from .model import AccessIndex, digest
 
 def load_or_build_index(sources, *, out_dir, limits, entry_points=(), include_edges=None):
     hashes = {p:hashlib.sha256(s.encode("utf-8",errors="replace")).hexdigest() for p,s in sources.items()}
-    implementation = {p.name:hashlib.sha256(p.read_bytes()).hexdigest()
+    implementation = {p.name:hashlib.sha256(p.read_bytes()).hexdigest()  # raw-open: __file__-relative module source for cache key
                       for p in (Path(__file__).with_name(n) for n in ("model.py","index.py","dispatch.py"))}
     for name in ("field_census.py", "callsite_consistency.py"):
-        implementation[name] = hashlib.sha256(Path(__file__).parent.parent.joinpath(name).read_bytes()).hexdigest()
+        implementation[name] = hashlib.sha256(Path(__file__).parent.parent.joinpath(name).read_bytes()).hexdigest()  # raw-open: __file__-relative sibling module for cache key
     for package in ("tree-sitter", "tree-sitter-c", "tree-sitter-cpp", "tree-sitter-languages"):
         try:
             implementation[package] = version(package)

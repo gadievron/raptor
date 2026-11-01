@@ -231,6 +231,7 @@ _LLM_PHASES = frozenset({
     "prep_evidence_index", "prep_fail_open_census", "prep_finalize",
     "prep_gap_compute", "prep_gap_scoring", "prep_iris_specs",
     "prep_lifecycle_channels", "prep_macro_recovery",
+    "prep_cross_entry",
     "prep_mechanical_detectors", "prep_peer_groups", "prep_taint_passes",
     "prep_triage", "resolve_gate_demoted", "sweep_promotion",
     # Direct per-call ledger mints (``cost_tracker.record_call``
