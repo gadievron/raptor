@@ -308,7 +308,8 @@ def test_private_stage_cannot_claim_protection_in_normal_process():
 
 def test_pid_namespaces_get_distinct_ledgers_but_share_projects(tmp_path, monkeypatch):
     monkeypatch.setenv('HOME', str(tmp_path))
-    monkeypatch.delenv('RAPTOR_REGISTRY_HOME', raising=False)
+    # Register an undo even when absent: the guard writes os.environ directly.
+    monkeypatch.setenv('RAPTOR_REGISTRY_HOME', '')
     guard.prepare_session_registry('claude')
     first = Path(os.environ['RAPTOR_REGISTRY_HOME'])
     monkeypatch.delenv('RAPTOR_REGISTRY_HOME')
