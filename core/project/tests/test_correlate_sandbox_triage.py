@@ -3,10 +3,20 @@ sandbox denial triage across runs."""
 
 import json
 import unittest
+
+import pytest
+
+from core.sandbox import summary as summary_mod
+from core.sandbox.triage import triage_run
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from core.project.correlate import correlate_sandbox_triage
+
+
+@pytest.fixture(autouse=True)
+def _isolated_mac_key(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
 
 
 def _write_run(base: Path, name: str, triage: dict, *,
@@ -14,12 +24,28 @@ def _write_run(base: Path, name: str, triage: dict, *,
                ts: str = "2026-09-20T00:00:00") -> Path:
     d = base / name
     d.mkdir(parents=True, exist_ok=True)
-    (d / "sandbox-summary.json").write_text(json.dumps({"triage": triage}))
+    records = []
+    templates = {
+        "escape_primitives": {"type": "seccomp", "cmd": "ptrace"},
+        "network_probing": {"type": "network", "cmd": "curl h1"},
+        "udp_egress": {"type": "udp", "cmd": "dns query"},
+        "filesystem_escape": {"type": "write", "path": "/etc/passwd"},
+        "routine": {"type": "write", "path": "/tmp/x"},
+    }
+    for category, template in templates.items():
+        records.extend(dict(template) for _ in range(triage.get(category, {}).get("count", 0)))
+    if not records:
+        records = [{"type": "write", "path": "/tmp/allowed", "verdict": "allow"}]
+    summary_mod.record_run_posture(d, mount_ns_active=True, restrict_reads=False)
+    summary_mod._assemble_and_write_summary(
+        d, records=records, refusals=[], corrupt_lines=0,
+        inode_mismatch=False, planted_object="")
     (d / ".raptor-run.json").write_text(json.dumps({
         "target_path": target,
         "started_at": ts,
         "command": "agentic",
     }))
+    triage_run(d, allow_legacy=False)
     return d
 
 
@@ -43,7 +69,7 @@ class TestCorrelateNoData(unittest.TestCase):
     def test_returns_none_with_empty_list(self):
         self.assertIsNone(correlate_sandbox_triage([]))
 
-    def test_returns_none_when_no_triage_key(self):
+    def test_malformed_summary_is_degraded_not_silent(self):
         with TemporaryDirectory() as tmp:
             d = Path(tmp) / "run1"
             d.mkdir()
@@ -51,7 +77,9 @@ class TestCorrelateNoData(unittest.TestCase):
             (d / ".raptor-run.json").write_text(json.dumps({
                 "target_path": "/x", "started_at": "t", "command": "scan",
             }))
-            self.assertIsNone(correlate_sandbox_triage([d]))
+            result = correlate_sandbox_triage([d])
+            self.assertEqual(result["integrity"], "degraded")
+            self.assertEqual(result["campaign_severity"], "elevated")
 
     def test_returns_none_when_no_summary_file(self):
         with TemporaryDirectory() as tmp:
@@ -71,9 +99,9 @@ class TestSingleRun(unittest.TestCase):
             self.assertEqual(result["campaign_severity"], "critical")
             t = result["targets"]["/src/app"]
             self.assertEqual(t["runs_with_triage"], 1)
-            self.assertEqual(t["signatures"]["escape_primitives"]["runs_seen"], 1)
+            self.assertEqual(t["categories"]["escape_primitives"]["runs_seen"], 1)
             self.assertEqual(
-                t["signatures"]["escape_primitives"]["trend"], "new")
+                t["categories"]["escape_primitives"]["trend"], "new")
 
     def test_single_run_routine(self):
         with TemporaryDirectory() as tmp:
@@ -96,7 +124,7 @@ class TestMultiRun(unittest.TestCase):
             ]
             result = correlate_sandbox_triage(dirs)
             t = result["targets"]["/src/app"]
-            sig = t["signatures"]["escape_primitives"]
+            sig = t["categories"]["escape_primitives"]
             self.assertEqual(sig["runs_seen"], 5)
             self.assertEqual(sig["persistence"], 1.0)
             self.assertEqual(sig["trend"], "stable")
@@ -122,7 +150,7 @@ class TestMultiRun(unittest.TestCase):
                            ts="2026-09-24T00:00:00"),
             ]
             result = correlate_sandbox_triage(dirs)
-            sig = result["targets"]["/src/app"]["signatures"]["escape_primitives"]
+            sig = result["targets"]["/src/app"]["categories"]["escape_primitives"]
             self.assertEqual(sig["trend"], "resolved")
             self.assertEqual(sig["runs_seen"], 2)
 
@@ -144,7 +172,7 @@ class TestMultiRun(unittest.TestCase):
                            ts="2026-09-23T00:00:00"),
             ]
             result = correlate_sandbox_triage(dirs)
-            sig = result["targets"]["/src/app"]["signatures"]["udp_egress"]
+            sig = result["targets"]["/src/app"]["categories"]["udp_egress"]
             self.assertEqual(sig["trend"], "new")
 
 
