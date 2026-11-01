@@ -54,7 +54,7 @@ set -euo pipefail
 # world-writable check. Same messages and RAPTOR_ALLOW_UNSAFE_PATH
 # keep-with-warning semantics; the full scrub honours the pre-pass
 # decision silently (no second warning).
-if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ] && [ "${1:-}" != --_scratch-session-stage ]; then
+if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ] && [ "${1:-}" != --_scratch-session-stage ] && [ "${1:-}" != --_protected-install-stage ]; then
     _scrubbed=""
     _rest="${PATH:-}"
     _last=""
@@ -425,6 +425,13 @@ fi
 # Inner dispatch inherits the already established launch boundary. Verify its
 # live ancestor credential before accepting any inherited scratch path.
 _scratch_inside=""
+if [ "${1:-}" = --_protected-install-stage ]; then
+    _rp python3 -I -S -B "$RAPTOR_DIR/core/startup/install_guard.py" --verify || exit 126
+    _verified_tmp="$(_rp python3 -I "$RAPTOR_DIR/core/security/launch_scratch.py" \
+        "$_RAPTOR_LAUNCH_METADATA" --read --protected)" || exit 126
+    [ "${TMPDIR:-}" = "$_verified_tmp" ] || exit 126
+    _scratch_inside=1
+fi
 if [ "${1:-}" = --_scratch-session-stage ]; then
     _RAPTOR_LAUNCH_METADATA="$(_rp python3 -I "$RAPTOR_DIR/core/security/launch_scratch.py" \
         unused --restore-auth)" || exit 126
@@ -476,6 +483,7 @@ Options:
   -p, --project NAME Set the active project
   -v, --verbose      Verbose output
   --trust-repo       Trust target repo's config (skip safety checks)
+  --protect-install  Opt in to Linux installation protection
   --allow-degraded-cleanup
                      Accept unavailable session cleanup tracking (required without a TTY)
   -h, --help         Show this help
@@ -699,8 +707,25 @@ CLAUDE_ARGS=("-n" "RAPTOR")
 INITIAL_PROMPT="/raptor"
 TARGET=""
 TRUST_REPO_ARG=""
+unset RAPTOR_INSTALL_PROTECTED
+PROTECT_INSTALL=""
+INSTALL_GUARD_INSIDE=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --)
+            CLAUDE_ARGS+=("$@")
+            break
+            ;;
+        --_protected-install-stage)
+            INSTALL_GUARD_INSIDE=1
+            PROTECT_INSTALL=1
+            export RAPTOR_INSTALL_PROTECTED=1
+            shift
+            ;;
+        --protect-install)
+            PROTECT_INSTALL=1
+            shift
+            ;;
         -p|--project)
             [[ $# -ge 2 ]] || { echo "raptor: $1 requires a value" >&2; exit 1; }
             STARTUP_ARGS+=("-p" "$2")
@@ -753,6 +778,15 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Use the parsed flag, so a model name or passthrough value cannot select
+# protection. A requested protected launch never retries without its boundary.
+if [ -n "$PROTECT_INSTALL" ] && [ -z "$INSTALL_GUARD_INSIDE" ]; then
+    _rp python3 -I "$RAPTOR_DIR/core/security/launch_scratch.py" \
+        "$_RAPTOR_LAUNCH_METADATA" --prepare-protection || exit 126
+    exec python3 -I -S -B "$RAPTOR_DIR/core/startup/install_guard.py" --frontend claude -- \
+        /bin/bash "$RAPTOR_DIR/bin/raptor" --_protected-install-stage ${RAPTOR_ORIGINAL_ARGS[@]+"${RAPTOR_ORIGINAL_ARGS[@]}"}
+fi
 
 # Keep the filesystem cleaner outside frontend mount/PID namespaces. Reentry
 # binds the actual frontend PID; the supervisor never seeds a project row.

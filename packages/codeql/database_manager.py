@@ -359,7 +359,7 @@ class DatabaseManager:
             db_root: Root directory for databases (defaults to RaptorConfig.CODEQL_DB_DIR)
             codeql_cli: Path to CodeQL CLI (auto-detected if None)
         """
-        self.db_root = db_root or RaptorConfig.CODEQL_DB_DIR
+        self.db_root = db_root or RaptorConfig.get_codeql_db_dir()
         self.db_root.mkdir(parents=True, exist_ok=True)
 
         # Detect CodeQL CLI

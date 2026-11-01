@@ -5,9 +5,10 @@ Inside the sandbox child's fresh user namespace those mounts are
 MNT_LOCKED, and the kernel refuses a NON-recursive MS_BIND of a subtree
 carrying locked children (EINVAL) — so step 4 of setup_mount_ns died on
 /etc in every standard docker/containerd container and the whole
-mount-ns backend was unavailable there. The fix routes exactly that
-failure shape (/etc + EINVAL) to the pre-existing tmpfs+copy lane,
-which serves a private read-only snapshot of /etc instead.
+mount-ns backend was unavailable there. /etc uses a private read-only
+snapshot instead. Other system directories, including /usr beneath an
+installation-protected launcher, retain locked children through a recursive
+bind with mandatory recursive read-only sealing.
 
 Unit-level: _bind_system_ro_dir is exercised with the mount primitives
 mocked. The end-to-end proof needs a real container (locked submounts
@@ -73,13 +74,38 @@ def test_einval_on_etc_routes_to_tmpfs_copy():
     assert len(binds) == 1
 
 
-def test_einval_on_non_etc_dir_propagates():
+def test_einval_on_non_etc_dir_requires_recursive_sealing():
     rec = _MountRecorder(OSError(errno.EINVAL, "Invalid argument"))
-    copy = mock.Mock()
-    with pytest.raises(OSError) as ei:
-        _run("usr", rec, copy=copy)
-    assert ei.value.errno == errno.EINVAL
+    with mock.patch.object(mount_ns, "_recursive_bind_system_ro") as seal:
+        copy, _ = _run("usr", rec)
+    seal.assert_called_once_with("/usr", "/sbx-root/usr")
     copy.assert_not_called()
+
+
+def test_recursive_sealing_failure_propagates():
+    rec = _MountRecorder(OSError(errno.EINVAL, "Invalid argument"))
+    with mock.patch.object(mount_ns, "_recursive_bind_system_ro",
+                           side_effect=OSError(errno.EPERM, "seal refused")):
+        with pytest.raises(OSError, match="seal refused"):
+            _run("usr", rec)
+
+
+@pytest.mark.parametrize("result", [0, -1])
+def test_recursive_system_bind_seals_every_mount_without_clearing_flags(result):
+    with mock.patch.object(mount_ns, "_mount") as mount, \
+            mock.patch.object(mount_ns._libc, "syscall", return_value=result) as syscall, \
+            mock.patch("platform.machine", return_value="x86_64"), \
+            mock.patch.object(mount_ns.ctypes, "get_errno", return_value=errno.EPERM):
+        if result:
+            with pytest.raises(OSError, match="read-only sealing failed"):
+                mount_ns._recursive_bind_system_ro("/usr", "/private/usr")
+        else:
+            mount_ns._recursive_bind_system_ro("/usr", "/private/usr")
+        mount.assert_called_once_with("/usr", "/private/usr", None, mount_ns.MS_BIND | mount_ns.MS_REC)
+        arguments = syscall.call_args.args
+        assert arguments[:4] == (442, -100, b"/private/usr", 0x8000)
+        assert list(arguments[4]._obj) == [1, 0, 0, 0]
+        assert arguments[5] == 32
 
 
 def test_non_einval_on_etc_propagates():

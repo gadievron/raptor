@@ -6,6 +6,7 @@ the terminal banner. No logic, no checks, no side effects.
 
 import random
 import re
+import textwrap
 from pathlib import Path
 
 _ASSETS = Path(__file__).resolve().parent / "assets"
@@ -67,6 +68,8 @@ def format_banner(
     project_line: str | None = None,
     lang_line: str | None = None,
     tool_updates: set[str] | None = None,
+    *,
+    protection_notice: str | None = None,
 ) -> str:
     """Format the startup banner from gathered data.
 
@@ -82,6 +85,7 @@ def format_banner(
         project_line: One-line project status, or None.
         lang_line: Pre-formatted language support line, or None.
         tool_updates: Tool names that have a newer version on PyPI.
+        protection_notice: Verified installation status, or a verification warning.
 
     Returns:
         Formatted banner string.
@@ -127,6 +131,11 @@ def format_banner(
     # Active project
     if project_line:
         lines.append(f"   {project_line}")
+        lines.append("")
+
+    if protection_notice:
+        lines.append(textwrap.fill(protection_notice, width=77,
+                                   initial_indent="  ", subsequent_indent="  "))
         lines.append("")
 
     lines.append("  For defensive security research, education, and authorized penetration testing.")

@@ -5,12 +5,12 @@
 
 Called automatically by Claude Code on session start (via .claude/settings.json).
 Writes RAPTOR_DIR + PATH to the env file (overwrite, not append) and generates
-the startup banner in .startup-output.
+the startup banner in .startup-output (under out/ in protected sessions).
 
 The banner is also printed to stdout on purpose: Claude Code attaches
 SessionStart stdout to the conversation before the first user message, so the
 assistant can render the banner directly without spending a second turn
-reading .startup-output back from disk. The file remains as a fallback for
+reading the startup banner back from disk. The file remains as a fallback for
 older Claude Code versions and direct/manual callers.
 
 The launcher seeds the session's project binding (sessions.d) and exports the session credential; the .active symlink is the last-activated default.
@@ -73,14 +73,16 @@ def write_env_file():
 
 
 def generate_banner():
-    """Generate the startup banner and write to .startup-output."""
+    """Generate the startup banner and persist the startup banner."""
     try:
         from core.startup.init import main as init_main
         init_main()
     except Exception as e:
         # Non-fatal — write a minimal banner
-        output_file = REPO_ROOT / ".startup-output"
+        output_file = ((REPO_ROOT / "out") if os.environ.get("RAPTOR_INSTALL_PROTECTED") == "1"
+                       else REPO_ROOT) / ".startup-output"
         try:
+            output_file.parent.mkdir(parents=True, exist_ok=True)
             output_file.write_text(f"RAPTOR startup error: {e}\n", encoding="utf-8")
         except OSError:
             pass

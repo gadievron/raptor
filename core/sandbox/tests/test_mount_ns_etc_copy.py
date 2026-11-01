@@ -327,9 +327,8 @@ def test_runner_shaped_etc_completes_fast(tmp_path, monkeypatch,
     assert (dst / "ssl" / "certs" / "ca-certificates.crt").exists()
 
 
-def test_alternatives_never_copied(tmp_path, monkeypatch, phase_trace):
-    """Debian/Ubuntu alternatives symlinks are skipped — hundreds of
-    package-manager entries that no sandbox target reads directly."""
+def test_alternatives_links_preserved_without_following_targets(tmp_path, monkeypatch, phase_trace):
+    """System executables resolve through alternatives in the private /etc."""
     src = tmp_path / "src"
     src.mkdir()
     alts = src / "alternatives"
@@ -340,12 +339,13 @@ def test_alternatives_never_copied(tmp_path, monkeypatch, phase_trace):
     dst = tmp_path / "dst"
     _copy(monkeypatch, src, dst, force_byte_copy=True)
 
-    assert not (dst / "alternatives").exists()
     assert (dst / "passwd").exists()
+    for i in range(200):
+        link = dst / "alternatives" / f"editor.{i}"
+        assert link.is_symlink()
+        assert os.readlink(link) == f"/usr/bin/vim.{i}"
     trace = _read_trace(phase_trace)
-    assert "etc copy skip: " in trace
-    assert str(src / "alternatives") in trace
-    assert "never copied" in trace
+    assert "etc copy skip: " not in trace
 
 
 def test_wallclock_deadline_stops_copy(tmp_path, monkeypatch, phase_trace):

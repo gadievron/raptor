@@ -9,7 +9,7 @@ Dangerous operations (apply patches, delete, git push): ASK FIRST.
 
 **On first message:**
 VERY IMPORTANT: follow these steps in order.
-1. The SessionStart hook has already attached the RAPTOR startup banner to the conversation before the first user message. Output that banner verbatim as a fenced code block (``` with no language tag). Do NOT paraphrase, reformat, or call the Read tool just to fetch `.startup-output`. Only fall back to reading `.startup-output` if the SessionStart hook content is genuinely absent.
+1. The SessionStart hook has already attached the RAPTOR startup banner to the conversation before the first user message. Output that banner verbatim as a fenced code block (``` with no language tag). Do NOT paraphrase, reformat, or call the Read tool just to fetch `.startup-output` (or `out/.startup-output` with `--protect-install`). Only fall back to reading `.startup-output` (or `out/.startup-output` with `--protect-install`) if the SessionStart hook content is genuinely absent.
 2. On a single line, output "Quick commands:" then list the /agentic, /scan, /fuzz, /web commands (don't explain what they do) and note /commands for the full list.
 3. If the `sage_inception` tool is present in your available MCP tools, load `core/sage/CLAUDE.md` (persistent-memory workflow). If absent, SAGE is not installed — skip silently and do not mention it.
 

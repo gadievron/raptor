@@ -26,7 +26,7 @@ matches the inline step comments in the function body):
        read-only into the new root. When an etc_overlay targets paths
        missing on the host, /etc becomes a tmpfs populated by a
        breadth-first, budgeted copy of host /etc — non-config
-       directories (skel, alternatives) are never copied, and the
+       directories (skel) are never copied, and the
        copy stops at a total bytes/entry/wall-clock budget rather
        than crawling a pathological host /etc (see _copy_etc_tree).
     5. builds a minimal per-sandbox /dev (fresh tmpfs, per-node binds,
@@ -568,11 +568,10 @@ _PHASE_TRACE_MAX_ENTRIES = 4096
 #
 #   skel — new-user home-directory TEMPLATE tree; CI runner images stuff
 #          whole toolchains into it (100k+ entries, hundreds of MB).
-#   alternatives — Debian/Ubuntu alternatives symlinks; one per binary
-#          variant per package (PostgreSQL alone plants 60+); no sandbox
-#          target reads /etc/alternatives directly, and the originals
-#          live under /usr which is already bind-mounted.
-_ETC_COPY_SKIP_TOP_DIRS = frozenset({"skel", "alternatives"})
+# Debian/Ubuntu alternatives must remain: /usr/bin/awk and other system
+# commands resolve through /etc/alternatives even when /usr is mounted.
+# The bounded copy recreates these links without following their targets.
+_ETC_COPY_SKIP_TOP_DIRS = frozenset({"skel"})
 
 # Total copy budget (belt-and-braces behind the skel skip). The copy
 # exists to carry config files — passwd, group, hosts, resolv.conf,
@@ -646,10 +645,9 @@ def _copy_etc_tree(src: str, dst: str) -> None:
     Bounds (all loud, named in the phase trace; none may wedge or fail
     the setup):
 
-    * ``_ETC_COPY_SKIP_TOP_DIRS`` (top-level directories: skel,
-      alternatives) are never entered — non-config payload the sandbox
-      doesn't need; CI runner images stuff whole toolchains / hundreds
-      of package-manager symlinks into them.
+    * ``_ETC_COPY_SKIP_TOP_DIRS`` (the top-level skel directory) is never
+      entered — CI runner images can store whole template toolchains there.
+      Alternatives symlinks are preserved within the same copy budgets.
     * ``_ETC_COPY_MAX_ENTRIES`` total entries (files, dirs, symlinks,
       FIFOs): reaching it stops the copy with a marker + post-fork
       warning; the sandbox proceeds with what was copied.
@@ -944,17 +942,31 @@ def _mount_etc_tmpfs_copy(root: str, host_dir: str, inside: str,
     _phase_trace(b"etc ro remount: done")
 
 
+def _recursive_bind_system_ro(source: str, inside: str) -> None:
+    """Carry locked child mounts without leaving any of them writable."""
+    import errno
+    import platform
+    if platform.machine() not in {"x86_64", "aarch64", "riscv64"}:
+        raise OSError(errno.ENOSYS, "recursive system-dir sealing unsupported on this architecture")
+    _mount(source, inside, None, MS_BIND | MS_REC)
+    # Linux 5.12 mount_setattr, with no clear mask: preserve every inherited
+    # locked attribute while adding read-only recursively. Never continue on
+    # an old kernel or denied syscall with writable carried submounts.
+    attributes = (ctypes.c_uint64 * 4)(1, 0, 0, 0)  # MOUNT_ATTR_RDONLY
+    result = _libc.syscall(442, -100, os.fsencode(inside), 0x8000,
+                           ctypes.byref(attributes), ctypes.sizeof(attributes))  # AT_RECURSIVE
+    if result != 0:
+        number = ctypes.get_errno()
+        raise OSError(number, "recursive system-dir read-only sealing failed: " + os.strerror(number))
+
+
 def _bind_system_ro_dir(d: str, root: str, host_dir: str, inside: str,
                         etc_overlay,
                         etc_has_missing_targets: bool) -> None:
-    """Bind one host system dir read-only into the new root (step 4
-    unit). /etc routes to the tmpfs+copy lane when overlay targets are
-    missing on the host, or when the non-recursive bind is refused with
-    EINVAL (locked child mounts — the container-runtime shape described
-    on _mount_etc_tmpfs_copy). Any other bind failure, and EINVAL on a
-    non-/etc dir, propagates: those are not the known-benign container
-    shape, and mounting on regardless would hide a genuinely broken
-    system-dir view from the operator.
+    """Bind a system directory read-only, retaining locked child mounts.
+
+    /etc keeps its bounded private-copy fallback. Other directories retry
+    EINVAL with a recursive bind and mandatory recursive read-only sealing.
     """
     if d == "etc" and etc_has_missing_targets:
         _mount_etc_tmpfs_copy(root, host_dir, inside, etc_overlay)
@@ -962,8 +974,11 @@ def _bind_system_ro_dir(d: str, root: str, host_dir: str, inside: str,
     try:
         _mount(host_dir, inside, None, MS_BIND)
     except OSError as exc:
-        if d != "etc" or exc.errno != _EINVAL:
+        if exc.errno != _EINVAL:
             raise
+        if d != "etc":
+            _recursive_bind_system_ro(host_dir, inside)
+            return
         warn_post_fork(
             b"sandbox: mount_ns: non-recursive /etc bind refused "
             b"(EINVAL: locked child mounts, typical inside container "
