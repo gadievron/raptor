@@ -107,6 +107,7 @@ def _make_streamer(tmp_path):
     ``_proc`` directly to bypass the real Popen('/usr/bin/log')."""
     return seatbelt_audit.LogStreamer(
         run_dir=tmp_path, observe_mode=True, observe_nonce="warm-up-test",
+        list_pid_ppids=lambda: [], lineage_poll_interval=0,
     )
 
 
@@ -304,12 +305,14 @@ def test_start_proceeds_in_best_effort_when_warm_up_times_out(tmp_path):
     ), mock.patch.object(
         seatbelt_audit.Path, "exists", return_value=True,
     ):
-        streamer.start()
-
-    # Reader thread started despite warm-up returning False.
-    assert streamer._reader is not None
-    assert streamer._reader.is_alive() or streamer._reader.ident is not None
-    streamer._stopped.set()
+        try:
+            streamer.start()
+            # Reader thread started despite warm-up returning False.
+            assert streamer._reader is not None
+            assert streamer._reader.is_alive() or streamer._reader.ident is not None
+        finally:
+            streamer.stop(drain_timeout=0)
+    assert not streamer._reader.is_alive()
 
 
 def test_start_raises_when_warm_up_required_and_gate_fails(tmp_path):
@@ -357,11 +360,13 @@ def test_start_keeps_best_effort_when_warm_up_not_required(tmp_path):
         seatbelt_audit.LogStreamer, "_warm_up_until_attached",
         return_value=False,
     ):
-        streamer.start()
-
-    assert streamer._reader is not None
-    assert fake_log_stream.terminated is False
-    streamer._stopped.set()
+        try:
+            streamer.start()
+            assert streamer._reader is not None
+            assert fake_log_stream.terminated is False
+        finally:
+            streamer.stop(drain_timeout=0)
+    assert not streamer._reader.is_alive()
 
 
 def test_spawn_fails_closed_on_warm_up_miss_when_audit_required(
