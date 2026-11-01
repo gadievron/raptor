@@ -2131,7 +2131,7 @@ def _load_domain_model(config: OrchestratorConfig):
     )
     if dm is not None and config.target_path:
         try:
-            import hashlib as _hashlib
+            from core.concepts.model import source_span_hash
             root = Path(config.target_path)
             marked = 0
             for inv in dm.get("invariants", []):
@@ -2141,18 +2141,8 @@ def _load_domain_model(config: OrchestratorConfig):
                 span = inv.get("source_hash_span")
                 if not sh or not span:
                     continue
-                fpath = root / span.get("file", "")
-                if not fpath.is_file():
-                    inv["state"] = "stale"
-                    marked += 1
-                    continue
-                text = fpath.read_text(encoding="utf-8", errors="replace")
-                lines = text.splitlines(keepends=True)
-                start = max(0, span.get("start", 1) - 1)
-                end = span.get("end", len(lines))
-                region = "".join(lines[start:end])
-                h = _hashlib.sha256(region.encode()).hexdigest()[:16]
-                if h != sh:
+                actual = source_span_hash(root, span)
+                if actual is None or actual != sh:
                     inv["state"] = "stale"
                     marked += 1
             if marked:

@@ -17,6 +17,26 @@ from typing import Any
 from core.hash import sha256_string
 
 
+def source_span_hash(source_root: Path | str, span: dict[str, Any]) -> str | None:
+    """Hash a contained source span using scanner line numbers and LF endings."""
+    from core.source import read_contained
+    from core.source.lines import split_lines
+
+    if not isinstance(span, dict) or not isinstance(span.get("file"), str) or not span["file"]:
+        return None
+    text = read_contained(source_root, span["file"], newline="")
+    if text is None:
+        return None
+    lines = [line + "\n" for line in split_lines(text)]
+    if lines and not text.endswith("\n"):
+        lines[-1] = lines[-1][:-1]
+    start, end = span.get("start", 1), span.get("end", len(lines))
+    if (type(start) is not int or type(end) is not int
+            or start < 1 or end < start or end > len(lines)):
+        return None
+    return sha256_string("".join(lines[start - 1:end]))[:16]
+
+
 def _filter_fields(cls: type, raw: dict) -> dict:
     """Keep only keys that are valid dataclass fields for *cls*."""
     valid = {f.name for f in dataclasses.fields(cls)}
@@ -602,28 +622,12 @@ class DomainModel:
     # -- versioning (gap 10) ----------------------------------------
 
     def stale_invariants(self, source_root: Path | str) -> list[Invariant]:
-        from pathlib import Path as _P
-        root = _P(source_root) if not isinstance(source_root, _P) else source_root
         stale: list[Invariant] = []
         for inv in self.invariants:
             if not inv.source_hash or not inv.source_hash_span:
                 continue
-            span = inv.source_hash_span
-            fpath = root / span.get("file", "")
-            if not fpath.is_file():
-                stale.append(inv)
-                continue
-            try:
-                import hashlib
-                text = fpath.read_text(encoding="utf-8", errors="replace")
-                lines = text.splitlines(keepends=True)
-                start = max(0, span.get("start", 1) - 1)
-                end = span.get("end", len(lines))
-                region = "".join(lines[start:end])
-                h = hashlib.sha256(region.encode()).hexdigest()[:16]
-                if h != inv.source_hash:
-                    stale.append(inv)
-            except OSError:
+            actual = source_span_hash(source_root, inv.source_hash_span)
+            if actual is None or actual != inv.source_hash:
                 stale.append(inv)
         return stale
 
