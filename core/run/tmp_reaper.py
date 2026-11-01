@@ -81,6 +81,9 @@ logger = logging.getLogger(__name__)
 # Dir prefixes whose creators ALWAYS intend cleanup — presence past the
 # age floor means the owning process died without its exit path.
 _DIR_PREFIXES = (
+    # Native installation-namespace probe; TemporaryDirectory normally
+    # removes it, but SIGKILL/OOM can strand the probe's scratch tree.
+    "raptor-native-ns-probe-",
     "raptor-llm-",
     "raptor-cc-cwd-",
     "raptor-joern-ws-",
