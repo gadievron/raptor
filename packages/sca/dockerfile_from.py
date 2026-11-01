@@ -411,7 +411,7 @@ _OCI_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 # ImageSbom contains (parser fields, name canonicalisation, ecosystem
 # resolution). Old entries orphan under the previous key and are
 # reaped by clean-cache; each image re-extracts once.
-_SBOM_EXTRACTION_VERSION = 2
+_SBOM_EXTRACTION_VERSION = 3
 
 
 def _sbom_cache_key(registry_host: str, digest: str) -> str:
@@ -822,7 +822,14 @@ def packages_to_dependencies(
         purl_type = _PURL_TYPE_BY_ECOSYSTEM.get(
             eco_base, eco_base.lower(),
         )
-        purl = f"pkg:{purl_type}/{pkg.name}@{pkg.version}"
+        from urllib.parse import quote
+        name, version = quote(pkg.name, safe=""), quote(pkg.version, safe="")
+        if eco_base in {"Debian", "Ubuntu"}:
+            release = pkg.ecosystem.partition(":")[2].removesuffix(":LTS")
+            distro = f"&distro={eco_base.lower()}-{release}" if release else ""
+            purl = f"pkg:deb/{eco_base.lower()}/{name}@{version}?arch=source{distro}"
+        else:
+            purl = f"pkg:{purl_type}/{name}@{version}"
         out.append(Dependency(
             ecosystem=pkg.ecosystem,
             name=pkg.name,

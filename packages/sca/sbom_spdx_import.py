@@ -12,6 +12,7 @@ from datetime import datetime
 import re
 from typing import TYPE_CHECKING
 
+from .distro import has_source_coordinates
 from .ecosystems import distro_base
 from .models import Confidence, Dependency, PinStyle
 from .sbom_import import ImportedBom, _component_to_dep
@@ -277,7 +278,7 @@ def _read_spdx(data: dict, path: Path) -> ImportedBom:
             inventory.append(dep)
         else:
             deps.append(dep)
-            if distro_base(dep.ecosystem) is not None and package.get("primaryPackagePurpose") != "SOURCE":
+            if distro_base(dep.ecosystem) is not None and package.get("primaryPackagePurpose") != "SOURCE" and not has_source_coordinates(dep.purl):
                 gaps.append(f"package {name}: distro matching uses supplied PURL coordinates; binary-to-source package correspondence is not established")
             refs.setdefault(dep.key(), []).append(package["SPDXID"])
             if not dep.version:

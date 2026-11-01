@@ -49,6 +49,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+from .distro import release_ecosystem
+
 logger = logging.getLogger(__name__)
 
 
@@ -122,20 +124,27 @@ def parse_dpkg_status(content: bytes) -> list[InstalledPackage]:
         # OSV's Debian / Ubuntu feeds key advisories by SOURCE
         # package name (DEBIAN-CVE-* for ``openssl``; nothing under
         # the ``libssl1.1`` binary split). ``Source:`` may carry a
-        # version qualifier (``Source: openssl (1.1.0l-1)``) — strip
-        # it. Binary-only stanzas (no Source field) ARE their own
+        # version qualifier (``Source: openssl (1.1.0l-1)``) — use
+        # that source version rather than a binary rebuild suffix.
+        # Binary-only stanzas (no Source field) ARE their own
         # source. Deduplicate per (source, version): one source
         # builds many binaries and one advisory row is enough.
-        source = (fields.get("Source") or "").split("(", 1)[0].strip()
-        name = source or package.strip()
-        key = (name, version.strip())
+        source = (fields.get("Source") or "").strip()
+        if source:
+            match = re.fullmatch(r"([a-z0-9][a-z0-9+.-]*)(?: \(([^()\s]+)\))?", source)
+            if not match:
+                raise ValueError("invalid dpkg Source field")
+            name, source_version = match[1], match[2] or version.strip()
+        else:
+            name, source_version = package.strip(), version.strip()
+        key = (name, source_version)
         if key in seen:
             continue
         seen.add(key)
         _check_record_cap(out, "dpkg status")
         out.append(InstalledPackage(
             ecosystem="Debian", name=name,
-            version=version.strip(),
+            version=source_version,
         ))
     return out
 
@@ -496,17 +505,13 @@ def _resolve_distro_ecosystem(
     """Map a package row's parser-assigned ecosystem to the OSV
     ecosystem the image's distro actually publishes under."""
     distro_id = (os_release.get("ID") or "").lower()
-    id_like = (os_release.get("ID_LIKE") or "").lower().split()
     if pkg.ecosystem == "Debian":
-        if distro_id == "ubuntu" or "ubuntu" in id_like:
-            # Ubuntu and Ubuntu derivatives (Mint, Pop!_OS — their
-            # ID_LIKE carries "ubuntu") ship Ubuntu package builds;
-            # holding an Ubuntu version stream against Debian fixed
-            # ranges is meaningless.
-            return "Ubuntu"
-        # Debian proper and Debian-only derivatives fall back to the
-        # Debian feed — best effort for derivatives (their package
-        # sets track Debian's), exact for Debian itself.
+        family = {"debian": "Debian", "ubuntu": "Ubuntu"}.get(distro_id)
+        if family:
+            release = os_release.get("VERSION_ID") or os_release.get("VERSION_CODENAME") or ""
+            return release_ecosystem(family, release) or family
+        # ID_LIKE is not evidence of the parent's package release/origin.
+        # Retain inventory, but leave release unknown for advisory consumers.
         return "Debian"
     if pkg.ecosystem == "Alpine":
         version_id = os_release.get("VERSION_ID") or ""

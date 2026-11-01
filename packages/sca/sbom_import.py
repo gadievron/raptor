@@ -40,6 +40,9 @@ import logging
 import re
 import urllib.parse
 
+from core.oci.distro import release_ecosystem
+from .distro import has_source_coordinates
+from .ecosystems import distro_base
 from .models import Confidence, Dependency, PinStyle
 from .parsers import _safe_read
 from .parsers._base import PARSE_ESCAPE_ERRORS
@@ -213,6 +216,8 @@ def _read_cyclonedx(data: dict, path: Path) -> ImportedBom:
                 source_extra={"sbom_ref": component_ref},
             ))
             continue
+        if distro_base(dep.ecosystem) in {"Debian", "Ubuntu", "Alpine"} and not has_source_coordinates(dep.purl):
+            diagnostics.append(f"component {comp['name']}: source package identity is not declared; advisory queries use supplied coordinates")
         if not dep.version:
             diagnostics.append(f"component {comp['name']}: no resolved version; vulnerability coverage is incomplete")
         depth = depths.get(component_ref)
@@ -491,7 +496,7 @@ def _parse_purl(purl: str) -> tuple[str, str, str | None] | None:
         namespace = urllib.parse.unquote(package_path.split("/", 1)[0], errors="strict").lower() if "/" in package_path else ""
     except UnicodeDecodeError:
         return None
-    query = purl.partition("?")[2].partition("#")[0]
+    query = purl.partition("#")[0].partition("?")[2]
     try:
         qualifiers = urllib.parse.parse_qs(query, keep_blank_values=True,
                                          strict_parsing=True, max_num_fields=64,
@@ -516,6 +521,9 @@ def _parse_purl(purl: str) -> tuple[str, str, str | None] | None:
             return None
     elif type_lc == "rpm" and namespace not in {"", "redhat", "rhel", "centos", "rocky", "almalinux"}:
         return None
+    if type_lc == "deb" and distro:
+        release = distro.removeprefix(ecosystem.lower() + "-")
+        ecosystem = release_ecosystem(ecosystem, release) or ecosystem
     last_at = path_and_version.rfind("@")
     if last_at > 0:
         path = path_and_version[:last_at]

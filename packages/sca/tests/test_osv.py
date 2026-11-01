@@ -1070,8 +1070,8 @@ def test_distro_ecosystems_join_the_primary_batch(tmp_path: Path) -> None:
     pre-filter silently zeroed every base-image package's advisory
     lookup when it treated them as unindexed."""
     deps = [
-        _dep("openssl", version="1.1.0l-1", ecosystem="Debian"),
-        _dep("pam", version="1.1.8-1", ecosystem="Ubuntu"),
+        _dep("openssl", version="1.1.0l-1", ecosystem="Debian:12"),
+        _dep("pam", version="1.1.8-1", ecosystem="Ubuntu:22.04:LTS"),
         _dep("musl", version="1.2.3-r0", ecosystem="Alpine:v3.16"),
         _dep("openssl", version="1:1.1.1k-12", ecosystem="Red Hat"),
         _dep("someorg/somerepo", version="1.0", ecosystem="GitHub"),
@@ -1083,7 +1083,7 @@ def test_distro_ecosystems_join_the_primary_batch(tmp_path: Path) -> None:
     queried = [
         q["package"]["ecosystem"] for q in http.posts[0][1]["queries"]
     ]
-    assert queried == ["Debian", "Ubuntu", "Alpine:v3.16", "Red Hat"]
+    assert queried == ["Debian:12", "Ubuntu:22.04:LTS", "Alpine:v3.16", "Red Hat"]
 
 
 # ---------------------------------------------------------------------------

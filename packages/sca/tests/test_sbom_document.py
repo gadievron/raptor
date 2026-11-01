@@ -105,8 +105,8 @@ def test_duplicate_occurrences_do_not_hide_licences_or_required_scope(tmp_path):
 
 
 @pytest.mark.parametrize("purl, ecosystem", [
-    ("pkg:deb/ubuntu/libssl3@3.0.2-0ubuntu1?arch=amd64&distro=ubuntu-22.04", "Ubuntu"),
-    ("pkg:deb/debian/libssl3@3.0.2-1?distro=debian-12", "Debian"),
+    ("pkg:deb/ubuntu/libssl3@3.0.2-0ubuntu1?arch=amd64&distro=ubuntu-22.04", "Ubuntu:22.04:LTS"),
+    ("pkg:deb/debian/libssl3@3.0.2-1?distro=debian-12", "Debian:12"),
     ("pkg:apk/alpine/zlib@1.3.1-r0?distro=alpine-3.20.1", "Alpine:v3.20"),
 ])
 def test_uses_distro_context_but_preserves_complete_purl(tmp_path, purl, ecosystem):

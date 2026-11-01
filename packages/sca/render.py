@@ -373,7 +373,11 @@ def _render_vuln_table(buf: StringIO, rows: list[FindingRow]) -> None:
         kev = "yes" if sca.get("in_kev") else ""
         epss_val = sca.get("epss")
         epss = f"{epss_val:.2f}" if isinstance(epss_val, (int, float)) else ""
-        fix = _cell(sca.get("fixed_version") or "")
+        fix_value = sca.get("fixed_version") or ""
+        query = sca.get("advisory_package")
+        if fix_value and isinstance(query, dict) and (query.get("name"), query.get("version")) != (sca.get("name"), sca.get("version")):
+            fix_value = f"source {query.get('name', '')} {fix_value}"
+        fix = _cell(fix_value)
         reach = _cell(REACHABILITY_LABELS.get(
             r.reachability_verdict,
             r.reachability_verdict,
