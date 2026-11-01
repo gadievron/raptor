@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "tools": {
+    "codeql": {
+      "repository": "github/codeql-action",
+      "version": "codeql-bundle-v2.27.3",
+      "assets": {
+        "x86_64": {
+          "name": "codeql-bundle-linux64.tar.gz",
+          "sha256": "64518dc413c8e7b5733fee2489e830a899bb1e3f28c8873b5869d5cc90164c5c",
+          "size": 695275440
+        },
+        "aarch64": {
+          "name": "codeql-bundle-linux-arm64.tar.gz",
+          "sha256": "0c9e32e9fcf65be4ab8df0cf0a7bb83e64aff4099fffc5f4930e84c12a454c8b",
+          "size": 677815257
+        }
+      },
+      "release_tag_prefix": "codeql-bundle-v"
+    }
+  }
+}

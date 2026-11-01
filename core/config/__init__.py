@@ -577,6 +577,9 @@ class RaptorConfig:
         # so an attacker setting them gains nothing beyond what they
         # already had with same-UID write access to ~/raptor-out.
         "RAPTOR_OUT_DIR", "RAPTOR_DIR",
+        # Preserve the operator's first-use download opt-out through launchers
+        # and diagnostic subprocesses. This flag only disables installation.
+        "RAPTOR_CODEQL_AUTO_INSTALL",
         "_RAPTOR_JOERN_TMP_BASE", "_RAPTOR_SERVICE_TMP_BASE",
         #   RAPTOR_TARGET_KIND  operator's target-classification override
         #                    (auto|library|hybrid|application). Must survive

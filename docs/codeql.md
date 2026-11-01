@@ -16,6 +16,42 @@ and -- optionally -- LLM-powered analysis with exploit generation.
 [sandbox](sandbox.md)
 
 
+## Container installation
+
+The devcontainer image ships a first-use installer. The first CodeQL analysis
+downloads the pinned platform-specific CodeQL bundle directly from GitHub into
+the operator's cache. The bundle includes the CLI and compatible standard query
+and library packs, with precompiled standard queries. The installer
+verifies the pinned archive size and SHA-256, and reuses that installation on
+later runs. Linux x86-64 and ARM64 are supported. Installation completes before
+RAPTOR enters the analysis sandbox; an interrupted or invalid download fails
+the command without publishing a partial installation.
+
+RAPTOR's additional query packs may still download dependencies when first
+used. Preparing those dependencies for an airgapped deployment is separate
+from installing the bundle.
+
+To install ahead of time (including before an offline session), run:
+
+```sh
+codeql --raptor-install
+```
+
+`codeql --raptor-status` reports installation status without downloading.
+Version probes also avoid downloads; run `codeql --raptor-install` first if
+you want to check the version before running an analysis.
+Set `RAPTOR_CODEQL_AUTO_INSTALL=0` to require explicit installation. Existing
+installations selected with `CODEQL_CLI` or `--codeql-cli` remain supported.
+The default cache is `~/.cache/raptor/codeql`; set `XDG_CACHE_HOME` to an
+absolute path to relocate it, or persist that cache across container rebuilds.
+
+The installer displays the terms link for the exact CodeQL release it downloads.
+Operators remain responsible for the license covering their use. The installer
+preserves the distribution's licenses and notices. The weekly SCA self-bump
+updates the release tag and both architecture-specific archive hashes and sizes
+in `.devcontainer/github-release-pins.json` together. This uses SCA's generic
+GitHub release pin manifest support. The terms link follows the pinned release.
+
 ## Usage
 
 ```

@@ -88,6 +88,13 @@ def check_binary(name: str, version_flag: str = "--version") -> Tuple[bool, str,
         return False, "Not found in PATH", None
 
     try:
+        if name == "codeql" and Path(path).resolve().name == "raptor-codeql-bootstrap":
+            result = subprocess.run([path, "--raptor-status"], capture_output=True,
+                                    text=True, timeout=10, check=True)
+            import json
+            state = json.loads(result.stdout)
+            if not state["installed"]:
+                return True, "First-use installer ready; CLI not downloaded yet", None
         result = subprocess.run(
             [name, version_flag],
             capture_output=True,

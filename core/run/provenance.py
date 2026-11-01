@@ -221,7 +221,7 @@ def tool_version(name: str) -> str | None:
     from core.run.toolprobe import probe
     info = probe(probe_argv[0], args=tuple(probe_argv[1:]),
                  timeout=_PROBE_TIMEOUT_S)
-    if info is None:
+    if info is None or info.returncode != 0:
         return None
     first = info.first_line
     return first.strip() or None if isinstance(first, str) else None

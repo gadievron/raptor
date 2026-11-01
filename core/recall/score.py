@@ -135,6 +135,8 @@ def collect_toolchain() -> dict[str, str]:
                 argv, capture_output=True, text=True, timeout=30,
                 check=False, env=RaptorConfig.get_safe_env(),
             )
+            if proc.returncode != 0:
+                continue
             out = (proc.stdout or proc.stderr).strip().splitlines()
             if out:
                 versions[tool] = out[0][:80]
