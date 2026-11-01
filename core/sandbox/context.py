@@ -2020,7 +2020,9 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
     # that — the anti-fingerprint overlay is enforcement-lane
     # polish and must not survive the disable as the run's one
     # residual env mutation.
-    for _tv in () if _effectively_disabled else ("TMPDIR", "TEMP", "TMP"):
+    _temp_rebranding = (not _effectively_disabled and bool(target or output or rootfs)
+                       and (profile is None or PROFILES[profile]["use_landlock"]))
+    for _tv in ("TMPDIR", "TEMP", "TMP") if _temp_rebranding else ():
         _tval = os.environ.get(_tv, "")
         if (_tval.startswith(("/tmp/", "/var/tmp/"))
                 and _BRANDED_TMP_RE.search(_tval)):
@@ -2929,6 +2931,11 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
     # Per-CALL private scratch dirs minted when a mount-ns run is
     # demoted to the Landlock-only path mid-call (see the demotion
     # hardening in run()); cleaned up with the context.
+    try:
+        _outer_tmp_readonly = (sys.platform == "linux"
+                               and bool(os.statvfs("/tmp").f_flag & os.ST_RDONLY))
+    except OSError:
+        _outer_tmp_readonly = False
     _demoted_scratch_dirs: list[str] = []
     if target or output or allowed_tcp_ports or extra_writable_paths:
         # ``/tmp`` is in the writable baseline so Python's pyc cache
@@ -2960,7 +2967,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         # mount-ns path keeps full /tmp semantics.
         _use_private_scratch = (
             sys.platform == "linux" and not use_seatbelt
-            and restrict_reads and not use_mount
+            and (restrict_reads or _outer_tmp_readonly) and not use_mount
             and not effectively_disabled
         )
         if exclude_tmp_baseline:
@@ -2977,6 +2984,12 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             # between must not orphan a registration that would pin
             # the stray dir against reaping for the process lifetime.
             writable_paths = [_private_scratch_dir]
+            if not restrict_reads:
+                # Preserve the normal caller's output/temp grants. Only the
+                # read-restricted posture revokes access to shared temp state.
+                writable_paths.append(_tempfile.gettempdir())
+                if os.path.isdir("/dev/shm"):
+                    writable_paths.append("/dev/shm")
         else:
             writable_paths = [_tempfile.gettempdir()]
             # /dev/shm rides the scratch baseline for the same reason
@@ -4732,9 +4745,9 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
 
             if _mountless_call_writable is not None:
                 return _mountless_call_writable, _env_for_target
-            if (not use_mount or rootfs is not None
+            if (not use_mount or rootfs is not None or not (target or output)
                     or sys.platform != "linux" or effectively_disabled
-                    or not restrict_reads or exclude_tmp_baseline):
+                    or not (restrict_reads or _outer_tmp_readonly) or exclude_tmp_baseline):
                 return list(writable_paths or []), _env_for_target
 
             import tempfile as _tempfile_mountless
@@ -4748,7 +4761,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             }
             _mountless_call_writable = [scratch] + [
                 path for path in (writable_paths or [])
-                if path not in shared and os.path.realpath(path) not in shared
+                if not restrict_reads
+                or (path not in shared and os.path.realpath(path) not in shared)
             ]
             _mountless_private_scratch = scratch
             scratch_env = {"TMPDIR": scratch, "TEMP": scratch, "TMP": scratch}

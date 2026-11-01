@@ -944,6 +944,7 @@ print(json.dumps({
     "fallback": "Landlock-only" in log,
     "stdout_head": (r.stdout or "")[:200],
     "stderr_tail": (r.stderr or "")[-400:],
+    "stderr": r.stderr or "",
 }))
 """
 
@@ -1077,12 +1078,16 @@ def _matrix_specs(ctx: Ctx) -> list[dict]:
                       "builder": "afl"})
     # joern CPG build in the runner shape (target=src, output=cpg
     # dir, block_network). joern-parse is a shell wrapper spawning a
-    # JVM; PATH-which resolution, no tool_paths in production.
+    # JVM. Use production's scratch environment and declared tool paths.
     jp = shutil.which("joern-parse")
     if jp:
-        spec("joern-parse", jp,
-             [jp, fx, "--output", f"{out}/cpg.bin"],
-             {"block_network": True, "target": fx, "output": out},
+        from packages.joern.runner import _jvm_scratch_command
+        from packages.joern.prereqs import joern_tool_paths
+        command = _jvm_scratch_command(
+            [jp, f"-J-Djava.io.tmpdir={out}", fx, "--output", f"{out}/cpg.bin"], Path(out))
+        spec("joern-parse", jp, command,
+             {"block_network": True, "target": fx, "output": out,
+              "tool_paths": joern_tool_paths()},
              expect_rc=(0,), timeout=300)
     # frida CLI smoke under its dedicated profile.
     fr = shutil.which("frida")
@@ -1093,6 +1098,12 @@ def _matrix_specs(ctx: Ctx) -> list[dict]:
               "tool_paths": [os.path.dirname(rp(fr))]},
              expect_rc=(0,))
     return specs
+
+
+def _term(value: str) -> str:
+    from core.security.log_sanitisation import sanitise_for_terminal
+    return "\n".join(sanitise_for_terminal(line, max_len=16384)
+                     for line in value.splitlines()) + "\n"
 
 
 def case_tool_sandbox_matrix(ctx: Ctx) -> None:
@@ -1130,6 +1141,8 @@ def case_tool_sandbox_matrix(ctx: Ctx) -> None:
             except (ValueError, IndexError):
                 verdict = {"rc": -1, "fallback": False,
                            "stderr_tail": (proc.stderr or "")[-300:]}
+        if verdict.get("stderr"):
+            (ctx.logs / (name + ".stderr.log")).write_text(_term(verdict["stderr"]))
         status = _matrix_entry_status(verdict, sp["expect_rc"],
                                       sp["strict_tier"])
         if status == "skip":

@@ -1126,6 +1126,12 @@ class TestChildPlaneSocket:
             strip_request_headers=original.strip_request_headers,
         )
         try:
+            # This test checks forwarding on the reduced IPC plane. Keep the
+            # separately bounded cold confinement-worker startup outside the
+            # HTTP client's five-second request timeout; still engage the real
+            # worker, rather than bypassing its fail-closed readiness check.
+            from core.llm.dispatcher.usage_scan_jail import get_usage_scan_jail
+            get_usage_scan_jail().ensure_available()
             token, _info = d.allocate_child("bridged-child", budget_usd=5.0)
             transport = httpx.HTTPTransport(uds=str(d.child_socket_path))
             with httpx.Client(transport=transport, timeout=5.0) as c:

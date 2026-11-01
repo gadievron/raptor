@@ -562,7 +562,7 @@ def main() -> int:
             else ("_RAPTOR_STATUS_FD", "_RAPTOR_DEATH_FD",
                   "_RAPTOR_TRUSTED", "CLAUDECODE",
                   "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN",
-                  "_RAPTOR_JOERN_TMP_BASE",
+                  "_RAPTOR_JOERN_TMP_BASE", "_RAPTOR_SERVICE_TMP_BASE",
                   "RAPTOR_ALLOW_DEGRADED_UNTRUSTED",
                   "RAPTOR_NO_SANDBOX_NONCE",
                   "RAPTOR_DIR", "RAPTOR_OUT_DIR", "RAPTOR_TARGET_KIND",

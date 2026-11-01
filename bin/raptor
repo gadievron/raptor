@@ -287,6 +287,7 @@ if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ]; then
         *) _RAPTOR_JOERN_TMP_BASE="$(_rp pwd -P)/$_RAPTOR_JOERN_TMP_BASE" ;;
     esac
     export _RAPTOR_JOERN_TMP_BASE
+    export _RAPTOR_SERVICE_TMP_BASE="$_RAPTOR_JOERN_TMP_BASE"
 
     # Per-session TMPDIR: <base>/raptor-<uid>/session-<pid>-<rand>
     # (0700; <base> = RAPTOR_WORK_DIR, else operator TMPDIR, else

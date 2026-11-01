@@ -30,6 +30,7 @@ sys.path.insert(0, os.environ["RAPTOR_DIR"])
 from core.build.build_detector import BuildSystem
 from core.config import RaptorConfig
 from core.git import get_safe_git_env
+from packages.codeql.temp_env import temporary_command
 
 # Per-invocation git overrides for target-repo invocations.
 # See `core.git.clone.safe_git_command` for the threat model
@@ -459,7 +460,7 @@ class DatabaseManager:
             # env-hygiene posture as the database-creation Popen
             # below.
             result = subprocess.run(
-                [self.codeql_cli, "version"],  # type: ignore[list-item]
+                temporary_command([self.codeql_cli, "version"]),  # type: ignore[list-item]
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -1700,7 +1701,7 @@ class DatabaseManager:
             from core.sandbox import run as sandbox_run
             from core.sandbox.fingerprint import HOST_CPU_COUNT
             result = sandbox_run(
-                cmd,  # type: ignore[arg-type]
+                temporary_command(cmd),  # type: ignore[arg-type]
                 block_network=True,
                 cwd=working_dir,
                 env=env,

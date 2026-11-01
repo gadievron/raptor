@@ -577,7 +577,7 @@ class RaptorConfig:
         # so an attacker setting them gains nothing beyond what they
         # already had with same-UID write access to ~/raptor-out.
         "RAPTOR_OUT_DIR", "RAPTOR_DIR",
-        "_RAPTOR_JOERN_TMP_BASE",
+        "_RAPTOR_JOERN_TMP_BASE", "_RAPTOR_SERVICE_TMP_BASE",
         #   RAPTOR_TARGET_KIND  operator's target-classification override
         #                    (auto|library|hybrid|application). Must survive
         #                    the subprocess boundary so an inventory rebuilt in
@@ -683,7 +683,7 @@ class RaptorConfig:
     # Extend THIS constant; do not scatter per-caller strips.
     TARGET_ENV_STRIP_SET = frozenset({
         "CLAUDECODE", "_RAPTOR_TRUSTED",
-        "_RAPTOR_JOERN_TMP_BASE",
+        "_RAPTOR_JOERN_TMP_BASE", "_RAPTOR_SERVICE_TMP_BASE",
         "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN",
         "RAPTOR_ALLOW_DEGRADED_UNTRUSTED",
         # Sandbox-disable consent nonce. Deliberately NOT in
