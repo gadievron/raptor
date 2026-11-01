@@ -78,7 +78,8 @@ def test_repin_rejects_changed_source_identity_or_symlink(native, tmp_path, syml
 
 
 @pytest.mark.skipif(sys.platform != 'linux', reason='Linux procfs descriptor inspection')
-def test_namespace_init_closes_ambient_host_descriptors_before_forking(tmp_path):
+@pytest.mark.parametrize('close_ambient', [True, False])
+def test_namespace_init_closes_ambient_host_descriptors_before_forking(tmp_path, close_ambient):
     import subprocess
     # Isolate the fork and descriptor sweep from pytest's own files/threads.
     # No namespaces or mount privileges are needed to verify this boundary.
@@ -94,13 +95,31 @@ def armed(death):
     os.fstat(death)
 native.arm_parent_death = armed
 
-def frontend():
+def assert_setup_closed():
     for descriptor in (control, directory, read, write):
         try: os.fstat(descriptor)
         except OSError as error: assert error.errno == errno.EBADF
-        else: raise AssertionError('frontend inherited setup descriptor')
-    parent_fds = set(os.listdir('/proc/' + str(os.getppid()) + '/fd'))
-    assert parent_fds <= {'0', '1', '2'}, parent_fds
+        else: raise AssertionError('setup descriptor survived to fork')
+
+real_fork = os.fork
+def checked_fork():
+    # Inspect the boundary before either process can open bookkeeping files.
+    assert_setup_closed()
+    names = os.listdir('/proc/self/fd')
+    live = set()
+    for name in names:
+        try: os.fstat(int(name))
+        except OSError as error: assert error.errno == errno.EBADF
+        else: live.add(name)
+    # listdir's own descriptor is closed by now; live extra handles still fail.
+    assert live <= {'0', '1', '2'}, live
+    return real_fork()
+native.os.fork = checked_fork
+if sys.argv[4] == 'fault':
+    native._close_setup_fds = lambda death: None
+
+def frontend():
+    assert_setup_closed()
     print('descriptor isolation verified', flush=True)
     os._exit(0)
 native.namespace_init(read, frontend)
@@ -108,8 +127,13 @@ native.namespace_init(read, frontend)
     control = tmp_path / 'host-control'
     control.write_text('must remain outside the protected process tree')
     helper = Path(__file__).resolve().parents[1] / '_install_namespace.py'
-    result = subprocess.run([sys.executable, '-I', '-c', code, str(helper), str(control), str(tmp_path)],
+    result = subprocess.run([sys.executable, '-I', '-c', code, str(helper), str(control), str(tmp_path),
+                             'normal' if close_ambient else 'fault'],
                             capture_output=True, text=True, timeout=5)
+    if not close_ambient:
+        assert result.returncode != 0
+        assert 'setup descriptor survived to fork' in result.stderr
+        return
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == 'descriptor isolation verified'
 
