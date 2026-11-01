@@ -355,3 +355,103 @@ def test_registry_enrichment_never_overwrites_explicit_multiple_declarations(tmp
     assert registry.declared_license == "MIT"
     assert multi.declared_license is None
     assert multi.license_declarations == ("BSD-2-Clause", "GPL-2.0-only")
+
+
+@pytest.mark.parametrize("purl", [None, "pkg:pypi/requests@2.0"])
+def test_file_evidence_is_preserved_without_becoming_a_package(tmp_path, purl):
+    file = {"type": "file", "name": "./vendor/LICENSE", "bom-ref": "file",
+            "hashes": [{"alg": "SHA-256", "content": "a" * 64}],
+            "licenses": [{"license": {"id": "AGPL-3.0-only"}}],
+            "evidence": {"copyright": [{"text": "Example authors"}]},
+            "components": [{"type": "library", "name": "nested", "bom-ref": "nested",
+                            "purl": "pkg:pypi/nested@1"}]}
+    if purl is not None:
+        file["purl"] = purl
+    doc = {"bomFormat": "CycloneDX", "specVersion": "1.5", "components": [file],
+           "metadata": {"component": {"type": "application", "name": "root", "bom-ref": "root"}},
+           "dependencies": [{"ref": "root", "dependsOn": ["file"]},
+                            {"ref": "file", "dependsOn": ["nested"]}]}
+    source = imported(tmp_path, doc)
+    assert [d.name for d in source.dependencies] == ["nested"]
+    assert source.dependencies[0].transitive_depth == 1
+    assert source.license_dependencies == []
+    assert evaluate(source.dependencies, LicensePolicy(on_unknown="deny"))[0].dependency.name == "nested"
+    assert len([gap for gap in source.coverage_gaps if "file component(s)" in gap]) == 1
+    output = build_bom(deps=source.dependencies, source_bom=source)
+    assert output["components"] == doc["components"]
+    assert output["dependencies"] == doc["dependencies"]
+    assert source.document == doc
+
+
+def test_file_count_diagnostic_does_not_flood_gaps_or_hide_package_licences(tmp_path):
+    doc = {"bomFormat": "CycloneDX", "specVersion": "1.5", "components": [
+        *[{"type": "file", "name": f"./file-{i}", "bom-ref": f"file-{i}"} for i in range(1001)],
+        {"type": "library", "name": "unknown-package", "bom-ref": "unknown"},
+        {"type": "library", "name": "denied-package", "bom-ref": "denied", "licenses": [{"license": {"id": "AGPL-3.0-only"}}]},
+    ]}
+    source = imported(tmp_path, doc)
+    assert source.dependencies == []
+    assert len(source.coverage_gaps) == 3
+    assert any("1001 CycloneDX file component(s)" in gap for gap in source.coverage_gaps)
+    findings = evaluate(source.license_dependencies, LicensePolicy(deny={"AGPL-3.0-only"}, on_unknown="deny"))
+    assert {f.dependency.name for f in findings} == {"unknown-package", "denied-package"}
+    assert build_bom(deps=[], source_bom=source)["components"] == doc["components"]
+
+
+@pytest.mark.parametrize("component_type", ["File", "unknown", None, [], {}])
+def test_invalid_explicit_component_type_fails_instead_of_skipping_policy(tmp_path, component_type):
+    doc = {"bomFormat": "CycloneDX", "specVersion": "1.5", "components": [
+        {"type": component_type, "name": "component"}]}
+    with pytest.raises(ValueError, match="component type"):
+        imported(tmp_path, doc)
+
+
+def test_file_classification_does_not_bypass_evidence_validation(tmp_path):
+    doc = {"bomFormat": "CycloneDX", "specVersion": "1.5", "components": [
+        {"type": "file", "name": "file", "licenses": "AGPL-3.0-only"}]}
+    with pytest.raises(ValueError, match="licenses"):
+        imported(tmp_path, doc)
+
+
+def test_cli_file_inventory_does_not_create_package_unknown_licence_findings(tmp_path):
+    doc = {"bomFormat": "CycloneDX", "specVersion": "1.5", "components": [
+        {"type": "file", "name": "unlicensed-file", "bom-ref": "file"},
+        {"type": "file", "name": "declared-file", "bom-ref": "declared-file",
+         "licenses": [{"license": {"id": "AGPL-3.0-only"}}]},
+        {"type": "library", "name": "unlicensed-package", "bom-ref": "package"},
+    ]}
+    path = tmp_path / "input.cdx.json"
+    path.write_text(json.dumps(doc))
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / ".raptor-sca-license-policy.yml").write_text("on_unknown: deny\ndeny: [AGPL-3.0-only]\n")
+    output = tmp_path / "output"
+    result = subprocess.run([sys.executable, "-m", "packages.sca.cli", str(target),
+        "--sbom", str(path), "--offline", "--trust-repo", "--out", str(output)],
+        cwd=Path(__file__).resolve().parents[3], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr[-2000:]
+    saved = json.loads((output / "sbom.cdx.json").read_text())
+    assert saved["components"] == doc["components"]
+    rows = json.loads((output / "findings.json").read_text())
+    assert len(rows) == 1
+    assert rows[0]["sca"]["name"] == "unlicensed-package"
+    gaps = [json.loads(line) for line in (output / "analysis-gaps.jsonl").read_text().splitlines()]
+    file_gaps = [gap for gap in gaps if "file component(s)" in gap["detail"]]
+    assert len(file_gaps) == 1
+    assert "outside analysis coverage" in file_gaps[0]["detail"]
+
+
+def test_file_sharing_package_purl_is_not_a_vex_target(tmp_path):
+    from packages.sca.tests.test_sbom import _adv
+    from packages.sca.findings import build_vuln_findings
+    from packages.sca.osv import OsvResult
+    doc = {"bomFormat": "CycloneDX", "specVersion": "1.5", "components": [
+        {"type": "file", "name": "./package.py", "bom-ref": "file", "purl": "pkg:pypi/package@1"},
+        {"type": "library", "name": "package", "bom-ref": "package", "purl": "pkg:pypi/package@1"}]}
+    source = imported(tmp_path, doc)
+    assert len(source.dependencies) == 1
+    dep = source.dependencies[0]
+    findings = build_vuln_findings([dep], [OsvResult(dep.key(), [_adv()])])
+    output = build_bom(deps=source.dependencies, vuln_findings=findings, source_bom=source)
+    assert {target["ref"] for vuln in output["vulnerabilities"] for target in vuln["affects"]} == {"package"}
+    assert output["components"] == doc["components"]
