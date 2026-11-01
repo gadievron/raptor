@@ -2,7 +2,7 @@
   "_source": {
     "fetched_at": "2026-10-29T21:47:03Z",
     "git_ref": "tokio-1.35.0",
-    "license": "MIT (RAPTOR-generated scan output)",
+    "license": "MIT (RAPTOR-generated fields only; upstream advisory data retains its own terms)",
     "name": "RAPTOR SCA scan of tokio",
     "project_license": "MIT",
     "provenance": "Scan output produced by RAPTOR's SCA pipeline against https://github.com/tokio-rs/tokio.git@tokio-1.35.0. Project source not redistributed.",
@@ -15,24 +15,7 @@
           "CVE-2020-35908",
           "RUSTSEC-2020-0062"
         ],
-        "fixed_versions": [
-          "0.3.2"
-        ],
-        "id": "GHSA-5r9g-j7jj-hw6c",
-        "modified": "2023-11-08T04:03:38.733785+00:00",
-        "published": "2022-05-24T17:37:49+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-35908",
-          "https://github.com/rust-lang/futures-rs/issues/2050",
-          "https://github.com/rust-lang/futures-rs",
-          "https://rustsec.org/advisories/RUSTSEC-2020-0062.html"
-        ],
-        "severity": {
-          "score": 5.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Improper `Sync` implementation on `FuturesUnordered` in futures-utils can cause data corruption"
+        "id": "GHSA-5r9g-j7jj-hw6c"
       },
       "cvss_score": 5.5,
       "dep_name": "futures-util",
@@ -95,29 +78,7 @@
           "CVE-2024-27308",
           "RUSTSEC-2024-0019"
         ],
-        "cwe_ids": [
-          "CWE-416",
-          "CWE-672"
-        ],
-        "fixed_versions": [
-          "0.8.11"
-        ],
-        "id": "GHSA-r8w9-5wcg-vfj7",
-        "modified": "2026-09-10T03:50:10.693636+00:00",
-        "published": "2024-03-04T20:44:35+00:00",
-        "references": [
-          "https://github.com/tokio-rs/mio/security/advisories/GHSA-r8w9-5wcg-vfj7",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-27308",
-          "https://github.com/tokio-rs/tokio/issues/6369",
-          "https://github.com/tokio-rs/mio/pull/1760",
-          "https://github.com/tokio-rs/mio/commit/90d4fe00df870acd3d38f3dc4face9aacab8fbb9"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
-        },
-        "summary": "Mio's tokens for named pipes may be delivered after deregistration"
+        "id": "GHSA-r8w9-5wcg-vfj7"
       },
       "cvss_score": 7.5,
       "dep_name": "mio",
@@ -180,24 +141,7 @@
         "aliases": [
           "RUSTSEC-2026-0097"
         ],
-        "cwe_ids": [
-          "CWE-20"
-        ],
-        "fixed_versions": [
-          "0.9.3",
-          "0.10.1",
-          "0.8.6"
-        ],
-        "id": "GHSA-cq8v-f236-94qc",
-        "modified": "2026-09-10T03:50:43.958966+00:00",
-        "published": "2026-04-14T01:03:36+00:00",
-        "references": [
-          "https://github.com/rust-random/rand/pull/1763",
-          "https://github.com/rust-random/rand",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0097.html"
-        ],
-        "severity": null,
-        "summary": "Rand is unsound with a custom logger using rand::rng()"
+        "id": "GHSA-cq8v-f236-94qc"
       },
       "cvss_score": null,
       "dep_name": "rand",
@@ -259,24 +203,7 @@
         "aliases": [
           "RUSTSEC-2026-0097"
         ],
-        "cwe_ids": [
-          "CWE-20"
-        ],
-        "fixed_versions": [
-          "0.9.3",
-          "0.10.1",
-          "0.8.6"
-        ],
-        "id": "GHSA-cq8v-f236-94qc",
-        "modified": "2026-09-10T03:50:43.958966+00:00",
-        "published": "2026-04-14T01:03:36+00:00",
-        "references": [
-          "https://github.com/rust-random/rand/pull/1763",
-          "https://github.com/rust-random/rand",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0097.html"
-        ],
-        "severity": null,
-        "summary": "Rand is unsound with a custom logger using rand::rng()"
+        "id": "GHSA-cq8v-f236-94qc"
       },
       "cvss_score": null,
       "dep_name": "rand",
@@ -338,24 +265,7 @@
         "aliases": [
           "RUSTSEC-2026-0097"
         ],
-        "cwe_ids": [
-          "CWE-20"
-        ],
-        "fixed_versions": [
-          "0.9.3",
-          "0.10.1",
-          "0.8.6"
-        ],
-        "id": "GHSA-cq8v-f236-94qc",
-        "modified": "2026-09-10T03:50:43.958966+00:00",
-        "published": "2026-04-14T01:03:36+00:00",
-        "references": [
-          "https://github.com/rust-random/rand/pull/1763",
-          "https://github.com/rust-random/rand",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0097.html"
-        ],
-        "severity": null,
-        "summary": "Rand is unsound with a custom logger using rand::rng()"
+        "id": "GHSA-cq8v-f236-94qc"
       },
       "cvss_score": null,
       "dep_name": "rand",
@@ -418,32 +328,7 @@
           "CVE-2021-38191",
           "RUSTSEC-2021-0072"
         ],
-        "cwe_ids": [
-          "CWE-362",
-          "CWE-366"
-        ],
-        "fixed_versions": [
-          "1.8.1",
-          "1.7.2",
-          "1.6.3",
-          "1.5.1"
-        ],
-        "id": "GHSA-2grh-hm3w-w7hv",
-        "modified": "2023-11-08T04:06:25.982475+00:00",
-        "published": "2021-08-25T20:55:51+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-38191",
-          "https://github.com/tokio-rs/tokio/issues/3929",
-          "https://github.com/tokio-rs/tokio",
-          "https://raw.githubusercontent.com/rustsec/advisory-db/main/crates/tokio/RUSTSEC-2021-0072.md",
-          "https://rustsec.org/advisories/RUSTSEC-2021-0072.html"
-        ],
-        "severity": {
-          "score": 5.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Race condition in tokio"
+        "id": "GHSA-2grh-hm3w-w7hv"
       },
       "cvss_score": 5.9,
       "dep_name": "tokio",
@@ -505,21 +390,7 @@
         "aliases": [
           "RUSTSEC-2023-0005"
         ],
-        "fixed_versions": [
-          "1.24.2",
-          "1.20.4",
-          "1.18.5"
-        ],
-        "id": "GHSA-4q83-7cq4-p6wg",
-        "modified": "2026-09-10T03:49:56.588581+00:00",
-        "published": "2023-02-04T00:30:37+00:00",
-        "references": [
-          "https://github.com/tokio-rs/tokio/issues/5372",
-          "https://github.com/tokio-rs/tokio",
-          "https://rustsec.org/advisories/RUSTSEC-2023-0005.html"
-        ],
-        "severity": null,
-        "summary": "`tokio::io::ReadHalf<T>::unsplit` is Unsound"
+        "id": "GHSA-4q83-7cq4-p6wg"
       },
       "cvss_score": null,
       "dep_name": "tokio",
@@ -582,29 +453,7 @@
           "CVE-2021-45710",
           "RUSTSEC-2021-0124"
         ],
-        "cwe_ids": [
-          "CWE-362"
-        ],
-        "fixed_versions": [
-          "1.8.4",
-          "1.13.1"
-        ],
-        "id": "GHSA-fg7r-2g4j-5cgr",
-        "modified": "2023-11-08T04:07:23.239744+00:00",
-        "published": "2022-01-06T22:04:37+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-45710",
-          "https://github.com/tokio-rs/tokio/issues/4225",
-          "https://github.com/tokio-rs/tokio",
-          "https://raw.githubusercontent.com/rustsec/advisory-db/main/crates/tokio/RUSTSEC-2021-0124.md",
-          "https://rustsec.org/advisories/RUSTSEC-2021-0124.html"
-        ],
-        "severity": {
-          "score": 8.1,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Race Condition in tokio"
+        "id": "GHSA-fg7r-2g4j-5cgr"
       },
       "cvss_score": 8.1,
       "dep_name": "tokio",
@@ -666,23 +515,8 @@
         "aliases": [
           "GHSA-rr8g-9fpq-6wmg"
         ],
-        "fixed_versions": [
-          "1.38.2",
-          "1.42.1",
-          "1.43.1",
-          "1.44.2"
-        ],
         "id": "RUSTSEC-2025-0023",
-        "informational": "unsound",
-        "modified": "2025-10-28T06:29:26.130595+00:00",
-        "published": "2025-04-07T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/tokio",
-          "https://rustsec.org/advisories/RUSTSEC-2025-0023.html",
-          "https://github.com/tokio-rs/tokio/pull/7232"
-        ],
-        "severity": null,
-        "summary": "Broadcast channel calls clone in parallel, but does not require `Sync`"
+        "informational": "unsound"
       },
       "cvss_score": null,
       "dep_name": "tokio",
@@ -742,23 +576,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [
-          "1.51.6",
-          "1.53.3"
-        ],
         "id": "RUSTSEC-2026-0386",
-        "informational": "unsound",
-        "modified": "2026-10-23T14:45:03.847864+00:00",
-        "published": "2026-10-13T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/tokio",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0386.html",
-          "https://github.com/tokio-rs/tokio/pull/8587",
-          "https://github.com/tokio-rs/tokio/issues/8538",
-          "https://github.com/tokio-rs/tokio/issues/8539"
-        ],
-        "severity": null,
-        "summary": "`AsyncFd::new` and related constructors violate I/O safety"
+        "informational": "unsound"
       },
       "cvss_score": null,
       "dep_name": "tokio",
@@ -820,21 +639,7 @@
         "aliases": [
           "RUSTSEC-2023-0005"
         ],
-        "fixed_versions": [
-          "1.24.2",
-          "1.20.4",
-          "1.18.5"
-        ],
-        "id": "GHSA-4q83-7cq4-p6wg",
-        "modified": "2026-09-10T03:49:56.588581+00:00",
-        "published": "2023-02-04T00:30:37+00:00",
-        "references": [
-          "https://github.com/tokio-rs/tokio/issues/5372",
-          "https://github.com/tokio-rs/tokio",
-          "https://rustsec.org/advisories/RUSTSEC-2023-0005.html"
-        ],
-        "severity": null,
-        "summary": "`tokio::io::ReadHalf<T>::unsplit` is Unsound"
+        "id": "GHSA-4q83-7cq4-p6wg"
       },
       "cvss_score": null,
       "dep_name": "tokio",
@@ -897,30 +702,7 @@
           "CVE-2023-22466",
           "RUSTSEC-2023-0001"
         ],
-        "cwe_ids": [
-          "CWE-665"
-        ],
-        "fixed_versions": [
-          "1.18.4",
-          "1.20.3",
-          "1.23.1"
-        ],
-        "id": "GHSA-7rrj-xr53-82p7",
-        "modified": "2026-09-10T03:49:51.032327+00:00",
-        "published": "2023-01-06T21:40:58+00:00",
-        "references": [
-          "https://github.com/tokio-rs/tokio/security/advisories/GHSA-7rrj-xr53-82p7",
-          "https://nvd.nist.gov/vuln/detail/CVE-2023-22466",
-          "https://github.com/tokio-rs/tokio/pull/5336",
-          "https://github.com/tokio-rs/tokio",
-          "https://github.com/tokio-rs/tokio/releases/tag/tokio-1.23.1"
-        ],
-        "severity": {
-          "score": 5.4,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:L"
-        },
-        "summary": "Tokio reject_remote_clients configuration may get dropped when creating a Windows named pipe"
+        "id": "GHSA-7rrj-xr53-82p7"
       },
       "cvss_score": 5.4,
       "dep_name": "tokio",
@@ -982,23 +764,8 @@
         "aliases": [
           "GHSA-rr8g-9fpq-6wmg"
         ],
-        "fixed_versions": [
-          "1.38.2",
-          "1.42.1",
-          "1.43.1",
-          "1.44.2"
-        ],
         "id": "RUSTSEC-2025-0023",
-        "informational": "unsound",
-        "modified": "2025-10-28T06:29:26.130595+00:00",
-        "published": "2025-04-07T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/tokio",
-          "https://rustsec.org/advisories/RUSTSEC-2025-0023.html",
-          "https://github.com/tokio-rs/tokio/pull/7232"
-        ],
-        "severity": null,
-        "summary": "Broadcast channel calls clone in parallel, but does not require `Sync`"
+        "informational": "unsound"
       },
       "cvss_score": null,
       "dep_name": "tokio",
@@ -1058,23 +825,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [
-          "1.51.6",
-          "1.53.3"
-        ],
         "id": "RUSTSEC-2026-0386",
-        "informational": "unsound",
-        "modified": "2026-10-23T14:45:03.847864+00:00",
-        "published": "2026-10-13T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/tokio",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0386.html",
-          "https://github.com/tokio-rs/tokio/pull/8587",
-          "https://github.com/tokio-rs/tokio/issues/8538",
-          "https://github.com/tokio-rs/tokio/issues/8539"
-        ],
-        "severity": null,
-        "summary": "`AsyncFd::new` and related constructors violate I/O safety"
+        "informational": "unsound"
       },
       "cvss_score": null,
       "dep_name": "tokio",
@@ -1137,32 +889,7 @@
           "CVE-2021-38191",
           "RUSTSEC-2021-0072"
         ],
-        "cwe_ids": [
-          "CWE-362",
-          "CWE-366"
-        ],
-        "fixed_versions": [
-          "1.8.1",
-          "1.7.2",
-          "1.6.3",
-          "1.5.1"
-        ],
-        "id": "GHSA-2grh-hm3w-w7hv",
-        "modified": "2023-11-08T04:06:25.982475+00:00",
-        "published": "2021-08-25T20:55:51+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-38191",
-          "https://github.com/tokio-rs/tokio/issues/3929",
-          "https://github.com/tokio-rs/tokio",
-          "https://raw.githubusercontent.com/rustsec/advisory-db/main/crates/tokio/RUSTSEC-2021-0072.md",
-          "https://rustsec.org/advisories/RUSTSEC-2021-0072.html"
-        ],
-        "severity": {
-          "score": 5.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Race condition in tokio"
+        "id": "GHSA-2grh-hm3w-w7hv"
       },
       "cvss_score": 5.9,
       "dep_name": "tokio",
@@ -1224,21 +951,7 @@
         "aliases": [
           "RUSTSEC-2023-0005"
         ],
-        "fixed_versions": [
-          "1.24.2",
-          "1.20.4",
-          "1.18.5"
-        ],
-        "id": "GHSA-4q83-7cq4-p6wg",
-        "modified": "2026-09-10T03:49:56.588581+00:00",
-        "published": "2023-02-04T00:30:37+00:00",
-        "references": [
-          "https://github.com/tokio-rs/tokio/issues/5372",
-          "https://github.com/tokio-rs/tokio",
-          "https://rustsec.org/advisories/RUSTSEC-2023-0005.html"
-        ],
-        "severity": null,
-        "summary": "`tokio::io::ReadHalf<T>::unsplit` is Unsound"
+        "id": "GHSA-4q83-7cq4-p6wg"
       },
       "cvss_score": null,
       "dep_name": "tokio",
@@ -1301,29 +1014,7 @@
           "CVE-2021-45710",
           "RUSTSEC-2021-0124"
         ],
-        "cwe_ids": [
-          "CWE-362"
-        ],
-        "fixed_versions": [
-          "1.8.4",
-          "1.13.1"
-        ],
-        "id": "GHSA-fg7r-2g4j-5cgr",
-        "modified": "2023-11-08T04:07:23.239744+00:00",
-        "published": "2022-01-06T22:04:37+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-45710",
-          "https://github.com/tokio-rs/tokio/issues/4225",
-          "https://github.com/tokio-rs/tokio",
-          "https://raw.githubusercontent.com/rustsec/advisory-db/main/crates/tokio/RUSTSEC-2021-0124.md",
-          "https://rustsec.org/advisories/RUSTSEC-2021-0124.html"
-        ],
-        "severity": {
-          "score": 8.1,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Race Condition in tokio"
+        "id": "GHSA-fg7r-2g4j-5cgr"
       },
       "cvss_score": 8.1,
       "dep_name": "tokio",
@@ -1385,23 +1076,8 @@
         "aliases": [
           "GHSA-rr8g-9fpq-6wmg"
         ],
-        "fixed_versions": [
-          "1.38.2",
-          "1.42.1",
-          "1.43.1",
-          "1.44.2"
-        ],
         "id": "RUSTSEC-2025-0023",
-        "informational": "unsound",
-        "modified": "2025-10-28T06:29:26.130595+00:00",
-        "published": "2025-04-07T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/tokio",
-          "https://rustsec.org/advisories/RUSTSEC-2025-0023.html",
-          "https://github.com/tokio-rs/tokio/pull/7232"
-        ],
-        "severity": null,
-        "summary": "Broadcast channel calls clone in parallel, but does not require `Sync`"
+        "informational": "unsound"
       },
       "cvss_score": null,
       "dep_name": "tokio",
@@ -1461,23 +1137,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [
-          "1.51.6",
-          "1.53.3"
-        ],
         "id": "RUSTSEC-2026-0386",
-        "informational": "unsound",
-        "modified": "2026-10-23T14:45:03.847864+00:00",
-        "published": "2026-10-13T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/tokio",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0386.html",
-          "https://github.com/tokio-rs/tokio/pull/8587",
-          "https://github.com/tokio-rs/tokio/issues/8538",
-          "https://github.com/tokio-rs/tokio/issues/8539"
-        ],
-        "severity": null,
-        "summary": "`AsyncFd::new` and related constructors violate I/O safety"
+        "informational": "unsound"
       },
       "cvss_score": null,
       "dep_name": "tokio",
@@ -1539,23 +1200,8 @@
         "aliases": [
           "GHSA-rr8g-9fpq-6wmg"
         ],
-        "fixed_versions": [
-          "1.38.2",
-          "1.42.1",
-          "1.43.1",
-          "1.44.2"
-        ],
         "id": "RUSTSEC-2025-0023",
-        "informational": "unsound",
-        "modified": "2025-10-28T06:29:26.130595+00:00",
-        "published": "2025-04-07T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/tokio",
-          "https://rustsec.org/advisories/RUSTSEC-2025-0023.html",
-          "https://github.com/tokio-rs/tokio/pull/7232"
-        ],
-        "severity": null,
-        "summary": "Broadcast channel calls clone in parallel, but does not require `Sync`"
+        "informational": "unsound"
       },
       "cvss_score": null,
       "dep_name": "tokio",
@@ -1615,23 +1261,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [
-          "1.51.6",
-          "1.53.3"
-        ],
         "id": "RUSTSEC-2026-0386",
-        "informational": "unsound",
-        "modified": "2026-10-23T14:45:03.847864+00:00",
-        "published": "2026-10-13T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/tokio",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0386.html",
-          "https://github.com/tokio-rs/tokio/pull/8587",
-          "https://github.com/tokio-rs/tokio/issues/8538",
-          "https://github.com/tokio-rs/tokio/issues/8539"
-        ],
-        "severity": null,
-        "summary": "`AsyncFd::new` and related constructors violate I/O safety"
+        "informational": "unsound"
       },
       "cvss_score": null,
       "dep_name": "tokio",
@@ -1694,32 +1325,7 @@
           "CVE-2021-38191",
           "RUSTSEC-2021-0072"
         ],
-        "cwe_ids": [
-          "CWE-362",
-          "CWE-366"
-        ],
-        "fixed_versions": [
-          "1.8.1",
-          "1.7.2",
-          "1.6.3",
-          "1.5.1"
-        ],
-        "id": "GHSA-2grh-hm3w-w7hv",
-        "modified": "2023-11-08T04:06:25.982475+00:00",
-        "published": "2021-08-25T20:55:51+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-38191",
-          "https://github.com/tokio-rs/tokio/issues/3929",
-          "https://github.com/tokio-rs/tokio",
-          "https://raw.githubusercontent.com/rustsec/advisory-db/main/crates/tokio/RUSTSEC-2021-0072.md",
-          "https://rustsec.org/advisories/RUSTSEC-2021-0072.html"
-        ],
-        "severity": {
-          "score": 5.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Race condition in tokio"
+        "id": "GHSA-2grh-hm3w-w7hv"
       },
       "cvss_score": 5.9,
       "dep_name": "tokio",
@@ -1781,21 +1387,7 @@
         "aliases": [
           "RUSTSEC-2023-0005"
         ],
-        "fixed_versions": [
-          "1.24.2",
-          "1.20.4",
-          "1.18.5"
-        ],
-        "id": "GHSA-4q83-7cq4-p6wg",
-        "modified": "2026-09-10T03:49:56.588581+00:00",
-        "published": "2023-02-04T00:30:37+00:00",
-        "references": [
-          "https://github.com/tokio-rs/tokio/issues/5372",
-          "https://github.com/tokio-rs/tokio",
-          "https://rustsec.org/advisories/RUSTSEC-2023-0005.html"
-        ],
-        "severity": null,
-        "summary": "`tokio::io::ReadHalf<T>::unsplit` is Unsound"
+        "id": "GHSA-4q83-7cq4-p6wg"
       },
       "cvss_score": null,
       "dep_name": "tokio",
@@ -1858,29 +1450,7 @@
           "CVE-2021-45710",
           "RUSTSEC-2021-0124"
         ],
-        "cwe_ids": [
-          "CWE-362"
-        ],
-        "fixed_versions": [
-          "1.8.4",
-          "1.13.1"
-        ],
-        "id": "GHSA-fg7r-2g4j-5cgr",
-        "modified": "2023-11-08T04:07:23.239744+00:00",
-        "published": "2022-01-06T22:04:37+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-45710",
-          "https://github.com/tokio-rs/tokio/issues/4225",
-          "https://github.com/tokio-rs/tokio",
-          "https://raw.githubusercontent.com/rustsec/advisory-db/main/crates/tokio/RUSTSEC-2021-0124.md",
-          "https://rustsec.org/advisories/RUSTSEC-2021-0124.html"
-        ],
-        "severity": {
-          "score": 8.1,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Race Condition in tokio"
+        "id": "GHSA-fg7r-2g4j-5cgr"
       },
       "cvss_score": 8.1,
       "dep_name": "tokio",
@@ -1942,23 +1512,8 @@
         "aliases": [
           "GHSA-rr8g-9fpq-6wmg"
         ],
-        "fixed_versions": [
-          "1.38.2",
-          "1.42.1",
-          "1.43.1",
-          "1.44.2"
-        ],
         "id": "RUSTSEC-2025-0023",
-        "informational": "unsound",
-        "modified": "2025-10-28T06:29:26.130595+00:00",
-        "published": "2025-04-07T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/tokio",
-          "https://rustsec.org/advisories/RUSTSEC-2025-0023.html",
-          "https://github.com/tokio-rs/tokio/pull/7232"
-        ],
-        "severity": null,
-        "summary": "Broadcast channel calls clone in parallel, but does not require `Sync`"
+        "informational": "unsound"
       },
       "cvss_score": null,
       "dep_name": "tokio",
@@ -2018,23 +1573,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [
-          "1.51.6",
-          "1.53.3"
-        ],
         "id": "RUSTSEC-2026-0386",
-        "informational": "unsound",
-        "modified": "2026-10-23T14:45:03.847864+00:00",
-        "published": "2026-10-13T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/tokio",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0386.html",
-          "https://github.com/tokio-rs/tokio/pull/8587",
-          "https://github.com/tokio-rs/tokio/issues/8538",
-          "https://github.com/tokio-rs/tokio/issues/8539"
-        ],
-        "severity": null,
-        "summary": "`AsyncFd::new` and related constructors violate I/O safety"
+        "informational": "unsound"
       },
       "cvss_score": null,
       "dep_name": "tokio",
@@ -2097,19 +1637,7 @@
           "CVE-2025-58160",
           "GHSA-xwfj-jgwm-7wp5"
         ],
-        "fixed_versions": [
-          "0.3.20"
-        ],
-        "id": "RUSTSEC-2025-0055",
-        "modified": "2026-10-12T18:00:11.495445+00:00",
-        "published": "2025-08-29T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/tracing-subscriber",
-          "https://rustsec.org/advisories/RUSTSEC-2025-0055.html",
-          "https://github.com/tokio-rs/tracing/pull/3368"
-        ],
-        "severity": null,
-        "summary": "Logging user input may result in poisoning logs with ANSI escape sequences"
+        "id": "RUSTSEC-2025-0055"
       },
       "cvss_score": null,
       "dep_name": "tracing-subscriber",

@@ -16,7 +16,7 @@ def _fixture(cve: str) -> dict:
 
 
 class TestOSVParsing:
-    """Parser tests against real OSV fixture snapshots (captured from api.osv.dev)."""
+    """Parser tests against minimized OSV commit/range fixtures from api.osv.dev."""
 
     def test_curl_extracts_fix_and_introduced(self) -> None:
         """

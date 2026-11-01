@@ -2,7 +2,7 @@
   "_source": {
     "fetched_at": "2026-10-29T21:47:33Z",
     "git_ref": "v2.18.0",
-    "license": "MIT (RAPTOR-generated scan output)",
+    "license": "MIT (RAPTOR-generated fields only; upstream advisory data retains its own terms)",
     "name": "RAPTOR SCA scan of requests-2.18",
     "project_license": "Apache-2.0",
     "provenance": "Scan output produced by RAPTOR's SCA pipeline against https://github.com/psf/requests.git@v2.18.0. Project source not redistributed.",
@@ -15,28 +15,7 @@
           "CVE-2025-71176",
           "PYSEC-2026-1845"
         ],
-        "cwe_ids": [
-          "CWE-379"
-        ],
-        "fixed_versions": [
-          "9.0.3"
-        ],
-        "id": "GHSA-6w46-j5rx-g56g",
-        "modified": "2026-09-10T03:50:32.768043+00:00",
-        "published": "2026-01-22T06:30:29+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-71176",
-          "https://github.com/pytest-dev/pytest/issues/13669",
-          "https://github.com/pytest-dev/pytest/pull/14343",
-          "https://github.com/pytest-dev/pytest/commit/95d8423bd24992deea5b9df32555fa1741679e2c",
-          "https://github.com/pytest-dev/pytes"
-        ],
-        "severity": {
-          "score": 6.8,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:C/C:L/I:L/A:L"
-        },
-        "summary": "pytest has vulnerable tmpdir handling"
+        "id": "GHSA-6w46-j5rx-g56g"
       },
       "cvss_score": 6.8,
       "dep_name": "pytest",
@@ -102,28 +81,7 @@
           "CVE-2025-47273",
           "PYSEC-2025-49"
         ],
-        "cwe_ids": [
-          "CWE-22"
-        ],
-        "fixed_versions": [
-          "78.1.1"
-        ],
-        "id": "GHSA-5rjg-fvgr-3xxf",
-        "modified": "2026-09-10T03:50:24.253527+00:00",
-        "published": "2025-05-19T16:52:43+00:00",
-        "references": [
-          "https://github.com/pypa/setuptools/security/advisories/GHSA-5rjg-fvgr-3xxf",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-47273",
-          "https://github.com/pypa/setuptools/issues/4946",
-          "https://github.com/pypa/setuptools/commit/250a6d17978f9f6ac3ac887091f2d32886fbbb0b",
-          "https://github.com/pypa/advisory-database/tree/main/vulns/setuptools/PYSEC-2025-49.yaml"
-        ],
-        "severity": {
-          "score": 7.7,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N/E:P"
-        },
-        "summary": "setuptools has a path traversal vulnerability in PackageIndex.download that leads to Arbitrary File Write"
+        "id": "GHSA-5rjg-fvgr-3xxf"
       },
       "cvss_score": 7.7,
       "dep_name": "setuptools",
@@ -191,28 +149,7 @@
           "CVE-2024-6345",
           "PYSEC-2026-1918"
         ],
-        "cwe_ids": [
-          "CWE-94"
-        ],
-        "fixed_versions": [
-          "70.0.0"
-        ],
-        "id": "GHSA-cx63-2mw6-8hw5",
-        "modified": "2026-09-10T03:50:16.663495+00:00",
-        "published": "2024-07-15T03:30:57+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-6345",
-          "https://github.com/pypa/setuptools/pull/4332",
-          "https://github.com/pypa/setuptools/commit/88807c7062788254f654ea8c03427adc859321f0",
-          "https://github.com/pypa/setuptools",
-          "https://huntr.com/bounties/d6362117-ad57-4e83-951f-b8141c6e7ca5"
-        ],
-        "severity": {
-          "score": 8.8,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H"
-        },
-        "summary": "setuptools vulnerable to Command Injection via package URL"
+        "id": "GHSA-cx63-2mw6-8hw5"
       },
       "cvss_score": 8.8,
       "dep_name": "setuptools",
@@ -280,29 +217,7 @@
           "CVE-2026-59890",
           "PYSEC-2026-3447"
         ],
-        "cwe_ids": [
-          "CWE-176",
-          "CWE-697"
-        ],
-        "fixed_versions": [
-          "83.0.0"
-        ],
-        "id": "GHSA-h35f-9h28-mq5c",
-        "modified": "2026-09-10T03:50:52.323347+00:00",
-        "published": "2026-07-21T19:09:21+00:00",
-        "references": [
-          "https://github.com/pypa/setuptools/security/advisories/GHSA-h35f-9h28-mq5c",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-59890",
-          "https://github.com/pypa/setuptools/commit/dd9f436a36486b4cb8a4c70a2321548b0be09b8f",
-          "https://github.com/pypa/advisory-database/tree/main/vulns/setuptools/PYSEC-2026-3447.yaml",
-          "https://github.com/pypa/setuptools"
-        ],
-        "severity": {
-          "score": 6.1,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:L/A:N"
-        },
-        "summary": "setuptools: MANIFEST.in exclusion bypass in sdist via Unicode normalization collision (NFC/NFD) on macOS APFS/HFS+"
+        "id": "GHSA-h35f-9h28-mq5c"
       },
       "cvss_score": 6.1,
       "dep_name": "setuptools",
@@ -370,28 +285,7 @@
           "CVE-2022-40897",
           "PYSEC-2022-43012"
         ],
-        "cwe_ids": [
-          "CWE-1333"
-        ],
-        "fixed_versions": [
-          "65.5.1"
-        ],
-        "id": "GHSA-r9hx-vwmv-q579",
-        "modified": "2026-08-07T08:12:25.181519+00:00",
-        "published": "2022-12-23T00:30:23+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-40897",
-          "https://github.com/pypa/setuptools/issues/3659",
-          "https://github.com/pypa/setuptools/commit/43a9c9bfa6aa626ec2a22540bea28d2ca77964be",
-          "https://setuptools.pypa.io/en/latest",
-          "https://security.netapp.com/advisory/ntap-20240621-0006"
-        ],
-        "severity": {
-          "score": 8.7,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:L/SI:L/SA:N"
-        },
-        "summary": "pypa/setuptools vulnerable to Regular Expression Denial of Service (ReDoS)"
+        "id": "GHSA-r9hx-vwmv-q579"
       },
       "cvss_score": 8.7,
       "dep_name": "setuptools",

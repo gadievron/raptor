@@ -2,7 +2,7 @@
   "_source": {
     "fetched_at": "2026-08-28T20:30:20Z",
     "git_ref": "v1.0.193",
-    "license": "MIT (RAPTOR-generated scan output)",
+    "license": "MIT (RAPTOR-generated fields only; upstream advisory data retains its own terms)",
     "name": "RAPTOR SCA scan of serde",
     "project_license": "MIT OR Apache-2.0",
     "provenance": "Scan output produced by RAPTOR's SCA pipeline against https://github.com/serde-rs/serde.git@v1.0.193. Project source not redistributed.",

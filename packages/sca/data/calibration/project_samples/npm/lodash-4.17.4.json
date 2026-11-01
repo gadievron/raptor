@@ -2,7 +2,7 @@
   "_source": {
     "fetched_at": "2026-11-01T12:50:30Z",
     "git_ref": "4.17.4",
-    "license": "MIT (RAPTOR-generated scan output)",
+    "license": "MIT (RAPTOR-generated fields only; upstream advisory data retains its own terms)",
     "name": "RAPTOR SCA scan of lodash-4.17.4",
     "project_license": "MIT",
     "provenance": "Scan output produced by RAPTOR's SCA pipeline against https://github.com/lodash/lodash.git@4.17.4. Project source not redistributed.",
@@ -14,29 +14,7 @@
         "aliases": [
           "CVE-2021-43138"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "3.2.2",
-          "2.6.4"
-        ],
-        "id": "GHSA-fwr7-v2mv-hh25",
-        "modified": "2024-06-24T21:23:09+00:00",
-        "published": "2022-04-07T00:00:17+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-43138",
-          "https://github.com/caolan/async/pull/1828",
-          "https://github.com/caolan/async/commit/8f7f90342a6571ba1c197d747ebed30c368096d2",
-          "https://github.com/caolan/async/commit/e1ecdbf79264f9ab488c7799f4c76996d5dca66d",
-          "https://github.com/caolan/async"
-        ],
-        "severity": {
-          "score": 7.8,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Prototype Pollution in async"
+        "id": "GHSA-fwr7-v2mv-hh25"
       },
       "cvss_score": 7.8,
       "dep_name": "async",
@@ -103,30 +81,7 @@
         "aliases": [
           "CVE-2023-45133"
         ],
-        "cwe_ids": [
-          "CWE-184",
-          "CWE-697"
-        ],
-        "fixed_versions": [
-          "7.23.2",
-          "8.0.0-alpha.4"
-        ],
-        "id": "GHSA-67hx-6x53-jw92",
-        "modified": "2026-09-10T03:50:03.372029+00:00",
-        "published": "2023-10-16T13:55:36+00:00",
-        "references": [
-          "https://github.com/babel/babel/security/advisories/GHSA-67hx-6x53-jw92",
-          "https://nvd.nist.gov/vuln/detail/CVE-2023-45133",
-          "https://github.com/babel/babel/pull/16033",
-          "https://github.com/babel/babel/commit/b13376b346946e3f62fc0848c1d2a23223314c82",
-          "https://babeljs.io/blog/2023/10/16/cve-2023-45133"
-        ],
-        "severity": {
-          "score": 9.3,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H"
-        },
-        "summary": "Babel vulnerable to arbitrary code execution when compiling specifically crafted malicious code"
+        "id": "GHSA-67hx-6x53-jw92"
       },
       "cvss_score": 9.3,
       "dep_name": "babel-traverse",
@@ -188,32 +143,7 @@
         "aliases": [
           "CVE-2020-8244"
         ],
-        "cwe_ids": [
-          "CWE-125",
-          "CWE-126"
-        ],
-        "fixed_versions": [
-          "1.2.3",
-          "2.2.1",
-          "3.0.1",
-          "4.0.3"
-        ],
-        "id": "GHSA-pp7h-53gx-mx7r",
-        "modified": "2023-11-08T04:04:15.963824+00:00",
-        "published": "2020-09-02T15:26:19+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-8244",
-          "https://github.com/rvagg/bl/commit/8a8c13c880e2bef519133ea43e0e9b78b5d0c91e",
-          "https://github.com/rvagg/bl/commit/d3e240e3b8ba4048d3c76ef5fb9dd1f8872d3190",
-          "https://github.com/rvagg/bl/commit/dacc4ac7d5fcd6201bcf26fbd886951be9537466",
-          "https://hackerone.com/reports/966347"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:L"
-        },
-        "summary": "Remote Memory Exposure in bl"
+        "id": "GHSA-pp7h-53gx-mx7r"
       },
       "cvss_score": 6.5,
       "dep_name": "bl",
@@ -275,32 +205,7 @@
         "aliases": [
           "CVE-2020-8244"
         ],
-        "cwe_ids": [
-          "CWE-125",
-          "CWE-126"
-        ],
-        "fixed_versions": [
-          "1.2.3",
-          "2.2.1",
-          "3.0.1",
-          "4.0.3"
-        ],
-        "id": "GHSA-pp7h-53gx-mx7r",
-        "modified": "2023-11-08T04:04:15.963824+00:00",
-        "published": "2020-09-02T15:26:19+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-8244",
-          "https://github.com/rvagg/bl/commit/8a8c13c880e2bef519133ea43e0e9b78b5d0c91e",
-          "https://github.com/rvagg/bl/commit/d3e240e3b8ba4048d3c76ef5fb9dd1f8872d3190",
-          "https://github.com/rvagg/bl/commit/dacc4ac7d5fcd6201bcf26fbd886951be9537466",
-          "https://hackerone.com/reports/966347"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:L"
-        },
-        "summary": "Remote Memory Exposure in bl"
+        "id": "GHSA-pp7h-53gx-mx7r"
       },
       "cvss_score": 6.5,
       "dep_name": "bl",
@@ -362,31 +267,7 @@
         "aliases": [
           "CVE-2026-13149"
         ],
-        "cwe_ids": [
-          "CWE-400",
-          "CWE-407"
-        ],
-        "fixed_versions": [
-          "5.0.7",
-          "1.1.16",
-          "2.1.2"
-        ],
-        "id": "GHSA-3jxr-9vmj-r5cp",
-        "modified": "2026-09-10T03:51:10.092354+00:00",
-        "published": "2026-07-20T20:51:09+00:00",
-        "references": [
-          "https://github.com/juliangruber/brace-expansion/security/advisories/GHSA-3jxr-9vmj-r5cp",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-13149",
-          "https://github.com/juliangruber/brace-expansion/pull/122",
-          "https://github.com/juliangruber/brace-expansion/pull/123",
-          "https://github.com/juliangruber/brace-expansion/commit/835d6be91201122d9adffb0c0c8c094189ace265"
-        ],
-        "severity": {
-          "score": 7.7,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N/E:P/S:N/AU:Y/R:U/V:D/RE:M/U:Amber"
-        },
-        "summary": "brace-expansion: DoS via exponential-time expansion of consecutive non-expanding {} groups"
+        "id": "GHSA-3jxr-9vmj-r5cp"
       },
       "cvss_score": 7.7,
       "dep_name": "brace-expansion",
@@ -448,32 +329,7 @@
         "aliases": [
           "CVE-2026-102276"
         ],
-        "cwe_ids": [
-          "CWE-400",
-          "CWE-674"
-        ],
-        "fixed_versions": [
-          "5.0.10",
-          "3.0.7",
-          "2.1.5",
-          "1.1.19"
-        ],
-        "id": "GHSA-6j4f-fj2g-mc7p",
-        "modified": "2026-09-30T00:00:03.836613+00:00",
-        "published": "2026-09-29T23:44:58+00:00",
-        "references": [
-          "https://github.com/juliangruber/brace-expansion/security/advisories/GHSA-6j4f-fj2g-mc7p",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-102276",
-          "https://github.com/juliangruber/brace-expansion/commit/0bcbfc0a5928c3073d48f42999d1ce4fc1c42fbc",
-          "https://github.com/juliangruber/brace-expansion/commit/316359e6019c39b3254c8ba8e25dc586a480652c",
-          "https://github.com/juliangruber/brace-expansion/commit/5171e681c0922b7ae8bfaf9a331e309107be6edc"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "brace-expansion: DoS via uncontrolled recursion in parseCommaParts causing stack exhaustion"
+        "id": "GHSA-6j4f-fj2g-mc7p"
       },
       "cvss_score": 7.5,
       "dep_name": "brace-expansion",
@@ -535,28 +391,7 @@
         "aliases": [
           "CVE-2017-18077"
         ],
-        "cwe_ids": [
-          "CWE-1333"
-        ],
-        "fixed_versions": [
-          "1.1.7"
-        ],
-        "id": "GHSA-832h-xg76-4gv6",
-        "modified": "2023-11-08T03:59:15.193726+00:00",
-        "published": "2018-01-29T15:50:46+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2017-18077",
-          "https://github.com/juliangruber/brace-expansion/issues/33",
-          "https://github.com/juliangruber/brace-expansion/pull/35",
-          "https://github.com/juliangruber/brace-expansion/pull/35/commits/b13381281cead487cbdbfd6a69fb097ea5e456c3",
-          "https://bugs.debian.org/862712"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "ReDoS in brace-expansion"
+        "id": "GHSA-832h-xg76-4gv6"
       },
       "cvss_score": 7.5,
       "dep_name": "brace-expansion",
@@ -618,31 +453,7 @@
         "aliases": [
           "CVE-2026-33750"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "5.0.5",
-          "3.0.2",
-          "2.0.3",
-          "1.1.13"
-        ],
-        "id": "GHSA-f886-m6hf-6m8v",
-        "modified": "2026-09-10T03:51:00.342356+00:00",
-        "published": "2026-03-26T18:29:42+00:00",
-        "references": [
-          "https://github.com/juliangruber/brace-expansion/security/advisories/GHSA-f886-m6hf-6m8v",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-33750",
-          "https://github.com/juliangruber/brace-expansion/issues/98",
-          "https://github.com/juliangruber/brace-expansion/pull/95",
-          "https://github.com/juliangruber/brace-expansion/pull/96"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H"
-        },
-        "summary": "brace-expansion: Zero-step sequence causes process hang and memory exhaustion"
+        "id": "GHSA-f886-m6hf-6m8v"
       },
       "cvss_score": 6.5,
       "dep_name": "brace-expansion",
@@ -704,32 +515,7 @@
         "aliases": [
           "CVE-2026-14257"
         ],
-        "cwe_ids": [
-          "CWE-400",
-          "CWE-770"
-        ],
-        "fixed_versions": [
-          "5.0.8",
-          "3.0.3",
-          "2.1.3",
-          "1.1.17"
-        ],
-        "id": "GHSA-mh99-v99m-4gvg",
-        "modified": "2026-09-10T03:50:12.282849+00:00",
-        "published": "2026-07-24T21:53:14+00:00",
-        "references": [
-          "https://github.com/juliangruber/brace-expansion/security/advisories/GHSA-mh99-v99m-4gvg",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-14257",
-          "https://github.com/juliangruber/brace-expansion/pull/129",
-          "https://github.com/juliangruber/brace-expansion/pull/130",
-          "https://github.com/juliangruber/brace-expansion/pull/136"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash"
+        "id": "GHSA-mh99-v99m-4gvg"
       },
       "cvss_score": 7.5,
       "dep_name": "brace-expansion",
@@ -791,32 +577,7 @@
         "aliases": [
           "CVE-2026-102277"
         ],
-        "cwe_ids": [
-          "CWE-400",
-          "CWE-407"
-        ],
-        "fixed_versions": [
-          "5.0.12",
-          "3.0.9",
-          "2.1.7",
-          "1.1.21"
-        ],
-        "id": "GHSA-q2hr-2g5m-vwhr",
-        "modified": "2026-09-30T00:00:03.849541+00:00",
-        "published": "2026-09-29T23:45:39+00:00",
-        "references": [
-          "https://github.com/juliangruber/brace-expansion/security/advisories/GHSA-q2hr-2g5m-vwhr",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-102277",
-          "https://github.com/juliangruber/brace-expansion/commit/33a5ef17b8d800bbfa8c52b14c39043b6aac1a96",
-          "https://github.com/juliangruber/brace-expansion/commit/bdff773f98e5988616b7039cc9b508df5d640b22",
-          "https://github.com/juliangruber/brace-expansion/commit/c55e67d8d8b1c56a2474afff15c2891166b2d364"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "brace-expansion: Quadratic-time expansion of the `{a},b}` rewrite causes CPU denial of service"
+        "id": "GHSA-q2hr-2g5m-vwhr"
       },
       "cvss_score": 5.3,
       "dep_name": "brace-expansion",
@@ -878,32 +639,7 @@
         "aliases": [
           "CVE-2026-102278"
         ],
-        "cwe_ids": [
-          "CWE-400",
-          "CWE-674"
-        ],
-        "fixed_versions": [
-          "5.0.11",
-          "3.0.8",
-          "2.1.6",
-          "1.1.20"
-        ],
-        "id": "GHSA-qhr7-859c-m2p7",
-        "modified": "2026-09-30T00:00:04.402763+00:00",
-        "published": "2026-09-29T23:45:17+00:00",
-        "references": [
-          "https://github.com/juliangruber/brace-expansion/security/advisories/GHSA-qhr7-859c-m2p7",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-102278",
-          "https://github.com/juliangruber/brace-expansion/commit/1efee7c397c191da6287a78ec19512476a966a7b",
-          "https://github.com/juliangruber/brace-expansion/commit/935d78f32f335b2ff76578e5c5e877d31ae9888c",
-          "https://github.com/juliangruber/brace-expansion/commit/de84f144e9816f30e25fc8179e2e1249ab6df0db"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "brace-expansion: DoS via uncontrolled recursion on nested brace groups causing stack exhaustion"
+        "id": "GHSA-qhr7-859c-m2p7"
       },
       "cvss_score": 7.5,
       "dep_name": "brace-expansion",
@@ -965,32 +701,7 @@
         "aliases": [
           "CVE-2026-69152"
         ],
-        "cwe_ids": [
-          "CWE-400",
-          "CWE-770"
-        ],
-        "fixed_versions": [
-          "1.1.18",
-          "2.1.4",
-          "3.0.6",
-          "5.0.9"
-        ],
-        "id": "GHSA-rgw5-rvv9-x895",
-        "modified": "2026-09-10T03:51:14.535270+00:00",
-        "published": "2026-08-03T16:35:32+00:00",
-        "references": [
-          "https://github.com/juliangruber/brace-expansion/security/advisories/GHSA-rgw5-rvv9-x895",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-69152",
-          "https://github.com/juliangruber/brace-expansion/commit/139d015104e71433ad52a41d19467c48ecbb2c7d",
-          "https://github.com/juliangruber/brace-expansion/commit/1e30c930238d7162802d88a94189182def178dac",
-          "https://github.com/juliangruber/brace-expansion/commit/688a99eeaab02627c2b89ba8ba4821fecfa659cf"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "brace-expansion: DoS via unbounded intermediate arrays, bypassing the CVE-2026-14257 mitigation"
+        "id": "GHSA-rgw5-rvv9-x895"
       },
       "cvss_score": 7.5,
       "dep_name": "brace-expansion",
@@ -1053,31 +764,7 @@
         "aliases": [
           "CVE-2025-5889"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "2.0.2",
-          "1.1.12",
-          "3.0.1",
-          "4.0.1"
-        ],
-        "id": "GHSA-v6h2-p8h4-qcjw",
-        "modified": "2026-09-10T03:50:25.501161+00:00",
-        "published": "2025-06-09T21:30:51+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-5889",
-          "https://github.com/juliangruber/brace-expansion/pull/65/commits/a5b98a4f30d7813266b221435e1eaaf25a1b0ac5",
-          "https://github.com/juliangruber/brace-expansion/commit/0b6a9781e18e9d2769bb2931f4856d1360243ed2",
-          "https://github.com/juliangruber/brace-expansion/commit/15f9b3c75ebf5988198241fecaebdc45eff28a9f",
-          "https://github.com/juliangruber/brace-expansion/commit/36603d5f3599a37af9e85eda30acd7d28599c36e"
-        ],
-        "severity": {
-          "score": 3.1,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "brace-expansion Regular Expression Denial of Service vulnerability"
+        "id": "GHSA-v6h2-p8h4-qcjw"
       },
       "cvss_score": 3.1,
       "dep_name": "brace-expansion",
@@ -1140,29 +827,7 @@
         "aliases": [
           "CVE-2024-4068"
         ],
-        "cwe_ids": [
-          "CWE-1050",
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "3.0.3"
-        ],
-        "id": "GHSA-grv7-fg5c-xmjg",
-        "modified": "2026-09-10T03:50:00.374713+00:00",
-        "published": "2024-05-14T18:30:54+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-4068",
-          "https://github.com/micromatch/braces/issues/35",
-          "https://github.com/micromatch/braces/pull/37",
-          "https://github.com/micromatch/braces/pull/40",
-          "https://github.com/micromatch/braces/commit/415d660c3002d1ab7e63dbf490c9851da80596ff"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Uncontrolled resource consumption in braces"
+        "id": "GHSA-grv7-fg5c-xmjg"
       },
       "cvss_score": 7.5,
       "dep_name": "braces",
@@ -1224,29 +889,7 @@
         "aliases": [
           "CVE-2024-21538"
         ],
-        "cwe_ids": [
-          "CWE-1333"
-        ],
-        "fixed_versions": [
-          "7.0.5",
-          "6.0.6"
-        ],
-        "id": "GHSA-3xgq-45jj-v275",
-        "modified": "2026-09-10T03:50:20.309509+00:00",
-        "published": "2024-11-08T06:30:47+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-21538",
-          "https://github.com/moxystudio/node-cross-spawn/issues/165",
-          "https://github.com/moxystudio/node-cross-spawn/pull/160",
-          "https://github.com/moxystudio/node-cross-spawn/commit/5ff3a07d9add449021d806e45c4168203aa833ff",
-          "https://github.com/moxystudio/node-cross-spawn/commit/640d391fde65388548601d95abedccc12943374f"
-        ],
-        "severity": {
-          "score": 7.7,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N/E:P"
-        },
-        "summary": "Regular Expression Denial of Service (ReDoS) in cross-spawn"
+        "id": "GHSA-3xgq-45jj-v275"
       },
       "cvss_score": 7.7,
       "dep_name": "cross-spawn",
@@ -1309,29 +952,7 @@
         "aliases": [
           "CVE-2022-21222"
         ],
-        "cwe_ids": [
-          "CWE-1333",
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "2.1.3"
-        ],
-        "id": "GHSA-p28h-cc7q-c4fg",
-        "modified": "2025-05-20T21:02:33+00:00",
-        "published": "2022-10-01T00:00:24+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-21222",
-          "https://github.com/fb55/css-what/commit/dc510929790da6617e7aa93a616498b22f6a6b72",
-          "https://github.com/fb55/css-what",
-          "https://github.com/fb55/css-what/blob/a38effd5a8f5506d75c7f8f13cbd8c76248a3860/index.js#23L12",
-          "https://github.com/fb55/css-what/blob/a38effd5a8f5506d75c7f8f13cbd8c76248a3860/index.js%23L12"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "css-what vulnerable to ReDoS due to use of insecure regular expression"
+        "id": "GHSA-p28h-cc7q-c4fg"
       },
       "cvss_score": 7.5,
       "dep_name": "css-what",
@@ -1394,29 +1015,7 @@
         "aliases": [
           "CVE-2017-20165"
         ],
-        "cwe_ids": [
-          "CWE-1333"
-        ],
-        "fixed_versions": [
-          "3.1.0",
-          "2.6.9"
-        ],
-        "id": "GHSA-9vvw-cc9w-f27h",
-        "modified": "2023-11-08T03:59:17.780578+00:00",
-        "published": "2023-01-09T12:30:19+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2017-20165",
-          "https://github.com/debug-js/debug/pull/504",
-          "https://github.com/debug-js/debug/commit/c38a0166c266a679c8de012d4eaccec3f944e685",
-          "https://github.com/debug-js/debug/commit/f53962e944a87e6ca9bb622a2a12dffc22a9bb5a",
-          "https://github.com/debug-js/debug"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "debug Inefficient Regular Expression Complexity vulnerability"
+        "id": "GHSA-9vvw-cc9w-f27h"
       },
       "cvss_score": 7.5,
       "dep_name": "debug",
@@ -1478,31 +1077,7 @@
         "aliases": [
           "CVE-2017-16137"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "2.6.9",
-          "3.1.0",
-          "3.2.7",
-          "4.3.1"
-        ],
-        "id": "GHSA-gxpj-cx7g-858c",
-        "modified": "2026-09-10T03:47:07.070123+00:00",
-        "published": "2018-08-09T20:18:07+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2017-16137",
-          "https://github.com/debug-js/debug/issues/797",
-          "https://github.com/visionmedia/debug/issues/501",
-          "https://github.com/visionmedia/debug/pull/504",
-          "https://github.com/debug-js/debug/commit/4e2150207c568adb9ead8f4c4528016081c88020"
-        ],
-        "severity": {
-          "score": 3.7,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "Regular Expression Denial of Service in debug"
+        "id": "GHSA-gxpj-cx7g-858c"
       },
       "cvss_score": 3.7,
       "dep_name": "debug",
@@ -1564,29 +1139,7 @@
         "aliases": [
           "CVE-2017-20165"
         ],
-        "cwe_ids": [
-          "CWE-1333"
-        ],
-        "fixed_versions": [
-          "3.1.0",
-          "2.6.9"
-        ],
-        "id": "GHSA-9vvw-cc9w-f27h",
-        "modified": "2023-11-08T03:59:17.780578+00:00",
-        "published": "2023-01-09T12:30:19+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2017-20165",
-          "https://github.com/debug-js/debug/pull/504",
-          "https://github.com/debug-js/debug/commit/c38a0166c266a679c8de012d4eaccec3f944e685",
-          "https://github.com/debug-js/debug/commit/f53962e944a87e6ca9bb622a2a12dffc22a9bb5a",
-          "https://github.com/debug-js/debug"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "debug Inefficient Regular Expression Complexity vulnerability"
+        "id": "GHSA-9vvw-cc9w-f27h"
       },
       "cvss_score": 7.5,
       "dep_name": "debug",
@@ -1648,31 +1201,7 @@
         "aliases": [
           "CVE-2017-16137"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "2.6.9",
-          "3.1.0",
-          "3.2.7",
-          "4.3.1"
-        ],
-        "id": "GHSA-gxpj-cx7g-858c",
-        "modified": "2026-09-10T03:47:07.070123+00:00",
-        "published": "2018-08-09T20:18:07+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2017-16137",
-          "https://github.com/debug-js/debug/issues/797",
-          "https://github.com/visionmedia/debug/issues/501",
-          "https://github.com/visionmedia/debug/pull/504",
-          "https://github.com/debug-js/debug/commit/4e2150207c568adb9ead8f4c4528016081c88020"
-        ],
-        "severity": {
-          "score": 3.7,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "Regular Expression Denial of Service in debug"
+        "id": "GHSA-gxpj-cx7g-858c"
       },
       "cvss_score": 3.7,
       "dep_name": "debug",
@@ -1734,28 +1263,7 @@
         "aliases": [
           "CVE-2018-3750"
         ],
-        "cwe_ids": [
-          "CWE-20"
-        ],
-        "fixed_versions": [
-          "0.5.1"
-        ],
-        "id": "GHSA-hr2v-3952-633q",
-        "modified": "2023-11-08T04:00:18.842083+00:00",
-        "published": "2018-10-09T00:44:59+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2018-3750",
-          "https://github.com/unclechu/node-deep-extend/commit/9423fae877e2ab6b4aecc4db79a0ed63039d4703",
-          "https://hackerone.com/reports/311333",
-          "https://github.com/advisories/GHSA-hr2v-3952-633q",
-          "https://www.npmjs.com/advisories/612"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Prototype Pollution in deep-extend"
+        "id": "GHSA-hr2v-3952-633q"
       },
       "cvss_score": 9.8,
       "dep_name": "deep-extend",
@@ -1817,27 +1325,7 @@
         "aliases": [
           "CVE-2010-2273"
         ],
-        "cwe_ids": [
-          "CWE-79"
-        ],
-        "fixed_versions": [
-          "1.13.1",
-          "1.12.4",
-          "1.11.6",
-          "1.10.10"
-        ],
-        "id": "GHSA-536q-8gxx-m782",
-        "modified": "2023-11-08T03:56:56.454372+00:00",
-        "published": "2019-09-11T23:02:57+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2010-2273",
-          "https://github.com/dojo/dojo/pull/307",
-          "https://github.com/dojo/dojo/commit/9117ffd5a3863e44c92fcd58564c0da22be858f4",
-          "https://bugs.dojotoolkit.org/ticket/10773",
-          "https://www.npmjs.com/advisories/972"
-        ],
-        "severity": null,
-        "summary": "Cross-Site Scripting in dojo"
+        "id": "GHSA-536q-8gxx-m782"
       },
       "cvss_score": null,
       "dep_name": "dojo",
@@ -1901,35 +1389,7 @@
         "aliases": [
           "CVE-2020-5258"
         ],
-        "cwe_ids": [
-          "CWE-1321",
-          "CWE-74",
-          "CWE-94"
-        ],
-        "fixed_versions": [
-          "1.11.10",
-          "1.12.8",
-          "1.13.7",
-          "1.14.6",
-          "1.15.3",
-          "1.16.2"
-        ],
-        "id": "GHSA-jxfh-8wgv-vfr2",
-        "modified": "2026-09-10T03:48:29.334564+00:00",
-        "published": "2020-03-10T18:03:14+00:00",
-        "references": [
-          "https://github.com/dojo/dojo/security/advisories/GHSA-jxfh-8wgv-vfr2",
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-5258",
-          "https://github.com/dojo/dojo/commit/20a00afb68f5587946dc76fbeaa68c39bda2171d",
-          "https://github.com/dojo/dojo",
-          "https://lists.apache.org/thread.html/r3638722360d7ae95f874280518b8d987d799a76df7a9cd78eac33a1b@%3Cusers.qpid.apache.org%3E"
-        ],
-        "severity": {
-          "score": 7.7,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:L/UI:R/S:C/C:H/I:H/A:N"
-        },
-        "summary": "Prototype pollution in dojo"
+        "id": "GHSA-jxfh-8wgv-vfr2"
       },
       "cvss_score": 7.7,
       "dep_name": "dojo",
@@ -1991,26 +1451,7 @@
         "aliases": [
           "CVE-2021-23450"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [],
-        "id": "GHSA-m8gw-hjpr-rjv7",
-        "modified": "2025-01-14T09:12:14.277759+00:00",
-        "published": "2022-01-05T15:01:46+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-23450",
-          "https://github.com/dojo/dojo",
-          "https://github.com/dojo/dojo/blob/4c39c14349408fc8274e19b399ffc660512ed07c/_base/lang.js%23L172",
-          "https://lists.debian.org/debian-lts-announce/2023/01/msg00030.html",
-          "https://snyk.io/vuln/SNYK-JAVA-ORGWEBJARS-2313036"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Prototype Pollution in dojo"
+        "id": "GHSA-m8gw-hjpr-rjv7"
       },
       "cvss_score": 7.5,
       "dep_name": "dojo",
@@ -2070,23 +1511,7 @@
     {
       "advisory": {
         "aliases": [],
-        "cwe_ids": [
-          "CWE-601"
-        ],
-        "fixed_versions": [
-          "2.2.2",
-          "3.3.2",
-          "4.1.2"
-        ],
-        "id": "GHSA-9q64-mpxx-87fg",
-        "modified": "2020-12-15T16:51:18+00:00",
-        "published": "2020-04-01T16:35:08+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2019-10775",
-          "https://www.npmjs.com/advisories/830"
-        ],
-        "severity": null,
-        "summary": "Open Redirect in ecstatic"
+        "id": "GHSA-9q64-mpxx-87fg"
       },
       "cvss_score": null,
       "dep_name": "ecstatic",
@@ -2150,21 +1575,7 @@
         "aliases": [
           "CVE-2019-10775"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "4.1.3"
-        ],
-        "id": "GHSA-jc84-3g44-wf2q",
-        "modified": "2026-03-13T22:11:11.602511+00:00",
-        "published": "2020-12-15T16:52:17+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2019-10775",
-          "https://snyk.io/vuln/SNYK-JS-ECSTATIC-540354"
-        ],
-        "severity": null,
-        "summary": "Denial of Service in ecstatic"
+        "id": "GHSA-jc84-3g44-wf2q"
       },
       "cvss_score": null,
       "dep_name": "ecstatic",
@@ -2228,25 +1639,7 @@
         "aliases": [
           "CVE-2018-16492"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "3.0.2",
-          "2.0.2"
-        ],
-        "id": "GHSA-qrmc-fj45-qfc2",
-        "modified": "2026-02-03T03:09:19.104400+00:00",
-        "published": "2019-02-07T18:03:28+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2018-16492",
-          "https://github.com/github/advisory-database/pull/6695",
-          "https://github.com/justmoon/node-extend/pull/48",
-          "https://github.com/justmoon/node-extend/commit/0e68e71d93507fcc391e398bc84abd0666b28190",
-          "https://hackerone.com/reports/381185"
-        ],
-        "severity": null,
-        "summary": "Prototype Pollution in extend"
+        "id": "GHSA-qrmc-fj45-qfc2"
       },
       "cvss_score": null,
       "dep_name": "extend",
@@ -2308,30 +1701,7 @@
         "aliases": [
           "CVE-2025-7783"
         ],
-        "cwe_ids": [
-          "CWE-330"
-        ],
-        "fixed_versions": [
-          "2.5.4",
-          "3.0.4",
-          "4.0.4"
-        ],
-        "id": "GHSA-fjxv-7rqg-78g4",
-        "modified": "2026-09-10T03:50:57.924154+00:00",
-        "published": "2025-07-21T19:04:54+00:00",
-        "references": [
-          "https://github.com/form-data/form-data/security/advisories/GHSA-fjxv-7rqg-78g4",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-7783",
-          "https://github.com/form-data/form-data/commit/3d1723080e6577a66f17f163ecd345a21d8d0fd0",
-          "https://github.com/benweissmann/CVE-2025-7783-poc",
-          "https://github.com/form-data/form-data"
-        ],
-        "severity": {
-          "score": 9.4,
-          "severity": "critical",
-          "vector": "CVSS:4.0/AV:N/AC:H/AT:N/PR:N/UI:N/VC:H/VI:H/VA:N/SC:H/SI:H/SA:N"
-        },
-        "summary": "form-data uses unsafe random function in form-data for choosing boundary"
+        "id": "GHSA-fjxv-7rqg-78g4"
       },
       "cvss_score": 9.4,
       "dep_name": "form-data",
@@ -2394,30 +1764,7 @@
         "aliases": [
           "CVE-2026-12143"
         ],
-        "cwe_ids": [
-          "CWE-93"
-        ],
-        "fixed_versions": [
-          "2.5.6",
-          "3.0.5",
-          "4.0.6"
-        ],
-        "id": "GHSA-hmw2-7cc7-3qxx",
-        "modified": "2026-09-10T03:50:49.785679+00:00",
-        "published": "2026-06-15T17:26:26+00:00",
-        "references": [
-          "https://github.com/form-data/form-data/security/advisories/GHSA-hmw2-7cc7-3qxx",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-12143",
-          "https://github.com/form-data/form-data/commit/64190db548c0179e37206858e39f27cf513e9435",
-          "https://github.com/form-data/form-data/commit/be3f3cf553978bac15a5182f1f3c3d2d38ccf229",
-          "https://github.com/form-data/form-data/commit/c7133499c2ee1b80c678e411244f4442bf902045"
-        ],
-        "severity": {
-          "score": 8.7,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N"
-        },
-        "summary": "form-data: CRLF injection in form-data via unescaped multipart field names and filenames"
+        "id": "GHSA-hmw2-7cc7-3qxx"
       },
       "cvss_score": 8.7,
       "dep_name": "form-data",
@@ -2480,30 +1827,7 @@
         "aliases": [
           "CVE-2025-7783"
         ],
-        "cwe_ids": [
-          "CWE-330"
-        ],
-        "fixed_versions": [
-          "2.5.4",
-          "3.0.4",
-          "4.0.4"
-        ],
-        "id": "GHSA-fjxv-7rqg-78g4",
-        "modified": "2026-09-10T03:50:57.924154+00:00",
-        "published": "2025-07-21T19:04:54+00:00",
-        "references": [
-          "https://github.com/form-data/form-data/security/advisories/GHSA-fjxv-7rqg-78g4",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-7783",
-          "https://github.com/form-data/form-data/commit/3d1723080e6577a66f17f163ecd345a21d8d0fd0",
-          "https://github.com/benweissmann/CVE-2025-7783-poc",
-          "https://github.com/form-data/form-data"
-        ],
-        "severity": {
-          "score": 9.4,
-          "severity": "critical",
-          "vector": "CVSS:4.0/AV:N/AC:H/AT:N/PR:N/UI:N/VC:H/VI:H/VA:N/SC:H/SI:H/SA:N"
-        },
-        "summary": "form-data uses unsafe random function in form-data for choosing boundary"
+        "id": "GHSA-fjxv-7rqg-78g4"
       },
       "cvss_score": 9.4,
       "dep_name": "form-data",
@@ -2566,30 +1890,7 @@
         "aliases": [
           "CVE-2026-12143"
         ],
-        "cwe_ids": [
-          "CWE-93"
-        ],
-        "fixed_versions": [
-          "2.5.6",
-          "3.0.5",
-          "4.0.6"
-        ],
-        "id": "GHSA-hmw2-7cc7-3qxx",
-        "modified": "2026-09-10T03:50:49.785679+00:00",
-        "published": "2026-06-15T17:26:26+00:00",
-        "references": [
-          "https://github.com/form-data/form-data/security/advisories/GHSA-hmw2-7cc7-3qxx",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-12143",
-          "https://github.com/form-data/form-data/commit/64190db548c0179e37206858e39f27cf513e9435",
-          "https://github.com/form-data/form-data/commit/be3f3cf553978bac15a5182f1f3c3d2d38ccf229",
-          "https://github.com/form-data/form-data/commit/c7133499c2ee1b80c678e411244f4442bf902045"
-        ],
-        "severity": {
-          "score": 8.7,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N"
-        },
-        "summary": "form-data: CRLF injection in form-data via unescaped multipart field names and filenames"
+        "id": "GHSA-hmw2-7cc7-3qxx"
       },
       "cvss_score": 8.7,
       "dep_name": "form-data",
@@ -2652,30 +1953,7 @@
         "aliases": [
           "CVE-2025-7783"
         ],
-        "cwe_ids": [
-          "CWE-330"
-        ],
-        "fixed_versions": [
-          "2.5.4",
-          "3.0.4",
-          "4.0.4"
-        ],
-        "id": "GHSA-fjxv-7rqg-78g4",
-        "modified": "2026-09-10T03:50:57.924154+00:00",
-        "published": "2025-07-21T19:04:54+00:00",
-        "references": [
-          "https://github.com/form-data/form-data/security/advisories/GHSA-fjxv-7rqg-78g4",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-7783",
-          "https://github.com/form-data/form-data/commit/3d1723080e6577a66f17f163ecd345a21d8d0fd0",
-          "https://github.com/benweissmann/CVE-2025-7783-poc",
-          "https://github.com/form-data/form-data"
-        ],
-        "severity": {
-          "score": 9.4,
-          "severity": "critical",
-          "vector": "CVSS:4.0/AV:N/AC:H/AT:N/PR:N/UI:N/VC:H/VI:H/VA:N/SC:H/SI:H/SA:N"
-        },
-        "summary": "form-data uses unsafe random function in form-data for choosing boundary"
+        "id": "GHSA-fjxv-7rqg-78g4"
       },
       "cvss_score": 9.4,
       "dep_name": "form-data",
@@ -2738,30 +2016,7 @@
         "aliases": [
           "CVE-2026-12143"
         ],
-        "cwe_ids": [
-          "CWE-93"
-        ],
-        "fixed_versions": [
-          "2.5.6",
-          "3.0.5",
-          "4.0.6"
-        ],
-        "id": "GHSA-hmw2-7cc7-3qxx",
-        "modified": "2026-09-10T03:50:49.785679+00:00",
-        "published": "2026-06-15T17:26:26+00:00",
-        "references": [
-          "https://github.com/form-data/form-data/security/advisories/GHSA-hmw2-7cc7-3qxx",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-12143",
-          "https://github.com/form-data/form-data/commit/64190db548c0179e37206858e39f27cf513e9435",
-          "https://github.com/form-data/form-data/commit/be3f3cf553978bac15a5182f1f3c3d2d38ccf229",
-          "https://github.com/form-data/form-data/commit/c7133499c2ee1b80c678e411244f4442bf902045"
-        ],
-        "severity": {
-          "score": 8.7,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N"
-        },
-        "summary": "form-data: CRLF injection in form-data via unescaped multipart field names and filenames"
+        "id": "GHSA-hmw2-7cc7-3qxx"
       },
       "cvss_score": 8.7,
       "dep_name": "form-data",
@@ -2824,28 +2079,7 @@
         "aliases": [
           "CVE-2023-45311"
         ],
-        "cwe_ids": [
-          "CWE-94"
-        ],
-        "fixed_versions": [
-          "1.2.11"
-        ],
-        "id": "GHSA-8r6j-v8pm-fqw3",
-        "modified": "2023-11-08T04:13:38.062107+00:00",
-        "published": "2023-10-06T21:30:49+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2023-45311",
-          "https://github.com/fsevents/fsevents/commit/909af26846834642c81d19f4148afa3b7557b058",
-          "https://github.com/atlassian/moo/blob/56ccbdd41b493332bc2cd7a4097a5802594cdb9c/package-lock.json#L1901-L1902",
-          "https://github.com/atlassian/react-immutable-proptypes/blob/ddb9fa5194b931bf7528eb4f2c0a8c3434f70edd/package-lock.json#L153",
-          "https://github.com/cloudflare/authr/blob/3f6129d97d06e61033a7f237d84e35e678db490f/ts/package-lock.json#L1512"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Code injection in fsevents"
+        "id": "GHSA-8r6j-v8pm-fqw3"
       },
       "cvss_score": 9.8,
       "dep_name": "fsevents",
@@ -2907,19 +2141,7 @@
         "aliases": [
           "GHSA-xv2f-5jw4-v95m"
         ],
-        "fixed_versions": [
-          "1.2.11"
-        ],
-        "id": "MAL-2023-462",
-        "modified": "2023-11-08T04:24:32.787594+00:00",
-        "published": "2023-04-27T19:20:00+00:00",
-        "references": [
-          "https://www.npmjs.com/package/fsevents",
-          "https://github.com/fsevents/fsevents/commit/909af26846834642c81d19f4148afa3b7557b058",
-          "https://github.com/advisories/GHSA-xv2f-5jw4-v95m"
-        ],
-        "severity": null,
-        "summary": "Malicious code in fsevents (npm)"
+        "id": "MAL-2023-462"
       },
       "cvss_score": null,
       "dep_name": "fsevents",
@@ -2981,28 +2203,7 @@
         "aliases": [
           "CVE-2019-13173"
         ],
-        "cwe_ids": [
-          "CWE-59"
-        ],
-        "fixed_versions": [
-          "1.0.12"
-        ],
-        "id": "GHSA-xf7w-r453-m56c",
-        "modified": "2023-11-08T04:01:07.720925+00:00",
-        "published": "2019-05-30T17:19:34+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2019-13173",
-          "https://github.com/npm/fstream/commit/6a77d2fa6e1462693cf8e46f930da96ec1b0bb22",
-          "https://usn.ubuntu.com/4123-1",
-          "https://www.npmjs.com/advisories/886",
-          "http://lists.opensuse.org/opensuse-security-announce/2019-08/msg00010.html"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
-        },
-        "summary": "Arbitrary File Overwrite in fstream"
+        "id": "GHSA-xf7w-r453-m56c"
       },
       "cvss_score": 7.5,
       "dep_name": "fstream",
@@ -3062,25 +2263,7 @@
     {
       "advisory": {
         "aliases": [],
-        "cwe_ids": [
-          "CWE-94"
-        ],
-        "fixed_versions": [
-          "3.0.8",
-          "4.5.2"
-        ],
-        "id": "GHSA-2cf5-4w76-r9qv",
-        "modified": "2026-09-10T03:48:33.174881+00:00",
-        "published": "2020-09-04T14:57:38+00:00",
-        "references": [
-          "https://www.npmjs.com/advisories/1316"
-        ],
-        "severity": {
-          "score": 7.3,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:R/S:C/C:L/I:H/A:L"
-        },
-        "summary": "Arbitrary Code Execution in handlebars"
+        "id": "GHSA-2cf5-4w76-r9qv"
       },
       "cvss_score": 7.3,
       "dep_name": "handlebars",
@@ -3142,29 +2325,7 @@
         "aliases": [
           "CVE-2026-33916"
         ],
-        "cwe_ids": [
-          "CWE-1321",
-          "CWE-79"
-        ],
-        "fixed_versions": [
-          "4.7.9"
-        ],
-        "id": "GHSA-2qvq-rjwj-gvw9",
-        "modified": "2026-09-10T03:50:36.381674+00:00",
-        "published": "2026-03-26T22:20:51+00:00",
-        "references": [
-          "https://github.com/handlebars-lang/handlebars.js/security/advisories/GHSA-2qvq-rjwj-gvw9",
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-23369",
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-23383",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-33916",
-          "https://github.com/handlebars-lang/handlebars.js/commit/68d8df5a88e0a26fe9e6084c5c6aaebe67b07da2"
-        ],
-        "severity": {
-          "score": 4.7,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:L/I:L/A:N"
-        },
-        "summary": "Handlebars.js has Prototype Pollution Leading to XSS through Partial Template Injection"
+        "id": "GHSA-2qvq-rjwj-gvw9"
       },
       "cvss_score": 4.7,
       "dep_name": "handlebars",
@@ -3227,29 +2388,7 @@
         "aliases": [
           "CVE-2026-33937"
         ],
-        "cwe_ids": [
-          "CWE-843",
-          "CWE-94"
-        ],
-        "fixed_versions": [
-          "4.7.9"
-        ],
-        "id": "GHSA-2w6w-674q-4c4q",
-        "modified": "2026-09-10T03:50:36.539490+00:00",
-        "published": "2026-03-27T18:19:58+00:00",
-        "references": [
-          "https://github.com/handlebars-lang/handlebars.js/security/advisories/GHSA-2w6w-674q-4c4q",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-33937",
-          "https://github.com/handlebars-lang/handlebars.js/commit/68d8df5a88e0a26fe9e6084c5c6aaebe67b07da2",
-          "https://github.com/handlebars-lang/handlebars.js",
-          "https://github.com/handlebars-lang/handlebars.js/releases/tag/v4.7.9"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Handlebars.js has JavaScript Injection via AST Type Confusion"
+        "id": "GHSA-2w6w-674q-4c4q"
       },
       "cvss_score": 9.8,
       "dep_name": "handlebars",
@@ -3313,29 +2452,7 @@
           "CVE-2019-20920",
           "SNYK-JS-HANDLEBARS-534478"
         ],
-        "cwe_ids": [
-          "CWE-94"
-        ],
-        "fixed_versions": [
-          "3.0.8",
-          "4.5.3"
-        ],
-        "id": "GHSA-3cqr-58rm-57f8",
-        "modified": "2026-09-10T03:49:16.886485+00:00",
-        "published": "2022-02-10T20:38:19+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2019-20920",
-          "https://github.com/handlebars-lang/handlebars.js/commit/156061eb7707575293613d7fdf90e2bdaac029ee",
-          "https://github.com/handlebars-lang/handlebars.js/commit/d54137810a49939fd2ad01a91a34e182ece4528e",
-          "https://snyk.io/vuln/SNYK-JS-HANDLEBARS-534478",
-          "https://www.npmjs.com/advisories/1316"
-        ],
-        "severity": {
-          "score": 8.1,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:C/C:H/I:L/A:L"
-        },
-        "summary": "Arbitrary Code Execution in Handlebars"
+        "id": "GHSA-3cqr-58rm-57f8"
       },
       "cvss_score": 8.1,
       "dep_name": "handlebars",
@@ -3397,29 +2514,7 @@
         "aliases": [
           "CVE-2026-33938"
         ],
-        "cwe_ids": [
-          "CWE-843",
-          "CWE-94"
-        ],
-        "fixed_versions": [
-          "4.7.9"
-        ],
-        "id": "GHSA-3mfm-83xf-c92r",
-        "modified": "2026-09-10T03:50:36.784657+00:00",
-        "published": "2026-03-27T18:20:44+00:00",
-        "references": [
-          "https://github.com/handlebars-lang/handlebars.js/security/advisories/GHSA-3mfm-83xf-c92r",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-33938",
-          "https://github.com/handlebars-lang/handlebars.js/commit/68d8df5a88e0a26fe9e6084c5c6aaebe67b07da2",
-          "https://github.com/handlebars-lang/handlebars.js",
-          "https://github.com/handlebars-lang/handlebars.js/releases/tag/v4.7.9"
-        ],
-        "severity": {
-          "score": 8.1,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Handlebars.js has JavaScript Injection via AST Type Confusion by tampering @partial-block"
+        "id": "GHSA-3mfm-83xf-c92r"
       },
       "cvss_score": 8.1,
       "dep_name": "handlebars",
@@ -3480,27 +2575,7 @@
     {
       "advisory": {
         "aliases": [],
-        "cwe_ids": [
-          "CWE-367"
-        ],
-        "fixed_versions": [
-          "4.7.9"
-        ],
-        "id": "GHSA-442j-39wm-28r2",
-        "modified": "2026-09-10T03:50:36.874716+00:00",
-        "published": "2026-03-29T15:16:37+00:00",
-        "references": [
-          "https://github.com/handlebars-lang/handlebars.js/security/advisories/GHSA-442j-39wm-28r2",
-          "https://github.com/handlebars-lang/handlebars.js/commit/68d8df5a88e0a26fe9e6084c5c6aaebe67b07da2",
-          "https://github.com/handlebars-lang/handlebars.js",
-          "https://github.com/handlebars-lang/handlebars.js/releases/tag/v4.7.9"
-        ],
-        "severity": {
-          "score": 3.7,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:N"
-        },
-        "summary": "Handlebars.js has a Property Access Validation Bypass in container.lookup"
+        "id": "GHSA-442j-39wm-28r2"
       },
       "cvss_score": 3.7,
       "dep_name": "handlebars",
@@ -3563,28 +2638,7 @@
           "CVE-2019-20922",
           "SNYK-JS-HANDLEBARS-480388"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "4.4.5"
-        ],
-        "id": "GHSA-62gr-4qp9-h98f",
-        "modified": "2026-07-08T06:49:32.364286+00:00",
-        "published": "2022-02-10T20:38:22+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2019-20922",
-          "https://github.com/handlebars-lang/handlebars.js/commit/8d5530ee2c3ea9f0aee3fde310b9f36887d00b8b",
-          "https://snyk.io/vuln/SNYK-JS-HANDLEBARS-480388",
-          "https://www.npmjs.com/advisories/1300",
-          "https://www.npmjs.com/package/handlebars"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Regular Expression Denial of Service in Handlebars"
+        "id": "GHSA-62gr-4qp9-h98f"
       },
       "cvss_score": 7.5,
       "dep_name": "handlebars",
@@ -3646,28 +2700,7 @@
         "aliases": [
           "CVE-2021-23383"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "4.7.7"
-        ],
-        "id": "GHSA-765h-qjxv-5f44",
-        "modified": "2026-09-10T03:49:11.707510+00:00",
-        "published": "2022-02-10T23:51:42+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-23383",
-          "https://github.com/handlebars-lang/handlebars.js/commit/f0589701698268578199be25285b2ebea1c1e427",
-          "https://github.com/handlebars-lang/handlebars.js",
-          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/handlebars-source/CVE-2021-23383.yml",
-          "https://security.netapp.com/advisory/ntap-20210618-0007"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Prototype Pollution in handlebars"
+        "id": "GHSA-765h-qjxv-5f44"
       },
       "cvss_score": 9.8,
       "dep_name": "handlebars",
@@ -3729,29 +2762,7 @@
         "aliases": [
           "CVE-2026-106446"
         ],
-        "cwe_ids": [
-          "CWE-843",
-          "CWE-94"
-        ],
-        "fixed_versions": [
-          "4.7.10"
-        ],
-        "id": "GHSA-8r5x-fm3f-whwj",
-        "modified": "2026-10-08T18:00:08.902906+00:00",
-        "published": "2026-10-08T17:52:32+00:00",
-        "references": [
-          "https://github.com/handlebars-lang/handlebars.js/security/advisories/GHSA-8r5x-fm3f-whwj",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-106446",
-          "https://github.com/handlebars-lang/handlebars.js/pull/2185",
-          "https://github.com/handlebars-lang/handlebars.js/commit/703fdcc5fd6cc8d1cc0c33cc19de40c467c4b8d2",
-          "https://github.com/handlebars-lang/handlebars.js"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Handlebars: JavaScript Injection via AST Type Confusion in compile (bypass of CVE-2026-33937)"
+        "id": "GHSA-8r5x-fm3f-whwj"
       },
       "cvss_score": 9.8,
       "dep_name": "handlebars",
@@ -3814,28 +2825,7 @@
         "aliases": [
           "CVE-2026-33939"
         ],
-        "cwe_ids": [
-          "CWE-754"
-        ],
-        "fixed_versions": [
-          "4.7.9"
-        ],
-        "id": "GHSA-9cx6-37pm-9jff",
-        "modified": "2026-09-10T03:51:00.150731+00:00",
-        "published": "2026-03-27T18:21:15+00:00",
-        "references": [
-          "https://github.com/handlebars-lang/handlebars.js/security/advisories/GHSA-9cx6-37pm-9jff",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-33939",
-          "https://github.com/handlebars-lang/handlebars.js/commit/68d8df5a88e0a26fe9e6084c5c6aaebe67b07da2",
-          "https://github.com/handlebars-lang/handlebars.js",
-          "https://github.com/handlebars-lang/handlebars.js/releases/tag/v4.7.9"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Handlebars.js has Denial of Service via Malformed Decorator Syntax in Template Compilation"
+        "id": "GHSA-9cx6-37pm-9jff"
       },
       "cvss_score": 7.5,
       "dep_name": "handlebars",
@@ -3898,28 +2888,7 @@
         "aliases": [
           "CVE-2021-23369"
         ],
-        "cwe_ids": [
-          "CWE-94"
-        ],
-        "fixed_versions": [
-          "4.7.7"
-        ],
-        "id": "GHSA-f2jv-r9rf-7988",
-        "modified": "2026-09-10T03:49:14.829727+00:00",
-        "published": "2021-05-06T15:57:44+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-23369",
-          "https://github.com/handlebars-lang/handlebars.js/commit/b6d3de7123eebba603e321f04afdbae608e8fea8",
-          "https://github.com/handlebars-lang/handlebars.js/commit/f0589701698268578199be25285b2ebea1c1e427",
-          "https://github.com/wycats/handlebars.js",
-          "https://security.netapp.com/advisory/ntap-20210604-0008"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Remote code execution in handlebars when compiling templates"
+        "id": "GHSA-f2jv-r9rf-7988"
       },
       "cvss_score": 9.8,
       "dep_name": "handlebars",
@@ -3979,20 +2948,7 @@
     {
       "advisory": {
         "aliases": [],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "4.4.5"
-        ],
-        "id": "GHSA-f52g-6jhx-586p",
-        "modified": "2020-08-31T18:54:21+00:00",
-        "published": "2020-09-03T23:20:12+00:00",
-        "references": [
-          "https://www.npmjs.com/advisories/1300"
-        ],
-        "severity": null,
-        "summary": "Denial of Service in handlebars"
+        "id": "GHSA-f52g-6jhx-586p"
       },
       "cvss_score": null,
       "dep_name": "handlebars",
@@ -4052,21 +3008,7 @@
     {
       "advisory": {
         "aliases": [],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "3.0.8",
-          "4.5.3"
-        ],
-        "id": "GHSA-g9r4-xpmj-mj65",
-        "modified": "2026-09-10T03:49:13.649783+00:00",
-        "published": "2020-09-04T15:06:32+00:00",
-        "references": [
-          "https://www.npmjs.com/advisories/1325"
-        ],
-        "severity": null,
-        "summary": "Prototype Pollution in handlebars"
+        "id": "GHSA-g9r4-xpmj-mj65"
       },
       "cvss_score": null,
       "dep_name": "handlebars",
@@ -4128,29 +3070,7 @@
         "aliases": [
           "CVE-2026-106445"
         ],
-        "cwe_ids": [
-          "CWE-1289",
-          "CWE-184"
-        ],
-        "fixed_versions": [
-          "4.7.10"
-        ],
-        "id": "GHSA-p8wg-vrv2-v86f",
-        "modified": "2026-10-12T14:45:06.527043+00:00",
-        "published": "2026-10-08T17:52:26+00:00",
-        "references": [
-          "https://github.com/handlebars-lang/handlebars.js/security/advisories/GHSA-p8wg-vrv2-v86f",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-106445",
-          "https://github.com/handlebars-lang/handlebars.js/pull/2185",
-          "https://github.com/handlebars-lang/handlebars.js/commit/ceec388abe1d1aac8f6369860d5f390fa71ef4fa",
-          "https://github.com/handlebars-lang/handlebars.js"
-        ],
-        "severity": {
-          "score": 9.2,
-          "severity": "critical",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
-        },
-        "summary": "Handlebars: JavaScript Injection via Own Property Check Bypass"
+        "id": "GHSA-p8wg-vrv2-v86f"
       },
       "cvss_score": 9.2,
       "dep_name": "handlebars",
@@ -4211,18 +3131,7 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [
-          "3.0.8",
-          "4.5.3"
-        ],
-        "id": "GHSA-q2c6-c6pm-g3gh",
-        "modified": "2026-09-10T03:48:58.277710+00:00",
-        "published": "2020-09-04T15:07:38+00:00",
-        "references": [
-          "https://www.npmjs.com/advisories/1324"
-        ],
-        "severity": null,
-        "summary": "Arbitrary Code Execution in handlebars"
+        "id": "GHSA-q2c6-c6pm-g3gh"
       },
       "cvss_score": null,
       "dep_name": "handlebars",
@@ -4282,30 +3191,7 @@
     {
       "advisory": {
         "aliases": [],
-        "cwe_ids": [
-          "CWE-471"
-        ],
-        "fixed_versions": [
-          "4.1.2",
-          "4.0.14",
-          "3.0.7"
-        ],
-        "id": "GHSA-q42p-pg8m-cqh6",
-        "modified": "2026-09-10T03:48:23.648231+00:00",
-        "published": "2019-06-05T14:07:48+00:00",
-        "references": [
-          "https://github.com/handlebars-lang/handlebars.js/issues/1495",
-          "https://github.com/handlebars-lang/handlebars.js/commit/0d6d8c335ad81bad1b672fc56b6a44f6aa472dac",
-          "https://github.com/handlebars-lang/handlebars.js/commit/7372d4e9dffc9d70c09671aa28b9392a1577fd86",
-          "https://github.com/handlebars-lang/handlebars.js/commit/85c8783b34fc6d36145d8b53885ad0b9e3c3f9c4",
-          "https://github.com/handlebars-lang/handlebars.js/commit/cd38583216dce3252831916323202749431c773e"
-        ],
-        "severity": {
-          "score": 7.3,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:L"
-        },
-        "summary": "Prototype Pollution in handlebars"
+        "id": "GHSA-q42p-pg8m-cqh6"
       },
       "cvss_score": 7.3,
       "dep_name": "handlebars",
@@ -4367,30 +3253,7 @@
         "aliases": [
           "CVE-2019-19919"
         ],
-        "cwe_ids": [
-          "CWE-1321",
-          "CWE-74"
-        ],
-        "fixed_versions": [
-          "4.3.0",
-          "3.0.8"
-        ],
-        "id": "GHSA-w457-6q6x-cgp9",
-        "modified": "2026-09-10T03:49:25.089815+00:00",
-        "published": "2019-12-26T17:58:13+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2019-19919",
-          "https://github.com/wycats/handlebars.js/issues/1558",
-          "https://github.com/handlebars-lang/handlebars.js/commit/156061eb7707575293613d7fdf90e2bdaac029ee",
-          "https://github.com/handlebars-lang/handlebars.js/commit/90ad8d97ad2933852fb83fcc054699dc99e094db",
-          "https://github.com/wycats/handlebars.js/commit/2078c727c627f25d4a149962f05c1e069beb18bc"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Prototype Pollution in handlebars"
+        "id": "GHSA-w457-6q6x-cgp9"
       },
       "cvss_score": 9.8,
       "dep_name": "handlebars",
@@ -4452,29 +3315,7 @@
         "aliases": [
           "CVE-2026-33940"
         ],
-        "cwe_ids": [
-          "CWE-843",
-          "CWE-94"
-        ],
-        "fixed_versions": [
-          "4.7.9"
-        ],
-        "id": "GHSA-xhpv-hc6g-r9c6",
-        "modified": "2026-09-10T03:50:41.814438+00:00",
-        "published": "2026-03-27T18:21:44+00:00",
-        "references": [
-          "https://github.com/handlebars-lang/handlebars.js/security/advisories/GHSA-xhpv-hc6g-r9c6",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-33940",
-          "https://github.com/handlebars-lang/handlebars.js/commit/68d8df5a88e0a26fe9e6084c5c6aaebe67b07da2",
-          "https://github.com/handlebars-lang/handlebars.js",
-          "https://github.com/handlebars-lang/handlebars.js/releases/tag/v4.7.9"
-        ],
-        "severity": {
-          "score": 8.1,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Handlebars.js has JavaScript Injection via AST Type Confusion when passing an object as dynamic partial"
+        "id": "GHSA-xhpv-hc6g-r9c6"
       },
       "cvss_score": 8.1,
       "dep_name": "handlebars",
@@ -4537,30 +3378,7 @@
         "aliases": [
           "CVE-2026-33941"
         ],
-        "cwe_ids": [
-          "CWE-116",
-          "CWE-79",
-          "CWE-94"
-        ],
-        "fixed_versions": [
-          "4.7.9"
-        ],
-        "id": "GHSA-xjpj-3mr7-gcpf",
-        "modified": "2026-09-10T03:50:41.826443+00:00",
-        "published": "2026-03-27T18:22:10+00:00",
-        "references": [
-          "https://github.com/handlebars-lang/handlebars.js/security/advisories/GHSA-xjpj-3mr7-gcpf",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-33941",
-          "https://github.com/handlebars-lang/handlebars.js/commit/68d8df5a88e0a26fe9e6084c5c6aaebe67b07da2",
-          "https://github.com/handlebars-lang/handlebars.js",
-          "https://github.com/handlebars-lang/handlebars.js/releases/tag/v4.7.9"
-        ],
-        "severity": {
-          "score": 8.2,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:R/S:C/C:H/I:H/A:H"
-        },
-        "summary": "Handlebars.js has JavaScript Injection in CLI Precompiler via Unescaped Names and Options"
+        "id": "GHSA-xjpj-3mr7-gcpf"
       },
       "cvss_score": 8.2,
       "dep_name": "handlebars",
@@ -4623,28 +3441,7 @@
         "aliases": [
           "CVE-2026-106444"
         ],
-        "cwe_ids": [
-          "CWE-116"
-        ],
-        "fixed_versions": [
-          "4.7.10"
-        ],
-        "id": "GHSA-xw65-4hp5-5hc7",
-        "modified": "2026-10-08T18:00:09.713255+00:00",
-        "published": "2026-10-08T17:52:37+00:00",
-        "references": [
-          "https://github.com/handlebars-lang/handlebars.js/security/advisories/GHSA-xw65-4hp5-5hc7",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-106444",
-          "https://github.com/handlebars-lang/handlebars.js/pull/2185",
-          "https://github.com/handlebars-lang/handlebars.js/commit/609d1b11c833c9a3e00f56f2f34d22f425446725",
-          "https://github.com/handlebars-lang/handlebars.js"
-        ],
-        "severity": {
-          "score": 4.7,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:L/I:L/A:N"
-        },
-        "summary": "Handlebars: JavaScript Injection via Unsafe Inline Embedding of Precompiled Templates"
+        "id": "GHSA-xw65-4hp5-5hc7"
       },
       "cvss_score": 4.7,
       "dep_name": "handlebars",
@@ -4707,29 +3504,7 @@
         "aliases": [
           "CVE-2022-29167"
         ],
-        "cwe_ids": [
-          "CWE-1333",
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "9.0.1"
-        ],
-        "id": "GHSA-44pw-h2cw-w3vq",
-        "modified": "2023-11-08T04:09:08.620639+00:00",
-        "published": "2022-05-23T20:18:14+00:00",
-        "references": [
-          "https://github.com/mozilla/hawk/security/advisories/GHSA-44pw-h2cw-w3vq",
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-29167",
-          "https://github.com/mozilla/hawk/pull/286",
-          "https://github.com/mozilla/hawk/commit/d10d72ca82db967f6c5fcf866ff78e3ca25ce1ab",
-          "https://github.com/mozilla/hawk"
-        ],
-        "severity": {
-          "score": 7.4,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:N/I:N/A:H"
-        },
-        "summary": "Uncontrolled Resource Consumption in Hawk"
+        "id": "GHSA-44pw-h2cw-w3vq"
       },
       "cvss_score": 7.4,
       "dep_name": "hawk",
@@ -4791,29 +3566,7 @@
         "aliases": [
           "CVE-2016-2515"
         ],
-        "cwe_ids": [
-          "CWE-1333"
-        ],
-        "fixed_versions": [
-          "4.1.1",
-          "3.1.3"
-        ],
-        "id": "GHSA-jcpv-g9rr-qxrc",
-        "modified": "2023-11-08T03:58:24.587802+00:00",
-        "published": "2018-07-31T22:52:00+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2016-2515",
-          "https://github.com/hueniverse/hawk/issues/168",
-          "https://github.com/hueniverse/hawk/commit/0833f99ba64558525995a7e21d4093da1f3e15fa",
-          "https://bugzilla.redhat.com/show_bug.cgi?id=1309721",
-          "https://github.com/advisories/GHSA-jcpv-g9rr-qxrc"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Regular Expression Denial of Service in hawk"
+        "id": "GHSA-jcpv-g9rr-qxrc"
       },
       "cvss_score": 7.5,
       "dep_name": "hawk",
@@ -4875,29 +3628,7 @@
         "aliases": [
           "CVE-2022-29167"
         ],
-        "cwe_ids": [
-          "CWE-1333",
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "9.0.1"
-        ],
-        "id": "GHSA-44pw-h2cw-w3vq",
-        "modified": "2023-11-08T04:09:08.620639+00:00",
-        "published": "2022-05-23T20:18:14+00:00",
-        "references": [
-          "https://github.com/mozilla/hawk/security/advisories/GHSA-44pw-h2cw-w3vq",
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-29167",
-          "https://github.com/mozilla/hawk/pull/286",
-          "https://github.com/mozilla/hawk/commit/d10d72ca82db967f6c5fcf866ff78e3ca25ce1ab",
-          "https://github.com/mozilla/hawk"
-        ],
-        "severity": {
-          "score": 7.4,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:N/I:N/A:H"
-        },
-        "summary": "Uncontrolled Resource Consumption in Hawk"
+        "id": "GHSA-44pw-h2cw-w3vq"
       },
       "cvss_score": 7.4,
       "dep_name": "hawk",
@@ -4959,28 +3690,7 @@
         "aliases": [
           "CVE-2020-36604"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "8.5.1",
-          "9.0.3"
-        ],
-        "id": "GHSA-c429-5p7v-vgjp",
-        "modified": "2026-09-10T03:49:45.279524+00:00",
-        "published": "2022-09-25T00:00:27+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-36604",
-          "https://github.com/hapijs/hoek/issues/352",
-          "https://github.com/hapijs/hoek/commit/4d0804bc6135ad72afdc5e1ec002b935b2f5216a",
-          "https://github.com/hapijs/hoek/commit/948baf98634a5c206875b67d11368f133034fa90"
-        ],
-        "severity": {
-          "score": 8.1,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "hoek subject to prototype pollution via the clone function."
+        "id": "GHSA-c429-5p7v-vgjp"
       },
       "cvss_score": 8.1,
       "dep_name": "hoek",
@@ -5042,29 +3752,7 @@
         "aliases": [
           "CVE-2018-3728"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "5.0.3",
-          "4.2.1"
-        ],
-        "id": "GHSA-jp4x-w63m-7wgm",
-        "modified": "2025-05-29T22:49:49+00:00",
-        "published": "2018-04-26T15:25:17+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2018-3728",
-          "https://github.com/hapijs/hoek/commit/32ed5c9413321fbc37da5ca81a7cbab693786dee",
-          "https://github.com/hapijs/hoek/commit/5aed1a8c4a3d55722d1c799f2368857bf418d6df",
-          "https://hackerone.com/reports/310439",
-          "https://access.redhat.com/errata/RHSA-2018:1263"
-        ],
-        "severity": {
-          "score": 8.8,
-          "severity": "high",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Prototype Pollution in hoek"
+        "id": "GHSA-jp4x-w63m-7wgm"
       },
       "cvss_score": 8.8,
       "dep_name": "hoek",
@@ -5126,28 +3814,7 @@
         "aliases": [
           "CVE-2020-36604"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "8.5.1",
-          "9.0.3"
-        ],
-        "id": "GHSA-c429-5p7v-vgjp",
-        "modified": "2026-09-10T03:49:45.279524+00:00",
-        "published": "2022-09-25T00:00:27+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-36604",
-          "https://github.com/hapijs/hoek/issues/352",
-          "https://github.com/hapijs/hoek/commit/4d0804bc6135ad72afdc5e1ec002b935b2f5216a",
-          "https://github.com/hapijs/hoek/commit/948baf98634a5c206875b67d11368f133034fa90"
-        ],
-        "severity": {
-          "score": 8.1,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "hoek subject to prototype pollution via the clone function."
+        "id": "GHSA-c429-5p7v-vgjp"
       },
       "cvss_score": 8.1,
       "dep_name": "hoek",
@@ -5209,29 +3876,7 @@
         "aliases": [
           "CVE-2018-3728"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "5.0.3",
-          "4.2.1"
-        ],
-        "id": "GHSA-jp4x-w63m-7wgm",
-        "modified": "2025-05-29T22:49:49+00:00",
-        "published": "2018-04-26T15:25:17+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2018-3728",
-          "https://github.com/hapijs/hoek/commit/32ed5c9413321fbc37da5ca81a7cbab693786dee",
-          "https://github.com/hapijs/hoek/commit/5aed1a8c4a3d55722d1c799f2368857bf418d6df",
-          "https://hackerone.com/reports/310439",
-          "https://access.redhat.com/errata/RHSA-2018:1263"
-        ],
-        "severity": {
-          "score": 8.8,
-          "severity": "high",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Prototype Pollution in hoek"
+        "id": "GHSA-jp4x-w63m-7wgm"
       },
       "cvss_score": 8.8,
       "dep_name": "hoek",
@@ -5293,29 +3938,7 @@
         "aliases": [
           "CVE-2021-23362"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "2.8.9",
-          "3.0.8"
-        ],
-        "id": "GHSA-43f8-2h32-f4cj",
-        "modified": "2025-01-14T08:57:25.609462+00:00",
-        "published": "2021-05-06T16:10:39+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-23362",
-          "https://github.com/npm/hosted-git-info/pull/76",
-          "https://github.com/npm/hosted-git-info/commit/29adfe5ef789784c861b2cdeb15051ec2ba651a7",
-          "https://github.com/npm/hosted-git-info/commit/8d4b3697d79bcd89cdb36d1db165e3696c783a01",
-          "https://github.com/npm/hosted-git-info/commit/bede0dc38e1785e732bf0a48ba6f81a4a908eba3"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "Regular Expression Denial of Service in hosted-git-info"
+        "id": "GHSA-43f8-2h32-f4cj"
       },
       "cvss_score": 5.3,
       "dep_name": "hosted-git-info",
@@ -5377,27 +4000,7 @@
         "aliases": [
           "CVE-2021-3820"
         ],
-        "cwe_ids": [
-          "CWE-1333"
-        ],
-        "fixed_versions": [
-          "0.3.7"
-        ],
-        "id": "GHSA-x55w-vjjp-222r",
-        "modified": "2023-11-08T04:06:26.408707+00:00",
-        "published": "2021-09-29T17:12:19+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-3820",
-          "https://github.com/pksunkara/inflect/commit/a9a0a8e9561c3487854c7cae42565d9652ec858b",
-          "https://github.com/pksunkara/inflect",
-          "https://huntr.dev/bounties/4612b31a-072b-4f61-a916-c7e4cbc2042a"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "inflect vulnerable to Inefficient Regular Expression Complexity"
+        "id": "GHSA-x55w-vjjp-222r"
       },
       "cvss_score": 7.5,
       "dep_name": "i",
@@ -5460,28 +4063,7 @@
           "CVE-2020-7788",
           "SNYK-JS-INI-1048974"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "1.3.6"
-        ],
-        "id": "GHSA-qqgx-2p2h-9c37",
-        "modified": "2026-09-10T03:49:13.836088+00:00",
-        "published": "2020-12-10T16:53:45+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-7788",
-          "https://github.com/npm/ini/commit/56d2805e07ccd94e2ba0984ac9240ff02d44b6f1",
-          "https://github.com/npm/ini",
-          "https://lists.debian.org/debian-lts-announce/2020/12/msg00032.html",
-          "https://snyk.io/vuln/SNYK-JS-INI-1048974"
-        ],
-        "severity": {
-          "score": 7.3,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:L"
-        },
-        "summary": "ini before 1.3.6 vulnerable to Prototype Pollution via ini.parse"
+        "id": "GHSA-qqgx-2p2h-9c37"
       },
       "cvss_score": 7.3,
       "dep_name": "ini",
@@ -5543,29 +4125,7 @@
         "aliases": [
           "CVE-2018-1107"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "2.17.2",
-          "1.4.1"
-        ],
-        "id": "GHSA-4hpf-3wq7-5rpr",
-        "modified": "2023-11-08T03:59:45.221407+00:00",
-        "published": "2022-01-06T20:44:07+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2018-1107",
-          "https://github.com/mafintosh/is-my-json-valid/pull/159",
-          "https://github.com/mafintosh/is-my-json-valid/commit/b3051b277f7caa08cd2edc6f74f50aeda65d2976",
-          "https://bugzilla.redhat.com/show_bug.cgi?id=1546357",
-          "https://snyk.io/vuln/npm:is-my-json-valid:20180214"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "Regular expression deinal of service (ReDoS) in is-my-json-valid"
+        "id": "GHSA-4hpf-3wq7-5rpr"
       },
       "cvss_score": 5.3,
       "dep_name": "is-my-json-valid",
@@ -5630,33 +4190,7 @@
           "PYSEC-2026-628",
           "SNYK-JS-JQUERY-174006"
         ],
-        "cwe_ids": [
-          "CWE-1321",
-          "CWE-79"
-        ],
-        "fixed_versions": [
-          "3.4.0",
-          "4.3.4",
-          "2.1.9",
-          "2.2.2",
-          "1.19.0"
-        ],
-        "id": "GHSA-6c3j-c64m-qhgq",
-        "modified": "2026-07-08T05:56:09.047237+00:00",
-        "published": "2019-04-26T16:29:11+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2019-11358",
-          "https://github.com/maximebf/php-debugbar/issues/447",
-          "https://github.com/jquery/jquery/pull/4333",
-          "https://github.com/maximebf/php-debugbar/commit/847216e60544258c881f2733d699bbcfeefac0fc",
-          "https://github.com/django/django/commit/34ec52269ade54af31a021b12969913129571a3f"
-        ],
-        "severity": {
-          "score": 6.1,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
-        },
-        "summary": "XSS in jQuery as used in Drupal, Backdrop CMS, and other products"
+        "id": "GHSA-6c3j-c64m-qhgq"
       },
       "cvss_score": 6.1,
       "dep_name": "jquery",
@@ -5721,31 +4255,7 @@
           "BIT-drupal-2020-11022",
           "CVE-2020-11022"
         ],
-        "cwe_ids": [
-          "CWE-79"
-        ],
-        "fixed_versions": [
-          "3.5.0",
-          "4.4.0",
-          "1.19.0",
-          "4.0.1"
-        ],
-        "id": "GHSA-gxr4-xjj5-5px2",
-        "modified": "2026-09-10T03:48:45.850954+00:00",
-        "published": "2020-04-29T22:18:55+00:00",
-        "references": [
-          "https://github.com/jquery/jquery/security/advisories/GHSA-gxr4-xjj5-5px2",
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-11022",
-          "https://github.com/maximebf/php-debugbar/issues/447",
-          "https://github.com/jquery/jquery/commit/1d61fd9407e6fbe82fe55cb0b938307aa0791f77",
-          "https://github.com/maximebf/php-debugbar/commit/847216e60544258c881f2733d699bbcfeefac0fc"
-        ],
-        "severity": {
-          "score": 6.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:H/I:L/A:N"
-        },
-        "summary": "Potential XSS vulnerability in jQuery"
+        "id": "GHSA-gxr4-xjj5-5px2"
       },
       "cvss_score": 6.9,
       "dep_name": "jquery",
@@ -5810,29 +4320,7 @@
           "BIT-drupal-2020-11023",
           "CVE-2020-11023"
         ],
-        "cwe_ids": [
-          "CWE-79"
-        ],
-        "fixed_versions": [
-          "3.5.0",
-          "4.4.0"
-        ],
-        "id": "GHSA-jpcq-cgw6-v4j6",
-        "modified": "2026-09-10T03:48:45.809517+00:00",
-        "published": "2020-04-29T22:19:14+00:00",
-        "references": [
-          "https://github.com/jquery/jquery/security/advisories/GHSA-jpcq-cgw6-v4j6",
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-11023",
-          "https://github.com/jquery/jquery/commit/1d61fd9407e6fbe82fe55cb0b938307aa0791f77",
-          "https://lists.apache.org/thread.html/rda99599896c3667f2cc9e9d34c7b6ef5d2bbed1f4801e1d75a2b0679@%3Ccommits.nifi.apache.org%3E",
-          "https://lists.apache.org/thread.html/re4ae96fa5c1a2fe71ccbb7b7ac1538bd0cb677be270a2bf6e2f8d108%40%3Cissues.flink.apache.org%3E"
-        ],
-        "severity": {
-          "score": 6.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:H/I:L/A:N/E:H"
-        },
-        "summary": "Potential XSS vulnerability in jQuery"
+        "id": "GHSA-jpcq-cgw6-v4j6"
       },
       "cvss_score": 6.9,
       "dep_name": "jquery",
@@ -5896,30 +4384,7 @@
         "aliases": [
           "CVE-2026-84375"
         ],
-        "cwe_ids": [
-          "CWE-400",
-          "CWE-407"
-        ],
-        "fixed_versions": [
-          "4.3.2",
-          "3.15.2"
-        ],
-        "id": "GHSA-2883-xcg3-v3hh",
-        "modified": "2026-09-08T21:30:05.575808+00:00",
-        "published": "2026-09-08T21:24:51+00:00",
-        "references": [
-          "https://github.com/nodeca/js-yaml/security/advisories/GHSA-2883-xcg3-v3hh",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-84375",
-          "https://github.com/nodeca/js-yaml/pull/797",
-          "https://github.com/nodeca/js-yaml/commit/3485bc06ff8a0251505f44a00414d90df2466639",
-          "https://github.com/nodeca/js-yaml/commit/6a8e05f9a485188ed730ac81e81ae221352ef480"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "js-yaml: maxTotalMergeKeys does not limit CPU use for empty merge sources"
+        "id": "GHSA-2883-xcg3-v3hh"
       },
       "cvss_score": 7.5,
       "dep_name": "js-yaml",
@@ -5979,28 +4444,7 @@
     {
       "advisory": {
         "aliases": [],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "3.13.0"
-        ],
-        "id": "GHSA-2pr6-76vf-7546",
-        "modified": "2021-08-04T21:32:56+00:00",
-        "published": "2019-06-05T14:35:29+00:00",
-        "references": [
-          "https://github.com/nodeca/js-yaml/issues/475",
-          "https://github.com/nodeca/js-yaml/commit/a567ef3c6e61eb319f0bfc2671d91061afb01235",
-          "https://snyk.io/vuln/SNYK-JS-JSYAML-173999",
-          "https://www.npmjs.com/advisories/788",
-          "https://www.npmjs.com/advisories/788/versions"
-        ],
-        "severity": {
-          "score": 5.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Denial of Service in js-yaml"
+        "id": "GHSA-2pr6-76vf-7546"
       },
       "cvss_score": 5.9,
       "dep_name": "js-yaml",
@@ -6062,30 +4506,7 @@
         "aliases": [
           "CVE-2026-59869"
         ],
-        "cwe_ids": [
-          "CWE-400",
-          "CWE-407"
-        ],
-        "fixed_versions": [
-          "3.15.0",
-          "4.3.0"
-        ],
-        "id": "GHSA-52cp-r559-cp3m",
-        "modified": "2026-09-10T03:50:12.263307+00:00",
-        "published": "2026-07-20T21:19:09+00:00",
-        "references": [
-          "https://github.com/nodeca/js-yaml/security/advisories/GHSA-52cp-r559-cp3m",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-59869",
-          "https://github.com/nodeca/js-yaml/commit/24f13e79ee1343a7e30bd6f6c9d9cdbf0ac9b2b7",
-          "https://github.com/nodeca/js-yaml/commit/59423c6f8cdc78742ac00e25a4dd39ef16b702e4",
-          "https://github.com/nodeca/js-yaml"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "js-yaml: YAML merge-key chains can force quadratic CPU consumption"
+        "id": "GHSA-52cp-r559-cp3m"
       },
       "cvss_score": 7.5,
       "dep_name": "js-yaml",
@@ -6146,26 +4567,7 @@
     {
       "advisory": {
         "aliases": [],
-        "cwe_ids": [
-          "CWE-407"
-        ],
-        "fixed_versions": [
-          "4.3.1",
-          "3.15.1"
-        ],
-        "id": "GHSA-5p4m-2wfm-xmqj",
-        "modified": "2026-09-10T03:50:53.407436+00:00",
-        "published": "2026-08-06T20:27:32+00:00",
-        "references": [
-          "https://github.com/nodeca/js-yaml/security/advisories/GHSA-5p4m-2wfm-xmqj",
-          "https://github.com/nodeca/js-yaml"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "JS-YAML: Quadratic CPU consumption in !!omap resolution (3.x and 4.x) — CVE-2026-59870 fix not backported"
+        "id": "GHSA-5p4m-2wfm-xmqj"
       },
       "cvss_score": 7.5,
       "dep_name": "js-yaml",
@@ -6225,22 +4627,7 @@
     {
       "advisory": {
         "aliases": [],
-        "cwe_ids": [
-          "CWE-94"
-        ],
-        "fixed_versions": [
-          "3.13.1"
-        ],
-        "id": "GHSA-8j8c-7jfh-h6hx",
-        "modified": "2020-08-31T18:36:43+00:00",
-        "published": "2019-06-04T20:14:07+00:00",
-        "references": [
-          "https://github.com/nodeca/js-yaml/pull/480",
-          "https://github.com/nodeca/js-yaml/pull/480/commits/e18afbf1edcafb7add2c4c7b22abc8d6ebc2fa61",
-          "https://www.npmjs.com/advisories/813"
-        ],
-        "severity": null,
-        "summary": "Code Injection in js-yaml"
+        "id": "GHSA-8j8c-7jfh-h6hx"
       },
       "cvss_score": null,
       "dep_name": "js-yaml",
@@ -6302,27 +4689,7 @@
         "aliases": [
           "CVE-2026-53550"
         ],
-        "cwe_ids": [
-          "CWE-407"
-        ],
-        "fixed_versions": [
-          "4.2.0",
-          "3.15.0"
-        ],
-        "id": "GHSA-h67p-54hq-rp68",
-        "modified": "2026-09-10T03:50:49.729923+00:00",
-        "published": "2026-06-15T17:15:07+00:00",
-        "references": [
-          "https://github.com/nodeca/js-yaml/security/advisories/GHSA-h67p-54hq-rp68",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-53550",
-          "https://github.com/nodeca/js-yaml"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "JS-YAML: Quadratic-complexity DoS in merge key handling via repeated aliases"
+        "id": "GHSA-h67p-54hq-rp68"
       },
       "cvss_score": 5.3,
       "dep_name": "js-yaml",
@@ -6384,29 +4751,7 @@
         "aliases": [
           "CVE-2025-64718"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "4.1.1",
-          "3.14.2"
-        ],
-        "id": "GHSA-mh29-5h37-fv8m",
-        "modified": "2026-09-10T03:50:58.469126+00:00",
-        "published": "2025-11-14T14:29:48+00:00",
-        "references": [
-          "https://github.com/nodeca/js-yaml/security/advisories/GHSA-mh29-5h37-fv8m",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-64718",
-          "https://github.com/nodeca/js-yaml/issues/730#issuecomment-3549635876",
-          "https://github.com/nodeca/js-yaml/commit/383665ff4248ec2192d1274e934462bb30426879",
-          "https://github.com/nodeca/js-yaml/commit/5278870a17454fe8621dbd8c445c412529525266"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N"
-        },
-        "summary": "js-yaml has prototype pollution in merge (<<)"
+        "id": "GHSA-mh29-5h37-fv8m"
       },
       "cvss_score": 5.3,
       "dep_name": "js-yaml",
@@ -6468,30 +4813,7 @@
         "aliases": [
           "CVE-2026-84375"
         ],
-        "cwe_ids": [
-          "CWE-400",
-          "CWE-407"
-        ],
-        "fixed_versions": [
-          "4.3.2",
-          "3.15.2"
-        ],
-        "id": "GHSA-2883-xcg3-v3hh",
-        "modified": "2026-09-08T21:30:05.575808+00:00",
-        "published": "2026-09-08T21:24:51+00:00",
-        "references": [
-          "https://github.com/nodeca/js-yaml/security/advisories/GHSA-2883-xcg3-v3hh",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-84375",
-          "https://github.com/nodeca/js-yaml/pull/797",
-          "https://github.com/nodeca/js-yaml/commit/3485bc06ff8a0251505f44a00414d90df2466639",
-          "https://github.com/nodeca/js-yaml/commit/6a8e05f9a485188ed730ac81e81ae221352ef480"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "js-yaml: maxTotalMergeKeys does not limit CPU use for empty merge sources"
+        "id": "GHSA-2883-xcg3-v3hh"
       },
       "cvss_score": 7.5,
       "dep_name": "js-yaml",
@@ -6551,28 +4873,7 @@
     {
       "advisory": {
         "aliases": [],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "3.13.0"
-        ],
-        "id": "GHSA-2pr6-76vf-7546",
-        "modified": "2021-08-04T21:32:56+00:00",
-        "published": "2019-06-05T14:35:29+00:00",
-        "references": [
-          "https://github.com/nodeca/js-yaml/issues/475",
-          "https://github.com/nodeca/js-yaml/commit/a567ef3c6e61eb319f0bfc2671d91061afb01235",
-          "https://snyk.io/vuln/SNYK-JS-JSYAML-173999",
-          "https://www.npmjs.com/advisories/788",
-          "https://www.npmjs.com/advisories/788/versions"
-        ],
-        "severity": {
-          "score": 5.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Denial of Service in js-yaml"
+        "id": "GHSA-2pr6-76vf-7546"
       },
       "cvss_score": 5.9,
       "dep_name": "js-yaml",
@@ -6634,30 +4935,7 @@
         "aliases": [
           "CVE-2026-59869"
         ],
-        "cwe_ids": [
-          "CWE-400",
-          "CWE-407"
-        ],
-        "fixed_versions": [
-          "3.15.0",
-          "4.3.0"
-        ],
-        "id": "GHSA-52cp-r559-cp3m",
-        "modified": "2026-09-10T03:50:12.263307+00:00",
-        "published": "2026-07-20T21:19:09+00:00",
-        "references": [
-          "https://github.com/nodeca/js-yaml/security/advisories/GHSA-52cp-r559-cp3m",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-59869",
-          "https://github.com/nodeca/js-yaml/commit/24f13e79ee1343a7e30bd6f6c9d9cdbf0ac9b2b7",
-          "https://github.com/nodeca/js-yaml/commit/59423c6f8cdc78742ac00e25a4dd39ef16b702e4",
-          "https://github.com/nodeca/js-yaml"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "js-yaml: YAML merge-key chains can force quadratic CPU consumption"
+        "id": "GHSA-52cp-r559-cp3m"
       },
       "cvss_score": 7.5,
       "dep_name": "js-yaml",
@@ -6718,26 +4996,7 @@
     {
       "advisory": {
         "aliases": [],
-        "cwe_ids": [
-          "CWE-407"
-        ],
-        "fixed_versions": [
-          "4.3.1",
-          "3.15.1"
-        ],
-        "id": "GHSA-5p4m-2wfm-xmqj",
-        "modified": "2026-09-10T03:50:53.407436+00:00",
-        "published": "2026-08-06T20:27:32+00:00",
-        "references": [
-          "https://github.com/nodeca/js-yaml/security/advisories/GHSA-5p4m-2wfm-xmqj",
-          "https://github.com/nodeca/js-yaml"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "JS-YAML: Quadratic CPU consumption in !!omap resolution (3.x and 4.x) — CVE-2026-59870 fix not backported"
+        "id": "GHSA-5p4m-2wfm-xmqj"
       },
       "cvss_score": 7.5,
       "dep_name": "js-yaml",
@@ -6797,22 +5056,7 @@
     {
       "advisory": {
         "aliases": [],
-        "cwe_ids": [
-          "CWE-94"
-        ],
-        "fixed_versions": [
-          "3.13.1"
-        ],
-        "id": "GHSA-8j8c-7jfh-h6hx",
-        "modified": "2020-08-31T18:36:43+00:00",
-        "published": "2019-06-04T20:14:07+00:00",
-        "references": [
-          "https://github.com/nodeca/js-yaml/pull/480",
-          "https://github.com/nodeca/js-yaml/pull/480/commits/e18afbf1edcafb7add2c4c7b22abc8d6ebc2fa61",
-          "https://www.npmjs.com/advisories/813"
-        ],
-        "severity": null,
-        "summary": "Code Injection in js-yaml"
+        "id": "GHSA-8j8c-7jfh-h6hx"
       },
       "cvss_score": null,
       "dep_name": "js-yaml",
@@ -6874,27 +5118,7 @@
         "aliases": [
           "CVE-2026-53550"
         ],
-        "cwe_ids": [
-          "CWE-407"
-        ],
-        "fixed_versions": [
-          "4.2.0",
-          "3.15.0"
-        ],
-        "id": "GHSA-h67p-54hq-rp68",
-        "modified": "2026-09-10T03:50:49.729923+00:00",
-        "published": "2026-06-15T17:15:07+00:00",
-        "references": [
-          "https://github.com/nodeca/js-yaml/security/advisories/GHSA-h67p-54hq-rp68",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-53550",
-          "https://github.com/nodeca/js-yaml"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "JS-YAML: Quadratic-complexity DoS in merge key handling via repeated aliases"
+        "id": "GHSA-h67p-54hq-rp68"
       },
       "cvss_score": 5.3,
       "dep_name": "js-yaml",
@@ -6956,29 +5180,7 @@
         "aliases": [
           "CVE-2025-64718"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "4.1.1",
-          "3.14.2"
-        ],
-        "id": "GHSA-mh29-5h37-fv8m",
-        "modified": "2026-09-10T03:50:58.469126+00:00",
-        "published": "2025-11-14T14:29:48+00:00",
-        "references": [
-          "https://github.com/nodeca/js-yaml/security/advisories/GHSA-mh29-5h37-fv8m",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-64718",
-          "https://github.com/nodeca/js-yaml/issues/730#issuecomment-3549635876",
-          "https://github.com/nodeca/js-yaml/commit/383665ff4248ec2192d1274e934462bb30426879",
-          "https://github.com/nodeca/js-yaml/commit/5278870a17454fe8621dbd8c445c412529525266"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N"
-        },
-        "summary": "js-yaml has prototype pollution in merge (<<)"
+        "id": "GHSA-mh29-5h37-fv8m"
       },
       "cvss_score": 5.3,
       "dep_name": "js-yaml",
@@ -7040,30 +5242,7 @@
         "aliases": [
           "CVE-2026-84375"
         ],
-        "cwe_ids": [
-          "CWE-400",
-          "CWE-407"
-        ],
-        "fixed_versions": [
-          "4.3.2",
-          "3.15.2"
-        ],
-        "id": "GHSA-2883-xcg3-v3hh",
-        "modified": "2026-09-08T21:30:05.575808+00:00",
-        "published": "2026-09-08T21:24:51+00:00",
-        "references": [
-          "https://github.com/nodeca/js-yaml/security/advisories/GHSA-2883-xcg3-v3hh",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-84375",
-          "https://github.com/nodeca/js-yaml/pull/797",
-          "https://github.com/nodeca/js-yaml/commit/3485bc06ff8a0251505f44a00414d90df2466639",
-          "https://github.com/nodeca/js-yaml/commit/6a8e05f9a485188ed730ac81e81ae221352ef480"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "js-yaml: maxTotalMergeKeys does not limit CPU use for empty merge sources"
+        "id": "GHSA-2883-xcg3-v3hh"
       },
       "cvss_score": 7.5,
       "dep_name": "js-yaml",
@@ -7123,28 +5302,7 @@
     {
       "advisory": {
         "aliases": [],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "3.13.0"
-        ],
-        "id": "GHSA-2pr6-76vf-7546",
-        "modified": "2021-08-04T21:32:56+00:00",
-        "published": "2019-06-05T14:35:29+00:00",
-        "references": [
-          "https://github.com/nodeca/js-yaml/issues/475",
-          "https://github.com/nodeca/js-yaml/commit/a567ef3c6e61eb319f0bfc2671d91061afb01235",
-          "https://snyk.io/vuln/SNYK-JS-JSYAML-173999",
-          "https://www.npmjs.com/advisories/788",
-          "https://www.npmjs.com/advisories/788/versions"
-        ],
-        "severity": {
-          "score": 5.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Denial of Service in js-yaml"
+        "id": "GHSA-2pr6-76vf-7546"
       },
       "cvss_score": 5.9,
       "dep_name": "js-yaml",
@@ -7206,30 +5364,7 @@
         "aliases": [
           "CVE-2026-59869"
         ],
-        "cwe_ids": [
-          "CWE-400",
-          "CWE-407"
-        ],
-        "fixed_versions": [
-          "3.15.0",
-          "4.3.0"
-        ],
-        "id": "GHSA-52cp-r559-cp3m",
-        "modified": "2026-09-10T03:50:12.263307+00:00",
-        "published": "2026-07-20T21:19:09+00:00",
-        "references": [
-          "https://github.com/nodeca/js-yaml/security/advisories/GHSA-52cp-r559-cp3m",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-59869",
-          "https://github.com/nodeca/js-yaml/commit/24f13e79ee1343a7e30bd6f6c9d9cdbf0ac9b2b7",
-          "https://github.com/nodeca/js-yaml/commit/59423c6f8cdc78742ac00e25a4dd39ef16b702e4",
-          "https://github.com/nodeca/js-yaml"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "js-yaml: YAML merge-key chains can force quadratic CPU consumption"
+        "id": "GHSA-52cp-r559-cp3m"
       },
       "cvss_score": 7.5,
       "dep_name": "js-yaml",
@@ -7290,26 +5425,7 @@
     {
       "advisory": {
         "aliases": [],
-        "cwe_ids": [
-          "CWE-407"
-        ],
-        "fixed_versions": [
-          "4.3.1",
-          "3.15.1"
-        ],
-        "id": "GHSA-5p4m-2wfm-xmqj",
-        "modified": "2026-09-10T03:50:53.407436+00:00",
-        "published": "2026-08-06T20:27:32+00:00",
-        "references": [
-          "https://github.com/nodeca/js-yaml/security/advisories/GHSA-5p4m-2wfm-xmqj",
-          "https://github.com/nodeca/js-yaml"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "JS-YAML: Quadratic CPU consumption in !!omap resolution (3.x and 4.x) — CVE-2026-59870 fix not backported"
+        "id": "GHSA-5p4m-2wfm-xmqj"
       },
       "cvss_score": 7.5,
       "dep_name": "js-yaml",
@@ -7369,22 +5485,7 @@
     {
       "advisory": {
         "aliases": [],
-        "cwe_ids": [
-          "CWE-94"
-        ],
-        "fixed_versions": [
-          "3.13.1"
-        ],
-        "id": "GHSA-8j8c-7jfh-h6hx",
-        "modified": "2020-08-31T18:36:43+00:00",
-        "published": "2019-06-04T20:14:07+00:00",
-        "references": [
-          "https://github.com/nodeca/js-yaml/pull/480",
-          "https://github.com/nodeca/js-yaml/pull/480/commits/e18afbf1edcafb7add2c4c7b22abc8d6ebc2fa61",
-          "https://www.npmjs.com/advisories/813"
-        ],
-        "severity": null,
-        "summary": "Code Injection in js-yaml"
+        "id": "GHSA-8j8c-7jfh-h6hx"
       },
       "cvss_score": null,
       "dep_name": "js-yaml",
@@ -7446,27 +5547,7 @@
         "aliases": [
           "CVE-2026-53550"
         ],
-        "cwe_ids": [
-          "CWE-407"
-        ],
-        "fixed_versions": [
-          "4.2.0",
-          "3.15.0"
-        ],
-        "id": "GHSA-h67p-54hq-rp68",
-        "modified": "2026-09-10T03:50:49.729923+00:00",
-        "published": "2026-06-15T17:15:07+00:00",
-        "references": [
-          "https://github.com/nodeca/js-yaml/security/advisories/GHSA-h67p-54hq-rp68",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-53550",
-          "https://github.com/nodeca/js-yaml"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "JS-YAML: Quadratic-complexity DoS in merge key handling via repeated aliases"
+        "id": "GHSA-h67p-54hq-rp68"
       },
       "cvss_score": 5.3,
       "dep_name": "js-yaml",
@@ -7528,29 +5609,7 @@
         "aliases": [
           "CVE-2025-64718"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "4.1.1",
-          "3.14.2"
-        ],
-        "id": "GHSA-mh29-5h37-fv8m",
-        "modified": "2026-09-10T03:50:58.469126+00:00",
-        "published": "2025-11-14T14:29:48+00:00",
-        "references": [
-          "https://github.com/nodeca/js-yaml/security/advisories/GHSA-mh29-5h37-fv8m",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-64718",
-          "https://github.com/nodeca/js-yaml/issues/730#issuecomment-3549635876",
-          "https://github.com/nodeca/js-yaml/commit/383665ff4248ec2192d1274e934462bb30426879",
-          "https://github.com/nodeca/js-yaml/commit/5278870a17454fe8621dbd8c445c412529525266"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N"
-        },
-        "summary": "js-yaml has prototype pollution in merge (<<)"
+        "id": "GHSA-mh29-5h37-fv8m"
       },
       "cvss_score": 5.3,
       "dep_name": "js-yaml",
@@ -7612,29 +5671,7 @@
         "aliases": [
           "CVE-2021-3918"
         ],
-        "cwe_ids": [
-          "CWE-1321",
-          "CWE-915"
-        ],
-        "fixed_versions": [
-          "0.4.0"
-        ],
-        "id": "GHSA-896r-f27r-55mw",
-        "modified": "2025-01-17T21:31:38+00:00",
-        "published": "2021-11-19T20:16:17+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-3918",
-          "https://github.com/kriszyp/json-schema/commit/22f146111f541d9737e832823699ad3528ca7741",
-          "https://github.com/kriszyp/json-schema/commit/b62f1da1ff5442f23443d6be6a92d00e65cba93a",
-          "https://github.com/kriszyp/json-schema/commit/f6f6a3b02d667aa4ba2d5d50cc19208c4462abfa",
-          "https://github.com/kriszyp/json-schema"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "json-schema is vulnerable to Prototype Pollution"
+        "id": "GHSA-896r-f27r-55mw"
       },
       "cvss_score": 9.8,
       "dep_name": "json-schema",
@@ -7696,29 +5733,7 @@
         "aliases": [
           "CVE-2022-46175"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "2.2.2",
-          "1.0.2"
-        ],
-        "id": "GHSA-9c47-m6qq-7p4h",
-        "modified": "2026-09-10T03:49:56.250129+00:00",
-        "published": "2022-12-29T01:51:03+00:00",
-        "references": [
-          "https://github.com/json5/json5/security/advisories/GHSA-9c47-m6qq-7p4h",
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-46175",
-          "https://github.com/json5/json5/issues/199",
-          "https://github.com/json5/json5/issues/295",
-          "https://github.com/json5/json5/pull/298"
-        ],
-        "severity": {
-          "score": 7.1,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:H/I:L/A:H"
-        },
-        "summary": "Prototype Pollution in JSON5 via Parse Method"
+        "id": "GHSA-9c47-m6qq-7p4h"
       },
       "cvss_score": 7.1,
       "dep_name": "json5",
@@ -7780,29 +5795,7 @@
         "aliases": [
           "CVE-2021-23807"
         ],
-        "cwe_ids": [
-          "CWE-1321",
-          "CWE-843"
-        ],
-        "fixed_versions": [
-          "5.0.0"
-        ],
-        "id": "GHSA-282f-qqgm-c34q",
-        "modified": "2026-09-10T03:49:09.416500+00:00",
-        "published": "2021-11-08T17:44:45+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-23807",
-          "https://github.com/janl/node-jsonpointer/pull/51",
-          "https://github.com/janl/node-jsonpointer/commit/a0345f3550cd9c4d89f33b126390202b89510ad4",
-          "https://github.com/janl/node-jsonpointer",
-          "https://snyk.io/vuln/SNYK-JAVA-ORGWEBJARSNPM-1910273"
-        ],
-        "severity": {
-          "score": 5.6,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:L"
-        },
-        "summary": "Prototype Pollution in node-jsonpointer"
+        "id": "GHSA-282f-qqgm-c34q"
       },
       "cvss_score": 5.6,
       "dep_name": "jsonpointer",
@@ -7864,29 +5857,7 @@
         "aliases": [
           "CVE-2022-37601"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "2.0.3",
-          "1.4.1"
-        ],
-        "id": "GHSA-76p3-8jx3-jpfq",
-        "modified": "2026-09-10T03:49:46.237604+00:00",
-        "published": "2022-10-13T12:00:28+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-37601",
-          "https://github.com/webpack/loader-utils/issues/212",
-          "https://github.com/webpack/loader-utils/issues/212#issuecomment-1319192884",
-          "https://github.com/xmldom/xmldom/issues/436#issuecomment-1319412826",
-          "https://github.com/webpack/loader-utils/pull/217"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Prototype pollution in webpack loader-utils"
+        "id": "GHSA-76p3-8jx3-jpfq"
       },
       "cvss_score": 9.8,
       "dep_name": "loader-utils",
@@ -7947,20 +5918,7 @@
     {
       "advisory": {
         "aliases": [],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "4.6.1"
-        ],
-        "id": "GHSA-2m96-9w4j-wgv7",
-        "modified": "2020-08-31T18:46:06+00:00",
-        "published": "2020-09-03T18:06:00+00:00",
-        "references": [
-          "https://www.npmjs.com/advisories/1067"
-        ],
-        "severity": null,
-        "summary": "Prototype Pollution in lodash.merge"
+        "id": "GHSA-2m96-9w4j-wgv7"
       },
       "cvss_score": null,
       "dep_name": "lodash.merge",
@@ -8020,20 +5978,7 @@
     {
       "advisory": {
         "aliases": [],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "4.6.2"
-        ],
-        "id": "GHSA-h726-x36v-rx45",
-        "modified": "2020-08-31T18:46:04+00:00",
-        "published": "2020-09-03T18:04:54+00:00",
-        "references": [
-          "https://www.npmjs.com/advisories/1066"
-        ],
-        "severity": null,
-        "summary": "Prototype Pollution in lodash.merge"
+        "id": "GHSA-h726-x36v-rx45"
       },
       "cvss_score": null,
       "dep_name": "lodash.merge",
@@ -8095,30 +6040,7 @@
         "aliases": [
           "CVE-2020-8203"
         ],
-        "cwe_ids": [
-          "CWE-1321",
-          "CWE-770"
-        ],
-        "fixed_versions": [
-          "4.17.19",
-          "4.17.20"
-        ],
-        "id": "GHSA-p6mc-m468-83gw",
-        "modified": "2025-08-12T21:56:17.174859+00:00",
-        "published": "2020-07-15T19:15:48+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-8203",
-          "https://github.com/lodash/lodash/issues/4744",
-          "https://github.com/lodash/lodash/issues/4874",
-          "https://github.com/github/advisory-database/pull/2884",
-          "https://github.com/lodash/lodash/commit/c84fe82760fb2d3e03a63379b297a1cc1a2fce12"
-        ],
-        "severity": {
-          "score": 7.4,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:H"
-        },
-        "summary": "Prototype Pollution in lodash"
+        "id": "GHSA-p6mc-m468-83gw"
       },
       "cvss_score": 7.4,
       "dep_name": "lodash.pick",
@@ -8180,29 +6102,7 @@
         "aliases": [
           "CVE-2021-23337"
         ],
-        "cwe_ids": [
-          "CWE-77",
-          "CWE-94"
-        ],
-        "fixed_versions": [
-          "4.17.21"
-        ],
-        "id": "GHSA-35jh-r3h4-6jhm",
-        "modified": "2026-10-17T02:55:38.085813+00:00",
-        "published": "2021-05-06T16:05:51+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-23337",
-          "https://github.com/lodash/lodash/commit/3469357cff396a26c363f8c1b5a91dde28ba4b1c",
-          "https://www.oracle.com/security-alerts/cpuoct2021.html",
-          "https://www.oracle.com/security-alerts/cpujul2022.html",
-          "https://www.oracle.com/security-alerts/cpujan2022.html"
-        ],
-        "severity": {
-          "score": 7.2,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Command Injection in lodash"
+        "id": "GHSA-35jh-r3h4-6jhm"
       },
       "cvss_score": 7.2,
       "dep_name": "lodash",
@@ -8271,24 +6171,7 @@
         "aliases": [
           "CVE-2018-16487"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "4.17.11"
-        ],
-        "id": "GHSA-4xc9-xhrj-v574",
-        "modified": "2025-08-12T21:55:35.778975+00:00",
-        "published": "2019-02-07T18:16:48+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2018-16487",
-          "https://github.com/lodash/lodash/commit/90e6199a161b6445b01454517b40ef65ebecd2ad",
-          "https://hackerone.com/reports/380873",
-          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/lodash-rails/CVE-2018-16487.yml",
-          "https://security.netapp.com/advisory/ntap-20190919-0004"
-        ],
-        "severity": null,
-        "summary": "Prototype Pollution in lodash"
+        "id": "GHSA-4xc9-xhrj-v574"
       },
       "cvss_score": null,
       "dep_name": "lodash",
@@ -8357,27 +6240,7 @@
         "aliases": [
           "CVE-2026-2950"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "4.18.0"
-        ],
-        "id": "GHSA-f23m-r3pf-42rh",
-        "modified": "2026-10-17T02:56:13.084362+00:00",
-        "published": "2026-04-01T23:50:27+00:00",
-        "references": [
-          "https://github.com/lodash/lodash/security/advisories/GHSA-f23m-r3pf-42rh",
-          "https://github.com/lodash/lodash/security/advisories/GHSA-xxjr-mmjv-4gpg",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-2950",
-          "https://github.com/lodash/lodash"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:L"
-        },
-        "summary": "lodash vulnerable to Prototype Pollution via array path bypass in `_.unset` and `_.omit`"
+        "id": "GHSA-f23m-r3pf-42rh"
       },
       "cvss_score": 6.5,
       "dep_name": "lodash",
@@ -8446,29 +6309,7 @@
         "aliases": [
           "CVE-2018-3721"
         ],
-        "cwe_ids": [
-          "CWE-1321",
-          "CWE-471"
-        ],
-        "fixed_versions": [
-          "4.17.5"
-        ],
-        "id": "GHSA-fvqr-27wr-82fm",
-        "modified": "2025-08-12T21:55:16.003066+00:00",
-        "published": "2018-07-26T15:14:52+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2018-3721",
-          "https://github.com/lodash/lodash/commit/d8e069cc3410082e44eb18fcf8e7f3d08ebe1d4a",
-          "https://hackerone.com/reports/310443",
-          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/lodash-rails/CVE-2018-3721.yml",
-          "https://security.netapp.com/advisory/ntap-20190919-0004"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:N"
-        },
-        "summary": "Prototype Pollution in lodash"
+        "id": "GHSA-fvqr-27wr-82fm"
       },
       "cvss_score": 6.5,
       "dep_name": "lodash",
@@ -8538,32 +6379,7 @@
           "CVE-2019-10744",
           "SNYK-JS-LODASH-450202"
         ],
-        "cwe_ids": [
-          "CWE-1321",
-          "CWE-20"
-        ],
-        "fixed_versions": [
-          "4.17.12",
-          "4.17.14",
-          "4.17.13",
-          "4.6.1"
-        ],
-        "id": "GHSA-jf85-cpcp-j695",
-        "modified": "2026-09-10T03:47:55.238868+00:00",
-        "published": "2019-07-10T19:45:23+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2019-10744",
-          "https://github.com/lodash/lodash/pull/4336",
-          "https://access.redhat.com/errata/RHSA-2019:3024",
-          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/lodash-rails/CVE-2019-10744.yml",
-          "https://security.netapp.com/advisory/ntap-20191004-0005"
-        ],
-        "severity": {
-          "score": 9.1,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:H"
-        },
-        "summary": "Prototype Pollution in lodash"
+        "id": "GHSA-jf85-cpcp-j695"
       },
       "cvss_score": 9.1,
       "dep_name": "lodash",
@@ -8632,30 +6448,7 @@
         "aliases": [
           "CVE-2020-8203"
         ],
-        "cwe_ids": [
-          "CWE-1321",
-          "CWE-770"
-        ],
-        "fixed_versions": [
-          "4.17.19",
-          "4.17.20"
-        ],
-        "id": "GHSA-p6mc-m468-83gw",
-        "modified": "2025-08-12T21:56:17.174859+00:00",
-        "published": "2020-07-15T19:15:48+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-8203",
-          "https://github.com/lodash/lodash/issues/4744",
-          "https://github.com/lodash/lodash/issues/4874",
-          "https://github.com/github/advisory-database/pull/2884",
-          "https://github.com/lodash/lodash/commit/c84fe82760fb2d3e03a63379b297a1cc1a2fce12"
-        ],
-        "severity": {
-          "score": 7.4,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:H"
-        },
-        "summary": "Prototype Pollution in lodash"
+        "id": "GHSA-p6mc-m468-83gw"
       },
       "cvss_score": 7.4,
       "dep_name": "lodash",
@@ -8724,29 +6517,7 @@
         "aliases": [
           "CVE-2020-28500"
         ],
-        "cwe_ids": [
-          "CWE-1333",
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "4.17.21"
-        ],
-        "id": "GHSA-29mw-wpgm-hmr9",
-        "modified": "2025-09-29T21:12:31.102523+00:00",
-        "published": "2022-01-06T20:30:46+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-28500",
-          "https://github.com/github/advisory-database/pull/6139",
-          "https://github.com/lodash/lodash/pull/5065",
-          "https://github.com/lodash/lodash/pull/5065/commits/02906b8191d3c100c193fe6f7b27d1c40f200bb7",
-          "https://github.com/lodash/lodash/commit/c4847ebe7d14540bb28a8b932a9ce1b9ecbfee1a"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "Regular Expression Denial of Service (ReDoS) in lodash"
+        "id": "GHSA-29mw-wpgm-hmr9"
       },
       "cvss_score": 5.3,
       "dep_name": "lodash",
@@ -8815,29 +6586,7 @@
         "aliases": [
           "CVE-2021-23337"
         ],
-        "cwe_ids": [
-          "CWE-77",
-          "CWE-94"
-        ],
-        "fixed_versions": [
-          "4.17.21"
-        ],
-        "id": "GHSA-35jh-r3h4-6jhm",
-        "modified": "2026-10-17T02:55:38.085813+00:00",
-        "published": "2021-05-06T16:05:51+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-23337",
-          "https://github.com/lodash/lodash/commit/3469357cff396a26c363f8c1b5a91dde28ba4b1c",
-          "https://www.oracle.com/security-alerts/cpuoct2021.html",
-          "https://www.oracle.com/security-alerts/cpujul2022.html",
-          "https://www.oracle.com/security-alerts/cpujan2022.html"
-        ],
-        "severity": {
-          "score": 7.2,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Command Injection in lodash"
+        "id": "GHSA-35jh-r3h4-6jhm"
       },
       "cvss_score": 7.2,
       "dep_name": "lodash",
@@ -8906,24 +6655,7 @@
         "aliases": [
           "CVE-2018-16487"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "4.17.11"
-        ],
-        "id": "GHSA-4xc9-xhrj-v574",
-        "modified": "2025-08-12T21:55:35.778975+00:00",
-        "published": "2019-02-07T18:16:48+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2018-16487",
-          "https://github.com/lodash/lodash/commit/90e6199a161b6445b01454517b40ef65ebecd2ad",
-          "https://hackerone.com/reports/380873",
-          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/lodash-rails/CVE-2018-16487.yml",
-          "https://security.netapp.com/advisory/ntap-20190919-0004"
-        ],
-        "severity": null,
-        "summary": "Prototype Pollution in lodash"
+        "id": "GHSA-4xc9-xhrj-v574"
       },
       "cvss_score": null,
       "dep_name": "lodash",
@@ -8992,27 +6724,7 @@
         "aliases": [
           "CVE-2026-2950"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "4.18.0"
-        ],
-        "id": "GHSA-f23m-r3pf-42rh",
-        "modified": "2026-10-17T02:56:13.084362+00:00",
-        "published": "2026-04-01T23:50:27+00:00",
-        "references": [
-          "https://github.com/lodash/lodash/security/advisories/GHSA-f23m-r3pf-42rh",
-          "https://github.com/lodash/lodash/security/advisories/GHSA-xxjr-mmjv-4gpg",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-2950",
-          "https://github.com/lodash/lodash"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:L"
-        },
-        "summary": "lodash vulnerable to Prototype Pollution via array path bypass in `_.unset` and `_.omit`"
+        "id": "GHSA-f23m-r3pf-42rh"
       },
       "cvss_score": 6.5,
       "dep_name": "lodash",
@@ -9081,29 +6793,7 @@
         "aliases": [
           "CVE-2018-3721"
         ],
-        "cwe_ids": [
-          "CWE-1321",
-          "CWE-471"
-        ],
-        "fixed_versions": [
-          "4.17.5"
-        ],
-        "id": "GHSA-fvqr-27wr-82fm",
-        "modified": "2025-08-12T21:55:16.003066+00:00",
-        "published": "2018-07-26T15:14:52+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2018-3721",
-          "https://github.com/lodash/lodash/commit/d8e069cc3410082e44eb18fcf8e7f3d08ebe1d4a",
-          "https://hackerone.com/reports/310443",
-          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/lodash-rails/CVE-2018-3721.yml",
-          "https://security.netapp.com/advisory/ntap-20190919-0004"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:N"
-        },
-        "summary": "Prototype Pollution in lodash"
+        "id": "GHSA-fvqr-27wr-82fm"
       },
       "cvss_score": 6.5,
       "dep_name": "lodash",
@@ -9173,32 +6863,7 @@
           "CVE-2019-10744",
           "SNYK-JS-LODASH-450202"
         ],
-        "cwe_ids": [
-          "CWE-1321",
-          "CWE-20"
-        ],
-        "fixed_versions": [
-          "4.17.12",
-          "4.17.14",
-          "4.17.13",
-          "4.6.1"
-        ],
-        "id": "GHSA-jf85-cpcp-j695",
-        "modified": "2026-09-10T03:47:55.238868+00:00",
-        "published": "2019-07-10T19:45:23+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2019-10744",
-          "https://github.com/lodash/lodash/pull/4336",
-          "https://access.redhat.com/errata/RHSA-2019:3024",
-          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/lodash-rails/CVE-2019-10744.yml",
-          "https://security.netapp.com/advisory/ntap-20191004-0005"
-        ],
-        "severity": {
-          "score": 9.1,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:H"
-        },
-        "summary": "Prototype Pollution in lodash"
+        "id": "GHSA-jf85-cpcp-j695"
       },
       "cvss_score": 9.1,
       "dep_name": "lodash",
@@ -9267,30 +6932,7 @@
         "aliases": [
           "CVE-2020-8203"
         ],
-        "cwe_ids": [
-          "CWE-1321",
-          "CWE-770"
-        ],
-        "fixed_versions": [
-          "4.17.19",
-          "4.17.20"
-        ],
-        "id": "GHSA-p6mc-m468-83gw",
-        "modified": "2025-08-12T21:56:17.174859+00:00",
-        "published": "2020-07-15T19:15:48+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-8203",
-          "https://github.com/lodash/lodash/issues/4744",
-          "https://github.com/lodash/lodash/issues/4874",
-          "https://github.com/github/advisory-database/pull/2884",
-          "https://github.com/lodash/lodash/commit/c84fe82760fb2d3e03a63379b297a1cc1a2fce12"
-        ],
-        "severity": {
-          "score": 7.4,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:H"
-        },
-        "summary": "Prototype Pollution in lodash"
+        "id": "GHSA-p6mc-m468-83gw"
       },
       "cvss_score": 7.4,
       "dep_name": "lodash",
@@ -9359,28 +7001,7 @@
         "aliases": [
           "CVE-2026-4800"
         ],
-        "cwe_ids": [
-          "CWE-94"
-        ],
-        "fixed_versions": [
-          "4.18.0"
-        ],
-        "id": "GHSA-r5fr-rjxr-66jc",
-        "modified": "2026-10-17T02:56:15.633068+00:00",
-        "published": "2026-04-01T23:51:12+00:00",
-        "references": [
-          "https://github.com/lodash/lodash/security/advisories/GHSA-r5fr-rjxr-66jc",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-4800",
-          "https://github.com/lodash/lodash/commit/3469357cff396a26c363f8c1b5a91dde28ba4b1c",
-          "https://cna.openjsf.org/security-advisories.html",
-          "https://github.com/advisories/GHSA-35jh-r3h4-6jhm"
-        ],
-        "severity": {
-          "score": 8.1,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "lodash vulnerable to Code Injection via `_.template` imports key names"
+        "id": "GHSA-r5fr-rjxr-66jc"
       },
       "cvss_score": 8.1,
       "dep_name": "lodash",
@@ -9450,28 +7071,7 @@
           "CVE-2019-1010266",
           "SNYK-JS-LODASH-73639"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "4.17.11"
-        ],
-        "id": "GHSA-x5rq-j2xg-h7qm",
-        "modified": "2026-09-10T03:48:25.206281+00:00",
-        "published": "2019-07-19T16:13:07+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2019-1010266",
-          "https://github.com/lodash/lodash/issues/3359",
-          "https://github.com/github/advisory-database/pull/6138",
-          "https://github.com/lodash/lodash/commit/5c08f18d365b64063bfbfa686cbb97cdd6267347",
-          "https://github.com/lodash/lodash"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Regular Expression Denial of Service (ReDoS) in lodash"
+        "id": "GHSA-x5rq-j2xg-h7qm"
       },
       "cvss_score": 6.5,
       "dep_name": "lodash",
@@ -9540,28 +7140,7 @@
         "aliases": [
           "CVE-2025-13465"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "4.17.23"
-        ],
-        "id": "GHSA-xxjr-mmjv-4gpg",
-        "modified": "2026-10-17T02:55:54.229635+00:00",
-        "published": "2026-01-21T23:01:22+00:00",
-        "references": [
-          "https://github.com/lodash/lodash/security/advisories/GHSA-xxjr-mmjv-4gpg",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-13465",
-          "https://github.com/lodash/lodash/commit/edadd452146f7e4bad4ea684e955708931d84d81",
-          "https://cert-portal.siemens.com/productcert/html/ssa-253495.html",
-          "https://github.com/lodash/lodash"
-        ],
-        "severity": {
-          "score": 6.9,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:L/SC:H/SI:H/SA:H/E:P"
-        },
-        "summary": "Lodash has Prototype Pollution Vulnerability in `_.unset` and `_.omit` functions"
+        "id": "GHSA-xxjr-mmjv-4gpg"
       },
       "cvss_score": 6.9,
       "dep_name": "lodash",
@@ -9630,28 +7209,7 @@
         "aliases": [
           "CVE-2024-4067"
         ],
-        "cwe_ids": [
-          "CWE-1333"
-        ],
-        "fixed_versions": [
-          "4.0.8"
-        ],
-        "id": "GHSA-952p-6rrq-rcjv",
-        "modified": "2026-09-10T03:50:13.524150+00:00",
-        "published": "2024-05-14T18:30:54+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-4067",
-          "https://github.com/micromatch/micromatch/issues/243",
-          "https://github.com/micromatch/micromatch/pull/247",
-          "https://github.com/micromatch/micromatch/pull/266",
-          "https://github.com/micromatch/micromatch/commit/03aa8052171e878897eee5d7bb2ae0ae83ec2ade"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "Regular Expression Denial of Service (ReDoS) in micromatch"
+        "id": "GHSA-952p-6rrq-rcjv"
       },
       "cvss_score": 5.3,
       "dep_name": "micromatch",
@@ -9713,29 +7271,7 @@
         "aliases": [
           "CVE-2017-16138"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "2.0.3",
-          "1.4.1"
-        ],
-        "id": "GHSA-wrvr-8mpx-r7pp",
-        "modified": "2023-11-08T03:59:07.102650+00:00",
-        "published": "2018-07-20T16:20:52+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2017-16138",
-          "https://github.com/broofa/node-mime/issues/167",
-          "https://github.com/broofa/mime/commit/1df903fdeb9ae7eaa048795b8d580ce2c98f40b0",
-          "https://github.com/broofa/mime/commit/855d0c4b8b22e4a80b9401a81f2872058eae274d",
-          "https://github.com/broofa/mime"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "mime Regular Expression Denial of Service when MIME lookup performed on untrusted user input"
+        "id": "GHSA-wrvr-8mpx-r7pp"
       },
       "cvss_score": 7.5,
       "dep_name": "mime",
@@ -9797,29 +7333,7 @@
         "aliases": [
           "CVE-2017-16138"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "2.0.3",
-          "1.4.1"
-        ],
-        "id": "GHSA-wrvr-8mpx-r7pp",
-        "modified": "2023-11-08T03:59:07.102650+00:00",
-        "published": "2018-07-20T16:20:52+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2017-16138",
-          "https://github.com/broofa/node-mime/issues/167",
-          "https://github.com/broofa/mime/commit/1df903fdeb9ae7eaa048795b8d580ce2c98f40b0",
-          "https://github.com/broofa/mime/commit/855d0c4b8b22e4a80b9401a81f2872058eae274d",
-          "https://github.com/broofa/mime"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "mime Regular Expression Denial of Service when MIME lookup performed on untrusted user input"
+        "id": "GHSA-wrvr-8mpx-r7pp"
       },
       "cvss_score": 7.5,
       "dep_name": "mime",
@@ -9881,34 +7395,7 @@
         "aliases": [
           "CVE-2026-27904"
         ],
-        "cwe_ids": [
-          "CWE-1333"
-        ],
-        "fixed_versions": [
-          "10.2.3",
-          "9.0.7",
-          "8.0.6",
-          "7.4.8",
-          "6.2.2",
-          "5.1.8",
-          "4.2.5",
-          "3.1.4"
-        ],
-        "id": "GHSA-23c5-xmqv-rm74",
-        "modified": "2026-09-10T03:50:59.274637+00:00",
-        "published": "2026-02-26T22:07:15+00:00",
-        "references": [
-          "https://github.com/isaacs/minimatch/security/advisories/GHSA-23c5-xmqv-rm74",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-27904",
-          "https://github.com/isaacs/minimatch/commit/11d0df6165d15a955462316b26d52e5efae06fce",
-          "https://github.com/isaacs/minimatch"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "minimatch ReDoS: nested *() extglobs generate catastrophically backtracking regular expressions"
+        "id": "GHSA-23c5-xmqv-rm74"
       },
       "cvss_score": 7.5,
       "dep_name": "minimatch",
@@ -9971,34 +7458,7 @@
         "aliases": [
           "CVE-2026-26996"
         ],
-        "cwe_ids": [
-          "CWE-1333"
-        ],
-        "fixed_versions": [
-          "10.2.1",
-          "9.0.6",
-          "8.0.5",
-          "7.4.7",
-          "6.2.1",
-          "5.1.7",
-          "4.2.4",
-          "3.1.3"
-        ],
-        "id": "GHSA-3ppc-4f35-3m26",
-        "modified": "2026-09-10T03:50:33.812431+00:00",
-        "published": "2026-02-18T22:38:11+00:00",
-        "references": [
-          "https://github.com/isaacs/minimatch/security/advisories/GHSA-3ppc-4f35-3m26",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-26996",
-          "https://github.com/isaacs/minimatch/commit/2e111f3a79abc00fa73110195de2c0f2351904f5",
-          "https://github.com/isaacs/minimatch"
-        ],
-        "severity": {
-          "score": 8.7,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N"
-        },
-        "summary": "minimatch has a ReDoS via repeated wildcards with non-matching literal in pattern"
+        "id": "GHSA-3ppc-4f35-3m26"
       },
       "cvss_score": 8.7,
       "dep_name": "minimatch",
@@ -10060,34 +7520,7 @@
         "aliases": [
           "CVE-2026-27903"
         ],
-        "cwe_ids": [
-          "CWE-407"
-        ],
-        "fixed_versions": [
-          "10.2.3",
-          "9.0.7",
-          "8.0.6",
-          "7.4.8",
-          "6.2.2",
-          "5.1.8",
-          "4.2.5",
-          "3.1.3"
-        ],
-        "id": "GHSA-7r86-cg39-jmmj",
-        "modified": "2026-09-10T03:50:34.376990+00:00",
-        "published": "2026-02-26T22:10:18+00:00",
-        "references": [
-          "https://github.com/isaacs/minimatch/security/advisories/GHSA-7r86-cg39-jmmj",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-27903",
-          "https://github.com/isaacs/minimatch/commit/0bf499aa45f5059b56809cc3b75ff3eafeb8d748",
-          "https://github.com/isaacs/minimatch"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "minimatch has ReDoS: matchOne() combinatorial backtracking via multiple non-adjacent GLOBSTAR segments"
+        "id": "GHSA-7r86-cg39-jmmj"
       },
       "cvss_score": 7.5,
       "dep_name": "minimatch",
@@ -10150,29 +7583,7 @@
         "aliases": [
           "CVE-2022-3517"
         ],
-        "cwe_ids": [
-          "CWE-1333",
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "3.0.5"
-        ],
-        "id": "GHSA-f8q6-p94x-37v3",
-        "modified": "2026-09-10T03:49:46.410416+00:00",
-        "published": "2022-10-18T12:00:32+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-3517",
-          "https://github.com/grafana/grafana-image-renderer/issues/329",
-          "https://github.com/nodejs/node/issues/42510",
-          "https://github.com/isaacs/minimatch/commit/a8763f4388e51956be62dc6025cec1126beeb5e6",
-          "https://github.com/isaacs/minimatch"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "minimatch ReDoS vulnerability"
+        "id": "GHSA-f8q6-p94x-37v3"
       },
       "cvss_score": 7.5,
       "dep_name": "minimatch",
@@ -10234,28 +7645,7 @@
         "aliases": [
           "CVE-2026-118764"
         ],
-        "cwe_ids": [
-          "CWE-405"
-        ],
-        "fixed_versions": [
-          "11.0.1"
-        ],
-        "id": "GHSA-g3hv-75wg-m249",
-        "modified": "2026-10-30T23:15:07.420159+00:00",
-        "published": "2026-10-30T23:09:55+00:00",
-        "references": [
-          "https://github.com/isaacs/minimatch/security/advisories/GHSA-g3hv-75wg-m249",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-118764",
-          "https://github.com/isaacs/minimatch/commit/77a0f5c4b80bdc641c3c930a1d9edf5ad2db57f8",
-          "https://github.com/isaacs/minimatch",
-          "https://github.com/isaacs/minimatch/releases/tag/v11.0.1"
-        ],
-        "severity": {
-          "score": 6.9,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
-        },
-        "summary": "minimatch has potential denial of service via globparts amplification"
+        "id": "GHSA-g3hv-75wg-m249"
       },
       "cvss_score": 6.9,
       "dep_name": "minimatch",
@@ -10317,29 +7707,7 @@
         "aliases": [
           "CVE-2020-7598"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "0.2.1",
-          "1.2.3"
-        ],
-        "id": "GHSA-vh95-rmgr-6w4m",
-        "modified": "2026-03-13T22:11:31.390433+00:00",
-        "published": "2020-04-03T21:48:32+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-7598",
-          "https://github.com/minimistjs/minimist/commit/10bd4cdf49d9686d48214be9d579a9cdfda37c68",
-          "https://github.com/minimistjs/minimist/commit/38a4d1caead72ef99e824bb420a2528eec03d9ab",
-          "https://github.com/minimistjs/minimist/commit/4cf1354839cb972e38496d35e12f806eea92c11f#diff-a1e0ee62c91705696ddb71aa30ad4f95",
-          "https://github.com/minimistjs/minimist/commit/63e7ed05aa4b1889ec2f3b196426db4500cbda94"
-        ],
-        "severity": {
-          "score": 5.6,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:L"
-        },
-        "summary": "Prototype Pollution in minimist"
+        "id": "GHSA-vh95-rmgr-6w4m"
       },
       "cvss_score": 5.6,
       "dep_name": "minimist",
@@ -10401,29 +7769,7 @@
         "aliases": [
           "CVE-2021-44906"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "1.2.6",
-          "0.2.4"
-        ],
-        "id": "GHSA-xvch-5gv4-984h",
-        "modified": "2026-03-13T22:11:59.523514+00:00",
-        "published": "2022-03-18T00:01:09+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-44906",
-          "https://github.com/minimistjs/minimist/issues/11",
-          "https://github.com/substack/minimist/issues/164",
-          "https://github.com/minimistjs/minimist/pull/24",
-          "https://github.com/minimistjs/minimist/commit/34e20b8461118608703d6485326abbb8e35e1703"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Prototype Pollution in minimist"
+        "id": "GHSA-xvch-5gv4-984h"
       },
       "cvss_score": 9.8,
       "dep_name": "minimist",
@@ -10485,29 +7831,7 @@
         "aliases": [
           "CVE-2020-7598"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "0.2.1",
-          "1.2.3"
-        ],
-        "id": "GHSA-vh95-rmgr-6w4m",
-        "modified": "2026-03-13T22:11:31.390433+00:00",
-        "published": "2020-04-03T21:48:32+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-7598",
-          "https://github.com/minimistjs/minimist/commit/10bd4cdf49d9686d48214be9d579a9cdfda37c68",
-          "https://github.com/minimistjs/minimist/commit/38a4d1caead72ef99e824bb420a2528eec03d9ab",
-          "https://github.com/minimistjs/minimist/commit/4cf1354839cb972e38496d35e12f806eea92c11f#diff-a1e0ee62c91705696ddb71aa30ad4f95",
-          "https://github.com/minimistjs/minimist/commit/63e7ed05aa4b1889ec2f3b196426db4500cbda94"
-        ],
-        "severity": {
-          "score": 5.6,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:L"
-        },
-        "summary": "Prototype Pollution in minimist"
+        "id": "GHSA-vh95-rmgr-6w4m"
       },
       "cvss_score": 5.6,
       "dep_name": "minimist",
@@ -10569,29 +7893,7 @@
         "aliases": [
           "CVE-2021-44906"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "1.2.6",
-          "0.2.4"
-        ],
-        "id": "GHSA-xvch-5gv4-984h",
-        "modified": "2026-03-13T22:11:59.523514+00:00",
-        "published": "2022-03-18T00:01:09+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-44906",
-          "https://github.com/minimistjs/minimist/issues/11",
-          "https://github.com/substack/minimist/issues/164",
-          "https://github.com/minimistjs/minimist/pull/24",
-          "https://github.com/minimistjs/minimist/commit/34e20b8461118608703d6485326abbb8e35e1703"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Prototype Pollution in minimist"
+        "id": "GHSA-xvch-5gv4-984h"
       },
       "cvss_score": 9.8,
       "dep_name": "minimist",
@@ -10653,29 +7955,7 @@
         "aliases": [
           "CVE-2020-7598"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "0.2.1",
-          "1.2.3"
-        ],
-        "id": "GHSA-vh95-rmgr-6w4m",
-        "modified": "2026-03-13T22:11:31.390433+00:00",
-        "published": "2020-04-03T21:48:32+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-7598",
-          "https://github.com/minimistjs/minimist/commit/10bd4cdf49d9686d48214be9d579a9cdfda37c68",
-          "https://github.com/minimistjs/minimist/commit/38a4d1caead72ef99e824bb420a2528eec03d9ab",
-          "https://github.com/minimistjs/minimist/commit/4cf1354839cb972e38496d35e12f806eea92c11f#diff-a1e0ee62c91705696ddb71aa30ad4f95",
-          "https://github.com/minimistjs/minimist/commit/63e7ed05aa4b1889ec2f3b196426db4500cbda94"
-        ],
-        "severity": {
-          "score": 5.6,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:L"
-        },
-        "summary": "Prototype Pollution in minimist"
+        "id": "GHSA-vh95-rmgr-6w4m"
       },
       "cvss_score": 5.6,
       "dep_name": "minimist",
@@ -10737,29 +8017,7 @@
         "aliases": [
           "CVE-2021-44906"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "1.2.6",
-          "0.2.4"
-        ],
-        "id": "GHSA-xvch-5gv4-984h",
-        "modified": "2026-03-13T22:11:59.523514+00:00",
-        "published": "2022-03-18T00:01:09+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-44906",
-          "https://github.com/minimistjs/minimist/issues/11",
-          "https://github.com/substack/minimist/issues/164",
-          "https://github.com/minimistjs/minimist/pull/24",
-          "https://github.com/minimistjs/minimist/commit/34e20b8461118608703d6485326abbb8e35e1703"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Prototype Pollution in minimist"
+        "id": "GHSA-xvch-5gv4-984h"
       },
       "cvss_score": 9.8,
       "dep_name": "minimist",
@@ -10821,28 +8079,7 @@
         "aliases": [
           "CVE-2017-20162"
         ],
-        "cwe_ids": [
-          "CWE-1333"
-        ],
-        "fixed_versions": [
-          "2.0.0"
-        ],
-        "id": "GHSA-w9mr-4mfr-499f",
-        "modified": "2025-11-04T16:42:14+00:00",
-        "published": "2023-01-05T12:30:27+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2017-20162",
-          "https://github.com/vercel/ms/pull/89",
-          "https://github.com/vercel/ms/commit/caae2988ba2a37765d055c4eee63d383320ee662",
-          "https://github.com/vercel/ms",
-          "https://github.com/vercel/ms/releases/tag/2.0.0"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "Vercel ms Inefficient Regular Expression Complexity vulnerability"
+        "id": "GHSA-w9mr-4mfr-499f"
       },
       "cvss_score": 5.3,
       "dep_name": "ms",
@@ -10904,28 +8141,7 @@
         "aliases": [
           "CVE-2017-20162"
         ],
-        "cwe_ids": [
-          "CWE-1333"
-        ],
-        "fixed_versions": [
-          "2.0.0"
-        ],
-        "id": "GHSA-w9mr-4mfr-499f",
-        "modified": "2025-11-04T16:42:14+00:00",
-        "published": "2023-01-05T12:30:27+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2017-20162",
-          "https://github.com/vercel/ms/pull/89",
-          "https://github.com/vercel/ms/commit/caae2988ba2a37765d055c4eee63d383320ee662",
-          "https://github.com/vercel/ms",
-          "https://github.com/vercel/ms/releases/tag/2.0.0"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "Vercel ms Inefficient Regular Expression Complexity vulnerability"
+        "id": "GHSA-w9mr-4mfr-499f"
       },
       "cvss_score": 5.3,
       "dep_name": "ms",
@@ -10987,28 +8203,7 @@
         "aliases": [
           "CVE-2021-3803"
         ],
-        "cwe_ids": [
-          "CWE-1333"
-        ],
-        "fixed_versions": [
-          "2.0.1"
-        ],
-        "id": "GHSA-rp65-9cf3-cjxr",
-        "modified": "2026-09-10T03:49:08.829841+00:00",
-        "published": "2021-09-20T20:47:31+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-3803",
-          "https://github.com/fb55/nth-check/commit/9894c1d2010870c351f66c6f6efcf656e26bb726",
-          "https://github.com/fb55/nth-check",
-          "https://huntr.dev/bounties/8cf8cc06-d2cf-4b4e-b42c-99fafb0b04d0",
-          "https://lists.debian.org/debian-lts-announce/2023/05/msg00023.html"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Inefficient Regular Expression Complexity in nth-check"
+        "id": "GHSA-rp65-9cf3-cjxr"
       },
       "cvss_score": 7.5,
       "dep_name": "nth-check",
@@ -11071,29 +8266,7 @@
           "CVE-2020-7751",
           "SNYK-JS-PATHVAL-596926"
         ],
-        "cwe_ids": [
-          "CWE-1321",
-          "CWE-20"
-        ],
-        "fixed_versions": [
-          "1.1.1"
-        ],
-        "id": "GHSA-g6ww-v8xp-vmwg",
-        "modified": "2026-07-08T06:50:05.260651+00:00",
-        "published": "2022-02-10T20:21:24+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-7751",
-          "https://github.com/chaijs/pathval/pull/58/commits/21a9046cfa0c2697cb41990f3b4316db410e6c8a",
-          "https://github.com/chaijs/pathval/pull/58/files",
-          "https://github.com/chaijs/pathval",
-          "https://github.com/chaijs/pathval/releases/tag/v1.1.1"
-        ],
-        "severity": {
-          "score": 7.2,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Prototype pollution in pathval"
+        "id": "GHSA-g6ww-v8xp-vmwg"
       },
       "cvss_score": 7.2,
       "dep_name": "pathval",
@@ -11155,27 +8328,7 @@
         "aliases": [
           "CVE-2025-15284"
         ],
-        "cwe_ids": [
-          "CWE-20"
-        ],
-        "fixed_versions": [
-          "6.14.1"
-        ],
-        "id": "GHSA-6rw7-vpxm-498p",
-        "modified": "2026-09-10T03:50:31.670581+00:00",
-        "published": "2025-12-30T21:02:54+00:00",
-        "references": [
-          "https://github.com/ljharb/qs/security/advisories/GHSA-6rw7-vpxm-498p",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-15284",
-          "https://github.com/ljharb/qs/commit/3086902ecf7f088d0d1803887643ac6c03d415b9",
-          "https://github.com/ljharb/qs"
-        ],
-        "severity": {
-          "score": 6.3,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:L"
-        },
-        "summary": "qs's arrayLimit bypass in its bracket notation allows DoS via memory exhaustion"
+        "id": "GHSA-6rw7-vpxm-498p"
       },
       "cvss_score": 6.3,
       "dep_name": "qs",
@@ -11237,31 +8390,7 @@
         "aliases": [
           "CVE-2017-1000048"
         ],
-        "cwe_ids": [
-          "CWE-20"
-        ],
-        "fixed_versions": [
-          "6.0.4",
-          "6.1.2",
-          "6.2.3",
-          "6.3.2"
-        ],
-        "id": "GHSA-gqgv-6jq5-jjj9",
-        "modified": "2023-11-08T03:58:42.086259+00:00",
-        "published": "2020-04-30T17:16:47+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2017-1000048",
-          "https://github.com/ljharb/qs/issues/200",
-          "https://github.com/ljharb/qs/commit/beade029171b8cef9cee0d03ebe577e2dd84976d",
-          "https://access.redhat.com/errata/RHSA-2017:2672",
-          "https://github.com/ljharb/qs"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Prototype Pollution Protection Bypass in qs"
+        "id": "GHSA-gqgv-6jq5-jjj9"
       },
       "cvss_score": 7.5,
       "dep_name": "qs",
@@ -11323,36 +8452,7 @@
         "aliases": [
           "CVE-2022-24999"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "6.10.3",
-          "6.9.7",
-          "6.8.3",
-          "6.7.3",
-          "6.6.1",
-          "6.5.3",
-          "6.4.1",
-          "6.3.3",
-          "6.2.4"
-        ],
-        "id": "GHSA-hrpp-h998-j3pp",
-        "modified": "2025-04-29T15:41:43+00:00",
-        "published": "2022-11-27T00:30:50+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-24999",
-          "https://github.com/ljharb/qs/pull/428",
-          "https://github.com/ljharb/qs/commit/4310742efbd8c03f6495f07906b45213da0a32ec",
-          "https://github.com/ljharb/qs/commit/727ef5d34605108acb3513f72d5435972ed15b68",
-          "https://github.com/ljharb/qs/commit/73205259936317b40f447c5cdb71c5b341848e1b"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "qs vulnerable to Prototype Pollution"
+        "id": "GHSA-hrpp-h998-j3pp"
       },
       "cvss_score": 7.5,
       "dep_name": "qs",
@@ -11415,28 +8515,7 @@
         "aliases": [
           "CVE-2026-82417"
         ],
-        "cwe_ids": [
-          "CWE-248",
-          "CWE-703"
-        ],
-        "fixed_versions": [
-          "6.16.0"
-        ],
-        "id": "GHSA-4mjr-xmp4-gh2g",
-        "modified": "2026-09-10T03:51:14.991984+00:00",
-        "published": "2026-09-02T14:45:13+00:00",
-        "references": [
-          "https://github.com/ljharb/qs/security/advisories/GHSA-4mjr-xmp4-gh2g",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-82417",
-          "https://github.com/ljharb/qs/commit/e83d321ffafb38cf210683ac31714fce6ce1c6c6",
-          "https://github.com/ljharb/qs"
-        ],
-        "severity": {
-          "score": 6.3,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
-        },
-        "summary": "qs: Denial of Service via Attacker Controlled isBuffer"
+        "id": "GHSA-4mjr-xmp4-gh2g"
       },
       "cvss_score": 6.3,
       "dep_name": "qs",
@@ -11499,27 +8578,7 @@
         "aliases": [
           "CVE-2025-15284"
         ],
-        "cwe_ids": [
-          "CWE-20"
-        ],
-        "fixed_versions": [
-          "6.14.1"
-        ],
-        "id": "GHSA-6rw7-vpxm-498p",
-        "modified": "2026-09-10T03:50:31.670581+00:00",
-        "published": "2025-12-30T21:02:54+00:00",
-        "references": [
-          "https://github.com/ljharb/qs/security/advisories/GHSA-6rw7-vpxm-498p",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-15284",
-          "https://github.com/ljharb/qs/commit/3086902ecf7f088d0d1803887643ac6c03d415b9",
-          "https://github.com/ljharb/qs"
-        ],
-        "severity": {
-          "score": 6.3,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:L"
-        },
-        "summary": "qs's arrayLimit bypass in its bracket notation allows DoS via memory exhaustion"
+        "id": "GHSA-6rw7-vpxm-498p"
       },
       "cvss_score": 6.3,
       "dep_name": "qs",
@@ -11581,31 +8640,7 @@
         "aliases": [
           "CVE-2017-1000048"
         ],
-        "cwe_ids": [
-          "CWE-20"
-        ],
-        "fixed_versions": [
-          "6.0.4",
-          "6.1.2",
-          "6.2.3",
-          "6.3.2"
-        ],
-        "id": "GHSA-gqgv-6jq5-jjj9",
-        "modified": "2023-11-08T03:58:42.086259+00:00",
-        "published": "2020-04-30T17:16:47+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2017-1000048",
-          "https://github.com/ljharb/qs/issues/200",
-          "https://github.com/ljharb/qs/commit/beade029171b8cef9cee0d03ebe577e2dd84976d",
-          "https://access.redhat.com/errata/RHSA-2017:2672",
-          "https://github.com/ljharb/qs"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Prototype Pollution Protection Bypass in qs"
+        "id": "GHSA-gqgv-6jq5-jjj9"
       },
       "cvss_score": 7.5,
       "dep_name": "qs",
@@ -11667,36 +8702,7 @@
         "aliases": [
           "CVE-2022-24999"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "6.10.3",
-          "6.9.7",
-          "6.8.3",
-          "6.7.3",
-          "6.6.1",
-          "6.5.3",
-          "6.4.1",
-          "6.3.3",
-          "6.2.4"
-        ],
-        "id": "GHSA-hrpp-h998-j3pp",
-        "modified": "2025-04-29T15:41:43+00:00",
-        "published": "2022-11-27T00:30:50+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-24999",
-          "https://github.com/ljharb/qs/pull/428",
-          "https://github.com/ljharb/qs/commit/4310742efbd8c03f6495f07906b45213da0a32ec",
-          "https://github.com/ljharb/qs/commit/727ef5d34605108acb3513f72d5435972ed15b68",
-          "https://github.com/ljharb/qs/commit/73205259936317b40f447c5cdb71c5b341848e1b"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "qs vulnerable to Prototype Pollution"
+        "id": "GHSA-hrpp-h998-j3pp"
       },
       "cvss_score": 7.5,
       "dep_name": "qs",
@@ -11759,28 +8765,7 @@
         "aliases": [
           "CVE-2026-82417"
         ],
-        "cwe_ids": [
-          "CWE-248",
-          "CWE-703"
-        ],
-        "fixed_versions": [
-          "6.16.0"
-        ],
-        "id": "GHSA-4mjr-xmp4-gh2g",
-        "modified": "2026-09-10T03:51:14.991984+00:00",
-        "published": "2026-09-02T14:45:13+00:00",
-        "references": [
-          "https://github.com/ljharb/qs/security/advisories/GHSA-4mjr-xmp4-gh2g",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-82417",
-          "https://github.com/ljharb/qs/commit/e83d321ffafb38cf210683ac31714fce6ce1c6c6",
-          "https://github.com/ljharb/qs"
-        ],
-        "severity": {
-          "score": 6.3,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
-        },
-        "summary": "qs: Denial of Service via Attacker Controlled isBuffer"
+        "id": "GHSA-4mjr-xmp4-gh2g"
       },
       "cvss_score": 6.3,
       "dep_name": "qs",
@@ -11843,27 +8828,7 @@
         "aliases": [
           "CVE-2025-15284"
         ],
-        "cwe_ids": [
-          "CWE-20"
-        ],
-        "fixed_versions": [
-          "6.14.1"
-        ],
-        "id": "GHSA-6rw7-vpxm-498p",
-        "modified": "2026-09-10T03:50:31.670581+00:00",
-        "published": "2025-12-30T21:02:54+00:00",
-        "references": [
-          "https://github.com/ljharb/qs/security/advisories/GHSA-6rw7-vpxm-498p",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-15284",
-          "https://github.com/ljharb/qs/commit/3086902ecf7f088d0d1803887643ac6c03d415b9",
-          "https://github.com/ljharb/qs"
-        ],
-        "severity": {
-          "score": 6.3,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:L"
-        },
-        "summary": "qs's arrayLimit bypass in its bracket notation allows DoS via memory exhaustion"
+        "id": "GHSA-6rw7-vpxm-498p"
       },
       "cvss_score": 6.3,
       "dep_name": "qs",
@@ -11925,31 +8890,7 @@
         "aliases": [
           "CVE-2017-1000048"
         ],
-        "cwe_ids": [
-          "CWE-20"
-        ],
-        "fixed_versions": [
-          "6.0.4",
-          "6.1.2",
-          "6.2.3",
-          "6.3.2"
-        ],
-        "id": "GHSA-gqgv-6jq5-jjj9",
-        "modified": "2023-11-08T03:58:42.086259+00:00",
-        "published": "2020-04-30T17:16:47+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2017-1000048",
-          "https://github.com/ljharb/qs/issues/200",
-          "https://github.com/ljharb/qs/commit/beade029171b8cef9cee0d03ebe577e2dd84976d",
-          "https://access.redhat.com/errata/RHSA-2017:2672",
-          "https://github.com/ljharb/qs"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Prototype Pollution Protection Bypass in qs"
+        "id": "GHSA-gqgv-6jq5-jjj9"
       },
       "cvss_score": 7.5,
       "dep_name": "qs",
@@ -12011,36 +8952,7 @@
         "aliases": [
           "CVE-2022-24999"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "6.10.3",
-          "6.9.7",
-          "6.8.3",
-          "6.7.3",
-          "6.6.1",
-          "6.5.3",
-          "6.4.1",
-          "6.3.3",
-          "6.2.4"
-        ],
-        "id": "GHSA-hrpp-h998-j3pp",
-        "modified": "2025-04-29T15:41:43+00:00",
-        "published": "2022-11-27T00:30:50+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-24999",
-          "https://github.com/ljharb/qs/pull/428",
-          "https://github.com/ljharb/qs/commit/4310742efbd8c03f6495f07906b45213da0a32ec",
-          "https://github.com/ljharb/qs/commit/727ef5d34605108acb3513f72d5435972ed15b68",
-          "https://github.com/ljharb/qs/commit/73205259936317b40f447c5cdb71c5b341848e1b"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "qs vulnerable to Prototype Pollution"
+        "id": "GHSA-hrpp-h998-j3pp"
       },
       "cvss_score": 7.5,
       "dep_name": "qs",
@@ -12103,29 +9015,7 @@
         "aliases": [
           "CVE-2017-16028"
         ],
-        "cwe_ids": [
-          "CWE-330",
-          "CWE-338"
-        ],
-        "fixed_versions": [
-          "3.0.0"
-        ],
-        "id": "GHSA-6g33-f262-xjp4",
-        "modified": "2023-11-08T03:59:00.496794+00:00",
-        "published": "2018-10-09T00:57:21+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2017-16028",
-          "https://github.com/jonschlinkert/randomatic/commit/4a526959b3a246ae8e4a82f9c182180907227fe1#diff-b9cfc7f2cdf78a7f4b91a753d10865a2",
-          "https://github.com/advisories/GHSA-6g33-f262-xjp4",
-          "https://github.com/tableflip/react-native-meteor-oauth/blob/a7eb738b74c469f5db20296b44b7cae4e2337435/src/meteor-oauth.js#L66",
-          "https://www.npmjs.com/advisories/157"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"
-        },
-        "summary": "Cryptographically Weak PRNG in randomatic"
+        "id": "GHSA-6g33-f262-xjp4"
       },
       "cvss_score": 5.3,
       "dep_name": "randomatic",
@@ -12187,28 +9077,7 @@
         "aliases": [
           "CVE-2017-16026"
         ],
-        "cwe_ids": [
-          "CWE-201"
-        ],
-        "fixed_versions": [
-          "2.68.0"
-        ],
-        "id": "GHSA-7xfp-9c55-5vqj",
-        "modified": "2023-11-08T03:59:00.437371+00:00",
-        "published": "2018-11-09T17:44:01+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2017-16026",
-          "https://github.com/request/request/issues/1904",
-          "https://github.com/request/request/pull/2018",
-          "https://github.com/request/request/pull/2022",
-          "https://github.com/request/request/commit/29d81814bc16bc79cb112b4face8be6fc00061dd"
-        ],
-        "severity": {
-          "score": 5.9,
-          "severity": "medium",
-          "vector": "CVSS:3.0/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
-        },
-        "summary": "Remote Memory Exposure in request"
+        "id": "GHSA-7xfp-9c55-5vqj"
       },
       "cvss_score": 5.9,
       "dep_name": "request",
@@ -12272,28 +9141,7 @@
         "aliases": [
           "CVE-2023-28155"
         ],
-        "cwe_ids": [
-          "CWE-918"
-        ],
-        "fixed_versions": [
-          "3.0.0"
-        ],
-        "id": "GHSA-p8p7-x288-28g6",
-        "modified": "2026-09-10T03:49:52.915755+00:00",
-        "published": "2023-03-16T15:30:19+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2023-28155",
-          "https://github.com/request/request/issues/3442",
-          "https://github.com/cypress-io/request/pull/28",
-          "https://github.com/github/advisory-database/pull/2500",
-          "https://github.com/request/request/pull/3444"
-        ],
-        "severity": {
-          "score": 6.1,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
-        },
-        "summary": "Server-Side Request Forgery in Request"
+        "id": "GHSA-p8p7-x288-28g6"
       },
       "cvss_score": 6.1,
       "dep_name": "request",
@@ -12357,28 +9205,7 @@
         "aliases": [
           "CVE-2023-28155"
         ],
-        "cwe_ids": [
-          "CWE-918"
-        ],
-        "fixed_versions": [
-          "3.0.0"
-        ],
-        "id": "GHSA-p8p7-x288-28g6",
-        "modified": "2026-09-10T03:49:52.915755+00:00",
-        "published": "2023-03-16T15:30:19+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2023-28155",
-          "https://github.com/request/request/issues/3442",
-          "https://github.com/cypress-io/request/pull/28",
-          "https://github.com/github/advisory-database/pull/2500",
-          "https://github.com/request/request/pull/3444"
-        ],
-        "severity": {
-          "score": 6.1,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
-        },
-        "summary": "Server-Side Request Forgery in Request"
+        "id": "GHSA-p8p7-x288-28g6"
       },
       "cvss_score": 6.1,
       "dep_name": "request",
@@ -12442,28 +9269,7 @@
         "aliases": [
           "CVE-2023-28155"
         ],
-        "cwe_ids": [
-          "CWE-918"
-        ],
-        "fixed_versions": [
-          "3.0.0"
-        ],
-        "id": "GHSA-p8p7-x288-28g6",
-        "modified": "2026-09-10T03:49:52.915755+00:00",
-        "published": "2023-03-16T15:30:19+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2023-28155",
-          "https://github.com/request/request/issues/3442",
-          "https://github.com/cypress-io/request/pull/28",
-          "https://github.com/github/advisory-database/pull/2500",
-          "https://github.com/request/request/pull/3444"
-        ],
-        "severity": {
-          "score": 6.1,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
-        },
-        "summary": "Server-Side Request Forgery in Request"
+        "id": "GHSA-p8p7-x288-28g6"
       },
       "cvss_score": 6.1,
       "dep_name": "request",
@@ -12527,28 +9333,7 @@
         "aliases": [
           "CVE-2024-38999"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "2.3.7"
-        ],
-        "id": "GHSA-x3m3-4wpv-5vgc",
-        "modified": "2026-09-10T03:50:16.891512+00:00",
-        "published": "2024-07-01T15:32:19+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-38999",
-          "https://github.com/requirejs/r.js/issues/1015",
-          "https://github.com/requirejs/requirejs/issues/1854",
-          "https://github.com/requirejs/requirejs/pull/1856/commits/ebd7a2ff71473542fa132d0d15c10fb4ed1539e1",
-          "https://gist.github.com/mestrtee/9acae342285bd2998fa09ebcb1e6d30a"
-        ],
-        "severity": {
-          "score": 10.0,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H"
-        },
-        "summary": "jrburke requirejs vulnerable to prototype pollution"
+        "id": "GHSA-x3m3-4wpv-5vgc"
       },
       "cvss_score": 10.0,
       "dep_name": "requirejs",
@@ -12611,30 +9396,7 @@
         "aliases": [
           "CVE-2022-25883"
         ],
-        "cwe_ids": [
-          "CWE-1333"
-        ],
-        "fixed_versions": [
-          "7.5.2",
-          "6.3.1",
-          "5.7.2"
-        ],
-        "id": "GHSA-c2qf-rxjj-qqgw",
-        "modified": "2026-09-10T03:50:02.224637+00:00",
-        "published": "2023-06-21T06:30:28+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-25883",
-          "https://github.com/npm/node-semver/pull/564",
-          "https://github.com/npm/node-semver/pull/585",
-          "https://github.com/npm/node-semver/pull/593",
-          "https://github.com/npm/node-semver/commit/2f8fd41487acf380194579ecb6f8b1bbfe116be0"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "semver vulnerable to Regular Expression Denial of Service"
+        "id": "GHSA-c2qf-rxjj-qqgw"
       },
       "cvss_score": 7.5,
       "dep_name": "semver",
@@ -12697,28 +9459,7 @@
         "aliases": [
           "CVE-2025-9288"
         ],
-        "cwe_ids": [
-          "CWE-20"
-        ],
-        "fixed_versions": [
-          "2.4.12"
-        ],
-        "id": "GHSA-95m3-7q98-8xr5",
-        "modified": "2026-09-10T03:50:26.795456+00:00",
-        "published": "2025-08-21T14:47:55+00:00",
-        "references": [
-          "https://github.com/browserify/sha.js/security/advisories/GHSA-95m3-7q98-8xr5",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-9288",
-          "https://github.com/browserify/sha.js/pull/78",
-          "https://github.com/browserify/sha.js/commit/f2a258e9f2d0fcd113bfbaa49706e1ac0d979ba5",
-          "https://github.com/browserify/sha.js"
-        ],
-        "severity": {
-          "score": 9.1,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:H"
-        },
-        "summary": "sha.js is missing type checks leading to hash rewind and passing on crafted data"
+        "id": "GHSA-95m3-7q98-8xr5"
       },
       "cvss_score": 9.1,
       "dep_name": "sha.js",
@@ -12781,29 +9522,7 @@
         "aliases": [
           "CVE-2018-3737"
         ],
-        "cwe_ids": [
-          "CWE-185",
-          "CWE-770"
-        ],
-        "fixed_versions": [
-          "1.13.2"
-        ],
-        "id": "GHSA-2m39-62fm-q8r3",
-        "modified": "2023-11-08T04:00:18.101194+00:00",
-        "published": "2018-08-15T13:22:23+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2018-3737",
-          "https://github.com/joyent/node-sshpk/commit/46065d38a5e6d1bccf86d3efb2fb83c14e3f9957",
-          "https://hackerone.com/reports/319593",
-          "https://github.com/advisories/GHSA-2m39-62fm-q8r3",
-          "https://github.com/joyent/node-sshpk/blob/v1.13.1/lib/formats/ssh.js#L17"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Regular Expression Denial of Service in sshpk"
+        "id": "GHSA-2m39-62fm-q8r3"
       },
       "cvss_score": 7.5,
       "dep_name": "sshpk",
@@ -12865,22 +9584,7 @@
         "aliases": [
           "CVE-2018-21270"
         ],
-        "cwe_ids": [
-          "CWE-125"
-        ],
-        "fixed_versions": [
-          "0.0.6"
-        ],
-        "id": "GHSA-mf6x-7mm4-x2g7",
-        "modified": "2023-11-08T04:00:14.605779+00:00",
-        "published": "2019-06-20T18:22:32+00:00",
-        "references": [
-          "https://hackerone.com/reports/321670",
-          "https://github.com/mhart/StringStream/blob/v0.0.5/stringstream.js#L32",
-          "https://www.npmjs.com/advisories/664"
-        ],
-        "severity": null,
-        "summary": "Out-of-bounds Read in stringstream"
+        "id": "GHSA-mf6x-7mm4-x2g7"
       },
       "cvss_score": null,
       "dep_name": "stringstream",
@@ -12942,28 +9646,7 @@
         "aliases": [
           "CVE-2026-59873"
         ],
-        "cwe_ids": [
-          "CWE-770"
-        ],
-        "fixed_versions": [
-          "7.5.19"
-        ],
-        "id": "GHSA-23hp-3jrh-7fpw",
-        "modified": "2026-09-10T03:51:09.781853+00:00",
-        "published": "2026-07-20T21:52:03+00:00",
-        "references": [
-          "https://github.com/isaacs/node-tar/security/advisories/GHSA-23hp-3jrh-7fpw",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-59873",
-          "https://github.com/isaacs/node-tar/commit/2812e9338665659b183aa7226518c307044957d3",
-          "https://github.com/isaacs/node-tar",
-          "https://github.com/isaacs/node-tar/releases/tag/v7.5.19"
-        ],
-        "severity": {
-          "score": 9.2,
-          "severity": "critical",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:H"
-        },
-        "summary": "node-tar: Decompression/parse DoS via unlimited input"
+        "id": "GHSA-23hp-3jrh-7fpw"
       },
       "cvss_score": 9.2,
       "dep_name": "tar",
@@ -13026,28 +9709,7 @@
         "aliases": [
           "CVE-2026-24842"
         ],
-        "cwe_ids": [
-          "CWE-22",
-          "CWE-59"
-        ],
-        "fixed_versions": [
-          "7.5.7"
-        ],
-        "id": "GHSA-34x7-hfp2-rc4v",
-        "modified": "2026-09-10T03:50:32.616577+00:00",
-        "published": "2026-01-28T16:35:31+00:00",
-        "references": [
-          "https://github.com/isaacs/node-tar/security/advisories/GHSA-34x7-hfp2-rc4v",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-24842",
-          "https://github.com/isaacs/node-tar/commit/f4a7aa9bc3d717c987fdf1480ff7a64e87ffdb46",
-          "https://github.com/isaacs/node-tar"
-        ],
-        "severity": {
-          "score": 8.2,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:H/I:L/A:N"
-        },
-        "summary": "node-tar Vulnerable to Arbitrary File Creation/Overwrite via Hardlink Path Traversal"
+        "id": "GHSA-34x7-hfp2-rc4v"
       },
       "cvss_score": 8.2,
       "dep_name": "tar",
@@ -13110,31 +9772,7 @@
         "aliases": [
           "CVE-2021-32804"
         ],
-        "cwe_ids": [
-          "CWE-22"
-        ],
-        "fixed_versions": [
-          "3.2.2",
-          "4.4.14",
-          "5.0.6",
-          "6.1.1"
-        ],
-        "id": "GHSA-3jfq-g458-7qm9",
-        "modified": "2026-07-08T06:28:51.409971+00:00",
-        "published": "2021-08-03T19:06:36+00:00",
-        "references": [
-          "https://github.com/npm/node-tar/security/advisories/GHSA-3jfq-g458-7qm9",
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-32804",
-          "https://github.com/npm/node-tar/commit/1f036ca23f64a547bdd6c79c1a44bc62e8115da4",
-          "https://cert-portal.siemens.com/productcert/pdf/ssa-389290.pdf",
-          "https://github.com/npm/node-tar"
-        ],
-        "severity": {
-          "score": 8.2,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:C/C:H/I:H/A:N"
-        },
-        "summary": "Arbitrary File Creation/Overwrite due to insufficient absolute path sanitization"
+        "id": "GHSA-3jfq-g458-7qm9"
       },
       "cvss_score": 8.2,
       "dep_name": "tar",
@@ -13196,30 +9834,7 @@
         "aliases": [
           "CVE-2021-37713"
         ],
-        "cwe_ids": [
-          "CWE-22"
-        ],
-        "fixed_versions": [
-          "4.4.18",
-          "5.0.10",
-          "6.1.9"
-        ],
-        "id": "GHSA-5955-9wpr-37jh",
-        "modified": "2026-07-08T06:28:41.552506+00:00",
-        "published": "2021-08-31T16:05:05+00:00",
-        "references": [
-          "https://github.com/npm/node-tar/security/advisories/GHSA-5955-9wpr-37jh",
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-37713",
-          "https://github.com/isaacs/node-tar/commit/52b09e309bcae0c741a7eb79a17ef36e7828b946",
-          "https://github.com/isaacs/node-tar/commit/82eac952f7c10765969ed464e549375854b26edc",
-          "https://github.com/isaacs/node-tar/commit/875a37e3ec031186fc6599f6807341f56c584598"
-        ],
-        "severity": {
-          "score": 8.2,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:C/C:H/I:H/A:N"
-        },
-        "summary": "Arbitrary File Creation/Overwrite on Windows via insufficient relative path sanitization"
+        "id": "GHSA-5955-9wpr-37jh"
       },
       "cvss_score": 8.2,
       "dep_name": "tar",
@@ -13281,28 +9896,7 @@
         "aliases": [
           "CVE-2026-26960"
         ],
-        "cwe_ids": [
-          "CWE-22"
-        ],
-        "fixed_versions": [
-          "7.5.8"
-        ],
-        "id": "GHSA-83g3-92jg-28cx",
-        "modified": "2026-09-10T03:50:34.418493+00:00",
-        "published": "2026-02-18T00:57:13+00:00",
-        "references": [
-          "https://github.com/isaacs/node-tar/security/advisories/GHSA-83g3-92jg-28cx",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-26960",
-          "https://github.com/isaacs/node-tar/commit/2cb1120bcefe28d7ecc719b41441ade59c52e384",
-          "https://github.com/isaacs/node-tar/commit/d18e4e1f846f4ddddc153b0f536a19c050e7499f",
-          "https://github.com/isaacs/node-tar"
-        ],
-        "severity": {
-          "score": 7.1,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:N"
-        },
-        "summary": "Arbitrary File Read/Write via Hardlink Target Escape Through Symlink Chain in node-tar Extraction"
+        "id": "GHSA-83g3-92jg-28cx"
       },
       "cvss_score": 7.1,
       "dep_name": "tar",
@@ -13364,27 +9958,7 @@
         "aliases": [
           "CVE-2026-23745"
         ],
-        "cwe_ids": [
-          "CWE-22"
-        ],
-        "fixed_versions": [
-          "7.5.3"
-        ],
-        "id": "GHSA-8qq5-rm4j-mr97",
-        "modified": "2026-09-10T03:50:59.009017+00:00",
-        "published": "2026-01-16T21:16:20+00:00",
-        "references": [
-          "https://github.com/isaacs/node-tar/security/advisories/GHSA-8qq5-rm4j-mr97",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-23745",
-          "https://github.com/isaacs/node-tar/commit/340eb285b6d986e91969a1170d7fe9b0face405e",
-          "https://github.com/isaacs/node-tar"
-        ],
-        "severity": {
-          "score": 8.2,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:A/VC:H/VI:L/VA:N/SC:H/SI:L/SA:N"
-        },
-        "summary": "node-tar is Vulnerable to Arbitrary File Overwrite and Symlink Poisoning via Insufficient Path Sanitization"
+        "id": "GHSA-8qq5-rm4j-mr97"
       },
       "cvss_score": 8.2,
       "dep_name": "tar",
@@ -13447,28 +10021,7 @@
         "aliases": [
           "CVE-2026-59874"
         ],
-        "cwe_ids": [
-          "CWE-835"
-        ],
-        "fixed_versions": [
-          "7.5.18"
-        ],
-        "id": "GHSA-8x88-c5mf-7j5w",
-        "modified": "2026-09-10T03:51:11.200904+00:00",
-        "published": "2026-07-20T21:51:39+00:00",
-        "references": [
-          "https://github.com/isaacs/node-tar/security/advisories/GHSA-8x88-c5mf-7j5w",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-59874",
-          "https://github.com/isaacs/node-tar/commit/9e78bf058b2c22dd4d52e00d8922d5c06fc2f7b5",
-          "https://github.com/isaacs/node-tar",
-          "https://github.com/isaacs/node-tar/releases/tag/v7.5.18"
-        ],
-        "severity": {
-          "score": 8.7,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N"
-        },
-        "summary": "node-tar: Negative tar entry size causes infinite loop in archive replace"
+        "id": "GHSA-8x88-c5mf-7j5w"
       },
       "cvss_score": 8.7,
       "dep_name": "tar",
@@ -13531,27 +10084,7 @@
         "aliases": [
           "CVE-2026-31802"
         ],
-        "cwe_ids": [
-          "CWE-22"
-        ],
-        "fixed_versions": [
-          "7.5.11"
-        ],
-        "id": "GHSA-9ppj-qmqm-q256",
-        "modified": "2026-09-10T03:50:38.398085+00:00",
-        "published": "2026-03-10T23:44:58+00:00",
-        "references": [
-          "https://github.com/isaacs/node-tar/security/advisories/GHSA-9ppj-qmqm-q256",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-31802",
-          "https://github.com/isaacs/node-tar/commit/f48b5fa3b7985ddab96dc0f2125a4ffc9911b6ad",
-          "https://github.com/isaacs/node-tar"
-        ],
-        "severity": {
-          "score": 8.2,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:N/VC:N/VI:H/VA:N/SC:N/SI:H/SA:N"
-        },
-        "summary": "node-tar Symlink Path Traversal via Drive-Relative Linkpath"
+        "id": "GHSA-9ppj-qmqm-q256"
       },
       "cvss_score": 8.2,
       "dep_name": "tar",
@@ -13614,28 +10147,7 @@
         "aliases": [
           "CVE-2024-28863"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "6.2.1"
-        ],
-        "id": "GHSA-f5x3-32g6-xq36",
-        "modified": "2026-09-10T03:50:10.480254+00:00",
-        "published": "2024-03-22T16:57:05+00:00",
-        "references": [
-          "https://github.com/isaacs/node-tar/security/advisories/GHSA-f5x3-32g6-xq36",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-28863",
-          "https://github.com/isaacs/node-tar/commit/fe8cd57da5686f8695415414bda49206a545f7f7",
-          "https://github.com/isaacs/node-tar",
-          "https://security.netapp.com/advisory/ntap-20240524-0005"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Denial of service while parsing a tar file due to lack of folders count validation"
+        "id": "GHSA-f5x3-32g6-xq36"
       },
       "cvss_score": 6.5,
       "dep_name": "tar",
@@ -13698,28 +10210,7 @@
         "aliases": [
           "CVE-2026-59875"
         ],
-        "cwe_ids": [
-          "CWE-248"
-        ],
-        "fixed_versions": [
-          "7.5.17"
-        ],
-        "id": "GHSA-gvwx-54wh-qm9j",
-        "modified": "2026-09-10T03:50:52.205344+00:00",
-        "published": "2026-07-20T21:51:12+00:00",
-        "references": [
-          "https://github.com/isaacs/node-tar/security/advisories/GHSA-gvwx-54wh-qm9j",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-59875",
-          "https://github.com/isaacs/node-tar/commit/7a635c29f5edbf083557374d43984273ecfed5b3",
-          "https://github.com/isaacs/node-tar",
-          "https://github.com/isaacs/node-tar/releases/tag/v7.5.17"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "node-tar: Uncaught Exception DoS via NUL byte in PAX path/linkpath records"
+        "id": "GHSA-gvwx-54wh-qm9j"
       },
       "cvss_score": 5.3,
       "dep_name": "tar",
@@ -13782,29 +10273,7 @@
         "aliases": [
           "CVE-2018-20834"
         ],
-        "cwe_ids": [
-          "CWE-59"
-        ],
-        "fixed_versions": [
-          "4.4.2",
-          "2.2.2"
-        ],
-        "id": "GHSA-j44m-qm6p-hp7m",
-        "modified": "2023-11-29T22:25:48+00:00",
-        "published": "2019-05-01T18:37:31+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2018-20834",
-          "https://github.com/npm/node-tar/commit/7ecef07da6a9e72cc0c4d0c9c6a8e85b6b52395d",
-          "https://github.com/npm/node-tar/commit/b0c58433c22f5e7fe8b1c76373f27e3f81dcd4c8",
-          "https://hackerone.com/reports/344595",
-          "https://access.redhat.com/errata/RHSA-2019:1821"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
-        },
-        "summary": "Arbitrary File Overwrite in tar"
+        "id": "GHSA-j44m-qm6p-hp7m"
       },
       "cvss_score": 7.5,
       "dep_name": "tar",
@@ -13866,28 +10335,7 @@
         "aliases": [
           "CVE-2026-29786"
         ],
-        "cwe_ids": [
-          "CWE-22",
-          "CWE-59"
-        ],
-        "fixed_versions": [
-          "7.5.10"
-        ],
-        "id": "GHSA-qffp-2rhf-9h96",
-        "modified": "2026-09-10T03:50:40.605623+00:00",
-        "published": "2026-03-05T00:52:32+00:00",
-        "references": [
-          "https://github.com/isaacs/node-tar/security/advisories/GHSA-qffp-2rhf-9h96",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-29786",
-          "https://github.com/isaacs/node-tar/commit/7bc755dd85e623c0279e08eb3784909e6d7e4b9f",
-          "https://github.com/isaacs/node-tar"
-        ],
-        "severity": {
-          "score": 8.2,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:P/VC:N/VI:H/VA:L/SC:N/SI:H/SA:L"
-        },
-        "summary": "tar has Hardlink Path Traversal via Drive-Relative Linkpath"
+        "id": "GHSA-qffp-2rhf-9h96"
       },
       "cvss_score": 8.2,
       "dep_name": "tar",
@@ -13950,29 +10398,7 @@
         "aliases": [
           "CVE-2026-73566"
         ],
-        "cwe_ids": [
-          "CWE-400",
-          "CWE-674"
-        ],
-        "fixed_versions": [
-          "7.5.21"
-        ],
-        "id": "GHSA-r292-9mhp-454m",
-        "modified": "2026-09-10T03:51:11.855710+00:00",
-        "published": "2026-07-24T16:26:16+00:00",
-        "references": [
-          "https://github.com/isaacs/node-tar/security/advisories/GHSA-r292-9mhp-454m",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-73566",
-          "https://github.com/isaacs/node-tar/commit/631ae59121bf8fc8a22bbae35f074cb9b789cd4a",
-          "https://github.com/isaacs/node-tar",
-          "https://github.com/isaacs/node-tar/releases/tag/v7.5.21"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "node-tar: Uncontrolled recursion in mapHas/filesFilter allows uncatchable stack-overflow DoS via crafted long-path tar with member selection"
+        "id": "GHSA-r292-9mhp-454m"
       },
       "cvss_score": 7.5,
       "dep_name": "tar",
@@ -14035,28 +10461,7 @@
         "aliases": [
           "CVE-2026-23950"
         ],
-        "cwe_ids": [
-          "CWE-176",
-          "CWE-367"
-        ],
-        "fixed_versions": [
-          "7.5.4"
-        ],
-        "id": "GHSA-r6q2-hw4h-h46w",
-        "modified": "2026-09-10T03:50:59.225342+00:00",
-        "published": "2026-01-21T01:05:49+00:00",
-        "references": [
-          "https://github.com/isaacs/node-tar/security/advisories/GHSA-r6q2-hw4h-h46w",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-23950",
-          "https://github.com/isaacs/node-tar/commit/3b1abfae650056edfabcbe0a0df5954d390521e6",
-          "https://github.com/isaacs/node-tar"
-        ],
-        "severity": {
-          "score": 8.8,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:H/A:L"
-        },
-        "summary": "Race Condition in node-tar Path Reservations via Unicode Ligature Collisions on macOS APFS"
+        "id": "GHSA-r6q2-hw4h-h46w"
       },
       "cvss_score": 8.8,
       "dep_name": "tar",
@@ -14118,25 +10523,7 @@
         "aliases": [
           "CVE-2026-53655"
         ],
-        "cwe_ids": [
-          "CWE-436"
-        ],
-        "fixed_versions": [
-          "7.5.16"
-        ],
-        "id": "GHSA-vmf3-w455-68vh",
-        "modified": "2026-09-10T03:51:09.639522+00:00",
-        "published": "2026-06-15T17:19:42+00:00",
-        "references": [
-          "https://github.com/isaacs/node-tar/security/advisories/GHSA-vmf3-w455-68vh",
-          "https://github.com/isaacs/node-tar"
-        ],
-        "severity": {
-          "score": 6.9,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N"
-        },
-        "summary": "node-tar applies PAX size override to intermediary GNU long-name/long-link headers, causing tar parser interpretation differential (file smuggling)"
+        "id": "GHSA-vmf3-w455-68vh"
       },
       "cvss_score": 6.9,
       "dep_name": "tar",
@@ -14199,28 +10586,7 @@
         "aliases": [
           "CVE-2026-59871"
         ],
-        "cwe_ids": [
-          "CWE-704"
-        ],
-        "fixed_versions": [
-          "7.5.18"
-        ],
-        "id": "GHSA-w8wr-v893-vjvp",
-        "modified": "2026-09-10T03:51:12.362978+00:00",
-        "published": "2026-07-20T21:53:14+00:00",
-        "references": [
-          "https://github.com/isaacs/node-tar/security/advisories/GHSA-w8wr-v893-vjvp",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-59871",
-          "https://github.com/isaacs/node-tar/commit/e02a4e9e013c4be95302e2eb2047a942b883c27b",
-          "https://github.com/isaacs/node-tar",
-          "https://github.com/isaacs/node-tar/releases/tag/v7.5.18"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "node-tar: Process crash via PAX numeric path type confusion"
+        "id": "GHSA-w8wr-v893-vjvp"
       },
       "cvss_score": 5.3,
       "dep_name": "tar",
@@ -14283,28 +10649,7 @@
         "aliases": [
           "CVE-2023-26136"
         ],
-        "cwe_ids": [
-          "CWE-1321"
-        ],
-        "fixed_versions": [
-          "4.1.3"
-        ],
-        "id": "GHSA-72xf-g2v4-qvf3",
-        "modified": "2026-09-10T03:49:54.440029+00:00",
-        "published": "2023-07-01T06:30:16+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2023-26136",
-          "https://github.com/salesforce/tough-cookie/issues/282",
-          "https://github.com/salesforce/tough-cookie/commit/12d474791bb856004e858fdb1c47b7608d09cf6e",
-          "https://github.com/salesforce/tough-cookie",
-          "https://github.com/salesforce/tough-cookie/releases/tag/v4.1.3"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N"
-        },
-        "summary": "tough-cookie Prototype Pollution vulnerability"
+        "id": "GHSA-72xf-g2v4-qvf3"
       },
       "cvss_score": 6.5,
       "dep_name": "tough-cookie",
@@ -14367,28 +10712,7 @@
         "aliases": [
           "CVE-2017-15010"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "2.3.3"
-        ],
-        "id": "GHSA-g7q5-pjjr-gqvp",
-        "modified": "2023-11-08T03:58:56.101045+00:00",
-        "published": "2018-07-24T20:14:39+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2017-15010",
-          "https://github.com/salesforce/tough-cookie/issues/92",
-          "https://github.com/salesforce/tough-cookie/commit/f1ed420a6a92ea7a5418df6e39e676556bc0c71d",
-          "https://access.redhat.com/errata/RHSA-2017:2912",
-          "https://access.redhat.com/errata/RHSA-2017:2913"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Regular Expression Denial of Service in tough-cookie"
+        "id": "GHSA-g7q5-pjjr-gqvp"
       },
       "cvss_score": 7.5,
       "dep_name": "tough-cookie",
@@ -14448,22 +10772,7 @@
     {
       "advisory": {
         "aliases": [],
-        "cwe_ids": [
-          "CWE-200"
-        ],
-        "fixed_versions": [
-          "0.6.0"
-        ],
-        "id": "GHSA-xc7v-wxcw-j472",
-        "modified": "2020-08-31T18:29:19+00:00",
-        "published": "2019-06-03T17:08:26+00:00",
-        "references": [
-          "https://github.com/request/tunnel-agent/commit/9ca95ec7219daface8a6fc2674000653de0922c0",
-          "https://gist.github.com/ChALkeR/fd6b2c445834244e7d440a043f9d2ff4",
-          "https://www.npmjs.com/advisories/598"
-        ],
-        "severity": null,
-        "summary": "Memory Exposure in tunnel-agent"
+        "id": "GHSA-xc7v-wxcw-j472"
       },
       "cvss_score": null,
       "dep_name": "tunnel-agent",
@@ -14525,28 +10834,7 @@
         "aliases": [
           "CVE-2021-23358"
         ],
-        "cwe_ids": [
-          "CWE-94"
-        ],
-        "fixed_versions": [
-          "1.12.1"
-        ],
-        "id": "GHSA-cf4h-3jhx-xvhq",
-        "modified": "2025-11-04T16:33:59+00:00",
-        "published": "2021-05-06T16:09:43+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-23358",
-          "https://github.com/jashkenas/underscore/pull/2917",
-          "https://github.com/jashkenas/underscore/commit/4c73526d43838ad6ab43a6134728776632adeb66",
-          "https://www.tenable.com/security/tns-2021-14",
-          "https://www.npmjs.com/package/underscore"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Arbitrary Code Execution in underscore"
+        "id": "GHSA-cf4h-3jhx-xvhq"
       },
       "cvss_score": 9.8,
       "dep_name": "underscore",
@@ -14609,29 +10897,7 @@
         "aliases": [
           "CVE-2026-27601"
         ],
-        "cwe_ids": [
-          "CWE-674",
-          "CWE-770"
-        ],
-        "fixed_versions": [
-          "1.13.8"
-        ],
-        "id": "GHSA-qpx9-hpmf-5gmw",
-        "modified": "2026-09-10T03:51:00.752419+00:00",
-        "published": "2026-03-03T17:46:06+00:00",
-        "references": [
-          "https://github.com/jashkenas/underscore/security/advisories/GHSA-qpx9-hpmf-5gmw",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-27601",
-          "https://github.com/jashkenas/underscore/issues/3011",
-          "https://github.com/jashkenas/underscore/commit/411e222eb0ca5d570cc4f6315c02c05b830ed2b4",
-          "https://github.com/jashkenas/underscore/commit/a6e23ae9647461ec33ad9f92a2ecfc220eea0a84"
-        ],
-        "severity": {
-          "score": 8.2,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N"
-        },
-        "summary": "Underscore has unlimited recursion in _.flatten and _.isEqual, potential for DoS attack"
+        "id": "GHSA-qpx9-hpmf-5gmw"
       },
       "cvss_score": 8.2,
       "dep_name": "underscore",
@@ -14694,31 +10960,7 @@
           "CVE-2026-41907",
           "CVE-2026-41988"
         ],
-        "cwe_ids": [
-          "CWE-1285",
-          "CWE-787"
-        ],
-        "fixed_versions": [
-          "11.1.1",
-          "12.0.1",
-          "13.0.1"
-        ],
-        "id": "GHSA-w5hq-g745-h8pq",
-        "modified": "2026-09-10T03:51:03.663336+00:00",
-        "published": "2026-04-22T20:53:24+00:00",
-        "references": [
-          "https://github.com/uuidjs/uuid/security/advisories/GHSA-w5hq-g745-h8pq",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-41907",
-          "https://github.com/uuidjs/uuid/commit/32389c887c9e75f90442ee4cc95bbab0c4e8346e",
-          "https://github.com/uuidjs/uuid/commit/3d2c5b0342f0fcb52a5ac681c3d47c13e7444b34",
-          "https://github.com/uuidjs/uuid/commit/3d61d6ac1f782cf6b1dd8661c60f11722cd49a0d"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
-        },
-        "summary": "uuid: Missing buffer bounds check in v3/v5/v6 when buf is provided"
+        "id": "GHSA-w5hq-g745-h8pq"
       },
       "cvss_score": 7.5,
       "dep_name": "uuid",
@@ -14782,31 +11024,7 @@
           "CVE-2026-41907",
           "CVE-2026-41988"
         ],
-        "cwe_ids": [
-          "CWE-1285",
-          "CWE-787"
-        ],
-        "fixed_versions": [
-          "11.1.1",
-          "12.0.1",
-          "13.0.1"
-        ],
-        "id": "GHSA-w5hq-g745-h8pq",
-        "modified": "2026-09-10T03:51:03.663336+00:00",
-        "published": "2026-04-22T20:53:24+00:00",
-        "references": [
-          "https://github.com/uuidjs/uuid/security/advisories/GHSA-w5hq-g745-h8pq",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-41907",
-          "https://github.com/uuidjs/uuid/commit/32389c887c9e75f90442ee4cc95bbab0c4e8346e",
-          "https://github.com/uuidjs/uuid/commit/3d2c5b0342f0fcb52a5ac681c3d47c13e7444b34",
-          "https://github.com/uuidjs/uuid/commit/3d61d6ac1f782cf6b1dd8661c60f11722cd49a0d"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
-        },
-        "summary": "uuid: Missing buffer bounds check in v3/v5/v6 when buf is provided"
+        "id": "GHSA-w5hq-g745-h8pq"
       },
       "cvss_score": 7.5,
       "dep_name": "uuid",
@@ -14869,32 +11087,7 @@
         "aliases": [
           "CVE-2020-7774"
         ],
-        "cwe_ids": [
-          "CWE-1321",
-          "CWE-20",
-          "CWE-915"
-        ],
-        "fixed_versions": [
-          "3.2.2",
-          "4.0.1",
-          "5.0.5"
-        ],
-        "id": "GHSA-c4w7-xm78-47vh",
-        "modified": "2024-12-05T15:28:53.812442+00:00",
-        "published": "2021-03-29T16:05:12+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-7774",
-          "https://github.com/yargs/y18n/issues/96",
-          "https://github.com/yargs/y18n/pull/108",
-          "https://github.com/yargs/y18n/commit/90401eea9062ad498f4f792e3fff8008c4c193a3",
-          "https://github.com/yargs/y18n/commit/a9ac604abf756dec9687be3843e2c93bfe581f25"
-        ],
-        "severity": {
-          "score": 7.3,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:L"
-        },
-        "summary": "Prototype Pollution in y18n"
+        "id": "GHSA-c4w7-xm78-47vh"
       },
       "cvss_score": 7.3,
       "dep_name": "y18n",
@@ -14957,32 +11150,7 @@
           "CVE-2020-7608",
           "SNYK-JS-YARGSPARSER-560381"
         ],
-        "cwe_ids": [
-          "CWE-1321",
-          "CWE-915"
-        ],
-        "fixed_versions": [
-          "13.1.2",
-          "15.0.1",
-          "18.1.1",
-          "5.0.1"
-        ],
-        "id": "GHSA-p9pc-299p-vxgp",
-        "modified": "2026-07-08T06:49:37.726276+00:00",
-        "published": "2020-09-04T18:00:54+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-7608",
-          "https://github.com/yargs/yargs-parser/commit/1c417bd0b42b09c475ee881e36d292af4fa2cc36",
-          "https://github.com/yargs/yargs-parser/commit/63810ca1ae1a24b08293a4d971e70e058c7a41e2",
-          "https://github.com/yargs/yargs-parser",
-          "https://snyk.io/vuln/SNYK-JS-YARGSPARSER-560381"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:L/I:L/A:L"
-        },
-        "summary": "yargs-parser Vulnerable to Prototype Pollution"
+        "id": "GHSA-p9pc-299p-vxgp"
       },
       "cvss_score": 5.3,
       "dep_name": "yargs-parser",

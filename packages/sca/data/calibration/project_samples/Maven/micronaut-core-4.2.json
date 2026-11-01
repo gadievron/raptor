@@ -2,7 +2,7 @@
   "_source": {
     "fetched_at": "2026-10-29T21:59:54Z",
     "git_ref": "v4.2.0",
-    "license": "MIT (RAPTOR-generated scan output)",
+    "license": "MIT (RAPTOR-generated fields only; upstream advisory data retains its own terms)",
     "name": "RAPTOR SCA scan of micronaut-core-4.2",
     "project_license": "Apache-2.0",
     "provenance": "Scan output produced by RAPTOR's SCA pipeline against https://github.com/micronaut-projects/micronaut-core.git@v4.2.0. Project source not redistributed.",
@@ -14,30 +14,7 @@
         "aliases": [
           "CVE-2023-6378"
         ],
-        "cwe_ids": [
-          "CWE-502"
-        ],
-        "fixed_versions": [
-          "1.3.12",
-          "1.4.12",
-          "1.2.13"
-        ],
-        "id": "GHSA-vmq6-5m68-f53m",
-        "modified": "2026-09-10T03:50:04.518871+00:00",
-        "published": "2023-11-29T12:30:16+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2023-6378",
-          "https://github.com/qos-ch/logback/issues/745#issuecomment-1836227158",
-          "https://github.com/qos-ch/logback/commit/9c782b45be4abdafb7e17481e24e7354c2acd1eb",
-          "https://github.com/qos-ch/logback/commit/b8eac23a9de9e05fb6d51160b3f46acd91af9731",
-          "https://github.com/qos-ch/logback/commit/bb095154be011267b64e37a1d401546e7cc2b7c3"
-        ],
-        "severity": {
-          "score": 7.1,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:C/C:N/I:N/A:H"
-        },
-        "summary": "logback serialization vulnerability"
+        "id": "GHSA-vmq6-5m68-f53m"
       },
       "cvss_score": 7.1,
       "dep_name": "ch.qos.logback:logback-classic",
@@ -103,30 +80,7 @@
         "aliases": [
           "CVE-2026-18401"
         ],
-        "cwe_ids": [
-          "CWE-770"
-        ],
-        "fixed_versions": [
-          "3.1.0",
-          "2.21.1",
-          "2.18.6"
-        ],
-        "id": "GHSA-72hv-8253-57qq",
-        "modified": "2026-09-10T03:50:34.318297+00:00",
-        "published": "2026-02-28T02:01:05+00:00",
-        "references": [
-          "https://github.com/FasterXML/jackson-core/security/advisories/GHSA-72hv-8253-57qq",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-18401",
-          "https://github.com/FasterXML/jackson-core/pull/1555",
-          "https://github.com/FasterXML/jackson-core/commit/b0c428e6f993e1b5ece5c1c3cb2523e887cd52cf",
-          "https://github.com/FasterXML/jackson-core"
-        ],
-        "severity": {
-          "score": 6.9,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
-        },
-        "summary": "jackson-core: Number Length Constraint Bypass in Async Parser Leads to Potential DoS Condition"
+        "id": "GHSA-72hv-8253-57qq"
       },
       "cvss_score": 6.9,
       "dep_name": "com.fasterxml.jackson.core:jackson-core",
@@ -193,33 +147,7 @@
         "aliases": [
           "CVE-2026-89425"
         ],
-        "cwe_ids": [
-          "CWE-400",
-          "CWE-770"
-        ],
-        "fixed_versions": [
-          "2.21.7",
-          "2.22.3",
-          "3.1.7",
-          "3.2.3",
-          "2.18.11"
-        ],
-        "id": "GHSA-7hhh-6rmp-j9qf",
-        "modified": "2026-10-01T15:30:05.552671+00:00",
-        "published": "2026-10-01T15:20:27+00:00",
-        "references": [
-          "https://github.com/FasterXML/jackson-core/security/advisories/GHSA-7hhh-6rmp-j9qf",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-89425",
-          "https://github.com/FasterXML/jackson-core/pull/1698",
-          "https://github.com/FasterXML/jackson-core/commit/211cf2c5d91abbec38067f37efc1363cd4e88ee3",
-          "https://github.com/FasterXML/jackson-core"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "jackson-core: UTF8DataInputJsonParser._reportInvalidToken() missing maxErrorTokenLength limit -> unbounded StringBuilder growth (DoS)"
+        "id": "GHSA-7hhh-6rmp-j9qf"
       },
       "cvss_score": 7.5,
       "dep_name": "com.fasterxml.jackson.core:jackson-core",
@@ -286,30 +214,7 @@
         "aliases": [
           "CVE-2026-68494"
         ],
-        "cwe_ids": [
-          "CWE-770"
-        ],
-        "fixed_versions": [
-          "2.18.8",
-          "2.21.4",
-          "3.1.4"
-        ],
-        "id": "GHSA-r7wm-3cxj-wff9",
-        "modified": "2026-10-02T23:15:06.853935+00:00",
-        "published": "2026-07-21T21:58:53+00:00",
-        "references": [
-          "https://github.com/FasterXML/jackson-core/security/advisories/GHSA-r7wm-3cxj-wff9",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-68494",
-          "https://github.com/FasterXML/jackson-core/pull/1611",
-          "https://github.com/FasterXML/jackson-core/commit/050b429804dce2a7e08f0be1b0b4c3d040fdb9cd",
-          "https://github.com/FasterXML/jackson-core/commit/4cdd529749da396cc7edf6d4a2aad41d47902641"
-        ],
-        "severity": {
-          "score": 8.7,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N"
-        },
-        "summary": "jackson-core: Async parser maxNumberLength bypass via chunked digit accumulation (incomplete fix for GHSA-72hv-8253-57qq)"
+        "id": "GHSA-r7wm-3cxj-wff9"
       },
       "cvss_score": 8.7,
       "dep_name": "com.fasterxml.jackson.core:jackson-core",
@@ -376,30 +281,7 @@
         "aliases": [
           "CVE-2026-59888"
         ],
-        "cwe_ids": [
-          "CWE-915"
-        ],
-        "fixed_versions": [
-          "2.18.8",
-          "2.21.4",
-          "3.1.4"
-        ],
-        "id": "GHSA-3pjw-73gf-8qr5",
-        "modified": "2026-09-10T03:51:10.312389+00:00",
-        "published": "2026-07-21T19:33:06+00:00",
-        "references": [
-          "https://github.com/FasterXML/jackson-databind/security/advisories/GHSA-3pjw-73gf-8qr5",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-59888",
-          "https://github.com/FasterXML/jackson-databind/pull/5974",
-          "https://github.com/FasterXML/jackson-databind/commit/baa2cdf5ca2b2717fbb88d91955d69d8651df3e4",
-          "https://github.com/FasterXML/jackson-databind/commit/c7c678360624da5bc7eed2152789fa522880db9d"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N"
-        },
-        "summary": "jackson-databind: @JsonIgnore on a Record property is bypassed with a PropertyNamingStrategy"
+        "id": "GHSA-3pjw-73gf-8qr5"
       },
       "cvss_score": 6.5,
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
@@ -465,32 +347,7 @@
         "aliases": [
           "CVE-2026-59889"
         ],
-        "cwe_ids": [
-          "CWE-863"
-        ],
-        "fixed_versions": [
-          "2.21.5",
-          "3.1.5",
-          "2.18.9",
-          "2.22.1",
-          "3.2.1"
-        ],
-        "id": "GHSA-5gvw-p9qm-jgwh",
-        "modified": "2026-10-19T19:45:04.650428+00:00",
-        "published": "2026-07-21T22:00:43+00:00",
-        "references": [
-          "https://github.com/FasterXML/jackson-databind/security/advisories/GHSA-5gvw-p9qm-jgwh",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-59889",
-          "https://github.com/FasterXML/jackson-databind/issues/6060",
-          "https://github.com/FasterXML/jackson-databind/pull/6056",
-          "https://github.com/FasterXML/jackson-databind/commit/d627a8a86fcb062429282f79f3f256f181ed2c7b"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:N"
-        },
-        "summary": "jackson-databind: @JsonView bypassed for @JsonUnwrapped container properties on deserialization"
+        "id": "GHSA-5gvw-p9qm-jgwh"
       },
       "cvss_score": 6.5,
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
@@ -556,31 +413,7 @@
         "aliases": [
           "CVE-2026-54515"
         ],
-        "cwe_ids": [
-          "CWE-915"
-        ],
-        "fixed_versions": [
-          "3.1.4",
-          "2.18.9",
-          "2.21.5",
-          "2.22.1"
-        ],
-        "id": "GHSA-5jmj-h7xm-6q6v",
-        "modified": "2026-09-10T03:51:08.069993+00:00",
-        "published": "2026-06-23T21:23:58+00:00",
-        "references": [
-          "https://github.com/FasterXML/jackson-databind/security/advisories/GHSA-5jmj-h7xm-6q6v",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-54515",
-          "https://github.com/FasterXML/jackson-databind/issues/5962",
-          "https://github.com/FasterXML/jackson-databind/issues/5964",
-          "https://github.com/FasterXML/jackson-databind/commit/0e1b0b211f7a53baa62ba2f4c9bd006c7bf4d5fa"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N"
-        },
-        "summary": "jackson-databind has case-insensitive deserialization bypasses per-property @JsonIgnoreProperties"
+        "id": "GHSA-5jmj-h7xm-6q6v"
       },
       "cvss_score": 5.3,
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
@@ -646,32 +479,7 @@
         "aliases": [
           "CVE-2026-91777"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "2.21.7",
-          "3.1.7",
-          "3.2.3",
-          "2.18.11",
-          "2.22.3"
-        ],
-        "id": "GHSA-cxp5-3px4-pw24",
-        "modified": "2026-09-30T15:46:18.051343+00:00",
-        "published": "2026-09-30T15:37:24+00:00",
-        "references": [
-          "https://github.com/FasterXML/jackson-databind/security/advisories/GHSA-cxp5-3px4-pw24",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-91777",
-          "https://github.com/FasterXML/jackson-databind/issues/6204",
-          "https://github.com/FasterXML/jackson-databind/pull/6204",
-          "https://github.com/FasterXML/jackson-databind/commit/37ad9b81712cbb9fb62c2d2c1813593252a24b67"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "jackson-databind quadratic forward-reference completion "
+        "id": "GHSA-cxp5-3px4-pw24"
       },
       "cvss_score": 7.5,
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
@@ -738,33 +546,7 @@
         "aliases": [
           "CVE-2026-83557"
         ],
-        "cwe_ids": [
-          "CWE-502",
-          "CWE-915"
-        ],
-        "fixed_versions": [
-          "3.1.6",
-          "3.2.2",
-          "2.18.10",
-          "2.21.6",
-          "2.22.2"
-        ],
-        "id": "GHSA-gx83-3vf8-gh7j",
-        "modified": "2026-09-28T21:00:05.608227+00:00",
-        "published": "2026-09-28T20:44:25+00:00",
-        "references": [
-          "https://github.com/FasterXML/jackson-databind/security/advisories/GHSA-gx83-3vf8-gh7j",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-83557",
-          "https://github.com/FasterXML/jackson-databind/issues/6156",
-          "https://github.com/FasterXML/jackson-databind/pull/6155",
-          "https://github.com/FasterXML/jackson-databind/commit/eb3b7fc0f9c0d27f471550ac3316b17d1987388f"
-        ],
-        "severity": {
-          "score": 5.6,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:L"
-        },
-        "summary": "jackson-databind: Comparable missing from DefaultBaseTypeLimitingValidator's unsafe base types (incomplete PolymorphicTypeValidator denylist)"
+        "id": "GHSA-gx83-3vf8-gh7j"
       },
       "cvss_score": 5.6,
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
@@ -831,30 +613,7 @@
         "aliases": [
           "CVE-2026-54514"
         ],
-        "cwe_ids": [
-          "CWE-918"
-        ],
-        "fixed_versions": [
-          "2.18.8",
-          "2.21.4",
-          "3.1.4"
-        ],
-        "id": "GHSA-hgj6-7826-r7m5",
-        "modified": "2026-09-10T03:50:49.909813+00:00",
-        "published": "2026-06-23T21:22:54+00:00",
-        "references": [
-          "https://github.com/FasterXML/jackson-databind/security/advisories/GHSA-hgj6-7826-r7m5",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-54514",
-          "https://github.com/FasterXML/jackson-databind/pull/5951",
-          "https://github.com/FasterXML/jackson-databind/commit/1f5a1037b1e9e05920e755cb35f198bcd46667e4",
-          "https://github.com/FasterXML/jackson-databind"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"
-        },
-        "summary": "jackson-databind: InetSocketAddress deserialization triggers eager DNS resolution (SSRF)"
+        "id": "GHSA-hgj6-7826-r7m5"
       },
       "cvss_score": 5.3,
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
@@ -920,31 +679,7 @@
         "aliases": [
           "CVE-2026-54512"
         ],
-        "cwe_ids": [
-          "CWE-184",
-          "CWE-502"
-        ],
-        "fixed_versions": [
-          "2.18.8",
-          "3.1.4",
-          "2.21.4"
-        ],
-        "id": "GHSA-j3rv-43j4-c7qm",
-        "modified": "2026-10-28T10:56:49.472327+00:00",
-        "published": "2026-06-23T21:21:38+00:00",
-        "references": [
-          "https://github.com/FasterXML/jackson-databind/security/advisories/GHSA-j3rv-43j4-c7qm",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-54512",
-          "https://github.com/FasterXML/jackson-databind/issues/5988",
-          "https://github.com/FasterXML/jackson-databind/commit/434d6c511de7fdd9872f29157aafb6162d12d8d5",
-          "https://github.com/FasterXML/jackson-databind"
-        ],
-        "severity": {
-          "score": 8.1,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "jackson-databind has a PolymorphicTypeValidator bypass via generic type parameters that allows arbitrary class instantiation"
+        "id": "GHSA-j3rv-43j4-c7qm"
       },
       "cvss_score": 8.1,
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
@@ -1011,32 +746,7 @@
         "aliases": [
           "CVE-2026-68497"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "3.2.2",
-          "3.1.6",
-          "2.18.10",
-          "2.21.6",
-          "2.22.2"
-        ],
-        "id": "GHSA-q4xh-88c3-wmh7",
-        "modified": "2026-09-28T20:30:05.315085+00:00",
-        "published": "2026-09-28T20:19:46+00:00",
-        "references": [
-          "https://github.com/FasterXML/jackson-databind/security/advisories/GHSA-q4xh-88c3-wmh7",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-68497",
-          "https://github.com/FasterXML/jackson-databind/pull/6127",
-          "https://github.com/FasterXML/jackson-databind/commit/a99b7e74c8928f43f6975773a8c862c8316178bd",
-          "https://github.com/FasterXML/jackson-databind"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "jackson-databind: Duration XMLGregorianCalendar Unbounded Number Parse DoS"
+        "id": "GHSA-q4xh-88c3-wmh7"
       },
       "cvss_score": 7.5,
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
@@ -1103,30 +813,7 @@
         "aliases": [
           "CVE-2026-54513"
         ],
-        "cwe_ids": [
-          "CWE-184"
-        ],
-        "fixed_versions": [
-          "2.18.8",
-          "2.21.4",
-          "3.1.4"
-        ],
-        "id": "GHSA-rmj7-2vxq-3g9f",
-        "modified": "2026-09-11T15:45:08.499771+00:00",
-        "published": "2026-06-23T21:22:15+00:00",
-        "references": [
-          "https://github.com/FasterXML/jackson-databind/security/advisories/GHSA-rmj7-2vxq-3g9f",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-54513",
-          "https://github.com/FasterXML/jackson-databind/issues/5983",
-          "https://github.com/FasterXML/jackson-databind/issues/5981",
-          "https://github.com/FasterXML/jackson-databind/pull/5984"
-        ],
-        "severity": {
-          "score": 8.1,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "jackson-databind has an array subtype allowlist bypass in BasicPolymorphicTypeValidator (allowIfSubTypeIsArray)"
+        "id": "GHSA-rmj7-2vxq-3g9f"
       },
       "cvss_score": 8.1,
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
@@ -1192,32 +879,7 @@
         "aliases": [
           "CVE-2026-77310"
         ],
-        "cwe_ids": [
-          "CWE-918"
-        ],
-        "fixed_versions": [
-          "2.18.9",
-          "2.21.5",
-          "2.22.1",
-          "3.1.5",
-          "3.2.1"
-        ],
-        "id": "GHSA-vvgp-rfg2-7rr6",
-        "modified": "2026-09-28T20:30:05.324367+00:00",
-        "published": "2026-09-28T20:17:41+00:00",
-        "references": [
-          "https://github.com/FasterXML/jackson-databind/security/advisories/GHSA-vvgp-rfg2-7rr6",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-77310",
-          "https://github.com/FasterXML/jackson-databind/pull/6058",
-          "https://github.com/FasterXML/jackson-databind/commit/2fc7bd9057dd051d7dea0e5fcad89822d0fa5ebd",
-          "https://github.com/FasterXML/jackson-databind"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"
-        },
-        "summary": "jackson-databind: Incomplete fix for CVE-2026-54514: eager DNS resolution (SSRF) still present in InetAddress deserialization"
+        "id": "GHSA-vvgp-rfg2-7rr6"
       },
       "cvss_score": 5.3,
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
@@ -1283,33 +945,7 @@
         "aliases": [
           "CVE-2026-19032"
         ],
-        "cwe_ids": [
-          "CWE-470",
-          "CWE-610"
-        ],
-        "fixed_versions": [
-          "3.1.6",
-          "3.2.2",
-          "2.18.10",
-          "2.21.6",
-          "2.22.2"
-        ],
-        "id": "GHSA-wjgm-6hv5-3cvf",
-        "modified": "2026-09-28T20:30:05.331167+00:00",
-        "published": "2026-09-28T20:19:19+00:00",
-        "references": [
-          "https://github.com/FasterXML/jackson-databind/security/advisories/GHSA-wjgm-6hv5-3cvf",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-19032",
-          "https://github.com/FasterXML/jackson-databind/pull/6129",
-          "https://github.com/FasterXML/jackson-databind/commit/cc6756b61ed90b6b9227f670e0408d5d9bd48551",
-          "https://github.com/FasterXML/jackson-databind/commit/ce26eda3481cd796f76ba4c53ffe1da23b53f166"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "jackson-databind: Path Deserialization Missing Scheme Allowlist for FileSystemProvider Resolution"
+        "id": "GHSA-wjgm-6hv5-3cvf"
       },
       "cvss_score": 5.3,
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
@@ -1376,32 +1012,7 @@
         "aliases": [
           "CVE-2026-91776"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "2.18.11",
-          "2.21.7",
-          "2.22.3",
-          "3.1.7",
-          "3.2.3"
-        ],
-        "id": "GHSA-wv8q-qhhj-9h54",
-        "modified": "2026-09-30T15:46:18.451708+00:00",
-        "published": "2026-09-30T15:36:55+00:00",
-        "references": [
-          "https://github.com/FasterXML/jackson-databind/security/advisories/GHSA-wv8q-qhhj-9h54",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-91776",
-          "https://github.com/FasterXML/jackson-databind/issues/6203",
-          "https://github.com/FasterXML/jackson-databind/commit/2870d1d6dc1b7e1c07ee11dd5b04ab71cddbb577",
-          "https://github.com/FasterXML/jackson-databind"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "jackson-databind retains every unknown raw type ID "
+        "id": "GHSA-wv8q-qhhj-9h54"
       },
       "cvss_score": 7.5,
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
@@ -1470,30 +1081,7 @@
           "CVE-2023-41329",
           "PYSEC-2026-2050"
         ],
-        "cwe_ids": [
-          "CWE-290",
-          "CWE-350"
-        ],
-        "fixed_versions": [
-          "3.0.3",
-          "2.35.1",
-          "2.6.1"
-        ],
-        "id": "GHSA-pmxq-pj47-j8j4",
-        "modified": "2026-09-10T03:49:58.610466+00:00",
-        "published": "2023-09-08T12:19:49+00:00",
-        "references": [
-          "https://github.com/wiremock/wiremock/security/advisories/GHSA-pmxq-pj47-j8j4",
-          "https://nvd.nist.gov/vuln/detail/CVE-2023-41329",
-          "https://github.com/wiremock/wiremock",
-          "https://wiremock.org/docs/configuration/#preventing-proxying-to-and-recording-from-specific-target-addresses"
-        ],
-        "severity": {
-          "score": 3.9,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:A/AC:H/PR:H/UI:N/S:U/C:L/I:L/A:L"
-        },
-        "summary": "Domain restrictions bypass via DNS Rebinding in WireMock and WireMock Studio webhooks, proxy and recorder modes"
+        "id": "GHSA-pmxq-pj47-j8j4"
       },
       "cvss_score": 3.9,
       "dep_name": "com.github.tomakehurst:wiremock-jre8",
@@ -1555,29 +1143,7 @@
         "aliases": [
           "CVE-2022-45868"
         ],
-        "cwe_ids": [
-          "CWE-200",
-          "CWE-312"
-        ],
-        "fixed_versions": [
-          "2.2.220"
-        ],
-        "id": "GHSA-22wj-vf5f-wrvj",
-        "modified": "2026-09-10T03:49:46.817709+00:00",
-        "published": "2022-11-23T21:30:31+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-45868",
-          "https://github.com/h2database/h2database/issues/3686",
-          "https://github.com/h2database/h2database/pull/3833",
-          "https://github.com/h2database/h2database/commit/581ed18ff9d6b3761d851620ed88a3994a351a0d",
-          "https://github.com/advisories/GHSA-22wj-vf5f-wrvj"
-        ],
-        "severity": {
-          "score": 7.8,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Password exposure in H2 Database "
+        "id": "GHSA-22wj-vf5f-wrvj"
       },
       "cvss_score": 7.8,
       "dep_name": "com.h2database:h2",
@@ -1640,29 +1206,7 @@
         "aliases": [
           "CVE-2026-50560"
         ],
-        "cwe_ids": [
-          "CWE-770"
-        ],
-        "fixed_versions": [
-          "4.2.15.Final",
-          "4.1.135.Final"
-        ],
-        "id": "GHSA-563q-j3cm-6jxm",
-        "modified": "2026-09-10T03:50:48.396944+00:00",
-        "published": "2026-06-15T20:46:56+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-563q-j3cm-6jxm",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-50560",
-          "https://github.com/netty/netty",
-          "https://github.com/netty/netty/releases/tag/netty-4.1.135.Final",
-          "https://github.com/netty/netty/releases/tag/netty-4.2.15.Final"
-        ],
-        "severity": {
-          "score": 6.9,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
-        },
-        "summary": "Netty susceptible to HTTP/2 Reset Attack with different on-the-wire signature"
+        "id": "GHSA-563q-j3cm-6jxm"
       },
       "cvss_score": 6.9,
       "dep_name": "io.netty:netty-codec-http2",
@@ -1728,29 +1272,7 @@
         "aliases": [
           "CVE-2026-47244"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "4.2.15.Final",
-          "4.1.135.Final"
-        ],
-        "id": "GHSA-5x3r-wrvg-rp6q",
-        "modified": "2026-09-10T03:50:48.488084+00:00",
-        "published": "2026-06-08T23:02:40+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-5x3r-wrvg-rp6q",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-47244",
-          "https://github.com/netty/netty",
-          "https://github.com/netty/netty/releases/tag/netty-4.1.135.Final",
-          "https://github.com/netty/netty/releases/tag/netty-4.2.15.Final"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "Netty HTTP/2: Advertised MAX_CONCURRENT_STREAMS are not enforced"
+        "id": "GHSA-5x3r-wrvg-rp6q"
       },
       "cvss_score": 5.3,
       "dep_name": "io.netty:netty-codec-http2",
@@ -1816,29 +1338,7 @@
         "aliases": [
           "CVE-2026-56819"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "4.2.16.Final",
-          "4.1.136.Final"
-        ],
-        "id": "GHSA-93wv-jw9v-4972",
-        "modified": "2026-09-10T03:51:11.318239+00:00",
-        "published": "2026-07-31T16:51:50+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-93wv-jw9v-4972",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-56819",
-          "https://github.com/netty/netty/commit/5b68c61f37aa4a3045cba624cbea239655c9003b",
-          "https://github.com/netty/netty/commit/bb2ff68a1fb71cb4b0eb9a9e17b66c52aff680c6",
-          "https://github.com/netty/netty"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Netty: HTTP/2 decompression leaks ByteBuf reference count when the decompressor channel is already closed (Direct memory leak / OOM DoS)"
+        "id": "GHSA-93wv-jw9v-4972"
       },
       "cvss_score": 7.5,
       "dep_name": "io.netty:netty-codec-http2",
@@ -1905,31 +1405,7 @@
         "aliases": [
           "CVE-2026-48043"
         ],
-        "cwe_ids": [
-          "CWE-400",
-          "CWE-401",
-          "CWE-772"
-        ],
-        "fixed_versions": [
-          "4.1.135.Final",
-          "4.2.15.Final"
-        ],
-        "id": "GHSA-c2gf-v879-257j",
-        "modified": "2026-10-06T19:45:03.555042+00:00",
-        "published": "2026-06-11T13:28:46+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-c2gf-v879-257j",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-48043",
-          "https://github.com/netty/netty/commit/db6138b168699736a6463c367e12ad0a4c36a25e",
-          "https://github.com/netty/netty/commit/3d45a1e4e8eb99144f716e54be5ac57e525fa7ca",
-          "https://security.access.redhat.com/data/csaf/v2/vex/2026/cve-2026-48043.json"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "netty-codec-http2: ByteBuf Reference-Count Leak in DelegatingDecompressorFrameListener Leads to Memory Exhaustion"
+        "id": "GHSA-c2gf-v879-257j"
       },
       "cvss_score": 5.3,
       "dep_name": "io.netty:netty-codec-http2",
@@ -1995,28 +1471,7 @@
         "aliases": [
           "CVE-2026-59900"
         ],
-        "cwe_ids": [
-          "CWE-444"
-        ],
-        "fixed_versions": [
-          "4.2.16.Final",
-          "4.1.136.Final"
-        ],
-        "id": "GHSA-c69g-56f8-xwqj",
-        "modified": "2026-09-10T03:51:11.564389+00:00",
-        "published": "2026-07-22T21:49:28+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-c69g-56f8-xwqj",
-          "https://github.com/netty/netty",
-          "https://github.com/netty/netty/releases/tag/netty-4.1.136.Final",
-          "https://github.com/netty/netty/releases/tag/netty-4.2.16.Final"
-        ],
-        "severity": {
-          "score": 6.9,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:N/SC:L/SI:L/SA:N"
-        },
-        "summary": "Netty: [codec-http2] Lack of Host Header Deduplication in HTTP/2→HTTP/1.x Translation Leads to Request Routing Bypass"
+        "id": "GHSA-c69g-56f8-xwqj"
       },
       "cvss_score": 6.9,
       "dep_name": "io.netty:netty-codec-http2",
@@ -2082,27 +1537,7 @@
         "aliases": [
           "CVE-2026-42587"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "4.2.13.Final",
-          "4.1.133.Final"
-        ],
-        "id": "GHSA-f6hv-jmp6-3vwv",
-        "modified": "2026-09-10T03:51:05.447415+00:00",
-        "published": "2026-05-07T00:46:35+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-f6hv-jmp6-3vwv",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-42587",
-          "https://github.com/netty/netty"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Netty: HttpContentDecompressor maxAllocation bypass when Content-Encoding set to br/zstd/snappy leads to decompression bomb DoS"
+        "id": "GHSA-f6hv-jmp6-3vwv"
       },
       "cvss_score": 7.5,
       "dep_name": "io.netty:netty-codec-http2",
@@ -2169,30 +1604,7 @@
         "aliases": [
           "CVE-2025-55163"
         ],
-        "cwe_ids": [
-          "CWE-770"
-        ],
-        "fixed_versions": [
-          "4.2.4.Final",
-          "4.1.124.Final",
-          "1.75.0"
-        ],
-        "id": "GHSA-prj3-ccx8-p6x4",
-        "modified": "2026-09-10T03:50:27.396257+00:00",
-        "published": "2025-08-13T19:06:56+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-prj3-ccx8-p6x4",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-55163",
-          "https://github.com/grpc/grpc-java/commit/6462ef9a11980e168c21d90bbc7245c728fd1a7a",
-          "https://github.com/netty/netty/commit/be53dc3c9acd9af2e20d0c3c07cd77115a594cf1",
-          "https://github.com/netty/netty"
-        ],
-        "severity": {
-          "score": 8.2,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N"
-        },
-        "summary": "Netty affected by MadeYouReset HTTP/2 DDoS vulnerability"
+        "id": "GHSA-prj3-ccx8-p6x4"
       },
       "cvss_score": 8.2,
       "dep_name": "io.netty:netty-codec-http2",
@@ -2258,27 +1670,7 @@
         "aliases": [
           "CVE-2026-33871"
         ],
-        "cwe_ids": [
-          "CWE-770"
-        ],
-        "fixed_versions": [
-          "4.1.132.Final",
-          "4.2.11.Final"
-        ],
-        "id": "GHSA-w9fj-cfpg-grvv",
-        "modified": "2026-09-10T03:50:41.535305+00:00",
-        "published": "2026-03-26T18:49:21+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-w9fj-cfpg-grvv",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-33871",
-          "https://github.com/netty/netty"
-        ],
-        "severity": {
-          "score": 8.7,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N"
-        },
-        "summary": "Netty HTTP/2 CONTINUATION Frame Flood DoS via Zero-Byte Frame Bypass"
+        "id": "GHSA-w9fj-cfpg-grvv"
       },
       "cvss_score": 8.7,
       "dep_name": "io.netty:netty-codec-http2",
@@ -2344,28 +1736,7 @@
         "aliases": [
           "CVE-2026-42585"
         ],
-        "cwe_ids": [
-          "CWE-444"
-        ],
-        "fixed_versions": [
-          "4.2.13.Final",
-          "4.1.133.Final"
-        ],
-        "id": "GHSA-38f8-5428-x5cv",
-        "modified": "2026-09-10T03:51:04.415985+00:00",
-        "published": "2026-05-07T00:22:27+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-38f8-5428-x5cv",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-42585",
-          "https://datatracker.ietf.org/doc/html/rfc9112#name-message-body-length",
-          "https://github.com/netty/netty"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N"
-        },
-        "summary": "Netty vulnerable to HTTP Request Smuggling due to malformed Transfer-Encoding"
+        "id": "GHSA-38f8-5428-x5cv"
       },
       "cvss_score": 6.5,
       "dep_name": "io.netty:netty-codec-http",
@@ -2432,28 +1803,7 @@
         "aliases": [
           "CVE-2026-59898"
         ],
-        "cwe_ids": [
-          "CWE-444"
-        ],
-        "fixed_versions": [
-          "4.2.16.Final",
-          "4.1.136.Final"
-        ],
-        "id": "GHSA-4mp9-239f-g9hg",
-        "modified": "2026-09-10T03:51:10.413004+00:00",
-        "published": "2026-07-22T21:48:59+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-4mp9-239f-g9hg",
-          "https://github.com/netty/netty",
-          "https://github.com/netty/netty/releases/tag/netty-4.1.136.Final",
-          "https://github.com/netty/netty/releases/tag/netty-4.2.16.Final"
-        ],
-        "severity": {
-          "score": 6.3,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:H/AT:N/PR:N/UI:N/VC:N/VI:N/VA:N/SC:L/SI:L/SA:N"
-        },
-        "summary": "Netty: WebSockets V07/V08 handshaker missing Connection/Upgrade validation"
+        "id": "GHSA-4mp9-239f-g9hg"
       },
       "cvss_score": 6.3,
       "dep_name": "io.netty:netty-codec-http",
@@ -2519,27 +1869,7 @@
         "aliases": [
           "CVE-2026-42584"
         ],
-        "cwe_ids": [
-          "CWE-444"
-        ],
-        "fixed_versions": [
-          "4.2.13.Final",
-          "4.1.133.Final"
-        ],
-        "id": "GHSA-57rv-r2g8-2cj3",
-        "modified": "2026-09-10T03:51:04.645242+00:00",
-        "published": "2026-05-07T00:21:48+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-57rv-r2g8-2cj3",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-42584",
-          "https://github.com/netty/netty"
-        ],
-        "severity": {
-          "score": 7.3,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:L"
-        },
-        "summary": "Netty has HttpClientCodec response desynchronization"
+        "id": "GHSA-57rv-r2g8-2cj3"
       },
       "cvss_score": 7.3,
       "dep_name": "io.netty:netty-codec-http",
@@ -2606,28 +1936,7 @@
         "aliases": [
           "CVE-2024-29025"
         ],
-        "cwe_ids": [
-          "CWE-770"
-        ],
-        "fixed_versions": [
-          "4.1.108.Final"
-        ],
-        "id": "GHSA-5jpm-x58v-624v",
-        "modified": "2026-09-10T03:50:10.174704+00:00",
-        "published": "2024-03-25T19:40:50+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-5jpm-x58v-624v",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-29025",
-          "https://github.com/netty/netty/commit/0d0c6ed782d13d423586ad0c71737b2c7d02058c",
-          "https://gist.github.com/vietj/f558b8ea81ec6505f1e9a6ca283c9ae3",
-          "https://github.com/netty/netty"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "Netty's HttpPostRequestDecoder can OOM"
+        "id": "GHSA-5jpm-x58v-624v"
       },
       "cvss_score": 5.3,
       "dep_name": "io.netty:netty-codec-http",
@@ -2694,29 +2003,7 @@
         "aliases": [
           "CVE-2026-56746"
         ],
-        "cwe_ids": [
-          "CWE-284"
-        ],
-        "fixed_versions": [
-          "4.2.16.Final",
-          "4.1.136.Final"
-        ],
-        "id": "GHSA-6cqp-g7gg-8hr5",
-        "modified": "2026-09-10T03:51:10.615779+00:00",
-        "published": "2026-07-22T21:42:17+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-6cqp-g7gg-8hr5",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-56746",
-          "https://github.com/netty/netty",
-          "https://github.com/netty/netty/releases/tag/netty-4.1.136.Final",
-          "https://github.com/netty/netty/releases/tag/netty-4.2.16.Final"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:H/A:N"
-        },
-        "summary": "Netty: Security Control Bypass via CORS Short-Circuit Failure"
+        "id": "GHSA-6cqp-g7gg-8hr5"
       },
       "cvss_score": 6.5,
       "dep_name": "io.netty:netty-codec-http",
@@ -2782,29 +2069,7 @@
         "aliases": [
           "CVE-2026-55831"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "4.2.16.Final",
-          "4.1.136.Final"
-        ],
-        "id": "GHSA-6jqx-86gh-f27w",
-        "modified": "2026-09-10T03:51:10.812069+00:00",
-        "published": "2026-07-22T21:07:36+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-6jqx-86gh-f27w",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-55831",
-          "https://github.com/netty/netty/commit/5b68c61f37aa4a3045cba624cbea239655c9003b",
-          "https://github.com/netty/netty/commit/bb2ff68a1fb71cb4b0eb9a9e17b66c52aff680c6",
-          "https://github.com/netty/netty"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Netty SPDY SETTINGS frame count materializes unbounded settings map"
+        "id": "GHSA-6jqx-86gh-f27w"
       },
       "cvss_score": 7.5,
       "dep_name": "io.netty:netty-codec-http",
@@ -2871,28 +2136,7 @@
         "aliases": [
           "CVE-2025-67735"
         ],
-        "cwe_ids": [
-          "CWE-93"
-        ],
-        "fixed_versions": [
-          "4.2.8.Final",
-          "4.1.129.Final"
-        ],
-        "id": "GHSA-84h7-rjj3-6jx4",
-        "modified": "2026-09-10T03:50:31.724062+00:00",
-        "published": "2025-12-15T23:28:49+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-84h7-rjj3-6jx4",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-67735",
-          "https://github.com/netty/netty/commit/77e81f1e5944d98b3acf887d3aa443b252752e94",
-          "https://github.com/netty/netty"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N"
-        },
-        "summary": "Netty has a CRLF Injection vulnerability in io.netty.handler.codec.http.HttpRequestEncoder"
+        "id": "GHSA-84h7-rjj3-6jx4"
       },
       "cvss_score": 6.5,
       "dep_name": "io.netty:netty-codec-http",
@@ -2959,29 +2203,7 @@
         "aliases": [
           "CVE-2026-59903"
         ],
-        "cwe_ids": [
-          "CWE-524"
-        ],
-        "fixed_versions": [
-          "4.2.17.Final",
-          "4.1.137.Final"
-        ],
-        "id": "GHSA-8c42-7qj2-3j46",
-        "modified": "2026-09-10T03:51:13.389261+00:00",
-        "published": "2026-08-17T18:24:26+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-8c42-7qj2-3j46",
-          "https://github.com/netty/netty/pull/17213",
-          "https://github.com/netty/netty/pull/17217",
-          "https://github.com/netty/netty",
-          "https://github.com/netty/netty/releases/tag/netty-4.1.137.Final"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:L/A:N"
-        },
-        "summary": "Netty Vulnerable to Cache Poisoning and Information Disclosure via CORS Vary Header Overwrite"
+        "id": "GHSA-8c42-7qj2-3j46"
       },
       "cvss_score": 6.5,
       "dep_name": "io.netty:netty-codec-http",
@@ -3047,27 +2269,7 @@
         "aliases": [
           "CVE-2026-42587"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "4.2.13.Final",
-          "4.1.133.Final"
-        ],
-        "id": "GHSA-f6hv-jmp6-3vwv",
-        "modified": "2026-09-10T03:51:05.447415+00:00",
-        "published": "2026-05-07T00:46:35+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-f6hv-jmp6-3vwv",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-42587",
-          "https://github.com/netty/netty"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Netty: HttpContentDecompressor maxAllocation bypass when Content-Encoding set to br/zstd/snappy leads to decompression bomb DoS"
+        "id": "GHSA-f6hv-jmp6-3vwv"
       },
       "cvss_score": 7.5,
       "dep_name": "io.netty:netty-codec-http",
@@ -3134,25 +2336,7 @@
         "aliases": [
           "CVE-2025-58056"
         ],
-        "cwe_ids": [
-          "CWE-444"
-        ],
-        "fixed_versions": [
-          "4.1.125.Final",
-          "4.2.5.Final"
-        ],
-        "id": "GHSA-fghv-69vj-qj49",
-        "modified": "2026-09-10T03:50:28.333050+00:00",
-        "published": "2025-09-04T17:35:20+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-fghv-69vj-qj49",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-58056",
-          "https://github.com/JLLeitschuh/unCVEed/issues/1",
-          "https://github.com/netty/netty/issues/15522",
-          "https://github.com/github/advisory-database/pull/6092"
-        ],
-        "severity": null,
-        "summary": "Netty vulnerable to request smuggling due to incorrect parsing of chunk extensions"
+        "id": "GHSA-fghv-69vj-qj49"
       },
       "cvss_score": null,
       "dep_name": "io.netty:netty-codec-http",
@@ -3218,28 +2402,7 @@
         "aliases": [
           "CVE-2026-59921"
         ],
-        "cwe_ids": [
-          "CWE-93"
-        ],
-        "fixed_versions": [
-          "4.2.16.Final",
-          "4.1.136.Final"
-        ],
-        "id": "GHSA-gcjf-9mgh-3p7g",
-        "modified": "2026-09-10T03:50:52.172506+00:00",
-        "published": "2026-07-22T21:52:55+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-gcjf-9mgh-3p7g",
-          "https://github.com/netty/netty",
-          "https://github.com/netty/netty/releases/tag/netty-4.1.136.Final",
-          "https://github.com/netty/netty/releases/tag/netty-4.2.16.Final"
-        ],
-        "severity": {
-          "score": 5.7,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:A/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:N"
-        },
-        "summary": "Netty: CRLF Injection via Multipart Filename in Netty HttpPostRequestEncoder"
+        "id": "GHSA-gcjf-9mgh-3p7g"
       },
       "cvss_score": 5.7,
       "dep_name": "io.netty:netty-codec-http",
@@ -3306,29 +2469,7 @@
         "aliases": [
           "CVE-2026-50020"
         ],
-        "cwe_ids": [
-          "CWE-444"
-        ],
-        "fixed_versions": [
-          "4.2.15.Final",
-          "4.1.135.Final"
-        ],
-        "id": "GHSA-hvcg-qmg6-jm4c",
-        "modified": "2026-09-10T03:50:50.025404+00:00",
-        "published": "2026-06-15T20:46:36+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-hvcg-qmg6-jm4c",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-50020",
-          "https://github.com/netty/netty",
-          "https://github.com/netty/netty/releases/tag/netty-4.1.135.Final",
-          "https://github.com/netty/netty/releases/tag/netty-4.2.15.Final"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N"
-        },
-        "summary": "Netty: HttpObjectDecoder skips arbitrary initial control characters when only initial CRLF characters are permitted"
+        "id": "GHSA-hvcg-qmg6-jm4c"
       },
       "cvss_score": 5.3,
       "dep_name": "io.netty:netty-codec-http",
@@ -3395,29 +2536,7 @@
         "aliases": [
           "CVE-2026-56745"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "4.2.16.Final",
-          "4.1.136.Final"
-        ],
-        "id": "GHSA-jppx-w49h-x2qq",
-        "modified": "2026-09-10T03:50:12.368445+00:00",
-        "published": "2026-07-22T21:32:24+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-jppx-w49h-x2qq",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-56745",
-          "https://github.com/netty/netty/commit/5b68c61f37aa4a3045cba624cbea239655c9003b",
-          "https://github.com/netty/netty/commit/bb2ff68a1fb71cb4b0eb9a9e17b66c52aff680c6",
-          "https://github.com/netty/netty"
-        ],
-        "severity": {
-          "score": 8.7,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N"
-        },
-        "summary": "Netty: [SpdyHttpDecoder] ByteBuf Reference Leak on RST_STREAM Leads to Native Memory Exhaustion"
+        "id": "GHSA-jppx-w49h-x2qq"
       },
       "cvss_score": 8.7,
       "dep_name": "io.netty:netty-codec-http",
@@ -3483,28 +2602,7 @@
         "aliases": [
           "CVE-2026-42580"
         ],
-        "cwe_ids": [
-          "CWE-190",
-          "CWE-444"
-        ],
-        "fixed_versions": [
-          "4.2.13.Final",
-          "4.1.133.Final"
-        ],
-        "id": "GHSA-m4cv-j2px-7723",
-        "modified": "2026-09-10T03:51:06.379210+00:00",
-        "published": "2026-05-07T00:13:05+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-m4cv-j2px-7723",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-42580",
-          "https://github.com/netty/netty"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:L"
-        },
-        "summary": "Netty vulnerable to HTTP Request Smuggling due to incorrect chunk size parsing"
+        "id": "GHSA-m4cv-j2px-7723"
       },
       "cvss_score": 6.5,
       "dep_name": "io.netty:netty-codec-http",
@@ -3571,29 +2669,7 @@
         "aliases": [
           "CVE-2026-55833"
         ],
-        "cwe_ids": [
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "4.2.16.Final",
-          "4.1.136.Final"
-        ],
-        "id": "GHSA-mvh2-crg5-v77c",
-        "modified": "2026-09-10T03:50:52.830435+00:00",
-        "published": "2026-07-22T21:23:05+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-mvh2-crg5-v77c",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-55833",
-          "https://github.com/netty/netty/commit/5b68c61f37aa4a3045cba624cbea239655c9003b",
-          "https://github.com/netty/netty/commit/bb2ff68a1fb71cb4b0eb9a9e17b66c52aff680c6",
-          "https://github.com/netty/netty"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Netty SPDY zlib header block continues decoded expansion after maxHeaderSize truncation"
+        "id": "GHSA-mvh2-crg5-v77c"
       },
       "cvss_score": 7.5,
       "dep_name": "io.netty:netty-codec-http",
@@ -3659,29 +2735,7 @@
         "aliases": [
           "CVE-2026-33870"
         ],
-        "cwe_ids": [
-          "CWE-444"
-        ],
-        "fixed_versions": [
-          "4.1.132.Final",
-          "4.2.10.Final"
-        ],
-        "id": "GHSA-pwqr-wmgm-9rr8",
-        "modified": "2026-09-10T03:50:40.493461+00:00",
-        "published": "2026-03-26T18:48:55+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-pwqr-wmgm-9rr8",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-33870",
-          "https://github.com/netty/netty",
-          "https://w4ke.info/2025/06/18/funky-chunks.html",
-          "https://w4ke.info/2025/10/29/funky-chunks-2.html"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
-        },
-        "summary": "Netty: HTTP Request Smuggling via Chunked Extension Quoted-String Parsing"
+        "id": "GHSA-pwqr-wmgm-9rr8"
       },
       "cvss_score": 7.5,
       "dep_name": "io.netty:netty-codec-http",
@@ -3748,28 +2802,7 @@
         "aliases": [
           "CVE-2026-59899"
         ],
-        "cwe_ids": [
-          "CWE-770"
-        ],
-        "fixed_versions": [
-          "4.2.16.Final",
-          "4.1.136.Final"
-        ],
-        "id": "GHSA-q4f6-jm68-57ww",
-        "modified": "2026-09-10T03:50:52.883743+00:00",
-        "published": "2026-07-22T21:49:13+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-q4f6-jm68-57ww",
-          "https://github.com/netty/netty",
-          "https://github.com/netty/netty/releases/tag/netty-4.1.136.Final",
-          "https://github.com/netty/netty/releases/tag/netty-4.2.16.Final"
-        ],
-        "severity": {
-          "score": 6.9,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
-        },
-        "summary": "Netty: [HttpContentEncoder] Unbounded Per-Connection Queue Growth via HTTP/1.1 Pipelining Leads to Denial of Service"
+        "id": "GHSA-q4f6-jm68-57ww"
       },
       "cvss_score": 6.9,
       "dep_name": "io.netty:netty-codec-http",
@@ -3835,28 +2868,7 @@
         "aliases": [
           "CVE-2026-41417"
         ],
-        "cwe_ids": [
-          "CWE-444",
-          "CWE-93"
-        ],
-        "fixed_versions": [
-          "4.1.133.Final",
-          "4.2.13.Final"
-        ],
-        "id": "GHSA-v8h7-rr48-vmmv",
-        "modified": "2026-09-10T03:50:47.637727+00:00",
-        "published": "2026-05-05T18:27:35+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-v8h7-rr48-vmmv",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-41417",
-          "https://github.com/netty/netty"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N"
-        },
-        "summary": "Netty: Start-Line Injection in DefaultHttpRequest.setUri() Allows HTTP Request Smuggling and RTSP Request Injection"
+        "id": "GHSA-v8h7-rr48-vmmv"
       },
       "cvss_score": 5.3,
       "dep_name": "io.netty:netty-codec-http",
@@ -3923,27 +2935,7 @@
         "aliases": [
           "CVE-2026-42581"
         ],
-        "cwe_ids": [
-          "CWE-444"
-        ],
-        "fixed_versions": [
-          "4.2.13.Final",
-          "4.1.133.Final"
-        ],
-        "id": "GHSA-xxqh-mfjm-7mv9",
-        "modified": "2026-09-10T03:51:07.381332+00:00",
-        "published": "2026-05-07T00:18:41+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-xxqh-mfjm-7mv9",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-42581",
-          "https://github.com/netty/netty"
-        ],
-        "severity": {
-          "score": 5.8,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:N/I:L/A:N"
-        },
-        "summary": "Netty HTTP/1.0 TE+CL Coexistence Bypasses Smuggling Sanitization"
+        "id": "GHSA-xxqh-mfjm-7mv9"
       },
       "cvss_score": 5.8,
       "dep_name": "io.netty:netty-codec-http",
@@ -4010,28 +3002,7 @@
         "aliases": [
           "CVE-2026-42578"
         ],
-        "cwe_ids": [
-          "CWE-113"
-        ],
-        "fixed_versions": [
-          "4.1.133.Final",
-          "4.2.13.Final"
-        ],
-        "id": "GHSA-45q3-82m4-75jr",
-        "modified": "2026-09-10T03:51:04.662453+00:00",
-        "published": "2026-05-07T00:11:40+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-45q3-82m4-75jr",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-42578",
-          "https://github.com/advisories/GHSA-84h7-rjj3-6jx4",
-          "https://github.com/netty/netty"
-        ],
-        "severity": {
-          "score": 2.9,
-          "severity": "low",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:L/VA:N/SC:N/SI:N/SA:N/E:P/CR:X/IR:X/AR:X/MAV:X/MAC:X/MAT:X/MPR:X/MUI:X/MVC:X/MVI:X/MVA:X/MSC:X/MSI:X/MSA:X/S:X/AU:X/R:X/V:X/RE:X/U:X"
-        },
-        "summary": "Netty has HTTP Header Injection via HttpProxyHandler Disabled Validation (Incomplete Fix CVE-2025-67735)"
+        "id": "GHSA-45q3-82m4-75jr"
       },
       "cvss_score": 2.9,
       "dep_name": "io.netty:netty-handler-proxy",
@@ -4098,30 +3069,7 @@
         "aliases": [
           "CVE-2026-44249"
         ],
-        "cwe_ids": [
-          "CWE-284",
-          "CWE-697"
-        ],
-        "fixed_versions": [
-          "4.2.15.Final",
-          "4.1.135.Final"
-        ],
-        "id": "GHSA-3qp7-7mw8-wx86",
-        "modified": "2026-09-10T03:50:55.436123+00:00",
-        "published": "2026-06-08T19:00:33+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-3qp7-7mw8-wx86",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-44249",
-          "https://github.com/netty/netty",
-          "https://github.com/netty/netty/releases/tag/netty-4.1.135.Final",
-          "https://github.com/netty/netty/releases/tag/netty-4.2.15.Final"
-        ],
-        "severity": {
-          "score": 8.1,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Netty has an IPv6 Subnet Filter Bypass via Incorrect Comparator Masking"
+        "id": "GHSA-3qp7-7mw8-wx86"
       },
       "cvss_score": 8.1,
       "dep_name": "io.netty:netty-handler",
@@ -4187,28 +3135,7 @@
         "aliases": [
           "CVE-2025-24970"
         ],
-        "cwe_ids": [
-          "CWE-20"
-        ],
-        "fixed_versions": [
-          "4.1.118.Final"
-        ],
-        "id": "GHSA-4g8c-wm8x-jfhw",
-        "modified": "2026-09-10T03:50:22.400091+00:00",
-        "published": "2025-02-10T17:38:10+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-4g8c-wm8x-jfhw",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-24970",
-          "https://github.com/netty/netty/commit/87f40725155b2f89adfde68c7732f97c153676c4",
-          "https://github.com/netty/netty",
-          "https://security.netapp.com/advisory/ntap-20250221-0005"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "SslHandler doesn't correctly validate packets which can lead to native crash when using native SSLEngine"
+        "id": "GHSA-4g8c-wm8x-jfhw"
       },
       "cvss_score": 7.5,
       "dep_name": "io.netty:netty-handler",
@@ -4275,30 +3202,7 @@
         "aliases": [
           "CVE-2026-75595"
         ],
-        "cwe_ids": [
-          "CWE-475",
-          "CWE-754"
-        ],
-        "fixed_versions": [
-          "4.2.17.Final",
-          "4.1.137.Final"
-        ],
-        "id": "GHSA-c4c3-7fpv-j4q5",
-        "modified": "2026-09-08T18:27:48.571082+00:00",
-        "published": "2026-09-08T18:16:14+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-c4c3-7fpv-j4q5",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-75595",
-          "https://github.com/netty/netty/pull/17213",
-          "https://github.com/netty/netty/pull/17217",
-          "https://github.com/netty/netty/commit/1b5abc6443b63726c72cdd285af2feb7ddbb8ff7"
-        ],
-        "severity": {
-          "score": 9.1,
-          "severity": "critical",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N"
-        },
-        "summary": "Netty: SNI Routing Bypass via Fragmented TLS ClientHello Causing Fallback to Default SslContext"
+        "id": "GHSA-c4c3-7fpv-j4q5"
       },
       "cvss_score": 9.1,
       "dep_name": "io.netty:netty-handler",
@@ -4364,29 +3268,7 @@
         "aliases": [
           "CVE-2026-50010"
         ],
-        "cwe_ids": [
-          "CWE-347"
-        ],
-        "fixed_versions": [
-          "4.2.15.Final",
-          "4.1.135.Final"
-        ],
-        "id": "GHSA-c653-97m9-rcg9",
-        "modified": "2026-09-10T03:51:08.552933+00:00",
-        "published": "2026-06-15T20:45:45+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-c653-97m9-rcg9",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-50010",
-          "https://github.com/netty/netty",
-          "https://github.com/netty/netty/releases/tag/netty-4.1.135.Final",
-          "https://github.com/netty/netty/releases/tag/netty-4.2.15.Final"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
-        },
-        "summary": "Netty: Wrapping plain trust manager silently disables hostname verification"
+        "id": "GHSA-c653-97m9-rcg9"
       },
       "cvss_score": 7.5,
       "dep_name": "io.netty:netty-handler",
@@ -4452,29 +3334,7 @@
         "aliases": [
           "CVE-2026-75596"
         ],
-        "cwe_ids": [
-          "CWE-407"
-        ],
-        "fixed_versions": [
-          "4.2.17.Final",
-          "4.1.137.Final"
-        ],
-        "id": "GHSA-fccg-mwvh-qqg4",
-        "modified": "2026-09-08T18:27:48.113951+00:00",
-        "published": "2026-09-08T18:14:56+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-fccg-mwvh-qqg4",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-75596",
-          "https://github.com/netty/netty/pull/17213",
-          "https://github.com/netty/netty/pull/17217",
-          "https://github.com/netty/netty/commit/1b5abc6443b63726c72cdd285af2feb7ddbb8ff7"
-        ],
-        "severity": {
-          "score": 6.9,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
-        },
-        "summary": "Netty: Fragmented ClientHello records trigger quadratic pre-handshake reassembly in default SNI parsing"
+        "id": "GHSA-fccg-mwvh-qqg4"
       },
       "cvss_score": 6.9,
       "dep_name": "io.netty:netty-handler",
@@ -4540,29 +3400,7 @@
         "aliases": [
           "CVE-2026-45416"
         ],
-        "cwe_ids": [
-          "CWE-770"
-        ],
-        "fixed_versions": [
-          "4.2.15.Final",
-          "4.1.135.Final"
-        ],
-        "id": "GHSA-x4gw-5cx5-pgmh",
-        "modified": "2026-09-10T03:50:12.401611+00:00",
-        "published": "2026-06-08T23:01:04+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-x4gw-5cx5-pgmh",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-45416",
-          "https://github.com/netty/netty",
-          "https://github.com/netty/netty/releases/tag/netty-4.1.135.Final",
-          "https://github.com/netty/netty/releases/tag/netty-4.2.15.Final"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Netty: SNI handler pre-allocates up to 16 MiB from nine attacker bytes"
+        "id": "GHSA-x4gw-5cx5-pgmh"
       },
       "cvss_score": 7.5,
       "dep_name": "io.netty:netty-handler",
@@ -4628,30 +3466,7 @@
         "aliases": [
           "CVE-2026-45536"
         ],
-        "cwe_ids": [
-          "CWE-200",
-          "CWE-772"
-        ],
-        "fixed_versions": [
-          "4.2.15.Final",
-          "4.1.135.Final"
-        ],
-        "id": "GHSA-w573-9ffj-6ff9",
-        "modified": "2026-09-10T03:50:12.439404+00:00",
-        "published": "2026-06-08T23:01:33+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-w573-9ffj-6ff9",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-45536",
-          "https://github.com/netty/netty",
-          "https://github.com/netty/netty/releases/tag/netty-4.1.135.Final",
-          "https://github.com/netty/netty/releases/tag/netty-4.2.15.Final"
-        ],
-        "severity": {
-          "score": 4.0,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "Netty: Unix-socket fd receive leaks descriptors when peer sends two at once"
+        "id": "GHSA-w573-9ffj-6ff9"
       },
       "cvss_score": 4.0,
       "dep_name": "io.netty:netty-transport-native-epoll",
@@ -4717,30 +3532,7 @@
         "aliases": [
           "CVE-2026-45536"
         ],
-        "cwe_ids": [
-          "CWE-200",
-          "CWE-772"
-        ],
-        "fixed_versions": [
-          "4.2.15.Final",
-          "4.1.135.Final"
-        ],
-        "id": "GHSA-w573-9ffj-6ff9",
-        "modified": "2026-09-10T03:50:12.439404+00:00",
-        "published": "2026-06-08T23:01:33+00:00",
-        "references": [
-          "https://github.com/netty/netty/security/advisories/GHSA-w573-9ffj-6ff9",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-45536",
-          "https://github.com/netty/netty",
-          "https://github.com/netty/netty/releases/tag/netty-4.1.135.Final",
-          "https://github.com/netty/netty/releases/tag/netty-4.2.15.Final"
-        ],
-        "severity": {
-          "score": 4.0,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "Netty: Unix-socket fd receive leaks descriptors when peer sends two at once"
+        "id": "GHSA-w573-9ffj-6ff9"
       },
       "cvss_score": 4.0,
       "dep_name": "io.netty:netty-transport-native-kqueue",
@@ -4806,29 +3598,7 @@
         "aliases": [
           "CVE-2026-1002"
         ],
-        "cwe_ids": [
-          "CWE-444"
-        ],
-        "fixed_versions": [
-          "4.5.24",
-          "5.0.7"
-        ],
-        "id": "GHSA-cphf-4846-3xx9",
-        "modified": "2026-09-10T03:50:59.087819+00:00",
-        "published": "2026-01-15T21:31:48+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-1002",
-          "https://github.com/vert-x3/vertx-web/issues/2836",
-          "https://github.com/eclipse-vertx/vert.x/pull/5894",
-          "https://github.com/eclipse-vertx/vert.x/pull/5895",
-          "https://github.com/eclipse-vertx/vert.x/commit/5b67f5d17788b2483d277c760f3f8154f9b2fed0"
-        ],
-        "severity": {
-          "score": 6.9,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:L"
-        },
-        "summary": "Vert.x Web static handler component cache can be manipulated to deny the access to static files"
+        "id": "GHSA-cphf-4846-3xx9"
       },
       "cvss_score": 6.9,
       "dep_name": "io.vertx:vertx-core",
@@ -4895,28 +3665,7 @@
         "aliases": [
           "CVE-2026-34480"
         ],
-        "cwe_ids": [
-          "CWE-116"
-        ],
-        "fixed_versions": [
-          "2.25.4"
-        ],
-        "id": "GHSA-3pxv-7cmr-fjr4",
-        "modified": "2026-09-10T03:50:42.492278+00:00",
-        "published": "2026-04-10T18:31:17+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-34480",
-          "https://github.com/apache/logging-log4j2/pull/4077",
-          "https://github.com/apache/logging-log4j2",
-          "https://lists.apache.org/thread/5x0hcnng0chhghp6jgjdp3qmbbhfjzhb",
-          "https://logging.apache.org/cyclonedx/vdr.xml"
-        ],
-        "severity": {
-          "score": 6.9,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:N/SC:N/SI:L/SA:N"
-        },
-        "summary": "Apache Log4j Core: Silent log event loss in XmlLayout due to unescaped XML 1.0 forbidden characters"
+        "id": "GHSA-3pxv-7cmr-fjr4"
       },
       "cvss_score": 6.9,
       "dep_name": "org.apache.logging.log4j:log4j-core",
@@ -4982,28 +3731,7 @@
         "aliases": [
           "CVE-2026-34477"
         ],
-        "cwe_ids": [
-          "CWE-297"
-        ],
-        "fixed_versions": [
-          "2.25.4"
-        ],
-        "id": "GHSA-6hg6-v5c8-fphq",
-        "modified": "2026-09-10T03:50:43.570169+00:00",
-        "published": "2026-04-10T18:31:17+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-34477",
-          "https://github.com/apache/logging-log4j2/pull/4075",
-          "https://github.com/apache/logging-log4j2",
-          "https://lists.apache.org/thread/lkx8cl46t2bvkcwfcb2pd43ygc097lq4",
-          "https://logging.apache.org/cyclonedx/vdr.xml"
-        ],
-        "severity": {
-          "score": 6.3,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:H/AT:N/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:L/SA:N"
-        },
-        "summary": "Apache Log4j Core: `verifyHostName` attribute silently ignored in TLS configuration"
+        "id": "GHSA-6hg6-v5c8-fphq"
       },
       "cvss_score": 6.3,
       "dep_name": "org.apache.logging.log4j:log4j-core",
@@ -5069,28 +3797,7 @@
         "aliases": [
           "CVE-2026-34479"
         ],
-        "cwe_ids": [
-          "CWE-116"
-        ],
-        "fixed_versions": [
-          "2.25.4"
-        ],
-        "id": "GHSA-h383-gmxw-35v2",
-        "modified": "2026-10-26T15:30:05.719203+00:00",
-        "published": "2026-04-10T18:31:18+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-34479",
-          "https://github.com/apache/logging-log4j2/pull/4078",
-          "https://github.com/apache/logging-log4j2",
-          "https://lists.apache.org/thread/gd0hp6mj17rn3kj279vgy4p7kd4zz5on",
-          "https://logging.apache.org/cyclonedx/vdr.xml"
-        ],
-        "severity": {
-          "score": 6.9,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:N/SC:N/SI:L/SA:N"
-        },
-        "summary": "Apache Log4j 1 to Log4j 2 bridge: silent log event loss in Log4j1XmlLayout due to unescaped XML 1.0 forbidden characters"
+        "id": "GHSA-h383-gmxw-35v2"
       },
       "cvss_score": 6.9,
       "dep_name": "org.apache.logging.log4j:log4j-core",
@@ -5156,28 +3863,7 @@
         "aliases": [
           "CVE-2025-68161"
         ],
-        "cwe_ids": [
-          "CWE-297"
-        ],
-        "fixed_versions": [
-          "2.25.3"
-        ],
-        "id": "GHSA-vc5p-v9hr-52mj",
-        "modified": "2026-09-10T03:50:32.126499+00:00",
-        "published": "2025-12-18T21:31:44+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-68161",
-          "https://github.com/apache/logging-log4j2/pull/4002",
-          "https://github.com/apache/logging-log4j2/commit/3b93748497e1adbbd027fda8a5e7268ec5d0d578",
-          "https://github.com/apache/logging-log4j2",
-          "https://lists.apache.org/thread/xr33kyxq3sl67lwb61ggvm1fzc8k7dvx"
-        ],
-        "severity": {
-          "score": 6.3,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:H/AT:N/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:L/SA:N"
-        },
-        "summary": "Apache Log4j does not verify the TLS hostname in its Socket Appender"
+        "id": "GHSA-vc5p-v9hr-52mj"
       },
       "cvss_score": 6.3,
       "dep_name": "org.apache.logging.log4j:log4j-core",
@@ -5243,30 +3929,7 @@
         "aliases": [
           "CVE-2025-8916"
         ],
-        "cwe_ids": [
-          "CWE-770"
-        ],
-        "fixed_versions": [
-          "1.79",
-          "1.0.8",
-          "2.0.8"
-        ],
-        "id": "GHSA-4cx2-fc23-5wg6",
-        "modified": "2026-09-10T03:50:26.717417+00:00",
-        "published": "2025-08-13T12:31:30+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-8916",
-          "https://github.com/bcgit/bc-java/commit/310b30a4fbf36d13f6cc201ffa7771715641e67e",
-          "https://github.com/bcgit/bc-java/commit/ff444a479942d88de64004dc82c3ee32a9e9075a",
-          "https://cert-portal.siemens.com/productcert/html/ssa-032379.html",
-          "https://github.com/bcgit/bc-java"
-        ],
-        "severity": {
-          "score": 6.3,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N/S:P/R:U/RE:M/U:Amber"
-        },
-        "summary": "Bouncy Castle for Java bcpkix, bcprov, bcpkix-fips on All (API modules) allows Excessive Allocation"
+        "id": "GHSA-4cx2-fc23-5wg6"
       },
       "cvss_score": 6.3,
       "dep_name": "org.bouncycastle:bcpkix-jdk15on",
@@ -5328,27 +3991,7 @@
         "aliases": [
           "CVE-2026-5588"
         ],
-        "cwe_ids": [
-          "CWE-327"
-        ],
-        "fixed_versions": [
-          "1.84"
-        ],
-        "id": "GHSA-wg6q-6289-32hp",
-        "modified": "2026-09-10T03:50:45.075900+00:00",
-        "published": "2026-04-15T18:31:54+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-5588",
-          "https://github.com/bcgit/bc-java/commit/656bae0dbd9b1521f840521ff786e78749fe3057",
-          "https://github.com/bcgit/bc-java",
-          "https://github.com/bcgit/bc-java/wiki/CVE%E2%80%902026%E2%80%905588"
-        ],
-        "severity": {
-          "score": 6.3,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N/U:Green"
-        },
-        "summary": "Bouncy Castle Crypto Package For Java: Use of a Broken or Risky Cryptographic Algorithm vulnerability in bcpkix modules"
+        "id": "GHSA-wg6q-6289-32hp"
       },
       "cvss_score": 6.3,
       "dep_name": "org.bouncycastle:bcpkix-jdk15on",
@@ -5410,28 +4053,7 @@
         "aliases": [
           "CVE-2026-53914"
         ],
-        "cwe_ids": [
-          "CWE-502"
-        ],
-        "fixed_versions": [
-          "2.4.20-Beta1"
-        ],
-        "id": "GHSA-r937-wjx7-w2jp",
-        "modified": "2026-08-12T19:40:59.256901+00:00",
-        "published": "2026-06-26T15:32:13+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-53914",
-          "https://github.com/JetBrains/kotlin/commit/bf51df665b458fda7c3eaf436c4d88dc119d7ec6",
-          "https://github.com/JetBrains/kotlin",
-          "https://github.com/JetBrains/kotlin/releases/tag/v2.4.20-Beta1",
-          "https://www.jetbrains.com/privacy-security/issues-fixed"
-        ],
-        "severity": {
-          "score": 6.7,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:H/UI:N/S:C/C:H/I:L/A:L"
-        },
-        "summary": "JetBrains Kotlin: Unsafe Deserialization in Kotlin Build Cache Enables Code Execution"
+        "id": "GHSA-r937-wjx7-w2jp"
       },
       "cvss_score": 6.7,
       "dep_name": "org.jetbrains.kotlin:kotlin-gradle-plugin",

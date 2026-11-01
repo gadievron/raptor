@@ -2,7 +2,7 @@
   "_source": {
     "fetched_at": "2026-11-01T12:55:01Z",
     "git_ref": "v1.0.0",
-    "license": "MIT (RAPTOR-generated scan output)",
+    "license": "MIT (RAPTOR-generated fields only; upstream advisory data retains its own terms)",
     "name": "RAPTOR SCA scan of firecracker-1.0",
     "project_license": "Apache-2.0",
     "provenance": "Scan output produced by RAPTOR's SCA pipeline against https://github.com/firecracker-microvm/firecracker.git@v1.0.0. Project source not redistributed.",
@@ -14,18 +14,7 @@
         "aliases": [
           "RUSTSEC-2021-0145"
         ],
-        "fixed_versions": [],
-        "id": "GHSA-g98v-hv3f-hcfr",
-        "modified": "2026-09-10T03:49:53.897184+00:00",
-        "published": "2023-06-30T20:21:59+00:00",
-        "references": [
-          "https://github.com/softprops/atty/issues/50",
-          "https://github.com/softprops/atty/pull/51",
-          "https://github.com/softprops/atty",
-          "https://rustsec.org/advisories/RUSTSEC-2021-0145.html"
-        ],
-        "severity": null,
-        "summary": "atty potential unaligned read"
+        "id": "GHSA-g98v-hv3f-hcfr"
       },
       "cvss_score": null,
       "dep_name": "atty",
@@ -85,18 +74,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [],
         "id": "RUSTSEC-2024-0375",
-        "informational": "unmaintained",
-        "modified": "2024-09-26T12:26:22+00:00",
-        "published": "2024-09-25T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/atty",
-          "https://rustsec.org/advisories/RUSTSEC-2024-0375.html",
-          "https://github.com/softprops/atty/issues/57"
-        ],
-        "severity": null,
-        "summary": "`atty` is unmaintained"
+        "informational": "unmaintained"
       },
       "cvss_score": null,
       "dep_name": "atty",
@@ -156,18 +135,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [],
         "id": "RUSTSEC-2025-0141",
-        "informational": "unmaintained",
-        "modified": "2026-01-16T11:07:28.867553+00:00",
-        "published": "2025-12-16T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/bincode",
-          "https://rustsec.org/advisories/RUSTSEC-2025-0141.html",
-          "https://git.sr.ht/~stygianentity/bincode/tree/v3.0/item/README.md"
-        ],
-        "severity": null,
-        "summary": "Bincode is unmaintained"
+        "informational": "unmaintained"
       },
       "cvss_score": null,
       "dep_name": "bincode",
@@ -235,19 +204,7 @@
         "aliases": [
           "RUSTSEC-2022-0078"
         ],
-        "fixed_versions": [
-          "3.11.1"
-        ],
-        "id": "GHSA-f85w-wvc7-crwc",
-        "modified": "2026-09-10T03:49:51.242906+00:00",
-        "published": "2023-01-20T21:54:22+00:00",
-        "references": [
-          "https://github.com/fitzgen/bumpalo",
-          "https://github.com/fitzgen/bumpalo/blob/main/CHANGELOG.md#3111",
-          "https://rustsec.org/advisories/RUSTSEC-2022-0078.html"
-        ],
-        "severity": null,
-        "summary": "bumpalo has use-after-free due to a lifetime error in `Vec::into_iter()`"
+        "id": "GHSA-f85w-wvc7-crwc"
       },
       "cvss_score": null,
       "dep_name": "bumpalo",
@@ -307,19 +264,7 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [
-          "0.9.20"
-        ],
-        "id": "RUSTSEC-2026-0204",
-        "modified": "2026-07-06T22:30:04.159269+00:00",
-        "published": "2026-07-06T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/crossbeam-epoch",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0204.html",
-          "https://github.com/crossbeam-rs/crossbeam/pull/1276"
-        ],
-        "severity": null,
-        "summary": "Invalid pointer dereference in `fmt::Pointer` impl for `Atomic` and `Shared` when the underlying pointer is invalid"
+        "id": "RUSTSEC-2026-0204"
       },
       "cvss_score": null,
       "dep_name": "crossbeam-epoch",
@@ -382,28 +327,7 @@
           "CVE-2022-23639",
           "RUSTSEC-2022-0041"
         ],
-        "cwe_ids": [
-          "CWE-362"
-        ],
-        "fixed_versions": [
-          "0.8.7"
-        ],
-        "id": "GHSA-qc84-gqf4-9926",
-        "modified": "2025-02-04T17:30:19+00:00",
-        "published": "2022-02-16T22:36:21+00:00",
-        "references": [
-          "https://github.com/crossbeam-rs/crossbeam/security/advisories/GHSA-qc84-gqf4-9926",
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-23639",
-          "https://github.com/crossbeam-rs/crossbeam/pull/781",
-          "https://github.com/crossbeam-rs/crossbeam",
-          "https://github.com/crossbeam-rs/crossbeam/releases/tag/crossbeam-utils-0.8.7"
-        ],
-        "severity": {
-          "score": 8.1,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "crossbeam-utils Unsoundness of AtomicCell<{i,u}64> arithmetics on 32-bit targets that support Atomic{I,U}64"
+        "id": "GHSA-qc84-gqf4-9926"
       },
       "cvss_score": 8.1,
       "dep_name": "crossbeam-utils",
@@ -466,22 +390,7 @@
         "aliases": [
           "RUSTSEC-2024-0428"
         ],
-        "cwe_ids": [
-          "CWE-843"
-        ],
-        "fixed_versions": [
-          "0.19.1"
-        ],
-        "id": "GHSA-3qx8-rv27-j6gp",
-        "modified": "2025-10-28T06:29:22.787282+00:00",
-        "published": "2024-12-23T19:26:37+00:00",
-        "references": [
-          "https://github.com/rust-vmm/kvm/pull/298",
-          "https://github.com/rust-vmm/kvm-ioctls",
-          "https://rustsec.org/advisories/RUSTSEC-2024-0428.html"
-        ],
-        "severity": null,
-        "summary": "Undefined behaviour in `kvm_ioctls::ioctls::vm::VmFd::create_device`"
+        "id": "GHSA-3qx8-rv27-j6gp"
       },
       "cvss_score": null,
       "dep_name": "kvm-ioctls",
@@ -543,30 +452,7 @@
         "aliases": [
           "CVE-2022-23523"
         ],
-        "cwe_ids": [
-          "CWE-119",
-          "CWE-125",
-          "CWE-835"
-        ],
-        "fixed_versions": [
-          "0.8.1"
-        ],
-        "id": "GHSA-52h2-m2cf-9jh6",
-        "modified": "2023-11-08T04:08:20.739426+00:00",
-        "published": "2022-12-12T22:35:41+00:00",
-        "references": [
-          "https://github.com/rust-vmm/linux-loader/security/advisories/GHSA-52h2-m2cf-9jh6",
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-23523",
-          "https://github.com/rust-vmm/linux-loader/pull/125",
-          "https://github.com/rust-vmm/linux-loader/commit/a44f152da4f38c538ed492b1efa8515be2047db2",
-          "https://github.com/rust-vmm/linux-loader"
-        ],
-        "severity": {
-          "score": 1.9,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:H/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "linux-loader reading beyond EOF could lead to infinite loop"
+        "id": "GHSA-52h2-m2cf-9jh6"
       },
       "cvss_score": 1.9,
       "dep_name": "linux-loader",
@@ -635,24 +521,7 @@
         "aliases": [
           "RUSTSEC-2026-0097"
         ],
-        "cwe_ids": [
-          "CWE-20"
-        ],
-        "fixed_versions": [
-          "0.9.3",
-          "0.10.1",
-          "0.8.6"
-        ],
-        "id": "GHSA-cq8v-f236-94qc",
-        "modified": "2026-09-10T03:50:43.958966+00:00",
-        "published": "2026-04-14T01:03:36+00:00",
-        "references": [
-          "https://github.com/rust-random/rand/pull/1763",
-          "https://github.com/rust-random/rand",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0097.html"
-        ],
-        "severity": null,
-        "summary": "Rand is unsound with a custom logger using rand::rng()"
+        "id": "GHSA-cq8v-f236-94qc"
       },
       "cvss_score": null,
       "dep_name": "rand",
@@ -715,29 +584,7 @@
           "CVE-2022-24713",
           "RUSTSEC-2022-0013"
         ],
-        "cwe_ids": [
-          "CWE-1333",
-          "CWE-400"
-        ],
-        "fixed_versions": [
-          "1.5.5"
-        ],
-        "id": "GHSA-m5pq-gvj9-9vr8",
-        "modified": "2023-11-08T04:08:33.272453+00:00",
-        "published": "2022-03-08T20:00:36+00:00",
-        "references": [
-          "https://github.com/rust-lang/regex/security/advisories/GHSA-m5pq-gvj9-9vr8",
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-24713",
-          "https://github.com/rust-lang/regex/commit/ae70b41d4f46641dbc45c7a4f87954aea356283e",
-          "https://github.com/rust-lang/regex",
-          "https://groups.google.com/g/rustlang-security-announcements/c/NcNNL1Jq7Yw"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Rust's regex crate vulnerable to regular expression denial of service"
+        "id": "GHSA-m5pq-gvj9-9vr8"
       },
       "cvss_score": 7.5,
       "dep_name": "regex",
@@ -799,18 +646,8 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [],
         "id": "RUSTSEC-2021-0127",
-        "informational": "unmaintained",
-        "modified": "2021-12-01T14:04:55+00:00",
-        "published": "2021-08-15T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/serde_cbor",
-          "https://rustsec.org/advisories/RUSTSEC-2021-0127.html",
-          "https://github.com/pyfisch/cbor"
-        ],
-        "severity": null,
-        "summary": "serde_cbor is unmaintained"
+        "informational": "unmaintained"
       },
       "cvss_score": null,
       "dep_name": "serde_cbor",
@@ -873,28 +710,7 @@
           "CVE-2023-28448",
           "RUSTSEC-2023-0030"
         ],
-        "cwe_ids": [
-          "CWE-125"
-        ],
-        "fixed_versions": [
-          "0.1.10"
-        ],
-        "id": "GHSA-8vxc-r5wp-vgvc",
-        "modified": "2023-11-08T04:12:11.444949+00:00",
-        "published": "2023-03-24T22:00:05+00:00",
-        "references": [
-          "https://github.com/firecracker-microvm/versionize/security/advisories/GHSA-8vxc-r5wp-vgvc",
-          "https://nvd.nist.gov/vuln/detail/CVE-2023-28448",
-          "https://github.com/firecracker-microvm/versionize/pull/53",
-          "https://github.com/firecracker-microvm/versionize/commit/a57a051ba006cfa3b41a0532f484df759e008d47",
-          "https://github.com/firecracker-microvm/versionize"
-        ],
-        "severity": {
-          "score": 5.7,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:C/C:N/I:L/A:L"
-        },
-        "summary": "Versionize::deserialize implementation for FamStructWrapper<T> is lacking bound checks, potentially leading to out of bounds memory accesses"
+        "id": "GHSA-8vxc-r5wp-vgvc"
       },
       "cvss_score": 5.7,
       "dep_name": "versionize",
@@ -964,28 +780,7 @@
           "CVE-2023-41051",
           "RUSTSEC-2023-0056"
         ],
-        "cwe_ids": [
-          "CWE-125"
-        ],
-        "fixed_versions": [
-          "0.12.2"
-        ],
-        "id": "GHSA-49hh-fprx-m68g",
-        "modified": "2026-09-10T03:50:03.137269+00:00",
-        "published": "2023-09-04T16:35:37+00:00",
-        "references": [
-          "https://github.com/rust-vmm/vm-memory/security/advisories/GHSA-49hh-fprx-m68g",
-          "https://nvd.nist.gov/vuln/detail/CVE-2023-41051",
-          "https://github.com/rust-vmm/vm-memory/issues/250",
-          "https://github.com/rust-vmm/vm-memory/commit/aff1dd4a5259f7deba56692840f7a2d9ca34c9c8",
-          "https://crates.io/crates/vm-memory/0.12.2"
-        ],
-        "severity": {
-          "score": 2.5,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:N/UI:R/S:U/C:N/I:N/A:L"
-        },
-        "summary": "Default functions in VolatileMemory trait lack bounds checks, potentially leading to out-of-bounds memory accesses"
+        "id": "GHSA-49hh-fprx-m68g"
       },
       "cvss_score": 2.5,
       "dep_name": "vm-memory",
@@ -1048,30 +843,7 @@
           "CVE-2020-13759",
           "RUSTSEC-2020-0157"
         ],
-        "cwe_ids": [
-          "CWE-362",
-          "CWE-662"
-        ],
-        "fixed_versions": [
-          "0.1.1",
-          "0.2.1"
-        ],
-        "id": "GHSA-mm4m-qg48-f7wc",
-        "modified": "2023-11-08T04:02:21.747761+00:00",
-        "published": "2021-08-25T21:01:29+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-13759",
-          "https://github.com/rust-vmm/vm-memory/issues/93",
-          "https://github.com/rust-vmm/vm-memory",
-          "https://github.com/rust-vmm/vm-memory/releases/tag/v0.1.1",
-          "https://github.com/rust-vmm/vm-memory/releases/tag/v0.2.1"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Improper Synchronization and Race Condition in vm-memory"
+        "id": "GHSA-mm4m-qg48-f7wc"
       },
       "cvss_score": 7.5,
       "dep_name": "vm-memory",
@@ -1134,28 +906,7 @@
           "CVE-2023-41051",
           "RUSTSEC-2023-0056"
         ],
-        "cwe_ids": [
-          "CWE-125"
-        ],
-        "fixed_versions": [
-          "0.12.2"
-        ],
-        "id": "GHSA-49hh-fprx-m68g",
-        "modified": "2026-09-10T03:50:03.137269+00:00",
-        "published": "2023-09-04T16:35:37+00:00",
-        "references": [
-          "https://github.com/rust-vmm/vm-memory/security/advisories/GHSA-49hh-fprx-m68g",
-          "https://nvd.nist.gov/vuln/detail/CVE-2023-41051",
-          "https://github.com/rust-vmm/vm-memory/issues/250",
-          "https://github.com/rust-vmm/vm-memory/commit/aff1dd4a5259f7deba56692840f7a2d9ca34c9c8",
-          "https://crates.io/crates/vm-memory/0.12.2"
-        ],
-        "severity": {
-          "score": 2.5,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:N/UI:R/S:U/C:N/I:N/A:L"
-        },
-        "summary": "Default functions in VolatileMemory trait lack bounds checks, potentially leading to out-of-bounds memory accesses"
+        "id": "GHSA-49hh-fprx-m68g"
       },
       "cvss_score": 2.5,
       "dep_name": "vm-memory",
@@ -1218,28 +969,7 @@
           "CVE-2023-50711",
           "RUSTSEC-2024-0002"
         ],
-        "cwe_ids": [
-          "CWE-787"
-        ],
-        "fixed_versions": [
-          "0.12.0"
-        ],
-        "id": "GHSA-875g-mfp6-g7f9",
-        "modified": "2026-09-10T03:50:04.893291+00:00",
-        "published": "2024-01-02T16:28:08+00:00",
-        "references": [
-          "https://github.com/rust-vmm/vmm-sys-util/security/advisories/GHSA-875g-mfp6-g7f9",
-          "https://nvd.nist.gov/vuln/detail/CVE-2023-50711",
-          "https://github.com/rust-vmm/vmm-sys-util/commit/30172fca2a8e0a38667d934ee56682247e13f167",
-          "https://github.com/rust-vmm/vmm-sys-util",
-          "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/W5XMCLV2P3ANS3XN4NXZTV4PUNTLWUNJ"
-        ],
-        "severity": {
-          "score": 5.7,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:C/C:N/I:L/A:L"
-        },
-        "summary": "`serde` deserialization for `FamStructWrapper` lacks bound checks that could potentially lead to out-of-bounds memory access"
+        "id": "GHSA-875g-mfp6-g7f9"
       },
       "cvss_score": 5.7,
       "dep_name": "vmm-sys-util",
@@ -1302,28 +1032,7 @@
           "CVE-2022-23491",
           "PYSEC-2022-42986"
         ],
-        "cwe_ids": [
-          "CWE-345"
-        ],
-        "fixed_versions": [
-          "2022.12.07"
-        ],
-        "id": "GHSA-43fp-rhv2-5gv8",
-        "modified": "2025-02-12T18:53:14.421067+00:00",
-        "published": "2022-12-07T23:05:18+00:00",
-        "references": [
-          "https://github.com/certifi/python-certifi/security/advisories/GHSA-43fp-rhv2-5gv8",
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-23491",
-          "https://github.com/certifi/python-certifi/commit/9e9e840925d7b8e76c76fdac1fab7e6e88c1c3b8",
-          "https://github.com/certifi/python-certifi",
-          "https://github.com/pypa/advisory-database/tree/main/vulns/certifi/PYSEC-2022-42986.yaml"
-        ],
-        "severity": {
-          "score": 6.8,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:C/C:N/I:H/A:N"
-        },
-        "summary": "Certifi removing TrustCor root certificate"
+        "id": "GHSA-43fp-rhv2-5gv8"
       },
       "cvss_score": 6.8,
       "dep_name": "certifi",
@@ -1385,27 +1094,7 @@
         "aliases": [
           "PYSEC-2026-4320"
         ],
-        "cwe_ids": [
-          "CWE-295"
-        ],
-        "fixed_versions": [
-          "2026.10.18"
-        ],
-        "id": "GHSA-6q48-6c7w-9gw2",
-        "modified": "2026-10-26T16:15:35.371128+00:00",
-        "published": "2026-10-20T19:35:05+00:00",
-        "references": [
-          "https://github.com/certifi/python-certifi/security/advisories/GHSA-6q48-6c7w-9gw2",
-          "https://discuss.python.org/t/information-for-python-users-regarding-emudhra-emsign-ca-certificate-security-incident/109576",
-          "https://emudhra.we-have-a-problem.com",
-          "https://github.com/certifi/python-certifi"
-        ],
-        "severity": {
-          "score": 9.1,
-          "severity": "critical",
-          "vector": "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N"
-        },
-        "summary": "certifi bundles emSign root CAs with compromised intermediate CA keys"
+        "id": "GHSA-6q48-6c7w-9gw2"
       },
       "cvss_score": 9.1,
       "dep_name": "certifi",
@@ -1468,28 +1157,7 @@
           "CVE-2023-37920",
           "PYSEC-2023-135"
         ],
-        "cwe_ids": [
-          "CWE-345"
-        ],
-        "fixed_versions": [
-          "2023.7.22"
-        ],
-        "id": "GHSA-xqr8-7jwr-rhp7",
-        "modified": "2026-09-10T03:50:08.653753+00:00",
-        "published": "2023-07-25T14:43:53+00:00",
-        "references": [
-          "https://github.com/certifi/python-certifi/security/advisories/GHSA-xqr8-7jwr-rhp7",
-          "https://nvd.nist.gov/vuln/detail/CVE-2023-37920",
-          "https://github.com/certifi/python-certifi/commit/8fb96ed81f71e7097ed11bc4d9b19afd7ea5c909",
-          "https://github.com/certifi/python-certifi",
-          "https://github.com/pypa/advisory-database/tree/main/vulns/certifi/PYSEC-2023-135.yaml"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
-        },
-        "summary": "Removal of e-Tugra root certificate"
+        "id": "GHSA-xqr8-7jwr-rhp7"
       },
       "cvss_score": 7.5,
       "dep_name": "certifi",
@@ -1552,26 +1220,7 @@
           "CVE-2024-39689",
           "GHSA-248v-346w-9cwc"
         ],
-        "fixed_versions": [
-          "bd8153872e9c6fc98f4023df9c2deaffea2fa463",
-          "2024.7.4"
-        ],
-        "id": "PYSEC-2024-230",
-        "modified": "2026-06-10T17:14:18.786020+00:00",
-        "published": "2024-07-05T19:15:10+00:00",
-        "references": [
-          "https://github.com/certifi/python-certifi/security/advisories/GHSA-248v-346w-9cwc",
-          "https://security.netapp.com/advisory/ntap-20241206-0001/",
-          "https://groups.google.com/a/mozilla.org/g/dev-security-policy/c/XpknYMPO8dI",
-          "https://github.com/certifi/python-certifi/commit/bd8153872e9c6fc98f4023df9c2deaffea2fa463",
-          "https://github.com/advisories/GHSA-248v-346w-9cwc"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
-        },
-        "summary": ""
+        "id": "PYSEC-2024-230"
       },
       "cvss_score": 7.5,
       "dep_name": "certifi",
@@ -1634,27 +1283,7 @@
           "CVE-2026-45409",
           "PYSEC-2026-215"
         ],
-        "cwe_ids": [
-          "CWE-1333"
-        ],
-        "fixed_versions": [
-          "3.15"
-        ],
-        "id": "GHSA-65pc-fj4g-8rjx",
-        "modified": "2026-09-10T03:50:45.700124+00:00",
-        "published": "2026-05-19T14:34:32+00:00",
-        "references": [
-          "https://github.com/kjd/idna/security/advisories/GHSA-65pc-fj4g-8rjx",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-45409",
-          "https://github.com/kjd/idna",
-          "https://github.com/pypa/advisory-database/tree/main/vulns/idna/PYSEC-2026-215.yaml"
-        ],
-        "severity": {
-          "score": 6.9,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
-        },
-        "summary": "Internationalized Domain Names in Applications (IDNA): Specially crafted inputs to idna.encode() can bypass CVE-2024-3651 fix"
+        "id": "GHSA-65pc-fj4g-8rjx"
       },
       "cvss_score": 6.9,
       "dep_name": "idna",
@@ -1717,25 +1346,7 @@
           "CVE-2024-3651",
           "GHSA-jjg7-2v4v-x38h"
         ],
-        "fixed_versions": [
-          "1d365e17e10d72d0b7876316fc7b9ca0eebdd38d",
-          "3.7"
-        ],
-        "id": "PYSEC-2024-60",
-        "modified": "2026-06-10T17:01:21.102419+00:00",
-        "published": "2024-07-07T18:15:00+00:00",
-        "references": [
-          "https://huntr.com/bounties/93d78d07-d791-4b39-a845-cbfabc44aadb",
-          "https://huntr.com/bounties/93d78d07-d791-4b39-a845-cbfabc44aadb",
-          "https://github.com/kjd/idna/commit/1d365e17e10d72d0b7876316fc7b9ca0eebdd38d",
-          "https://github.com/advisories/GHSA-jjg7-2v4v-x38h"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "PYSEC-2024-60"
       },
       "cvss_score": 7.5,
       "dep_name": "idna",
@@ -1797,28 +1408,7 @@
         "aliases": [
           "CVE-2026-114608"
         ],
-        "cwe_ids": [
-          "CWE-502"
-        ],
-        "fixed_versions": [
-          "4.0.9"
-        ],
-        "id": "GHSA-22qq-2fwx-7p67",
-        "modified": "2026-10-27T15:00:04.526940+00:00",
-        "published": "2026-10-27T14:46:51+00:00",
-        "references": [
-          "https://github.com/pylint-dev/pylint/security/advisories/GHSA-22qq-2fwx-7p67",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-114608",
-          "https://github.com/pylint-dev/pylint/commit/58c87cffca9de2b3e89aa07b89686cbc90cfea2d",
-          "https://github.com/pylint-dev/pylint/commit/5b241f66318220e9ba7b21ca631fbfe8e77682ca",
-          "https://github.com/pylint-dev/pylint"
-        ],
-        "severity": {
-          "score": 5.4,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:L/AC:H/AT:P/PR:L/UI:P/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
-        },
-        "summary": "Pylint: Arbitrary code execution via pickle deserialization of the stats cache in PYLINT_HOME"
+        "id": "GHSA-22qq-2fwx-7p67"
       },
       "cvss_score": 5.4,
       "dep_name": "pylint",
@@ -1881,28 +1471,7 @@
           "CVE-2025-71176",
           "PYSEC-2026-1845"
         ],
-        "cwe_ids": [
-          "CWE-379"
-        ],
-        "fixed_versions": [
-          "9.0.3"
-        ],
-        "id": "GHSA-6w46-j5rx-g56g",
-        "modified": "2026-09-10T03:50:32.768043+00:00",
-        "published": "2026-01-22T06:30:29+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-71176",
-          "https://github.com/pytest-dev/pytest/issues/13669",
-          "https://github.com/pytest-dev/pytest/pull/14343",
-          "https://github.com/pytest-dev/pytest/commit/95d8423bd24992deea5b9df32555fa1741679e2c",
-          "https://github.com/pytest-dev/pytes"
-        ],
-        "severity": {
-          "score": 6.8,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:C/C:L/I:L/A:L"
-        },
-        "summary": "pytest has vulnerable tmpdir handling"
+        "id": "GHSA-6w46-j5rx-g56g"
       },
       "cvss_score": 6.8,
       "dep_name": "pytest",
@@ -1965,28 +1534,7 @@
           "CVE-2024-47081",
           "PYSEC-2026-1872"
         ],
-        "cwe_ids": [
-          "CWE-522"
-        ],
-        "fixed_versions": [
-          "2.32.4"
-        ],
-        "id": "GHSA-9hjg-9r4m-mvj7",
-        "modified": "2026-10-19T20:00:04.716114+00:00",
-        "published": "2025-06-09T19:06:08+00:00",
-        "references": [
-          "https://github.com/psf/requests/security/advisories/GHSA-9hjg-9r4m-mvj7",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-47081",
-          "https://github.com/psf/requests/pull/6965",
-          "https://github.com/psf/requests/commit/96ba401c1296ab1dda74a2365ef36d88f7d144ef",
-          "https://github.com/advisories/GHSA-9hjg-9r4m-mvj7"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:H/I:N/A:N"
-        },
-        "summary": "Requests vulnerable to .netrc credentials leak via malicious URLs"
+        "id": "GHSA-9hjg-9r4m-mvj7"
       },
       "cvss_score": 5.3,
       "dep_name": "requests",
@@ -2049,28 +1597,7 @@
           "CVE-2024-35195",
           "PYSEC-2026-1873"
         ],
-        "cwe_ids": [
-          "CWE-670"
-        ],
-        "fixed_versions": [
-          "2.32.0"
-        ],
-        "id": "GHSA-9wx4-h78v-vm56",
-        "modified": "2026-09-10T03:50:13.740879+00:00",
-        "published": "2024-05-20T20:15:00+00:00",
-        "references": [
-          "https://github.com/psf/requests/security/advisories/GHSA-9wx4-h78v-vm56",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-35195",
-          "https://github.com/psf/requests/pull/6655",
-          "https://github.com/psf/requests/commit/a58d7f2ffb4d00b46dca2d70a3932a0b37e22fac",
-          "https://github.com/psf/requests"
-        ],
-        "severity": {
-          "score": 5.6,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:H/UI:R/S:U/C:H/I:H/A:N"
-        },
-        "summary": "Requests `Session` object does not verify requests after making first request with verify=False"
+        "id": "GHSA-9wx4-h78v-vm56"
       },
       "cvss_score": 5.6,
       "dep_name": "requests",
@@ -2133,28 +1660,7 @@
           "CVE-2026-25645",
           "PYSEC-2026-2275"
         ],
-        "cwe_ids": [
-          "CWE-377"
-        ],
-        "fixed_versions": [
-          "2.33.0"
-        ],
-        "id": "GHSA-gc5v-m9x4-r6x2",
-        "modified": "2026-09-10T03:50:39.207922+00:00",
-        "published": "2026-03-25T16:56:28+00:00",
-        "references": [
-          "https://github.com/psf/requests/security/advisories/GHSA-gc5v-m9x4-r6x2",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-25645",
-          "https://github.com/psf/requests/commit/66d21cb07bd6255b1280291c4fafb71803cdb3b7",
-          "https://github.com/psf/requests",
-          "https://github.com/psf/requests/releases/tag/v2.33.0"
-        ],
-        "severity": {
-          "score": 4.4,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:R/S:U/C:N/I:H/A:N"
-        },
-        "summary": "Requests has Insecure Temp File Reuse in its extract_zipped_paths() utility function"
+        "id": "GHSA-gc5v-m9x4-r6x2"
       },
       "cvss_score": 4.4,
       "dep_name": "requests",
@@ -2217,28 +1723,7 @@
           "CVE-2023-32681",
           "PYSEC-2023-74"
         ],
-        "cwe_ids": [
-          "CWE-200"
-        ],
-        "fixed_versions": [
-          "2.31.0"
-        ],
-        "id": "GHSA-j8r2-6x86-q33q",
-        "modified": "2026-09-10T03:50:01.756149+00:00",
-        "published": "2023-05-22T20:36:32+00:00",
-        "references": [
-          "https://github.com/psf/requests/security/advisories/GHSA-j8r2-6x86-q33q",
-          "https://nvd.nist.gov/vuln/detail/CVE-2023-32681",
-          "https://github.com/psf/requests/commit/74ea7cf7a6a27a4eeb2ae24e162bcc942a6706d5",
-          "https://github.com/psf/requests",
-          "https://github.com/psf/requests/releases/tag/v2.31.0"
-        ],
-        "severity": {
-          "score": 6.1,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:H/I:N/A:N"
-        },
-        "summary": "Unintended leak of Proxy-Authorization header in requests"
+        "id": "GHSA-j8r2-6x86-q33q"
       },
       "cvss_score": 6.1,
       "dep_name": "requests",
@@ -2301,26 +1786,7 @@
           "CVE-2026-54552",
           "PYSEC-2026-3540"
         ],
-        "cwe_ids": [
-          "CWE-273"
-        ],
-        "fixed_versions": [
-          "2.2.4"
-        ],
-        "id": "GHSA-q38v-wp89-2w55",
-        "modified": "2026-07-23T15:11:41.199641+00:00",
-        "published": "2026-07-17T18:41:38+00:00",
-        "references": [
-          "https://github.com/amoffat/sh/security/advisories/GHSA-q38v-wp89-2w55",
-          "https://github.com/amoffat/sh",
-          "https://github.com/amoffat/sh/releases/tag/2.2.4"
-        ],
-        "severity": {
-          "score": 7.9,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:H/UI:N/S:C/C:H/I:H/A:N"
-        },
-        "summary": "sh _uid does not drop supplementary groups (incomplete privilege drop)"
+        "id": "GHSA-q38v-wp89-2w55"
       },
       "cvss_score": 7.9,
       "dep_name": "sh",
@@ -2383,28 +1849,7 @@
           "CVE-2025-66471",
           "PYSEC-2026-1994"
         ],
-        "cwe_ids": [
-          "CWE-409"
-        ],
-        "fixed_versions": [
-          "2.6.0"
-        ],
-        "id": "GHSA-2xpw-w6gg-jr37",
-        "modified": "2026-09-25T17:15:05.968189+00:00",
-        "published": "2025-12-05T18:15:54+00:00",
-        "references": [
-          "https://github.com/urllib3/urllib3/security/advisories/GHSA-2xpw-w6gg-jr37",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-66471",
-          "https://github.com/urllib3/urllib3/commit/c19571de34c47de3a766541b041637ba5f716ed7",
-          "https://github.com/urllib3/urllib3/commit/d0fde3672e4a4093f7587858dccfc298eb66e46c",
-          "https://github.com/advisories/GHSA-2xpw-w6gg-jr37"
-        ],
-        "severity": {
-          "score": 8.9,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:H"
-        },
-        "summary": "urllib3 streaming API improperly handles highly compressed data"
+        "id": "GHSA-2xpw-w6gg-jr37"
       },
       "cvss_score": 8.9,
       "dep_name": "urllib3",
@@ -2467,29 +1912,7 @@
           "CVE-2024-37891",
           "PYSEC-2026-1995"
         ],
-        "cwe_ids": [
-          "CWE-669"
-        ],
-        "fixed_versions": [
-          "1.26.19",
-          "2.2.2"
-        ],
-        "id": "GHSA-34jh-p97f-mpxf",
-        "modified": "2026-09-10T03:50:14.811193+00:00",
-        "published": "2024-06-17T21:37:20+00:00",
-        "references": [
-          "https://github.com/urllib3/urllib3/security/advisories/GHSA-34jh-p97f-mpxf",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-37891",
-          "https://github.com/urllib3/urllib3/commit/40b6d1605814dd1db0a46e202d6e56f2e4c9a468",
-          "https://github.com/urllib3/urllib3/commit/accff72ecc2f6cf5a76d9570198a93ac7c90270e",
-          "https://github.com/urllib3/urllib3"
-        ],
-        "severity": {
-          "score": 4.4,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:H/UI:N/S:U/C:H/I:N/A:N"
-        },
-        "summary": "urllib3's Proxy-Authorization request header isn't stripped during cross-origin redirects"
+        "id": "GHSA-34jh-p97f-mpxf"
       },
       "cvss_score": 4.4,
       "dep_name": "urllib3",
@@ -2552,28 +1975,7 @@
           "CVE-2026-21441",
           "PYSEC-2026-1996"
         ],
-        "cwe_ids": [
-          "CWE-409"
-        ],
-        "fixed_versions": [
-          "2.6.3"
-        ],
-        "id": "GHSA-38jv-5279-wg99",
-        "modified": "2026-09-10T03:50:32.562010+00:00",
-        "published": "2026-01-07T19:18:14+00:00",
-        "references": [
-          "https://github.com/urllib3/urllib3/security/advisories/GHSA-38jv-5279-wg99",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-21441",
-          "https://github.com/urllib3/urllib3/commit/8864ac407bba8607950025e0979c4c69bc7abc7b",
-          "https://github.com/urllib3/urllib3",
-          "https://lists.debian.org/debian-lts-announce/2026/01/msg00017.html"
-        ],
-        "severity": {
-          "score": 8.9,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:H"
-        },
-        "summary": "Decompression-bomb safeguards bypassed when following HTTP redirects (streaming API)"
+        "id": "GHSA-38jv-5279-wg99"
       },
       "cvss_score": 8.9,
       "dep_name": "urllib3",
@@ -2636,29 +2038,7 @@
           "CVE-2026-97687",
           "PYSEC-2026-4175"
         ],
-        "cwe_ids": [
-          "CWE-295",
-          "CWE-440"
-        ],
-        "fixed_versions": [
-          "2.8.0"
-        ],
-        "id": "GHSA-8988-9cw3-xx77",
-        "modified": "2026-10-01T17:55:53.793608+00:00",
-        "published": "2026-09-30T14:46:04+00:00",
-        "references": [
-          "https://github.com/urllib3/urllib3/security/advisories/GHSA-8988-9cw3-xx77",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-97687",
-          "https://github.com/urllib3/urllib3/pull/5093",
-          "https://github.com/urllib3/urllib3/commit/07408cec79d1856d81bb42c74a904a24fdb9e465",
-          "https://github.com/urllib3/urllib3/commit/b6447295fff7b38fdffc67e0df9712d60cef3cc3"
-        ],
-        "severity": {
-          "score": 7.6,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:P/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N"
-        },
-        "summary": "urllib3: HTTPS proxy TLS configuration may be ignored or overridden"
+        "id": "GHSA-8988-9cw3-xx77"
       },
       "cvss_score": 7.6,
       "dep_name": "urllib3",
@@ -2721,29 +2101,7 @@
           "CVE-2023-45803",
           "PYSEC-2023-212"
         ],
-        "cwe_ids": [
-          "CWE-200"
-        ],
-        "fixed_versions": [
-          "2.0.7",
-          "1.26.18"
-        ],
-        "id": "GHSA-g4mx-q9vg-27p4",
-        "modified": "2026-09-10T03:50:03.706889+00:00",
-        "published": "2023-10-17T20:15:25+00:00",
-        "references": [
-          "https://github.com/urllib3/urllib3/security/advisories/GHSA-g4mx-q9vg-27p4",
-          "https://nvd.nist.gov/vuln/detail/CVE-2023-45803",
-          "https://github.com/urllib3/urllib3/commit/4e50fbc5db74e32cabd5ccc1ab81fc103adfe0b3",
-          "https://github.com/urllib3/urllib3/commit/4e98d57809dacab1cbe625fddeec1a290c478ea9",
-          "https://github.com/urllib3/urllib3/commit/b594c5ceaca38e1ac215f916538fb128e3526a36"
-        ],
-        "severity": {
-          "score": 5.7,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:A/AC:L/AT:P/PR:H/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N"
-        },
-        "summary": "urllib3's request body not stripped after redirect from 303 status changes request method to GET"
+        "id": "GHSA-g4mx-q9vg-27p4"
       },
       "cvss_score": 5.7,
       "dep_name": "urllib3",
@@ -2806,27 +2164,7 @@
           "CVE-2025-66418",
           "PYSEC-2026-1998"
         ],
-        "cwe_ids": [
-          "CWE-770"
-        ],
-        "fixed_versions": [
-          "2.6.0"
-        ],
-        "id": "GHSA-gm62-xv2j-4w53",
-        "modified": "2026-09-10T03:50:58.741847+00:00",
-        "published": "2025-12-05T18:15:19+00:00",
-        "references": [
-          "https://github.com/urllib3/urllib3/security/advisories/GHSA-gm62-xv2j-4w53",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-66418",
-          "https://github.com/urllib3/urllib3/commit/24d7b67eac89f94e11003424bcf0d8f7b72222a8",
-          "https://github.com/urllib3/urllib3"
-        ],
-        "severity": {
-          "score": 8.9,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:H"
-        },
-        "summary": "urllib3 allows an unbounded number of links in the decompression chain"
+        "id": "GHSA-gm62-xv2j-4w53"
       },
       "cvss_score": 8.9,
       "dep_name": "urllib3",
@@ -2889,28 +2227,7 @@
           "CVE-2025-50181",
           "PYSEC-2026-1999"
         ],
-        "cwe_ids": [
-          "CWE-601"
-        ],
-        "fixed_versions": [
-          "2.5.0"
-        ],
-        "id": "GHSA-pq67-6m6q-mj2v",
-        "modified": "2026-09-10T03:50:25.299291+00:00",
-        "published": "2025-06-18T17:50:00+00:00",
-        "references": [
-          "https://github.com/urllib3/urllib3/security/advisories/GHSA-pq67-6m6q-mj2v",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-50181",
-          "https://github.com/urllib3/urllib3/commit/f05b1329126d5be6de501f9d1e3e36738bc08857",
-          "https://github.com/urllib3/urllib3",
-          "https://github.com/urllib3/urllib3/releases/tag/2.5.0"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:H/I:N/A:N"
-        },
-        "summary": "urllib3 redirects are not disabled when retries are disabled on PoolManager instantiation"
+        "id": "GHSA-pq67-6m6q-mj2v"
       },
       "cvss_score": 5.3,
       "dep_name": "urllib3",
@@ -2973,26 +2290,7 @@
           "CVE-2026-44431",
           "PYSEC-2026-141"
         ],
-        "cwe_ids": [
-          "CWE-200"
-        ],
-        "fixed_versions": [
-          "2.7.0"
-        ],
-        "id": "GHSA-qccp-gfcp-xxvc",
-        "modified": "2026-09-10T03:50:47.272765+00:00",
-        "published": "2026-05-11T14:51:20+00:00",
-        "references": [
-          "https://github.com/urllib3/urllib3/security/advisories/GHSA-qccp-gfcp-xxvc",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-44431",
-          "https://github.com/urllib3/urllib3"
-        ],
-        "severity": {
-          "score": 8.2,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N"
-        },
-        "summary": "urllib3: Sensitive headers forwarded across origins in proxied low-level redirects"
+        "id": "GHSA-qccp-gfcp-xxvc"
       },
       "cvss_score": 8.2,
       "dep_name": "urllib3",
@@ -3055,29 +2353,7 @@
           "CVE-2023-43804",
           "PYSEC-2023-192"
         ],
-        "cwe_ids": [
-          "CWE-200"
-        ],
-        "fixed_versions": [
-          "2.0.6",
-          "1.26.17"
-        ],
-        "id": "GHSA-v845-jxx5-vc9f",
-        "modified": "2026-09-10T03:49:24.753610+00:00",
-        "published": "2023-10-02T23:27:05+00:00",
-        "references": [
-          "https://github.com/urllib3/urllib3/security/advisories/GHSA-v845-jxx5-vc9f",
-          "https://nvd.nist.gov/vuln/detail/CVE-2023-43804",
-          "https://github.com/urllib3/urllib3/commit/01220354d389cd05474713f8c982d05c9b17aafb",
-          "https://github.com/urllib3/urllib3/commit/644124ecd0b6e417c527191f866daa05a5a2056d",
-          "https://github.com/pypa/advisory-database/tree/main/vulns/urllib3/PYSEC-2023-192.yaml"
-        ],
-        "severity": {
-          "score": 7.4,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:H/UI:N/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N"
-        },
-        "summary": "`Cookie` HTTP header isn't stripped on cross-origin redirects"
+        "id": "GHSA-v845-jxx5-vc9f"
       },
       "cvss_score": 7.4,
       "dep_name": "urllib3",
@@ -3140,28 +2416,7 @@
           "CVE-2026-97689",
           "PYSEC-2026-4177"
         ],
-        "cwe_ids": [
-          "CWE-770"
-        ],
-        "fixed_versions": [
-          "2.8.0"
-        ],
-        "id": "GHSA-vxq7-64xx-v4gw",
-        "modified": "2026-10-01T17:55:57.514829+00:00",
-        "published": "2026-09-30T14:46:18+00:00",
-        "references": [
-          "https://github.com/urllib3/urllib3/security/advisories/GHSA-vxq7-64xx-v4gw",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-97689",
-          "https://github.com/urllib3/urllib3/commit/cd770b059b543be29298ea5c52afb0b1b090f5ed",
-          "https://github.com/urllib3/urllib3",
-          "https://github.com/urllib3/urllib3/releases/tag/2.8.0"
-        ],
-        "severity": {
-          "score": 8.9,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:H"
-        },
-        "summary": "urllib3: HTTPResponse.stream()/read_chunked() buffers an unbounded chunk-size line into memory"
+        "id": "GHSA-vxq7-64xx-v4gw"
       },
       "cvss_score": 8.9,
       "dep_name": "urllib3",
@@ -3224,28 +2479,7 @@
           "CVE-2024-5569",
           "PYSEC-2026-2074"
         ],
-        "cwe_ids": [
-          "CWE-400",
-          "CWE-835"
-        ],
-        "fixed_versions": [
-          "3.19.1"
-        ],
-        "id": "GHSA-jfmj-5v4g-7637",
-        "modified": "2026-09-10T03:49:18.747455+00:00",
-        "published": "2024-07-09T00:31:40+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-5569",
-          "https://github.com/jaraco/zipp/commit/fd604bd34f0343472521a36da1fbd22e793e14fd",
-          "https://github.com/jaraco/zipp",
-          "https://huntr.com/bounties/be898306-11f9-46b4-b28c-f4c4aa4ffbae"
-        ],
-        "severity": {
-          "score": 6.9,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N"
-        },
-        "summary": "zipp Denial of Service vulnerability"
+        "id": "GHSA-jfmj-5v4g-7637"
       },
       "cvss_score": 6.9,
       "dep_name": "zipp",
@@ -3307,23 +2541,7 @@
         "aliases": [
           "CVE-2026-54369"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-54369",
-        "modified": "2026-07-01T21:27:56+00:00",
-        "published": "2026-06-29T14:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-54369",
-          "https://www.cve.org/CVERecord?id=CVE-2026-54369",
-          "https://www.openwall.com/lists/oss-security/2026/06/29/1",
-          "https://cgit.git.savannah.nongnu.org/cgit/acl.git/commit/?id=24a227d0ab8576612194f8a56c2314389adc74a5",
-          "https://cgit.git.savannah.nongnu.org/cgit/acl.git/commit/?id=3589787cd589b34bdd9265936e17190b6d3f17d1"
-        ],
-        "severity": {
-          "score": 8.4,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:L/AC:L/AT:N/PR:L/UI:N/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-54369"
       },
       "cvss_score": 8.4,
       "dep_name": "acl",
@@ -3385,23 +2603,7 @@
         "aliases": [
           "CVE-2026-54370"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-54370",
-        "modified": "2026-07-01T21:27:56+00:00",
-        "published": "2026-06-29T14:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-54370",
-          "https://www.cve.org/CVERecord?id=CVE-2026-54370",
-          "https://www.openwall.com/lists/oss-security/2026/06/29/1",
-          "https://cgit.git.savannah.nongnu.org/cgit/acl.git/commit/?id=24a227d0ab8576612194f8a56c2314389adc74a5",
-          "https://cgit.git.savannah.nongnu.org/cgit/acl.git/commit/?id=3589787cd589b34bdd9265936e17190b6d3f17d1"
-        ],
-        "severity": {
-          "score": 7.2,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:L/AC:H/AT:N/PR:L/UI:N/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-54370"
       },
       "cvss_score": 7.2,
       "dep_name": "acl",
@@ -3463,31 +2665,7 @@
         "aliases": [
           "CVE-2026-54371"
         ],
-        "fixed_versions": [
-          "1:2.4.47-1ubuntu1+esm1",
-          "1:2.4.47-2ubuntu0.16.04.1~esm1",
-          "1:2.4.47-2ubuntu0.18.04.1~esm1",
-          "1:2.4.48-5ubuntu0.1~esm1",
-          "1:2.5.1-1ubuntu0.1",
-          "1:2.5.2-1ubuntu0.1",
-          "1:2.5.2-4ubuntu0.1"
-        ],
-        "id": "UBUNTU-CVE-2026-54371",
-        "modified": "2026-08-31T22:15:26.918166+00:00",
-        "published": "2026-06-29T14:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-54371",
-          "https://www.cve.org/CVERecord?id=CVE-2026-54371",
-          "https://www.openwall.com/lists/oss-security/2026/06/29/1",
-          "https://www.vulncheck.com/advisories/attr-symlink-traversal-privilege-escalation-via-getfattr-setfattr",
-          "https://access.redhat.com/security/cve/CVE-2026-54371"
-        ],
-        "severity": {
-          "score": 8.4,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:L/AC:L/AT:N/PR:L/UI:N/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-54371"
       },
       "cvss_score": 8.4,
       "dep_name": "attr",
@@ -3549,31 +2727,7 @@
         "aliases": [
           "CVE-2026-42250"
         ],
-        "fixed_versions": [
-          "1.0.6-5ubuntu0.1~esm3",
-          "1.0.6-8ubuntu0.2+esm1",
-          "1.0.6-8.1ubuntu0.2+esm1",
-          "1.0.8-2ubuntu0.1~esm1",
-          "1.0.8-5ubuntu0.1",
-          "1.0.8-5.1ubuntu0.1",
-          "1.0.8-6ubuntu0.1"
-        ],
-        "id": "UBUNTU-CVE-2026-42250",
-        "modified": "2026-10-17T12:58:16.125511+00:00",
-        "published": "2026-05-28T14:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-42250",
-          "https://www.cve.org/CVERecord?id=CVE-2026-42250",
-          "https://cert.pl/en/posts/2026/05/CVE-2026-42250/",
-          "https://inbox.sourceware.org/bzip2-devel/20260528145407.293768-1-mark@klomp.org/",
-          "https://ubuntu.com/security/notices/USN-8685-1"
-        ],
-        "severity": {
-          "score": 4.8,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:P/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-42250"
       },
       "cvss_score": 4.8,
       "dep_name": "bzip2",
@@ -3635,23 +2789,7 @@
         "aliases": [
           "CVE-2016-2781"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2016-2781",
-        "modified": "2026-08-31T17:15:56.293705+00:00",
-        "published": "2017-02-07T15:59:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2016-2781",
-          "http://seclists.org/oss-sec/2016/q1/452",
-          "https://lore.kernel.org/patchwork/patch/793178/",
-          "https://www.cve.org/CVERecord?id=CVE-2016-2781",
-          "https://mirrors.edge.kernel.org/pub/linux/utils/util-linux/v2.28/v2.28-ReleaseNotes"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.0/AV:L/AC:L/PR:L/UI:N/S:C/C:N/I:H/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2016-2781"
       },
       "cvss_score": 6.5,
       "dep_name": "coreutils",
@@ -3713,23 +2851,7 @@
         "aliases": [
           "CVE-2017-18018"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2017-18018",
-        "modified": "2025-10-24T04:46:38+00:00",
-        "published": "2018-01-04T04:29:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2017-18018",
-          "http://lists.gnu.org/archive/html/coreutils/2017-12/msg00045.html",
-          "http://www.openwall.com/lists/oss-security/2018/01/04/3",
-          "https://lists.gnu.org/archive/html/coreutils/2017-12/msg00072.html",
-          "https://lists.gnu.org/archive/html/coreutils/2017-12/msg00073.html"
-        ],
-        "severity": {
-          "score": 7.1,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2017-18018"
       },
       "cvss_score": 7.1,
       "dep_name": "coreutils",
@@ -3792,27 +2914,7 @@
         "aliases": [
           "CVE-2025-5278"
         ],
-        "fixed_versions": [
-          "8.32-4.1ubuntu1.4",
-          "9.4-3ubuntu6.3",
-          "9.7-3ubuntu2.1"
-        ],
-        "id": "UBUNTU-CVE-2025-5278",
-        "modified": "2026-08-31T17:15:48.819967+00:00",
-        "published": "2025-05-27T21:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2025-5278",
-          "https://www.cve.org/CVERecord?id=CVE-2025-5278",
-          "https://lists.gnu.org/archive/html/bug-coreutils/2025-05/msg00036.html",
-          "https://lists.gnu.org/archive/html/bug-coreutils/2025-05/msg00040.html",
-          "https://www.openwall.com/lists/oss-security/2025/05/27/2"
-        ],
-        "severity": {
-          "score": 4.4,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:L/I:N/A:L"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2025-5278"
       },
       "cvss_score": 4.4,
       "dep_name": "coreutils",
@@ -3874,21 +2976,7 @@
         "aliases": [
           "CVE-2026-102473"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-102473",
-        "modified": "2026-10-17T12:59:45.441182+00:00",
-        "published": "2026-09-29T10:17:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-102473",
-          "https://www.cve.org/CVERecord?id=CVE-2026-102473",
-          "https://access.redhat.com/security/cve/CVE-2026-102473"
-        ],
-        "severity": {
-          "score": 5.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-102473"
       },
       "cvss_score": 5.5,
       "dep_name": "dash",
@@ -3950,21 +3038,7 @@
         "aliases": [
           "CVE-2026-102474"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-102474",
-        "modified": "2026-10-17T12:59:46.086863+00:00",
-        "published": "2026-09-29T10:17:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-102474",
-          "https://www.cve.org/CVERecord?id=CVE-2026-102474",
-          "https://access.redhat.com/security/cve/CVE-2026-102474"
-        ],
-        "severity": {
-          "score": 4.0,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-102474"
       },
       "cvss_score": 4.0,
       "dep_name": "dash",
@@ -4027,24 +3101,7 @@
           "CVE-2026-53910",
           "UBUNTU-CVE-2026-53910"
         ],
-        "fixed_versions": [
-          "1:3.3-1ubuntu0.1~esm1",
-          "1:3.3-3ubuntu0.1~esm1",
-          "1:3.6-1ubuntu0.1~esm1",
-          "1:3.7-3ubuntu0.1~esm1",
-          "1:3.8-0ubuntu2.1",
-          "1:3.10-1ubuntu0.1",
-          "1:3.12-1ubuntu0.1"
-        ],
-        "id": "USN-8692-1",
-        "modified": "2026-08-31T22:26:23.970191+00:00",
-        "published": "2026-08-31T10:27:56+00:00",
-        "references": [
-          "https://ubuntu.com/security/notices/USN-8692-1",
-          "https://ubuntu.com/security/CVE-2026-53910"
-        ],
-        "severity": null,
-        "summary": "diffutils vulnerability"
+        "id": "USN-8692-1"
       },
       "cvss_score": null,
       "dep_name": "diffutils",
@@ -4106,25 +3163,7 @@
         "aliases": [
           "CVE-2025-6297"
         ],
-        "fixed_versions": [
-          "1.21.1ubuntu2.6",
-          "1.22.6ubuntu6.5",
-          "1.22.21ubuntu1"
-        ],
-        "id": "UBUNTU-CVE-2025-6297",
-        "modified": "2026-04-22T16:08:20.375647+00:00",
-        "published": "2025-07-01T17:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2025-6297",
-          "https://www.cve.org/CVERecord?id=CVE-2025-6297",
-          "https://ubuntu.com/security/notices/USN-7768-1"
-        ],
-        "severity": {
-          "score": 8.2,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:L/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2025-6297"
       },
       "cvss_score": 8.2,
       "dep_name": "dpkg",
@@ -4186,21 +3225,7 @@
         "aliases": [
           "CVE-2018-12886"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2018-12886",
-        "modified": "2026-10-17T12:54:52.346068+00:00",
-        "published": "2019-05-22T19:29:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2018-12886",
-          "https://gcc.gnu.org/git/?p=gcc.git;a=commit;h=89d7557202d25a393666ac4c0f7dbdab31e452a2",
-          "https://www.cve.org/CVERecord?id=CVE-2018-12886"
-        ],
-        "severity": {
-          "score": 8.1,
-          "severity": "high",
-          "vector": "CVSS:3.0/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2018-12886"
       },
       "cvss_score": 8.1,
       "dep_name": "gcc-8",
@@ -4262,27 +3287,7 @@
         "aliases": [
           "CVE-2020-13844"
         ],
-        "fixed_versions": [
-          "10.2.0-5ubuntu1~20.04",
-          "9.4.0-1ubuntu1~20.04",
-          "21ubuntu7"
-        ],
-        "id": "UBUNTU-CVE-2020-13844",
-        "modified": "2026-10-17T12:56:14.238239+00:00",
-        "published": "2020-06-08T23:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2020-13844",
-          "http://lists.llvm.org/pipermail/llvm-dev/2020-June/142109.html",
-          "https://developer.arm.com/support/arm-security-updates/speculative-processor-vulnerability",
-          "https://developer.arm.com/support/arm-security-updates/speculative-processor-vulnerability/downloads/straight-line-speculation",
-          "https://developer.arm.com/support/arm-security-updates/speculative-processor-vulnerability/frequently-asked-questions"
-        ],
-        "severity": {
-          "score": 5.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2020-13844"
       },
       "cvss_score": 5.5,
       "dep_name": "gcc-8",
@@ -4344,21 +3349,7 @@
         "aliases": [
           "CVE-2020-23026"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2020-23026",
-        "modified": "2026-10-08T12:50:15.163068+00:00",
-        "published": "2022-01-03T20:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2020-23026",
-          "https://fossies.org/linux/privat/old/dhrystone-2.1.tar.gz/dhry_1.c",
-          "https://www.cve.org/CVERecord?id=CVE-2020-23026"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2020-23026"
       },
       "cvss_score": 7.5,
       "dep_name": "gcc-8",
@@ -4420,35 +3411,7 @@
         "aliases": [
           "CVE-2023-4039"
         ],
-        "fixed_versions": [
-          "10.5.0-1ubuntu1~20.04.1+esm1",
-          "10.5.0-1ubuntu1~22.04.2",
-          "11.4.0-1ubuntu1~22.04.2",
-          "12.3.0-1ubuntu1~22.04.2",
-          "10.5.0-4ubuntu2",
-          "23ubuntu2",
-          "11.4.0-4ubuntu1",
-          "21ubuntu2",
-          "19ubuntu2",
-          "9.5.0-6ubuntu2",
-          "29ubuntu2"
-        ],
-        "id": "UBUNTU-CVE-2023-4039",
-        "modified": "2026-10-17T12:56:46.969078+00:00",
-        "published": "2023-09-12T15:00:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2023-4039",
-          "https://developer.arm.com/Arm%20Security%20Center/GCC%20Stack%20Protector%20Vulnerability%20AArch64",
-          "https://github.com/metaredteam/external-disclosures/security/advisories/GHSA-x7ch-h5rf-w2mf",
-          "https://rtx.meta.security/mitigation/2023/09/12/CVE-2023-4039.html",
-          "https://www.cve.org/CVERecord?id=CVE-2023-4039"
-        ],
-        "severity": {
-          "score": 4.8,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2023-4039"
       },
       "cvss_score": 4.8,
       "dep_name": "gcc-8",
@@ -4511,21 +3474,7 @@
         "aliases": [
           "CVE-2026-102010"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-102010",
-        "modified": "2026-10-22T23:20:50.868103+00:00",
-        "published": "2026-09-28T19:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-102010",
-          "https://www.cve.org/CVERecord?id=CVE-2026-102010",
-          "https://access.redhat.com/security/cve/CVE-2026-102010"
-        ],
-        "severity": {
-          "score": 7.0,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-102010"
       },
       "cvss_score": 7.0,
       "dep_name": "gcc-8",
@@ -4587,22 +3536,7 @@
         "aliases": [
           "CVE-2026-114690"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-114690",
-        "modified": "2026-10-31T03:30:13.047994+00:00",
-        "published": "2026-10-30T00:00:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-114690",
-          "https://www.cve.org/CVERecord?id=CVE-2026-114690",
-          "https://access.redhat.com/security/cve/CVE-2026-114690",
-          "https://bugzilla.redhat.com/show_bug.cgi?id=2478652"
-        ],
-        "severity": {
-          "score": 6.2,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-114690"
       },
       "cvss_score": 6.2,
       "dep_name": "gcc-8",
@@ -4664,22 +3598,7 @@
         "aliases": [
           "CVE-2026-114691"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-114691",
-        "modified": "2026-10-31T03:30:13.026276+00:00",
-        "published": "2026-10-30T00:00:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-114691",
-          "https://www.cve.org/CVERecord?id=CVE-2026-114691",
-          "https://access.redhat.com/security/cve/CVE-2026-114691",
-          "https://bugzilla.redhat.com/show_bug.cgi?id=2478508"
-        ],
-        "severity": {
-          "score": 5.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-114691"
       },
       "cvss_score": 5.9,
       "dep_name": "gcc-8",
@@ -4741,23 +3660,7 @@
         "aliases": [
           "CVE-2026-115455"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-115455",
-        "modified": "2026-10-31T03:30:08.925799+00:00",
-        "published": "2026-10-30T00:00:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-115455",
-          "https://www.cve.org/CVERecord?id=CVE-2026-115455",
-          "https://access.redhat.com/security/cve/CVE-2026-115455",
-          "https://bugzilla.redhat.com/show_bug.cgi?id=2562933",
-          "https://gcc.gnu.org/cgit/gcc/commit/?id=5d419c69ce2e6b86d7da75f18736904885674219"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-115455"
       },
       "cvss_score": 6.5,
       "dep_name": "gcc-8",
@@ -4819,22 +3722,7 @@
         "aliases": [
           "CVE-2026-115456"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-115456",
-        "modified": "2026-10-31T03:30:12.734012+00:00",
-        "published": "2026-10-30T00:00:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-115456",
-          "https://www.cve.org/CVERecord?id=CVE-2026-115456",
-          "https://access.redhat.com/security/cve/CVE-2026-115456",
-          "https://bugzilla.redhat.com/show_bug.cgi?id=2563044"
-        ],
-        "severity": {
-          "score": 3.7,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-115456"
       },
       "cvss_score": 3.7,
       "dep_name": "gcc-8",
@@ -4896,26 +3784,7 @@
         "aliases": [
           "CVE-2026-95619"
         ],
-        "fixed_versions": [
-          "12.4.0-2ubuntu1~24.04",
-          "19ubuntu2.2"
-        ],
-        "id": "UBUNTU-CVE-2026-95619",
-        "modified": "2026-10-17T13:01:23.949203+00:00",
-        "published": "2026-09-22T13:17:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-95619",
-          "https://www.cve.org/CVERecord?id=CVE-2026-95619",
-          "https://access.redhat.com/errata/RHSA-2026:58503",
-          "https://access.redhat.com/errata/RHSA-2026:67275",
-          "https://access.redhat.com/security/cve/CVE-2026-95619"
-        ],
-        "severity": {
-          "score": 7.7,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:H/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-95619"
       },
       "cvss_score": 7.7,
       "dep_name": "gcc-8",
@@ -4977,23 +3846,7 @@
         "aliases": [
           "CVE-2009-5155"
         ],
-        "fixed_versions": [
-          "2.23-0ubuntu11.3"
-        ],
-        "id": "UBUNTU-CVE-2009-5155",
-        "modified": "2026-04-22T08:45:03.248370+00:00",
-        "published": "2019-02-26T02:29:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2009-5155",
-          "https://ubuntu.com/security/notices/USN-4954-1",
-          "https://www.cve.org/CVERecord?id=CVE-2009-5155"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2009-5155"
       },
       "cvss_score": 7.5,
       "dep_name": "glibc",
@@ -5055,21 +3908,7 @@
         "aliases": [
           "CVE-2015-8985"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2015-8985",
-        "modified": "2026-04-22T10:25:37.916103+00:00",
-        "published": "2017-03-20T16:59:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2015-8985",
-          "https://sourceware.org/git/gitweb.cgi?p=glibc.git;a=commitdiff;h=bc680b336971305cb39896b30d72dc7101b62242",
-          "https://www.cve.org/CVERecord?id=CVE-2015-8985"
-        ],
-        "severity": {
-          "score": 5.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2015-8985"
       },
       "cvss_score": 5.9,
       "dep_name": "glibc",
@@ -5131,20 +3970,7 @@
         "aliases": [
           "CVE-2016-10739"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2016-10739",
-        "modified": "2026-04-22T10:31:03.465378+00:00",
-        "published": "2019-01-21T19:29:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2016-10739",
-          "https://www.cve.org/CVERecord?id=CVE-2016-10739"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.0/AV:L/AC:L/PR:L/UI:N/S:U/C:L/I:L/A:L"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2016-10739"
       },
       "cvss_score": 5.3,
       "dep_name": "glibc",
@@ -5206,23 +4032,7 @@
         "aliases": [
           "CVE-2016-20013"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2016-20013",
-        "modified": "2026-09-10T16:30:20.617971+00:00",
-        "published": "2022-02-19T05:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2016-20013",
-          "https://akkadia.org/drepper/SHA-crypt.txt",
-          "https://pthree.org/2018/05/23/do-not-use-sha256crypt-sha512crypt-theyre-dangerous/",
-          "https://twitter.com/solardiz/status/795601240151457793",
-          "https://www.cve.org/CVERecord?id=CVE-2016-20013"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2016-20013"
       },
       "cvss_score": 7.5,
       "dep_name": "glibc",
@@ -5284,21 +4094,7 @@
         "aliases": [
           "CVE-2018-20796"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2018-20796",
-        "modified": "2026-04-22T11:52:56.130300+00:00",
-        "published": "2019-02-26T02:29:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2018-20796",
-          "https://lists.gnu.org/archive/html/bug-gnulib/2019-01/msg00108.html",
-          "https://www.cve.org/CVERecord?id=CVE-2018-20796"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2018-20796"
       },
       "cvss_score": 7.5,
       "dep_name": "glibc",
@@ -5360,20 +4156,7 @@
         "aliases": [
           "CVE-2019-1010022"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2019-1010022",
-        "modified": "2026-04-22T12:06:23.793855+00:00",
-        "published": "2019-07-15T04:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2019-1010022",
-          "https://www.cve.org/CVERecord?id=CVE-2019-1010022"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2019-1010022"
       },
       "cvss_score": 9.8,
       "dep_name": "glibc",
@@ -5435,20 +4218,7 @@
         "aliases": [
           "CVE-2019-1010023"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2019-1010023",
-        "modified": "2026-04-22T12:05:33.953019+00:00",
-        "published": "2019-07-15T04:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2019-1010023",
-          "https://www.cve.org/CVERecord?id=CVE-2019-1010023"
-        ],
-        "severity": {
-          "score": 8.8,
-          "severity": "high",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2019-1010023"
       },
       "cvss_score": 8.8,
       "dep_name": "glibc",
@@ -5511,20 +4281,7 @@
         "aliases": [
           "CVE-2019-1010024"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2019-1010024",
-        "modified": "2026-04-22T12:06:15.007809+00:00",
-        "published": "2019-07-15T04:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2019-1010024",
-          "https://www.cve.org/CVERecord?id=CVE-2019-1010024"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2019-1010024"
       },
       "cvss_score": 5.3,
       "dep_name": "glibc",
@@ -5586,20 +4343,7 @@
         "aliases": [
           "CVE-2019-6488"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2019-6488",
-        "modified": "2026-04-22T12:20:51.000216+00:00",
-        "published": "2019-01-18T19:29:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2019-6488",
-          "https://www.cve.org/CVERecord?id=CVE-2019-6488"
-        ],
-        "severity": {
-          "score": 7.8,
-          "severity": "high",
-          "vector": "CVSS:3.0/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2019-6488"
       },
       "cvss_score": 7.8,
       "dep_name": "glibc",
@@ -5661,22 +4405,7 @@
         "aliases": [
           "CVE-2019-7309"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2019-7309",
-        "modified": "2026-04-22T12:20:47.865362+00:00",
-        "published": "2019-02-03T02:29:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2019-7309",
-          "https://sourceware.org/ml/libc-alpha/2019-02/msg00041.html",
-          "https://sourceware.org/ml/libc-alpha/2019-02/msg00063.html",
-          "https://www.cve.org/CVERecord?id=CVE-2019-7309"
-        ],
-        "severity": {
-          "score": 5.5,
-          "severity": "medium",
-          "vector": "CVSS:3.0/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2019-7309"
       },
       "cvss_score": 5.5,
       "dep_name": "glibc",
@@ -5738,21 +4467,7 @@
         "aliases": [
           "CVE-2021-33574"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2021-33574",
-        "modified": "2026-04-22T12:54:38.050483+00:00",
-        "published": "2021-05-25T22:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2021-33574",
-          "https://sourceware.org/bugzilla/show_bug.cgi?id=27896",
-          "https://www.cve.org/CVERecord?id=CVE-2021-33574"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2021-33574"
       },
       "cvss_score": 9.8,
       "dep_name": "glibc",
@@ -5814,27 +4529,7 @@
         "aliases": [
           "CVE-2023-4806"
         ],
-        "fixed_versions": [
-          "2.23-0ubuntu11.3+esm5",
-          "2.27-3ubuntu1.6+esm1",
-          "2.31-0ubuntu9.14",
-          "2.35-0ubuntu3.5"
-        ],
-        "id": "UBUNTU-CVE-2023-4806",
-        "modified": "2026-04-22T14:14:08.611766+00:00",
-        "published": "2023-09-18T17:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2023-4806",
-          "https://ubuntu.com/security/notices/USN-6541-1",
-          "https://ubuntu.com/security/notices/USN-6541-2",
-          "https://www.cve.org/CVERecord?id=CVE-2023-4806"
-        ],
-        "severity": {
-          "score": 5.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2023-4806"
       },
       "cvss_score": 5.9,
       "dep_name": "glibc",
@@ -5896,30 +4591,7 @@
         "aliases": [
           "CVE-2024-2961"
         ],
-        "fixed_versions": [
-          "2.19-0ubuntu6.15+esm3",
-          "2.23-0ubuntu11.3+esm6",
-          "2.27-3ubuntu1.6+esm2",
-          "2.31-0ubuntu9.15",
-          "2.35-0ubuntu3.7",
-          "2.39-0ubuntu8.1"
-        ],
-        "id": "UBUNTU-CVE-2024-2961",
-        "modified": "2026-04-22T14:48:39.033647+00:00",
-        "published": "2024-04-17T00:00:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2024-2961",
-          "https://www.cve.org/CVERecord?id=CVE-2024-2961",
-          "https://ubuntu.com/security/notices/USN-6737-1",
-          "https://ubuntu.com/security/notices/USN-6737-2",
-          "https://ubuntu.com/security/notices/USN-6762-1"
-        ],
-        "severity": {
-          "score": 7.3,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2024-2961"
       },
       "cvss_score": 7.3,
       "dep_name": "glibc",
@@ -5983,29 +4655,7 @@
         "aliases": [
           "CVE-2024-33599"
         ],
-        "fixed_versions": [
-          "2.23-0ubuntu11.3+esm7",
-          "2.27-3ubuntu1.6+esm3",
-          "2.31-0ubuntu9.16",
-          "2.35-0ubuntu3.8",
-          "2.39-0ubuntu8.2"
-        ],
-        "id": "UBUNTU-CVE-2024-33599",
-        "modified": "2026-04-22T14:50:14.774573+00:00",
-        "published": "2024-05-06T20:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2024-33599",
-          "https://www.cve.org/CVERecord?id=CVE-2024-33599",
-          "https://inbox.sourceware.org/libc-alpha/cover.1713974801.git.fweimer@redhat.com/",
-          "https://www.openwall.com/lists/oss-security/2024/04/24/2",
-          "https://ubuntu.com/security/notices/USN-6804-1"
-        ],
-        "severity": {
-          "score": 8.1,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2024-33599"
       },
       "cvss_score": 8.1,
       "dep_name": "glibc",
@@ -6067,30 +4717,7 @@
         "aliases": [
           "CVE-2025-0395"
         ],
-        "fixed_versions": [
-          "2.19-0ubuntu6.15+esm4",
-          "2.23-0ubuntu11.3+esm8",
-          "2.27-3ubuntu1.6+esm4",
-          "2.31-0ubuntu9.17",
-          "2.35-0ubuntu3.9",
-          "2.39-0ubuntu8.4"
-        ],
-        "id": "UBUNTU-CVE-2025-0395",
-        "modified": "2026-04-22T15:28:12.422655+00:00",
-        "published": "2025-01-22T13:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2025-0395",
-          "https://www.cve.org/CVERecord?id=CVE-2025-0395",
-          "https://sourceware.org/git/?p=glibc.git;a=blob;f=advisories/GLIBC-SA-2025-0001",
-          "https://sourceware.org/pipermail/libc-announce/2025/000044.html",
-          "https://www.openwall.com/lists/oss-security/2025/01/22/4"
-        ],
-        "severity": {
-          "score": 6.2,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2025-0395"
       },
       "cvss_score": 6.2,
       "dep_name": "glibc",
@@ -6153,30 +4780,7 @@
         "aliases": [
           "CVE-2025-15281"
         ],
-        "fixed_versions": [
-          "2.23-0ubuntu11.3+esm9",
-          "2.27-3ubuntu1.6+esm6",
-          "2.31-0ubuntu9.18+esm1",
-          "2.35-0ubuntu3.13",
-          "2.39-0ubuntu8.7",
-          "2.42-0ubuntu3.1",
-          "2.42-2ubuntu5"
-        ],
-        "id": "UBUNTU-CVE-2025-15281",
-        "modified": "2026-05-20T16:20:25.786327+00:00",
-        "published": "2026-01-20T14:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2025-15281",
-          "https://www.cve.org/CVERecord?id=CVE-2025-15281",
-          "https://www.openwall.com/lists/oss-security/2026/01/20/3",
-          "https://ubuntu.com/security/notices/USN-8005-1"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2025-15281"
       },
       "cvss_score": 7.5,
       "dep_name": "glibc",
@@ -6239,27 +4843,7 @@
         "aliases": [
           "CVE-2025-4802"
         ],
-        "fixed_versions": [
-          "2.27-3ubuntu1.6+esm5",
-          "2.31-0ubuntu9.18",
-          "2.35-0ubuntu3.10"
-        ],
-        "id": "UBUNTU-CVE-2025-4802",
-        "modified": "2026-04-22T16:03:42.030514+00:00",
-        "published": "2025-05-16T20:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2025-4802",
-          "https://www.cve.org/CVERecord?id=CVE-2025-4802",
-          "https://sourceware.org/bugzilla/show_bug.cgi?id=32976",
-          "https://www.openwall.com/lists/oss-security/2025/05/17/2",
-          "http://www.openwall.com/lists/oss-security/2025/05/16/7"
-        ],
-        "severity": {
-          "score": 7.8,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2025-4802"
       },
       "cvss_score": 7.8,
       "dep_name": "glibc",
@@ -6321,22 +4905,7 @@
         "aliases": [
           "CVE-2026-18374"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-18374",
-        "modified": "2026-09-10T16:30:19.837164+00:00",
-        "published": "2026-08-27T20:17:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-18374",
-          "https://www.cve.org/CVERecord?id=CVE-2026-18374",
-          "https://sourceware.org/git/?p=glibc.git;a=blob;f=advisories/GLIBC-SA-2026-0015",
-          "http://www.openwall.com/lists/oss-security/2026/08/27/6"
-        ],
-        "severity": {
-          "score": 4.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:L"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-18374"
       },
       "cvss_score": 4.9,
       "dep_name": "glibc",
@@ -6398,26 +4967,7 @@
         "aliases": [
           "CVE-2026-19542"
         ],
-        "fixed_versions": [
-          "2.35-0ubuntu3.15",
-          "2.39-0ubuntu8.9",
-          "2.43-2ubuntu2.4"
-        ],
-        "id": "UBUNTU-CVE-2026-19542",
-        "modified": "2026-09-16T14:01:42.300086+00:00",
-        "published": "2026-08-27T00:00:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-19542",
-          "https://www.cve.org/CVERecord?id=CVE-2026-19542",
-          "https://ubuntu.com/security/notices/USN-8737-1",
-          "https://ubuntu.com/security/notices/USN-8737-2"
-        ],
-        "severity": {
-          "score": 5.6,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:L"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-19542"
       },
       "cvss_score": 5.6,
       "dep_name": "glibc",
@@ -6479,26 +5029,7 @@
         "aliases": [
           "CVE-2026-4046"
         ],
-        "fixed_versions": [
-          "2.35-0ubuntu3.14",
-          "2.39-0ubuntu8.8",
-          "2.43-2ubuntu2.3"
-        ],
-        "id": "UBUNTU-CVE-2026-4046",
-        "modified": "2026-07-27T21:00:19.263666+00:00",
-        "published": "2026-03-30T18:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-4046",
-          "https://www.cve.org/CVERecord?id=CVE-2026-4046",
-          "https://sourceware.org/git/?p=glibc.git;a=blob_plain;f=advisories/GLIBC-SA-2026-0007",
-          "https://ubuntu.com/security/notices/USN-8611-1"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-4046"
       },
       "cvss_score": 7.5,
       "dep_name": "glibc",
@@ -6561,27 +5092,7 @@
         "aliases": [
           "CVE-2026-5435"
         ],
-        "fixed_versions": [
-          "2.35-0ubuntu3.14",
-          "2.39-0ubuntu8.8",
-          "2.43-2ubuntu2.3"
-        ],
-        "id": "UBUNTU-CVE-2026-5435",
-        "modified": "2026-07-27T21:00:20.628931+00:00",
-        "published": "2026-04-28T13:19:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-5435",
-          "https://www.cve.org/CVERecord?id=CVE-2026-5435",
-          "https://sourceware.org/git/?p=glibc.git;a=blob_plain;f=advisories/GLIBC-SA-2026-0011",
-          "https://inbox.sourceware.org/libc-alpha/cover.1777546194.git.fweimer@redhat.com/",
-          "https://ubuntu.com/security/notices/USN-8611-1"
-        ],
-        "severity": {
-          "score": 7.3,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:L"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-5435"
       },
       "cvss_score": 7.3,
       "dep_name": "glibc",
@@ -6643,26 +5154,7 @@
         "aliases": [
           "CVE-2026-5450"
         ],
-        "fixed_versions": [
-          "2.35-0ubuntu3.14",
-          "2.39-0ubuntu8.8",
-          "2.43-2ubuntu2.3"
-        ],
-        "id": "UBUNTU-CVE-2026-5450",
-        "modified": "2026-07-27T21:00:20.716923+00:00",
-        "published": "2026-04-20T21:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-5450",
-          "https://www.cve.org/CVERecord?id=CVE-2026-5450",
-          "https://sourceware.org/git/?p=glibc.git;a=blob_plain;f=advisories/GLIBC-SA-2026-0009",
-          "https://ubuntu.com/security/notices/USN-8611-1"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-5450"
       },
       "cvss_score": 9.8,
       "dep_name": "glibc",
@@ -6725,26 +5217,7 @@
         "aliases": [
           "CVE-2026-5928"
         ],
-        "fixed_versions": [
-          "2.35-0ubuntu3.14",
-          "2.39-0ubuntu8.8",
-          "2.43-2ubuntu2.3"
-        ],
-        "id": "UBUNTU-CVE-2026-5928",
-        "modified": "2026-07-27T21:00:20.915415+00:00",
-        "published": "2026-04-20T21:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-5928",
-          "https://www.cve.org/CVERecord?id=CVE-2026-5928",
-          "https://sourceware.org/git/?p=glibc.git;a=blob_plain;f=advisories/GLIBC-SA-2026-0010",
-          "https://ubuntu.com/security/notices/USN-8611-1"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-5928"
       },
       "cvss_score": 7.5,
       "dep_name": "glibc",
@@ -6807,27 +5280,7 @@
         "aliases": [
           "CVE-2026-6238"
         ],
-        "fixed_versions": [
-          "2.35-0ubuntu3.14",
-          "2.39-0ubuntu8.8",
-          "2.43-2ubuntu2.3"
-        ],
-        "id": "UBUNTU-CVE-2026-6238",
-        "modified": "2026-07-27T21:00:21.426627+00:00",
-        "published": "2026-04-28T19:37:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-6238",
-          "https://www.cve.org/CVERecord?id=CVE-2026-6238",
-          "https://sourceware.org/git/?p=glibc.git;a=blob_plain;f=advisories/GLIBC-SA-2026-0012",
-          "https://inbox.sourceware.org/libc-alpha/cover.1777546194.git.fweimer@redhat.com/",
-          "https://ubuntu.com/security/notices/USN-8611-1"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:L"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-6238"
       },
       "cvss_score": 6.5,
       "dep_name": "glibc",
@@ -6889,27 +5342,7 @@
         "aliases": [
           "CVE-2026-6368"
         ],
-        "fixed_versions": [
-          "2.35-0ubuntu3.15",
-          "2.39-0ubuntu8.9",
-          "2.43-2ubuntu2.4"
-        ],
-        "id": "UBUNTU-CVE-2026-6368",
-        "modified": "2026-09-10T16:41:40.271478+00:00",
-        "published": "2026-08-10T19:17:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-6368",
-          "https://www.cve.org/CVERecord?id=CVE-2026-6368",
-          "https://sourceware.org/git/?p=glibc.git;a=blob;f=advisories/GLIBC-SA-2026-0014",
-          "https://ubuntu.com/security/notices/USN-8737-1",
-          "https://ubuntu.com/security/notices/USN-8737-2"
-        ],
-        "severity": {
-          "score": 2.1,
-          "severity": "low",
-          "vector": "CVSS:4.0/AV:L/AC:H/AT:P/PR:N/UI:N/VC:L/VI:L/VA:L/SC:L/SI:L/SA:L/S:P/AU:Y/U:Green"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-6368"
       },
       "cvss_score": 2.1,
       "dep_name": "glibc",
@@ -6971,27 +5404,7 @@
         "aliases": [
           "CVE-2026-6791"
         ],
-        "fixed_versions": [
-          "2.35-0ubuntu3.15",
-          "2.39-0ubuntu8.9",
-          "2.43-2ubuntu2.4"
-        ],
-        "id": "UBUNTU-CVE-2026-6791",
-        "modified": "2026-09-10T16:41:40.299775+00:00",
-        "published": "2026-08-10T19:17:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-6791",
-          "https://www.cve.org/CVERecord?id=CVE-2026-6791",
-          "https://sourceware.org/git/?p=glibc.git;a=blob;f=advisories/GLIBC-SA-2026-0013",
-          "https://ubuntu.com/security/notices/USN-8737-1",
-          "https://ubuntu.com/security/notices/USN-8737-2"
-        ],
-        "severity": {
-          "score": 6.6,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:H/AT:N/PR:N/UI:N/VC:L/VI:L/VA:H/SC:N/SI:L/SA:H/E:U"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-6791"
       },
       "cvss_score": 6.6,
       "dep_name": "glibc",
@@ -7053,26 +5466,7 @@
         "aliases": [
           "CVE-2026-77117"
         ],
-        "fixed_versions": [
-          "2.35-0ubuntu3.15",
-          "2.39-0ubuntu8.9",
-          "2.43-2ubuntu2.4"
-        ],
-        "id": "UBUNTU-CVE-2026-77117",
-        "modified": "2026-09-24T02:00:46.627022+00:00",
-        "published": "2026-08-27T00:00:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-77117",
-          "https://www.cve.org/CVERecord?id=CVE-2026-77117",
-          "https://ubuntu.com/security/notices/USN-8737-1",
-          "https://ubuntu.com/security/notices/USN-8737-2"
-        ],
-        "severity": {
-          "score": 5.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-77117"
       },
       "cvss_score": 5.9,
       "dep_name": "glibc",
@@ -7134,26 +5528,7 @@
         "aliases": [
           "CVE-2026-80489"
         ],
-        "fixed_versions": [
-          "2.35-0ubuntu3.15",
-          "2.39-0ubuntu8.9",
-          "2.43-2ubuntu2.4"
-        ],
-        "id": "UBUNTU-CVE-2026-80489",
-        "modified": "2026-09-24T02:01:00.347236+00:00",
-        "published": "2026-08-31T00:00:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-80489",
-          "https://www.cve.org/CVERecord?id=CVE-2026-80489",
-          "https://ubuntu.com/security/notices/USN-8737-1",
-          "https://ubuntu.com/security/notices/USN-8737-2"
-        ],
-        "severity": {
-          "score": 5.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-80489"
       },
       "cvss_score": 5.9,
       "dep_name": "glibc",
@@ -7215,22 +5590,7 @@
         "aliases": [
           "CVE-2026-8674"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-8674",
-        "modified": "2026-09-24T02:00:39.581152+00:00",
-        "published": "2026-09-17T17:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-8674",
-          "https://www.cve.org/CVERecord?id=CVE-2026-8674",
-          "https://www.openwall.com/lists/oss-security/2026/09/17/4",
-          "https://sourceware.org/git/?p=glibc.git;a=blob;f=advisories/GLIBC-SA-2026-0021"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:A/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-8674"
       },
       "cvss_score": 5.3,
       "dep_name": "glibc",
@@ -7292,21 +5652,7 @@
         "aliases": [
           "CVE-2026-86805"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-86805",
-        "modified": "2026-09-25T00:41:26.805780+00:00",
-        "published": "2026-09-22T16:18:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-86805",
-          "https://www.cve.org/CVERecord?id=CVE-2026-86805",
-          "https://sourceware.org/git/?p=glibc.git;a=blob;f=advisories/GLIBC-SA-2026-0022"
-        ],
-        "severity": {
-          "score": 6.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:R/S:U/C:H/I:H/A:L"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-86805"
       },
       "cvss_score": 6.3,
       "dep_name": "glibc",
@@ -7368,22 +5714,7 @@
         "aliases": [
           "CVE-2026-89092"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-89092",
-        "modified": "2026-09-25T00:41:27.846316+00:00",
-        "published": "2026-09-11T02:18:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-89092",
-          "https://www.cve.org/CVERecord?id=CVE-2026-89092",
-          "https://sourceware.org/git/?p=glibc.git;a=blob;f=advisories/GLIBC-SA-2026-0016",
-          "http://www.openwall.com/lists/oss-security/2026/09/11/2"
-        ],
-        "severity": {
-          "score": 4.2,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:A/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:L"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-89092"
       },
       "cvss_score": 4.2,
       "dep_name": "glibc",
@@ -7445,21 +5776,7 @@
         "aliases": [
           "CVE-2026-95818"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-95818",
-        "modified": "2026-09-25T00:40:28.014244+00:00",
-        "published": "2026-09-22T17:17:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-95818",
-          "https://www.cve.org/CVERecord?id=CVE-2026-95818",
-          "https://sourceware.org/git/?p=glibc.git;a=blob;f=advisories/GLIBC-SA-2026-0023"
-        ],
-        "severity": {
-          "score": 3.6,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:L/I:L/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-95818"
       },
       "cvss_score": 3.6,
       "dep_name": "glibc",
@@ -7521,22 +5838,7 @@
         "aliases": [
           "CVE-2026-97399"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-97399",
-        "modified": "2026-10-01T19:11:28.548573+00:00",
-        "published": "2026-09-28T16:17:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-97399",
-          "https://www.cve.org/CVERecord?id=CVE-2026-97399",
-          "https://sourceware.org/git/?p=glibc.git;a=blob;f=advisories/GLIBC-SA-2026-0024",
-          "http://www.openwall.com/lists/oss-security/2026/09/28/7"
-        ],
-        "severity": {
-          "score": 3.7,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-97399"
       },
       "cvss_score": 3.7,
       "dep_name": "glibc",
@@ -7598,22 +5900,7 @@
         "aliases": [
           "CVE-2022-3219"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2022-3219",
-        "modified": "2026-09-03T16:01:18.582757+00:00",
-        "published": "2023-02-23T20:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2022-3219",
-          "https://access.redhat.com/security/cve/CVE-2022-3219",
-          "https://marc.info/?l=oss-security&m=165696590211434&w=4",
-          "https://www.cve.org/CVERecord?id=CVE-2022-3219"
-        ],
-        "severity": {
-          "score": 3.3,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2022-3219"
       },
       "cvss_score": 3.3,
       "dep_name": "gnupg2",
@@ -7675,30 +5962,7 @@
         "aliases": [
           "CVE-2025-30258"
         ],
-        "fixed_versions": [
-          "2.1.11-6ubuntu2.1+esm2",
-          "2.2.4-1ubuntu1.6+esm1",
-          "2.2.19-3ubuntu2.4",
-          "2.2.27-3ubuntu2.3",
-          "2.4.4-2ubuntu17.2",
-          "2.4.4-2ubuntu23"
-        ],
-        "id": "UBUNTU-CVE-2025-30258",
-        "modified": "2026-02-04T04:30:17.426918+00:00",
-        "published": "2025-03-19T20:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2025-30258",
-          "https://www.cve.org/CVERecord?id=CVE-2025-30258",
-          "https://lists.gnupg.org/pipermail/gnupg-announce/2025q1/000491.html",
-          "https://ubuntu.com/security/notices/USN-7412-1",
-          "https://ubuntu.com/security/notices/USN-7412-3"
-        ],
-        "severity": {
-          "score": 4.7,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2025-30258"
       },
       "cvss_score": 4.7,
       "dep_name": "gnupg2",
@@ -7760,32 +6024,7 @@
         "aliases": [
           "CVE-2025-68973"
         ],
-        "fixed_versions": [
-          "1.4.16-1ubuntu2.6+esm2",
-          "1.4.20-1ubuntu3.3+esm3",
-          "2.1.11-6ubuntu2.1+esm3",
-          "2.2.4-1ubuntu1.6+esm2",
-          "2.2.19-3ubuntu2.5+esm1",
-          "2.2.27-3ubuntu2.5",
-          "2.4.4-2ubuntu17.4",
-          "2.4.8-2ubuntu2.1"
-        ],
-        "id": "UBUNTU-CVE-2025-68973",
-        "modified": "2026-02-05T00:30:28.335358+00:00",
-        "published": "2025-12-28T17:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2025-68973",
-          "https://www.cve.org/CVERecord?id=CVE-2025-68973",
-          "https://gpg.fail/memcpy",
-          "https://www.openwall.com/lists/oss-security/2025/12/28/5",
-          "https://github.com/gpg/gnupg/commit/115d138ba599328005c5321c0ef9f00355838ca9"
-        ],
-        "severity": {
-          "score": 7.8,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:N/UI:N/S:C/C:H/I:H/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2025-68973"
       },
       "cvss_score": 7.8,
       "dep_name": "gnupg2",
@@ -7848,21 +6087,7 @@
         "aliases": [
           "CVE-2026-105712"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-105712",
-        "modified": "2026-10-17T12:59:47.832348+00:00",
-        "published": "2026-10-05T19:17:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-105712",
-          "https://www.cve.org/CVERecord?id=CVE-2026-105712",
-          "https://lists.gnupg.org/pipermail/gnupg-announce/2026q2/000504.html"
-        ],
-        "severity": {
-          "score": 3.6,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:N/UI:R/S:U/C:N/I:L/A:L"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-105712"
       },
       "cvss_score": 3.6,
       "dep_name": "gnupg2",
@@ -7924,17 +6149,7 @@
         "aliases": [
           "CVE-2026-118131"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-118131",
-        "modified": "2026-10-28T20:17:34.813245+00:00",
-        "published": "2026-10-27T18:17:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-118131",
-          "https://www.cve.org/CVERecord?id=CVE-2026-118131",
-          "https://atos.net/en/lp/cybershield/a-tale-of-several-hijacks-and-what-it-taught-me-about-runtime-driven-testing"
-        ],
-        "severity": null,
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-118131"
       },
       "cvss_score": null,
       "dep_name": "gnupg2",
@@ -7996,21 +6211,7 @@
         "aliases": [
           "CVE-2018-16868"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2018-16868",
-        "modified": "2026-07-22T11:33:20.657886+00:00",
-        "published": "2018-12-03T14:29:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2018-16868",
-          "http://cat.eyalro.net/",
-          "https://www.cve.org/CVERecord?id=CVE-2018-16868"
-        ],
-        "severity": {
-          "score": 5.6,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:P/AC:H/PR:L/UI:N/S:C/C:H/I:L/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2018-16868"
       },
       "cvss_score": 5.6,
       "dep_name": "gnutls28",
@@ -8072,25 +6273,7 @@
         "aliases": [
           "CVE-2023-0361"
         ],
-        "fixed_versions": [
-          "3.6.13-2ubuntu1.8",
-          "3.7.3-4ubuntu1.2"
-        ],
-        "id": "UBUNTU-CVE-2023-0361",
-        "modified": "2026-07-14T23:30:12.735263+00:00",
-        "published": "2023-02-15T18:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2023-0361",
-          "https://gnutls.org/security-new.html#GNUTLS-SA-2020-07-14",
-          "https://ubuntu.com/security/notices/USN-5901-1",
-          "https://www.cve.org/CVERecord?id=CVE-2023-0361"
-        ],
-        "severity": {
-          "score": 7.4,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2023-0361"
       },
       "cvss_score": 7.4,
       "dep_name": "gnutls28",
@@ -8153,27 +6336,7 @@
         "aliases": [
           "CVE-2023-5981"
         ],
-        "fixed_versions": [
-          "3.5.18-1ubuntu1.6+esm1",
-          "3.6.13-2ubuntu1.9",
-          "3.7.3-4ubuntu1.3"
-        ],
-        "id": "UBUNTU-CVE-2023-5981",
-        "modified": "2026-07-14T23:30:12.979904+00:00",
-        "published": "2023-11-17T00:00:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2023-5981",
-          "https://lists.gnupg.org/pipermail/gnutls-help/2023-November/004837.html",
-          "https://gnutls.org/security-new.html#GNUTLS-SA-2023-10-23",
-          "https://ubuntu.com/security/notices/USN-6499-1",
-          "https://ubuntu.com/security/notices/USN-6499-2"
-        ],
-        "severity": {
-          "score": 5.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2023-5981"
       },
       "cvss_score": 5.9,
       "dep_name": "gnutls28",
@@ -8235,28 +6398,7 @@
         "aliases": [
           "CVE-2024-0553"
         ],
-        "fixed_versions": [
-          "3.5.18-1ubuntu1.6+esm3",
-          "3.6.13-2ubuntu1.10",
-          "3.7.3-4ubuntu1.4",
-          "3.8.3-1ubuntu1"
-        ],
-        "id": "UBUNTU-CVE-2024-0553",
-        "modified": "2026-07-14T23:30:12.980666+00:00",
-        "published": "2024-01-16T12:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2024-0553",
-          "https://gnutls.org/security-new.html#GNUTLS-SA-2024-01-14",
-          "https://lists.gnupg.org/pipermail/gnutls-help/2024-January/004841.html",
-          "https://access.redhat.com/security/cve/CVE-2024-0553",
-          "https://ubuntu.com/security/notices/USN-6593-1"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2024-0553"
       },
       "cvss_score": 7.5,
       "dep_name": "gnutls28",
@@ -8319,31 +6461,7 @@
         "aliases": [
           "CVE-2025-32988"
         ],
-        "fixed_versions": [
-          "3.5.18-1ubuntu1.6+esm2",
-          "3.6.13-2ubuntu1.12+esm1",
-          "3.7.3-4ubuntu1.7",
-          "3.7.3-4ubuntu1.7+Fips1",
-          "3.8.3-1.1ubuntu3.4",
-          "3.8.3-1.1ubuntu3.4+Fips1",
-          "3.8.9-3ubuntu1"
-        ],
-        "id": "UBUNTU-CVE-2025-32988",
-        "modified": "2026-04-22T15:42:43.907567+00:00",
-        "published": "2025-07-10T08:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2025-32988",
-          "https://www.cve.org/CVERecord?id=CVE-2025-32988",
-          "https://lists.gnupg.org/pipermail/gnutls-help/2025-July/004883.html",
-          "https://access.redhat.com/security/cve/CVE-2025-32988",
-          "https://ubuntu.com/security/notices/USN-7635-1"
-        ],
-        "severity": {
-          "score": 8.2,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2025-32988"
       },
       "cvss_score": 8.2,
       "dep_name": "gnutls28",
@@ -8405,32 +6523,7 @@
         "aliases": [
           "CVE-2026-42011"
         ],
-        "fixed_versions": [
-          "3.5.18-1ubuntu1.6+esm4",
-          "3.6.13-2ubuntu1.12+esm3",
-          "3.7.3-4ubuntu1.9",
-          "3.7.3-4ubuntu1.9+Fips1",
-          "3.8.3-1.1ubuntu3.6",
-          "3.8.3-1.1ubuntu3.6+Fips1.2",
-          "3.8.9-3ubuntu2.2",
-          "3.8.12-2ubuntu1.1"
-        ],
-        "id": "UBUNTU-CVE-2026-42011",
-        "modified": "2026-07-14T23:44:43.206224+00:00",
-        "published": "2026-05-07T15:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-42011",
-          "https://www.cve.org/CVERecord?id=CVE-2026-42011",
-          "https://www.gnutls.org/security-new.html#GNUTLS-SA-2026-04-29-6",
-          "https://ubuntu.com/security/notices/USN-8284-1",
-          "https://ubuntu.com/security/notices/USN-8539-1"
-        ],
-        "severity": {
-          "score": 7.4,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-42011"
       },
       "cvss_score": 7.4,
       "dep_name": "gnutls28",
@@ -8492,22 +6585,7 @@
         "aliases": [
           "CVE-2026-67693"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-67693",
-        "modified": "2026-10-22T10:30:11.328343+00:00",
-        "published": "2026-10-08T19:18:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-67693",
-          "https://www.cve.org/CVERecord?id=CVE-2026-67693",
-          "https://gist.github.com/lkloliver/6fbfc191bc6163942c8017551ac3f238",
-          "https://gitlab.com/gnutls/gnutls/-/blob/3.8.13/lib/x509/verify.c#L1119-1178"
-        ],
-        "severity": {
-          "score": 3.7,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-67693"
       },
       "cvss_score": 3.7,
       "dep_name": "gnutls28",
@@ -8569,22 +6647,7 @@
         "aliases": [
           "CVE-2026-88647"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-88647",
-        "modified": "2026-10-22T10:30:12.616809+00:00",
-        "published": "2026-10-08T17:17:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-88647",
-          "https://www.cve.org/CVERecord?id=CVE-2026-88647",
-          "https://gist.github.com/lkloliver/f98ec3de1a871fdfc02b70b8b9ba7642",
-          "https://gitlab.com/gnutls/gnutls/-/issues/1802"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:H/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-88647"
       },
       "cvss_score": 6.5,
       "dep_name": "gnutls28",
@@ -8646,23 +6709,7 @@
         "aliases": [
           "CVE-2026-88648"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-88648",
-        "modified": "2026-10-28T17:43:56+00:00",
-        "published": "2026-10-08T19:20:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-88648",
-          "https://www.cve.org/CVERecord?id=CVE-2026-88648",
-          "https://github.com/lkloliver/poc/tree/main/CVE-2026-88648",
-          "https://gist.github.com/lkloliver/1f2a97cb8d0b31aa27b6bd0354358d7d",
-          "https://www.rfc-editor.org/rfc/rfc5280#section-4.2.1.10"
-        ],
-        "severity": {
-          "score": 3.7,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-88648"
       },
       "cvss_score": 3.7,
       "dep_name": "gnutls28",
@@ -8724,23 +6771,7 @@
         "aliases": [
           "CVE-2026-95184"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-95184",
-        "modified": "2026-10-22T10:30:18.588894+00:00",
-        "published": "2026-10-08T18:18:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-95184",
-          "https://www.cve.org/CVERecord?id=CVE-2026-95184",
-          "http://gnutls.com",
-          "https://evil.com",
-          "https://gist.github.com/lkloliver/0c8b47fa75a0958fa88587665b82ae15"
-        ],
-        "severity": {
-          "score": 5.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-95184"
       },
       "cvss_score": 5.9,
       "dep_name": "gnutls28",
@@ -8802,23 +6833,7 @@
         "aliases": [
           "CVE-2026-95209"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-95209",
-        "modified": "2026-10-22T10:30:18.277319+00:00",
-        "published": "2026-10-08T19:20:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-95209",
-          "https://www.cve.org/CVERecord?id=CVE-2026-95209",
-          "http://gnutls.com",
-          "https://evil.com",
-          "https://gist.github.com/lkloliver/8e4498311aff18e2077010e412043e18"
-        ],
-        "severity": {
-          "score": 5.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-95209"
       },
       "cvss_score": 5.9,
       "dep_name": "gnutls28",
@@ -8880,23 +6895,7 @@
         "aliases": [
           "CVE-2026-95210"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-95210",
-        "modified": "2026-10-22T10:30:17.526395+00:00",
-        "published": "2026-10-08T18:18:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-95210",
-          "https://www.cve.org/CVERecord?id=CVE-2026-95210",
-          "http://gnutls.com",
-          "https://gist.github.com/lkloliver/4aad23689202720c4068f43b3c6069c7",
-          "https://github.com/lkloliver/poc/tree/main/CVE-2026-95210"
-        ],
-        "severity": {
-          "score": 4.8,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-95210"
       },
       "cvss_score": 4.8,
       "dep_name": "gnutls28",
@@ -8958,31 +6957,7 @@
         "aliases": [
           "CVE-2026-41992"
         ],
-        "fixed_versions": [
-          "1.6-3ubuntu1+esm2",
-          "1.6-4ubuntu1+esm2",
-          "1.6-5ubuntu1.2+esm1",
-          "1.10-0ubuntu4.1+esm1",
-          "1.10-4ubuntu4.2",
-          "1.12-1ubuntu3.2",
-          "1.14-1~exp2ubuntu1.1"
-        ],
-        "id": "UBUNTU-CVE-2026-41992",
-        "modified": "2026-09-23T14:41:41.556540+00:00",
-        "published": "2026-06-29T12:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-41992",
-          "https://www.cve.org/CVERecord?id=CVE-2026-41992",
-          "https://cert.pl/en/posts/2026/04/CVE-2026-41991/",
-          "https://www.gnu.org/software/gzip/",
-          "https://ubuntu.com/security/notices/USN-8512-1"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-41992"
       },
       "cvss_score": 7.5,
       "dep_name": "gzip",
@@ -9044,29 +7019,7 @@
         "aliases": [
           "CVE-2024-2236"
         ],
-        "fixed_versions": [
-          "1.9.4-3ubuntu3.3",
-          "1.9.4-3ubuntu3.3+Fips1",
-          "1.10.3-2ubuntu0.2",
-          "1.12.0-2ubuntu1.1+Fips2",
-          "1.12.0-2ubuntu1.1"
-        ],
-        "id": "UBUNTU-CVE-2024-2236",
-        "modified": "2026-09-25T17:45:09.209245+00:00",
-        "published": "2024-03-06T22:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2024-2236",
-          "https://access.redhat.com/security/cve/CVE-2024-2236",
-          "https://lists.gnupg.org/pipermail/gcrypt-devel/2024-March/005607.html",
-          "https://github.com/tomato42/marvin-toolkit/tree/master/example/libgcrypt",
-          "https://dev.gnupg.org/T7136"
-        ],
-        "severity": {
-          "score": 5.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2024-2236"
       },
       "cvss_score": 5.9,
       "dep_name": "libgcrypt20",
@@ -9128,29 +7081,7 @@
         "aliases": [
           "CVE-2026-41989"
         ],
-        "fixed_versions": [
-          "1.9.4-3ubuntu3.2",
-          "1.9.4-3ubuntu3.2+Fips1",
-          "1.10.3-2ubuntu0.1",
-          "1.12.0-2ubuntu0.1~Fips1~rc11",
-          "1.11.0-7ubuntu0.1",
-          "1.12.0-2ubuntu0.1"
-        ],
-        "id": "UBUNTU-CVE-2026-41989",
-        "modified": "2026-08-31T17:16:14.824575+00:00",
-        "published": "2026-04-23T05:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-41989",
-          "https://www.cve.org/CVERecord?id=CVE-2026-41989",
-          "https://www.openwall.com/lists/oss-security/2026/04/21/1",
-          "https://ubuntu.com/security/notices/USN-8319-1"
-        ],
-        "severity": {
-          "score": 6.7,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-41989"
       },
       "cvss_score": 6.7,
       "dep_name": "libgcrypt20",
@@ -9212,23 +7143,7 @@
         "aliases": [
           "CVE-2018-1000654"
         ],
-        "fixed_versions": [
-          "4.7-3ubuntu0.16.04.3+esm2"
-        ],
-        "id": "UBUNTU-CVE-2018-1000654",
-        "modified": "2026-04-22T11:39:27.799743+00:00",
-        "published": "2018-08-20T19:31:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2018-1000654",
-          "https://ubuntu.com/security/notices/USN-5352-1",
-          "https://www.cve.org/CVERecord?id=CVE-2018-1000654"
-        ],
-        "severity": {
-          "score": 5.5,
-          "severity": "medium",
-          "vector": "CVSS:3.0/AV:L/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2018-1000654"
       },
       "cvss_score": 5.5,
       "dep_name": "libtasn1-6",
@@ -9290,29 +7205,7 @@
         "aliases": [
           "CVE-2021-46848"
         ],
-        "fixed_versions": [
-          "3.4-3ubuntu0.6+esm1",
-          "4.7-3ubuntu0.16.04.3+esm3",
-          "4.13-2ubuntu0.1~esm1",
-          "4.16.0-2ubuntu0.1+esm1",
-          "4.18.0-4ubuntu0.2"
-        ],
-        "id": "UBUNTU-CVE-2021-46848",
-        "modified": "2026-04-22T13:00:38.989006+00:00",
-        "published": "2022-10-25T00:00:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2021-46848",
-          "https://ubuntu.com/security/notices/USN-5707-1",
-          "https://www.cve.org/CVERecord?id=CVE-2021-46848",
-          "https://ubuntu.com/security/notices/USN-7954-1",
-          "https://ubuntu.com/security/notices/USN-7954-2"
-        ],
-        "severity": {
-          "score": 9.1,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2021-46848"
       },
       "cvss_score": 9.1,
       "dep_name": "libtasn1-6",
@@ -9374,27 +7267,7 @@
         "aliases": [
           "CVE-2024-12133"
         ],
-        "fixed_versions": [
-          "4.16.0-2ubuntu0.1",
-          "4.18.0-4ubuntu0.1",
-          "4.19.0-3ubuntu0.24.04.1"
-        ],
-        "id": "UBUNTU-CVE-2024-12133",
-        "modified": "2026-04-22T14:38:21.767463+00:00",
-        "published": "2025-02-10T16:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2024-12133",
-          "https://www.cve.org/CVERecord?id=CVE-2024-12133",
-          "https://gitlab.com/gnutls/libtasn1/-/blob/master/doc/security/CVE-2024-12133.md?ref_type=heads",
-          "https://ubuntu.com/security/notices/USN-7275-1",
-          "https://ubuntu.com/security/notices/USN-7275-2"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2024-12133"
       },
       "cvss_score": 5.3,
       "dep_name": "libtasn1-6",
@@ -9456,22 +7329,7 @@
         "aliases": [
           "CVE-2025-62813"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2025-62813",
-        "modified": "2025-10-27T08:32:45.494712+00:00",
-        "published": "2025-10-24T00:00:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2025-62813",
-          "https://www.cve.org/CVERecord?id=CVE-2025-62813",
-          "https://github.com/lz4/lz4/pull/1593",
-          "https://github.com/lz4/lz4/commit/f64efec011c058bd70348576438abac222fe6c82"
-        ],
-        "severity": {
-          "score": 5.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:N/UI:N/S:C/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2025-62813"
       },
       "cvss_score": 5.9,
       "dep_name": "lz4",
@@ -9533,22 +7391,7 @@
         "aliases": [
           "CVE-2017-20229"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2017-20229",
-        "modified": "2026-04-02T18:09:45.937835+00:00",
-        "published": "2026-03-28T12:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2017-20229",
-          "https://www.cve.org/CVERecord?id=CVE-2017-20229",
-          "https://www.exploit-db.com/exploits/42357",
-          "https://www.vulncheck.com/advisories/mawk-17-stack-based-buffer-overflow"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2017-20229"
       },
       "cvss_score": 9.8,
       "dep_name": "mawk",
@@ -9611,26 +7454,7 @@
         "aliases": [
           "CVE-2020-19189"
         ],
-        "fixed_versions": [
-          "5.9+20140118-1ubuntu1+esm4",
-          "6.0+20160213-1ubuntu1+esm4",
-          "6.1-1ubuntu1.18.04.1+esm1"
-        ],
-        "id": "UBUNTU-CVE-2020-19189",
-        "modified": "2026-04-22T12:32:47.513514+00:00",
-        "published": "2023-08-22T19:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2020-19189",
-          "https://github.com/zjuchenyuan/fuzzpoc/blob/master/infotocap_poc5.md",
-          "https://ubuntu.com/security/notices/USN-6451-1",
-          "https://www.cve.org/CVERecord?id=CVE-2020-19189"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2020-19189"
       },
       "cvss_score": 6.5,
       "dep_name": "ncurses",
@@ -9692,27 +7516,7 @@
         "aliases": [
           "CVE-2023-50495"
         ],
-        "fixed_versions": [
-          "5.9+20140118-1ubuntu1+esm5",
-          "6.0+20160213-1ubuntu1+esm5",
-          "6.1-1ubuntu1.18.04.1+esm2"
-        ],
-        "id": "UBUNTU-CVE-2023-50495",
-        "modified": "2026-09-01T21:00:10.951145+00:00",
-        "published": "2023-12-12T15:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2023-50495",
-          "https://lists.gnu.org/archive/html/bug-ncurses/2023-04/msg00020.html",
-          "https://lists.gnu.org/archive/html/bug-ncurses/2023-04/msg00029.html",
-          "https://ubuntu.com/security/notices/USN-6684-1",
-          "https://www.cve.org/CVERecord?id=CVE-2023-50495"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2023-50495"
       },
       "cvss_score": 6.5,
       "dep_name": "ncurses",
@@ -9774,30 +7578,7 @@
         "aliases": [
           "CVE-2025-6141"
         ],
-        "fixed_versions": [
-          "5.9+20140118-1ubuntu1+esm7",
-          "6.0+20160213-1ubuntu1+esm7",
-          "6.1-1ubuntu1.18.04.1+esm4",
-          "6.2-0ubuntu2.1+esm2",
-          "6.3-2ubuntu0.3",
-          "6.4+20240113-1ubuntu2.2"
-        ],
-        "id": "UBUNTU-CVE-2025-6141",
-        "modified": "2026-09-01T21:00:11.451261+00:00",
-        "published": "2025-06-16T22:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2025-6141",
-          "https://www.cve.org/CVERecord?id=CVE-2025-6141",
-          "https://lists.gnu.org/archive/html/bug-ncurses/2025-03/msg00107.html",
-          "https://lists.gnu.org/archive/html/bug-ncurses/2025-03/msg00109.html",
-          "https://invisible-island.net/ncurses/NEWS.html#index-t20250329"
-        ],
-        "severity": {
-          "score": 4.8,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:L/AC:L/AT:N/PR:L/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2025-6141"
       },
       "cvss_score": 4.8,
       "dep_name": "ncurses",
@@ -9859,31 +7640,7 @@
         "aliases": [
           "CVE-2025-69720"
         ],
-        "fixed_versions": [
-          "5.9+20140118-1ubuntu1+esm6",
-          "6.0+20160213-1ubuntu1+esm6",
-          "6.1-1ubuntu1.18.04.1+esm3",
-          "6.2-0ubuntu2.1+esm1",
-          "6.3-2ubuntu0.2",
-          "6.4+20240113-1ubuntu2.1",
-          "6.5+20250216-2ubuntu0.1"
-        ],
-        "id": "UBUNTU-CVE-2025-69720",
-        "modified": "2026-07-08T18:30:10.365748+00:00",
-        "published": "2026-03-19T15:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2025-69720",
-          "https://www.cve.org/CVERecord?id=CVE-2025-69720",
-          "https://github.com/Cao-Wuhui/CVE-2025-69720",
-          "https://marc.info/?l=ncurses-bug&m=176539968328570&w=2",
-          "https://marc.info/?l=ncurses-bug&m=176540731801330&w=2"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2025-69720"
       },
       "cvss_score": 9.8,
       "dep_name": "ncurses",
@@ -9946,27 +7703,7 @@
         "aliases": [
           "CVE-2026-13757"
         ],
-        "fixed_versions": [
-          "0.23.9-2ubuntu0.1+esm1",
-          "0.23.20-1ubuntu0.1+esm1",
-          "0.24.0-6ubuntu0.1",
-          "0.25.3-4ubuntu2.2"
-        ],
-        "id": "UBUNTU-CVE-2026-13757",
-        "modified": "2026-08-31T17:15:57.336492+00:00",
-        "published": "2026-06-29T19:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-13757",
-          "https://www.cve.org/CVERecord?id=CVE-2026-13757",
-          "https://access.redhat.com/security/cve/CVE-2026-13757",
-          "https://ubuntu.com/security/notices/USN-8687-1"
-        ],
-        "severity": {
-          "score": 6.2,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-13757"
       },
       "cvss_score": 6.2,
       "dep_name": "p11-kit",
@@ -10028,21 +7765,7 @@
         "aliases": [
           "CVE-2024-10041"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2024-10041",
-        "modified": "2026-08-31T17:15:51.473466+00:00",
-        "published": "2024-10-23T14:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2024-10041",
-          "https://www.cve.org/CVERecord?id=CVE-2024-10041",
-          "https://access.redhat.com/security/cve/CVE-2024-10041"
-        ],
-        "severity": {
-          "score": 4.7,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:N/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2024-10041"
       },
       "cvss_score": 4.7,
       "dep_name": "pam",
@@ -10104,28 +7827,7 @@
         "aliases": [
           "CVE-2024-22365"
         ],
-        "fixed_versions": [
-          "1.1.8-1ubuntu2.2+esm4",
-          "1.1.8-3.2ubuntu2.3+esm5",
-          "1.1.8-3.6ubuntu2.18.04.6+esm1",
-          "1.3.1-5ubuntu4.7",
-          "1.4.0-11ubuntu2.4"
-        ],
-        "id": "UBUNTU-CVE-2024-22365",
-        "modified": "2026-04-22T14:40:05.373199+00:00",
-        "published": "2024-01-17T00:00:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2024-22365",
-          "https://ubuntu.com/security/notices/USN-6588-1",
-          "https://ubuntu.com/security/notices/USN-6588-2",
-          "https://www.cve.org/CVERecord?id=CVE-2024-22365"
-        ],
-        "severity": {
-          "score": 5.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2024-22365"
       },
       "cvss_score": 5.5,
       "dep_name": "pam",
@@ -10187,26 +7889,7 @@
         "aliases": [
           "CVE-2025-6020"
         ],
-        "fixed_versions": [
-          "1.4.0-11ubuntu2.6",
-          "1.5.3-5ubuntu5.4",
-          "1.5.3-7ubuntu6"
-        ],
-        "id": "UBUNTU-CVE-2025-6020",
-        "modified": "2026-08-31T17:15:47.680627+00:00",
-        "published": "2025-06-17T10:00:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2025-6020",
-          "https://www.cve.org/CVERecord?id=CVE-2025-6020",
-          "https://www.openwall.com/lists/oss-security/2025/06/17/1",
-          "https://ubuntu.com/security/notices/USN-7580-1"
-        ],
-        "severity": {
-          "score": 7.8,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2025-6020"
       },
       "cvss_score": 7.8,
       "dep_name": "pam",
@@ -10268,25 +7951,7 @@
         "aliases": [
           "CVE-2026-54411"
         ],
-        "fixed_versions": [
-          "1.4.0-11ubuntu2.7",
-          "1.5.3-5ubuntu5.6",
-          "1.7.0-5ubuntu3.1"
-        ],
-        "id": "UBUNTU-CVE-2026-54411",
-        "modified": "2026-08-31T17:16:31.932897+00:00",
-        "published": "2026-06-14T18:17:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-54411",
-          "https://www.cve.org/CVERecord?id=CVE-2026-54411",
-          "https://ubuntu.com/security/notices/USN-8601-1"
-        ],
-        "severity": {
-          "score": 6.9,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N/E:P/AU:N/V:D"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-54411"
       },
       "cvss_score": 6.9,
       "dep_name": "pam",
@@ -10346,21 +8011,7 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [
-          "1.1.8-3.6ubuntu2.18.04.6+esm2",
-          "1.3.1-5ubuntu4.7+esm1",
-          "1.4.0-11ubuntu2.8",
-          "1.5.3-5ubuntu5.7"
-        ],
-        "id": "USN-8688-1",
-        "modified": "2026-08-31T17:16:06.871331+00:00",
-        "published": "2026-08-27T19:43:08+00:00",
-        "references": [
-          "https://ubuntu.com/security/notices/USN-8688-1",
-          "https://launchpad.net/bugs/2164901"
-        ],
-        "severity": null,
-        "summary": "pam vulnerability"
+        "id": "USN-8688-1"
       },
       "cvss_score": null,
       "dep_name": "pam",
@@ -10422,22 +8073,7 @@
         "aliases": [
           "CVE-2017-11164"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2017-11164",
-        "modified": "2026-07-21T18:18:16.477212+00:00",
-        "published": "2017-07-11T03:29:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2017-11164",
-          "http://openwall.com/lists/oss-security/2017/07/11/3",
-          "https://www.cve.org/CVERecord?id=CVE-2017-11164",
-          "https://www.openwall.com/lists/oss-security/2023/04/11/1"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2017-11164"
       },
       "cvss_score": 7.5,
       "dep_name": "pcre3",
@@ -10499,21 +8135,7 @@
         "aliases": [
           "CVE-2011-10043"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2011-10043",
-        "modified": "2026-09-08T19:45:09.989939+00:00",
-        "published": "2026-07-07T12:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2011-10043",
-          "https://www.cve.org/CVERecord?id=CVE-2011-10043",
-          "https://lists.security.metacpan.org/cve-announce/msg/41608305/"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2011-10043"
       },
       "cvss_score": 9.8,
       "dep_name": "perl",
@@ -10575,23 +8197,7 @@
         "aliases": [
           "CVE-2017-20230"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2017-20230",
-        "modified": "2026-09-08T19:45:06.027206+00:00",
-        "published": "2026-04-21T16:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2017-20230",
-          "https://www.cve.org/CVERecord?id=CVE-2017-20230",
-          "https://lists.security.metacpan.org/cve-announce/msg/39144694/",
-          "https://github.com/Perl/perl5/issues/15831",
-          "https://github.com/Perl/perl5/commit/a258c17c6937f79529c8319a829310e09cdbd216"
-        ],
-        "severity": {
-          "score": 10.0,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2017-20230"
       },
       "cvss_score": 10.0,
       "dep_name": "perl",
@@ -10653,23 +8259,7 @@
         "aliases": [
           "CVE-2023-31486"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2023-31486",
-        "modified": "2026-10-08T12:51:40.327586+00:00",
-        "published": "2023-04-29T00:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2023-31486",
-          "https://www.openwall.com/lists/oss-security/2023/04/18/14",
-          "https://github.com/chansen/p5-http-tiny/issues/134",
-          "https://blog.hackeriet.no/perl-http-tiny-insecure-tls-default-affects-cpan-modules/",
-          "https://hackeriet.github.io/cpan-http-tiny-overview/"
-        ],
-        "severity": {
-          "score": 8.1,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2023-31486"
       },
       "cvss_score": 8.1,
       "dep_name": "perl",
@@ -10731,20 +8321,7 @@
         "aliases": [
           "CVE-2023-47039"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2023-47039",
-        "modified": "2026-09-08T19:45:11.618908+00:00",
-        "published": "2023-11-25T17:00:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2023-47039",
-          "https://www.cve.org/CVERecord?id=CVE-2023-47039"
-        ],
-        "severity": {
-          "score": 7.8,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2023-47039"
       },
       "cvss_score": 7.8,
       "dep_name": "perl",
@@ -10806,25 +8383,7 @@
         "aliases": [
           "CVE-2025-15649"
         ],
-        "fixed_versions": [
-          "5.38.2-3.2ubuntu0.4"
-        ],
-        "id": "UBUNTU-CVE-2025-15649",
-        "modified": "2026-10-17T12:56:48.723379+00:00",
-        "published": "2026-05-27T04:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2025-15649",
-          "https://www.cve.org/CVERecord?id=CVE-2025-15649",
-          "https://lists.security.metacpan.org/cve-announce/msg/40434380/",
-          "https://github.com/pmqs/IO-Compress/issues/65",
-          "https://github.com/pmqs/IO-Compress/commit/fd28c1d2374eee9811f6d0c5bddc0957abdf1da8.patch"
-        ],
-        "severity": {
-          "score": 5.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2025-15649"
       },
       "cvss_score": 5.5,
       "dep_name": "perl",
@@ -10886,25 +8445,7 @@
         "aliases": [
           "CVE-2025-40909"
         ],
-        "fixed_versions": [
-          "5.34.0-3ubuntu1.5",
-          "5.38.2-3.2ubuntu0.2"
-        ],
-        "id": "UBUNTU-CVE-2025-40909",
-        "modified": "2026-09-08T19:45:12.706838+00:00",
-        "published": "2025-05-30T13:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2025-40909",
-          "https://www.cve.org/CVERecord?id=CVE-2025-40909",
-          "https://lists.security.metacpan.org/cve-announce/msg/30017499/",
-          "https://ubuntu.com/security/notices/USN-7678-1"
-        ],
-        "severity": {
-          "score": 5.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:L"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2025-40909"
       },
       "cvss_score": 5.9,
       "dep_name": "perl",
@@ -10967,31 +8508,7 @@
         "aliases": [
           "CVE-2026-12087"
         ],
-        "fixed_versions": [
-          "5.18.2-2ubuntu1.7+esm8",
-          "5.22.1-9ubuntu0.9+esm3",
-          "5.26.1-6ubuntu0.7+esm3",
-          "5.30.0-9ubuntu0.5+esm3",
-          "5.34.0-3ubuntu1.8",
-          "5.38.2-3.2ubuntu0.4",
-          "5.40.1-7ubuntu0.3"
-        ],
-        "id": "UBUNTU-CVE-2026-12087",
-        "modified": "2026-10-17T12:58:04.858644+00:00",
-        "published": "2026-06-15T22:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-12087",
-          "https://www.cve.org/CVERecord?id=CVE-2026-12087",
-          "https://lists.security.metacpan.org/cve-announce/msg/41020451/",
-          "https://ubuntu.com/security/notices/USN-8675-1",
-          "https://ubuntu.com/security/notices/USN-8684-1"
-        ],
-        "severity": {
-          "score": 9.1,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-12087"
       },
       "cvss_score": 9.1,
       "dep_name": "perl",
@@ -11053,31 +8570,7 @@
         "aliases": [
           "CVE-2026-15534"
         ],
-        "fixed_versions": [
-          "5.18.2-2ubuntu1.7+esm9",
-          "5.22.1-9ubuntu0.9+esm4",
-          "5.26.1-6ubuntu0.7+esm4",
-          "5.30.0-9ubuntu0.5+esm4",
-          "5.34.0-3ubuntu1.9",
-          "5.38.2-3.2ubuntu0.6",
-          "5.40.1-7ubuntu0.2"
-        ],
-        "id": "UBUNTU-CVE-2026-15534",
-        "modified": "2026-10-17T12:58:05.975521+00:00",
-        "published": "2026-08-09T18:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-15534",
-          "https://www.cve.org/CVERecord?id=CVE-2026-15534",
-          "https://github.com/Perl/perl5/commit/54cf3d44cbbedd17d774e9a37921963e8fd5d0cb.patch",
-          "https://github.com/Perl/perl5/commit/568e6fd238867bb9e99fa3f47cba3169009239e0.patch",
-          "http://www.openwall.com/lists/oss-security/2026/08/09/12"
-        ],
-        "severity": {
-          "score": 5.7,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-15534"
       },
       "cvss_score": 5.7,
       "dep_name": "perl",
@@ -11140,23 +8633,7 @@
         "aliases": [
           "CVE-2026-4176"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-4176",
-        "modified": "2026-09-08T19:45:15.576128+00:00",
-        "published": "2026-03-29T21:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-4176",
-          "https://www.cve.org/CVERecord?id=CVE-2026-4176",
-          "https://lists.security.metacpan.org/cve-announce/msg/38393284/",
-          "https://github.com/Perl/perl5/commit/c75ae9cc164205e1b6d6dbd57bd2c65c8593fe94",
-          "https://lists.security.metacpan.org/cve-announce/msg/37638919/"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-4176"
       },
       "cvss_score": 9.8,
       "dep_name": "perl",
@@ -11218,31 +8695,7 @@
         "aliases": [
           "CVE-2026-42496"
         ],
-        "fixed_versions": [
-          "5.18.2-2ubuntu1.7+esm7",
-          "5.26.1-6ubuntu0.7+esm2",
-          "5.30.0-9ubuntu0.5+esm2",
-          "5.34.0-3ubuntu1.7",
-          "5.38.2-3.2ubuntu0.3",
-          "5.40.1-6ubuntu0.1",
-          "5.40.1-7ubuntu0.1"
-        ],
-        "id": "UBUNTU-CVE-2026-42496",
-        "modified": "2026-07-01T18:56:57.544972+00:00",
-        "published": "2026-05-26T02:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-42496",
-          "https://www.cve.org/CVERecord?id=CVE-2026-42496",
-          "https://lists.security.metacpan.org/cve-announce/msg/40396459/",
-          "https://github.com/jib/archive-tar-new/commit/17c873492a05eddc0de18c1485e0b2cccd5a9158.patch",
-          "https://metacpan.org/release/BINGOS/Archive-Tar-3.08/changes"
-        ],
-        "severity": {
-          "score": 9.1,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-42496"
       },
       "cvss_score": 9.1,
       "dep_name": "perl",
@@ -11304,25 +8757,7 @@
         "aliases": [
           "CVE-2026-42497"
         ],
-        "fixed_versions": [
-          "5.38.2-3.2ubuntu0.3"
-        ],
-        "id": "UBUNTU-CVE-2026-42497",
-        "modified": "2026-10-17T13:00:05.500851+00:00",
-        "published": "2026-05-26T02:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-42497",
-          "https://www.cve.org/CVERecord?id=CVE-2026-42497",
-          "https://lists.security.metacpan.org/cve-announce/msg/40396457/",
-          "https://github.com/jib/archive-tar-new/commit/17c873492a05eddc0de18c1485e0b2cccd5a9158.patch",
-          "https://metacpan.org/release/BINGOS/Archive-Tar-3.08/changes"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-42497"
       },
       "cvss_score": 7.5,
       "dep_name": "perl",
@@ -11384,25 +8819,7 @@
         "aliases": [
           "CVE-2026-48959"
         ],
-        "fixed_versions": [
-          "5.38.2-3.2ubuntu0.4"
-        ],
-        "id": "UBUNTU-CVE-2026-48959",
-        "modified": "2026-10-17T13:00:23.966328+00:00",
-        "published": "2026-05-27T04:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-48959",
-          "https://www.cve.org/CVERecord?id=CVE-2026-48959",
-          "https://lists.security.metacpan.org/cve-announce/msg/40434381/",
-          "https://github.com/pmqs/IO-Compress/commit/68db44076f4c1a86a2ffe53a958eac6cabaf72e2.patch",
-          "https://metacpan.org/release/PMQS/IO-Compress-2.220/changes"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-48959"
       },
       "cvss_score": 7.5,
       "dep_name": "perl",
@@ -11464,23 +8881,7 @@
         "aliases": [
           "CVE-2026-48961"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-48961",
-        "modified": "2026-10-17T12:56:06.804766+00:00",
-        "published": "2026-05-27T04:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-48961",
-          "https://www.cve.org/CVERecord?id=CVE-2026-48961",
-          "https://lists.security.metacpan.org/cve-announce/msg/40434383/",
-          "https://github.com/pmqs/IO-Compress/commit/33c89d03d6e746ed2ead4f2f6570d47864c61bc7.patch",
-          "https://metacpan.org/release/PMQS/IO-Compress-2.220/changes"
-        ],
-        "severity": {
-          "score": 7.3,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:L"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-48961"
       },
       "cvss_score": 7.3,
       "dep_name": "perl",
@@ -11542,25 +8943,7 @@
         "aliases": [
           "CVE-2026-48962"
         ],
-        "fixed_versions": [
-          "5.38.2-3.2ubuntu0.4"
-        ],
-        "id": "UBUNTU-CVE-2026-48962",
-        "modified": "2026-10-17T13:00:24.223332+00:00",
-        "published": "2026-05-27T04:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-48962",
-          "https://www.cve.org/CVERecord?id=CVE-2026-48962",
-          "https://lists.security.metacpan.org/cve-announce/msg/40434385/",
-          "https://github.com/pmqs/IO-Compress/commit/f2db247bf90d4cc7ee2710be384946081f3b4610.patch",
-          "https://metacpan.org/release/PMQS/IO-Compress-2.220/changes"
-        ],
-        "severity": {
-          "score": 7.8,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-48962"
       },
       "cvss_score": 7.8,
       "dep_name": "perl",
@@ -11622,25 +9005,7 @@
         "aliases": [
           "CVE-2026-7017"
         ],
-        "fixed_versions": [
-          "5.38.2-3.2ubuntu0.4"
-        ],
-        "id": "UBUNTU-CVE-2026-7017",
-        "modified": "2026-10-17T12:59:30.301444+00:00",
-        "published": "2026-07-07T19:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-7017",
-          "https://www.cve.org/CVERecord?id=CVE-2026-7017",
-          "https://lists.security.metacpan.org/cve-announce/msg/41618211/",
-          "https://github.com/Perl-Toolchain-Gang/HTTP-Tiny/pull/36",
-          "https://ubuntu.com/security/notices/USN-8684-1"
-        ],
-        "severity": {
-          "score": 7.1,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:L/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-7017"
       },
       "cvss_score": 7.1,
       "dep_name": "perl",
@@ -11702,23 +9067,7 @@
         "aliases": [
           "CVE-2026-82560"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-82560",
-        "modified": "2026-10-17T13:01:11.614430+00:00",
-        "published": "2026-09-19T16:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-82560",
-          "https://www.cve.org/CVERecord?id=CVE-2026-82560",
-          "https://lists.security.metacpan.org/cve-announce/msg/43682367/",
-          "https://github.com/rra/podlators/commit/70510174f69eb54aa6d617bde4e1402cd9b7c61f.patch",
-          "https://metacpan.org/release/RRA/podlators-v6.1.0/source/lib/Pod/Text.pm#L245-261"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-82560"
       },
       "cvss_score": 7.5,
       "dep_name": "perl",
@@ -11780,25 +9129,7 @@
         "aliases": [
           "CVE-2026-9538"
         ],
-        "fixed_versions": [
-          "5.38.2-3.2ubuntu0.4"
-        ],
-        "id": "UBUNTU-CVE-2026-9538",
-        "modified": "2026-10-17T13:01:19.356655+00:00",
-        "published": "2026-05-26T02:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-9538",
-          "https://www.cve.org/CVERecord?id=CVE-2026-9538",
-          "https://lists.security.metacpan.org/cve-announce/msg/40396448/",
-          "https://github.com/jib/archive-tar-new/commit/f9af01426038e29d9578825a0cd3626946ab08c7.patch",
-          "https://metacpan.org/release/BINGOS/Archive-Tar-3.10/changes"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-9538"
       },
       "cvss_score": 7.5,
       "dep_name": "perl",
@@ -11861,21 +9192,7 @@
           "CVE-2023-4016",
           "UBUNTU-CVE-2023-4016"
         ],
-        "fixed_versions": [
-          "2:3.3.10-4ubuntu2.5+esm1",
-          "2:3.3.12-3ubuntu1.2+esm1",
-          "2:3.3.16-1ubuntu2.4",
-          "2:3.3.17-6ubuntu2.1"
-        ],
-        "id": "USN-6477-1",
-        "modified": "2026-06-25T13:31:34.901748+00:00",
-        "published": "2023-11-14T09:44:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/notices/USN-6477-1",
-          "https://ubuntu.com/security/CVE-2023-4016"
-        ],
-        "severity": null,
-        "summary": "procps vulnerability"
+        "id": "USN-6477-1"
       },
       "cvss_score": null,
       "dep_name": "procps",
@@ -11938,19 +9255,7 @@
           "CVE-2026-5958",
           "UBUNTU-CVE-2026-5958"
         ],
-        "fixed_versions": [
-          "4.4-2ubuntu0.1~esm1",
-          "4.7-1ubuntu0.1~esm1"
-        ],
-        "id": "USN-8229-2",
-        "modified": "2026-05-29T10:59:19.228985+00:00",
-        "published": "2026-05-28T18:34:13+00:00",
-        "references": [
-          "https://ubuntu.com/security/notices/USN-8229-2",
-          "https://ubuntu.com/security/CVE-2026-5958"
-        ],
-        "severity": null,
-        "summary": "sed vulnerability"
+        "id": "USN-8229-2"
       },
       "cvss_score": null,
       "dep_name": "sed",
@@ -12012,25 +9317,7 @@
         "aliases": [
           "CVE-2013-4235"
         ],
-        "fixed_versions": [
-          "1:4.8.1-2ubuntu2.1"
-        ],
-        "id": "UBUNTU-CVE-2013-4235",
-        "modified": "2026-02-04T02:59:56.388070+00:00",
-        "published": "2019-12-03T15:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2013-4235",
-          "https://github.com/shadow-maint/shadow/issues/317",
-          "https://github.com/shadow-maint/shadow/pull/545",
-          "https://ubuntu.com/security/notices/USN-5745-1",
-          "https://ubuntu.com/security/notices/USN-5745-2"
-        ],
-        "severity": {
-          "score": 4.7,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:N/I:H/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2013-4235"
       },
       "cvss_score": 4.7,
       "dep_name": "shadow",
@@ -12092,23 +9379,7 @@
         "aliases": [
           "CVE-2023-29383"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2023-29383",
-        "modified": "2025-10-24T05:01:54+00:00",
-        "published": "2023-04-14T22:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2023-29383",
-          "https://github.com/shadow-maint/shadow/pull/687",
-          "https://www.trustwave.com/en-us/resources/security-resources/security-advisories/?fid=31797",
-          "https://www.trustwave.com/en-us/resources/blogs/spiderlabs-blog/cve-2023-29383-abusing-linux-chfn-to-misrepresent-etc-passwd/",
-          "https://www.cve.org/CVERecord?id=CVE-2023-29383"
-        ],
-        "severity": {
-          "score": 3.3,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:L/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2023-29383"
       },
       "cvss_score": 3.3,
       "dep_name": "shadow",
@@ -12171,27 +9442,7 @@
         "aliases": [
           "CVE-2023-4641"
         ],
-        "fixed_versions": [
-          "1:4.1.5.1-1ubuntu9.5+esm4",
-          "1:4.2-3.1ubuntu5.5+esm4",
-          "1:4.5-1ubuntu2.5+esm1",
-          "1:4.8.1-1ubuntu5.20.04.5",
-          "1:4.8.1-2ubuntu2.2"
-        ],
-        "id": "UBUNTU-CVE-2023-4641",
-        "modified": "2026-02-04T02:32:17.041015+00:00",
-        "published": "2023-12-27T16:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2023-4641",
-          "https://ubuntu.com/security/notices/USN-6640-1",
-          "https://www.cve.org/CVERecord?id=CVE-2023-4641"
-        ],
-        "severity": {
-          "score": 5.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2023-4641"
       },
       "cvss_score": 5.5,
       "dep_name": "shadow",
@@ -12253,22 +9504,7 @@
         "aliases": [
           "CVE-2024-56433"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2024-56433",
-        "modified": "2026-10-17T12:56:45.866436+00:00",
-        "published": "2024-12-26T09:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2024-56433",
-          "https://www.cve.org/CVERecord?id=CVE-2024-56433",
-          "https://github.com/shadow-maint/shadow/blob/e2512d5741d4a44bdd81a8c2d0029b6222728cf0/etc/login.defs#L238-L241",
-          "https://github.com/shadow-maint/shadow/releases/tag/4.4"
-        ],
-        "severity": {
-          "score": 3.6,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:L/I:L/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2024-56433"
       },
       "cvss_score": 3.6,
       "dep_name": "shadow",
@@ -12330,16 +9566,7 @@
         "aliases": [
           "CVE-2019-9619"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2019-9619",
-        "modified": "2026-10-17T12:56:10.599224+00:00",
-        "published": "2019-09-19T20:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2019-9619",
-          "https://www.cve.org/CVERecord?id=CVE-2019-9619"
-        ],
-        "severity": null,
-        "summary": ""
+        "id": "UBUNTU-CVE-2019-9619"
       },
       "cvss_score": null,
       "dep_name": "systemd",
@@ -12401,20 +9628,7 @@
         "aliases": [
           "CVE-2020-13776"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2020-13776",
-        "modified": "2026-10-17T12:55:51.333360+00:00",
-        "published": "2020-06-03T03:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2020-13776",
-          "https://www.cve.org/CVERecord?id=CVE-2020-13776"
-        ],
-        "severity": {
-          "score": 6.7,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:R/S:U/C:H/I:H/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2020-13776"
       },
       "cvss_score": 6.7,
       "dep_name": "systemd",
@@ -12476,23 +9690,7 @@
         "aliases": [
           "CVE-2021-3997"
         ],
-        "fixed_versions": [
-          "245.4-4ubuntu3.15"
-        ],
-        "id": "UBUNTU-CVE-2021-3997",
-        "modified": "2026-10-17T12:56:01.145952+00:00",
-        "published": "2022-01-10T00:00:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2021-3997",
-          "https://ubuntu.com/security/notices/USN-5226-1",
-          "https://www.cve.org/CVERecord?id=CVE-2021-3997"
-        ],
-        "severity": {
-          "score": 5.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2021-3997"
       },
       "cvss_score": 5.5,
       "dep_name": "systemd",
@@ -12554,25 +9752,7 @@
         "aliases": [
           "CVE-2022-4415"
         ],
-        "fixed_versions": [
-          "245.4-4ubuntu3.20",
-          "249.11-0ubuntu3.7"
-        ],
-        "id": "UBUNTU-CVE-2022-4415",
-        "modified": "2026-10-17T12:56:22.819518+00:00",
-        "published": "2023-01-11T15:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2022-4415",
-          "https://www.openwall.com/lists/oss-security/2022/12/21/3",
-          "https://ubuntu.com/security/notices/USN-5928-1",
-          "https://www.cve.org/CVERecord?id=CVE-2022-4415"
-        ],
-        "severity": {
-          "score": 5.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2022-4415"
       },
       "cvss_score": 5.5,
       "dep_name": "systemd",
@@ -12635,23 +9815,7 @@
         "aliases": [
           "CVE-2023-26604"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2023-26604",
-        "modified": "2026-10-17T12:57:16.324356+00:00",
-        "published": "2023-03-03T16:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2023-26604",
-          "https://medium.com/@zenmoviefornotification/saidov-maxim-cve-2023-26604-c1232a526ba7",
-          "https://github.com/systemd/systemd/blob/main/NEWS#L4335-L4340",
-          "https://blog.compass-security.com/2012/10/dangerous-sudoers-entries-part-2-insecure-functionality/",
-          "https://www.cve.org/CVERecord?id=CVE-2023-26604"
-        ],
-        "severity": {
-          "score": 7.8,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2023-26604"
       },
       "cvss_score": 7.8,
       "dep_name": "systemd",
@@ -12714,23 +9878,7 @@
         "aliases": [
           "CVE-2023-7008"
         ],
-        "fixed_versions": [
-          "249.11-0ubuntu3.21"
-        ],
-        "id": "UBUNTU-CVE-2023-7008",
-        "modified": "2026-10-17T12:56:43.382551+00:00",
-        "published": "2023-12-23T13:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2023-7008",
-          "https://www.cve.org/CVERecord?id=CVE-2023-7008",
-          "https://ubuntu.com/security/notices/USN-8402-1"
-        ],
-        "severity": {
-          "score": 5.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2023-7008"
       },
       "cvss_score": 5.9,
       "dep_name": "systemd",
@@ -12792,26 +9940,7 @@
         "aliases": [
           "CVE-2026-40226"
         ],
-        "fixed_versions": [
-          "249.11-0ubuntu3.21",
-          "255.4-1ubuntu8.16",
-          "257.9-0ubuntu2.5"
-        ],
-        "id": "UBUNTU-CVE-2026-40226",
-        "modified": "2026-10-17T12:58:53.810846+00:00",
-        "published": "2026-04-10T16:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-40226",
-          "https://www.cve.org/CVERecord?id=CVE-2026-40226",
-          "https://github.com/systemd/systemd/security/advisories/GHSA-9mj4-rrc3-gjcx",
-          "https://ubuntu.com/security/notices/USN-8402-1"
-        ],
-        "severity": {
-          "score": 6.4,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:H/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-40226"
       },
       "cvss_score": 6.4,
       "dep_name": "systemd",
@@ -12874,21 +10003,7 @@
         "aliases": [
           "CVE-2026-40228"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-40228",
-        "modified": "2026-10-20T10:45:45.974173+00:00",
-        "published": "2026-04-10T16:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-40228",
-          "https://www.cve.org/CVERecord?id=CVE-2026-40228",
-          "https://www.openwall.com/lists/oss-security/2026/04/08/1"
-        ],
-        "severity": {
-          "score": 3.3,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:L/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-40228"
       },
       "cvss_score": 3.3,
       "dep_name": "systemd",
@@ -12951,21 +10066,7 @@
         "aliases": [
           "UBUNTU-CVE-2026-29111"
         ],
-        "fixed_versions": [
-          "204-5ubuntu20.31+esm3",
-          "229-4ubuntu21.31+esm4",
-          "237-3ubuntu10.57+esm3",
-          "245.4-4ubuntu3.24+esm3"
-        ],
-        "id": "USN-8119-2",
-        "modified": "2026-06-25T13:32:31.904524+00:00",
-        "published": "2026-03-23T20:47:54+00:00",
-        "references": [
-          "https://ubuntu.com/security/notices/USN-8119-2",
-          "https://ubuntu.com/security/CVE-2026-29111"
-        ],
-        "severity": null,
-        "summary": "systemd vulnerabilities"
+        "id": "USN-8119-2"
       },
       "cvss_score": null,
       "dep_name": "systemd",
@@ -13027,28 +10128,7 @@
         "aliases": [
           "CVE-2023-39804"
         ],
-        "fixed_versions": [
-          "1.27.1-1ubuntu0.1+esm4",
-          "1.28-2.1ubuntu0.2+esm3",
-          "1.29b-2ubuntu0.4+esm1",
-          "1.30+dfsg-7ubuntu0.20.04.4",
-          "1.34+dfsg-1ubuntu0.1.22.04.2"
-        ],
-        "id": "UBUNTU-CVE-2023-39804",
-        "modified": "2026-02-04T02:29:47.183590+00:00",
-        "published": "2023-11-30T00:00:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2023-39804",
-          "https://git.savannah.gnu.org/cgit/tar.git/commit/?id=a339f05cd269013fa133d2f148d73f6f7d4247e4",
-          "https://ubuntu.com/security/notices/USN-6543-1",
-          "https://www.cve.org/CVERecord?id=CVE-2023-39804"
-        ],
-        "severity": {
-          "score": 6.2,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2023-39804"
       },
       "cvss_score": 6.2,
       "dep_name": "tar",
@@ -13110,26 +10190,7 @@
         "aliases": [
           "CVE-2025-45582"
         ],
-        "fixed_versions": [
-          "1.34+dfsg-1ubuntu0.1.22.04.4",
-          "1.35+dfsg-3ubuntu0.2",
-          "1.35+dfsg-4ubuntu0.2"
-        ],
-        "id": "UBUNTU-CVE-2025-45582",
-        "modified": "2026-07-22T20:46:40.337951+00:00",
-        "published": "2025-07-11T17:15:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2025-45582",
-          "https://www.cve.org/CVERecord?id=CVE-2025-45582",
-          "https://github.com/i900008/vulndb/blob/main/Gnu_tar_vuln.md",
-          "https://ubuntu.com/security/notices/USN-8510-1"
-        ],
-        "severity": {
-          "score": 4.1,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:N/UI:R/S:C/C:N/I:L/A:L"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2025-45582"
       },
       "cvss_score": 4.1,
       "dep_name": "tar",
@@ -13192,21 +10253,7 @@
         "aliases": [
           "CVE-2026-18477"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-18477",
-        "modified": "2026-10-17T12:56:47.255072+00:00",
-        "published": "2026-08-03T17:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-18477",
-          "https://www.cve.org/CVERecord?id=CVE-2026-18477",
-          "https://access.redhat.com/security/cve/CVE-2026-18477"
-        ],
-        "severity": {
-          "score": 4.4,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:R/S:U/C:N/I:H/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-18477"
       },
       "cvss_score": 4.4,
       "dep_name": "tar",
@@ -13268,21 +10315,7 @@
         "aliases": [
           "CVE-2026-18508"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-18508",
-        "modified": "2026-10-17T12:56:47.255674+00:00",
-        "published": "2026-08-03T16:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-18508",
-          "https://www.cve.org/CVERecord?id=CVE-2026-18508",
-          "https://access.redhat.com/security/cve/CVE-2026-18508"
-        ],
-        "severity": {
-          "score": 4.4,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:L/I:L/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-18508"
       },
       "cvss_score": 4.4,
       "dep_name": "tar",
@@ -13344,31 +10377,7 @@
         "aliases": [
           "CVE-2026-5704"
         ],
-        "fixed_versions": [
-          "1.27.1-1ubuntu0.1+esm7",
-          "1.28-2.1ubuntu0.2+esm6",
-          "1.29b-2ubuntu0.4+esm4",
-          "1.30+dfsg-7ubuntu0.20.04.4+esm3",
-          "1.34+dfsg-1ubuntu0.1.22.04.6",
-          "1.35+dfsg-3ubuntu0.4",
-          "1.35+dfsg-4ubuntu0.4"
-        ],
-        "id": "UBUNTU-CVE-2026-5704",
-        "modified": "2026-07-22T20:59:36.824197+00:00",
-        "published": "2026-04-06T16:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-5704",
-          "https://www.cve.org/CVERecord?id=CVE-2026-5704",
-          "https://access.redhat.com/security/cve/CVE-2026-5704",
-          "https://ubuntu.com/security/notices/USN-8477-1",
-          "https://ubuntu.com/security/notices/USN-8477-2"
-        ],
-        "severity": {
-          "score": 5.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:N/I:H/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-5704"
       },
       "cvss_score": 5.5,
       "dep_name": "tar",
@@ -13430,27 +10439,7 @@
         "aliases": [
           "CVE-2024-28085"
         ],
-        "fixed_versions": [
-          "2.34-0.1ubuntu9.6",
-          "2.37.2-4ubuntu3.4",
-          "2.39.3-9ubuntu6"
-        ],
-        "id": "UBUNTU-CVE-2024-28085",
-        "modified": "2026-04-22T14:47:06.275214+00:00",
-        "published": "2024-03-27T00:00:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2024-28085",
-          "https://people.rit.edu/sjf5462/6831711781/wall_2_27_2024.txt",
-          "https://www.openwall.com/lists/oss-security/2024/03/27/5",
-          "https://ubuntu.com/security/notices/USN-6719-1",
-          "https://ubuntu.com/security/notices/USN-6719-2"
-        ],
-        "severity": {
-          "score": 3.3,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:L/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2024-28085"
       },
       "cvss_score": 3.3,
       "dep_name": "util-linux",
@@ -13513,22 +10502,7 @@
         "aliases": [
           "CVE-2025-14104"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2025-14104",
-        "modified": "2026-04-22T15:31:47.129328+00:00",
-        "published": "2025-12-05T17:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2025-14104",
-          "https://www.cve.org/CVERecord?id=CVE-2025-14104",
-          "https://github.com/util-linux/util-linux/pull/3586",
-          "https://access.redhat.com/security/cve/CVE-2025-14104"
-        ],
-        "severity": {
-          "score": 6.1,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2025-14104"
       },
       "cvss_score": 6.1,
       "dep_name": "util-linux",
@@ -13590,27 +10564,7 @@
         "aliases": [
           "CVE-2026-13595"
         ],
-        "fixed_versions": [
-          "2.37.2-4ubuntu3.6",
-          "2.39.3-9ubuntu6.6",
-          "2.41.3-3ubuntu2.2"
-        ],
-        "id": "UBUNTU-CVE-2026-13595",
-        "modified": "2026-10-17T12:58:45.725397+00:00",
-        "published": "2026-06-29T09:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-13595",
-          "https://www.cve.org/CVERecord?id=CVE-2026-13595",
-          "https://access.redhat.com/errata/RHSA-2026:26573",
-          "https://access.redhat.com/security/cve/CVE-2026-13595",
-          "https://ubuntu.com/security/notices/USN-8702-1"
-        ],
-        "severity": {
-          "score": 6.8,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-13595"
       },
       "cvss_score": 6.8,
       "dep_name": "util-linux",
@@ -13672,26 +10626,7 @@
         "aliases": [
           "CVE-2026-27456"
         ],
-        "fixed_versions": [
-          "2.37.2-4ubuntu3.6",
-          "2.39.3-9ubuntu6.6",
-          "2.41.3-3ubuntu2.2"
-        ],
-        "id": "UBUNTU-CVE-2026-27456",
-        "modified": "2026-10-17T12:58:49.775038+00:00",
-        "published": "2026-04-03T22:16:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-27456",
-          "https://www.cve.org/CVERecord?id=CVE-2026-27456",
-          "https://github.com/util-linux/util-linux/security/advisories/GHSA-qq4x-vfq4-9h9g",
-          "https://ubuntu.com/security/notices/USN-8702-1"
-        ],
-        "severity": {
-          "score": 4.7,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:N/A:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-27456"
       },
       "cvss_score": 4.7,
       "dep_name": "util-linux",
@@ -13754,26 +10689,7 @@
         "aliases": [
           "CVE-2026-53613"
         ],
-        "fixed_versions": [
-          "2.37.2-4ubuntu3.6",
-          "2.39.3-9ubuntu6.6",
-          "2.41.3-3ubuntu2.2"
-        ],
-        "id": "UBUNTU-CVE-2026-53613",
-        "modified": "2026-10-28T20:17:47.738865+00:00",
-        "published": "2026-06-18T00:00:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-53613",
-          "https://www.cve.org/CVERecord?id=CVE-2026-53613",
-          "https://github.com/util-linux/util-linux/security/advisories/GHSA-8gj5-72r3-428g",
-          "https://ubuntu.com/security/notices/USN-8702-1"
-        ],
-        "severity": {
-          "score": 7.0,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-53613"
       },
       "cvss_score": 7.0,
       "dep_name": "util-linux",
@@ -13835,26 +10751,7 @@
         "aliases": [
           "CVE-2026-53615"
         ],
-        "fixed_versions": [
-          "2.37.2-4ubuntu3.6",
-          "2.39.3-9ubuntu6.6",
-          "2.41.3-3ubuntu2.2"
-        ],
-        "id": "UBUNTU-CVE-2026-53615",
-        "modified": "2026-10-28T20:17:22.969233+00:00",
-        "published": "2026-06-18T00:00:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-53615",
-          "https://www.cve.org/CVERecord?id=CVE-2026-53615",
-          "https://github.com/util-linux/util-linux/security/advisories/GHSA-h4rw-gv36-wmp5",
-          "https://ubuntu.com/security/notices/USN-8702-1"
-        ],
-        "severity": {
-          "score": 8.0,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:L/I:H/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-53615"
       },
       "cvss_score": 8.0,
       "dep_name": "util-linux",
@@ -13916,21 +10813,7 @@
         "aliases": [
           "CVE-2026-76642"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-76642",
-        "modified": "2026-10-17T13:01:06.989481+00:00",
-        "published": "2026-09-03T13:06:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-76642",
-          "https://www.cve.org/CVERecord?id=CVE-2026-76642",
-          "https://github.com/util-linux/util-linux/security/advisories/GHSA-m25x-3hj9-m26f"
-        ],
-        "severity": {
-          "score": 8.5,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:L/AC:L/AT:N/PR:L/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-76642"
       },
       "cvss_score": 8.5,
       "dep_name": "util-linux",
@@ -13993,23 +10876,7 @@
         "aliases": [
           "CVE-2026-78408"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-78408",
-        "modified": "2026-10-17T13:01:08.997959+00:00",
-        "published": "2026-09-02T16:17:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-78408",
-          "https://www.cve.org/CVERecord?id=CVE-2026-78408",
-          "https://github.com/util-linux/util-linux/security/advisories/GHSA-55fx-f4gg-cfhj",
-          "https://access.redhat.com/security/cve/CVE-2026-78408",
-          "https://bugzilla.redhat.com/show_bug.cgi?id=2522497"
-        ],
-        "severity": {
-          "score": 7.9,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:R/S:C/C:N/I:H/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-78408"
       },
       "cvss_score": 7.9,
       "dep_name": "util-linux",
@@ -14072,23 +10939,7 @@
         "aliases": [
           "CVE-2026-78409"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-78409",
-        "modified": "2026-10-17T13:01:09.001539+00:00",
-        "published": "2026-09-02T16:17:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-78409",
-          "https://www.cve.org/CVERecord?id=CVE-2026-78409",
-          "https://github.com/util-linux/util-linux/security/advisories/GHSA-8f2p-47x3-43mv",
-          "https://access.redhat.com/security/cve/CVE-2026-78409",
-          "https://bugzilla.redhat.com/show_bug.cgi?id=2522607"
-        ],
-        "severity": {
-          "score": 7.0,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-78409"
       },
       "cvss_score": 7.0,
       "dep_name": "util-linux",
@@ -14151,23 +11002,7 @@
         "aliases": [
           "CVE-2026-78410"
         ],
-        "fixed_versions": [],
-        "id": "UBUNTU-CVE-2026-78410",
-        "modified": "2026-10-17T13:01:08.829994+00:00",
-        "published": "2026-09-02T16:17:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-78410",
-          "https://www.cve.org/CVERecord?id=CVE-2026-78410",
-          "https://github.com/util-linux/util-linux/security/advisories/GHSA-rh77-686x-2f2m",
-          "https://access.redhat.com/security/cve/CVE-2026-78410",
-          "https://bugzilla.redhat.com/show_bug.cgi?id=2522684"
-        ],
-        "severity": {
-          "score": 7.8,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-78410"
       },
       "cvss_score": 7.8,
       "dep_name": "util-linux",
@@ -14230,30 +11065,7 @@
         "aliases": [
           "CVE-2026-34743"
         ],
-        "fixed_versions": [
-          "5.1.1alpha+20120614-2ubuntu2.14.04.1+esm2",
-          "5.1.1alpha+20120614-2ubuntu2.16.04.1+esm2",
-          "5.2.2-1.3ubuntu0.1+esm1",
-          "5.2.4-1ubuntu1.1+esm1",
-          "5.2.5-2ubuntu1.1",
-          "5.6.1+really5.4.5-1ubuntu0.3",
-          "5.8.1-1ubuntu0.1"
-        ],
-        "id": "UBUNTU-CVE-2026-34743",
-        "modified": "2026-06-02T14:00:18.179184+00:00",
-        "published": "2026-04-02T19:21:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-34743",
-          "https://www.cve.org/CVERecord?id=CVE-2026-34743",
-          "https://tukaani.org/xz/index-append-overflow.html",
-          "https://ubuntu.com/security/notices/USN-8362-1"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-34743"
       },
       "cvss_score": 5.3,
       "dep_name": "xz-utils",
@@ -14313,25 +11125,7 @@
     {
       "advisory": {
         "aliases": [],
-        "fixed_versions": [
-          "5.1.1alpha+20120614-2ubuntu2.14.04.1+esm3",
-          "5.1.1alpha+20120614-2ubuntu2.16.04.1+esm3",
-          "5.2.2-1.3ubuntu0.1+esm2",
-          "5.2.4-1ubuntu1.1+esm2",
-          "5.2.5-2ubuntu1.2",
-          "5.6.1+really5.4.5-1ubuntu0.4",
-          "5.8.3-1ubuntu1",
-          "5.8.3-1ubuntu0.1"
-        ],
-        "id": "USN-8945-1",
-        "modified": "2026-10-21T04:30:02.862564+00:00",
-        "published": "2026-10-20T17:45:10+00:00",
-        "references": [
-          "https://ubuntu.com/security/notices/USN-8945-1",
-          "https://bugs.launchpad.net/bugs/2170056"
-        ],
-        "severity": null,
-        "summary": "xz-utils vulnerability"
+        "id": "USN-8945-1"
       },
       "cvss_score": null,
       "dep_name": "xz-utils",
@@ -14393,27 +11187,7 @@
         "aliases": [
           "CVE-2026-85091"
         ],
-        "fixed_versions": [
-          "1:1.3.dfsg-3.1ubuntu2.3",
-          "1:1.3.dfsg+really1.3.2-3ubuntu1.1",
-          "1:1.3.dfsg+really1.3.1-1ubuntu3.2"
-        ],
-        "id": "UBUNTU-CVE-2026-85091",
-        "modified": "2026-10-23T04:45:04.338350+00:00",
-        "published": "2026-09-03T13:06:00+00:00",
-        "references": [
-          "https://ubuntu.com/security/CVE-2026-85091",
-          "https://www.cve.org/CVERecord?id=CVE-2026-85091",
-          "https://gist.github.com/thesmartshadow/e0b9481792afb7c31e86fee1ff084490",
-          "https://www.vulncheck.com/advisories/zlib-1.3.1.2-through-1.3.2-heap-buffer-overflow-via-gz-vacate",
-          "https://ubuntu.com/security/notices/USN-8954-1"
-        ],
-        "severity": {
-          "score": 8.3,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:N/AC:H/AT:N/PR:N/UI:N/VC:N/VI:H/VA:H/SC:N/SI:N/SA:N"
-        },
-        "summary": ""
+        "id": "UBUNTU-CVE-2026-85091"
       },
       "cvss_score": 8.3,
       "dep_name": "zlib",
