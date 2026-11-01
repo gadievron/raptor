@@ -25,7 +25,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -41,30 +40,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'ch.qos.logback.classic' from 3 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "LogbackLoggingSystem.java:18",
-          "LogbackLoggingSystem.java:18",
-          "LogbackLoggingSystem.java:19"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 71.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.4433337,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 12.7834718227875,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 12.7834718227875
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -91,7 +72,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -107,31 +87,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'com.fasterxml.jackson.core' from 27 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "ComputeInstanceMetadataResolverUtils.java:18",
-          "DigitalOceanMetadataResolver.java:18",
-          "JsonPropertySourceLoader.java:18"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 69.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441073944,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 27.416424789356295,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 27.416424789356295
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -158,7 +119,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -174,31 +134,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'com.fasterxml.jackson.core' from 27 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "ComputeInstanceMetadataResolverUtils.java:18",
-          "DigitalOceanMetadataResolver.java:18",
-          "JsonPropertySourceLoader.java:18"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441643476,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 27.451825953844786,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 27.451825953844786
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -225,7 +166,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -241,31 +181,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'com.fasterxml.jackson.core' from 27 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "ComputeInstanceMetadataResolverUtils.java:18",
-          "DigitalOceanMetadataResolver.java:18",
-          "JsonPropertySourceLoader.java:18"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 86.99999999999999,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44132655899999995,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 29.88473631270581,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 29.88473631270581
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -292,7 +213,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -308,30 +228,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'com.fasterxml.jackson.databind' from 32 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "RequestHandler.java:3",
-          "ComputeInstanceMetadataResolverUtils.java:20",
-          "DigitalOceanMetadataResolver.java:19"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 65.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44114283899999995,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.645343806776873,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 11.645343806776873
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -358,7 +260,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -374,30 +275,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'com.fasterxml.jackson.databind' from 32 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "RequestHandler.java:3",
-          "ComputeInstanceMetadataResolverUtils.java:20",
-          "DigitalOceanMetadataResolver.java:19"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 65.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440789178,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.63600781949125,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 11.63600781949125
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -424,7 +307,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -440,30 +322,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'com.fasterxml.jackson.databind' from 32 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "RequestHandler.java:3",
-          "ComputeInstanceMetadataResolverUtils.java:20",
-          "DigitalOceanMetadataResolver.java:19"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 53.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44123469899999995,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 9.497411432962874,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 9.497411432962874
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -490,7 +354,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -506,31 +369,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'com.fasterxml.jackson.databind' from 32 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "RequestHandler.java:3",
-          "ComputeInstanceMetadataResolverUtils.java:20",
-          "DigitalOceanMetadataResolver.java:19"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441436791,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 27.43897875705461,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 27.43897875705461
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -557,7 +401,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -573,31 +416,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'com.fasterxml.jackson.databind' from 32 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "RequestHandler.java:3",
-          "ComputeInstanceMetadataResolverUtils.java:20",
-          "DigitalOceanMetadataResolver.java:19"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 55.99999999999999,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44249318099999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 20.664644783858392,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 20.664644783858392
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -624,7 +448,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -640,30 +463,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'com.fasterxml.jackson.databind' from 32 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "RequestHandler.java:3",
-          "ComputeInstanceMetadataResolverUtils.java:20",
-          "DigitalOceanMetadataResolver.java:19"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 53.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440890224,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 9.489996737765999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 9.489996737765999
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -690,7 +495,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -706,31 +510,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'com.fasterxml.jackson.databind' from 32 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "RequestHandler.java:3",
-          "ComputeInstanceMetadataResolverUtils.java:20",
-          "DigitalOceanMetadataResolver.java:19"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 81.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.443535792,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 21.00901769118708,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 21.00901769118708
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -757,7 +542,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -773,31 +557,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'com.fasterxml.jackson.databind' from 32 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "RequestHandler.java:3",
-          "ComputeInstanceMetadataResolverUtils.java:20",
-          "DigitalOceanMetadataResolver.java:19"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.442084404,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 27.479233306997166,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 27.479233306997166
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -824,7 +589,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -840,30 +604,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'com.fasterxml.jackson.databind' from 32 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "RequestHandler.java:3",
-          "ComputeInstanceMetadataResolverUtils.java:20",
-          "DigitalOceanMetadataResolver.java:19"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 81.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44483101799999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 14.633216772005246,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 14.633216772005246
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -890,7 +636,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -906,30 +651,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'com.fasterxml.jackson.databind' from 32 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "RequestHandler.java:3",
-          "ComputeInstanceMetadataResolverUtils.java:20",
-          "DigitalOceanMetadataResolver.java:19"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 53.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440637609,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 9.484559294621624,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 9.484559294621624
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -956,7 +683,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -972,31 +698,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'com.fasterxml.jackson.databind' from 32 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "RequestHandler.java:3",
-          "ComputeInstanceMetadataResolverUtils.java:20",
-          "DigitalOceanMetadataResolver.java:19"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 53.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441827196,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 27.463245684324946,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 27.463245684324946
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1023,7 +730,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1039,31 +745,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'com.fasterxml.jackson.databind' from 32 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "RequestHandler.java:3",
-          "ComputeInstanceMetadataResolverUtils.java:20",
-          "DigitalOceanMetadataResolver.java:19"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441436791,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 27.43897875705461,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 27.43897875705461
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -1092,7 +779,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1108,26 +794,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "no Java import matched any candidate prefix ('com.github.tomakehurst, com.github.tomakehurst.wiremockjre8'); Maven coord -> package mapping is heuristic, dep may still be used"
+          "numeric": 0.3
         },
-        "evidence": [],
         "verdict": "not_evaluated"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 39.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.442088997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 4.295845014306863,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.6135,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 4.295845014306863
       },
       "severity": "low",
       "ssvc_automatable": null,
@@ -1154,7 +826,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1170,27 +841,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "no Java import matched any candidate prefix ('com.h2database, com.h2database.h2'); Maven coord -> package mapping is heuristic, dep may still be used"
+          "numeric": 0.3
         },
-        "evidence": [],
         "verdict": "not_evaluated"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 78.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44067435299999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 12.625648796511841,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.6135,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 12.625648796511841
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -1217,7 +873,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1233,30 +888,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 69.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44102342099999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 12.358633942900122,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 12.358633942900122
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1283,7 +920,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1299,30 +935,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 53.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44096371199999995,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 9.491578539408,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 9.491578539408
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1349,7 +967,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1365,31 +982,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.442254345,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 27.489796557691314,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 27.489796557691314
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -1416,7 +1014,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1432,30 +1029,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 53.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44265852899999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 9.528058839776625,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 9.528058839776625
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1482,7 +1061,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1498,30 +1076,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 69.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44102801399999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 12.358762650816747,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 12.358762650816747
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1548,7 +1108,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1564,31 +1123,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44374706999999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 27.582581867842602,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 27.582581867842602
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -1615,7 +1155,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1631,30 +1170,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 82.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.444256893,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 14.794754114909248,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 14.794754114909248
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -1681,7 +1202,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1697,30 +1217,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 86.99999999999999,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.444458985,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 15.70401375963187,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 15.70401375963187
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -1747,7 +1249,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1763,31 +1264,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 65.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440426331,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 27.37617023941374,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 27.37617023941374
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1814,7 +1296,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1830,30 +1311,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 63.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44121632699999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.288905790581122,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 11.288905790581122
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1880,7 +1343,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1896,31 +1358,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 73.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.443048934,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 27.539186892018005,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 27.539186892018005
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -1947,7 +1390,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1963,31 +1405,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 53.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44553834,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 27.69392424002415,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 27.69392424002415
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -2014,7 +1437,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2030,30 +1452,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 65.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441073944,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.643525107954998,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 11.643525107954998
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -2080,7 +1484,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2096,31 +1499,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.442254345,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 27.489796557691314,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 27.489796557691314
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -2147,7 +1531,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2163,31 +1546,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 65.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44066975999999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 27.391301382299947,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 27.391301382299947
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -2214,7 +1578,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2230,30 +1593,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 65.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44068813199999995,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.633340394552496,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 11.633340394552496
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -2280,7 +1625,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2296,31 +1640,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44374706999999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 27.582581867842602,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 27.582581867842602
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -2347,7 +1672,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2363,30 +1687,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44246103,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.187779432349998,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 7.187779432349998
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -2413,7 +1719,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2429,31 +1734,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 57.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441335745,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 20.610591964906483,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 20.610591964906483
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -2480,7 +1766,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2496,31 +1781,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 53.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440265576,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 27.3661779752436,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 27.3661779752436
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -2547,7 +1813,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2563,30 +1828,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 86.99999999999999,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44209359,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 15.620437553771245,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 15.620437553771245
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -2613,7 +1860,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2629,31 +1875,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 65.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44093615399999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 27.407859991496178,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 27.407859991496178
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -2680,7 +1907,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2696,30 +1922,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.442254345,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 13.470790939734373,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 13.470790939734373
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -2746,7 +1954,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2762,31 +1969,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.442419693,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 27.50007431512346,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 27.50007431512346
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -2813,7 +2001,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2829,30 +2016,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 69.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441997137,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 12.385920021224623,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 12.385920021224623
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -2879,7 +2048,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2895,31 +2063,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 53.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44066057399999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 27.390730395775936,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 27.390730395775936
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -2946,7 +2095,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2962,31 +2110,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 57.99999999999999,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44209359,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 27.479804293521177,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 27.479804293521177
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3013,7 +2142,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3029,31 +2157,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 28.999999999999996,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.444091545,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 20.739289152887228,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 20.739289152887228
       },
       "severity": "low",
       "ssvc_automatable": null,
@@ -3080,7 +2189,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3096,30 +2204,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 81.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.443733291,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 14.597105807397373,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 14.597105807397373
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -3146,7 +2236,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3162,31 +2251,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44926785599999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 27.925744768771363,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 27.925744768771363
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -3213,7 +2283,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3229,30 +2298,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 90.99999999999999,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440651388,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 16.285318590586495,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 16.285318590586495
       },
       "severity": "critical",
       "ssvc_automatable": null,
@@ -3279,7 +2330,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3295,30 +2345,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441455163,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 13.446448355503122,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 13.446448355503122
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -3345,7 +2377,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3361,30 +2392,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 69.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440917782,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 12.355673660817748,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 12.355673660817748
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3411,7 +2424,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3427,30 +2439,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.443430153,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 13.506605316534374,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 13.506605316534374
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -3477,7 +2471,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3493,30 +2486,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.439824648,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.14495140676,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 7.14495140676
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3543,7 +2518,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3559,30 +2533,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'io.netty' from 167 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "FullHttpStackBenchmark.java:6",
-          "RequestHandler.java:6",
-          "NettyByteBuffer.java:22"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.439824648,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.14495140676,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 7.14495140676
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3609,7 +2565,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3625,31 +2580,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "Java imports under 'io.vertx' only from test files"
+          "numeric": 0.3
         },
-        "evidence": [
-          "Http2PostTest.java:21",
-          "Http2PostTest.java:22",
-          "Http2PostTest.java:23"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 69.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44096371199999995,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 27.409572951068203,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 27.409572951068203
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3676,7 +2612,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3692,30 +2627,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'org.apache.logging.log4j' from 2 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "Log4jLoggingSystem.java:23",
-          "Log4jLoggingSystem.java:26",
-          "Log4jLoggingSystem.java:24"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 69.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.444004278,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 12.442165380789747,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 12.442165380789747
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3742,7 +2659,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3758,30 +2674,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'org.apache.logging.log4j' from 2 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "Log4jLoggingSystem.java:23",
-          "Log4jLoggingSystem.java:26",
-          "Log4jLoggingSystem.java:24"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 63.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44177207999999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.303125217369999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 11.303125217369999
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3808,7 +2706,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3824,30 +2721,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'org.apache.logging.log4j' from 2 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "Log4jLoggingSystem.java:23",
-          "Log4jLoggingSystem.java:26",
-          "Log4jLoggingSystem.java:24"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 69.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44165725499999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 12.376395635394372,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 12.376395635394372
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3874,7 +2753,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3890,30 +2768,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'org.apache.logging.log4j' from 2 non-test file(s) (heuristic match)"
+          "numeric": 0.7
         },
-        "evidence": [
-          "Log4jLoggingSystem.java:23",
-          "Log4jLoggingSystem.java:26",
-          "Log4jLoggingSystem.java:24"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 63.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.442722831,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.327451013612125,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 11.327451013612125
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3940,7 +2800,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3956,26 +2815,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "no Java import matched any candidate prefix ('org.bouncycastle, org.bouncycastle.bcpkixjdk15on'); Maven coord -> package mapping is heuristic, dep may still be used"
+          "numeric": 0.3
         },
-        "evidence": [],
         "verdict": "not_evaluated"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 63.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44131737299999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.92732981494606,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.6135,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 6.92732981494606
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -4002,7 +2847,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4018,26 +2862,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "no Java import matched any candidate prefix ('org.bouncycastle, org.bouncycastle.bcpkixjdk15on'); Maven coord -> package mapping is heuristic, dep may still be used"
+          "numeric": 0.3
         },
-        "evidence": [],
         "verdict": "not_evaluated"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 63.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44276876099999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.9501121570440105,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.6135,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 6.9501121570440105
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -4064,7 +2894,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4080,26 +2909,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "no Java import matched any candidate prefix ('org.jetbrains.kotlin, org.jetbrains.kotlin.kotlingradleplugin'); Maven coord -> package mapping is heuristic, dep may still be used"
+          "numeric": 0.3
         },
-        "evidence": [],
         "verdict": "not_evaluated"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 67.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440729469,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 3.994570163101565,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 0.6135,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 3.994570163101565
       },
       "severity": "medium",
       "ssvc_automatable": null,

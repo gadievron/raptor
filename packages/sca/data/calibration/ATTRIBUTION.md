@@ -138,6 +138,12 @@ advisory data keeps its source terms. Advisory blocks retain only identifiers
 (`id` / legacy `osv_id`), aliases, CVE join keys (`cves` / `cve_id`), and the
 `informational` flag. Advisory prose, references, timestamps, severity metadata,
 and fixed-version lists are omitted because calibration does not read them.
+The archive also omits intermediate risk multipliers (retaining only
+`risk_components.final`), reachability evidence and confidence explanations,
+and the derived `exploit_evidence.has_any` flag. It preserves every scoring
+input, including the reachability verdict/confidence and the underlying
+exploit-evidence lists and KEV flag.
+
 The projects themselves are NOT redistributed — only the scan findings (with
 file paths under the discarded clone tree stripped before storage).
 

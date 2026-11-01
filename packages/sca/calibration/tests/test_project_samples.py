@@ -376,3 +376,50 @@ def test_sanitise_advisory_handles_missing_or_invalid_blocks(tmp_path, advisory)
     findings = _fake_findings(tmp_path)
     findings[0]["sca"]["advisory"] = advisory
     assert _sanitise_findings(findings, tmp_path)[0]["advisory"] is None
+
+
+@pytest.mark.parametrize("verdict", ["imported", "not_reachable", "not_evaluated"])
+def test_sanitise_diagnostics_preserves_rescoring(tmp_path, verdict):
+    from packages.sca.calibration.refit import _rescore_finding
+    findings = _fake_findings(tmp_path)
+    sca = findings[0]["sca"]
+    sca["risk_components"] = {"final": 0.65, "cvss_base": 75.0, "diagnostic": "discard"}
+    sca["reachability"] = {
+        "verdict": verdict,
+        "confidence": {"level": "low", "numeric": 0.3, "reason": "discard"},
+        "evidence": [str(tmp_path / "discarded-source.py")],
+    }
+    sca["exploit_evidence"] = {
+        "kev_listed": False, "edb_ids": [123], "msf_modules": [],
+        "github_poc_urls": [], "has_any": True,
+    }
+    projected = _sanitise_findings(findings, tmp_path)[0]
+    full = {**projected, **{key: sca[key] for key in
+                           ("risk_components", "reachability", "exploit_evidence")}}
+    assert projected["risk_components"] == {"final": 0.65}
+    assert projected["reachability"] == {"verdict": verdict,
+        "confidence": {"level": "low", "numeric": 0.3}}
+    assert "has_any" not in projected["exploit_evidence"]
+    for overrides in [None, {"_REACH_NOT_EVALUATED_MULTIPLIER": 0.4,
+                             "_REACH_NOT_REACHABLE_MAX_REDUCTION": 0.2}]:
+        assert _rescore_finding(projected, overrides) == _rescore_finding(full, overrides)
+
+
+@pytest.mark.parametrize("raw", [None, [], "invalid", {}, {"confidence": None},
+                               {"confidence": "invalid"}, {"confidence": {}}])
+def test_sanitise_reachability_preserves_missing_and_invalid_semantics(tmp_path, raw):
+    from packages.sca.calibration.refit import _rescore_finding
+    findings = _fake_findings(tmp_path)
+    findings[0]["sca"]["reachability"] = raw
+    projected = _sanitise_findings(findings, tmp_path)[0]
+    full = {**projected, "reachability": raw}
+    assert _rescore_finding(projected, None) == _rescore_finding(full, None)
+
+
+def test_committed_project_samples_are_all_readable_by_calibration():
+    from packages.sca.calibration.validate import _load_project_samples
+    samples_dir = Path(__file__).resolve().parents[2] / "data/calibration/project_samples"
+    files = sorted(samples_dir.rglob("*.json"))
+    assert files, "calibration sample coverage check must not be vacuous"
+    loaded = _load_project_samples(samples_dir)
+    assert len(loaded) == len(files), "calibration silently skipped an invalid or oversized sample"

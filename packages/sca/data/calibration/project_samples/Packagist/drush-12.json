@@ -27,7 +27,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -43,33 +42,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Drupal\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+248 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 69.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441101502,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 12.360821977482749,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 12.360821977482749
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -98,7 +76,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -114,33 +91,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Drupal\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+248 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 54.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440743248,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 9.665829986075998,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 9.665829986075998
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -169,7 +125,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -185,33 +140,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Drupal\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+248 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 98.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44347148999999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 17.6502761698725,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 17.6502761698725
       },
       "severity": "critical",
       "ssvc_automatable": null,
@@ -240,7 +174,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -256,33 +189,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Drupal\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+248 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 98.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.443714919,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 17.659964704929752,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 17.659964704929752
       },
       "severity": "critical",
       "ssvc_automatable": null,
@@ -311,7 +223,6 @@
           52266
         ],
         "github_poc_urls": [],
-        "has_any": true,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -327,33 +238,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Drupal\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+248 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 63.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.48177251699999996,
-        "exploit_evidence_multiplier": 1.7423,
-        "exposure_multiplier": 0.45,
-        "final": 29.946541530637095,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 29.946541530637095
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -382,7 +272,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -398,33 +287,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Drupal\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+248 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 98.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.442993818,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 17.6312647048545,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 17.6312647048545
       },
       "severity": "critical",
       "ssvc_automatable": null,
@@ -453,7 +321,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -469,33 +336,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
+          "numeric": 0.7
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+180 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.440793771,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.513735003619148,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 5.513735003619148
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -524,7 +370,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -540,33 +385,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
+          "numeric": 0.7
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+180 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44031609899999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.50775997175635,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 5.50775997175635
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -595,7 +419,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -611,33 +434,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
+          "numeric": 0.7
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+180 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.440476854,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.5097707997871,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 5.5097707997871
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -665,7 +467,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -681,33 +482,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
+          "numeric": 0.7
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+180 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.440821329,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.51407971699585,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 5.51407971699585
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -735,7 +515,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -751,33 +530,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
+          "numeric": 0.7
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+180 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.440821329,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.51407971699585,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 5.51407971699585
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -805,7 +563,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -821,33 +578,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
+          "numeric": 0.7
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+180 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44075702699999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.513275385783549,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 5.513275385783549
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -875,7 +611,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -891,33 +626,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
+          "numeric": 0.7
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+180 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44021505299999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.5064960227084505,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 5.5064960227084505
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -945,7 +659,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -961,33 +674,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
+          "numeric": 0.7
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+180 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.440453889,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.5094835386398495,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 5.5094835386398495
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1014,7 +706,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1030,33 +721,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
+          "numeric": 0.7
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+180 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.440100228,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.5050597169722,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 5.5050597169722
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1083,7 +753,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1099,33 +768,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
+          "numeric": 0.7
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+180 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44023801799999995,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.5067832838556985,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 5.5067832838556985
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1152,7 +800,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1168,33 +815,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
+          "numeric": 0.7
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+180 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.440697318,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.5125285068007,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 5.5125285068007
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1221,7 +847,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1237,33 +862,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
+          "numeric": 0.7
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+180 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.440104821,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.50511716920165,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 5.50511716920165
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1292,7 +896,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1308,33 +911,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
+          "numeric": 0.7
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+180 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 45.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44193283499999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.218981051088093,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 6.218981051088093
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1363,7 +945,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1379,33 +960,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
+          "numeric": 0.7
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+180 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 61.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.440628423,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 8.4052917531224,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 8.4052917531224
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1434,7 +994,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1450,33 +1009,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
+          "numeric": 0.7
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+180 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 59.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.440968305,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 8.135979327798921,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 8.135979327798921
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1501,7 +1039,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1517,33 +1054,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
+          "numeric": 0.7
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+180 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 8.3664105525,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 8.3664105525
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1572,7 +1088,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1588,33 +1103,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
+          "numeric": 0.7
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+180 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 69.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.441101502,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 9.517832922661716,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 9.517832922661716
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1643,7 +1137,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1659,33 +1152,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
+          "numeric": 0.7
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+180 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 54.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.440743248,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.442689089278519,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 7.442689089278519
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1714,7 +1186,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1730,33 +1201,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
+          "numeric": 0.7
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+180 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 98.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44347148999999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 13.590712650801827,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 13.590712650801827
       },
       "severity": "critical",
       "ssvc_automatable": null,
@@ -1785,7 +1235,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1801,33 +1250,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
+          "numeric": 0.7
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+180 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 61.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.440205867,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 8.397231205330563,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 8.397231205330563
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1858,7 +1286,6 @@
           52608
         ],
         "github_poc_urls": [],
-        "has_any": true,
         "kev_listed": true,
         "msf_modules": [
           "auxiliary_scanner/http/drupal_pgsql_entityquery_sqli"
@@ -1876,33 +1303,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
+          "numeric": 0.7
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+180 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 98.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.8497269329999999,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 50.326633988443525,
-        "kev_multiplier": 1.9326,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 50.326633988443525
       },
       "severity": "critical",
       "ssvc_automatable": null,
@@ -1931,7 +1337,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1947,33 +1352,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
+          "numeric": 0.7
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+180 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 98.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.443714919,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 13.59817282279591,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 13.59817282279591
       },
       "severity": "critical",
       "ssvc_automatable": null,
@@ -2002,7 +1386,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2018,33 +1401,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
+          "numeric": 0.7
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+180 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 54.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44150568599999995,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.455564133898263,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 7.455564133898263
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -2073,7 +1435,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2089,33 +1450,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
+          "numeric": 0.7
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+180 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 59.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44048603999999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 8.12708141376285,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 8.12708141376285
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -2144,7 +1484,6 @@
           52266
         ],
         "github_poc_urls": [],
-        "has_any": true,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2160,33 +1499,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
+          "numeric": 0.7
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+180 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 63.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.48177251699999996,
-        "exploit_evidence_multiplier": 1.7423,
-        "exposure_multiplier": 0.45,
-        "final": 23.05883697859057,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 23.05883697859057
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -2215,7 +1533,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2231,33 +1548,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
+          "numeric": 0.7
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+180 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 98.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.442993818,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 13.576073822737966,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 13.576073822737966
       },
       "severity": "critical",
       "ssvc_automatable": null,
@@ -2286,7 +1582,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2302,33 +1597,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
+          "numeric": 0.7
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+180 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 53.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.440655981,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.303415153674735,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 7.303415153674735
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -2357,7 +1631,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2373,33 +1646,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
+          "numeric": 0.7
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+180 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 65.99999999999999,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44103260699999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 9.102592157258403,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 9.102592157258403
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -2428,7 +1680,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2444,33 +1695,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
+          "numeric": 0.7
         },
-        "evidence": [
-          "src/Boot/DrupalBoot8.php:7",
-          "src/Commands/core/TwigCommands.php:8",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "... (+180 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44138626799999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 10.352149389784122,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 10.352149389784122
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -2497,7 +1727,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2513,30 +1742,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "src/Commands/DrushCommands.php:17",
-          "src/Commands/DrushCommands.php:18",
-          "src/Commands/DrushCommands.php:19"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 53.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440908596,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 9.4903921881765,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 9.4903921881765
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -2563,7 +1774,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2579,30 +1789,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "src/Commands/DrushCommands.php:17",
-          "src/Commands/DrushCommands.php:18",
-          "src/Commands/DrushCommands.php:19"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 57.99999999999999,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440169123,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 10.368293734545748,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 10.368293734545748
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -2629,7 +1821,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2645,30 +1836,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "src/Commands/DrushCommands.php:17",
-          "src/Commands/DrushCommands.php:18",
-          "src/Commands/DrushCommands.php:19"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 53.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44111987399999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 9.494939867897248,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 9.494939867897248
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -2695,7 +1868,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2711,30 +1883,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "src/Commands/DrushCommands.php:17",
-          "src/Commands/DrushCommands.php:18",
-          "src/Commands/DrushCommands.php:19"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 65.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440114007,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.618184571036872,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 11.618184571036872
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -2761,7 +1915,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2777,30 +1930,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "src/Commands/DrushCommands.php:17",
-          "src/Commands/DrushCommands.php:18",
-          "src/Commands/DrushCommands.php:19"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 47.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.43996703099999995,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 8.398035691849122,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 8.398035691849122
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -2827,7 +1962,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2843,30 +1977,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "src/Commands/DrushCommands.php:17",
-          "src/Commands/DrushCommands.php:18",
-          "src/Commands/DrushCommands.php:19"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 59.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440908596,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 10.5647762094795,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 10.5647762094795
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -2893,7 +2009,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2909,30 +2024,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "src/Commands/DrushCommands.php:17",
-          "src/Commands/DrushCommands.php:18",
-          "src/Commands/DrushCommands.php:19"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 72.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44089941,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 12.89233964781,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 12.89233964781
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -2959,7 +2056,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2975,30 +2071,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "src/Commands/DrushCommands.php:17",
-          "src/Commands/DrushCommands.php:18",
-          "src/Commands/DrushCommands.php:19"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 59.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440881038,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 10.56411588190725,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 10.56411588190725
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3025,7 +2103,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3041,30 +2118,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "src/Commands/DrushCommands.php:17",
-          "src/Commands/DrushCommands.php:18",
-          "src/Commands/DrushCommands.php:19"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 59.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.439879764,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 10.540123980115501,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 10.540123980115501
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3091,7 +2150,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3107,30 +2165,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "src/Commands/DrushCommands.php:17",
-          "src/Commands/DrushCommands.php:18",
-          "src/Commands/DrushCommands.php:19"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 53.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.440109414,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.294356373396207,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 7.294356373396207
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3157,7 +2197,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3173,30 +2212,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "src/Commands/DrushCommands.php:17",
-          "src/Commands/DrushCommands.php:18",
-          "src/Commands/DrushCommands.php:19"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 42.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.440655981,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.787612008572433,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 5.787612008572433
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3223,7 +2244,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3239,30 +2259,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "src/Commands/DrushCommands.php:17",
-          "src/Commands/DrushCommands.php:18",
-          "src/Commands/DrushCommands.php:19"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 53.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44007267,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.293747379764037,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 7.293747379764037
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3289,7 +2291,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3305,30 +2306,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "src/Commands/DrushCommands.php:17",
-          "src/Commands/DrushCommands.php:18",
-          "src/Commands/DrushCommands.php:19"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 48.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.440251797,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.6083467686528605,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 6.6083467686528605
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3355,7 +2338,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3371,33 +2353,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "vendor referenced only by test code"
+          "numeric": 0.7
         },
-        "evidence": [
-          "tests/unish/UnishTestCase.php:10",
-          "tests/unit/ArgsPreprocessorTest.php:8",
-          "tests/unit/ArgsRemapperTest.php:8",
-          "tests/unit/ConfigLocatorTest.php:8",
-          "tests/unit/EnvironmentTest.php:8",
-          "... (+9 more)"
-        ],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 78.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44096371199999995,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 9.926464759444919,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 9.926464759444919
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -3424,7 +2385,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3440,33 +2400,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Psy\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "src/Commands/core/CliCommands.php:16",
-          "src/Commands/core/CliCommands.php:17",
-          "src/Psysh/DrushCommand.php:10",
-          "src/Psysh/DrushHelpCommand.php:7",
-          "src/Psysh/Shell.php:7"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 67.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44067894599999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 20.5799191351044,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 20.5799191351044
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3493,7 +2432,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3509,26 +2447,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Squizlabs\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 73.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.444082359,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 9.355856071801881,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 9.355856071801881
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -3555,7 +2479,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3571,33 +2494,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "doctum-config.php:10",
-          "src/Commands/core/PhpCommands.php:12",
-          "src/Commands/core/TwigCommands.php:19",
-          "drush.php:8",
-          "src/Boot/DrupalBoot.php:8",
-          "... (+261 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 73.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44566694399999995,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 10.173812569794718,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 10.173812569794718
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -3624,7 +2526,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3640,33 +2541,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "doctum-config.php:10",
-          "src/Commands/core/PhpCommands.php:12",
-          "src/Commands/core/TwigCommands.php:19",
-          "drush.php:8",
-          "src/Boot/DrupalBoot.php:8",
-          "... (+261 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 31.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.441896091,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 4.28383074248254,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 4.28383074248254
       },
       "severity": "low",
       "ssvc_automatable": null,
@@ -3693,7 +2573,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3709,33 +2588,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "doctum-config.php:10",
-          "src/Commands/core/PhpCommands.php:12",
-          "src/Commands/core/TwigCommands.php:19",
-          "drush.php:8",
-          "src/Boot/DrupalBoot.php:8",
-          "... (+261 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 86.99999999999999,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44140463999999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 12.008993126545798,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 12.008993126545798
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -3762,7 +2620,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3778,33 +2635,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "doctum-config.php:10",
-          "src/Commands/core/PhpCommands.php:12",
-          "src/Commands/core/TwigCommands.php:19",
-          "drush.php:8",
-          "src/Boot/DrupalBoot.php:8",
-          "... (+261 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 71.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44194661399999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 9.8124760359497,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 9.8124760359497
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -3831,7 +2667,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3847,33 +2682,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "doctum-config.php:10",
-          "src/Commands/core/PhpCommands.php:12",
-          "src/Commands/core/TwigCommands.php:19",
-          "drush.php:8",
-          "src/Boot/DrupalBoot.php:8",
-          "... (+261 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 49.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44099127,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.757351675619739,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 6.757351675619739
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3900,7 +2714,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3916,33 +2729,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "doctum-config.php:10",
-          "src/Commands/core/PhpCommands.php:12",
-          "src/Commands/core/TwigCommands.php:19",
-          "drush.php:8",
-          "src/Boot/DrupalBoot.php:8",
-          "... (+261 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 27.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44167103399999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 3.729178156124767,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 3.729178156124767
       },
       "severity": "low",
       "ssvc_automatable": null,
@@ -3969,7 +2761,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3985,33 +2776,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "doctum-config.php:10",
-          "src/Commands/core/PhpCommands.php:12",
-          "src/Commands/core/TwigCommands.php:19",
-          "drush.php:8",
-          "src/Boot/DrupalBoot.php:8",
-          "... (+261 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 86.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.441165804,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.86453556353989,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 11.86453556353989
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -4038,7 +2808,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4054,33 +2823,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "doctum-config.php:10",
-          "src/Commands/core/PhpCommands.php:12",
-          "src/Commands/core/TwigCommands.php:19",
-          "drush.php:8",
-          "src/Boot/DrupalBoot.php:8",
-          "... (+261 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.440798364,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.5137924558486,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 5.5137924558486
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -4107,7 +2855,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4123,33 +2870,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "doctum-config.php:10",
-          "src/Commands/core/PhpCommands.php:12",
-          "src/Commands/core/TwigCommands.php:19",
-          "drush.php:8",
-          "src/Boot/DrupalBoot.php:8",
-          "... (+261 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 69.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.440798364,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 9.511291986338835,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 9.511291986338835
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -4176,7 +2902,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4192,33 +2917,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "doctum-config.php:10",
-          "src/Commands/core/PhpCommands.php:12",
-          "src/Commands/core/TwigCommands.php:19",
-          "drush.php:8",
-          "src/Boot/DrupalBoot.php:8",
-          "... (+261 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 31.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.441289815,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 4.277953379409807,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 4.277953379409807
       },
       "severity": "low",
       "ssvc_automatable": null,
@@ -4245,7 +2949,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4261,33 +2964,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "doctum-config.php:10",
-          "src/Commands/core/PhpCommands.php:12",
-          "src/Commands/core/TwigCommands.php:19",
-          "drush.php:8",
-          "src/Boot/DrupalBoot.php:8",
-          "... (+261 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 86.99999999999999,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441014235,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 15.58230083847562,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 15.58230083847562
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -4314,7 +2996,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4330,33 +3011,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "doctum-config.php:10",
-          "src/Commands/core/PhpCommands.php:12",
-          "src/Commands/core/TwigCommands.php:19",
-          "drush.php:8",
-          "src/Boot/DrupalBoot.php:8",
-          "... (+261 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 27.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.442341612,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 4.850441653684499,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 4.850441653684499
       },
       "severity": "low",
       "ssvc_automatable": null,
@@ -4383,7 +3043,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4399,33 +3058,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "doctum-config.php:10",
-          "src/Commands/core/PhpCommands.php:12",
-          "src/Commands/core/TwigCommands.php:19",
-          "drush.php:8",
-          "src/Boot/DrupalBoot.php:8",
-          "... (+261 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 27.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.442341612,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 4.850441653684499,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 4.850441653684499
       },
       "severity": "low",
       "ssvc_automatable": null,
@@ -4452,7 +3090,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4468,33 +3105,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "doctum-config.php:10",
-          "src/Commands/core/PhpCommands.php:12",
-          "src/Commands/core/TwigCommands.php:19",
-          "drush.php:8",
-          "src/Boot/DrupalBoot.php:8",
-          "... (+261 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 27.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44209359,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 4.84772199944625,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 4.84772199944625
       },
       "severity": "low",
       "ssvc_automatable": null,
@@ -4521,7 +3137,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4537,26 +3152,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Twig\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.440554935,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 3.916047379700669,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 3.916047379700669
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -4583,7 +3184,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4599,27 +3199,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Twig\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 13.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.440554935,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.257697735884879,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 11.257697735884879
       },
       "severity": "low",
       "ssvc_automatable": null,
@@ -4646,7 +3231,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4662,26 +3246,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Twig\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 86.99999999999999,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44086266599999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 8.523352522186144,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 8.523352522186144
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -4708,7 +3278,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4724,26 +3293,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Twig\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44111987399999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 3.921069064205555,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 3.921069064205555
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -4770,7 +3325,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4786,26 +3340,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Twig\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 22.000000000000004,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.441179583,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 2.1568798962415916,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 2.1568798962415916
       },
       "severity": "low",
       "ssvc_automatable": null,
@@ -4832,7 +3372,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4848,26 +3387,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Twig\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 85.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.443099457,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 8.369663918314144,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 8.369663918314144
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -4894,7 +3419,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4910,26 +3434,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Twig\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 57.99999999999999,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.441372489,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.688806072685573,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 5.688806072685573
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -4956,7 +3466,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4972,26 +3481,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Twig\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 93.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.442359984,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 9.142114537269316,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 9.142114537269316
       },
       "severity": "critical",
       "ssvc_automatable": null,
@@ -5018,7 +3513,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -5034,26 +3528,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Twig\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.440885631,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 3.918986902337675,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 3.918986902337675
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -5080,7 +3560,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -5096,26 +3575,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Twig\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.441069351,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 3.9206199704693456,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 3.9206199704693456
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -5142,7 +3607,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -5158,26 +3622,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Twig\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 22.000000000000004,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.441152025,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 2.156745168120729,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 2.156745168120729
       },
       "severity": "low",
       "ssvc_automatable": null,
@@ -5204,7 +3654,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -5220,26 +3669,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Twig\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.441418419,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 3.9237227999195197,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 3.9237227999195197
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -5266,7 +3701,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -5282,26 +3716,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Twig\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44104638599999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 3.9204158369528863,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 3.9204158369528863
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -5328,7 +3748,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -5344,26 +3763,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Twig\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 21.000000000000004,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.440720283,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 2.056696499035066,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 2.056696499035066
       },
       "severity": "low",
       "ssvc_automatable": null,

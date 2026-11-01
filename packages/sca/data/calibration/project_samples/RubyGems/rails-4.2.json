@@ -25,7 +25,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -41,28 +40,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activemodel/lib/active_model/secure_password.rb:58"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 45.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440288541,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 4.368763048072499,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 4.368763048072499
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -89,7 +72,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -105,29 +87,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/cache/mem_cache_store.rb:2"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 37.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.445621014,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.298892947574632,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.7
+        "final": 11.298892947574632
       },
       "severity": "low",
       "ssvc_automatable": null,
@@ -154,7 +119,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -170,26 +134,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `require 'jquery-rails'` found (also tried ['jquery_rails'])"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.45995576699999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 2.882850226223662,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 2.882850226223662
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -221,7 +171,6 @@
           52141
         ],
         "github_poc_urls": [],
-        "has_any": true,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -237,26 +186,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `require 'jquery-rails'` found (also tried ['jquery_rails'])"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 61.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.8379642599999999,
-        "exploit_evidence_multiplier": 1.7423,
-        "exposure_multiplier": 0.45,
-        "final": 20.096315657765853,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 20.096315657765853
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -286,7 +221,6 @@
           49766
         ],
         "github_poc_urls": [],
-        "has_any": true,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -302,26 +236,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `require 'jquery-rails'` found (also tried ['jquery_rails'])"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 69.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.894894495,
-        "exploit_evidence_multiplier": 1.7423,
-        "exposure_multiplier": 0.45,
-        "final": 21.46163399846787,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 21.46163399846787
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -351,7 +271,6 @@
           49767
         ],
         "github_poc_urls": [],
-        "has_any": true,
         "kev_listed": true,
         "msf_modules": []
       },
@@ -367,26 +286,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `require 'jquery-rails'` found (also tried ['jquery_rails'])"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 69.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.8290859909999999,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 24.30317026873621,
-        "kev_multiplier": 1.9326,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 24.30317026873621
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -413,7 +318,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -429,26 +333,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `require 'jquery-rails'` found (also tried ['jquery_rails'])"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 61.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.575731518,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.502953719435261,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 5.502953719435261
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -475,7 +365,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -491,32 +380,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.459620478,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.600973654924999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 7.600973654924999
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -543,7 +412,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -559,32 +427,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 59.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.455716428,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.928642870065999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 5.928642870065999
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -611,7 +459,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -627,32 +474,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.899256999999999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 5.899256999999999
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -679,7 +506,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -695,32 +521,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44590578,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.374166836749998,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 7.374166836749998
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -745,7 +551,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -761,32 +566,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.899256999999999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 5.899256999999999
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -813,7 +598,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -829,32 +613,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 53.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.468857001,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.479297342186499,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 5.479297342186499
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -881,7 +645,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -897,32 +660,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 88.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.520192962,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 10.093824234648,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 10.093824234648
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -949,7 +692,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -965,32 +707,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 63.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441156618,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.128327158946999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 6.128327158946999
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1017,7 +739,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1033,32 +754,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 17.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441156618,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 1.6536755825729996,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 1.6536755825729996
       },
       "severity": "low",
       "ssvc_automatable": null,
@@ -1085,7 +786,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1101,32 +801,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.899256999999999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 5.899256999999999
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1153,7 +833,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1169,32 +848,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.45641456399999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.547955852149999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 7.547955852149999
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -1221,7 +880,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1237,32 +895,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.449157624,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.427944206899999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 7.427944206899999
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -1289,7 +927,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1305,33 +942,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.475190748,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 16.036746462455014,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.7
+        "final": 16.036746462455014
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -1358,7 +974,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1374,32 +989,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.899256999999999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 5.899256999999999
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1426,7 +1021,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1442,32 +1036,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 26.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440109414,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 2.5231472704619997,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 2.5231472704619997
       },
       "severity": "low",
       "ssvc_automatable": null,
@@ -1494,7 +1068,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1510,32 +1083,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 65.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.45179400599999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.475337590994998,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 6.475337590994998
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1562,7 +1115,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1578,32 +1130,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.460447218,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.614645867674999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 7.614645867674999
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -1630,7 +1162,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1646,32 +1177,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 17.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44131277999999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 1.6542609558299994,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 1.6542609558299994
       },
       "severity": "low",
       "ssvc_automatable": null,
@@ -1698,7 +1209,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1714,32 +1224,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441464349,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.300716671587498,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 7.300716671587498
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -1766,7 +1256,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1782,32 +1271,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.46284017099999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.654219327912499,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 7.654219327912499
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -1834,7 +1303,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1850,32 +1318,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 86.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 12.683402549999997,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 12.683402549999997
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -1902,7 +1350,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1918,32 +1365,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 98.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.46629410699999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 10.076149358162999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 10.076149358162999
       },
       "severity": "critical",
       "ssvc_automatable": null,
@@ -1970,7 +1397,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1986,32 +1412,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.455362767,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.5305617592625005,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 7.5305617592625005
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -2038,7 +1444,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2054,32 +1459,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.899256999999999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 5.899256999999999
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -2106,7 +1491,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2122,32 +1506,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 98.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.47851148699999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 10.340154722583,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 10.340154722583
       },
       "severity": "critical",
       "ssvc_automatable": null,
@@ -2172,7 +1536,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2188,32 +1551,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.061106874999998,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 11.061106874999998
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -2241,7 +1584,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2257,33 +1599,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.676809669,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 22.84098566896151,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.7
+        "final": 22.84098566896151
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -2310,7 +1631,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2326,32 +1646,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 86.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.517216698,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 9.807980244173999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 9.807980244173999
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -2378,7 +1678,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2394,32 +1693,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 78.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.503551149999996,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 11.503551149999996
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -2446,7 +1725,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2462,32 +1740,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 17.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44104638599999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 1.6532623779209996,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 1.6532623779209996
       },
       "severity": "low",
       "ssvc_automatable": null,
@@ -2514,7 +1772,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2530,32 +1787,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 88.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.449116287,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 8.714652432948,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 8.714652432948
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -2582,7 +1819,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2598,32 +1834,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 17.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44131277999999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 1.6542609558299994,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 1.6542609558299994
       },
       "severity": "low",
       "ssvc_automatable": null,
@@ -2650,7 +1866,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2666,32 +1881,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.899256999999999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 5.899256999999999
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -2718,7 +1913,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2734,32 +1928,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 98.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.46302389099999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 10.005483260619,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 10.005483260619
       },
       "severity": "critical",
       "ssvc_automatable": null,
@@ -2786,7 +1960,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2802,32 +1975,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 88.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.452694234,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 8.784078916536,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 8.784078916536
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -2854,7 +2007,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2870,32 +2022,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.899256999999999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 5.899256999999999
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -2922,7 +2054,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2938,32 +2069,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 53.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44114283899999995,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.155415787973499,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 5.155415787973499
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -2990,7 +2101,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3006,32 +2116,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 88.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.539598387,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 10.470367101348,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 10.470367101348
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -3056,7 +2146,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3072,32 +2161,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.061106874999998,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 11.061106874999998
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -3124,7 +2193,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3140,32 +2208,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44754548099999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.401283392037499,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 7.401283392037499
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -3192,7 +2240,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3208,32 +2255,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 43.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.444624333,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 4.2157056133395,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 4.2157056133395
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3260,7 +2287,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3276,32 +2302,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.899256999999999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 5.899256999999999
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3328,7 +2334,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3344,32 +2349,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.43977412499999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 3.8788077824999987,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 3.8788077824999987
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3396,7 +2381,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3412,32 +2396,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 17.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44104638599999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 1.6532623779209996,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 1.6532623779209996
       },
       "severity": "low",
       "ssvc_automatable": null,
@@ -3464,7 +2428,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3480,32 +2443,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.46883403599999995,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.753342870349999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 7.753342870349999
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -3532,7 +2475,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3548,32 +2490,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 61.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.448041525,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.026382532012499,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 6.026382532012499
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3600,7 +2522,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3616,32 +2537,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.899256999999999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 5.899256999999999
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3668,7 +2569,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3684,33 +2584,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 82.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.45403539,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 15.733398358605548,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.7
+        "final": 15.733398358605548
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -3735,7 +2614,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3751,32 +2629,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
-          "guides/rails_guides.rb:43",
-          "guides/rails_guides/kindle.rb:7",
-          "guides/rails_guides/markdown.rb:4"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 65.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 9.586292624999999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 9.586292624999999
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3803,7 +2661,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3819,30 +2676,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "railties/lib/rails/engine.rb:452",
-          "railties/lib/rails/generators/rails/plugin/plugin_generator.rb:359",
-          "railties/lib/rails/test_unit/sub_test_task.rb:1"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 64.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.445441887,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.286075909343999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 6.286075909343999
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3869,7 +2708,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3885,29 +2723,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "guides/rails_guides.rb:24",
-          "guides/rails_guides/markdown.rb:3"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 68.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.446498277,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.694795165338,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 6.694795165338
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3934,7 +2755,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3950,28 +2770,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "activerecord/lib/active_record/connection_adapters/sqlite3_adapter.rb:6"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 20.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.43985220599999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 1.9397482284599996,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 1.9397482284599996
       },
       "severity": "low",
       "ssvc_automatable": null,
@@ -3998,7 +2802,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4014,26 +2817,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `require 'uglifier'` found (also tried [])"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 98.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.455546487,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.995275087187233,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 6.995275087187233
       },
       "severity": "critical",
       "ssvc_automatable": null,
@@ -4064,7 +2853,6 @@
         "github_poc_urls": [
           "https://github.com/rapid7/metasploit-framework/blob/32e1a1987531a94ea64227fa4f688036184ba83b/modules/exploits/multi/http/rails_web_console_v2_code_exec.rb"
         ],
-        "has_any": true,
         "kev_listed": false,
         "msf_modules": [
           "exploit_multi/http/rails_web_console_v2_code_exec"
@@ -4082,26 +2870,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `require 'web-console'` found (also tried ['web_console'])"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.644543844,
-        "exploit_evidence_multiplier": 1.7423,
-        "exposure_multiplier": 0.45,
-        "final": 15.457647972114941,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
+        "final": 15.457647972114941
       },
       "severity": "medium",
       "ssvc_automatable": null,
