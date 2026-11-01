@@ -608,3 +608,18 @@ class TestSeverityInheritance:
             rule_levels={"high-rule": "error"},
         )
         assert f.level == "note"
+
+
+def test_decoded_sarif_matches_text_parser_without_reserializing():
+    from core.json import dumps_artifact
+    from packages.semgrep.models import parse_sarif, parse_sarif_data
+    data = {"runs": [{"tool": {"driver": {"rules": [
+        {"id": "example", "defaultConfiguration": {"level": "error"}},
+    ]}}, "results": [None, {}, {"ruleId": "example", "message": {"text": "found"},
+        "locations": [{"physicalLocation": {"artifactLocation": {"uri": "a.c"},
+            "region": {"startLine": 2}}}]}]}]}
+    expected = parse_sarif(dumps_artifact(data))
+    assert len(expected) == 1
+    assert expected[0].level == "error"
+    assert parse_sarif_data(data) == expected
+    assert parse_sarif_data([]) == []

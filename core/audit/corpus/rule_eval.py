@@ -23,23 +23,19 @@ files are copied into a minimal excerpt tree (reusing ``run_corpus``'s
 splice/excerpt machinery), and each engine runs over that tree through
 the same sandboxed runners the production scanners use.
 
-Join semantics: a hit counts for a label when it lands in the label's
-pinned file within ``[line_start - slop, line_end + slop]`` (``--slop``,
-default 2).  A rule *targets* a label when the label pins it explicitly
-(optional ``expected_rule_hits``), or — fallback — when the rule's CWE
-metadata intersects the label's CWE (or its bug class's CWE family) and
-the rule's language applies to the pinned file.
+Join semantics: primary locations must lie inside the verified named
+function. Surrounding source-pin context and nested named functions do
+not own that target's alerts. Ambiguous line-level attribution is skipped.
 
-Scoring: per-rule true positives (targeted hit on a ``finding`` label),
-false positives (any hit on a ``clean`` label), misses (targeted
-``finding`` label with no hit), plus untargeted hits (serendipitous
-detections).  The actionable output for rule authoring is the
-RULE-COVERAGE GAP list: ``finding`` labels no evaluated rule even
-targets.
+Scoring version 2: reviewed exact expected_rule_hits confirm the labeled
+mechanism. CWE/language overlaps remain candidates, not true positives.
+Only complete analysis of an exact expectation can establish a miss;
+partial analysis preserves hits for review without treating absence as
+proof. Clean-label hits remain false alarms regardless of rule targeting.
 
-Skips are never failures: missing fixtures, absent engines, and
-per-repo infeasibility are reported in the skip taxonomy (mirroring
-``run_corpus``'s missing-source handling) and excluded from scoring.
+Missing fixtures, absent engines, and per-repo infeasibility are
+reported in the skip taxonomy and excluded from scoring. A run with
+no verifiable source definitions exits unsuccessfully.
 
 Usage:
     python3 -m core.audit.corpus.rule_eval [--class C] [--label ID]...
@@ -51,17 +47,20 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import logging
+import os
 import re
 import shutil
 import sys
 import time
-from dataclasses import dataclass, field
+import uuid
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
-from core.json import save_json
+from core.json import load_json, save_json
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +191,20 @@ class EngineOutcome:
     # ``custom-queries``). Recorded in the results JSON so slow rules
     # are visible and boundable (--spatch-timeout).
     rule_timings: dict[str, float] = field(default_factory=dict)
+
+    # Hits survive partial analysis, but absence cannot then score a miss.
+    analysis_complete: bool = True
+    failed_files: set[str] = field(default_factory=set)
+    failed_rules: set[str] = field(default_factory=set)
+    unconfigured_rules: set[str] = field(default_factory=set)
+    analysis_notes: list[str] = field(default_factory=list)
+
+    def complete_for(self, file: str, rule_id: str = "") -> bool:
+        return (self.ran and self.analysis_complete
+                and file not in self.failed_files
+                and rule_id not in self.failed_rules
+                and rule_id not in self.unconfigured_rules
+                and not (self.errors and not (self.failed_files or self.failed_rules)))
 
     @property
     def ran(self) -> bool:
@@ -609,6 +622,17 @@ def run_semgrep_engine(
         return outcome
 
     dirs = semgrep_config_dirs() if config_dirs is None else config_dirs
+    if config_dirs is None:
+        langs = {_EXT_LANG.get(p.suffix.lower()) for p in excerpt.rglob("*") if p.is_file()}
+        selected = []
+        for directory in dirs:
+            rules, errors = discover_semgrep_rules([directory])
+            if errors or not rules or any(
+                not rule.languages or rule.languages & _WILDCARD_LANGS or rule.languages & langs
+                for rule in rules
+            ):
+                selected.append(directory)
+        dirs = selected
     if not dirs:
         outcome.skipped_reason = "no shipped semgrep rule dirs found"
         return outcome
@@ -623,7 +647,11 @@ def run_semgrep_engine(
         outcome.rule_timings[name] = round(
             result.elapsed_ms / 1000.0, 3,
         )
+        for failure in getattr(result, "files_failed", []):
+            outcome.failed_files.add(_relativize(failure["path"], excerpt))
         if not result.ok:
+            rules, _ = discover_semgrep_rules([d])
+            outcome.failed_rules.update(rule.rule_id for rule in rules)
             detail = "; ".join(result.errors) or f"rc={result.returncode}"
             outcome.errors.append(f"{name}: {detail}")
         for f in result.findings or []:
@@ -655,6 +683,7 @@ def run_cocci_engine(
     rules_dir: Path | None = None,
     timeout_per_rule: int = DEFAULT_SPATCH_TIMEOUT,
     allow_scripting: bool = True,
+    on_rule: Callable[[int, int, str], None] | None = None,
 ) -> EngineOutcome:
     """Run the shipped .cocci rules over the excerpt tree.
 
@@ -684,16 +713,32 @@ def run_cocci_engine(
         return outcome
 
     t0 = time.monotonic()
+    # Parametric-only rules declare their required bindings. A bulk run
+    # has none; their actual callers supply the confirmed domain context.
+    for rule_path in rules_dir.glob("*.cocci"):
+        try:
+            text = rule_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            outcome.failed_rules.add(rule_path.stem)
+            outcome.errors.append(f"{rule_path.stem}: cannot read rule metadata: {exc}")
+            continue
+        if re.search(r"^//[ \t]*@requires-defines:[ \t]*\S", text, re.MULTILINE):
+            outcome.unconfigured_rules.add(rule_path.stem)
     results = cocci_runner.run_rules(
         excerpt, rules_dir,
+        exclude_rules=frozenset(outcome.unconfigured_rules | outcome.failed_rules),
+        on_rule=on_rule,
         no_includes=True,
         timeout_per_rule=timeout_per_rule,
         allow_scripting=allow_scripting,
     )
+    if not results:
+        outcome.skipped_reason = "no configured Coccinelle rule executed"
     for res in results:
         outcome.invocations += 1
         outcome.rule_timings[res.rule] = round(res.elapsed_ms / 1000.0, 3)
         if not res.ok:
+            outcome.failed_rules.add(res.rule)
             detail = "; ".join(res.errors) or f"rc={res.returncode}"
             outcome.errors.append(f"{res.rule}: {detail}")
         for m in res.matches or []:
@@ -727,6 +772,11 @@ def merge_engine_outcomes(
     a.invocations += b.invocations
     a.elapsed_s += b.elapsed_s
     a.rule_timings.update(b.rule_timings)
+    a.analysis_complete = a.analysis_complete and b.analysis_complete
+    a.failed_files.update(b.failed_files)
+    a.failed_rules.update(b.failed_rules)
+    a.unconfigured_rules.update(b.unconfigured_rules)
+    a.analysis_notes.extend(b.analysis_notes)
     return a
 
 
@@ -780,6 +830,32 @@ def codeql_feasibility(labels: list[Any]) -> tuple[str, str]:
     return ql_lang, ""
 
 
+def codeql_extraction_notes(artifact: dict[str, Any]) -> list[str]:
+    """Require affirmative extraction coverage before treating absence as a miss."""
+    observed = False
+    incomplete = False
+    for run in artifact.get("runs", []):
+        for invocation in run.get("invocations", []):
+            for note in invocation.get("toolExecutionNotifications", []):
+                attrs = note.get("properties", {}).get("attributes", {})
+                status = attrs.get("extraction_status", {})
+                if status:
+                    observed = True
+                    total = status.get("#total", 0)
+                    incomplete |= (not total or status.get("#partial", 0) > 0
+                                   or status.get("#errors", 0) > 0
+                                   or status.get("#success", 0) != total)
+                if "extractor-failures" in attrs:
+                    observed = True
+                    incomplete |= (attrs["extractor-failures"] > 0
+                                   or attrs.get("extractor-successes", 0) == 0)
+    if incomplete:
+        return ["CodeQL extraction incomplete; absence is not a proven miss"]
+    if not observed:
+        return ["CodeQL extraction coverage unavailable; absence is not a proven miss"]
+    return []
+
+
 def run_codeql_engine(
     excerpt: Path,
     labels: list[Any],
@@ -810,6 +886,7 @@ def run_codeql_engine(
         outcome.skipped_reason = f"no custom queries for {language}"
         return outcome
 
+    os.environ.setdefault("RAPTOR_DIR", str(Path(__file__).resolve().parents[3]))
     from packages.codeql.database_manager import DatabaseManager
     from packages.codeql.query_runner import QueryRunner
 
@@ -839,14 +916,20 @@ def run_codeql_engine(
             time.monotonic() - t_queries, 3,
         )
         if not query_result.success:
+            outcome.analysis_complete = False
             outcome.errors.extend(query_result.errors or [])
         sarif_path = query_result.sarif_path
         if sarif_path and Path(sarif_path).is_file():
-            from packages.semgrep.models import parse_sarif
+            from packages.semgrep.models import parse_sarif_data
 
-            findings = parse_sarif(Path(sarif_path).read_text(  # raw-open: SARIF produced by this harness run (eval lane)
-                encoding="utf-8", errors="replace",
-            ))
+            artifact = load_json(Path(sarif_path), max_bytes=64 * 1024 * 1024)
+            notes = codeql_extraction_notes(artifact)
+            outcome.analysis_notes.extend(notes)
+            if notes:
+                outcome.analysis_complete = False
+            # Reuse the bounded, already decoded artifact; no second raw
+            # read that can race replacement or bypass the byte budget.
+            findings = parse_sarif_data(artifact)
             for f in findings:
                 outcome.hits.append(RuleHit(
                     engine="codeql",
@@ -856,8 +939,11 @@ def run_codeql_engine(
                     line_end=int(f.line_end or 0),
                     message=(f.message or "")[:200],
                 ))
-    except RuntimeError as exc:  # CLI detection raced away
-        outcome.skipped_reason = str(exc)
+    except (RuntimeError, OSError, ValueError) as exc:
+        outcome.analysis_complete = False
+        outcome.errors.append(f"CodeQL execution failed: {exc}")
+        if not outcome.invocations:
+            outcome.skipped_reason = str(exc)
     finally:
         outcome.elapsed_s = time.monotonic() - t0
     return outcome
@@ -868,10 +954,98 @@ def run_codeql_engine(
 # ---------------------------------------------------------------------------
 
 
-def hit_joins_label(hit: RuleHit, label: Any, slop: int = DEFAULT_SLOP) -> bool:
+@dataclass(frozen=True)
+class ScoringSpan:
+    start: int
+    end: int
+    children: tuple[tuple[int, int], ...] = ()
+
+
+def scoring_spans(labels: list[Any], source_dirs: dict[str, Path]) -> tuple[dict, list[dict[str, str]]]:
+    """Keep pin context for verification, but attribute alerts to named definitions."""
+    from .definitions import definitions, function_name
+
+    cache: dict[tuple[str, str], Any] = {}
+    refs: dict[tuple[str, str], bool] = {}
+    spans = {}
+    skipped = []
+    last_file = None
+    # Decode each source once, retaining only one file's text/definitions.
+    for label in sorted(labels, key=lambda lb: (lb.source.repo, lb.source.file)):
+        src = label.source
+        key = (src.repo, src.file)
+        if key != last_file:
+            cache.clear()
+            last_file = key
+        root = source_dirs[src.repo]
+        ref_key = (src.repo, src.sha)
+        if ref_key not in refs:
+            from .lint import _checkout_matches
+            refs[ref_key] = not (root / ".git").exists() or _checkout_matches(root, src.sha)
+        if not refs[ref_key]:
+            skipped.append({"function_id": label.function_id, "reason": "fixture ref does not match source pin"})
+            continue
+        if key not in cache:
+            try:
+                path = source_dirs[src.repo] / src.file
+                with path.open("rb") as stream:  # raw-open: pinned source, bounded definition-only read
+                    raw = stream.read(8 * 1024 * 1024 + 1)
+                if len(raw) > 8 * 1024 * 1024:
+                    raise ValueError("source exceeds definition verification byte budget")
+                text = raw.decode("utf-8")
+                cache[key] = (text, definitions(text, src.file, kernel_extensions=src.repo == "linux-kernel"))
+            except (OSError, UnicodeError, ImportError, ValueError, SyntaxError, RuntimeError) as exc:
+                cache[key] = str(exc)
+        cached = cache[key]
+        text, parsed = ("", cached) if isinstance(cached, str) else cached
+        from .label import compute_span_sha
+        if isinstance(parsed, str):
+            skipped.append({"function_id": label.function_id,
+                            "reason": f"cannot attribute rule hits: {parsed}"})
+            continue
+        expected_sha = getattr(src, "span_sha", "")
+        try:
+            matching_sha = not expected_sha or compute_span_sha(text, src.line_start, src.line_end) == expected_sha
+        except ValueError:
+            matching_sha = False
+        if not matching_sha:
+            skipped.append({"function_id": label.function_id, "reason": "source span fingerprint does not match pin"})
+            continue
+        wanted = function_name(label.function_id, qualified=True)
+        candidates = [] if isinstance(parsed, str) else [
+            d for d in parsed if (d.name == wanted or (
+                "." not in wanted and d.name.rsplit(".", 1)[-1] == wanted))
+            and src.line_start <= d.start and d.end <= src.line_end
+        ]
+        if len(candidates) != 1 or candidates[0].uncertain:
+            detail = parsed if isinstance(parsed, str) else "missing, ambiguous, or uncertain definition"
+            skipped.append({"function_id": label.function_id,
+                            "reason": f"cannot attribute rule hits: {detail}"})
+            continue
+        target = candidates[0]
+        if not target.line_isolated or any(
+            d is not target and not d.line_isolated
+            and target.start <= d.start and d.end <= target.end for d in parsed
+        ):
+            skipped.append({"function_id": label.function_id,
+                            "reason": "multiple code owners share a scoring line"})
+            continue
+        children = tuple((d.decorator_start or d.start, d.end) for d in parsed
+                         if target.start < d.start and d.end <= target.end)
+        spans[(src.repo, label.function_id)] = ScoringSpan(max(src.line_start, target.decorator_start or target.start), target.end, children)
+    return spans, skipped
+
+
+def hit_joins_label(hit: RuleHit, label: Any, slop: int = DEFAULT_SLOP,
+                    definition: ScoringSpan | None = None) -> bool:
     """A hit joins a label when it lands in the pinned file and range."""
     if hit.file != label.source.file:
         return False
+    if definition is not None:
+        # Primary location owns the alert. Context ranges, line slop,
+        # and a broad hit end range must not reach into a neighbour.
+        return (definition.start <= hit.line <= definition.end
+                and not any(start <= hit.line <= end for start, end in definition.children))
     lo = label.source.line_start - slop
     hi = label.source.line_end + slop
     h_lo = hit.line
@@ -920,6 +1094,7 @@ def evaluate(
     inventory: list[RuleInfo],
     *,
     slop: int = DEFAULT_SLOP,
+    definitions_by_label: dict | None = None,
 ) -> dict[str, Any]:
     """Join engine hits to labels and score against ground truth.
 
@@ -934,9 +1109,14 @@ def evaluate(
         outcome = repo_outcomes.get(label.source.repo, {}).get(engine)
         return outcome is not None and outcome.ran
 
+    def complete(label: Any, rule: RuleInfo) -> bool:
+        outcome = repo_outcomes.get(label.source.repo, {}).get(rule.engine)
+        return (_language_compatible(rule, label) and outcome is not None
+                and outcome.complete_for(label.source.file, rule.rule_id))
+
     # Join hits per label.
     label_rows: list[dict[str, Any]] = []
-    joined: dict[tuple[str, str], list[RuleHit]] = {}
+    joined: dict[tuple[str, str, str], list[RuleHit]] = {}
     for label in labels:
         row_hits: list[RuleHit] = []
         for outcome in repo_outcomes.get(
@@ -944,10 +1124,10 @@ def evaluate(
             if not outcome.ran:
                 continue
             for hit in outcome.hits:
-                if hit_joins_label(hit, label, slop):
+                if hit_joins_label(hit, label, slop, (definitions_by_label or {}).get((label.source.repo, label.function_id))):
                     row_hits.append(hit)
                     joined.setdefault(
-                        (label.function_id, f"{hit.engine}:{hit.rule_id}"),
+                        (label.source.repo, label.function_id, f"{hit.engine}:{hit.rule_id}"),
                         [],
                     ).append(hit)
         targeted_by = sorted(
@@ -960,8 +1140,13 @@ def evaluate(
             and rule_targets_label(
                 rules_by_key[f"{h.engine}:{h.rule_id}"], label)
         })
+        confirmed_by = sorted({
+            f"{h.engine}:{h.rule_id}" for h in row_hits
+            if h.rule_id in _expected_rule_ids(label).get(h.engine, [])
+        })
         label_rows.append({
             "function_id": label.function_id,
+            "repo": label.source.repo,
             "bug_class": label.bug_class,
             "expected": label.expected_status,
             "cwe": getattr(label, "cwe", ""),
@@ -976,7 +1161,18 @@ def evaluate(
                 for h in row_hits
             ],
             "targeted_by": targeted_by,
-            "detected_by": detected_by,
+            "detected_by": confirmed_by,
+            "candidate_by": sorted(set(detected_by) - set(confirmed_by)),
+            "confirmed_by": confirmed_by,
+            "engines_complete": sorted(
+                engine for engine, outcome in repo_outcomes.get(label.source.repo, {}).items()
+                if outcome.complete_for(label.source.file)
+                and not outcome.failed_rules and not outcome.unconfigured_rules
+            ),
+            "analysis_incomplete": sorted(
+                rule.key for rule in inventory
+                if rule_targets_label(rule, label) and not complete(label, rule)
+            ),
         })
 
     # Per-rule scoring.
@@ -987,24 +1183,31 @@ def evaluate(
         misses: list[str] = []
         untargeted: list[str] = []
         dormant_hits: list[str] = []
+        candidate_hits: list[str] = []
+        candidate_no_hit: list[str] = []
         for label in labels:
             if not exposed(label, rule.engine):
                 continue
-            has_hit = bool(joined.get((label.function_id, rule.key)))
+            has_hit = bool(joined.get((label.source.repo, label.function_id, rule.key)))
             targets = rule_targets_label(rule, label)
             if label.expected_status in ("finding", "suspicious"):
-                if targets and has_hit:
+                exact = rule.rule_id in _expected_rule_ids(label).get(rule.engine, [])
+                if exact and has_hit:
                     tp.append(label.function_id)
-                elif targets:
+                elif exact and complete(label, rule):
                     misses.append(label.function_id)
+                elif targets and has_hit:
+                    candidate_hits.append(label.function_id)
                 elif has_hit:
                     untargeted.append(label.function_id)
+                elif targets and complete(label, rule):
+                    candidate_no_hit.append(label.function_id)
             elif label.expected_status == "clean":
                 if has_hit:
                     fp.append(label.function_id)
             elif label.expected_status == "dormant" and has_hit:
                 dormant_hits.append(label.function_id)
-        if tp or fp or misses or untargeted or dormant_hits:
+        if tp or fp or misses or untargeted or dormant_hits or candidate_hits or candidate_no_hit:
             denominator = len(tp) + len(fp)
             per_rule.append({
                 "rule": rule.key,
@@ -1017,27 +1220,31 @@ def evaluate(
                 "misses": misses,
                 "untargeted_hits": untargeted,
                 "dormant_hits": dormant_hits,
+                "candidate_hits": candidate_hits,
+                "candidate_no_hit": candidate_no_hit,
                 "precision": (
-                    len(tp) / denominator if denominator else None
+                    len(tp) / denominator
+                    if denominator and not (candidate_hits or untargeted) else None
                 ),
             })
 
     # Per-class rollup.
     per_class: dict[str, dict[str, int]] = {}
-    for label in labels:
+    for label, row in zip(labels, label_rows, strict=True):
         cls = per_class.setdefault(label.bug_class, {
             "finding_total": 0, "finding_detected": 0,
             "finding_untargeted_hit": 0, "finding_uncovered": 0,
+            "finding_confirmed": 0, "finding_candidate_hit": 0,
             "clean_total": 0, "clean_false_alarmed": 0,
         })
-        row = next(
-            r for r in label_rows
-            if r["function_id"] == label.function_id
-        )
         if label.expected_status in ("finding", "suspicious"):
             cls["finding_total"] += 1
+            if row["confirmed_by"]:
+                cls["finding_confirmed"] += 1
             if row["detected_by"]:
                 cls["finding_detected"] += 1
+            elif row["candidate_by"]:
+                cls["finding_candidate_hit"] += 1
             elif row["hits"]:
                 cls["finding_untargeted_hit"] += 1
             if not row["targeted_by"]:
@@ -1049,13 +1256,9 @@ def evaluate(
 
     # Rule-coverage gaps — the actionable list for rule authoring.
     gaps: list[dict[str, Any]] = []
-    for label in labels:
+    for label, row in zip(labels, label_rows, strict=True):
         if label.expected_status not in ("finding", "suspicious"):
             continue
-        row = next(
-            r for r in label_rows
-            if r["function_id"] == label.function_id
-        )
         if not row["targeted_by"]:
             gaps.append({
                 "function_id": label.function_id,
@@ -1103,7 +1306,7 @@ def format_summary(report: dict[str, Any]) -> str:
     if meta.get("provenance") and meta["provenance"] != "all":
         lines.append(f"  Provenance filter: {meta['provenance']}")
     lines.append(
-        f"  Labels: {meta.get('labels_evaluated', 0)} evaluated, "
+        f"  Labels: {meta.get('labels_evaluated', 0)} source-eligible, "
         f"{meta.get('labels_skipped', 0)} skipped"
     )
     if meta.get("wall_s") is not None:
@@ -1115,11 +1318,18 @@ def format_summary(report: dict[str, Any]) -> str:
         lines.append("Engine status:")
         lines.extend(f"  {note}" for note in engine_notes)
 
+    rows = report.get("labels", [])
+    if rows:
+        lines.append(f"  Labels with engine exposure: {sum(bool(r['engines_exposed']) for r in rows)}")
+        lines.append(f"  Labels with a complete engine: {sum(bool(r.get('engines_complete')) for r in rows)}")
+        lines.append(f"  Finding labels confirmed by exact rule expectations: "
+                     f"{sum(bool(r.get('confirmed_by')) for r in rows if r['expected'] in ('finding', 'suspicious'))}")
+    lines.append("  CWE matches are candidates, not confirmation of the labeled mechanism.")
     per_class = report.get("per_class", {})
     if per_class:
         lines.append("")
         lines.append(
-            f"{'Class':<14} {'Find':>5} {'Det':>4} {'Untgt':>6} "
+            f"{'Class':<14} {'Find':>5} {'Conf':>4} {'Untgt':>6} "
             f"{'Uncov':>6} {'Clean':>6} {'FA':>4}"
         )
         lines.append("-" * 52)
@@ -1152,7 +1362,11 @@ def format_summary(report: dict[str, Any]) -> str:
         for r in rows:
             parts = []
             if r["tp"]:
-                parts.append(f"tp={len(r['tp'])}")
+                parts.append(f"confirmed={len(r['tp'])}")
+            if r.get("candidate_hits"):
+                parts.append(f"candidate-hit={len(r['candidate_hits'])}")
+            if r.get("candidate_no_hit"):
+                parts.append(f"candidate-no-hit={len(r['candidate_no_hit'])}")
             if r["fp"]:
                 parts.append(f"fp={len(r['fp'])}")
             if r["misses"]:
@@ -1187,7 +1401,7 @@ def format_summary(report: dict[str, Any]) -> str:
     if gaps:
         lines.append(
             f"RULE-COVERAGE GAPS ({len(gaps)} finding label(s) no "
-            f"evaluated rule targets):"
+            f"inventory CWE/language target or exact rule expectation):"
         )
         for g in gaps:
             cwe = f" {g['cwe']}" if g["cwe"] else ""
@@ -1214,6 +1428,28 @@ def format_summary(report: dict[str, Any]) -> str:
         lines.extend(f"  {e}" for e in errors)
 
     return "\n".join(lines)
+
+
+def _write_engine_artifact(out_dir: Path, repo: str, outcome: EngineOutcome,
+                           *, run_id: str = "") -> str:
+    """Keep raw evidence even when a later engine interrupts the evaluation."""
+    if outcome.engine not in ENGINES:
+        raise ValueError("unknown engine identity")
+    if run_id and not re.fullmatch(r"[0-9a-f]{32}", run_id):
+        raise ValueError("invalid evaluation run identity")
+    directory = out_dir / "engine-results"
+    directory.mkdir(parents=True, exist_ok=True)
+    key = hashlib.sha256(repo.encode("utf-8")).hexdigest()
+    prefix = f"{run_id}-" if run_id else ""
+    path = directory / f"{prefix}{key}-{outcome.engine}.json"
+    record = asdict(outcome)
+    for name, value in record.items():
+        if isinstance(value, set):
+            record[name] = sorted(value)
+    record["repo"] = repo
+    record["run_id"] = run_id
+    save_json(path, record)
+    return str(path.relative_to(out_dir))
 
 
 def _write_report(report: dict[str, Any], out_dir: Path) -> Path:
@@ -1387,6 +1623,11 @@ def main(argv: list[str] | None = None) -> int:
         shipped_rules, graduated_rules,
     )
     discovery_errors.extend(collision_errors)
+    if collision_errors:
+        print("Ambiguous rule identities — refusing to execute or score:", file=sys.stderr)
+        for error in collision_errors:
+            print(f"  {error!r}", file=sys.stderr)
+        return 1
     n_graduated = len(inventory) - len(shipped_rules)
     print(f"Discovered {len(inventory)} rule(s): {len(shipped_rules)} "
           f"shipped + {n_graduated} graduated "
@@ -1410,6 +1651,10 @@ def main(argv: list[str] | None = None) -> int:
                 "reason": detail,
             })
 
+    bounds, attribution_skips = scoring_spans(evaluable, source_dirs)
+    skipped_rows.extend(attribution_skips)
+    evaluable = [lb for lb in evaluable if (lb.source.repo, lb.function_id) in bounds]
+
     if args.dry_run:
         # Coverage gaps are an inventory-level question — answerable
         # with zero engine cost, over ALL loaded labels.
@@ -1432,16 +1677,19 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if not evaluable:
-        print("All labels skipped (missing fixtures) — nothing to run.",
+        print("All labels skipped (source or definition unavailable) — nothing to run.",
               file=sys.stderr)
         for s in skipped_rows:
             print(f"  {s['function_id']}: {s['reason']}", file=sys.stderr)
-        return 0
+        return 1
 
     out_dir = args.out or Path(f"out/rule-eval-{int(time.time())}")
 
+    run_id = uuid.uuid4().hex
+    print(f"Evaluation run: {run_id}", flush=True)
     t0 = time.monotonic()
     repo_outcomes: dict[str, dict[str, EngineOutcome]] = {}
+    engine_artifacts: dict[str, dict[str, str]] = {}
     grad_semgrep = (
         graduated_semgrep_dir(graduated_base)
         if graduated_base is not None else None
@@ -1479,16 +1727,20 @@ def main(argv: list[str] | None = None) -> int:
                         )
                     )
                 elif engine == "coccinelle":
+                    def progress(index: int, total: int, name: str) -> None:
+                        print(f"    coccinelle {index + 1}/{total}: {name!r}", flush=True)
                     o = None
                     if run_shipped:
                         o = run_cocci_engine(
                             excerpt,
                             timeout_per_rule=args.spatch_timeout,
+                            on_rule=progress,
                         )
                     if grad_cocci is not None:
                         grad = run_cocci_engine(
                             excerpt, rules_dir=grad_cocci,
                             timeout_per_rule=args.spatch_timeout,
+                            on_rule=progress,
                             allow_scripting=False,
                         )
                         o = (
@@ -1519,6 +1771,8 @@ def main(argv: list[str] | None = None) -> int:
                             ),
                         )
                 o = outcomes[engine]
+                artifact = _write_engine_artifact(out_dir, repo_key, o, run_id=run_id)
+                engine_artifacts.setdefault(repo_key, {})[engine] = artifact
                 if o.skipped_reason:
                     print(f"    {engine}: skipped — {o.skipped_reason}",
                           flush=True)
@@ -1535,7 +1789,8 @@ def main(argv: list[str] | None = None) -> int:
             shutil.rmtree(str(d), ignore_errors=True)
     wall_s = time.monotonic() - t0
 
-    report = evaluate(evaluable, repo_outcomes, inventory, slop=args.slop)
+    report = evaluate(evaluable, repo_outcomes, inventory, slop=args.slop,
+                      definitions_by_label=bounds)
     report["skipped"] = skipped_rows
 
     engine_notes: list[str] = []
@@ -1552,6 +1807,12 @@ def main(argv: list[str] | None = None) -> int:
                     f"{repo_key}/{engine}: {len(outcome.hits)} hit(s) "
                     f"in {outcome.elapsed_s:.0f}s"
                 )
+            engine_notes.extend(f"{repo_key}/{engine}: {note}" for note in outcome.analysis_notes)
+            if not outcome.analysis_complete or outcome.failed_files or outcome.failed_rules:
+                engine_notes.append(f"{repo_key}/{engine}: incomplete analysis; absence is not a proven miss")
+            if outcome.unconfigured_rules:
+                engine_notes.append(f"{repo_key}/{engine}: unconfigured parametric rules: "
+                                    + ", ".join(sorted(outcome.unconfigured_rules)))
             engine_errors.extend(
                 f"{repo_key}/{engine}: {e}" for e in outcome.errors
             )
@@ -1570,6 +1831,9 @@ def main(argv: list[str] | None = None) -> int:
         "provenance": args.provenance,
         "slop": args.slop,
         "spatch_timeout": args.spatch_timeout,
+        "scoring_version": 2,
+        "run_id": run_id,
+        "engine_artifacts": engine_artifacts,
         "rules_discovered": len(inventory),
         "rules_shipped": len(shipped_rules),
         "rules_graduated": n_graduated,

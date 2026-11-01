@@ -960,6 +960,7 @@ def run_rules(
     subprocess_runner=None,
     allow_scripting: bool = False,
     on_rule=None,
+    exclude_rules: frozenset[str] = frozenset(),
 ) -> list[SpatchResult]:
     """Run all .cocci rules in a directory against a target.
 
@@ -974,7 +975,8 @@ def run_rules(
     directory. Callback failures are swallowed — progress must never
     cost a scan.
 
-    Returns one SpatchResult per rule, in filename order.
+    ``exclude_rules`` omits explicitly unconfigured rule stems.
+    Returns one SpatchResult per executed rule, in filename order.
     """
     rules_dir = Path(rules_dir)
     if not rules_dir.is_dir():
@@ -1001,6 +1003,8 @@ def run_rules(
 
     results = []
     for idx, rule_path in enumerate(rule_paths):
+        if rule_path.stem in exclude_rules:
+            continue
         if on_rule is not None:
             try:
                 on_rule(idx, len(rule_paths), rule_path.stem)

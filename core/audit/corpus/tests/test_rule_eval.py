@@ -225,6 +225,7 @@ class TestRuleTargetsLabel:
 class TestEvaluate:
     def test_true_positive(self):
         labels = [_label()]
+        labels[0].expected_rule_hits = {"coccinelle": ["use_after_free"]}
         report = evaluate(
             labels, _outcomes([_hit()]), [_rule()],
         )
@@ -243,6 +244,7 @@ class TestEvaluate:
         # legitimately target: a targeting hit is a tp, a targeting
         # rule with no hit is a miss — never an fp.
         labels = [_label(expected="suspicious")]
+        labels[0].expected_rule_hits = {"coccinelle": ["use_after_free"]}
         report = evaluate(labels, _outcomes([_hit()]), [_rule()])
         (row,) = report["per_rule"]
         assert row["tp"] == ["net/a.c:f"]
@@ -273,6 +275,7 @@ class TestEvaluate:
 
     def test_miss(self):
         labels = [_label()]
+        labels[0].expected_rule_hits = {"coccinelle": ["use_after_free"]}
         report = evaluate(
             labels, _outcomes([]), [_rule()],
         )
@@ -321,6 +324,7 @@ class TestEvaluate:
 
     def test_slop_respected(self):
         labels = [_label()]
+        labels[0].expected_rule_hits = {"coccinelle": ["use_after_free"]}
         report = evaluate(
             labels, _outcomes([_hit(line=95)]), [_rule()], slop=0,
         )
@@ -684,6 +688,8 @@ class TestProvenanceCli:
         label = _label()
         src = tmp_path / "repo"
         src.mkdir(exist_ok=True)
+        (src / "net").mkdir()
+        (src / "net/a.c").write_text("\n" * 99 + "int f(void) { return 0; }\n" + "\n" * 50)
         monkeypatch.setattr(
             label_mod, "load_all_labels",
             lambda bug_class=None: [label],
@@ -888,6 +894,8 @@ class TestRuleTimings:
         label = _label()
         src = tmp_path / "repo"
         src.mkdir()
+        (src / "net").mkdir()
+        (src / "net/a.c").write_text("\n" * 99 + "int f(void) { return 0; }\n" + "\n" * 50)
         monkeypatch.setattr(
             label_mod, "load_all_labels",
             lambda bug_class=None: [label],
@@ -1057,3 +1065,259 @@ def test_cli_dry_run_smoke(capsys):
     out = capsys.readouterr().out
     assert "Rule verification run complete" in out
     assert "dry run — no engine executed" in out
+
+
+class TestAnalysisAccounting:
+    def test_cwe_hit_is_a_candidate_not_confirmed(self):
+        report = evaluate([_label()], _outcomes([_hit()]), [_rule()])
+        row = report["labels"][0]
+        assert row["detected_by"] == []
+        assert row["candidate_by"] == ["coccinelle:use_after_free"]
+        assert report["per_rule"][0]["tp"] == []
+        assert report["per_rule"][0]["candidate_hits"] == ["net/a.c:f"]
+        assert report["per_rule"][0]["precision"] is None
+
+    def test_exact_expectation_can_cross_cwe(self):
+        label = _label(cwe="CWE-444")
+        label.expected_rule_hits = {"coccinelle": ["use_after_free"]}
+        report = evaluate([label], _outcomes([_hit()]), [_rule()])
+        assert report["labels"][0]["confirmed_by"] == ["coccinelle:use_after_free"]
+        assert report["per_rule"][0]["tp"] == [label.function_id]
+        assert report["coverage_gaps"] == []
+
+    @pytest.mark.parametrize("changes", [
+        {"analysis_complete": False},
+        {"failed_files": {"net/a.c"}},
+        {"failed_rules": {"use_after_free"}},
+        {"unconfigured_rules": {"use_after_free"}},
+        {"errors": ["unknown tool failure"]},
+    ])
+    def test_incomplete_absence_is_not_a_miss(self, changes):
+        label = _label()
+        label.expected_rule_hits = {"coccinelle": ["use_after_free"]}
+        outcome = EngineOutcome(engine="coccinelle", **changes)
+        report = evaluate([label], {"test-repo": {"coccinelle": outcome}}, [_rule()])
+        assert report["per_rule"] == []
+        assert report["labels"][0]["analysis_incomplete"] == ["coccinelle:use_after_free"]
+
+    def test_unrelated_failed_rule_does_not_erase_a_real_miss(self):
+        label = _label()
+        label.expected_rule_hits = {"coccinelle": ["use_after_free"]}
+        outcome = EngineOutcome(engine="coccinelle", failed_rules={"other"}, errors=["other failed"])
+        report = evaluate([label], {"test-repo": {"coccinelle": outcome}}, [_rule()])
+        assert report["per_rule"][0]["misses"] == [label.function_id]
+
+    def test_hits_survive_partial_analysis(self):
+        label = _label()
+        label.expected_rule_hits = {"coccinelle": ["use_after_free"]}
+        outcome = EngineOutcome(engine="coccinelle", analysis_complete=False, hits=[_hit()])
+        report = evaluate([label], {"test-repo": {"coccinelle": outcome}}, [_rule()])
+        assert report["per_rule"][0]["tp"] == [label.function_id]
+        assert report["labels"][0]["engines_complete"] == []
+
+    def test_merging_keeps_incomplete_analysis(self):
+        from core.audit.corpus.rule_eval import merge_engine_outcomes
+        a = EngineOutcome(engine="semgrep", failed_files={"a.c"})
+        b = EngineOutcome(engine="semgrep", analysis_complete=False,
+                          failed_rules={"r"}, unconfigured_rules={"p"})
+        result = merge_engine_outcomes(a, b)
+        assert not result.analysis_complete
+        assert result.failed_files == {"a.c"}
+        assert result.failed_rules == {"r"}
+        assert result.unconfigured_rules == {"p"}
+
+    @pytest.mark.parametrize("attrs, incomplete", [
+        ({"extraction_status": {"#total": 15, "#partial": 15, "#success": 0}}, True),
+        ({"extraction_status": {"#total": 2, "#success": 2}}, False),
+        ({"extraction_status": {"#total": 2, "#success": 1}}, True),
+        ({"extraction_status": {"#total": 0}}, True),
+        ({"extractor-failures": 1, "extractor-successes": 3}, True),
+        ({"extractor-failures": 0, "extractor-successes": 3}, False),
+        ({}, True),
+    ])
+    def test_codeql_coverage_uses_extraction_diagnostics(self, attrs, incomplete):
+        from core.audit.corpus.rule_eval import codeql_extraction_notes
+        artifact = {"runs": [{"invocations": [{"toolExecutionNotifications": [
+            {"properties": {"attributes": attrs}},
+        ]}]}]}
+        assert bool(codeql_extraction_notes(artifact)) is incomplete
+
+    def test_unconfigured_parametric_rule_is_not_executed(self, tmp_path, monkeypatch):
+        from packages.coccinelle import runner
+        (tmp_path / "x.c").write_text("int f(void) { return 0; }\n")
+        (tmp_path / "callback.cocci").write_text("// @requires-defines: lock, unlock\n")
+        seen = []
+        monkeypatch.setattr(runner, "is_available", lambda: True)
+        monkeypatch.setattr(runner, "run_rule", lambda *a, **kw: seen.append(a))
+        outcome = run_cocci_engine(tmp_path, rules_dir=tmp_path)
+        assert seen == []
+        assert outcome.unconfigured_rules == {"callback"}
+        assert outcome.errors == []
+
+
+class TestDefinitionAttribution:
+    def test_context_neighbour_and_hit_end_cannot_claim_target(self, tmp_path):
+        from core.audit.corpus.rule_eval import scoring_spans
+        root = tmp_path / "repo"
+        root.mkdir()
+        text = "int f(void) { return 0; }\nint neighbour(void) { return 1; }\n"
+        (root / "a.c").write_text(text)
+        label = _label(fid="a.c:f", file="a.c", line_start=1, line_end=len(text.splitlines()))
+        spans, skipped = scoring_spans([label], {"test-repo": root})
+        assert skipped == []
+        outcome = _outcomes([_hit(file="a.c", line=2, line_end=100)])
+        report = evaluate([label], outcome, [_rule()], definitions_by_label=spans)
+        assert report["labels"][0]["hits"] == []
+
+    def test_decorator_is_owned_but_nested_function_is_not(self, tmp_path):
+        from core.audit.corpus.rule_eval import scoring_spans
+        root = tmp_path / "repo"
+        root.mkdir()
+        text = "@decorator()\ndef f():\n    def nested():\n        sink()\n    return nested\n"
+        (root / "a.py").write_text(text)
+        label = _label(fid="a.py:f", file="a.py", line_start=1, line_end=len(text.splitlines()))
+        spans, skipped = scoring_spans([label], {"test-repo": root})
+        assert skipped == []
+        span = spans[("test-repo", label.function_id)]
+        assert hit_joins_label(_hit(file="a.py", line=1), label, definition=span)
+        nested_line = next(i for i, line in enumerate(text.splitlines(), 1) if "sink()" in line)
+        assert not hit_joins_label(_hit(file="a.py", line=nested_line), label, definition=span)
+
+    def test_ambiguous_conditional_definitions_refuse(self, tmp_path):
+        from core.audit.corpus.rule_eval import scoring_spans
+        root = tmp_path / "repo"
+        root.mkdir()
+        text = "#if FEATURE\nint f(void) { return 0; }\n#else\nint f(void) { return 1; }\n#endif\n"
+        (root / "a.c").write_text(text)
+        label = _label(fid="a.c:f", file="a.c", line_start=1, line_end=len(text.splitlines()))
+        spans, skipped = scoring_spans([label], {"test-repo": root})
+        assert spans == {}
+        assert len(skipped) == 1
+
+    def test_same_function_id_in_other_repo_cannot_borrow_hit(self):
+        a, b = _label(repo="first"), _label(repo="second")
+        for label in (a, b):
+            label.expected_rule_hits = {"coccinelle": ["use_after_free"]}
+        outcomes = _outcomes([_hit()], repo="first")
+        outcomes.update(_outcomes([], repo="second"))
+        report = evaluate([a, b], outcomes, [_rule()])
+        assert report["labels"][0]["confirmed_by"]
+        assert report["labels"][1]["confirmed_by"] == []
+        assert report["per_class"]["lifecycle"]["finding_detected"] == 1
+
+
+def test_changed_span_fingerprint_is_not_scored(tmp_path):
+    from core.audit.corpus.rule_eval import scoring_spans
+    from core.audit.corpus.label import compute_span_sha
+    text = "int f(void) { return 0; }\n"
+    (tmp_path / "a.c").write_text(text)
+    label = _label(fid="a.c:f", file="a.c", line_start=1, line_end=1)
+    label.source.span_sha = compute_span_sha(text.replace("0", "1"), 1, 1)
+    spans, skipped = scoring_spans([label], {"test-repo": tmp_path})
+    assert spans == {}
+    assert "fingerprint" in skipped[0]["reason"]
+
+
+def test_wrong_fixture_ref_is_not_scored(tmp_path, monkeypatch):
+    from core.audit.corpus import lint
+    from core.audit.corpus.rule_eval import scoring_spans
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "a.c").write_text("int f(void) { return 0; }\n")
+    monkeypatch.setattr(lint, "_checkout_matches", lambda root, sha: False)
+    label = _label(fid="a.c:f", file="a.c", line_start=1, line_end=1)
+    spans, skipped = scoring_spans([label], {"test-repo": tmp_path})
+    assert spans == {}
+    assert "ref" in skipped[0]["reason"]
+
+
+def test_standalone_codeql_sets_framework_root(tmp_path, monkeypatch):
+    import os
+    import sys
+    from core.audit.corpus import rule_eval
+    monkeypatch.setenv("RAPTOR_DIR", "placeholder")
+    monkeypatch.delenv("RAPTOR_DIR")
+    monkeypatch.setattr(rule_eval.shutil, "which", lambda name: "/mock/codeql")
+    monkeypatch.setattr(rule_eval, "codeql_feasibility", lambda labels: ("cpp", ""))
+    monkeypatch.setattr(rule_eval, "codeql_query_dir", lambda language: tmp_path)
+    manager = SimpleNamespace(create_database=lambda *a: SimpleNamespace(
+        success=False, database_path=None, errors=["fixture extraction refused"]))
+    monkeypatch.setitem(sys.modules, "packages.codeql.database_manager",
+                        SimpleNamespace(DatabaseManager=lambda **kw: manager))
+    monkeypatch.setitem(sys.modules, "packages.codeql.query_runner",
+                        SimpleNamespace(QueryRunner=lambda: None))
+    result = rule_eval.run_codeql_engine(tmp_path, [_label()], tmp_path / "out")
+    assert os.environ["RAPTOR_DIR"] == str(__import__("pathlib").Path(rule_eval.__file__).resolve().parents[3])
+    assert result.skipped_reason
+
+
+@pytest.mark.parametrize("text", [
+    "int f(void) { return 0; } int neighbour(void) { return 1; }\n",
+    "int f(void) { return 0; } int global = unsafe();\n",
+])
+def test_same_line_code_ownership_is_unverifiable(tmp_path, text):
+    from core.audit.corpus.rule_eval import scoring_spans
+    (tmp_path / "a.c").write_text(text)
+    label = _label(fid="a.c:f", file="a.c", line_start=1, line_end=1)
+    spans, skipped = scoring_spans([label], {"test-repo": tmp_path})
+    assert spans == {}
+    assert "share a scoring line" in skipped[0]["reason"]
+
+
+def test_boundary_comments_are_not_other_code_owners(tmp_path):
+    from core.audit.corpus.rule_eval import scoring_spans
+    (tmp_path / "a.c").write_text("/*é*/ int f(void) { return 0; } /* end */\n")
+    label = _label(fid="a.c:f", file="a.c", line_start=1, line_end=1)
+    spans, skipped = scoring_spans([label], {"test-repo": tmp_path})
+    assert skipped == []
+    assert spans
+
+
+def test_shipped_semgrep_prunes_only_known_incompatible_categories(tmp_path, monkeypatch):
+    from core.audit.corpus import rule_eval
+    from packages.semgrep import runner
+    target = tmp_path / "source"
+    target.mkdir()
+    (target / "a.c").write_text("int f(void) { return 0; }\n")
+    directories = []
+    for name, language in [("c", "c"), ("python", "python")]:
+        directory = tmp_path / name
+        directory.mkdir()
+        (directory / "rules.yaml").write_text(
+            f"rules:\n- id: {name}.r\n  languages: [{language}]\n  message: test\n  severity: WARNING\n  pattern: foo(...)\n")
+        directories.append(directory)
+    bad = tmp_path / "unknown"
+    bad.mkdir()
+    (bad / "rules.yaml").write_text("rules: [\n")
+    directories.append(bad)
+    calls = []
+    monkeypatch.setattr(rule_eval, "semgrep_config_dirs", lambda: directories)
+    monkeypatch.setattr(runner, "is_available", lambda: True)
+    def run(target, config, **kwargs):
+        calls.append(config)
+        return SimpleNamespace(ok=True, elapsed_ms=0, findings=[], files_failed=[])
+    monkeypatch.setattr(runner, "run_rule", run)
+    rule_eval.run_semgrep_engine(target)
+    assert calls == [str(directories[0]), str(bad)]
+
+
+def test_cli_rejects_ambiguous_rule_identity_before_execution(tmp_path, monkeypatch):
+    from core.audit.corpus import rule_eval
+    monkeypatch.setattr(rule_eval, "merge_inventories", lambda *a: ([], ["duplicate rule identity"]))
+    rc, calls = TestProvenanceCli()._run_main(tmp_path, monkeypatch, ["--provenance", "shipped"])
+    assert rc == 1
+    assert calls == []
+
+
+def test_raw_engine_artifact_keeps_partial_evidence(tmp_path):
+    from core.audit.corpus.rule_eval import _write_engine_artifact
+    from core.json import load_json
+    outcome = EngineOutcome(engine="semgrep", hits=[_hit(engine="semgrep")],
+                            failed_files={"a.c"}, errors=["partial parse"])
+    relative = _write_engine_artifact(tmp_path, "../untrusted/repo", outcome)
+    path = tmp_path / relative
+    assert path.parent == tmp_path / "engine-results"
+    raw = load_json(path)
+    assert raw["repo"] == "../untrusted/repo"
+    assert raw["failed_files"] == ["a.c"]
+    assert len(raw["hits"]) == 1
+    assert raw["errors"] == ["partial parse"]

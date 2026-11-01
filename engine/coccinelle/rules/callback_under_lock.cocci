@@ -7,6 +7,7 @@
 // from the learned/pack/seed lock pairs (the unchecked_return.cocci
 // parametric precedent). Without both defines it matches nothing
 // (safe default).
+// @requires-defines: lock, unlock
 // @role: detection
 
 @r@
