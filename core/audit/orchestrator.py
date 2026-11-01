@@ -12060,6 +12060,129 @@ def _composite_tool_runner(joern_runner, codeql_runner):
     return _composite
 
 
+def _compile_eager_invariants(
+    config: OrchestratorConfig,
+    shared: SharedState,
+    checklist: dict[str, Any],
+) -> None:
+    """Compile domain-model invariants from the eager study into rules.
+
+    Runs on the study-consumer thread after the eager ``run_study``
+    succeeds.  Compiles any invariant without a ``mechanical_rule`` field,
+    sweeps the target, and injects matches into ``shared.mechanical_findings``
+    so the review loop picks them up.
+    """
+    dm = shared.domain_model
+    if not dm:
+        try:
+            dm = _load_domain_model(config)
+        except Exception:
+            return
+    if not dm:
+        return
+
+    invariants = dm.get("invariants", [])
+    uncompiled = [
+        inv for inv in invariants
+        if isinstance(inv, dict) and not inv.get("mechanical_rule")
+    ]
+    if not uncompiled:
+        return
+
+    from core.concepts.compiler import compile_invariant
+    from core.concepts.model import Invariant
+    from core.llm.task_types import TaskType
+    from packages.checker_synthesis.languages import fallback_engine
+
+    client = _run_llm_client(config)
+
+    def _llm(prompt, schema, system_prompt):
+        from core.security.prompt_framing import with_audit_framing
+        try:
+            data, _ = client.generate_structured(
+                prompt=prompt,
+                schema=schema,
+                system_prompt=with_audit_framing(system_prompt),
+                task_type=TaskType.AUDIT,
+                call_class="eager_compile",
+            )
+            return data
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("eager compile LLM call failed: %s", exc)
+            return None
+
+    compiled_count = 0
+    for entry in uncompiled:
+        inv = Invariant(
+            id=entry.get("id", ""),
+            concept=entry.get("concept") or entry.get("id", ""),
+            statement=entry.get("statement", ""),
+            negation=entry.get("negation", ""),
+            description=entry.get("description", ""),
+            confidence=entry.get("confidence", "observed"),
+            relevant_cwes=entry.get("relevant_cwes", []),
+            evidence=entry.get("evidence", []),
+        )
+        if not inv.statement or not inv.negation:
+            continue
+
+        engine = "semgrep"
+        for ev in inv.evidence:
+            ev_file = ev.split(":")[0].strip() if ":" in ev else ""
+            if ev_file:
+                from packages.checker_synthesis.languages import detect_engine
+                detected = detect_engine(ev_file)
+                if detected:
+                    engine = detected
+                    break
+
+        cr = compile_invariant(inv, engine, _llm, config.out_dir or Path("."))
+        if not cr.success:
+            alt = fallback_engine(engine)
+            if alt:
+                cr = compile_invariant(
+                    inv, alt, _llm, config.out_dir or Path("."),
+                )
+        if cr.success:
+            entry["mechanical_rule"] = cr.rule_id
+            compiled_count += 1
+
+    if not compiled_count:
+        return
+
+    logger.info(
+        "eager compile: %d/%d invariant(s) compiled", compiled_count, len(uncompiled),
+    )
+
+    if config.out_dir:
+        try:
+            dm_path = config.out_dir / "domain-model.json"
+            save_json(dm_path, dm)
+        except Exception:
+            logger.debug("eager compile: domain model write failed", exc_info=True)
+
+    gaps = [
+        {
+            "file": v.get("file", k.rsplit(":", 1)[0] if ":" in k else ""),
+            "name": v.get("name", k.rsplit(":", 1)[-1] if ":" in k else k),
+            "line_start": v.get("line_start", 0),
+            "line_end": v.get("line_end", 0),
+        }
+        for k, v in checklist.items()
+        if isinstance(v, dict)
+    ]
+
+    mechanical_findings = shared.mechanical_findings
+    n = _run_invariant_prescreening(dm, config, gaps, mechanical_findings)
+    if n:
+        logger.info("eager compile prescreening: %d match(es) injected", n)
+        if config.out_dir:
+            with contextlib.suppress(OSError, ValueError):
+                mech_path = config.out_dir / "mechanical-findings.json"
+                save_json(mech_path, mechanical_findings)
+
+
+
 def _run_invariant_prescreening(
     domain_model: dict[str, Any] | None,
     config: OrchestratorConfig,
@@ -17499,6 +17622,9 @@ def _study_consumer_loop(
                                     "study", cost_usd=_eager_cost,
                                 )
                             runstudy_ok += 1
+                            _compile_eager_invariants(
+                                config, shared, checklist,
+                            )
                             lane_truncation_failures += int(
                                 _eager_stats.get(
                                     "truncation_failures",
