@@ -92,8 +92,8 @@ jobs:
       # optional-dependency group in pyproject.toml, locked in uv.lock)
       # under its own cache-key prefix so a prefix-match restore never
       # hands this job the plain venv that lacks the grammar wheels.
-      # save-on-rebuild: no other job saves this flavour, so the
-      # rebuild cost is paid once per uv.lock change instead of nightly.
+      # Fast unit tests share this profile. Saving successful rebuilds
+      # makes the grammar wheels reusable across both workflows.
       - name: Restore or rebuild venv (with grammars)
         uses: ./.github/actions/setup-venv
         with:

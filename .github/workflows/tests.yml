@@ -425,11 +425,24 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      # Retry ladder + rebuild backstop + symlink fix-up live in the
-      # composite (rationale documented there); the key matches what
-      # the deps job saves.
-      - name: Restore or rebuild venv
+      # Corpus pin validation requires native parsers. Share nightly's
+      # locked grammar profile, isolated from the base venv cache.
+      - name: Restore or rebuild venv (with grammars)
         uses: ./.github/actions/setup-venv
+        with:
+          cache-key-prefix: venv-grammars
+          uv-export-extra-args: --extra grammars
+          save-on-rebuild: 'true'
+
+      - name: Verify corpus definition parsers
+        run: |
+          source $VENV_PATH/bin/activate
+          python - <<'PYTHON'
+          from core.inventory.extractors import _ts_parser_for
+          for language in ("c", "go"):
+              if _ts_parser_for(language) is None:
+                  raise SystemExit(f"{language} parser unavailable; rebuild the venv-grammars cache")
+          PYTHON
 
       - name: Cache Python bytecode
         id: pycache
