@@ -28,6 +28,7 @@ EDGE_PROVENANCES = {
 }
 
 NODE_KINDS = {
+    "asset",
     "file",
     "function",
     "entry_point",

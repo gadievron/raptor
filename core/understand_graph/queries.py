@@ -11,6 +11,7 @@ from .schema import (
     EDGE_PROVENANCE_MECHANICAL,
     _like_escape,
     json_loads,
+    json_dumps,
 )
 from .store import query_graph
 
@@ -497,23 +498,46 @@ def sca_reachability(
     target_path: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """Check if a dependency is reachable from an entry point."""
-    def _do(conn, dep, _target):
+    return sca_reachability_batch(db_path, [dep_name], target_path).get(dep_name, [])
+
+
+def sca_reachability_batch(
+    db_path: Path,
+    dep_names: Sequence[str],
+    target_path: Optional[str] = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Read dependency paths with one snapshot/freshness check per SCA run."""
+    names = sorted(set(dep_names))
+    if not names:
+        return {}
+
+    def _do(conn, target):
+        snapshot = _latest_snapshot(conn, target, producer="understand")
+        if not snapshot:
+            return []
+        stale = _stale_files_for_snapshot(conn, snapshot, target)
+        placeholders = ",".join("?" for _ in names)
         rows = conn.execute(
-            """
+            f"""
             SELECT DISTINCT ep.name AS entry_point, ep.file AS entry_file,
-                   dep.name AS dep_name
+                   dep.name AS dep_name, f.file AS import_file
             FROM nodes dep
             JOIN edges imp ON imp.dst_id = dep.id AND imp.kind = 'IMPORTS'
             JOIN nodes f ON f.id = imp.src_id AND f.kind = 'file'
-            JOIN edges cont ON cont.src_id = f.id AND cont.kind = 'CONTAINS'
-            JOIN nodes fn ON fn.id = cont.dst_id AND fn.kind = 'function'
-            JOIN edges r ON (r.src_id = fn.id OR r.dst_id = fn.id)
+            JOIN nodes point ON point.file = f.file
+                         AND point.snapshot_id = f.snapshot_id
+                         AND point.stale = 0
+            JOIN edges r ON (r.src_id = point.id OR r.dst_id = point.id)
                          AND r.kind = 'REACHES' AND r.stale = 0
             JOIN nodes ep ON ep.id = r.src_id AND ep.kind = 'entry_point'
-            WHERE dep.kind = 'dependency' AND dep.name = ?
-              AND dep.stale = 0
-            """,
-            (dep,),
+            WHERE dep.kind = 'dependency' AND dep.name IN ({placeholders})
+              AND dep.stale = 0 AND dep.snapshot_id = ?
+              AND imp.snapshot_id = dep.snapshot_id AND imp.stale = 0
+              AND f.snapshot_id = dep.snapshot_id AND f.stale = 0
+              AND ep.snapshot_id = dep.snapshot_id AND ep.stale = 0
+              AND r.snapshot_id = dep.snapshot_id
+            """,  # noqa: S608 — only placeholder tokens are interpolated
+            (*names, snapshot["id"]),
         ).fetchall()
         return [
             {
@@ -522,10 +546,14 @@ def sca_reachability(
                 "dependency": row["dep_name"],
             }
             for row in rows
+            if row["entry_file"] not in stale and row["import_file"] not in stale
         ]
 
-    result = query_graph(db_path, _do, dep_name, target_path)
-    return result if result is not None else []
+    result = query_graph(db_path, _do, target_path) or []
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for path in result:
+        grouped.setdefault(path["dependency"], []).append(path)
+    return grouped
 
 
 def coverage_residual(
@@ -594,9 +622,26 @@ def coverage_residual(
 def scan_dedup_chains(
     db_path: Path,
     target_path: Optional[str] = None,
+    *,
+    run_dir: Optional[Path] = None,
+    scan_snapshot: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """Group scan findings that share the same entry-to-sink path."""
+    if target_path is None:
+        # The CLI's unscoped view aggregates targets, but every constituent
+        # query still selects that target's own current /understand revision.
+        targets = query_graph(db_path, lambda conn: [
+            r[0] for r in conn.execute(
+                "SELECT DISTINCT target_path FROM snapshots WHERE producer='understand' AND target_path!=''")
+        ]) or []
+        return [chain for target in targets
+                for chain in scan_dedup_chains(
+                    db_path, target, run_dir=run_dir, scan_snapshot=scan_snapshot)]
     def _do(conn, target):
+        snapshot = _latest_snapshot(conn, target, producer="understand")
+        if not snapshot:
+            return []
+        stale = _stale_files_for_snapshot(conn, snapshot, target)
         # Scoped to the queried target's snapshots when a target is
         # given — this SQL used to carry no snapshot/target predicate
         # at all, so a target-scoped call returned every target's
@@ -610,11 +655,24 @@ def scan_dedup_chains(
                 "AND (ssf.target_path=? OR ssf.target_path=?) "
             )
             params = [str(target), str(Path(target).resolve())]
+        run_filter = ""
+        if run_dir is not None:
+            run_filter = "AND sf.snapshot_id IN (SELECT id FROM snapshots WHERE producer_run=?) "
+        params.append(snapshot["id"])
+        if run_dir is not None:
+            params.append(str(Path(run_dir).resolve()))
+        if scan_snapshot is not None:
+            run_filter += "AND sf.snapshot_id=? "
+            params.append(scan_snapshot)
         rows = conn.execute(
             f"""
             SELECT e.src_id, e.dst_id,
                    GROUP_CONCAT(sf.name, char(31)) AS finding_names,
                    GROUP_CONCAT(sf.id, char(31)) AS finding_ids,
+                   json_group_array(COALESCE(json_extract(sf.props_json, '$.id'),
+                                            json_extract(sf.props_json, '$.finding_id'))) AS finding_refs,
+                   fn.file AS file,
+                   sink.file AS sink_file,
                    COUNT(*) AS chain_size,
                    MAX(json_extract(sf.props_json, '$.severity')) AS max_severity
             FROM nodes sf
@@ -625,8 +683,13 @@ def scan_dedup_chains(
                          AND ep.kind = 'entry_point'
                          AND ep.snapshot_id = fn.snapshot_id
             JOIN edges e ON e.src_id = ep.id AND e.kind = 'REACHES'
-                         AND e.stale = 0
+                         AND e.stale = 0 AND e.snapshot_id = ep.snapshot_id
+            JOIN nodes sink ON sink.id=e.dst_id AND sink.stale=0
+                         AND sink.snapshot_id=ep.snapshot_id
             WHERE sf.kind = 'scan_finding' AND sf.stale = 0
+              AND ep.snapshot_id = ? AND fn.stale = 0 AND ep.stale = 0
+              AND a.stale = 0
+              {run_filter}
             GROUP BY e.src_id, e.dst_id
             HAVING chain_size > 1
             ORDER BY chain_size DESC
@@ -639,10 +702,12 @@ def scan_dedup_chains(
                 "sink_id": row["dst_id"],
                 "finding_ids": [fid for fid in (row["finding_ids"] or "").split("\x1f") if fid],
                 "finding_names": [fn for fn in (row["finding_names"] or "").split("\x1f") if fn],
+                "finding_refs": [str(ref) for ref in json_loads(row["finding_refs"]) if ref is not None],
                 "chain_size": row["chain_size"],
                 "max_severity": row["max_severity"],
             }
             for row in rows
+            if row["file"] not in stale and row["sink_file"] not in stale
         ]
 
     result = query_graph(db_path, _do, target_path)
@@ -656,6 +721,8 @@ def fuzz_targets(
     limit: int = 10,
 ) -> list[dict[str, Any]]:
     """Rank functions by proximity to dangerous sinks via unchecked flows."""
+    if limit < 1:
+        return []
     _DANGEROUS = (
         "system", "exec", "execve", "popen", "memcpy", "strcpy",
         "sprintf", "printf", "gets", "scanf", "eval", "command",
@@ -667,21 +734,28 @@ def fuzz_targets(
         snapshot = _latest_snapshot(conn, target, producer="understand")
         if not snapshot:
             return []
+        stale = _stale_files_for_snapshot(conn, snapshot, target)
+        stale_json = json_dumps(sorted(stale))
         like_clauses = " OR ".join(["s.name LIKE ?"] * len(_DANGEROUS))
-        params: list[Any] = [snapshot["id"]]
+        params: list[Any] = [snapshot["id"], stale_json, stale_json]
         params.extend(f"%{sink}%" for sink in _DANGEROUS)
         params.append(lim)
         rows = conn.execute(
             f"""
             SELECT DISTINCT fn.name, fn.file, fn.line_start,
-                   s.name AS sink_name, r.confidence
+                   s.name AS sink_name, s.file AS sink_file, r.confidence
             FROM nodes fn
             JOIN edges r ON r.src_id = fn.id AND r.kind = 'REACHES' AND r.stale = 0
-            JOIN nodes s ON s.id = r.dst_id AND s.kind = 'sink'
+            JOIN nodes s ON s.id = r.dst_id AND s.kind = 'sink' AND s.stale=0
+                        AND s.snapshot_id=fn.snapshot_id
             WHERE fn.kind = 'entry_point' AND fn.stale = 0
               AND fn.snapshot_id = ?
+              AND r.snapshot_id = fn.snapshot_id
+              AND fn.file NOT IN (SELECT value FROM json_each(?))
+              AND s.file NOT IN (SELECT value FROM json_each(?))
               AND ({like_clauses})
-            ORDER BY {_CONFIDENCE_RANK_SQL.format(col="r.confidence")} DESC
+            ORDER BY {_CONFIDENCE_RANK_SQL.format(col="r.confidence")} DESC,
+                     fn.file, fn.name, s.name
             LIMIT ?
             """,
             params,
@@ -695,6 +769,7 @@ def fuzz_targets(
                 "confidence": row["confidence"],
             }
             for row in rows
+            if row["file"] not in stale and row["sink_file"] not in stale
         ]
 
     result = query_graph(db_path, _do, target_path, limit)

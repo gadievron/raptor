@@ -875,11 +875,8 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
             except Exception as e:  # noqa: BLE001
                 logging.getLogger(__name__).debug("coverage summary skipped: %s", e)
 
-        # Graph store enrichment for standalone /scan and /codeql only.
-        # /agentic does NOT ingest its findings into the graph yet —
-        # this lane is skipped for command=="agentic" and raptor_agentic.py
-        # has no ingest call of its own (wiring pending).
-        if command in ("scan", "codeql"):
+        # Read each command's own public artifact shape via the graph API.
+        if command in ("scan", "codeql", "agentic"):
             try:
                 _target_str = target or ""
                 if command == "scan":
@@ -888,6 +885,9 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
                 if command == "codeql":
                     from core.understand_graph import ingest_codeql_sarif
                     ingest_codeql_sarif(out_dir, _target_str)
+                if command == "agentic":
+                    from core.understand_graph import ingest_agentic_findings
+                    ingest_agentic_findings(out_dir, _target_str)
             # Broad except: enrichment is best-effort by design (the
             # sibling graph-enrichment sites use the same spelling). The
             # ingest mkdirs the graph dir and binds artifact-derived

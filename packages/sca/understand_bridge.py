@@ -190,3 +190,31 @@ def _extract_files(items: Iterable) -> set[str]:
 
 
 __all__ = ["ContextMap", "annotate", "annotate_all", "load_context_map"]
+
+
+def annotate_graph_reachability(reachability, deps, target, run_dir):
+    """Add fresh graph paths as hints without changing static verdicts.
+
+    Graph imports/flows can be LLM-authored. They are useful positive
+    context, never proof that a dependency is dead or safe to suppress.
+    """
+    from dataclasses import replace
+    from core.understand_graph import graph_path_for_run, sca_reachability_batch
+
+    graph = graph_path_for_run(run_dir, str(target))
+    if not graph.exists():
+        return reachability
+    deps = list(deps)
+    paths_by_dep = sca_reachability_batch(graph, [dep.name for dep in deps], str(target))
+    annotated = dict(reachability)
+    for dep in deps:
+        key = dep.key()
+        current = annotated.get(key)
+        if current is None:
+            continue
+        paths = paths_by_dep.get(dep.name, [])
+        if paths:
+            hints = [f"# graph hint: {p['entry_file']}:{p['entry_point']} -> {dep.name}"
+                     for p in paths[:20]]
+            annotated[key] = replace(current, evidence=list(dict.fromkeys(current.evidence + hints)))
+    return annotated

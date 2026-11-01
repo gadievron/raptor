@@ -270,6 +270,11 @@ class TestVerifiedOutcomeSidecar(unittest.TestCase):
             outcome = VerifiedOutcome.from_dict(records[0])
             self.assertEqual(outcome.finding_id, "WEB-0001")
             self.assertEqual(outcome.status.value, "verified")
+            from core.understand_graph import graph_path_for_run, graph_summary
+            graph = graph_path_for_run(Path(tmpdir), scanner.base_url)
+            nodes = graph_summary(graph)["nodes"]
+            self.assertGreaterEqual(nodes["finding"], 1)
+            self.assertGreaterEqual(nodes["verified_outcome"], 1)
 
     def test_refuted_finding_never_lands_as_verified_in_the_sidecar(self):
         from core.labeled_attempts import VerifiedOutcome

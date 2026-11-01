@@ -1822,6 +1822,8 @@ def orchestrate(
 
     # --- Structural grouping (pure Python, no LLM) ---
     groups = _structural_grouping(findings)
+    from core.understand_graph import agentic_graph_groups
+    groups.extend(agentic_graph_groups(out_dir, str(repo_path), findings))
     if groups:
         n = len(groups)
         print(f"\n  Structural grouping: {n} group{'s' if n != 1 else ''} found")

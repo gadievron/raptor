@@ -128,7 +128,7 @@ named one, passed as a trailing argument):
 raptor project graph status    # store path, size, schema version, node/edge totals, latest snapshot
 raptor project graph stats     # node and edge counts by type
 raptor project graph clear     # delete the store (with its WAL sidecars)
-raptor project graph rebuild   # delete, then re-ingest from the project's run artefacts
+raptor project graph rebuild   # rebuild from run artefacts, swap on success
 ```
 
 ## Snapshot Diff
@@ -163,3 +163,90 @@ When graph memory exists, Stage 0 hands `/validate` concrete paths like:
 
 That is not proof of exploitability. It is a mechanically reusable starting
 point: Stage B still has to confirm proximity, blockers, and exploitability.
+
+## Pipeline evidence and selection
+
+RAPTOR keeps project analysis memory in `graph/raptor.graph.sqlite`. JSON
+reports remain the public interface. The graph is optional: a missing,
+unreadable, corrupt, or incompatible database does not prevent the underlying
+analysis from producing its normal reports.
+
+Pipeline integrations use `core.understand_graph`; callers do not issue SQL.
+
+| Pipeline | Writes | Reads |
+|---|---|---|
+| `/understand` | Checklist, map, traces, hunt results, variants | Prior analysis context |
+| `/scan`, `/codeql` | Findings and code flows | — |
+| `/agentic` | Validation-envelope findings, including runs without an LLM | Shared entry-to-sink groups for cross-finding analysis |
+| `/validate`, `/audit` | Validation outcomes and audit hypotheses/verdicts | Graph-first context, residual paths, hypothesis seeds |
+| `/fuzz` | Campaign status and witness manifests | Ranked entry points reaching dangerous sinks |
+| SCA | Dependency findings and reported reachability evidence | Entry-point/import paths as additional reachability hints |
+| `/web` | Endpoint findings and reported verification outcomes | — |
+| `/threat-model` | Threats, assets, boundaries, and entry points on save | Graph-derived context and risk paths |
+
+Graph grouping preserves every finding. A shared path suggests that findings
+should be reviewed together; it does not prove that they are duplicates.
+The groups enter the existing cross-finding analysis with the
+`graph_path_hint` criterion. Each analysis request uses its exact findings
+snapshot; reused run directories and reused finding IDs cannot select groups
+from an earlier version of the findings.
+
+Fuzz planning includes ranked graph candidates in its plan and saved
+`fuzzing_plan.json`. For Python packages, an existing top-level function with
+one `bytes` or `str` parameter can supply the default Atheris entry point.
+RAPTOR checks the source without importing it and validates the module and
+function names using the harness scaffolder. Decorated functions, ambiguous
+signatures, rebound names, files outside the target, and changed source are
+excluded. Automatic selection also declines modules with class construction,
+module-level calls, or imports after the selected definition: these can change
+the final binding in ways the planner cannot establish without executing code.
+Such modules retain the operator-specified entry/harness flow.
+An explicit `--py-entry` or `--py-harness` takes precedence. Other engines
+retain their existing harness requirements; graph candidates help select
+functions to target rather than pretending that a source function is an
+executable harness.
+
+SCA graph hints add context without changing static reachability verdicts,
+confidence, or suppression decisions. Likewise, a web/fuzz report describing
+an outcome as verified is stored with imported provenance; copying it into
+SQLite does not manufacture mechanical verification authority.
+
+Queries scope evidence to the target and the relevant `/understand` snapshot.
+Files whose inventory hashes no longer match are excluded from the new
+grouping, dependency-path, and fuzz-target consumers. Re-run `/understand`
+after changing source to refresh those candidates.
+Freshness filtering happens before the requested fuzz-target limit, so stale
+top-ranked entries do not hide usable lower-ranked candidates.
+
+Web and SCA report imports replace their own run/lane atomically, including
+valid empty reports. Missing or malformed reports preserve the last stored
+evidence instead of being interpreted as a clean result. Web imports require
+both the findings and outcomes reports to be readable for replacement.
+Conflicting web finding IDs are preserved as distinct candidates without
+ambiguous confirmation links. Exact duplicates are collapsed before linking.
+
+Report ingestion has shared budgets across all roots and children: at most
+10,000 nodes, 20,000 edges, and 50,000 normalized record visits per lane update. Input
+arrays and witness-directory enumeration are bounded too. Witness manifests
+share the run-artifact byte budget, charged against actual bytes read.
+Any truncation or ambiguous identity is reported in the log and the snapshot's
+`props_json.ingest` metadata; partial memory is not silently presented as complete.
+
+`raptor project graph rebuild <project>` reconstructs graph memory from saved
+run artifacts, including agentic validation envelopes, nested SCA runs, web
+reports, fuzz campaign reports, and the project threat model. Both current
+`fuzzing-result.json` and legacy `fuzzing_report.json` are recognized.
+Agentic SARIF-only (`--skip-dedup`) runs use their live adapter during rebuild,
+and source snapshots are loaded before tool relationships are reconstructed.
+The rebuild uses a temporary store and preserves the previous database if
+it cannot complete.
+
+The agentic SARIF fallback decodes URI paths once, normalizes inventory-relative
+paths, and preserves logical function names when no line region is provided.
+Local `file://` URIs (including `localhost`) remain subject to source-root and
+symlink containment; remote authorities and other URI schemes are skipped.
+Malformed SARIF files are isolated so valid sibling files can still be imported.
+The fallback examines at most 64 SARIF files and accumulates at most 10,000
+findings, in addition to the shared parser's per-file byte cap. Exceeding either
+aggregate budget skips that graph update with a warning and preserves existing
+memory; the scanner's original artifacts remain available.

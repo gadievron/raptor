@@ -245,6 +245,11 @@ def test_run_sca_end_to_end_against_log4shell_fixture(tmp_path: Path) -> None:
     assert result.in_kev == 1
     assert result.findings_path.exists()
     assert result.report_path.exists()
+    from core.understand_graph import graph_path_for_run, graph_summary
+    graph = graph_path_for_run(out, str(target))
+    graph_nodes = graph_summary(graph)["nodes"]
+    assert graph_nodes["dependency"] >= 1
+    assert graph_nodes["tool_verdict"] >= 1
 
     # findings.json shape.
     rows = json.loads(result.findings_path.read_text())

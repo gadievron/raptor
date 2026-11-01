@@ -454,6 +454,7 @@ def test_scan_dedup_chains_scopes_to_target(tmp_path):
     # Second target's memory in the SAME store.
     run_b = tmp_path / "run-b"
     _write_understand_run(run_b, target_b)
+    ingest_run(run_b, str(target_b), graph_path=graph_path)
     save_json(run_b / "findings.json", [
         {"rule_id": "rb1", "file": "server.c", "function": "handle_request",
          "severity": "high", "message": "A"},
@@ -467,9 +468,8 @@ def test_scan_dedup_chains_scopes_to_target(tmp_path):
     scoped_findings = sum(len(c["finding_ids"]) for c in chains_a)
     all_chains = scan_dedup_chains(graph_path)
     unscoped_findings = sum(len(c["finding_ids"]) for c in all_chains)
-    # target-B's findings share target-A's function spelling, so the
-    # unscoped view folds them into the same chains; the target-scoped
-    # view must count only target-A's own findings.
+    # Same-spelled functions must remain linked to their own target;
+    # the unscoped view aggregates the two independent sets of chains.
     assert scoped_findings == 4
     assert unscoped_findings > scoped_findings
 

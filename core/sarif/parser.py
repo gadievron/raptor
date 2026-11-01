@@ -13,7 +13,7 @@ import re
 import stat as stat_mod
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 from core.config import RaptorConfig
 from core.json import load_json, loads
@@ -804,8 +804,11 @@ def _uri_escapes_root(uri: str, source_root: Path) -> bool:
     # file:///abs/path → /abs/path (kept absolute; the join below
     # then yields the absolute path itself, which must still land
     # under the root to survive).
-    clean = unquote(uri).removeprefix("file://")
     try:
+        parts = urlsplit(uri)
+        if parts.scheme and (parts.scheme != "file" or parts.netloc not in ("", "localhost")):
+            return True
+        clean = unquote(parts.path if parts.scheme == "file" else uri)
         root = source_root.resolve()
         resolved = (root / clean).resolve()
     except (OSError, ValueError):
@@ -973,6 +976,17 @@ def parse_sarif_findings(
             locs = result.get("locations")
             first_loc = _as_dict(locs[0]) if isinstance(locs, list) and locs else {}
             loc = _as_dict(first_loc.get("physicalLocation"))
+            logical_locations = first_loc.get("logicalLocations")
+            function_name = None
+            for logical in (logical_locations if isinstance(logical_locations, list) else []):
+                if not isinstance(logical, dict) or logical.get("kind") not in (
+                    "function", "method", "member",
+                ):
+                    continue
+                name = logical.get("name") or logical.get("fullyQualifiedName")
+                if isinstance(name, str) and name:
+                    function_name = name
+                    break
             artifact = _as_dict(loc.get("artifactLocation"))
             region = _as_dict(loc.get("region"))
             snippet = _as_dict(region.get("snippet")).get("text", "")
@@ -1018,6 +1032,7 @@ def parse_sarif_findings(
                     "rule_id": rule_id,
                     "message": message_text,
                     "file": file_uri,
+                    **({"function": function_name} if function_name else {}),
                     # Untrusted numeric fields: coerced to int-or-None at
                     # the parse boundary so downstream arithmetic and
                     # slicing (snippet synthesis in the import

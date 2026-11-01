@@ -123,6 +123,7 @@ class GraphQueryTerminalEscapeTests(unittest.TestCase):
 def _seed_two_target_graph(tmp: Path) -> tuple[Path, str, str]:
     """One graph DB holding two targets' memory (target-B newest)."""
     import time
+    import hashlib
 
     from core.understand_graph import ingest_scan_findings
 
@@ -140,7 +141,7 @@ def _seed_two_target_graph(tmp: Path) -> tuple[Path, str, str]:
             items.append({"name": "gamma_entry", "line_start": 9})
         save_json(run_dir / "checklist.json", {
             "target_path": str(target),
-            "files": [{"path": "code.c", "sha256": "0" * 64,
+            "files": [{"path": "code.c", "sha256": hashlib.sha256((target / "code.c").read_bytes()).hexdigest(),
                        "items": items}],
         })
         context_map: dict[str, Any] = {

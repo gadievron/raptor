@@ -311,8 +311,8 @@ def _ingest_context_map(conn, snapshot_id: str, context_map: dict[str, Any]) -> 
         })
         file_key = stable_key("file", imp_file)
         file_row = conn.execute(
-            "SELECT id FROM nodes WHERE stable_key=? AND stale=0 LIMIT 1",
-            (file_key,),
+            "SELECT id FROM nodes WHERE stable_key=? AND stale=0 AND snapshot_id=? LIMIT 1",
+            (file_key, snapshot_id),
         ).fetchone()
         if file_row:
             _upsert_edge(conn, snapshot_id, "IMPORTS", file_row["id"], dep_id,
@@ -393,15 +393,24 @@ def _artifact(conn, snapshot_id: str, kind: str, path: Path, run_dir: Path,
     )
 
 
+def _scan_snapshot_id(run_dir: Path, target: str, findings: list) -> str:
+    """One identity constructor for ingest and exact-snapshot consumers."""
+    return make_snapshot_id(target, _hash_json(findings), str(Path(run_dir).resolve()))
+
+
 def ingest_scan_findings(run_dir: Path, target_path: Optional[str] = None,
-                         *, graph_path: Optional[Path] = None) -> Optional[Path]:
+                         *, graph_path: Optional[Path] = None,
+                         findings: Any = None) -> Optional[Path]:
     """Ingest /scan or /agentic findings into the graph.
 
     Creates scan_finding nodes linked to function nodes via AFFECTS edges.
     Reads findings.json — the findings artifact scan-family runs write.
     """
     run_dir = Path(run_dir)
-    findings = load_json(run_dir / "findings.json")
+    if findings is None:
+        findings = load_json(run_dir / "findings.json")
+    if isinstance(findings, dict):
+        findings = findings.get("findings")
     if not findings or not isinstance(findings, list):
         return None
 
@@ -410,22 +419,54 @@ def ingest_scan_findings(run_dir: Path, target_path: Optional[str] = None,
         return None
     if graph_path is None:
         graph_path = graph_path_for_run(run_dir, target or None)
-    checklist_hash = _hash_json(findings)
-    snap_id = make_snapshot_id(target, checklist_hash, str(run_dir.resolve()))
+    snap_id = _scan_snapshot_id(run_dir, target, findings)
 
     try:
         with graph_write_txn(graph_path) as conn:
             _upsert_snapshot(conn, snap_id, target, run_dir, producer="scan")
+            from .queries import _latest_snapshot, _stale_files_for_snapshot
+            snapshot = _latest_snapshot(conn, target, producer="understand")
+            stale_files = (_stale_files_for_snapshot(conn, snapshot, target)
+                           if snapshot else set())
             for f in _list(findings):
-                fn_name = str(f.get("function") or f.get("name") or "?")
-                file_path = str(f.get("file") or f.get("path") or "?")
+                f = dict(f)
+                meta = f.get("metadata")
+                meta = meta if isinstance(meta, dict) else {}
+                fn_name = str(f.get("function") or f.get("function_name")
+                              or meta.get("name") or f.get("name") or "?")
+                file_path = str(f.get("file") or f.get("file_path") or f.get("path") or "?")
+                from core.paths import strip_file_uri
+                file_path = strip_file_uri(file_path)
+                if Path(file_path).is_absolute():
+                    try:
+                        file_path = str(Path(file_path).relative_to(Path(target)))
+                    except ValueError:
+                        pass
+                f["file"] = file_path
+                line = _int_or_none(f.get("line") or f.get("startLine") or f.get("start_line"))
+                f["line"] = line
+                fn_key = stable_key("function", function_ref(file_path, fn_name))
+                # A project may contain multiple targets and older revisions
+                # with identical function names. Link only into this target's
+                # latest /understand snapshot, never an arbitrary first row.
+                fn_row = None
+                if snapshot and file_path not in stale_files:
+                    fn_row = conn.execute(
+                        "SELECT id FROM nodes WHERE stable_key=? AND stale=0 AND snapshot_id=? LIMIT 1",
+                        (fn_key, snapshot["id"]),
+                    ).fetchone()
+                    if fn_row is None and line is not None:
+                        candidates = conn.execute(
+                            "SELECT id, name FROM nodes WHERE kind='function' AND file=? "
+                            "AND snapshot_id=? AND stale=0 AND line_start<=? AND line_end>=?",
+                            (file_path, snapshot["id"], line, line),
+                        ).fetchall()
+                        if len(candidates) == 1:
+                            fn_row = candidates[0]
+                            fn_name = fn_row["name"]
+                f["function"] = fn_name
                 key = f"{f.get('rule_id', '?')}::{file_path}::{fn_name}::{content_hash(f)}"
                 node_id = _upsert_node(conn, snap_id, "scan_finding", key, f)
-                fn_key = stable_key("function", function_ref(file_path, fn_name))
-                fn_row = conn.execute(
-                    "SELECT id FROM nodes WHERE stable_key=? AND stale=0 LIMIT 1",
-                    (fn_key,),
-                ).fetchone()
                 if fn_row:
                     _upsert_edge(conn, snap_id, "AFFECTS", node_id, fn_row["id"])
     except INGEST_SKIP_EXCEPTIONS as exc:
@@ -1201,6 +1242,11 @@ def rebuild_graph(project_dir: Path) -> Optional[Path]:
       own artefacts, never the runs after it in timestamp order.
     """
     from core.run.metadata import RUN_METADATA_FILE
+    from .evidence import (
+        _rows as evidence_rows,
+        ingest_fuzz_evidence, ingest_sca_evidence, ingest_threat_model, ingest_web_evidence,
+    )
+    from .integration import ingest_agentic_findings
 
     project_dir = Path(project_dir).resolve()
     graph_path = graph_path_for_run(project_dir)
@@ -1250,37 +1296,75 @@ def rebuild_graph(project_dir: Path) -> Optional[Path]:
 
     target = ""
     skipped = 0
+
+    def replay_lane(lane, directory, run_target):
+        nonlocal skipped
+        try:
+            lane(directory, run_target, graph_path=temp_path)
+        except Exception as exc:  # noqa: BLE001 — one bad artifact never costs the rest
+            skipped += 1
+            from core.security.log_sanitisation import sanitise_for_terminal
+            print(
+                f"graph: rebuild skipped {lane.__name__} for "
+                f"{sanitise_for_terminal(directory.name)} "
+                f"({sanitise_for_terminal(str(exc))})",
+                file=sys.stderr,
+            )
+
+    # Build the source substrate before tools try to resolve AFFECTS and
+    # other references. Imported/legacy runs can lack timestamps; sorting
+    # them lexically must not silently remove links from the rebuilt graph.
+    # Keep snapshot order within each producer pass for historical diffs.
+    from core.inventory import checklist_exists
+    for _ts, d in run_dirs:
+        if checklist_exists(d) or (d / "context-map.json").exists():
+            replay_lane(ingest_run, d, _infer_run_target(d))
+
     for _ts, d in run_dirs:
         run_meta = load_json(d / RUN_METADATA_FILE)
+        run_target = _infer_run_target(d)
         if isinstance(run_meta, dict):
             target = target or str(run_meta.get("target_path") or "")
 
         lanes = []
-        from core.inventory import checklist_exists
-        if checklist_exists(d) or (d / "context-map.json").exists():
-            lanes.append(ingest_run)
-        if (d / "findings.json").exists():
+        command = run_meta.get("command") if isinstance(run_meta, dict) else None
+        agentic_run = (command == "agentic"
+                       or (d / "raptor_agentic_report.json").exists()
+                       or (d / "validation" / "findings.json").exists())
+        if agentic_run:
+            # Match the live adapter, including SARIF-only --skip-dedup
+            # runs. Scanner SARIF here is not necessarily CodeQL output.
+            lanes.append(ingest_agentic_findings)
+        elif (d / "findings.json").exists():
             lanes.append(ingest_scan_findings)
-        if list(d.glob("*.sarif")) or list(d.glob("*.sarif.json")):
+        if not agentic_run and (list(d.glob("*.sarif")) or list(d.glob("*.sarif.json"))):
             lanes.append(ingest_codeql_sarif)
         if (d / "review-journal.jsonl").exists():
             lanes.append(ingest_audit_hypotheses)
         if (d / "validation-outcomes.json").exists():
             lanes.append(ingest_validation_outcomes)
+        if (d / "web_findings.json").exists():
+            lanes.append(ingest_web_evidence)
+        if (d / "fuzzing-result.json").exists() or (d / "fuzzing_report.json").exists():
+            lanes.append(ingest_fuzz_evidence)
+        if (d / "findings.json").exists():
+            parsed = evidence_rows(load_json(d / "findings.json"))
+            if command == "sca" or (parsed is not None and any(
+                    isinstance(row.get("sca"), dict) for row in parsed[0])):
+                # A generic scanner's [] must not manufacture an empty SCA
+                # snapshot and make a no-artifacts rebuild replace old memory.
+                lanes.append(ingest_sca_evidence)
+        if (d / "threat-model.json").exists():
+            lanes.append(ingest_threat_model)
         for lane in lanes:
-            try:
-                lane(d, target, graph_path=temp_path)
-            except Exception as exc:  # noqa: BLE001 — per-run containment: one bad artefact never costs the rest
-                skipped += 1
-                # Exception text can quote artifact-derived strings —
-                # escape before the operator TTY.
-                from core.security.log_sanitisation import sanitise_for_terminal
-                print(
-                    f"graph: rebuild skipped {lane.__name__} for "
-                    f"{sanitise_for_terminal(d.name)} "
-                    f"({sanitise_for_terminal(str(exc))})",
-                    file=sys.stderr,
-                )
+            replay_lane(lane, d, run_target)
+
+        for child in ("sca", "sca_deep"):
+            if (d / child / "findings.json").is_file():
+                replay_lane(ingest_sca_evidence, d / child, run_target)
+
+    if (project_dir / "threat-model.json").is_file():
+        replay_lane(ingest_threat_model, project_dir, "")
 
     ann_dir = project_dir / "annotations"
     if ann_dir.is_dir():
