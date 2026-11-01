@@ -36,7 +36,7 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from core.sandbox import run_untrusted
+from core.sandbox import run_untrusted, run_untrusted_networked
 
 # Drand mainnet API — the only hostname `tle` reaches for the time-lock
 # rounds. Egress proxy is pinned to this host so a compromised `tle`
@@ -99,7 +99,7 @@ class AgeKeypair:
     public_key: str
 
 
-class EnvelopeError(Exception):
+class EnvelopeError(RuntimeError):
     """Base for envelope-layer errors."""
 
 
@@ -107,11 +107,7 @@ class EnvelopeToolError(EnvelopeError):
     """Required external tool (tle, age, age-keygen) missing."""
 
 
-class EnvelopeRoundTripError(EnvelopeError):
-    """A decrypt path failed to recover the original plaintext."""
-
-
-def aes_encrypt(plaintext: bytes, key: bytes) -> bytes:
+def aes_encrypt(plaintext: bytes, key: bytes, *, aad: bytes = _AAD) -> bytes:
     """AES-256-GCM. Returns nonce || ciphertext-with-tag.
 
     Caller manages key lifecycle; this function does not retain it.
@@ -119,15 +115,17 @@ def aes_encrypt(plaintext: bytes, key: bytes) -> bytes:
     if len(key) != 32:
         raise ValueError(f"AES-256 requires 32-byte key (got {len(key)})")
     nonce = secrets.token_bytes(12)
-    return nonce + AESGCM(key).encrypt(nonce, plaintext, _AAD)
+    return nonce + AESGCM(key).encrypt(nonce, plaintext, aad)
 
 
-def aes_decrypt(blob: bytes, key: bytes) -> bytes:
+def aes_decrypt(blob: bytes, key: bytes, *, aad: bytes = _AAD) -> bytes:
     """Inverse of :func:`aes_encrypt`."""
-    if len(blob) < 12:
-        raise ValueError("blob too short to contain a nonce")
+    if len(key) != 32:
+        raise ValueError("AES-256 requires a 32-byte recovered key")
+    if len(blob) < 28:
+        raise ValueError("blob too short to contain a nonce and authentication tag")
     nonce, ct = blob[:12], blob[12:]
-    return AESGCM(key).decrypt(nonce, ct, _AAD)
+    return AESGCM(key).decrypt(nonce, ct, aad)
 
 
 def gen_age_keypair() -> AgeKeypair:
@@ -151,15 +149,19 @@ def gen_age_keypair() -> AgeKeypair:
         output=str(tmpdir),
         tool_paths=[str(Path(keygen).parent)],
         caller_label="zkpox-age-keygen",
-        capture_output=True, check=True, text=True,
+        capture_output=True, text=True, timeout=30,
     )
+    if out.returncode:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        raise EnvelopeError(f"age-keygen failed ({out.returncode}): {out.stderr[:2000]}")
     pub = ""
     for line in out.stderr.splitlines():
         if line.startswith("Public key: "):
             pub = line.removeprefix("Public key: ").strip()
             break
     if not pub:
-        raise EnvelopeError(f"could not parse age public key from: {out.stderr!r}")
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        raise EnvelopeError("age-keygen did not return a public key")
     return AgeKeypair(secret_key_path=sk_path, public_key=pub)
 
 
@@ -210,7 +212,13 @@ def tle_decrypt(ciphertext: bytes) -> bytes:
                 proxy_hosts=[_DRAND_HOST])
 
 
-def seal(witness: bytes, vendor_pubkey: str, *, duration: str = "90d") -> Envelope:
+def require_sealing_tools() -> None:
+    """Fail before expensive proving if delivery dependencies are absent."""
+    require(_which_age(), "age")
+    require(_which_tle(), "tle")
+
+
+def seal(witness: bytes, vendor_pubkey: str, *, duration: str = "90d", aad: bytes = _AAD) -> Envelope:
     """High-level: produce the three layered ciphertexts for a witness.
 
     Generates a fresh AES key K, encrypts the witness under it, then
@@ -218,25 +226,25 @@ def seal(witness: bytes, vendor_pubkey: str, *, duration: str = "90d") -> Envelo
     (tle). Returns the bundle-ready :class:`Envelope`.
     """
     K = secrets.token_bytes(32)
-    aes_blob = aes_encrypt(witness, K)
+    aes_blob = aes_encrypt(witness, K, aad=aad)
     ct_K_age = age_encrypt_to(K, vendor_pubkey)
     ct_K_tlock = tle_encrypt(K, duration=duration)
     return Envelope(aes_blob=aes_blob, ct_K_age=ct_K_age, ct_K_tlock=ct_K_tlock)
 
 
-def open_via_vendor(envelope: Envelope, vendor_key_path: Path) -> bytes:
+def open_via_vendor(envelope: Envelope, vendor_key_path: Path, *, aad: bytes = _AAD) -> bytes:
     """Open an envelope by the vendor path: age decrypt K, then AES."""
     K = age_decrypt_with(envelope.ct_K_age, vendor_key_path)
-    return aes_decrypt(envelope.aes_blob, K)
+    return aes_decrypt(envelope.aes_blob, K, aad=aad)
 
 
-def open_via_tlock(envelope: Envelope) -> bytes:
+def open_via_tlock(envelope: Envelope, *, aad: bytes = _AAD) -> bytes:
     """Open an envelope by the time-lock path: tle decrypt K, then AES.
 
     Blocks until the Drand round finalises.
     """
     K = tle_decrypt(envelope.ct_K_tlock)
-    return aes_decrypt(envelope.aes_blob, K)
+    return aes_decrypt(envelope.aes_blob, K, aad=aad)
 
 
 # -----------------------------------------------------------------------------
@@ -272,13 +280,16 @@ def _run(
             tool_paths=[str(Path(cmd[0]).parent)],
             caller_label="zkpox-envelope",
             input=stdin_bytes,
-            capture_output=True, check=True,
+            capture_output=True, timeout=120,
         )
-        if proxy_hosts:
-            kwargs["use_egress_proxy"] = True
-            kwargs["proxy_hosts"] = list(proxy_hosts)
         if readable_paths:
             kwargs["readable_paths"] = list(readable_paths)
-        return run_untrusted(cmd, **kwargs).stdout
+        if proxy_hosts:
+            result = run_untrusted_networked(cmd, proxy_hosts=list(proxy_hosts), fake_home=True, **kwargs)
+        else:
+            result = run_untrusted(cmd, **kwargs)
+        if result.returncode:
+            raise EnvelopeError(f"envelope tool failed ({result.returncode}): {result.stderr[:2000].decode(errors='replace')}")
+        return result.stdout
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)

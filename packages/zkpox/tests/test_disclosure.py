@@ -1,161 +1,79 @@
-"""Tests for packages.zkpox.disclosure — the Tier 2/3 CBOR schema and
-the ZKPoXBundle → DisclosureBundle projection.
-
-Covers the review-driven invariants: the projection reads the manifest
-(it does not rebuild from flags), the Tier 1.5 reproduction evidence
-reaches the disclosure bundle's provenance, the target hash is derived
-from the manifest (normalised to sha256:HEX), and the target
-reconciliation helper rejects a mismatched artifact.
-"""
-
-from __future__ import annotations
-
+"""V2 builders bind claims and never publish private witness provenance."""
+from dataclasses import replace
 import pytest
-
 pytest.importorskip("cbor2")
-
 from packages.zkpox.bundle import ZKPoXBundle
-from packages.zkpox.disclosure import (
-    BUNDLE_VERSION,
-    DisclosureBundle,
-    HarnessRef,
-    Proof,
-    VendorEnvelope,
-    disclosure_from_manifest,
-    from_cbor,
-    manifest_target_bare_hex,
-    target_hash_matches,
-    to_cbor,
-)
+from packages.zkpox.disclosure import (BUNDLE_VERSION,HarnessRef,Proof,VendorEnvelope,
+ disclosure_from_manifest,disclosure_from_statement,from_cbor,manifest_target_bare_hex,
+ sha256_bytes,target_hash_matches,to_cbor)
+from packages.zkpox.statement import Statement,SYSTEM,source_hash
 
+def _manifest(**overrides):
+    fields=dict(witness_hash='b'*64,witness_len=42,source='fuzz',observed_outcome='exit_signal',
+        outcome_detail={'secret':'private-outcome'},target_binary_hash='a'*64,
+        target_source_hash=source_hash(1).hex(),produced_by='raptor',timestamp=None,
+        attestation={'claim':'private-attestation-'+'b'*64},tier='0/1',reproduction=None)
+    fields.update(overrides)
+    return ZKPoXBundle(**fields)
 
-def _manifest(**overrides) -> ZKPoXBundle:
-    base = dict(
-        witness_hash="b" * 64,
-        witness_len=42,
-        source="fuzz",
-        observed_outcome="exit_signal",
-        outcome_detail={"finding_id": "F1"},
-        target_binary_hash="a" * 64,  # bare hex (the form core.hash emits)
-        target_source_hash=None,
-        produced_by="raptor",
-        timestamp=None,
-        attestation={"claim": "input X makes Y crash"},
-        tier="0/1",
-        reproduction=None,
-    )
-    base.update(overrides)
-    return ZKPoXBundle(**base)
+def _statement():
+    return Statement(1,2,3,1,16,b'c'*32,source_hash(1))
 
+def _material():
+    return dict(proof=Proof(SYSTEM,b'codec-fixture-not-a-proof','sp1-vk:'+'00'*32),
+        harness=HarnessRef(None,None,'sha256:'+'11'*32),
+        vendor_envelope=VendorEnvelope('zkpox-none/v2',b'',b'',b'',None,'',sha256_bytes(b'')))
 
-def _empty_envelope() -> VendorEnvelope:
-    return VendorEnvelope(
-        scheme="zkpox-none/v1", aes_blob=b"", ct_K_age=b"", ct_K_tlock=b"",
-        drand_round_min=None, vendor_pubkey="", vendor_pubkey_fingerprint="sha256:",
-    )
+def _project(manifest,**overrides):
+    fields=dict(statement=_statement(),vuln_class='memory-safety',gadget_id='oob_write',
+        gadget_id_hash=sha256_bytes(b'oob_write'),**_material())
+    fields.update(overrides)
+    return disclosure_from_manifest(manifest,**fields)
 
+def test_projection_binds_source_not_binary():
+    bundle=_project(_manifest())
+    assert bundle.target.kind=='source'
+    assert bundle.target.hash=='sha256:'+source_hash(1).hex()
+    assert bundle.version==BUNDLE_VERSION
+    assert bundle.statement==_statement().to_dict()
 
-def _project(manifest: ZKPoXBundle) -> DisclosureBundle:
-    return disclosure_from_manifest(
-        manifest,
-        proof=Proof(system="sp1-groth16/v6.1.0", bytes=b"\x01\x02",
-                    verifier_key_hash="sha256:dead"),
-        vendor_envelope=_empty_envelope(),
-        harness=HarnessRef(git_url=None, rev=None, hash="sha256:beef"),
-        vuln_class="memory-safety",
-        gadget_id="memory-safety::oob-write@0.1.0",
-        gadget_id_hash="sha256:abc",
-        leaked_fields=[],
-        target_kind="elf",
-    )
+def test_projection_accepts_prefixed_source():
+    assert _project(_manifest(target_source_hash='sha256:'+source_hash(1).hex())).target.hash=='sha256:'+source_hash(1).hex()
 
+@pytest.mark.parametrize('source',[None,'d'*64])
+def test_projection_rejects_wrong_or_missing_source(source):
+    with pytest.raises(ValueError,match='source hash'):
+        _project(_manifest(target_source_hash=source))
 
-# ---------------------------------------------------------------------------
-# Projection derives from the manifest (not from flags)
-# ---------------------------------------------------------------------------
+def test_projection_omits_private_provenance():
+    manifest=_manifest(tier='1.5',reproduction={'reproduced':True,'private':'secret-reproduction'})
+    bundle=_project(manifest)
+    payload=to_cbor(bundle)
+    assert bundle.provenance is None
+    assert bundle.target.metadata=={}
+    for secret in (manifest.witness_hash,'private-attestation','private-outcome','secret-reproduction'):
+        assert secret.encode() not in payload
+    assert from_cbor(payload)==bundle
 
-def test_projection_normalises_bare_hex_target():
-    """Manifest stores bare hex; the CBOR Target.hash must be the
-    proposal's sha256:HEX form."""
-    db = _project(_manifest(target_binary_hash="a" * 64))
-    assert db.target.hash == "sha256:" + "a" * 64
-    assert db.version == BUNDLE_VERSION
+@pytest.mark.parametrize('override',[
+ {'target_kind':'elf'},{'vuln_class':'rce'},{'gadget_id':'crash_only'},
+ {'gadget_id_hash':'sha256:wrong'},{'gadget_code_hash':'sha256:unbound'},
+ {'leaked_fields':['unbound claim']}])
+def test_projection_rejects_unproven_claims(override):
+    with pytest.raises(ValueError,match='claim metadata'):
+        _project(_manifest(),**override)
 
+def test_factory_rejects_benign_statement():
+    with pytest.raises(ValueError,match='did not demonstrate'):
+        disclosure_from_statement(replace(_statement(),flags=0,oob_count=0,oob_first_offset=-(2**31)),**_material())
 
-def test_projection_tolerates_already_prefixed_hash():
-    db = _project(_manifest(target_binary_hash="sha256:" + "c" * 64))
-    assert db.target.hash == "sha256:" + "c" * 64
+def test_factory_rejects_other_proof_system():
+    material=_material()
+    material['proof']=replace(material['proof'],system='sp1-core')
+    with pytest.raises(ValueError,match='Groth16'):
+        disclosure_from_statement(_statement(),**material)
 
-
-def test_projection_carries_tier15_reproduction_into_provenance():
-    """The core review point: reproduction evidence must reach the
-    disclosure bundle, not be dropped."""
-    repro = {"reproduced": True, "runs": 5, "deterministic": True}
-    db = _project(_manifest(tier="1.5", reproduction=repro))
-    assert db.provenance is not None
-    assert db.provenance["reproduction"] == repro
-    assert db.provenance["tier"] == "1.5"
-    assert db.provenance["observed_outcome"] == "exit_signal"
-    assert db.provenance["attestation"]["claim"] == "input X makes Y crash"
-
-
-def test_projection_provenance_omits_reproduction_when_absent():
-    db = _project(_manifest(reproduction=None))
-    assert db.provenance is not None
-    assert "reproduction" not in db.provenance
-
-
-def test_projection_binary_hash_wins_over_source():
-    db = _project(_manifest(
-        target_binary_hash="a" * 64, target_source_hash="d" * 64,
-    ))
-    assert db.target.hash == "sha256:" + "a" * 64
-    assert db.target.metadata["target_artefact_kind"] == "binary"
-
-
-def test_projection_uses_source_hash_when_no_binary():
-    db = _project(_manifest(
-        target_binary_hash=None, target_source_hash="d" * 64,
-    ))
-    assert db.target.hash == "sha256:" + "d" * 64
-    assert db.target.metadata["target_artefact_kind"] == "source"
-
-
-def test_projection_errors_without_any_target_hash():
-    with pytest.raises(ValueError, match="neither target_binary_hash"):
-        _project(_manifest(target_binary_hash=None, target_source_hash=None))
-
-
-# ---------------------------------------------------------------------------
-# CBOR round-trip preserves the new provenance field
-# ---------------------------------------------------------------------------
-
-def test_provenance_survives_cbor_round_trip():
-    repro = {"reproduced": True, "runs": 3}
-    db = _project(_manifest(tier="1.5", reproduction=repro))
-    restored = from_cbor(to_cbor(db))
-    assert restored.provenance["reproduction"] == repro
-    assert restored.target.hash == db.target.hash
-    assert restored.version == db.version
-
-
-def test_bundle_without_provenance_round_trips():
-    """A hand-built DisclosureBundle with provenance=None must still
-    encode/decode (provenance omitted from CBOR like timestamp)."""
-    db = DisclosureBundle(
-        version=BUNDLE_VERSION,
-        target=_project(_manifest()).target,
-        vulnerability=_project(_manifest()).vulnerability,
-        proof=Proof(system="s", bytes=b"\x00", verifier_key_hash="sha256:x"),
-        harness=HarnessRef(git_url=None, rev=None, hash="sha256:y"),
-        vendor_envelope=_empty_envelope(),
-    )
-    assert db.provenance is None
-    assert from_cbor(to_cbor(db)).provenance is None
-
-
-# ---------------------------------------------------------------------------
-# Target reconciliation (anti re-keying)
+# # Target reconciliation (anti re-keying)
 # ---------------------------------------------------------------------------
 
 def test_target_hash_matches_accepts_same_artifact():

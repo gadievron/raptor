@@ -194,9 +194,9 @@ def _collapse_cargo_workspaces(
 ) -> dict[tuple[str, Path], list[Manifest]]:
     """Remap Cargo workspace members to their workspace root.
 
-    A workspace member (``core/zkpox/guest/Cargo.toml``) doesn't own a
+    A workspace member (``packages/zkpox/native/guest/Cargo.toml``) doesn't own a
     ``Cargo.lock`` — the lock lives at the workspace root
-    (``core/zkpox/Cargo.lock``). Spawning ``cargo update`` on the member
+    (``packages/zkpox/native/Cargo.lock``). Spawning ``cargo update`` on the member
     alone copies only the member's manifest without the workspace root,
     producing wrong results or an outright failure.
 

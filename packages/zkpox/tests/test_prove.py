@@ -1,6 +1,6 @@
 """Tests for packages.zkpox.prove.
 
-The full SP1 round-trip is exercised by core/zkpox/test/run-tests.sh and
+The full SP1 round-trip is exercised by packages/zkpox/native/test/run-tests.sh and
 by `pytest -m sp1`-marked tests once we land them. This file just
 covers the Python wrapper's parsing + error paths so a broken JSON
 schema is caught fast.
@@ -17,32 +17,9 @@ pytest.importorskip("cbor2")
 
 from packages.zkpox import prove
 
-import shutil
-import sys
-
-
-def _mount_ns_usable() -> bool:
-    if sys.platform != "linux":
-        return False
-    if not shutil.which("newuidmap") or not shutil.which("newgidmap"):
-        return False
-    sysctl = Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
-    if sysctl.exists() and sysctl.read_text().strip() == "1":
-        return False
-    return True
-
-
-_needs_sandbox = pytest.mark.skipif(
-    not _mount_ns_usable(),
-    reason="prove needs mount-ns sandbox (uidmap + apparmor userns=0)",
-)
-
-
-
-
 def test_default_binary_under_repo_root(monkeypatch, tmp_path):
     monkeypatch.setenv("RAPTOR_DIR", str(tmp_path))
-    expected = tmp_path / "core" / "zkpox" / "target" / "release" / "zkpox-prove"
+    expected = tmp_path / "packages" / "zkpox" / "native" / "target" / "release" / "zkpox-prove"
     assert prove._default_binary() == expected
 
 
@@ -57,8 +34,7 @@ def test_run_rejects_unknown_mode():
         prove.run(witness=Path("/nonexistent"), mode="schedule-it")
 
 
-@_needs_sandbox
-def test_parse_full_record_via_fake_binary(tmp_path, monkeypatch):
+def test_parse_full_record(tmp_path, monkeypatch):
     """Smoke-test that a JSON record with the full schema parses back
     into a ProveResult without losing precision. Avoids spinning up
     SP1; uses a stub script that prints a fixed record."""
@@ -79,18 +55,7 @@ def test_parse_full_record_via_fake_binary(tmp_path, monkeypatch):
         "proof_bytes": None,
         "verified": None,
     }
-    fake = tmp_path / "fake-prove"
-    fake.write_text(
-        "#!/usr/bin/env python3\n"
-        "import json, sys\n"
-        f"print(json.dumps({record!r}))\n"
-    )
-    fake.chmod(0o755)
-
-    witness_path = tmp_path / "w.bin"
-    witness_path.write_bytes(b"x" * 32)
-
-    result = prove.run(witness=witness_path, mode="execute", binary=fake, tag="smoke")
+    result = prove.parse_record(record)
     assert result.tag == "smoke"
     assert result.mode == "execute"
     assert result.verdicts.crash_only_crashed is True

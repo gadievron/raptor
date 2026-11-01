@@ -139,3 +139,12 @@ def test_seal_round_trips_both_paths():
             pair.secret_key_path.parent.rmdir()
         except OSError:
             pass
+
+
+def test_decrypt_rejects_aes128_downgrade():
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    key = b'k' * 16
+    nonce = b'n' * 12
+    blob = nonce + AESGCM(key).encrypt(nonce, b'payload', envelope._AAD)
+    with pytest.raises(ValueError, match='AES-256'):
+        envelope.aes_decrypt(blob, key)

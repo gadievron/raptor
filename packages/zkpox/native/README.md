@@ -1,4 +1,6 @@
-# core/zkpox — Zero-Knowledge Proof of Exploit (Rust workspace)
+> For the supported v2 pipeline and build instructions, see [the package guide](../README.md). The notes below describe earlier native experiments.
+
+# packages/zkpox/native — Zero-Knowledge Proof of Exploit (Rust workspace)
 
 The Rust portion of RAPTOR's zkpox feature: SP1-backed proofs of
 memory-safety violation predicates, with a layered disclosure envelope.
@@ -22,10 +24,10 @@ Phase 0 spike findings: `docs/research/zkpox-phase0-findings.md`.
 
 ```sh
 # Guest (cross-compile to SP1's custom RISC-V target).
-cd core/zkpox/guest && cargo prove build
+cd packages/zkpox/native/guest && cargo prove build
 
 # Prover + verifier (native).
-cd core/zkpox && cargo build --release
+cd packages/zkpox/native && cargo build --release
 ```
 
 ### Fast local build (no SP1 toolchain)
@@ -37,14 +39,14 @@ crypto layer can skip it entirely and build the structural verifier:
 ```sh
 # Structural checks only — CBOR shape, envelope fingerprint, version
 # binding. No sp1-sdk, no proving toolchain.
-cd core/zkpox && cargo build --release \
+cd packages/zkpox/native && cargo build --release \
   -p zkpox-verify --no-default-features --features structural
 ```
 
 ### Optional: faster local linking / caching (opt-in)
 
 Not committed to the repo because they hard-break any machine missing
-the tool. If you have them installed, drop a `core/zkpox/.cargo/config.toml`
+the tool. If you have them installed, drop a `packages/zkpox/native/.cargo/config.toml`
 of your own:
 
 ```toml
@@ -63,13 +65,13 @@ rustc-wrapper = "sccache"
 
 ```sh
 # Regression sweep across the 40-witness corpus (execute mode, fast).
-cd core/zkpox/test && ./run-tests.sh
+cd packages/zkpox/native/test && ./run-tests.sh
 
 # PR-tier subset (8 witnesses) — what CI runs.
-cd core/zkpox/test && ./run-tests.sh --ci-subset
+cd packages/zkpox/native/test && ./run-tests.sh --ci-subset
 
 # Full prove-mode sweep (slow — ~10 min on warm cache).
-cd core/zkpox/test && ./run-tests.sh --prove
+cd packages/zkpox/native/test && ./run-tests.sh --prove
 ```
 
 ## Toolchain

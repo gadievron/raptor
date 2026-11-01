@@ -1,3 +1,5 @@
+> Historical design/experiment notes. The supported v2 implementation and commands are documented in [the package guide](../README.md) and [current scope](zkpox-scope.md).
+
 # ZKPoX Phase 0 — Findings
 
 *Spike completed 2026-05-10. This doc is the standalone deliverable; the
@@ -253,7 +255,7 @@ quality-of-life. Items 6–7 are scope-defining.
 
 These are noted to clarify the Phase 0 → Phase 1 contract:
 
-- No `/prove-exploit` or `/verify-exploit-proof` commands; no `.claude/skills/zkpox/`; no `disclosure-engineer` persona; no `core/zkpox/` workspace member; no integration with `raptor_agentic.py`.
+- No `/prove-exploit` or `/verify-exploit-proof` commands; no `.claude/skills/zkpox/`; no `disclosure-engineer` persona; no `packages/zkpox/native/` workspace member; no integration with `raptor_agentic.py`.
 - No Sigstore Rekor anchoring, no real CBOR bundle, no vendor key registry, no anonymity mode, no CVD timer policy.
 - No Groth16-wrapped proof (the artifact is the research-quality 2.65 MB core proof).
 - No EVM, no embedded firmware, no x86-64 binary mode.
@@ -405,7 +407,7 @@ Captured 2026-05-11 alongside the Phase 1.4 commit.
   the bundle with `timestamp` omitted. This is the hash Rekor binds
   to, which is the property that lets the anchor be added *after* the
   rest of the bundle is built without invalidating the binding.
-- `core/zkpox/verifier/` — reads and displays the timestamp
+- `packages/zkpox/native/verifier/` — reads and displays the timestamp
   structurally (log_index, log_id, entry_uuid, integrated_time, tree
   size, path length). **Full Merkle inclusion verification + Rekor STH
   validation is Phase 1.4.x** — same pattern as the 1.3 verifier:
@@ -515,7 +517,7 @@ Phase 1.6 lands a concrete second instance to back the claim.
 
 ### What target #2 adds
 
-`core/zkpox/targets/02-off-by-one.c`:
+`packages/zkpox/native/targets/02-off-by-one.c`:
 
 ```c
 for (size_t i = 0; i <= buf_size && i < n; i++) {
@@ -552,7 +554,7 @@ the prover's `--target` flag defaults to 01 too, so Phase 0 / 1.1–1.5
 bench commands keep producing comparable numbers.
 
 The host prepends the byte before `stdin.write()`; witnesses on disk
-stay as raw exploit bytes. `core/zkpox/test/run-tests.sh` parses the
+stay as raw exploit bytes. `packages/zkpox/native/test/run-tests.sh` parses the
 target id from each witness's filename prefix (`01-…`, `02-…`) and
 passes the matching `--target` flag.
 
@@ -686,7 +688,7 @@ no further changes to the redzone primitive were needed.
 
 ### Buffer geometry override
 
-`core/zkpox/guest/src/main.rs` previously hardcoded a single
+`packages/zkpox/native/guest/src/main.rs` previously hardcoded a single
 `BUF_SIZE = 16` constant shared by all targets. Phase 1.7 splits this
 into `BUF_SIZE_DEFAULT = 16` (targets 01, 02) and `BUF_SIZE_T03 = 32`,
 selected in the `dispatch()` match alongside the C victim. The
