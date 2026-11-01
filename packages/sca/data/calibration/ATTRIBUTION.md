@@ -4,8 +4,9 @@ This directory contains ground-truth signals + project samples used to
 validate the risk-score weights in `packages/sca/risk.py`.
 
 Each JSON file carries an inline `_source` block with its own license
-and provenance. This file is the cross-reference that satisfies
-attribution requirements for sources where the data license requires it.
+and provenance. This file records source credits and the scope of the
+retained data. RAPTOR-generated fields and upstream data retain their
+respective terms.
 
 ## Sources
 
@@ -25,12 +26,19 @@ attribution requirements for sources where the data license requires it.
 - **API:** <https://api.first.org/data/v1/epss>
 - **Maintainer:** Forum of Incident Response and Security Teams (FIRST.org)
 - **Use:** Embedded subset (CVEs with EPSS ≥ 0.05).
+- **Attribution:** EPSS data is published by FIRST.org; the EPSS SIG and
+  Empirical Security maintain the model and daily scores. FIRST requests
+  attribution when the data is used in publications or products; see the
+  [EPSS FAQ](https://www.first.org/epss/faq).
 
 ### `exploitdb_signals.json` — Exploit-DB index
 
-- **License:** Exploit-DB content is research/personal-use only.
-  We embed **only** boolean signals + entry-ID references (public
-  observable facts that an exploit exists for a given CVE).
+- **Upstream license:** The Exploit-DB repository publishes
+  [GPLv2 terms](https://gitlab.com/exploit-database/exploitdb/-/blob/main/LICENSE.md);
+  individual files may carry additional notices. RAPTOR retains only the
+  CVE-to-entry-ID mapping and boolean signals derived from the index,
+  not exploit code. The signal file records this origin separately from
+  RAPTOR-generated fields.
 - **Source:** <https://gitlab.com/exploit-database/exploitdb>
 - **Index file:** `files_exploits.csv` from the upstream default
   branch (fetched via the `HEAD` ref, so a branch rename can't break it).
@@ -73,10 +81,11 @@ attribution requirements for sources where the data license requires it.
 
 ### `osv_evidence_signals.json` — OSV EVIDENCE references (filtered)
 
-- **License:** Derived signal — presence + public URL only. OSV's
-  data is CC-BY-4.0; we cite + don't redistribute its advisory
-  bodies. URLs in the signal are public observable facts. Linked
-  exploit content is **not** fetched or stored.
+- **Source terms and scope:** Derived signal — presence + public URL only.
+  OSV aggregates databases under different licences; see its
+  [source catalogue](https://google.github.io/osv.dev/data/). RAPTOR stores
+  the extracted URL/boolean facts, with no advisory bodies or linked
+  exploit content.
 - **Source:** OSV `/v1/vulns/{id}` for every CVE present in
   `project_samples/` findings. We extract `references[]` entries
   where `type == "EVIDENCE"`.
@@ -143,6 +152,15 @@ The archive also omits intermediate risk multipliers (retaining only
 and the derived `exploit_evidence.has_any` flag. It preserves every scoring
 input, including the reachability verdict/confidence and the underlying
 exploit-evidence lists and KEV flag.
+
+Advisory identifiers and aliases originate from the upstream databases
+served by OSV. The [OSV source catalogue](https://google.github.io/osv.dev/data/)
+links their terms: GitHub/PyPA/Go use CC-BY-4.0; RustSec uses CC0-1.0;
+Ubuntu/Alpine use CC-BY-SA-4.0; the Drupal advisory database uses MIT;
+OpenSSF Malicious Packages uses Apache-2.0. Debian-family identifiers refer
+to the [Debian Security Tracker](https://security-tracker.debian.org/tracker/).
+The archive retains factual join keys and flags, not the original advisory
+records. Its wrapper licence does not grant rights to upstream databases.
 
 The projects themselves are NOT redistributed — only the scan findings (with
 file paths under the discarded clone tree stripped before storage).

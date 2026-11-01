@@ -422,8 +422,9 @@ def test_build_exploitdb_extracts_cve_to_edb_id_mapping(tmp_path: Path) -> None:
     assert data["signals"]["CVE-2024-2222"]["edb_ids"] == [12346]
     # Non-CVE codes (OSVDB-) don't produce signals.
     assert "OSVDB-9999" not in data["signals"]
-    # Source block carries the strict-licensing note.
-    assert "research/personal-use" in data["_source"]["license"]
+    # Distinguish the upstream repository terms from the derived signal.
+    assert "GPL-2.0" in data["_source"]["license"]
+    assert "Derived factual signal" in data["_source"]["license"]
 
 
 def test_build_exploitdb_no_exploit_content_emitted(tmp_path: Path) -> None:

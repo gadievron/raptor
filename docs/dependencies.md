@@ -1,10 +1,12 @@
 # Dependencies
 
-RAPTOR does not bundle external binaries or libraries. Users install them
-separately according to each tool's licence terms. A devcontainer is available
-for those who prefer a batteries-included environment.
+A source checkout uses separately installed tools and Python packages, each
+under its own licence. The devcontainer includes preinstalled tools and
+dependencies; CodeQL is installed on first use. See the
+[third-party notices](../THIRD_PARTY_NOTICES.md) for bundled source/data and
+[CodeQL setup](codeql.md) for installation and offline provisioning.
 
-See also: [README](README.md), [architecture](architecture.md).
+See also: [README](../README.md), [architecture](architecture.md).
 
 
 ## Python
@@ -53,7 +55,7 @@ Install with `uv sync --locked`.
 | defusedxml | PSF | Safe XML parsing (Maven POM) |
 | packaging | Apache 2.0 / BSD | PEP 440 version parsing (SCA) |
 | tabulate | MIT | Table formatting |
-| pyelftools | Unlicense | ELF metadata fallback when angr is absent |
+| pyelftools | Public domain | ELF metadata fallback when angr is absent |
 
 **Optional (install when needed):**
 
@@ -63,38 +65,47 @@ Install with `uv sync --locked`.
 | google-genai | Apache 2.0 | Google Gemini native SDK |
 | botocore | Apache 2.0 | AWS Bedrock SigV4 signing (parent-only, not needed for bearer-token auth) |
 | beautifulsoup4 | MIT | HTML parsing (web scanning) |
-| orjson | Apache 2.0 / MIT | Faster JSON parse and serialise (transparent fallback to stdlib `json`) |
+| orjson | MPL-2.0 AND (Apache-2.0 OR MIT) | Faster JSON parse and serialise (transparent fallback to stdlib `json`) |
+| cvss | LGPL-3.0-or-later | Optional CVSS v4 scoring for SCA (`[cvss]` extra) |
 | pwntools | MIT | Binary exploit analysis (ELF parsing, gadget search) — used if present, not in pyproject.toml |
-| r2pipe | LGPL v3 | Python bridge for radare2 (binary disassembly, call-graph extraction, `--binary-edges`) |
+| r2pipe | MIT | Python bridge for radare2 (binary disassembly, call-graph extraction, `--binary-edges`) |
 | pyghidra | Apache 2.0 | Ghidra bridge — in-process analysis via pyghidra's sandboxed JVM worker |
 | frida | wxWindows | Dynamic instrumentation (Frida validation bridge, coverage bridge) |
 | jsonschema | MIT | SARIF full-schema validation and orchestrated-report contract checking |
 | atheris | Apache 2.0 | Coverage-guided Python fuzzing engine — used if present, not in pyproject.toml |
 | playwright | Apache 2.0 | Browser automation for web scanning (`[web]` optional extra) |
 | z3-solver | MIT | SMT-based constraint analysis (one-gadget feasibility, path validation) |
-| angr | BSD | Binary symbolic execution (overflow witnesses, path constraints) — Python >=3.12; conflicts with standalone z3 pin |
+| angr | BSD-2-Clause; transitive PyVEX includes GPL-2.0-only VEX | Binary symbolic execution (overflow witnesses, path constraints) — Python >=3.12; conflicts with standalone z3 pin |
 | tree-sitter + grammars | MIT | Rich inventory metadata (decorators, typed params); audit mechanical witnesses (C and Go parsing) — absent grammars degrade to no-witness, never to a wrong verdict |
-| sage-agent-sdk | -- | SAGE persistent memory (see [sage.md](sage.md)) |
+| sage-agent-sdk | Apache-2.0 | SAGE persistent memory (see [sage.md](sage.md)) |
 | httpx | BSD | HTTP client used by the SAGE SDK (installed alongside it) |
 | h2 | MIT | HTTP/2 for pooled LLM transports (opt-in via `RAPTOR_HTTP2=1`; see [llm.md](llm.md)) |
 
 
 ## Licensing
 
-RAPTOR itself is MIT-licensed. External tools are used as command-line programs
-and are not linked as libraries. Users should review each tool's licence for
-their use case:
+RAPTOR's original code is MIT-licensed. Standalone tools, Python libraries,
+and their native dependencies retain their own terms. Invoking a tool as
+a separate process does not remove obligations when redistributing that tool
+in a container or other bundle.
 
 - **Semgrep**: LGPL 2.1
-- **CodeQL**: GitHub CodeQL Terms (free for security research; restrictions on commercial use)
+- **CodeQL**: [GitHub CodeQL Terms](https://github.com/github/codeql-cli-binaries/blob/main/LICENSE.md); permitted use depends on the codebase and any applicable GitHub agreement. The standard terms restrict redistribution.
 - **AFL++**: Apache 2.0
 - **GDB / binutils**: GPL v3 (called as external processes, not linked)
 - **radare2**: LGPL v3
 - **rr**: MIT
 - **Z3**: MIT
 
-Python packages carry their own licences (see the table above). All core
-dependencies are MIT or Apache 2.0.
+The tables summarize direct packages, not every transitive component. Installed
+distributions include additional terms, such as MPL-2.0 in certifi and
+pathspec, and MPL-2.0 AND MIT in tqdm. Preserve the notices and applicable
+source access for the exact components shipped.
+
+The optional `binary` extra installs angr/PyVEX, including GPLv2 VEX. The
+devcontainer installs that extra during operator-side setup; the published
+image does not preinstall it. Redistributing a populated environment requires
+reviewing the resulting combined stack and its licence/source obligations.
 
 ## Proxied hosts
 

@@ -17,9 +17,10 @@ actually changed.
 
 License compliance:
 
-  * Tier 1 sources (KEV / NVD / EPSS / OSV / GHSA) are embedded
-    verbatim — all are MIT-redistribution-compatible. CC-BY-4.0
-    sources (GHSA) carry per-file attribution blocks.
+  * Source-specific terms and attribution are recorded in each output
+    and ATTRIBUTION.md. KEV and EPSS are filtered to calibration fields;
+    OSV EVIDENCE records are reduced to URL/boolean signals. RAPTOR
+    does not assign its MIT licence to upstream data.
   * Tier 2 sources (Exploit-DB / Metasploit) are reduced to
     boolean signals + reference URLs only. We never ship exploit
     content; only public facts about its existence.
@@ -258,10 +259,9 @@ def _build_exploitdb(out_dir: Path, http: Any) -> BuildResult:
     """Fetch the Exploit-DB index CSV and emit a CVE-keyed
     boolean-signal file.
 
-    **Strict licensing posture:** Exploit-DB's license is
-    research/personal-use, NOT redistribution. We download the
-    public INDEX (which is metadata about public exploits — the
-    fact that an exploit exists for CVE-X) and emit ONLY:
+    The upstream repository publishes GPLv2 terms; individual files may
+    carry additional notices. We download the public INDEX and retain
+    only the factual CVE-to-entry-ID mapping, emitting:
 
       * ``has_exploitdb_entry: bool``
       * ``edb_ids: [int, ...]`` (entry IDs, public references)
@@ -313,9 +313,9 @@ def _build_exploitdb(out_dir: Path, http: Any) -> BuildResult:
             "name": "Exploit-DB index",
             "url": _EDB_CSV_URL,
             "license": (
-                "Exploit-DB content is research/personal-use only. "
-                "We embed ONLY boolean signals + entry-ID references "
-                "(public observable facts). No exploit content stored."
+                "Derived factual signal: CVE-to-Exploit-DB entry IDs and booleans. "
+                "Upstream repository: GPL-2.0; individual files may carry additional notices. "
+                "No exploit content stored."
             ),
             "fetched_at": _utcnow(),
             "provenance": (
