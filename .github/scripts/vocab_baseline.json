@@ -499,6 +499,21 @@
     "count": 16,
     "kind": "literal"
   },
+  "core/audit/cross_entry/dispatch.py::row": {
+    "count": 11,
+    "kind": "literal",
+    "note": "dispatch-row field manifest: typed fields for each ops-table callback registration record (file, function, owner_type, slot, callback, etc.)"
+  },
+  "core/audit/cross_entry/integration.py::coverage": {
+    "count": 11,
+    "kind": "literal",
+    "note": "collection coverage metadata: fields tracking source collection strategy, auxiliary headers, include edges, skipped files, and budget state"
+  },
+  "core/audit/cross_entry/study.py::metadata": {
+    "count": 23,
+    "kind": "literal",
+    "note": "study-engine output metadata: fields recording the full cross-entry study result (consumer, accesses, calls, dispatch candidates, slices, token counts, etc.)"
+  },
   "core/audit/cross_function_verify.py::_VERIFIER_DISPATCH": {
     "count": 11,
     "kind": "alternation"
