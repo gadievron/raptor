@@ -20,8 +20,9 @@ name: SCA-gated self-bump
 #   2. ``raptor-sca bump`` on non-manifest surfaces — Dockerfile ARG
 #      pins, Dockerfile FROM image refs, ``RUN pip install pkg==N``
 #      inline pins, GHA workflow ``uses:`` refs, k8s/compose/gitlab-ci
-#      ``image:`` refs, Helm Chart.yaml deps, git submodules. Same SCA
-#      signal set; ``--apply`` writes only Clean verdicts in place,
+#      ``image:`` refs, Helm Chart.yaml deps, git submodules, and the
+#      declarative GitHub release asset pins (github-release-pins.json).
+#      Same SCA signal set; ``--apply`` writes only Clean verdicts in place,
 #      Review/Block leave a comment for operator triage.
 #
 # Both passes are no-LLM (mechanical signals only) so CI doesn't

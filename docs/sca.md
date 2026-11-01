@@ -55,7 +55,7 @@ The default (no subcommand) is `scan` -- the full analyse pipeline.
 | `clean-cache` | Reclaim disk space from stale cache entries. Removes entries older than `--max-age` days from `~/.raptor/cache/sca/`. |
 | `dt-push` | Upload a CycloneDX SBOM to a Dependency-Track instance. Requires `--url` and `$DT_API_KEY` (or the deprecated `--api-key` flag — argv is world-readable via `/proc/*/cmdline`; the env var wins when both are set). |
 | `suppress` | Manage the suppression overlay (`.raptor-sca-suppress.yml`). Sub-actions: `list` (view current suppressions), `check` (validate against fresh findings and surface stale entries). |
-| `bump` | Dependency version bump operations. |
+| `bump` | Dependency version bump operations, including GitHub release asset pins. |
 | `fingerprint` | Compute, save or check-drift on a binary or OCI image fingerprint. Modes: compute+print (default), `--save` (store baseline), `--check` (detect drift from saved baseline). Accepts local file paths or OCI image refs. |
 | `triage` | LLM-assisted triage of supply-chain candidates (typosquat auditing). Runs automatically during scan unless `--skip-triage` is passed; this subcommand invokes it standalone. |
 | `fix-diff` | Fetch the upstream fix diffs for findings in a `findings.json` (cap with `--max-cves`). |
@@ -314,6 +314,55 @@ major bumps and exits non-zero so the pipeline can flag them. Use
 | `proposed/` | Rewritten manifest copies | Review, then `cp` or `git apply` |
 
 ---
+
+## Updating Downloaded Tools
+
+For tools downloaded from GitHub releases, put their release tag and required
+asset hashes and sizes in a `github-release-pins.json` file anywhere in your
+project. For example:
+
+```json
+{
+  "schema_version": 1,
+  "tools": {
+    "linter": {
+      "repository": "example/lint-engine",
+      "version": "v1.2.3",
+      "assets": {
+        "linux": {
+          "name": "lint-linux.tar.gz",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "size": 123456
+        }
+      }
+    }
+  }
+}
+```
+
+Replace the example values with the real release's hash and size. Your
+downloader must read these pins and verify the downloaded bytes; SCA maintains
+the manifest and does not install or execute the tool.
+
+Run `raptor-sca bump <project>` to preview updates, or add `--apply` to write
+Clean-verdict updates. Each update changes the release tag and all required
+asset hashes and sizes together. Existing exclusions, skip rules, and version
+policies apply. The weekly self-bump workflow includes these updates in its PR.
+
+All required assets must retain their filenames and have SHA-256 digests in
+GitHub's release metadata. Missing assets or digests leave that tool's pins
+unchanged and appear in the skipped report. Changing filenames requires a
+manual update. Inventory scans report these tools under the GitHub ecosystem;
+a Clean bump does not establish that a binary is free of vulnerabilities.
+
+For repositories that publish several tools or release streams, add
+`"release_tag_prefix": "engine-v"` alongside `repository` and pin a matching
+tag such as `"version": "engine-v1.2.3"`. SCA selects the highest stable numeric
+version after that literal prefix, ignoring drafts, prereleases, and other
+streams. Major-version and minor-skew policies compare the numeric suffix.
+The lookup follows release-list pagination up to 1,000 releases; if the list
+exceeds that bound, the update is skipped rather than guessing the latest
+version. Without a prefix, SCA continues to use GitHub's latest-release endpoint.
 
 ## CI Integration
 

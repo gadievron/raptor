@@ -294,9 +294,14 @@ def run_bump(
         )
         # Policy override: ``block_on_major`` forces major-version
         # bumps to Block-tier so operators always review them.
+        policy_current, policy_target = cand.current_version, cand.target_version
+        if cand.kind == 'github_release_pin':
+            from ..parsers.github_release_pins import version_suffix
+            tool = cand.extra['old_tool']
+            policy_current = version_suffix(tool, policy_current)
+            policy_target = version_suffix(tool, policy_target)
         if (policy.thresholds.block_on_major
-                and _is_major_bump(cand.current_version,
-                                    cand.target_version)
+                and _is_major_bump(policy_current, policy_target)
                 and result.verdict != _VERDICT_BLOCK):
             result.verdict = _VERDICT_BLOCK
             result.verdict_label = _VERDICT_LABEL[_VERDICT_BLOCK]
@@ -306,7 +311,7 @@ def run_bump(
         # bumps that semver labels "same major".
         if (policy.thresholds.block_on_minor_skew > 0
                 and _is_minor_skew_bump(
-                    cand.current_version, cand.target_version,
+                    policy_current, policy_target,
                     threshold=policy.thresholds.block_on_minor_skew,
                 )
                 and result.verdict != _VERDICT_BLOCK):
@@ -700,6 +705,44 @@ def _enumerate_candidates(
         )
         candidates.extend(gha_candidates)
         skipped.extend(gha_skipped)
+
+    # Declarative GitHub release pins: tool identities and required assets come
+    # entirely from each manifest, without application-specific mappings.
+    from ..parsers.github_release_pins import FILENAME, load_pins, version_suffix
+    from .github_release_pins import release_tool, latest_tool_release
+    for manifest in manifests:
+        if manifest.path.name != FILENAME:
+            continue
+        if exclude and matches_exclude(manifest.path, exclude, root=target):
+            excluded_files.setdefault(manifest.path, None)
+            continue
+        text = _read_target_text(manifest.path, target)
+        if text is None:
+            continue
+        try:
+            pins = load_pins(text)
+        except (ValueError, RecursionError) as exc:
+            skipped.append((FILENAME, manifest.path, f'release pins refused: {exc}'))
+            continue
+        for tool_id, tool in pins['tools'].items():
+            try:
+                suffix = version_suffix(tool, tool['version'])
+                if suffix is None:
+                    raise ValueError('current release tag is not stable semver')
+                current = parse_stable(suffix)
+                release = latest_tool_release(tool, http=http, cache=cache, github_token=github_token)
+                proposed = release_tool(tool, release)
+                if parse_stable(version_suffix(tool, proposed['version'])) > current:
+                    candidates.append(BumpCandidate(
+                        kind='github_release_pin', locator=tool_id,
+                        file=manifest.path, current_version=tool['version'],
+                        target_version=proposed['version'],
+                        upstream=UpstreamSource('github_release', tool['repository']),
+                        extra={'old_tool': tool, 'new_tool': proposed},
+                    ))
+            except (ValueError, TypeError, UpstreamLookupError) as exc:
+                skipped.append((tool_id, manifest.path,
+                                f'release asset pins unavailable: {exc}'))
 
     # Candidate choke point for the --exclude globs: the manifest-
     # based walkers above (yaml image / Helm / submodule) enumerate

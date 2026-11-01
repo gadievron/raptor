@@ -95,6 +95,7 @@ _TRIPWIRE_FILES: set[str] = set()
 # Multi-ecosystem files (some package.json variants) are disambiguated
 # at parse time, not here.
 MANIFEST_FILENAMES = {
+    'github-release-pins.json': 'GitHub',
     # Java / Maven / Gradle
     "pom.xml": "Maven",
     "build.gradle": "Maven",       # Gradle uses Maven artifact coordinates
