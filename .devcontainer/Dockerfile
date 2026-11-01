@@ -102,16 +102,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     || echo "AFL++ not available - skipping"
 
 # ============================================================================
-# CODEQL CLI (codeql package, codeql command)
-# Downloaded from GitHub releases
+# CODEQL CLI — operator-side first-use installation, not bundled in the image
+# Version, release asset sizes, and SHA-256 pins live in the JSON manifest.
 # ============================================================================
 
-ARG CODEQL_VERSION=2.27.3
-RUN mkdir -p /opt/codeql \
-    && curl -L "https://github.com/github/codeql-cli-binaries/releases/download/v${CODEQL_VERSION}/codeql-linux64.zip" -o /tmp/codeql.zip \
-    && unzip /tmp/codeql.zip -d /opt \
-    && rm /tmp/codeql.zip \
-    && ln -s /opt/codeql/codeql /usr/local/bin/codeql
+COPY .devcontainer/codeql-bootstrap.py /usr/local/libexec/raptor-codeql-bootstrap
+COPY .devcontainer/github-release-pins.json /usr/local/libexec/github-release-pins.json
+RUN chmod 0755 /usr/local/libexec/raptor-codeql-bootstrap \
+    && ln -s /usr/local/libexec/raptor-codeql-bootstrap /usr/local/bin/codeql
 
 # ============================================================================
 # PYTHON DEPENDENCIES
@@ -154,7 +152,7 @@ RUN npm install -g yarn@1.22.22 pnpm@11.11.0
 # ENVIRONMENT CONFIGURATION
 # ============================================================================
 
-ENV PATH="/opt/codeql:/workspaces/raptor/bin:${PATH}"
+ENV PATH="/workspaces/raptor/bin:${PATH}"
 ENV GIT_TERMINAL_PROMPT=0
 ENV PYTHONUNBUFFERED=1
 # Ensure python can import repo packages when container runs

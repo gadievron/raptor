@@ -36,6 +36,8 @@ on:
     branches: [ main ]
     paths:
       - '.devcontainer/Dockerfile'
+      - '.devcontainer/codeql-bootstrap.py'
+      - '.devcontainer/github-release-pins.json'
       - '.github/workflows/dockerhub-publish.yml'
   workflow_dispatch:
     inputs:

@@ -60,6 +60,7 @@ def check_tools() -> tuple[list, list, set]:
     available = set()
     for name in sorted(RaptorConfig.TOOL_DEPS):
         dep = RaptorConfig.TOOL_DEPS[name]
+        binary_path = None
         if "module" in dep:
             # Python-module dependency (e.g. z3) — no binary to probe.
             # find_spec locates without importing, so a broken module
@@ -69,8 +70,12 @@ def check_tools() -> tuple[list, list, set]:
             # deps actually import.
             found = importlib.util.find_spec(dep["module"]) is not None
         else:
-            found = bool(shutil.which(dep["binary"]))
+            binary_path = shutil.which(dep["binary"])
+            found = bool(binary_path)
         display = name
+        if (name == "codeql" and binary_path
+                and Path(os.path.realpath(binary_path)).name == "raptor-codeql-bootstrap"):
+            display = "codeql (first-use installer)"
         if found:
             available.add(name)
             ver = _tool_version(name)

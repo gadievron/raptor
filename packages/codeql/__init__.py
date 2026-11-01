@@ -39,7 +39,8 @@ def is_available() -> bool:
 
 
 def version() -> str | None:
-    cli = _resolve_cli()
+    from ._bootstrap import resolve_bootstrap
+    cli = resolve_bootstrap(_resolve_cli(), install=False)
     if not cli:
         return None
     try:
@@ -48,7 +49,7 @@ def version() -> str | None:
             capture_output=True, text=True, timeout=10,
             env=RaptorConfig.get_safe_env(),
         )
-        return out.stdout.strip() or None
+        return (out.stdout.strip() or None) if out.returncode == 0 else None
     except (OSError, subprocess.TimeoutExpired):
         return None
 

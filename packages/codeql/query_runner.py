@@ -252,6 +252,8 @@ class QueryRunner:
         # binds the resolved install root; a ~/.local/bin symlink as
         # cmd[0] would push every query run onto the Landlock-only
         # fallback path.
+        from packages.codeql._bootstrap import resolve_bootstrap
+        _cli = resolve_bootstrap(_cli)
         self.codeql_cli = os.path.realpath(_cli) if _cli else _cli
         if not self.codeql_cli:
             msg = (

@@ -370,6 +370,8 @@ class DatabaseManager:
         # so invoking via the symlink path would fail the mount-ns
         # visibility check and silently degrade the whole DB build
         # to the Landlock-only fallback.
+        from packages.codeql._bootstrap import resolve_bootstrap
+        _cli = resolve_bootstrap(_cli)
         self.codeql_cli = os.path.realpath(_cli) if _cli else _cli
         if not self.codeql_cli:
             msg = "CodeQL CLI not found. Set CODEQL_CLI environment variable or install CodeQL."
