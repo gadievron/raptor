@@ -18,12 +18,16 @@ Usage
   python3 engine/semgrep/tools/cache-packs.py fetch --packs security-audit,owasp-top-ten
 
   # Import a bundle on the airgapped machine:
-  python3 engine/semgrep/tools/cache-packs.py import semgrep-cache-2026-07-16.zip
+  python3 engine/semgrep/tools/cache-packs.py import semgrep-cache-2026-07-16.zip --sha256 <retained-sha256>
+  python3 engine/semgrep/tools/cache-packs.py check
+  export RAPTOR_SEMGREP_OFFLINE=1
 """
 from __future__ import annotations
 
 import argparse
 import io
+import hashlib
+import stat
 import json
 import os
 import re
@@ -89,7 +93,7 @@ def parse_pack_ids(packs_arg: str) -> list[str]:
             )
             raise SystemExit(msg)
         pack_ids.append(pid)
-    return pack_ids
+    return list(dict.fromkeys(pack_ids))
 
 
 def cache_filename(pack_id: str) -> str:
@@ -121,6 +125,8 @@ def _write_atomic(dest: Path, data: bytes) -> None:
 
 def fetch_pack(pack_id: str) -> bytes:
     """Fetch a pack from the Semgrep registry, return JSON bytes."""
+    if os.environ.get("RAPTOR_SEMGREP_OFFLINE", "").lower() in {"1", "true", "yes"}:
+        raise SystemExit("Offline Semgrep: fetching registry packs is disabled")
     url = REGISTRY_URL.format(pack_id=pack_id)
     req = Request(url, headers={"Accept": "application/json"})
     try:
@@ -247,6 +253,7 @@ def cmd_fetch(args: argparse.Namespace) -> None:
 
     buf = io.BytesIO()
     fetched = 0
+    inventory = {}
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for pid in pack_ids:
             print(f"  fetching p/{pid} ... ", end="", flush=True)
@@ -257,6 +264,7 @@ def cmd_fetch(args: argparse.Namespace) -> None:
                 continue
             fname = cache_filename(pid)
             zf.writestr(fname, data)
+            inventory[fname] = {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
             # Count rules for feedback
             try:
                 parsed = json.loads(data)
@@ -270,6 +278,8 @@ def cmd_fetch(args: argparse.Namespace) -> None:
 
         # Add a manifest so import can verify
         manifest = {
+            "schema": 1,
+            "files": inventory,
             "fetched_utc": datetime.now(timezone.utc).isoformat(),
             "packs": pack_ids,
             "fetched_count": fetched,
@@ -283,8 +293,10 @@ def cmd_fetch(args: argparse.Namespace) -> None:
     Path(zip_name).write_bytes(buf.getvalue())
     size_kb = len(buf.getvalue()) / 1024
     print(f"\n  {fetched}/{len(pack_ids)} packs → {zip_name} ({size_kb:.0f} KB)")
+    digest = hashlib.sha256(buf.getvalue()).hexdigest()
+    print(f"  SHA256 (retain separately): {digest}")
     print("  Transfer this file to the airgapped machine and run:")
-    print(f"    python3 engine/semgrep/tools/cache-packs.py import {zip_name}")
+    print(f"    python3 engine/semgrep/tools/cache-packs.py import {zip_name} --sha256 {digest}")
     if fetched < len(pack_ids):
         # The partial bundle is still written (the fetched packs are
         # useful) but the build must not report success: an airgap
@@ -321,9 +333,128 @@ def _read_member_bounded(zf: zipfile.ZipFile, name: str) -> bytes | None:
     return b"".join(chunks)
 
 
+def _validate_rules(data: bytes, name: str) -> None:
+    try:
+        doc = json.loads(data)
+    except (ValueError, UnicodeError) as exc:
+        raise SystemExit(f"Invalid pack JSON: {name}") from exc
+    if not isinstance(doc, dict) or not isinstance(doc.get("rules"), list) or not doc["rules"]:
+        raise SystemExit(f"Pack {name} must contain a nonempty rules list")
+    if any(not isinstance(rule, dict) or not isinstance(rule.get("id"), str)
+           for rule in doc["rules"]):
+        raise SystemExit(f"Invalid rule entries in {name}")
+
+
+def _verified_import(zip_path: Path, expected: str) -> None:
+    """Verify a private snapshot completely before touching the live cache."""
+    if not re.fullmatch(r"[a-f0-9]{64}", expected):
+        raise SystemExit("--sha256 must be the retained 64-character SHA256")
+    fd = os.open(zip_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as source, tempfile.TemporaryFile() as snapshot:
+        if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+            raise SystemExit("Bundle must be a regular file")
+        digest = hashlib.sha256()
+        total = 0
+        while chunk := source.read(65536):
+            total += len(chunk)
+            if total > 512 * 1024 * 1024:
+                raise SystemExit("Bundle exceeds 512 MiB")
+            digest.update(chunk)
+            snapshot.write(chunk)
+        if digest.hexdigest() != expected:
+            raise SystemExit("Bundle SHA256 mismatch; cache unchanged")
+        snapshot.seek(0)
+        with zipfile.ZipFile(snapshot) as zf:
+            names = zf.namelist()
+            if len(names) != len(set(names)) or len(names) > 65:
+                raise SystemExit("Duplicate members or too many packs")
+            if "manifest.json" not in names:
+                raise SystemExit("Bundle manifest missing; re-fetch using this tool")
+            raw = _read_member_bounded(zf, "manifest.json")
+            manifest = json.loads(raw) if raw else None
+            if not isinstance(manifest, dict) or manifest.get("schema") != 1:
+                raise SystemExit("Unsupported bundle manifest; re-fetch using this tool")
+            packs = manifest.get("packs")
+            if (not isinstance(packs, list) or not packs or len(packs) != len(set(packs))
+                    or any(not isinstance(p, str) or not _PACK_ID_RE.fullmatch(p) for p in packs)):
+                raise SystemExit("Invalid manifest pack list")
+            expected_names = {cache_filename(p) for p in packs}
+            files = manifest.get("files")
+            if (manifest.get("fetched_count") != len(packs) or not isinstance(files, dict)
+                    or set(files) != expected_names or set(names) != expected_names | {"manifest.json"}):
+                raise SystemExit("Incomplete bundle or unexpected members; cache unchanged")
+            contents = {}
+            expanded = 0
+            for name in sorted(expected_names):
+                data = _read_member_bounded(zf, name)
+                if data is None:
+                    raise SystemExit(f"Oversize pack: {name}")
+                expanded += len(data)
+                if expanded > 512 * 1024 * 1024:
+                    raise SystemExit("Expanded bundle exceeds 512 MiB")
+                if files[name] != {"size": len(data), "sha256": hashlib.sha256(data).hexdigest()}:
+                    raise SystemExit(f"Pack digest/size mismatch: {name}")
+                _validate_rules(data, name)
+                contents[name] = data
+            # Refuse redirected cache roots. Individual files are atomically replaced.
+            for parent in (CACHE_DIR, *CACHE_DIR.parents):
+                if parent.is_symlink():
+                    raise SystemExit(f"Cache directory is a symlink: {parent}")
+            CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            for name, data in contents.items():
+                _write_atomic(CACHE_DIR / name, data)
+            print(f"{len(contents)} verified pack(s) imported into {CACHE_DIR}")
+            print("Run cache-packs.py check, then export RAPTOR_SEMGREP_OFFLINE=1 before scanning.")
+
+
+def cmd_check(args: argparse.Namespace) -> None:
+    """Validate selected cached packs with Semgrep inside a network-denied sandbox."""
+    import sys
+    import shutil
+    sys.path.insert(0, str(SEMGREP_ENGINE_DIR.parents[1]))
+    from core.config import RaptorConfig, pin_raptor_dir_in_environ
+    from core.security.capped_read import read_capped
+    from core.sandbox import run
+    from core.sandbox.python_paths import python_runtime_tool_paths
+    pin_raptor_dir_in_environ()
+    packs = parse_pack_ids(args.packs) if args.packs else DEFAULT_PACKS
+    binary = shutil.which("semgrep")
+    if not binary:
+        raise SystemExit("Install Semgrep before validating the offline cache")
+    configs = []
+    for pack in packs:
+        path = CACHE_DIR / cache_filename(pack)
+        raw = read_capped(path, MAX_PACK_BYTES, raise_on_refusal=True)
+        _validate_rules(raw, pack)
+        configs.extend(["--config", str(path)])
+    with tempfile.TemporaryDirectory(prefix="raptor-semgrep-check-") as tmp:
+        # --validate unconditionally fetches p/semgrep-rule-lints upstream.
+        # A strict scan loads the local rule schema without that registry call.
+        target = Path(tmp) / "probe"
+        target.mkdir()
+        (target / "probe.py").write_text("pass\n")
+        result = run(
+            [str(Path(binary).resolve()), "scan", "--strict", "--json", "--metrics", "off",
+             "--disable-version-check", "--no-git-ignore", *configs, str(target)],
+            block_network=True, output=tmp, fake_home=True,
+            tool_paths=[str(CACHE_DIR), str(Path(binary).resolve().parent), *python_runtime_tool_paths()],
+            env=RaptorConfig.get_safe_env(), env_caller_filtered=True, timeout=300,
+            capture_output=True, text=True,
+        )
+        if result.returncode:
+            raise SystemExit(f"Offline Semgrep validation failed ({result.returncode}): {result.stderr[-4000:]}")
+        report = json.loads(result.stdout)
+        if report.get("errors"):
+            raise SystemExit(f"Offline Semgrep reported rule errors: {report['errors']!r}")
+    print(f"{len(packs)} cached pack(s) validated with network connections denied")
+
+
 def cmd_import(args: argparse.Namespace) -> None:
     """Import a cache bundle into RAPTOR's registry-cache directory."""
     zip_path = Path(args.zipfile)
+    if getattr(args, "sha256", None):
+        _verified_import(zip_path, args.sha256)
+        return
     if not zip_path.exists():
         msg = f"File not found: {zip_path}"
         raise SystemExit(msg)
@@ -437,6 +568,8 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("list", help="List packs and cache status")
+    p_check = sub.add_parser("check", help="Validate cached packs with network connections denied")
+    p_check.add_argument("--packs", help="Comma-separated pack IDs (default: all RAPTOR packs)")
 
     p_update = sub.add_parser("update", help="Fetch and write packs directly to the local cache")
     p_update.add_argument(
@@ -456,13 +589,14 @@ def main() -> None:
 
     p_import = sub.add_parser("import", help="Import a zip bundle into the cache")
     p_import.add_argument("zipfile", help="Path to the cache zip")
+    p_import.add_argument("--sha256", required=True, help="Bundle SHA256 retained on the connected host")
 
     args = parser.parse_args()
     if args.command is None:
         parser.print_help()
         raise SystemExit(1)
 
-    cmds = {"list": cmd_list, "update": cmd_update, "fetch": cmd_fetch, "import": cmd_import}
+    cmds = {"list": cmd_list, "update": cmd_update, "fetch": cmd_fetch, "import": cmd_import, "check": cmd_check}
     cmds[args.command](args)
 
 

@@ -585,6 +585,7 @@ class RaptorConfig:
         # Preserve the operator's first-use download opt-out through launchers
         # and diagnostic subprocesses. This flag only disables installation.
         "RAPTOR_CODEQL_AUTO_INSTALL",
+        "RAPTOR_SEMGREP_OFFLINE",
         "RAPTOR_CODEQL_OFFLINE",
         # Explicit operator tool selection; needed by imported offline CLIs
         # that are cached outside PATH. Same operator-controlled axis as PATH.
@@ -1081,16 +1082,41 @@ class RaptorConfig:
     LOG_FORMAT_CONSOLE = "[%(levelname)s] %(message)s"
     LOG_FORMAT_FILE = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
+    @classproperty
+    def SEMGREP_OFFLINE(cls) -> bool:
+        """Require local Semgrep configurations without registry fallback."""
+        return os.environ.get("RAPTOR_SEMGREP_OFFLINE", "").lower() in {"1", "true", "yes"}
+
     @classmethod
     def get_semgrep_config(cls, pack_id: str) -> str:
-        """Return local cached path for a registry pack if available, else the registry ID.
-
-        Naming: p/secrets -> c.p.secrets.json (mirrors semgrep.dev /c/p/ URL path).
-        Falls back to the registry identifier so online scans still work.
-        """
+        """Resolve cached registry packs; refuse missing/invalid packs offline."""
+        if not pack_id.startswith(("p/", "category/")):
+            if cls.SEMGREP_OFFLINE and (pack_id == "auto" or "://" in pack_id
+                                          or not Path(pack_id).exists()):
+                raise ValueError(f"Offline Semgrep requires a local configuration: {pack_id!r}")
+            return pack_id
+        # Only flat pack names are valid cache keys.
+        import re
+        if not re.fullmatch(r"(?:p|category)/[a-z0-9][a-z0-9._-]*", pack_id):
+            raise ValueError(f"Invalid Semgrep registry pack: {pack_id!r}")
         cache_file = cls.SEMGREP_REGISTRY_CACHE_DIR / ("c." + pack_id.replace("/", ".") + ".json")
-        if cache_file.exists():
+        if cache_file.is_file():
+            if cls.SEMGREP_OFFLINE:
+                import json
+                from core.security.capped_read import read_capped
+                try:
+                    raw = read_capped(cache_file, 32 * 1024 * 1024, raise_on_refusal=True)
+                    data = json.loads(raw)
+                    if not isinstance(data, dict) or not isinstance(data.get("rules"), list) or not data["rules"]:
+                        raise ValueError("expected a nonempty rules list")
+                except (OSError, ValueError) as exc:
+                    raise ValueError(f"Offline Semgrep cache is invalid for {pack_id}: {exc}") from exc
             return str(cache_file)
+        if cls.SEMGREP_OFFLINE:
+            raise ValueError(
+                f"Offline Semgrep pack unavailable: {pack_id}. "
+                "Import a complete bundle with engine/semgrep/tools/cache-packs.py, then run check."
+            )
         return pack_id
 
     @staticmethod

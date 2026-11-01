@@ -340,17 +340,39 @@ RAPTOR's capabilities degrade gracefully without network access:
 | SCA advisory matching | fetches from OSV/KEV | unavailable |
 | Claude Code orchestration | requires connection | unavailable |
 
-For airgapped environments, pre-cache the Semgrep registry packs on a
-connected machine:
+For airgapped environments, install Semgrep itself on the destination host,
+then fetch registry packs on a connected machine using the same RAPTOR revision:
 
 ```bash
-python3 engine/semgrep/tools/cache-packs.py fetch    # produces a zip bundle
-# transfer to airgapped host
-python3 engine/semgrep/tools/cache-packs.py import semgrep-cache-2026-07-16.zip
+python3 engine/semgrep/tools/cache-packs.py fetch --output semgrep-cache.zip
+# Retain the printed SHA256 separately from the transferred bundle.
+# Transfer semgrep-cache.zip to the airgapped host:
+python3 engine/semgrep/tools/cache-packs.py import semgrep-cache.zip --sha256 <retained-sha256>
+python3 engine/semgrep/tools/cache-packs.py check
+export RAPTOR_SEMGREP_OFFLINE=1
 ```
 
-Once cached, the scanner resolves pack IDs locally.  Without the cache, RAPTOR
-drops uncached packs and runs with custom rules only.
+The default bundle includes every registry pack referenced by RAPTOR's baseline,
+policy groups, and target-type catalog. For a deliberately smaller pack selection,
+pass the same `--packs security-audit,secrets` list to `fetch` and `check`; scans
+still require every pack selected for that scan. Refresh by repeating fetch and
+verified import. Bundles preserve rule metadata, including upstream licenses;
+fetching rules does not change their license terms.
+
+Import verifies the retained bundle checksum, complete manifest, member sizes and
+hashes, and rule-list structure before writing any packs. Existing bundles from
+older versions of the tool must be fetched again. `check` validates selected local
+packs with Semgrep inside a network-denied sandbox and fails if the binary,
+cache, rules, or isolation are unavailable.
+
+`RAPTOR_SEMGREP_OFFLINE=1` resolves `p/` identifiers to the imported local files,
+refuses missing or invalid caches and remote configurations before network
+probing, and disables registry fallback. The scanner exits unsuccessfully if any
+dispatched Semgrep pack fails, including partial coverage. Local rule scans use
+network denial, with metrics and version checks disabled. Apply this environment
+setting in the shell that launches RAPTOR. It controls Semgrep acquisition and
+execution; it is not a framework-wide airgap switch. Without this setting, the
+existing connected behavior can drop unreachable registry packs with a warning.
 
 For CodeQL, use the [offline preparation and import workflow](codeql.md#airgapped-setup)
 to transfer the pinned CLI bundle and dependencies for the selected shipped
