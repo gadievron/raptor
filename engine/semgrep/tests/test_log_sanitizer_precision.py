@@ -255,6 +255,10 @@ def test_log_replacement_contracts(tmp_path):
         target = tmp_path / f"contracts.{extension}"
         target.write_text(_cases(language))
         targets.append(target)
+    _scan_targets(tmp_path, targets)
+
+
+def _scan_targets(tmp_path, targets, *, columns=False):
     if shutil.which("git"):
         for args in (["git", "init", "-q"], ["git", "add", "--", *[p.name for p in targets]]):
             subprocess.run(args, cwd=tmp_path, capture_output=True, timeout=10, check=True)
@@ -272,9 +276,142 @@ def test_log_replacement_contracts(tmp_path):
     actual = {p.name: set() for p in targets}
     for result in data["results"]:
         assert "raptor.injection.log-injection.taint." in result["check_id"]
-        actual[Path(result["path"]).name].add(result["start"]["line"])
-    expected = {p.name: {i for i, line in enumerate(p.read_text().splitlines(), 1)
-                         if "log-finding" in line} for p in targets}
+        actual[Path(result["path"]).name].add((result["start"]["line"], result["start"]["col"]) if columns else result["start"]["line"])
+    if columns:
+        expected = {p.name: set() for p in targets}
+        for target in targets:
+            for number, line in enumerate(target.read_text().splitlines(), 1):
+                if 'format-find:' not in line:
+                    continue
+                code, names = line.split('format-find:', 1)
+                for name in filter(None, map(str.strip, names.split(','))):
+                    expected[target.name].add((number, code.rindex(name) + 1))
+    else:
+        expected = {p.name: {i for i, line in enumerate(p.read_text().splitlines(), 1)
+                             if "log-finding" in line} for p in targets}
     assert all(expected.values()), "every language must have positive witnesses"
-    assert all(any("safe_" in line for line in p.read_text().splitlines()) for p in targets)
+    if not columns:
+        assert all(any("safe_" in line for line in p.read_text().splitlines()) for p in targets)
     assert actual == expected, f"Semgrep {data.get('version')}: {actual} != {expected}"
+
+
+def _format_cases(language):
+    """Each marker names exact argument ranges, including mixed safe/raw calls."""
+    if language == "python":
+        cases = {
+            "mixed_first": ('logging.info("%s %r", raw1, raw2)', ['raw1']),
+            "mixed_second": ('logging.info("%r %s", raw1, raw2)', ['raw2']),
+            "three": ('logging.info("%r %s %a", raw1, raw2, raw3)', ['raw2']),
+            "four": ('logging.info("%r %s %a %s", raw1, raw2, raw3, raw4)', ['raw2', 'raw4']),
+            "all_encoded": ('logging.info("%r %a", raw1, raw2)', []),
+            "extra_error": ('logging.info("%s", raw1, raw2)', []),
+            "missing_error": ('logging.info("%s %s", raw1)', []),
+            "zero_precision": ('logging.info("%.0s %r", raw1, raw2)', []),
+            "width": ('logging.info("%10s %.0s", raw1, raw2)', ['raw1']),
+            "precision": ('logging.info("%.1s %r", raw1, raw2)', ['raw1']),
+            "character": ('logging.info("%.0c %r", raw1, raw2)', ['raw1']),
+            "percent": ('logging.info("%%s %r %s", raw1, raw2)', ['raw2']),
+            "numeric": ('logging.info("%d %s", 42, raw2)', ['raw2']),
+            "bad_numeric": ('logging.info("%d %s", "42", raw2)', []),
+            "keyword_arguments": ('logging.info("%s %r", raw1, raw2, extra={"tag": "fixed"})', ['raw1']),
+            "invalid_flag": (r'logging.info(r"%\s %r", raw1, raw2)', []),
+            "format_alias": ('fmt = "%s %r"\nlogging.info(fmt, raw1, raw2)', ['raw1']),
+            "mutated_safe": ('fmt = "%s %s"\nfmt = "%r %r"\nlogging.info(fmt, raw1, raw2)', []),
+            "mutated_raw": ('fmt = "%r %r"\nfmt = "%r %s"\nlogging.info(fmt, raw1, raw2)', ['raw2']),
+            "input_alias": ('alias = raw1\nlogging.info("%s %r", alias, raw2)', ['alias']),
+            "mapping_one": ('logging.info("%(first)s", {"first": raw1, "unused": raw2})', ['raw1']),
+            "mapping_repeat": ('logging.info("%(first)r %(first)s", {"first": raw1})', ['raw1']),
+            "mapping_mixed": ('logging.info("%(first)s %(second)r", {"first": raw1, "second": raw2})', ['raw1']),
+            "mapping_second": ('logging.info("%(first)r %(second)s", {"first": raw1, "second": raw2})', ['raw2']),
+            "mapping_safe": ('logging.info("%(first)r %(second)a", {"first": raw1, "second": raw2})', []),
+            "mapping_unused": ('logging.info("%(used)s", {"used": "fixed", "unused": raw1})', []),
+            "mapping_missing": ('logging.info("%(first)s %(missing)s", {"first": raw1})', []),
+            "mapping_overwritten": ('logging.info("%(first)s", {"first": raw1, "first": "fixed"})', []),
+            "mapping_alias": ('fmt = "%(first)s %(second)r"\nlogging.info(fmt, {"first": raw1, "second": raw2})', ['raw1']),
+            "mapping_percent": ('logging.info("%%(first)s", {"first": raw1})', []),
+            "mapping_sanitized": ('clean = raw1.replace("\\r", "").replace("\\n", "")\nlogging.info("%(first)s", {"first": clean})', []),
+        }
+        header, signature, end, decl = 'import logging\n', 'def {name}():', '', lambda i: f'raw{i} = input()'
+    elif language == "go":
+        cases = {
+            "mixed_first": ('log.Printf("%s %q", raw1, raw2)', ['raw1']),
+            "mixed_second": ('log.Printf("%q %s", raw1, raw2)', ['raw2']),
+            "three": ('log.Printf("%q %s %X", raw1, raw2, raw3)', ['raw2']),
+            "four": ('log.Printf("%q %s %x %s", raw1, raw2, raw3, raw4)', ['raw2', 'raw4']),
+            "encoded": ('log.Printf("%q %X %T", raw1, raw2, raw3)', []),
+            "extra": ('log.Printf("%q", raw1, raw2)', ['raw2']),
+            "missing": ('log.Printf("%q %s", raw1)', []),
+            "type_error": ('log.Printf("%q %d", raw1, raw2)', ['raw2']),
+            "empty": ('log.Printf("", raw1)', ['raw1']),
+            "literal_percent": ('log.Printf("%%s", raw1)', ['raw1']),
+            "format_alias": ('fmt := "%q %s"\nlog.Printf(fmt, raw1, raw2)', ['raw2']),
+            "mutated_safe": ('fmt := "%s %s"\nfmt = "%q %q"\nlog.Printf(fmt, raw1, raw2)', []),
+            "indexed_second": ('log.Printf("%[2]s", raw1, raw2)', ['raw2']),
+            "indexed_first": ('log.Printf("%[2]q %[1]s", raw1, raw2)', ['raw1']),
+            "indexed_repeat": ('log.Printf("%[2]q %[2]s", raw1, raw2)', ['raw2']),
+            "indexed_unused": ('log.Printf("%[2]q", raw1, raw2, raw3)', []),
+            "indexed_fourth": ('log.Printf("%[4]s %[2]q", raw1, raw2, raw3, raw4)', ['raw4']),
+            "indexed_bad_other": ('log.Printf("%[9]s %[2]s", raw1, raw2)', ['raw2']),
+            "indexed_alias": ('fmt := "%[2]s"\nlog.Printf(fmt, raw1, raw2)', ['raw2']),
+        }
+        header, signature, end = 'package main\nimport ("log"; "os")\n', 'func {name}() {{', '}'
+        decl = lambda i: f'raw{i} := os.Getenv("RAW{i}"); _ = raw{i}'
+    elif language == "java":
+        cases = {
+            "second": ('logger.info("{} {}", raw1, raw2);', ['raw1', 'raw2']),
+            "three": ('logger.info("{} {} {}", raw1, raw2, raw3);', ['raw1', 'raw2', 'raw3']),
+            "four": ('logger.info("{} {} {} {}", raw1, raw2, raw3, raw4);', ['raw1', 'raw2', 'raw3', 'raw4']),
+            "unused": ('logger.info("{}", "fixed", raw2);', []),
+            "extra": ('logger.info("{} {}", "fixed", raw2, raw3);', ['raw2']),
+            "missing": ('logger.info("{} {} {}", raw1);', ['raw1']),
+            "literal": ('logger.info("fixed", raw1, raw2);', []),
+            "escaped_literal": (r'logger.info("\\{}", raw1);', []),
+            "escaped_alias": (r'String fmt = "\\{}";' + '\nlogger.info(fmt, raw1);', []),
+            "format_alias": ('String fmt = "{} {}";\nlogger.info(fmt, "fixed", raw2);', ['raw2']),
+            "mutated_safe": ('String fmt = "{} {}";\nfmt = "fixed";\nlogger.info(fmt, raw1, raw2);', []),
+            "sanitized": ('String clean = raw1.replace("\\r", "").replace("\\n", "");\nlogger.info("{} {}", clean, raw2);', ['raw2']),
+        }
+        header, signature, end = 'class FormatCases {\n', 'void {name}(HttpServletRequest request, Logger logger) {{', '}'
+        decl = lambda i: f'String raw{i} = request.getParameter("raw{i}");'
+    else:
+        cases = {
+            "mixed_first": ('console.log("%s %j", raw1, raw2);', ['raw1']),
+            "mixed_second": ('console.log("%j %s", raw1, raw2);', ['raw2']),
+            "three": ('console.log("%j %s %d", raw1, raw2, raw3);', ['raw2']),
+            "four": ('console.log("%j %s %o %s", raw1, raw2, raw3, raw4);', ['raw2', 'raw4']),
+            "encoded": ('console.log("%j %d %o", raw1, raw2, raw3);', []),
+            "css": ('console.log("%c %s", raw1, raw2);', ['raw2']),
+            "extra": ('console.log("%j", raw1, raw2);', ['raw2']),
+            "missing": ('console.log("%j %s", raw1);', []),
+            "empty": ('console.log("", raw1, raw2);', ['raw1', 'raw2']),
+            "unknown": ('console.log("%z", raw1, raw2);', ['raw1', 'raw2']),
+            "escaped_percent": ('console.log("%%s %j", raw1, raw2);', ['raw2']),
+            "format_alias": ('const fmt = "%j %s";\nconsole.log(fmt, raw1, raw2);', ['raw2']),
+            "mutated_safe": ('let fmt = "%s %s";\nfmt = "%j %j";\nconsole.log(fmt, raw1, raw2);', []),
+            "sanitized": ('const clean = raw1.replace(/[\\r\\n]/g, "");\nconsole.log("%s %s", clean, raw2);', ['raw2']),
+        }
+        header, signature, end = '', 'function {name}(req) {{', '}'
+        decl = lambda i: f'const raw{i} = req.query.raw{i};'
+    lines = [header]
+    for name, (body, expected) in cases.items():
+        lines.append(signature.format(name=name))
+        lines.extend('    ' + decl(i) for i in range(1, 5))
+        body_lines = body.splitlines()
+        lines.extend('    ' + line for line in body_lines[:-1])
+        marker = ' # ' if language == 'python' else ' // '
+        lines.append('    ' + body_lines[-1] + marker + 'format-find: ' + ','.join(expected))
+        lines.append(end)
+    if language == 'java':
+        lines.append('}')
+    return '\n'.join(lines) + '\n'
+
+
+@pytest.mark.slow
+def test_format_arguments_follow_runtime_conversions(tmp_path):
+    targets = []
+    for language, extension in [("python", "py"), ("go", "go"), ("java", "java"),
+                                ("javascript", "js"), ("javascript", "ts")]:
+        target = tmp_path / f'formats.{extension}'
+        target.write_text(_format_cases(language))
+        targets.append(target)
+    _scan_targets(tmp_path, targets, columns=True)
