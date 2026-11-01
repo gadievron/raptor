@@ -75,15 +75,28 @@ class TestPathScrubWarningsEscaped(unittest.TestCase):
         self.assertNotIn("\x1b", proc.stderr)
         self.assertNotIn("\x07", proc.stderr)
 
-    def test_tmpdir_base_warning_stripped(self):
-        """RAPTOR_WORK_DIR/TMPDIR feed the session-scratch base — the
-        same attacker-influenceable env class as PATH; the
-        not-owned-directory warning must not echo its raw bytes."""
+    def test_tmpdir_control_bytes_are_refused_without_echo(self):
+        """Unsafe scratch paths fail before the legacy squat warning."""
         with tempfile.TemporaryDirectory() as d:
             work = Path(d) / f"w{_HOSTILE}k"
+            work.mkdir()
+            proc = _run_help(
+                "/usr/bin:/bin",
+                extra_env={"RAPTOR_WORK_DIR": str(work)},
+            )
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertIn("temporary directory contains control bytes", proc.stderr)
+        self.assertNotIn(str(work), proc.stderr)
+        self.assertNotIn("\x1b", proc.stderr)
+        self.assertNotIn("\x07", proc.stderr)
+
+    def test_tmpdir_squat_warning_remains_visible(self):
+        """A printable base still exercises the legacy ownership warning."""
+        with tempfile.TemporaryDirectory() as d:
+            work = Path(d) / "work"
+            work.mkdir()
             base = work / f"raptor-{os.getuid()}"
-            base.parent.mkdir(parents=True)
-            base.symlink_to("/nonexistent")  # squat-check refusal path
+            base.symlink_to("/nonexistent")
             proc = _run_help(
                 "/usr/bin:/bin",
                 extra_env={"RAPTOR_WORK_DIR": str(work)},
