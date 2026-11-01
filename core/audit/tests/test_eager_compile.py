@@ -46,7 +46,7 @@ def _domain_model(*, compiled: bool = False) -> dict:
         "concept": "test",
         "statement": "foo must not overflow",
         "negation": "foo overflows",
-        "confidence": "observed",
+        "confidence": "traced",
         "relevant_cwes": ["CWE-120"],
         "evidence": ["a.c:15"],
     }

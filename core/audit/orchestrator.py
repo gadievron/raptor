@@ -2118,12 +2118,48 @@ def _load_domain_model(config: OrchestratorConfig):
     /understand --study run may have produced. Gate off: only the
     run's own out_dir, so the in-run study pass's fresh model is
     still picked up but nothing pre-existing is imported.
+
+    When loading a prior run's model, invariants and concepts are
+    delta-validated against the current source: entries whose source
+    hash no longer matches are marked stale so tier-gated consumers
+    down-weight them.
     """
     from .journal import load_domain_model
-    return load_domain_model(
+    dm = load_domain_model(
         config.out_dir,
         run_only=not getattr(config, "domain_model_import", True),
     )
+    if dm is not None and config.target_path:
+        try:
+            import hashlib as _hashlib
+            root = Path(config.target_path)
+            marked = 0
+            for inv in dm.get("invariants", []):
+                if not isinstance(inv, dict):
+                    continue
+                sh = inv.get("source_hash")
+                span = inv.get("source_hash_span")
+                if not sh or not span:
+                    continue
+                fpath = root / span.get("file", "")
+                if not fpath.is_file():
+                    inv["state"] = "stale"
+                    marked += 1
+                    continue
+                text = fpath.read_text(encoding="utf-8", errors="replace")
+                lines = text.splitlines(keepends=True)
+                start = max(0, span.get("start", 1) - 1)
+                end = span.get("end", len(lines))
+                region = "".join(lines[start:end])
+                h = _hashlib.sha256(region.encode()).hexdigest()[:16]
+                if h != sh:
+                    inv["state"] = "stale"
+                    marked += 1
+            if marked:
+                logger.info("domain model: %d invariant(s) marked stale", marked)
+        except Exception:
+            logger.debug("domain model staleness check failed", exc_info=True)
+    return dm
 
 
 def _annotations_dir(config: OrchestratorConfig):
@@ -12081,10 +12117,22 @@ def _compile_eager_invariants(
     if not dm:
         return
 
+    from core.concepts.model import CONFIDENCE_GRADES
+
+    _min_grade = "traced"
+    try:
+        _floor = CONFIDENCE_GRADES.index(_min_grade)
+    except ValueError:
+        _floor = 0
+
     invariants = dm.get("invariants", [])
     uncompiled = [
         inv for inv in invariants
-        if isinstance(inv, dict) and not inv.get("mechanical_rule")
+        if isinstance(inv, dict)
+        and not inv.get("mechanical_rule")
+        and inv.get("state") != "stale"
+        and inv.get("confidence", "inferred") in CONFIDENCE_GRADES
+        and CONFIDENCE_GRADES.index(inv.get("confidence", "inferred")) >= _floor
     ]
     if not uncompiled:
         return
@@ -12180,7 +12228,6 @@ def _compile_eager_invariants(
             with contextlib.suppress(OSError, ValueError):
                 mech_path = config.out_dir / "mechanical-findings.json"
                 save_json(mech_path, mechanical_findings)
-
 
 
 def _run_invariant_prescreening(
@@ -17776,7 +17823,18 @@ def _study_consumer_loop(
         try:
             from core.concepts.audit_bridge import queue_reading_list_item
 
+            _src_root = Path(config.study_root or config.target_path)
             for req in fresh:
+                if req.source_file:
+                    try:
+                        _sf = Path(req.source_file)
+                        if _sf.is_absolute() and not _sf.is_relative_to(_src_root):
+                            logger.debug(
+                                "reading-list: out-of-scope %s", req.source_file,
+                            )
+                            continue
+                    except (ValueError, OSError):
+                        pass
                 queue_reading_list_item(
                     config.out_dir,
                     question=req.question,
@@ -18000,7 +18058,8 @@ def _study_consumer_loop(
                     "environment gate — exiting before study-run",
                 )
                 break
-        n_before = len(dm.get("concepts", [])) if dm else 0
+        n_before_c = len(dm.get("concepts", [])) if dm else 0
+        n_before_i = len(dm.get("invariants", [])) if dm else 0
         phase_stats: dict = {}
         try:
             from core.concepts.study import run_study
@@ -18126,8 +18185,20 @@ def _study_consumer_loop(
             logger.debug("study-consumer: domain model reload failed",
                          exc_info=True)
 
-        n_after = len(shared.domain_model.get("concepts", [])
-                       ) if shared.domain_model else 0
+        n_after_c = len(shared.domain_model.get("concepts", [])
+                        ) if shared.domain_model else 0
+        n_after_i = len(shared.domain_model.get("invariants", [])
+                        ) if shared.domain_model else 0
+
+        # Gap 3: mid-loop rule compilation from newly-arrived invariants
+        if shared.domain_model and (n_after_c > n_before_c
+                                    or n_after_i > n_before_i):
+            try:
+                _compile_eager_invariants(config, shared, checklist)
+            except Exception:
+                logger.debug(
+                    "study-consumer: mid-loop compile failed", exc_info=True,
+                )
 
         # Mark studied concepts so the suppression gate can release
         _mark_concepts_studied(study_queue, fresh)
@@ -18198,7 +18269,7 @@ def _study_consumer_loop(
             break
 
         # Starvation guard
-        if n_after == n_before:
+        if n_after_c == n_before_c and n_after_i == n_before_i:
             stale_batches += 1
             if stale_batches >= _STUDY_MAX_STALE_BATCHES:
                 logger.info(
@@ -18218,7 +18289,7 @@ def _study_consumer_loop(
         new_concept_names = _diff_new_concepts(
             seen_concepts,
             dm,
-            shared.domain_model if n_after > n_before else None,
+            shared.domain_model if n_after_c > n_before_c else None,
         )
         # Tier gate: only receipt-verified / mechanical concepts may
         # widen the re-review set beyond the originating functions.
@@ -30748,6 +30819,129 @@ def _dispatch_secondary_hypotheses(
                 outcome.file, outcome.function, tool, mechanism[:120],
             )
             promoted = True
+
+
+_MAX_CONCEPT_REFUTATIONS = 32
+
+
+def _refute_domain_model_invariants(
+    config: OrchestratorConfig,
+    shared: SharedState,
+) -> int:
+    """Attack domain-model invariants with an adversarial LLM prompt.
+
+    For each invariant, an LLM call attempts to find a concrete
+    counter-example or logical flaw.  Verdicts:
+
+    - ``stands`` — keep; optionally upgrade confidence one grade.
+    - ``refuted`` — lower confidence one grade (or mark stale if
+      already at the floor).
+    - ``needs_evidence`` — leave unchanged; flag for mechanical check.
+
+    Returns the number of invariants whose grade changed.
+    """
+    from core.concepts.model import CONFIDENCE_GRADES
+    from core.llm.task_types import TaskType
+
+    dm = shared.domain_model
+    if not dm:
+        return 0
+
+    raw_invs = dm.get("invariants", [])
+    if not raw_invs:
+        return 0
+
+    client = _run_llm_client(config)
+    changed = 0
+    capped = raw_invs[:_MAX_CONCEPT_REFUTATIONS]
+
+    for entry in capped:
+        if not isinstance(entry, dict):
+            continue
+        statement = entry.get("statement", "")
+        if not statement:
+            continue
+        confidence = entry.get("confidence", "inferred")
+
+        prompt = (
+            "You are an adversarial reviewer of domain-model invariants.\n\n"
+            f"Invariant: {statement}\n"
+        )
+        negation = entry.get("negation", "")
+        if negation:
+            prompt += f"Negation: {negation}\n"
+        evidence = entry.get("evidence", [])
+        if evidence:
+            prompt += f"Evidence: {'; '.join(str(e) for e in evidence[:5])}\n"
+        prompt += (
+            "\nAttempt to REFUTE this invariant. Find a concrete "
+            "counter-example, an edge case where it does not hold, or "
+            "a logical flaw in its reasoning. If you cannot refute it, "
+            "say so.\n\n"
+            'Respond with JSON: {"verdict": "stands"|"refuted"|"needs_evidence", '
+            '"argument": "your reasoning"}'
+        )
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "verdict": {
+                    "type": "string",
+                    "enum": ["stands", "refuted", "needs_evidence"],
+                },
+                "argument": {"type": "string"},
+            },
+            "required": ["verdict", "argument"],
+        }
+        try:
+            from core.security.prompt_framing import with_audit_framing
+            data, _ = client.generate_structured(
+                prompt=prompt,
+                schema=schema,
+                system_prompt=with_audit_framing(
+                    "Adversarial invariant reviewer. Be rigorous."
+                ),
+                task_type=TaskType.AUDIT,
+                call_class="adversarial",
+            )
+        except Exception:  # noqa: BLE001
+            continue
+
+        if not isinstance(data, dict):
+            continue
+        verdict = data.get("verdict", "")
+
+        if verdict == "refuted":
+            try:
+                idx = CONFIDENCE_GRADES.index(confidence)
+            except ValueError:
+                continue
+            if idx > 0:
+                entry["confidence"] = CONFIDENCE_GRADES[idx - 1]
+                changed += 1
+            else:
+                entry["state"] = "stale"
+                changed += 1
+        elif verdict == "stands":
+            try:
+                idx = CONFIDENCE_GRADES.index(confidence)
+            except ValueError:
+                continue
+            if idx < len(CONFIDENCE_GRADES) - 1:
+                entry["confidence"] = CONFIDENCE_GRADES[idx + 1]
+                changed += 1
+
+    if changed:
+        logger.info(
+            "concept refutation: %d/%d invariant(s) regraded",
+            changed, len(capped),
+        )
+        if config.out_dir:
+            try:
+                save_json(config.out_dir / "domain-model.json", dm)
+            except Exception:
+                logger.debug("concept refutation: save failed", exc_info=True)
+    return changed
 
 
 # Bound the adversarial refuter's extra LLM spend: at most this many

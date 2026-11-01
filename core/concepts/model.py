@@ -198,6 +198,7 @@ class Concept:
     derived_version: str | None = None
     qualified_by: list[str] = field(default_factory=list)
     derived_from: list[dict[str, Any]] = field(default_factory=list)
+    parent_id: str = ""
     # Provenance tier (core.concepts.receipts): verbatim | mechanical
     # | llm_summarized | llm_prior. Empty = pre-tier legacy entry —
     # treated as non-actionable by tier-gated consumers.
@@ -210,6 +211,8 @@ class Concept:
     # whose current strategies intersect it — AR-7). Empty = unstamped
     # legacy concept, treated as relevant to nothing (storm-safe).
     related_strategies: list[str] = field(default_factory=list)
+    source_hash: str = ""
+    source_hash_span: dict[str, Any] | None = None
 
 
 # ------------------------------------------------------------------
@@ -233,6 +236,8 @@ class Invariant:
     mechanism_tags: list[str] = field(default_factory=list)
     provenance: str = ""
     receipt: dict[str, Any] | None = None
+    source_hash: str = ""
+    source_hash_span: dict[str, Any] | None = None
     # Staleness marker: "" (fresh/unchecked) or "stale" — set by the
     # prior-model quarantine when the verbatim receipt no longer
     # verifies against the current source. Tier-gated consumers
@@ -560,3 +565,70 @@ class DomainModel:
             if c.confidence in CONFIDENCE_GRADES
             and CONFIDENCE_GRADES.index(c.confidence) >= floor
         ]
+
+    def invariants_at_confidence(self, min_grade: str) -> list[Invariant]:
+        try:
+            floor = CONFIDENCE_GRADES.index(min_grade)
+        except ValueError:
+            return []
+        return [
+            inv for inv in self.invariants
+            if inv.confidence in CONFIDENCE_GRADES
+            and CONFIDENCE_GRADES.index(inv.confidence) >= floor
+        ]
+
+    # -- hierarchy (gap 8) -----------------------------------------
+
+    def concept_children(self, concept_id: str) -> list[Concept]:
+        return [
+            c for c in self.concepts
+            if c.parent_id == concept_id
+        ]
+
+    def concept_subtree(self, concept_id: str) -> list[Concept]:
+        result: list[Concept] = []
+        stack = [concept_id]
+        seen: set[str] = set()
+        while stack:
+            cid = stack.pop()
+            if cid in seen:
+                continue
+            seen.add(cid)
+            for child in self.concept_children(cid):
+                result.append(child)
+                stack.append(child.id)
+        return result
+
+    # -- versioning (gap 10) ----------------------------------------
+
+    def stale_invariants(self, source_root: Path | str) -> list[Invariant]:
+        from pathlib import Path as _P
+        root = _P(source_root) if not isinstance(source_root, _P) else source_root
+        stale: list[Invariant] = []
+        for inv in self.invariants:
+            if not inv.source_hash or not inv.source_hash_span:
+                continue
+            span = inv.source_hash_span
+            fpath = root / span.get("file", "")
+            if not fpath.is_file():
+                stale.append(inv)
+                continue
+            try:
+                import hashlib
+                text = fpath.read_text(encoding="utf-8", errors="replace")
+                lines = text.splitlines(keepends=True)
+                start = max(0, span.get("start", 1) - 1)
+                end = span.get("end", len(lines))
+                region = "".join(lines[start:end])
+                h = hashlib.sha256(region.encode()).hexdigest()[:16]
+                if h != inv.source_hash:
+                    stale.append(inv)
+            except OSError:
+                stale.append(inv)
+        return stale
+
+    def mark_stale(self, source_root: Path | str) -> int:
+        stale = self.stale_invariants(source_root)
+        for inv in stale:
+            inv.state = "stale"
+        return len(stale)
