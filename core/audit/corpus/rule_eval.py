@@ -61,6 +61,7 @@ from typing import Any
 from collections.abc import Callable, Iterable
 
 from core.json import load_json, save_json
+from core.source import read_text_gated
 
 logger = logging.getLogger(__name__)
 
@@ -717,8 +718,11 @@ def run_cocci_engine(
     # has none; their actual callers supply the confirmed domain context.
     for rule_path in rules_dir.glob("*.cocci"):
         try:
-            text = rule_path.read_text(encoding="utf-8")
-        except (OSError, UnicodeError) as exc:
+            text = read_text_gated(
+                rule_path, max_bytes=cocci_runner._RULE_MAX_BYTES,
+                encoding="utf-8",
+            )
+        except (OSError, ValueError) as exc:
             outcome.failed_rules.add(rule_path.stem)
             outcome.errors.append(f"{rule_path.stem}: cannot read rule metadata: {exc}")
             continue
