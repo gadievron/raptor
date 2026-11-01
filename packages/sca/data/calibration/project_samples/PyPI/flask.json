@@ -25,7 +25,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -41,26 +40,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "tier-3 wheel-metadata fetch attempted for black==23.7.0 but no module mapping resolved against project scan"
+          "numeric": 0.3
         },
-        "evidence": [],
         "verdict": "not_evaluated"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 86.99999999999999,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 14.498473377740622,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.6135,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 14.498473377740622
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -88,7 +73,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -104,27 +88,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "tier-3 wheel-metadata fetch attempted for black==23.7.0 but no module mapping resolved against project scan"
+          "numeric": 0.3
         },
-        "evidence": [],
         "verdict": "not_evaluated"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 53.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.443696547,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 16.919987324642804,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.6135,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 16.919987324642804
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -152,7 +121,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -168,26 +136,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "tier-3 wheel-metadata fetch attempted for black==23.7.0 but no module mapping resolved against project scan"
+          "numeric": 0.3
         },
-        "evidence": [],
         "verdict": "not_evaluated"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 98.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441441384,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 10.778874411615474,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.6135,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 10.778874411615474
       },
       "severity": "critical",
       "ssvc_automatable": null,
@@ -215,7 +169,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -231,26 +184,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "tier-3 wheel-metadata fetch attempted for black==23.7.0 but no module mapping resolved against project scan"
+          "numeric": 0.3
         },
-        "evidence": [],
         "verdict": "not_evaluated"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.442167078,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 8.26269949823341,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.6135,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 8.26269949823341
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -278,7 +217,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -294,33 +232,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "examples/celery/src/task_app/__init__.py:3",
-          "examples/celery/src/task_app/__init__.py:4",
-          "examples/celery/src/task_app/views.py:2",
-          "examples/celery/src/task_app/views.py:3",
-          "examples/javascript/js_example/__init__.py:1",
-          "... and 21 more"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 86.99999999999999,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44494124999999995,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 15.721053568593746,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 15.721053568593746
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -348,7 +265,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -364,33 +280,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "examples/celery/src/task_app/__init__.py:3",
-          "examples/celery/src/task_app/__init__.py:4",
-          "examples/celery/src/task_app/views.py:2",
-          "examples/celery/src/task_app/views.py:3",
-          "examples/javascript/js_example/__init__.py:1",
-          "... and 21 more"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 43.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44103719999999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.701998012550001,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 7.701998012550001
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -418,7 +313,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -434,33 +328,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "examples/celery/src/task_app/__init__.py:3",
-          "examples/celery/src/task_app/__init__.py:4",
-          "examples/celery/src/task_app/views.py:2",
-          "examples/celery/src/task_app/views.py:3",
-          "examples/javascript/js_example/__init__.py:1",
-          "... and 21 more"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 43.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44103719999999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.701998012550001,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 7.701998012550001
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -488,7 +361,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -504,32 +376,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "src/flask/templating.py:5",
-          "src/flask/templating.py:6",
-          "src/flask/templating.py:7",
-          "src/flask/templating.py:8",
-          "src/flask/sansio/scaffold.py:11"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 54.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441528651,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 9.683054462918248,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 9.683054462918248
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -557,7 +409,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -573,32 +424,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "src/flask/templating.py:5",
-          "src/flask/templating.py:6",
-          "src/flask/templating.py:7",
-          "src/flask/templating.py:8",
-          "src/flask/sansio/scaffold.py:11"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 88.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440610051,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 15.746962612689003,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 15.746962612689003
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -626,7 +457,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -642,32 +472,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "src/flask/templating.py:5",
-          "src/flask/templating.py:6",
-          "src/flask/templating.py:7",
-          "src/flask/templating.py:8",
-          "src/flask/sansio/scaffold.py:11"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 54.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44329695599999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 9.721834717796998,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 9.721834717796998
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -695,7 +505,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -711,32 +520,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "src/flask/templating.py:5",
-          "src/flask/templating.py:6",
-          "src/flask/templating.py:7",
-          "src/flask/templating.py:8",
-          "src/flask/sansio/scaffold.py:11"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 54.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.443696547,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 9.73059804812025,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 9.73059804812025
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -764,7 +553,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -780,32 +568,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "src/flask/templating.py:5",
-          "src/flask/templating.py:6",
-          "src/flask/templating.py:7",
-          "src/flask/templating.py:8",
-          "src/flask/sansio/scaffold.py:11"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 78.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44159754599999995,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 13.988816662801495,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 13.988816662801495
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -833,7 +601,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -849,33 +616,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "examples/tutorial/flaskr/auth.py:11",
-          "examples/tutorial/flaskr/auth.py:12",
-          "examples/tutorial/flaskr/blog.py:8",
-          "src/flask/app.py:15",
-          "src/flask/app.py:16",
-          "... and 49 more"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 63.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.442098183,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.311468847965125,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 11.311468847965125
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -903,7 +649,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": true,
         "kev_listed": false,
         "msf_modules": [
           "exploit_multi/http/werkzeug_debug_rce"
@@ -921,33 +666,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "examples/tutorial/flaskr/auth.py:11",
-          "examples/tutorial/flaskr/auth.py:12",
-          "examples/tutorial/flaskr/blog.py:8",
-          "src/flask/app.py:15",
-          "src/flask/app.py:16",
-          "... and 49 more"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.45480242099999996,
-        "exploit_evidence_multiplier": 1.7423,
-        "exposure_multiplier": 0.45,
-        "final": 28.270104890003093,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 28.270104890003093
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -975,7 +699,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -991,33 +714,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "examples/tutorial/flaskr/auth.py:11",
-          "examples/tutorial/flaskr/auth.py:12",
-          "examples/tutorial/flaskr/blog.py:8",
-          "src/flask/app.py:15",
-          "src/flask/app.py:16",
-          "... and 49 more"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 63.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441381675,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.293136363840624,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 11.293136363840624
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1045,7 +747,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1061,33 +762,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "examples/tutorial/flaskr/auth.py:11",
-          "examples/tutorial/flaskr/auth.py:12",
-          "examples/tutorial/flaskr/blog.py:8",
-          "src/flask/app.py:15",
-          "src/flask/app.py:16",
-          "... and 49 more"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 63.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44276416799999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.328508656926997,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 11.328508656926997
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1115,7 +795,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1131,33 +810,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "examples/tutorial/flaskr/auth.py:11",
-          "examples/tutorial/flaskr/auth.py:12",
-          "examples/tutorial/flaskr/blog.py:8",
-          "src/flask/app.py:15",
-          "src/flask/app.py:16",
-          "... and 49 more"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 63.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44089941,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.280797191833749,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 11.280797191833749
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1185,7 +843,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1201,33 +858,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "examples/tutorial/flaskr/auth.py:11",
-          "examples/tutorial/flaskr/auth.py:12",
-          "examples/tutorial/flaskr/blog.py:8",
-          "src/flask/app.py:15",
-          "src/flask/app.py:16",
-          "... and 49 more"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 63.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441712371,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.301597510359622,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 11.301597510359622
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1256,7 +892,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1272,33 +907,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "examples/tutorial/flaskr/auth.py:11",
-          "examples/tutorial/flaskr/auth.py:12",
-          "examples/tutorial/flaskr/blog.py:8",
-          "src/flask/app.py:15",
-          "src/flask/app.py:16",
-          "... and 49 more"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.444229335,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 13.530947900765623,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 13.530947900765623
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -1326,7 +940,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1342,33 +955,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "examples/tutorial/flaskr/auth.py:11",
-          "examples/tutorial/flaskr/auth.py:12",
-          "examples/tutorial/flaskr/blog.py:8",
-          "src/flask/app.py:15",
-          "src/flask/app.py:16",
-          "... and 49 more"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44511578399999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 13.557948583275,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 13.557948583275
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -1396,7 +988,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1412,33 +1003,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "examples/tutorial/flaskr/auth.py:11",
-          "examples/tutorial/flaskr/auth.py:12",
-          "examples/tutorial/flaskr/blog.py:8",
-          "src/flask/app.py:15",
-          "src/flask/app.py:16",
-          "... and 49 more"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 63.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.442098183,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.311468847965125,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 11.311468847965125
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1466,7 +1036,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": true,
         "kev_listed": false,
         "msf_modules": [
           "exploit_multi/http/werkzeug_debug_rce"
@@ -1484,33 +1053,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "examples/tutorial/flaskr/auth.py:11",
-          "examples/tutorial/flaskr/auth.py:12",
-          "examples/tutorial/flaskr/blog.py:8",
-          "src/flask/app.py:15",
-          "src/flask/app.py:16",
-          "... and 49 more"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.45480242099999996,
-        "exploit_evidence_multiplier": 1.7423,
-        "exposure_multiplier": 0.45,
-        "final": 28.270104890003093,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 28.270104890003093
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -1538,7 +1086,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1554,33 +1101,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "examples/tutorial/flaskr/auth.py:11",
-          "examples/tutorial/flaskr/auth.py:12",
-          "examples/tutorial/flaskr/blog.py:8",
-          "src/flask/app.py:15",
-          "src/flask/app.py:16",
-          "... and 49 more"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 63.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441381675,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.293136363840624,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 11.293136363840624
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1608,7 +1134,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1624,33 +1149,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "examples/tutorial/flaskr/auth.py:11",
-          "examples/tutorial/flaskr/auth.py:12",
-          "examples/tutorial/flaskr/blog.py:8",
-          "src/flask/app.py:15",
-          "src/flask/app.py:16",
-          "... and 49 more"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 63.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44276416799999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.328508656926997,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 11.328508656926997
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1678,7 +1182,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1694,33 +1197,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "examples/tutorial/flaskr/auth.py:11",
-          "examples/tutorial/flaskr/auth.py:12",
-          "examples/tutorial/flaskr/blog.py:8",
-          "src/flask/app.py:15",
-          "src/flask/app.py:16",
-          "... and 49 more"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 63.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44089941,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.280797191833749,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 11.280797191833749
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1748,7 +1230,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1764,33 +1245,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "examples/tutorial/flaskr/auth.py:11",
-          "examples/tutorial/flaskr/auth.py:12",
-          "examples/tutorial/flaskr/blog.py:8",
-          "src/flask/app.py:15",
-          "src/flask/app.py:16",
-          "... and 49 more"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 63.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441712371,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.301597510359622,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 11.301597510359622
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1819,7 +1279,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1835,33 +1294,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "examples/tutorial/flaskr/auth.py:11",
-          "examples/tutorial/flaskr/auth.py:12",
-          "examples/tutorial/flaskr/blog.py:8",
-          "src/flask/app.py:15",
-          "src/flask/app.py:16",
-          "... and 49 more"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.444229335,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 13.530947900765623,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 13.530947900765623
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -1889,7 +1327,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1905,33 +1342,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "examples/tutorial/flaskr/auth.py:11",
-          "examples/tutorial/flaskr/auth.py:12",
-          "examples/tutorial/flaskr/blog.py:8",
-          "src/flask/app.py:15",
-          "src/flask/app.py:16",
-          "... and 49 more"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44511578399999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 13.557948583275,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 13.557948583275
       },
       "severity": "high",
       "ssvc_automatable": null,

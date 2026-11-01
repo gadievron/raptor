@@ -1018,9 +1018,9 @@ def _sanitise_findings(
             "in_kev": sca.get("in_kev"),
             "epss": sca.get("epss"),
             "cvss_score": sca.get("cvss_score"),
-            "reachability": sca.get("reachability"),
+            "reachability": _reachability_scrubbed(sca.get("reachability")),
             "raptor_risk_estimate": sca.get("raptor_risk_estimate"),
-            "risk_components": sca.get("risk_components"),
+            "risk_components": _retained_fields(sca.get("risk_components"), ("final",)),
             # Without this, refit could not see EDB / MSF / GitHub-PoC
             # signal on archived findings — only ``in_kev`` (the
             # binary CISA flag) was preserved, even though the live
@@ -1028,7 +1028,10 @@ def _sanitise_findings(
             # every finding before the archive step. Re-tuning runs
             # against this archive could only see ~half the exploit
             # signal that production scans actually saw.
-            "exploit_evidence": sca.get("exploit_evidence"),
+            "exploit_evidence": _retained_fields(
+                sca.get("exploit_evidence"),
+                ("kev_listed", "edb_ids", "msf_modules", "github_poc_urls"),
+            ),
             # CISA Vulnrichment SSVC fields. Persist BOTH so refit
             # exercises the matched ``compute_risk_estimate`` branches
             # (Automatable bonus only fires when Exploitation>=poc
@@ -1068,6 +1071,21 @@ def _sanitise_findings(
         f.get("dep_version") or "",
     ))
     return out
+
+
+def _retained_fields(raw: Any, fields: tuple[str, ...]) -> Any:
+    """Project structured blocks without repairing malformed scorer inputs."""
+    if not isinstance(raw, dict):
+        return raw
+    return {key: raw[key] for key in fields if key in raw}
+
+
+def _reachability_scrubbed(raw: Any) -> Any:
+    """Retain the verdict and confidence inputs, dropping diagnostic text."""
+    result = _retained_fields(raw, ("verdict", "confidence"))
+    if isinstance(result, dict) and isinstance(result.get("confidence"), dict):
+        result["confidence"] = _retained_fields(result["confidence"], ("level", "numeric"))
+    return result
 
 
 def _advisory_scrubbed(raw: Any) -> dict[str, Any] | None:

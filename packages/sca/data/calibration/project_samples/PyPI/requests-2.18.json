@@ -26,7 +26,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -42,28 +41,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "setup.py:31"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 68.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.439907322,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 12.148700558013,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 12.148700558013
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -92,7 +75,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -108,30 +90,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "setup.py:9",
-          "setup.py:10"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 77.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.446512056,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 27.754448811568995,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 27.754448811568995
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -160,7 +124,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -176,30 +139,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "setup.py:9",
-          "setup.py:10"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 88.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44810582699999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 23.059788492245204,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 23.059788492245204
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -228,7 +173,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -244,30 +188,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "setup.py:9",
-          "setup.py:10"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 61.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441060165,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 20.597722246108404,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 20.597722246108404
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -296,7 +222,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -312,29 +237,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "setup.py:9",
-          "setup.py:10"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 86.99999999999999,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.451288776,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 15.945329911310996,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 15.945329911310996
       },
       "severity": "high",
       "ssvc_automatable": null,

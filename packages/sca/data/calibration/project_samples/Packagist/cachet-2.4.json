@@ -23,7 +23,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -39,26 +38,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Aws\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 77.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 14.863346667043874,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 14.863346667043874
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -88,7 +73,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -104,27 +88,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Aws\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 60.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.443880267,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 14.730742123485967,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 14.730742123485967
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -151,7 +120,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -167,26 +135,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Aws\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 60.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440169123,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.62198299342369,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 7.62198299342369
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -213,7 +167,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -229,31 +182,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Integrations/Core/Beacon.php:26",
-          "app/Integrations/Core/Credits.php:16",
-          "app/Integrations/Core/Feed.php:16",
-          "app/Integrations/GitHub/Releases.php:16"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 53.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440908596,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 9.4903921881765,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 9.4903921881765
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -280,7 +214,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -296,31 +229,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Integrations/Core/Beacon.php:26",
-          "app/Integrations/Core/Credits.php:16",
-          "app/Integrations/Core/Feed.php:16",
-          "app/Integrations/GitHub/Releases.php:16"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 57.99999999999999,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440169123,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 10.368293734545748,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 10.368293734545748
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -347,7 +261,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -363,31 +276,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Integrations/Core/Beacon.php:26",
-          "app/Integrations/Core/Credits.php:16",
-          "app/Integrations/Core/Feed.php:16",
-          "app/Integrations/GitHub/Releases.php:16"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 53.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44111987399999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 9.494939867897248,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 9.494939867897248
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -414,7 +308,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -430,31 +323,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Integrations/Core/Beacon.php:26",
-          "app/Integrations/Core/Credits.php:16",
-          "app/Integrations/Core/Feed.php:16",
-          "app/Integrations/GitHub/Releases.php:16"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 65.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440114007,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.618184571036872,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 11.618184571036872
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -481,7 +355,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -497,31 +370,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Integrations/Core/Beacon.php:26",
-          "app/Integrations/Core/Credits.php:16",
-          "app/Integrations/Core/Feed.php:16",
-          "app/Integrations/GitHub/Releases.php:16"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 47.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.43996703099999995,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 8.398035691849122,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 8.398035691849122
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -548,7 +402,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -564,31 +417,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Integrations/Core/Beacon.php:26",
-          "app/Integrations/Core/Credits.php:16",
-          "app/Integrations/Core/Feed.php:16",
-          "app/Integrations/GitHub/Releases.php:16"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 59.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440908596,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 10.5647762094795,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 10.5647762094795
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -615,7 +449,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -631,31 +464,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Integrations/Core/Beacon.php:26",
-          "app/Integrations/Core/Credits.php:16",
-          "app/Integrations/Core/Feed.php:16",
-          "app/Integrations/GitHub/Releases.php:16"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 72.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44089941,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 12.89233964781,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 12.89233964781
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -682,7 +496,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -698,31 +511,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Integrations/Core/Beacon.php:26",
-          "app/Integrations/Core/Credits.php:16",
-          "app/Integrations/Core/Feed.php:16",
-          "app/Integrations/GitHub/Releases.php:16"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 59.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440881038,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 10.56411588190725,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 10.56411588190725
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -749,7 +543,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -765,31 +558,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Integrations/Core/Beacon.php:26",
-          "app/Integrations/Core/Credits.php:16",
-          "app/Integrations/Core/Feed.php:16",
-          "app/Integrations/GitHub/Releases.php:16"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 59.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.439879764,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 10.540123980115501,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 10.540123980115501
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -816,7 +590,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -832,31 +605,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Integrations/Core/Beacon.php:26",
-          "app/Integrations/Core/Credits.php:16",
-          "app/Integrations/Core/Feed.php:16",
-          "app/Integrations/GitHub/Releases.php:16"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 53.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.440109414,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.294356373396207,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 7.294356373396207
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -883,7 +637,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -899,31 +652,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Integrations/Core/Beacon.php:26",
-          "app/Integrations/Core/Credits.php:16",
-          "app/Integrations/Core/Feed.php:16",
-          "app/Integrations/GitHub/Releases.php:16"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 42.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.440655981,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.787612008572433,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 5.787612008572433
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -950,7 +684,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -966,31 +699,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Integrations/Core/Beacon.php:26",
-          "app/Integrations/Core/Credits.php:16",
-          "app/Integrations/Core/Feed.php:16",
-          "app/Integrations/GitHub/Releases.php:16"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 53.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44007267,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.293747379764037,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 7.293747379764037
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1017,7 +731,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1033,31 +746,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Integrations/Core/Beacon.php:26",
-          "app/Integrations/Core/Credits.php:16",
-          "app/Integrations/Core/Feed.php:16",
-          "app/Integrations/GitHub/Releases.php:16"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 48.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.440251797,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.6083467686528605,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 6.6083467686528605
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1082,7 +776,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1098,26 +791,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Laravel\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.721219047815,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 7.721219047815
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1144,7 +823,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1160,26 +838,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Laravel\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 89.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441547023,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.341333420046764,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 11.341333420046764
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -1206,7 +870,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1222,26 +885,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Laravel\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 61.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.442989225,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.7986629051676415,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 7.7986629051676415
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1269,7 +918,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1285,26 +933,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Laravel\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 69.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.442640157,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 8.814487224242331,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 8.814487224242331
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1329,7 +963,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1345,26 +978,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Laravel\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 42.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 8.107280000205751,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 8.107280000205751
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1391,7 +1010,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1407,26 +1025,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Laravel\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 92.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44276876099999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.75606422932569,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 11.75606422932569
       },
       "severity": "critical",
       "ssvc_automatable": null,
@@ -1454,7 +1058,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1470,26 +1073,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Laravel\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 86.99999999999999,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.644768901,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 16.189017232042875,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 16.189017232042875
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -1516,7 +1105,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1532,26 +1120,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Laravel\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 31.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44041255199999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 3.9402024126252377,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 3.9402024126252377
       },
       "severity": "low",
       "ssvc_automatable": null,
@@ -1578,7 +1152,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1594,26 +1167,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Laravel\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 98.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 18.91698666714675,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 18.91698666714675
       },
       "severity": "critical",
       "ssvc_automatable": null,
@@ -1638,7 +1197,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1654,26 +1212,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Laravel\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 99.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 19.110017143342123,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 19.110017143342123
       },
       "severity": "critical",
       "ssvc_automatable": null,
@@ -1700,7 +1244,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1716,26 +1259,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Laravel\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 88.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.450783546,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.448481279804048,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 11.448481279804048
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -1763,7 +1292,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1779,26 +1307,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Laravel\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44420636999999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 9.614865118874068,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 9.614865118874068
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -1823,7 +1337,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1839,26 +1352,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Laravel\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 72.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 13.898194286067,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 13.898194286067
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -1885,7 +1384,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1901,27 +1399,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use League\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 61.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.440830515,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.264739755155539,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 11.264739755155539
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1948,7 +1431,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1964,26 +1446,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use League\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44209359,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.3682331099438905,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 7.3682331099438905
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -2010,7 +1478,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2026,26 +1493,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use League\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 64.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44093615399999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.271097593718214,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 6.271097593718214
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -2072,7 +1525,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2088,26 +1540,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use League\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.441464349,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.357745750535819,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 7.357745750535819
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -2134,7 +1572,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2150,27 +1587,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use League\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 61.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44034825,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.252416221431881,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 11.252416221431881
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -2197,7 +1619,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2213,26 +1634,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use League\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.441441384,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.35736300019246,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 7.35736300019246
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -2257,7 +1664,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2273,26 +1679,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use League\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.147510000282905,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 11.147510000282905
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -2319,7 +1711,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2335,26 +1726,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use League\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.441464349,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.357745750535819,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 7.357745750535819
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -2379,7 +1756,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2395,26 +1771,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use League\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.147510000282905,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 11.147510000282905
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -2441,7 +1803,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2457,26 +1818,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use League\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44156539499999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.359429852046604,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 7.359429852046604
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -2503,7 +1850,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2519,26 +1865,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use League\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 98.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.455211198,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 9.913497205266447,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 9.913497205266447
       },
       "severity": "critical",
       "ssvc_automatable": null,
@@ -2565,7 +1897,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2581,27 +1912,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use League\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 35.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.440747841,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.26262714937434,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 11.26262714937434
       },
       "severity": "low",
       "ssvc_automatable": null,
@@ -2628,7 +1944,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2644,27 +1959,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Mtdowling\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 98.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44122551299999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 18.41556108297992,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 18.41556108297992
       },
       "severity": "critical",
       "ssvc_automatable": null,
@@ -2691,7 +1991,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2707,26 +2006,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Nesbot\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 63.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44265852899999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.197224965448063,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 6.197224965448063
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -2753,7 +2038,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2769,33 +2053,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "vendor referenced only by test code"
+          "numeric": 0.7
         },
-        "evidence": [
-          "tests/AnalysisTest.php:15",
-          "tests/Bus/Commands/CommandExistenceTest.php:15",
-          "tests/Bus/Events/EventExistenceTest.php:15",
-          "tests/Bus/Jobs/JobExistenceTest.php:15",
-          "tests/Models/ModelExistenceTest.php:15",
-          "... (+5 more)"
-        ],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 78.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44096371199999995,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 9.926464759444919,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 9.926464759444919
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -2822,7 +2085,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2838,27 +2100,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Psy\\...` found in non-test PHP source"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 67.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44067894599999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.260866644556675,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 11.260866644556675
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -2885,7 +2132,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2901,33 +2147,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Console/Commands/DemoMetricPointSeederCommand.php:17",
-          "app/Console/Commands/DemoSeederCommand.php:31",
-          "app/Exceptions/Displayers/JsonValidationDisplayer.php:18",
-          "app/Exceptions/Displayers/RedirectDisplayer.php:17",
-          "app/Exceptions/Displayers/ThrottleDisplayer.php:17",
-          "... (+19 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 73.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44566694399999995,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 10.173812569794718,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 10.173812569794718
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -2954,7 +2179,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -2970,33 +2194,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Console/Commands/DemoMetricPointSeederCommand.php:17",
-          "app/Console/Commands/DemoSeederCommand.php:31",
-          "app/Exceptions/Displayers/JsonValidationDisplayer.php:18",
-          "app/Exceptions/Displayers/RedirectDisplayer.php:17",
-          "app/Exceptions/Displayers/ThrottleDisplayer.php:17",
-          "... (+19 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 31.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.441896091,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 4.28383074248254,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 4.28383074248254
       },
       "severity": "low",
       "ssvc_automatable": null,
@@ -3023,7 +2226,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3039,33 +2241,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Console/Commands/DemoMetricPointSeederCommand.php:17",
-          "app/Console/Commands/DemoSeederCommand.php:31",
-          "app/Exceptions/Displayers/JsonValidationDisplayer.php:18",
-          "app/Exceptions/Displayers/RedirectDisplayer.php:17",
-          "app/Exceptions/Displayers/ThrottleDisplayer.php:17",
-          "... (+19 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 86.99999999999999,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44140463999999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 12.008993126545798,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 12.008993126545798
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -3092,7 +2273,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3108,33 +2288,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Console/Commands/DemoMetricPointSeederCommand.php:17",
-          "app/Console/Commands/DemoSeederCommand.php:31",
-          "app/Exceptions/Displayers/JsonValidationDisplayer.php:18",
-          "app/Exceptions/Displayers/RedirectDisplayer.php:17",
-          "app/Exceptions/Displayers/ThrottleDisplayer.php:17",
-          "... (+19 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 71.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44194661399999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 9.8124760359497,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 9.8124760359497
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -3161,7 +2320,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3177,33 +2335,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Console/Commands/DemoMetricPointSeederCommand.php:17",
-          "app/Console/Commands/DemoSeederCommand.php:31",
-          "app/Exceptions/Displayers/JsonValidationDisplayer.php:18",
-          "app/Exceptions/Displayers/RedirectDisplayer.php:17",
-          "app/Exceptions/Displayers/ThrottleDisplayer.php:17",
-          "... (+19 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 49.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44099127,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.757351675619739,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 6.757351675619739
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3230,7 +2367,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3246,33 +2382,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Console/Commands/DemoMetricPointSeederCommand.php:17",
-          "app/Console/Commands/DemoSeederCommand.php:31",
-          "app/Exceptions/Displayers/JsonValidationDisplayer.php:18",
-          "app/Exceptions/Displayers/RedirectDisplayer.php:17",
-          "app/Exceptions/Displayers/ThrottleDisplayer.php:17",
-          "... (+19 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 27.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44167103399999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 3.729178156124767,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 3.729178156124767
       },
       "severity": "low",
       "ssvc_automatable": null,
@@ -3299,7 +2414,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3315,33 +2429,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Console/Commands/DemoMetricPointSeederCommand.php:17",
-          "app/Console/Commands/DemoSeederCommand.php:31",
-          "app/Exceptions/Displayers/JsonValidationDisplayer.php:18",
-          "app/Exceptions/Displayers/RedirectDisplayer.php:17",
-          "app/Exceptions/Displayers/ThrottleDisplayer.php:17",
-          "... (+19 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 86.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.441165804,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.86453556353989,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 11.86453556353989
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -3368,7 +2461,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3384,33 +2476,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Console/Commands/DemoMetricPointSeederCommand.php:17",
-          "app/Console/Commands/DemoSeederCommand.php:31",
-          "app/Exceptions/Displayers/JsonValidationDisplayer.php:18",
-          "app/Exceptions/Displayers/RedirectDisplayer.php:17",
-          "app/Exceptions/Displayers/ThrottleDisplayer.php:17",
-          "... (+19 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 63.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.440260983,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 8.673636108379647,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 8.673636108379647
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3437,7 +2508,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3453,33 +2523,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Console/Commands/DemoMetricPointSeederCommand.php:17",
-          "app/Console/Commands/DemoSeederCommand.php:31",
-          "app/Exceptions/Displayers/JsonValidationDisplayer.php:18",
-          "app/Exceptions/Displayers/RedirectDisplayer.php:17",
-          "app/Exceptions/Displayers/ThrottleDisplayer.php:17",
-          "... (+19 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.440798364,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.5137924558486,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 5.5137924558486
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3506,7 +2555,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3522,33 +2570,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Console/Commands/DemoMetricPointSeederCommand.php:17",
-          "app/Console/Commands/DemoSeederCommand.php:31",
-          "app/Exceptions/Displayers/JsonValidationDisplayer.php:18",
-          "app/Exceptions/Displayers/RedirectDisplayer.php:17",
-          "app/Exceptions/Displayers/ThrottleDisplayer.php:17",
-          "... (+19 more)"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 69.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.440798364,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 9.511291986338835,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 9.511291986338835
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3575,7 +2602,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3591,30 +2617,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Twig\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Bus/Handlers/Commands/Incident/CreateIncidentCommandHandler.php:26",
-          "app/Bus/Handlers/Commands/Incident/CreateIncidentCommandHandler.php:27"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 13.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440554935,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 20.57412776164527,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 20.57412776164527
       },
       "severity": "low",
       "ssvc_automatable": null,
@@ -3641,7 +2649,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3657,29 +2664,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Twig\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Bus/Handlers/Commands/Incident/CreateIncidentCommandHandler.php:26",
-          "app/Bus/Handlers/Commands/Incident/CreateIncidentCommandHandler.php:27"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 86.99999999999999,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44086266599999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 15.576945469944746,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 15.576945469944746
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -3706,7 +2696,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3722,29 +2711,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Twig\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Bus/Handlers/Commands/Incident/CreateIncidentCommandHandler.php:26",
-          "app/Bus/Handlers/Commands/Incident/CreateIncidentCommandHandler.php:27"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44111987399999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.165992353129999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 7.165992353129999
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3771,7 +2743,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3787,29 +2758,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Twig\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Bus/Handlers/Commands/Incident/CreateIncidentCommandHandler.php:26",
-          "app/Bus/Handlers/Commands/Incident/CreateIncidentCommandHandler.php:27"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 22.000000000000004,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441179583,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 3.9418292792092506,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 3.9418292792092506
       },
       "severity": "low",
       "ssvc_automatable": null,
@@ -3836,7 +2790,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3852,29 +2805,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Twig\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Bus/Handlers/Commands/Incident/CreateIncidentCommandHandler.php:26",
-          "app/Bus/Handlers/Commands/Incident/CreateIncidentCommandHandler.php:27"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 85.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.443099457,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 15.296070192800622,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 15.296070192800622
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -3901,7 +2837,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3917,29 +2852,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Twig\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Bus/Handlers/Commands/Incident/CreateIncidentCommandHandler.php:26",
-          "app/Bus/Handlers/Commands/Incident/CreateIncidentCommandHandler.php:27"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 57.99999999999999,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441372489,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 10.396639321517249,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 10.396639321517249
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3966,7 +2884,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -3982,29 +2899,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Twig\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Bus/Handlers/Commands/Incident/CreateIncidentCommandHandler.php:26",
-          "app/Bus/Handlers/Commands/Incident/CreateIncidentCommandHandler.php:27"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 93.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.442359984,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 16.707770710686,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 16.707770710686
       },
       "severity": "critical",
       "ssvc_automatable": null,
@@ -4031,7 +2931,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4047,29 +2946,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Twig\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Bus/Handlers/Commands/Incident/CreateIncidentCommandHandler.php:26",
-          "app/Bus/Handlers/Commands/Incident/CreateIncidentCommandHandler.php:27"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440885631,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.162187075594999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 7.162187075594999
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -4096,7 +2978,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4112,29 +2993,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Twig\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Bus/Handlers/Commands/Incident/CreateIncidentCommandHandler.php:26",
-          "app/Bus/Handlers/Commands/Incident/CreateIncidentCommandHandler.php:27"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441069351,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.165171606994999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 7.165171606994999
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -4161,7 +3025,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4177,29 +3040,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Twig\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Bus/Handlers/Commands/Incident/CreateIncidentCommandHandler.php:26",
-          "app/Bus/Handlers/Commands/Incident/CreateIncidentCommandHandler.php:27"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 22.000000000000004,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441152025,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 3.9415830553687505,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 3.9415830553687505
       },
       "severity": "low",
       "ssvc_automatable": null,
@@ -4226,7 +3072,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4242,29 +3087,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Twig\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Bus/Handlers/Commands/Incident/CreateIncidentCommandHandler.php:26",
-          "app/Bus/Handlers/Commands/Incident/CreateIncidentCommandHandler.php:27"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441418419,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.170842216654999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 7.170842216654999
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -4291,7 +3119,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4307,29 +3134,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Twig\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Bus/Handlers/Commands/Incident/CreateIncidentCommandHandler.php:26",
-          "app/Bus/Handlers/Commands/Incident/CreateIncidentCommandHandler.php:27"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44104638599999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 7.164798540569998,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 7.164798540569998
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -4356,7 +3166,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4372,29 +3181,12 @@
       "reachability": {
         "confidence": {
           "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Twig\\...` referenced; pkg-segment match unconfirmed"
+          "numeric": 0.3
         },
-        "evidence": [
-          "app/Bus/Handlers/Commands/Incident/CreateIncidentCommandHandler.php:26",
-          "app/Bus/Handlers/Commands/Incident/CreateIncidentCommandHandler.php:27"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 21.000000000000004,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440720283,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 3.7587380236008747,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 3.7587380236008747
       },
       "severity": "low",
       "ssvc_automatable": null,
@@ -4421,7 +3213,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4437,30 +3228,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/app.js:16",
-          "resources/assets/js/bootstrap.js:21"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 70.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44312242199999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 20.694030641780664,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 20.694030641780664
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -4487,7 +3260,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4503,30 +3275,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/app.js:16",
-          "resources/assets/js/bootstrap.js:21"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 63.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44464729799999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 27.63853854719538,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 27.63853854719538
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -4553,7 +3307,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4569,29 +3322,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/app.js:16",
-          "resources/assets/js/bootstrap.js:21"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.452055807,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 13.769337346340624,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 13.769337346340624
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -4618,7 +3354,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4634,29 +3369,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/app.js:16",
-          "resources/assets/js/bootstrap.js:21"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 59.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.450034887,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 10.783454690489625,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 10.783454690489625
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -4683,7 +3401,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4699,30 +3416,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/app.js:16",
-          "resources/assets/js/bootstrap.js:21"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 53.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440701911,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 27.39329983513398,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 27.39329983513398
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -4749,7 +3448,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4765,30 +3463,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/app.js:16",
-          "resources/assets/js/bootstrap.js:21"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44274579599999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 27.520344336725735,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 27.520344336725735
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -4815,7 +3495,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4831,30 +3510,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/app.js:16",
-          "resources/assets/js/bootstrap.js:21"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 74.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44105097899999995,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 20.5972932554818,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 20.5972932554818
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -4881,7 +3542,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4897,30 +3557,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/app.js:16",
-          "resources/assets/js/bootstrap.js:21"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 63.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44066057399999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 20.579061153851193,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 20.579061153851193
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -4947,7 +3589,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -4963,30 +3604,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/app.js:16",
-          "resources/assets/js/bootstrap.js:21"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 48.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440724876,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 20.582064088237413,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 20.582064088237413
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -5013,7 +3636,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -5029,29 +3651,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/app.js:16",
-          "resources/assets/js/bootstrap.js:21"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.47830939499999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 14.569005228328125,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 14.569005228328125
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -5078,7 +3683,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -5094,30 +3698,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/app.js:16",
-          "resources/assets/js/bootstrap.js:21"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 48.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.448151757,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 20.928903009845538,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 20.928903009845538
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -5144,7 +3730,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -5160,30 +3745,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/app.js:16",
-          "resources/assets/js/bootstrap.js:21"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.46402516499999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 28.8430346195901,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 28.8430346195901
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -5210,7 +3777,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -5226,30 +3792,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/app.js:16",
-          "resources/assets/js/bootstrap.js:21"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441735336,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 27.457535819084864,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 27.457535819084864
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -5276,7 +3824,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -5292,30 +3839,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/app.js:16",
-          "resources/assets/js/bootstrap.js:21"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 77.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44283765599999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 27.526054201965817,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 27.526054201965817
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -5342,7 +3871,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -5358,30 +3886,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/app.js:16",
-          "resources/assets/js/bootstrap.js:21"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 68.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44068813199999995,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 20.580348125731003,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 20.580348125731003
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -5408,7 +3918,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -5424,30 +3933,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/app.js:16",
-          "resources/assets/js/bootstrap.js:21"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 63.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441147432,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 20.60179765706113,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 20.60179765706113
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -5474,7 +3965,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -5490,30 +3980,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/app.js:16",
-          "resources/assets/js/bootstrap.js:21"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 82.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.442364577,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 21.212226283960035,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 21.212226283960035
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -5540,7 +4012,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -5556,30 +4027,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/app.js:16",
-          "resources/assets/js/bootstrap.js:21"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 74.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.443182131,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 20.69681908085358,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 20.69681908085358
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -5606,7 +4059,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -5622,30 +4074,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/app.js:16",
-          "resources/assets/js/bootstrap.js:21"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 86.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.49560203999999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 33.174290864570395,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 33.174290864570395
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -5672,7 +4106,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -5688,30 +4121,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/app.js:16",
-          "resources/assets/js/bootstrap.js:21"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 72.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.442465623,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 27.502929247743495,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 27.502929247743495
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -5738,7 +4153,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -5754,30 +4168,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/app.js:16",
-          "resources/assets/js/bootstrap.js:21"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 53.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440701911,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 27.39329983513398,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 27.39329983513398
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -5804,7 +4200,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -5820,30 +4215,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/app.js:16",
-          "resources/assets/js/bootstrap.js:21"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 48.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44221300799999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 20.65156056974702,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 20.65156056974702
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -5870,7 +4247,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -5886,30 +4262,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/app.js:16",
-          "resources/assets/js/bootstrap.js:21"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 65.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.442548297,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 27.508068126459566,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 27.508068126459566
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -5936,7 +4294,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -5952,30 +4309,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/app.js:16",
-          "resources/assets/js/bootstrap.js:21"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 37.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440196681,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 20.557397127207768,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 20.557397127207768
       },
       "severity": "low",
       "ssvc_automatable": null,
@@ -6002,7 +4341,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -6018,30 +4356,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/app.js:16",
-          "resources/assets/js/bootstrap.js:21"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 54.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44016453,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 20.55589566001466,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 20.55589566001466
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -6071,7 +4391,6 @@
           49766
         ],
         "github_poc_urls": [],
-        "has_any": true,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -6087,28 +4406,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/bootstrap.js:10"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 69.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.894894495,
-        "exploit_evidence_multiplier": 1.7423,
-        "exposure_multiplier": 0.45,
-        "final": 55.62582798814158,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 55.62582798814158
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -6138,7 +4441,6 @@
           49767
         ],
         "github_poc_urls": [],
-        "has_any": true,
         "kev_listed": true,
         "msf_modules": []
       },
@@ -6154,28 +4456,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/bootstrap.js:10"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 69.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.8290859909999999,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 62.99072889938143,
-        "kev_multiplier": 1.9326,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 62.99072889938143
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -6202,7 +4488,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -6218,28 +4503,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/bootstrap.js:1"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 53.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.47289424799999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 10.178871352856998,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 10.178871352856998
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -6266,7 +4535,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -6282,28 +4550,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/bootstrap.js:1"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 72.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.537182469,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 15.707752576029,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 15.707752576029
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -6330,7 +4582,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -6346,28 +4597,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/bootstrap.js:1"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 65.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440747841,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 11.634916600198123,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 11.634916600198123
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -6394,7 +4629,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -6410,28 +4644,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/bootstrap.js:1"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 74.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.463143309,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 13.91896165120425,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 13.91896165120425
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -6458,7 +4676,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -6474,28 +4691,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/bootstrap.js:1"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 81.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.452097144,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 14.872244161167,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 14.872244161167
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -6522,7 +4723,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -6538,28 +4738,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/bootstrap.js:1"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 69.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.447573039,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 12.542171432007375,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 12.542171432007375
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -6586,7 +4770,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -6602,26 +4785,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no import/require for 'moment' found"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.50276712,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 10.882414957274866,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 10.882414957274866
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -6648,7 +4817,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -6664,27 +4832,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no import/require for 'moment' found"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.464695743,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 20.52605733576253,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 20.52605733576253
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -6711,7 +4864,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -6727,27 +4879,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "no import/require for 'vue-template-compiler' found"
+          "numeric": 0.7
         },
-        "evidence": [],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 42.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441524058,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 14.652548273142909,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 14.652548273142909
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -6774,7 +4911,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -6790,28 +4926,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
+          "numeric": 0.95
         },
-        "evidence": [
-          "resources/assets/js/app.js:14"
-        ],
         "verdict": "imported"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 37.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441822603,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.639102571804874,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 6.639102571804874
       },
       "severity": "low",
       "ssvc_automatable": null,

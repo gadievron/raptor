@@ -26,7 +26,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -42,26 +41,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "crate imported but the 1 OSV-listed affected symbol(s) are not called from non-test Rust source"
+          "numeric": 0.95
         },
-        "evidence": [],
         "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 55.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44076621299999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.978779502777737,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.60727,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 5.978779502777737
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -89,7 +74,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -105,27 +89,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "crate imported but the 1 OSV-listed affected symbol(s) are not called from non-test Rust source"
+          "numeric": 0.95
         },
-        "evidence": [],
         "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.443246433,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 16.73117699812411,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.60727,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
+        "final": 16.73117699812411
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -152,7 +121,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -168,26 +136,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "crate imported but the 2 OSV-listed affected symbol(s) are not called from non-test Rust source"
+          "numeric": 0.95
         },
-        "evidence": [],
         "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.5982729041775,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.60727,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 6.5982729041775
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -214,7 +168,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -230,26 +183,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "crate imported but the 2 OSV-listed affected symbol(s) are not called from non-test Rust source"
+          "numeric": 0.95
         },
-        "evidence": [],
         "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.5982729041775,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.60727,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 6.5982729041775
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -276,7 +215,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -292,26 +230,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "crate imported but the 2 OSV-listed affected symbol(s) are not called from non-test Rust source"
+          "numeric": 0.95
         },
-        "evidence": [],
         "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.5982729041775,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.60727,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 6.5982729041775
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -339,7 +263,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -355,26 +278,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "crate imported but the 6 OSV-listed affected symbol(s) are not called from non-test Rust source"
+          "numeric": 0.95
         },
-        "evidence": [],
         "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 59.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44302596899999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.446481594486102,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.60727,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 6.446481594486102
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -401,7 +310,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -417,26 +325,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "crate imported but the 6 OSV-listed affected symbol(s) are not called from non-test Rust source"
+          "numeric": 0.95
         },
-        "evidence": [],
         "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.5982729041775,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.60727,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 6.5982729041775
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -464,7 +358,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -480,26 +373,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "crate imported but the 6 OSV-listed affected symbol(s) are not called from non-test Rust source"
+          "numeric": 0.95
         },
-        "evidence": [],
         "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 81.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.444890727,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 8.887506345667871,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.60727,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 8.887506345667871
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -527,7 +406,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -543,26 +421,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "crate imported but the 6 OSV-listed affected symbol(s) are not called from non-test Rust source"
+          "numeric": 0.95
         },
-        "evidence": [],
         "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.5982729041775,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.60727,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 6.5982729041775
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -588,7 +452,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -604,26 +467,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "crate imported but the 6 OSV-listed affected symbol(s) are not called from non-test Rust source"
+          "numeric": 0.95
         },
-        "evidence": [],
         "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.5982729041775,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.60727,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 6.5982729041775
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -650,7 +499,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -666,26 +514,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "crate imported but the 4 OSV-listed affected symbol(s) are not called from non-test Rust source"
+          "numeric": 0.95
         },
-        "evidence": [],
         "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.5982729041775,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.60727,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 6.5982729041775
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -713,7 +547,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -729,26 +562,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "crate imported but the 4 OSV-listed affected symbol(s) are not called from non-test Rust source"
+          "numeric": 0.95
         },
-        "evidence": [],
         "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 54.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44190987,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.885305515090022,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.60727,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 5.885305515090022
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -776,7 +595,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -792,26 +610,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "crate imported but the 4 OSV-listed affected symbol(s) are not called from non-test Rust source"
+          "numeric": 0.95
         },
-        "evidence": [],
         "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.5982729041775,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.60727,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 6.5982729041775
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -837,7 +641,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -853,26 +656,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "crate imported but the 4 OSV-listed affected symbol(s) are not called from non-test Rust source"
+          "numeric": 0.95
         },
-        "evidence": [],
         "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.5982729041775,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.60727,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 6.5982729041775
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -900,7 +689,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -916,26 +704,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "crate imported but the 6 OSV-listed affected symbol(s) are not called from non-test Rust source"
+          "numeric": 0.95
         },
-        "evidence": [],
         "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 59.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44302596899999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.446481594486102,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.60727,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 6.446481594486102
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -962,7 +736,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -978,26 +751,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "crate imported but the 6 OSV-listed affected symbol(s) are not called from non-test Rust source"
+          "numeric": 0.95
         },
-        "evidence": [],
         "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.5982729041775,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.60727,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 6.5982729041775
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1025,7 +784,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1041,26 +799,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "crate imported but the 6 OSV-listed affected symbol(s) are not called from non-test Rust source"
+          "numeric": 0.95
         },
-        "evidence": [],
         "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 81.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.444890727,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 8.887506345667871,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.60727,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 8.887506345667871
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -1088,7 +832,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1104,26 +847,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "crate imported but the 6 OSV-listed affected symbol(s) are not called from non-test Rust source"
+          "numeric": 0.95
         },
-        "evidence": [],
         "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.5982729041775,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.60727,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 6.5982729041775
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1149,7 +878,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1165,26 +893,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "crate imported but the 6 OSV-listed affected symbol(s) are not called from non-test Rust source"
+          "numeric": 0.95
         },
-        "evidence": [],
         "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.5982729041775,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.60727,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 6.5982729041775
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1212,7 +926,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1228,26 +941,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "crate imported but the 4 OSV-listed affected symbol(s) are not called from non-test Rust source"
+          "numeric": 0.95
         },
-        "evidence": [],
         "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.5982729041775,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.60727,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 6.5982729041775
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1273,7 +972,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1289,26 +987,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "crate imported but the 4 OSV-listed affected symbol(s) are not called from non-test Rust source"
+          "numeric": 0.95
         },
-        "evidence": [],
         "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.5982729041775,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.60727,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 6.5982729041775
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1336,7 +1020,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1352,26 +1035,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "crate imported but the 6 OSV-listed affected symbol(s) are not called from non-test Rust source"
+          "numeric": 0.95
         },
-        "evidence": [],
         "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 59.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44302596899999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.446481594486102,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.60727,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 6.446481594486102
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1398,7 +1067,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1414,26 +1082,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "crate imported but the 6 OSV-listed affected symbol(s) are not called from non-test Rust source"
+          "numeric": 0.95
         },
-        "evidence": [],
         "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.5982729041775,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.60727,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 6.5982729041775
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1461,7 +1115,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1477,26 +1130,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "crate imported but the 6 OSV-listed affected symbol(s) are not called from non-test Rust source"
+          "numeric": 0.95
         },
-        "evidence": [],
         "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 81.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.444890727,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 8.887506345667871,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.60727,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 8.887506345667871
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -1524,7 +1163,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1540,26 +1178,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "crate imported but the 6 OSV-listed affected symbol(s) are not called from non-test Rust source"
+          "numeric": 0.95
         },
-        "evidence": [],
         "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.5982729041775,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.60727,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 6.5982729041775
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1585,7 +1209,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1601,26 +1224,12 @@
       "reachability": {
         "confidence": {
           "level": "high",
-          "numeric": 0.95,
-          "reason": "crate imported but the 6 OSV-listed affected symbol(s) are not called from non-test Rust source"
+          "numeric": 0.95
         },
-        "evidence": [],
         "verdict": "not_function_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 6.5982729041775,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.60727,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 6.5982729041775
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -1648,7 +1257,6 @@
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
-        "has_any": false,
         "kev_listed": false,
         "msf_modules": []
       },
@@ -1664,28 +1272,12 @@
       "reachability": {
         "confidence": {
           "level": "medium",
-          "numeric": 0.7,
-          "reason": "crate referenced only by test/example/bench code"
+          "numeric": 0.7
         },
-        "evidence": [
-          "examples/chat.rs:44"
-        ],
         "verdict": "not_reachable"
       },
       "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44076621299999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 5.088214815652064,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
+        "final": 5.088214815652064
       },
       "severity": "medium",
       "ssvc_automatable": null,
