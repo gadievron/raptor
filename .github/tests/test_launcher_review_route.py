@@ -35,7 +35,7 @@ def _run_launcher(args: list, stdin: str = ""):
         # the shared per-uid /tmp base races concurrent launchers).
         env.setdefault("RAPTOR_WORK_DIR", scratch)
         return subprocess.run(
-            ["bash", str(_LAUNCHER), *args],
+            ["bash", str(_LAUNCHER), "--allow-degraded-cleanup", *args],
             capture_output=True, text=True, timeout=60, env=env,
             input=stdin,
         )

@@ -72,7 +72,10 @@ class TestGetSafeEnv:
         with patch.dict(os.environ, injected):
             env = RaptorConfig.get_safe_env()
             for var in RaptorConfig.DANGEROUS_ENV_VARS:
-                if var in RaptorConfig.GIT_ENV_VARS:
+                if var == "TMPDIR" and os.name == "posix":
+                    assert env[var] != injected[var]
+                    assert os.path.isabs(env[var])
+                elif var in RaptorConfig.GIT_ENV_VARS:
                     # Git config vars are REPLACED with our pinned safe
                     # values rather than merely stripped — the malicious
                     # operator value must never survive either way.
@@ -239,7 +242,10 @@ class TestGetGitEnv:
             # effect rather than asserting absence.
             git_overrides = set(RaptorConfig.GIT_ENV_VARS)
             for var in RaptorConfig.DANGEROUS_ENV_VARS:
-                if var in git_overrides:
+                if var == "TMPDIR" and os.name == "posix":
+                    assert env[var] != injected[var]
+                    assert os.path.isabs(env[var])
+                elif var in git_overrides:
                     assert env[var] == RaptorConfig.GIT_ENV_VARS[var]
                 else:
                     assert var not in env
@@ -421,6 +427,9 @@ class TestGetSafeEnvIncludePythonUserBase:
             for var in RaptorConfig.DANGEROUS_ENV_VARS:
                 if var == "PYTHONUSERBASE":
                     assert env.get(var) == "malicious_PYTHONUSERBASE"
+                elif var == "TMPDIR" and os.name == "posix":
+                    assert env[var] != injected[var]
+                    assert os.path.isabs(env[var])
                 elif var in RaptorConfig.GIT_ENV_VARS:
                     # Replaced with our pinned safe value, not stripped.
                     assert env.get(var) == RaptorConfig.GIT_ENV_VARS[var]
@@ -502,6 +511,9 @@ class TestGetLlmEnvIncludePythonUserBase:
             for var in RaptorConfig.DANGEROUS_ENV_VARS:
                 if var == "PYTHONUSERBASE":
                     assert env.get(var) == "malicious_PYTHONUSERBASE"
+                elif var == "TMPDIR" and os.name == "posix":
+                    assert env[var] != injected[var]
+                    assert os.path.isabs(env[var])
                 elif var in RaptorConfig.GIT_ENV_VARS:
                     # Replaced with our pinned safe value, not stripped.
                     assert env.get(var) == RaptorConfig.GIT_ENV_VARS[var]

@@ -128,3 +128,26 @@ class ShimTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TerminalApprovalTests(unittest.TestCase):
+    def test_local_prompt_requires_both_terminal_streams(self):
+        from core.ux.interactivity import terminal_may_ask
+        for readable, visible in ((False, False), (False, True), (True, False)):
+            self.assertFalse(terminal_may_ask({}, ci=lambda: False,
+                                             input_tty=readable, output_tty=visible))
+        self.assertTrue(terminal_may_ask({}, ci=lambda: False,
+                                        input_tty=True, output_tty=True))
+
+    def test_ci_and_explicit_noninteractive_override_allocated_ttys(self):
+        from core.ux.interactivity import terminal_may_ask
+        self.assertFalse(terminal_may_ask({}, ci=lambda: True,
+                                         input_tty=True, output_tty=True))
+        self.assertFalse(terminal_may_ask({'RAPTOR_NONINTERACTIVE': '1'}, ci=lambda: False,
+                                         input_tty=True, output_tty=True))
+
+    def test_terminal_probe_error_fails_closed(self):
+        from unittest.mock import patch
+        from core.ux.interactivity import terminal_may_ask
+        with patch('sys.stdin.isatty', side_effect=OSError('closed input')):
+            self.assertFalse(terminal_may_ask({}, ci=lambda: False, output_tty=True))

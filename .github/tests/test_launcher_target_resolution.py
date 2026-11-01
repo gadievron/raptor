@@ -65,7 +65,7 @@ class TestTargetResolutionRefusesLoudly(unittest.TestCase):
             target.chmod(0o644)
             try:
                 proc = subprocess.run(
-                    ["bash", str(_LAUNCHER), str(target)],
+                    ["bash", str(_LAUNCHER), "--allow-degraded-cleanup", str(target)],
                     capture_output=True, text=True, timeout=60, env=env,
                 )
             finally:
@@ -93,7 +93,7 @@ class TestTargetResolutionRefusesLoudly(unittest.TestCase):
             real.chmod(0o644)
             try:
                 proc = subprocess.run(
-                    ["bash", str(_LAUNCHER), "proj"],
+                    ["bash", str(_LAUNCHER), "--allow-degraded-cleanup", "proj"],
                     capture_output=True, text=True, timeout=60,
                     env=env, cwd=str(cwd),
                 )

@@ -134,3 +134,29 @@ def session_interactivity(
         human_probe=human_probe,
     )
     return INTERACTIVE if may else NON_INTERACTIVE
+
+
+def terminal_may_ask(
+    environ: Mapping[str, str] | None = None,
+    *,
+    ci: Callable[[], bool] | None = None,
+    input_tty: bool | None = None,
+    output_tty: bool | None = None,
+) -> bool:
+    """Whether a local CLI can safely read a terminal approval.
+
+    Reuse the session policy, including explicit non-interactive and CI
+    overrides. Unlike AskUserQuestion, a CLI cannot route a question through
+    an ancestor: its own input and prompt-output streams must be terminals.
+    Never consume piped task input as a risk-acceptance answer.
+    """
+    import sys
+    try:
+        readable = sys.stdin.isatty() if input_tty is None else input_tty
+        visible = sys.stderr.isatty() if output_tty is None else output_tty
+    except Exception:  # noqa: BLE001 — inability to inspect I/O fails closed
+        return False
+    return session_may_ask(
+        environ, ci=ci, std_fd_interactive=bool(readable and visible),
+        human_probe=lambda: False,
+    )

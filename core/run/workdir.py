@@ -80,7 +80,9 @@ def _sweep_dead_sessions(root: Path) -> None:
 
     Mirrors the launcher's launch-time sweep (lstat-only, never follows
     symlinks, same-owner only). pid reuse merely delays cleanup one
-    cycle — the safe direction. Best-effort throughout.
+    cycle — the safe direction. Directories carrying launcher metadata
+    belong to the session lifecycle and must never be reclaimed here.
+    Best-effort throughout.
     """
     try:
         entries = list(os.scandir(root))
@@ -97,6 +99,17 @@ def _sweep_dead_sessions(root: Path) -> None:
         if not entry.is_dir(follow_symlinks=False):
             continue
         if st.st_uid != os.geteuid():
+            continue
+        # Reserve any metadata entry for the launcher/session lifecycle,
+        # including partial, invalid or dangling entries. Never follow it or
+        # interpret an inspection failure as permission to delete scratch.
+        try:
+            os.lstat(os.path.join(entry.path, "metadata"))
+        except FileNotFoundError:
+            pass  # Legacy workdir without a session-lifecycle marker.
+        except OSError:
+            continue
+        else:
             continue
         pid = int(m.group(1))
         if pid == os.getpid():

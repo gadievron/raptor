@@ -11,6 +11,7 @@ from core.ux.interactivity import (
     NONINTERACTIVE_ENV,
     session_interactivity,
     session_may_ask,
+    terminal_may_ask,
 )
 
 __all__ = [
@@ -19,4 +20,5 @@ __all__ = [
     "NON_INTERACTIVE",
     "session_interactivity",
     "session_may_ask",
+    "terminal_may_ask",
 ]

@@ -761,7 +761,7 @@ class LauncherAwarenessTest(unittest.TestCase):
                         encoding="utf-8")
         stub.chmod(0o755)
         return subprocess.run(
-            ["bash", str(LAUNCHER)],
+            ["bash", str(LAUNCHER), "--allow-degraded-cleanup"],
             capture_output=True, text=True, timeout=120, check=False,
             env={
                 "PATH": ":".join([str(stub_dir)] + path_dirs),

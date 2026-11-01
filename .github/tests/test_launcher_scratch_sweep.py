@@ -110,3 +110,24 @@ class TestScratchMaintenanceSurvivesFailure(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestManagedSessionRetention(unittest.TestCase):
+    def test_managed_roots_survive_dead_pid_sweeps_with_partial_or_broken_metadata(self):
+        for kind in ("directory", "file", "dangling-symlink"):
+            with self.subTest(marker=kind), tempfile.TemporaryDirectory() as temporary:
+                base = Path(temporary)
+                family = base / f"raptor-{os.geteuid()}"
+                managed = family / f"session-{_dead_pid()}-123"
+                managed.mkdir(parents=True)
+                (managed / "keep").write_text("a descendant still needs this")
+                marker = managed / "metadata"
+                if kind == "directory":
+                    marker.mkdir()
+                elif kind == "file":
+                    marker.write_text("invalid metadata must be retained")
+                else:
+                    marker.symlink_to("missing-metadata")
+                result = _run_help({"TMPDIR": str(base)})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual((managed / "keep").read_text(), "a descendant still needs this")

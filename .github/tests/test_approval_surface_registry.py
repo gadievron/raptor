@@ -267,6 +267,12 @@ REGISTRY: dict[str, Entry] = {
                      "sanitise_for_terminal(str(caller_dir))",
                      "({shown_target})", "({shown_caller})"),
     ),
+    "core/security/scratch_supervisor.py": Entry(
+        lane="code", status="clean", prompts=1,
+        note="fixed-wording session-cleanup downgrade consent; no target paths, "
+             "tool output or other external data is rendered in the prompt. "
+             "Non-interactive callers require the explicit launcher approval flag.",
+    ),
     "core/project/cli.py": Entry(
         lane="code", status="clean", prompts=1,
         note="destructive-command _confirm prompts render "

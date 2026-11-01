@@ -279,3 +279,52 @@ class TestTempRootInteropAdvisory:
         assert probed == [str(override)]
         assert "temp root (TMPDIR/RAPTOR_WORK_DIR)" in err
         assert str(override) in err
+
+
+@pytest.mark.parametrize('marker_kind', ['directory', 'file', 'dangling-symlink'])
+def test_managed_sessions_never_use_pid_liveness_for_reclamation(_fresh, monkeypatch, marker_kind):
+    family = _family(_fresh)
+    managed = family / 'session-1000000001-123'
+    managed.mkdir(parents=True)
+    (managed / 'keep').write_text('still in use by a descendant')
+    marker = managed / 'metadata'
+    if marker_kind == 'directory':
+        marker.mkdir()  # Even partial publication must be retained.
+    elif marker_kind == 'file':
+        marker.write_text('invalid metadata is not evidence of a legacy session')
+    else:
+        marker.symlink_to('missing-metadata')
+    legacy = family / 'session-1000000002-456'
+    legacy.mkdir()
+    probes = []
+
+    def invisible(pid, signal):
+        assert pid != 1000000001, 'managed session must not be judged by its PID'
+        probes.append(pid)
+        raise ProcessLookupError
+
+    monkeypatch.setattr(workdir.os, 'kill', invisible)
+    workdir._sweep_dead_sessions(family)
+    assert (managed / 'keep').read_text() == 'still in use by a descendant'
+    assert not legacy.exists()
+    assert probes == [1000000002]
+
+
+def test_unreadable_metadata_identity_is_retained(_fresh, monkeypatch):
+    family = _family(_fresh)
+    managed = family / 'session-1000000001-123'
+    managed.mkdir(parents=True)
+    original_lstat = os.lstat
+
+    def unavailable(path, *args, **kwargs):
+        if os.fspath(path) == str(managed / 'metadata'):
+            raise PermissionError('cannot inspect managed-session marker')
+        return original_lstat(path, *args, **kwargs)
+
+    def must_not_probe(pid, signal):
+        pytest.fail('unavailable metadata must not trigger PID-based deletion')
+
+    monkeypatch.setattr(workdir.os, 'lstat', unavailable)
+    monkeypatch.setattr(workdir.os, 'kill', must_not_probe)
+    workdir._sweep_dead_sessions(family)
+    assert managed.is_dir()

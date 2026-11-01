@@ -140,7 +140,7 @@ _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 #: bin/raptor mirrors this order). Unknown keys are dropped on rewrite
 #: BY DESIGN — the list is the schema.
 ENTRY_KEYS = ("v", "project", "since", "starttime", "boot_id", "pidns",
-              "token", "seeded_by")
+              "token", "seeded_by", "scratch_metadata")
 
 #: Identity keys preserved/refreshed on rewrite (subset of ENTRY_KEYS).
 _IDENTITY_KEYS = ("starttime", "boot_id", "pidns")

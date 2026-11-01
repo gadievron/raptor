@@ -54,7 +54,7 @@ set -euo pipefail
 # world-writable check. Same messages and RAPTOR_ALLOW_UNSAFE_PATH
 # keep-with-warning semantics; the full scrub honours the pre-pass
 # decision silently (no second warning).
-if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ]; then
+if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ] && [ "${1:-}" != --_scratch-session-stage ]; then
     _scrubbed=""
     _rest="${PATH:-}"
     _last=""
@@ -106,6 +106,38 @@ else
     _rp() { command "$@"; }
 fi
 
+# Select the operator's requested base once, before any session overrides.
+_raptor_tmp_base() {
+    if [ "${RAPTOR_WORK_DIR+x}" = x ] || [ "${TMPDIR+x}" = x ]; then
+        if [ "${RAPTOR_WORK_DIR+x}" = x ]; then
+            _requested_tmp="$RAPTOR_WORK_DIR"
+        else
+            _requested_tmp="$TMPDIR"
+        fi
+        if [ -z "$_requested_tmp" ]; then
+            echo "raptor: explicitly selected temporary directory is empty" >&2
+            return 1
+        fi
+        if [[ "$_requested_tmp" =~ [[:cntrl:]] ]]; then
+            echo "raptor: temporary directory contains control bytes" >&2
+            return 1
+        fi
+        printf '%s\n' "$_requested_tmp"
+    elif [ "$(_rp uname -s)" = Darwin ]; then
+        _private_tmp="$(_rp getconf DARWIN_USER_TEMP_DIR)" || return 1
+        case "${_private_tmp%/}" in
+            /tmp|/private/tmp|"")
+                echo "raptor: macOS private temporary directory is unavailable" >&2
+                return 1 ;;
+            /*) ;;
+            *) return 1 ;;
+        esac
+        printf '%s\n' "$_private_tmp"
+    else
+        printf '%s\n' /tmp
+    fi
+}
+
 # Resolve symlinks to find the real script location.
 # Every cd inside a substitution here runs with `CDPATH= cd --`: a
 # CDPATH entry in the operator's env (the hostile-direnv threat
@@ -132,10 +164,32 @@ if [ ! -d "$RAPTOR_DIR/core" ]; then
     exit 1
 fi
 
+# Consume only RAPTOR's own approval flag, before any frontend passthrough.
+# Never infer approval from an environment variable or a CI/non-TTY context.
+_scratch_approval_arg=""
+_scratch_argv=()
+_scratch_argc=0
+_scratch_passthrough=""
+for _scratch_arg in "$@"; do
+    if [ -z "$_scratch_passthrough" ] && [ "$_scratch_arg" = --allow-degraded-cleanup ]; then
+        _scratch_approval_arg=--allow-degraded-cleanup
+        continue
+    fi
+    [ "$_scratch_arg" != -- ] || _scratch_passthrough=1
+    _scratch_argv+=("$_scratch_arg")
+    _scratch_argc=$((_scratch_argc + 1))
+done
+if [ "$_scratch_argc" -gt 0 ]; then
+    set -- "${_scratch_argv[@]}"
+else
+    set --
+fi
+unset _scratch_argv _scratch_argc _scratch_passthrough _scratch_arg
+
 # ── Exec-boundary hardening ─────────────────────────────────────────
 # Runs BEFORE any binary is resolved via PATH; every exec below
 # inherits the result. RAPTOR_NO_LAUNCHER_HARDENING=1 skips the block.
-if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ]; then
+if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ] && [ "${1:-}" != --_scratch-session-stage ]; then
     # Core dumps off (a session crash dump can contain API keys).
     # SOFT only, on purpose: the crash-analysis/fuzz legs re-raise
     # the limit for their target processes (rr / AFL++ need dumps).
@@ -271,113 +325,78 @@ if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ]; then
     fi
     unset _claude_path
 
-    # Service scratch has its own lease lifetime, independent of this
-    # launcher's session TMPDIR. Capture the operator base before rewriting it.
-    if [ "${RAPTOR_WORK_DIR+x}" = x ]; then
-        _RAPTOR_JOERN_TMP_BASE="$RAPTOR_WORK_DIR"
-    elif [ "${TMPDIR+x}" = x ]; then
-        _RAPTOR_JOERN_TMP_BASE="$TMPDIR"
-    elif [ "$(_rp uname -s)" = Darwin ]; then
-        _RAPTOR_JOERN_TMP_BASE="$(_rp getconf DARWIN_USER_TEMP_DIR)"
-    else
-        _RAPTOR_JOERN_TMP_BASE=/tmp
-    fi
-    case "$_RAPTOR_JOERN_TMP_BASE" in
-        /*|'') ;;
-        *) _RAPTOR_JOERN_TMP_BASE="$(_rp pwd -P)/$_RAPTOR_JOERN_TMP_BASE" ;;
-    esac
-    export _RAPTOR_JOERN_TMP_BASE
-    export _RAPTOR_SERVICE_TMP_BASE="$_RAPTOR_JOERN_TMP_BASE"
-
-    # Per-session TMPDIR: <base>/raptor-<uid>/session-<pid>-<rand>
-    # (0700; <base> = RAPTOR_WORK_DIR, else operator TMPDIR, else
-    # /tmp). Keeps tool scratch private and sweepable, and gives
-    # operators ONE stable prefix for endpoint-security (EDR)
-    # exclusions (docs/troubleshooting.md; core/run/workdir.py
-    # builds the same family for non-launcher entry points). Sweep
-    # runs at LAUNCH — exec means no EXIT trap survives — removing
-    # session dirs whose pid is dead; pid reuse only delays cleanup
-    # a cycle (safe direction).
-    _tmp_base="${RAPTOR_WORK_DIR:-${TMPDIR:-/tmp}}"
-    _tmp_base="${_tmp_base%/}/raptor-$(_rp id -u)"
-    _rp mkdir -p -m 700 "$_tmp_base" 2>/dev/null || true
-    # Squat check: base must be a non-symlink dir owned by us
-    # (mkdir -p "succeeds" on an existing attacker-created dir).
-    if [ ! -L "$_tmp_base" ] && [ -d "$_tmp_base" ] && [ -O "$_tmp_base" ]; then
-        _rp chmod 700 "$_tmp_base" 2>/dev/null || true
-        for _d in "$_tmp_base"/session-*; do
-            [ -e "$_d" ] || continue      # unmatched glob
-            [ -L "$_d" ] && continue      # never follow symlinks
-            [ -d "$_d" ] || continue
-            _name="${_d##*/}"
-            if [[ "$_name" =~ ^session-([0-9]+)-[0-9]+$ ]]; then
-                _spid="${BASH_REMATCH[1]}"
-                if ! kill -0 "$_spid" 2>/dev/null; then
-                    # Depth bound: refuse suspiciously deep trees
-                    # (planted junk). find is -P: no symlink follow.
-                    if [ -n "$(_rp find "$_d" -mindepth 24 -print -quit 2>/dev/null)" ]; then
-                        # $_d inherits the RAPTOR_WORK_DIR/TMPDIR-derived
-                        # base prefix (attacker-influenceable env, same
-                        # class as PATH) — strip before echoing.
-                        _shown_d="${_d//[![:print:]]/}"
-                        echo "raptor: skipping suspiciously deep stale session dir: ${_shown_d:0:200}" >&2
-                        unset _shown_d
-                        continue
-                    fi
-                    # A failed removal (root-owned or immutable
-                    # leftovers from container/sandbox tool runs)
-                    # must not abort the launch — and would otherwise
-                    # re-abort EVERY launch until cleaned by hand.
-                    # rm's own stderr is nulled: it echoes raw
-                    # scratch-content filenames (tool/target-derived
-                    # bytes); the bounded, stripped path below is the
-                    # operator-facing report.
-                    if ! _rp rm -rf -- "$_d" 2>/dev/null; then
-                        _shown_d="${_d//[![:print:]]/}"
-                        echo "raptor: could not fully remove stale session dir (clean up manually): ${_shown_d:0:200}" >&2
-                        unset _shown_d
+    if [ "${1:-}" != cleanup ]; then
+        # Legacy scratch maintenance beneath the operator temporary base.
+        # (0700; <base> = RAPTOR_WORK_DIR, else operator TMPDIR, else
+        # the OS temporary directory). Keeps tool scratch private and gives
+        # operators ONE stable prefix for endpoint-security (EDR)
+        # exclusions (docs/troubleshooting.md; core/run/workdir.py
+        # builds the same family for non-launcher entry points). Sweep
+        # runs at LAUNCH — exec means no EXIT trap survives — removing
+        # session dirs whose pid is dead; pid reuse only delays cleanup
+        # a cycle (safe direction).
+        _tmp_base="$(_raptor_tmp_base)" || exit 1
+        _tmp_base="${_tmp_base%/}/raptor-$(_rp id -u)"
+        _rp mkdir -p -m 700 "$_tmp_base" 2>/dev/null || true
+        # Squat check: base must be a non-symlink dir owned by us
+        # (mkdir -p "succeeds" on an existing attacker-created dir).
+        if [ ! -L "$_tmp_base" ] && [ -d "$_tmp_base" ] && [ -O "$_tmp_base" ]; then
+            _rp chmod 700 "$_tmp_base" 2>/dev/null || true
+            for _d in "$_tmp_base"/session-*; do
+                [ -e "$_d" ] || continue      # unmatched glob
+                [ -L "$_d" ] && continue      # never follow symlinks
+                [ -d "$_d" ] || continue
+                # Session metadata marks scratch shared by arbitrary descendants.
+                # A dead/invisible launcher PID does not prove those users ended.
+                # Retain these roots for explicit cleanup until lifetime-safe
+                # reclamation is available; never reap them from a nested PID view.
+                # Reserve metadata even during publication or if it is malformed;
+                # a dangling marker must not make this look like a legacy root.
+                [ -x "$_d" ] || continue
+                if [ -e "$_d/metadata" ] || [ -L "$_d/metadata" ]; then
+                    continue
+                fi
+                _name="${_d##*/}"
+                if [[ "$_name" =~ ^session-([0-9]+)-[0-9]+$ ]]; then
+                    _spid="${BASH_REMATCH[1]}"
+                    if ! kill -0 "$_spid" 2>/dev/null; then
+                        # Depth bound: refuse suspiciously deep trees
+                        # (planted junk). find is -P: no symlink follow.
+                        if [ -n "$(_rp find "$_d" -mindepth 24 -print -quit 2>/dev/null)" ]; then
+                            # $_d inherits the RAPTOR_WORK_DIR/TMPDIR-derived
+                            # base prefix (attacker-influenceable env, same
+                            # class as PATH) — strip before echoing.
+                            _shown_d="${_d//[![:print:]]/}"
+                            echo "raptor: skipping suspiciously deep stale session dir: ${_shown_d:0:200}" >&2
+                            unset _shown_d
+                            continue
+                        fi
+                        # A failed removal (root-owned or immutable
+                        # leftovers from container/sandbox tool runs)
+                        # must not abort the launch — and would otherwise
+                        # re-abort EVERY launch until cleaned by hand.
+                        # rm's own stderr is nulled: it echoes raw
+                        # scratch-content filenames (tool/target-derived
+                        # bytes); the bounded, stripped path below is the
+                        # operator-facing report.
+                        if ! _rp rm -rf -- "$_d" 2>/dev/null; then
+                            _shown_d="${_d//[![:print:]]/}"
+                            echo "raptor: could not fully remove stale session dir (clean up manually): ${_shown_d:0:200}" >&2
+                            unset _shown_d
+                        fi
                     fi
                 fi
-            fi
-        done
-        unset _d _name _spid
-        # Advisory only — live sessions' scratch counts too. The
-        # measurement must never abort the launch: du exits nonzero
-        # when an entry vanishes mid-walk (live sibling sessions churn
-        # scratch here) or is unreadable, and under set -e/pipefail
-        # that status would kill the launcher with stderr already
-        # nulled. du still prints the total it summed, so keep it.
-        _kb="$(_rp du -sk "$_tmp_base" 2>/dev/null | _rp cut -f1)" || true
-        # Single-bracket `[` on purpose: `[[ ]]` arithmetic-evaluates
-        # its -gt operands, and _kb derives from du output over an
-        # attacker-influenceable base path. `[` treats a non-numeric
-        # _kb as an error (status 2, nulled, condition false) instead
-        # of evaluating it. Do not rewrite to `[[ ]]`.
-        if [ -n "$_kb" ] && [ "$_kb" -gt 5242880 ] 2>/dev/null; then
+            done
+            unset _d _name _spid
+        else
+            # RAPTOR_WORK_DIR/TMPDIR are attacker-influenceable env (the
+            # PATH-scrub threat model) — strip before echoing.
             _shown_tb="${_tmp_base//[![:print:]]/}"
-            echo "raptor: note: ${_shown_tb:0:200} holds >5G of session scratch — stale dirs sweep on each launch; live ones may need manual cleanup" >&2
+            echo "raptor: warning: ${_shown_tb:0:200} is not a directory owned by this user — session TMPDIR disabled for this launch" >&2
             unset _shown_tb
         fi
-        unset _kb
-        # $$ survives the exec, so the name tracks the session.
-        _try=0
-        while [ "$_try" -lt 5 ]; do
-            _sess="$_tmp_base/session-$$-$RANDOM"
-            if _rp mkdir -m 700 "$_sess" 2>/dev/null; then
-                export TMPDIR="$_sess"
-                break
-            fi
-            _try=$((_try + 1))
-        done
-        unset _try _sess
-    else
-        # RAPTOR_WORK_DIR/TMPDIR are attacker-influenceable env (the
-        # PATH-scrub threat model) — strip before echoing.
-        _shown_tb="${_tmp_base//[![:print:]]/}"
-        echo "raptor: warning: ${_shown_tb:0:200} is not a directory owned by this user — session TMPDIR disabled for this launch" >&2
-        unset _shown_tb
+        unset _tmp_base
     fi
-    unset _tmp_base
 fi
 # ── end exec-boundary hardening ─────────────────────────────────────
 
@@ -401,6 +420,24 @@ fi
 if ! command -v python3 >/dev/null 2>&1; then
     echo "raptor: python3 not found" >&2
     exit 1
+fi
+
+# Inner dispatch inherits the already established launch boundary. Verify its
+# live ancestor credential before accepting any inherited scratch path.
+_scratch_inside=""
+if [ "${1:-}" = --_scratch-session-stage ]; then
+    _RAPTOR_LAUNCH_METADATA="$(_rp python3 -I "$RAPTOR_DIR/core/security/launch_scratch.py" \
+        unused --restore-auth)" || exit 126
+    export _RAPTOR_LAUNCH_METADATA
+    export TMPDIR="${_RAPTOR_LAUNCH_METADATA%/metadata/launch.json}/tmp"
+    _scratch_inside=1
+    shift
+fi
+
+# Maintenance must work without a writable temporary base or a frontend.
+if [ "${1:-}" = cleanup ]; then
+    shift
+    exec python3 -I "$RAPTOR_DIR/core/security/scratch_lifecycle.py" "$@"
 fi
 
 # Fast path: print the framework version and exit without launching a
@@ -428,6 +465,7 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" || "${1:-}" == "help" ]]; then
 
 Usage: raptor [options] [target]
        raptor project <subcommand> [args]
+       raptor cleanup [--list|--dry-run] [--session ID]
 
 Arguments:
   target             Path or URL to scan (optional)
@@ -438,6 +476,8 @@ Options:
   -p, --project NAME Set the active project
   -v, --verbose      Verbose output
   --trust-repo       Trust target repo's config (skip safety checks)
+  --allow-degraded-cleanup
+                     Accept unavailable session cleanup tracking (required without a TTY)
   -h, --help         Show this help
 
 Projects:
@@ -477,6 +517,19 @@ if ! (LC_ALL=C; case "$_caller_dir" in (*[[:cntrl:]]*) false;; esac); then
 fi
 export RAPTOR_CALLER_DIR="$_caller_dir"
 unset _caller_dir
+
+# Capture the service base once, before session TMPDIR changes. Inner
+# dispatches inherit it; recomputing there would nest service scratch inside
+# a frontend session. This also applies when launcher hardening is disabled.
+if [ -z "$_scratch_inside" ]; then
+    _RAPTOR_JOERN_TMP_BASE="$(_raptor_tmp_base)" || exit 1
+    case "$_RAPTOR_JOERN_TMP_BASE" in
+        /*|'') ;;
+        *) _RAPTOR_JOERN_TMP_BASE="$(_rp pwd -P)/$_RAPTOR_JOERN_TMP_BASE" ;;
+    esac
+    export _RAPTOR_JOERN_TMP_BASE
+    export _RAPTOR_SERVICE_TMP_BASE="$_RAPTOR_JOERN_TMP_BASE"
+fi
 
 # Route project subcommands directly (no Claude needed). Export the
 # trust marker + RAPTOR_DIR like the doctor/frida routes do — pre-fix
@@ -607,7 +660,40 @@ export RAPTOR_DIR
 # direct invocation through this launcher is the safe path.
 export _RAPTOR_TRUSTED=1
 
+# Never inherit a metadata filename from an enclosing/target environment.
+# Only this launcher's freshly-created private session directory may seed it.
+if [ -n "${RAPTOR_REGISTRY_HOME:-}" ]; then
+    case "$RAPTOR_REGISTRY_HOME" in
+        /*) _scratch_state="$RAPTOR_REGISTRY_HOME/sessions.d/.scratch-authorities" ;;
+        *) echo "raptor: RAPTOR_REGISTRY_HOME must be an absolute path" >&2; exit 1 ;;
+    esac
+else
+    _scratch_state="$HOME/.local/share/raptor/sessions.d/.scratch-authorities"
+fi
+if [ -z "$_scratch_inside" ]; then
+    unset _RAPTOR_LAUNCH_METADATA _RAPTOR_SCRATCH_AUTH
+    _launch_root="$(_raptor_tmp_base)" || exit 1
+    _launch_scratch_args=(--allocate --issuer "$$")
+    if ! _RAPTOR_LAUNCH_METADATA="$(_rp python3 -I "$RAPTOR_DIR/core/security/launch_scratch.py" "$_launch_root" "${_launch_scratch_args[@]}")"; then
+        echo "raptor: could not establish launcher scratch metadata" >&2
+        exit 1
+    fi
+
+fi
+if ! _RAPTOR_SCRATCH_AUTH="$(_rp python3 -I "$RAPTOR_DIR/core/security/launch_scratch.py" \
+        "$_RAPTOR_LAUNCH_METADATA" --authorize --issuer "$$" --state-dir "$_scratch_state")"; then
+    echo "raptor: could not establish launcher scratch authority" >&2
+    exit 1
+fi
+unset _scratch_state
+export _RAPTOR_SCRATCH_AUTH
+export _RAPTOR_LAUNCH_METADATA
+export TMPDIR="${_RAPTOR_LAUNCH_METADATA%/metadata/launch.json}/tmp"
+unset _launch_root _launch_scratch_args
+
+
 # Parse RAPTOR-specific args, collect Claude args
+RAPTOR_ORIGINAL_ARGS=("$@")
 STARTUP_ARGS=("--caller-dir" "$RAPTOR_CALLER_DIR")
 CLAUDE_ARGS=("-n" "RAPTOR")
 INITIAL_PROMPT="/raptor"
@@ -667,6 +753,16 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Keep the filesystem cleaner outside frontend mount/PID namespaces. Reentry
+# binds the actual frontend PID; the supervisor never seeds a project row.
+if [ -z "$_scratch_inside" ]; then
+    exec python3 -I "$RAPTOR_DIR/core/security/scratch_supervisor.py" \
+        --metadata "$_RAPTOR_LAUNCH_METADATA" ${_scratch_approval_arg:+"$_scratch_approval_arg"} -- \
+        /bin/bash "$RAPTOR_DIR/bin/raptor" --_scratch-session-stage ${RAPTOR_ORIGINAL_ARGS[@]+"${RAPTOR_ORIGINAL_ARGS[@]}"}
+fi
+unset _scratch_inside
+
 
 # Build initial prompt: /raptor [target]. Strip control bytes from
 # the operator-supplied TARGET first - an embedded newline would
@@ -910,6 +1006,7 @@ if _rp mkdir -p -m 700 "$_sessions_dir" 2>/dev/null; then
         [ -n "$_pidns" ] && printf 'pidns=%s\n' "$_pidns"
         [ -n "$RAPTOR_SESSION_TOKEN" ] && printf 'token=%s\n' "$RAPTOR_SESSION_TOKEN"
         printf 'seeded_by=%s\n' "$_seed_by"
+        [ -z "${_RAPTOR_LAUNCH_METADATA:-}" ] || printf 'scratch_metadata=%s\n' "$_RAPTOR_LAUNCH_METADATA"
     } > "$_tmp_entry" 2>/dev/null && mv -f "$_tmp_entry" "$_sessions_dir/$$" 2>/dev/null; then
         _rp chmod 600 "$_sessions_dir/$$" 2>/dev/null || true
     else
@@ -956,8 +1053,8 @@ fi
 
 if [[ -n "$INITIAL_PROMPT" ]]; then
     exec env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS \
-        claude "${PLUGIN_ARGS[@]}" "${CLAUDE_ARGS[@]}" "$INITIAL_PROMPT"
+        claude ${PLUGIN_ARGS[@]+"${PLUGIN_ARGS[@]}"} "${CLAUDE_ARGS[@]}" "$INITIAL_PROMPT"
 else
     exec env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS \
-        claude "${PLUGIN_ARGS[@]}" "${CLAUDE_ARGS[@]}"
+        claude ${PLUGIN_ARGS[@]+"${PLUGIN_ARGS[@]}"} "${CLAUDE_ARGS[@]}"
 fi

@@ -62,7 +62,7 @@ class TestLauncherRegistryHomeSeam(unittest.TestCase):
             reg = Path(d) / "reg"
             env["RAPTOR_REGISTRY_HOME"] = str(reg)
             proc = subprocess.run(
-                ["bash", str(_LAUNCHER), str(Path(d) / "target")],
+                ["bash", str(_LAUNCHER), "--allow-degraded-cleanup", str(Path(d) / "target")],
                 capture_output=True, text=True, timeout=120, env=env,
             )
             combined = proc.stdout + proc.stderr
@@ -85,7 +85,7 @@ class TestLauncherRegistryHomeSeam(unittest.TestCase):
             env = _sandbox(d)
             env["RAPTOR_REGISTRY_HOME"] = "relative/reg"
             proc = subprocess.run(
-                ["bash", str(_LAUNCHER), str(Path(d) / "target")],
+                ["bash", str(_LAUNCHER), "--allow-degraded-cleanup", str(Path(d) / "target")],
                 capture_output=True, text=True, timeout=120, env=env,
             )
             combined = proc.stdout + proc.stderr
