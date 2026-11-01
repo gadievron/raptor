@@ -8,6 +8,8 @@
     "libexec/raptor-self-test::combined.sarif::json.loads",
     "libexec/raptor-self-test::combined.sarif::read_text",
     "libexec/raptor-self-test::sbom.cdx.json::json.loads",
-    "libexec/raptor-self-test::sbom.cdx.json::read_text"
+    "libexec/raptor-self-test::sbom.cdx.json::read_text",
+    "raptor_zkpox.py::prove-record.json::json.loads",
+    "raptor_zkpox.py::prove-record.json::read_text"
   ]
 }

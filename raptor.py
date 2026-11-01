@@ -1674,6 +1674,7 @@ def _mode_help_scripts() -> dict:
         'codeql': script_root / "raptor_codeql.py",
         'analyze': script_root / "packages/llm_analysis/agent.py",
         'openant': script_root / "raptor_openant.py",
+        'zkpox': script_root / "raptor_zkpox.py",
     }
 
 
