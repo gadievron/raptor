@@ -96,6 +96,8 @@ The `raptor` launcher is the recommended way to start a session, and it works fr
 
 Running plain `claude` from inside the repo directory also works -- Claude Code picks up RAPTOR's configuration from the checkout -- but you skip everything the launcher does above: no pre-flight checks, no coverage tracking, and commands that default to "the directory you ran this from" can't see it.
 
+Experimental Linux installation protection is available with `--protect-install`; ordinary launches are unchanged. Existing Claude configuration and ordinary user files retain their normal permissions. See [installation protection](docs/installation-protection.md) for setup, writable locations, and platform requirements.
+
 **Important:** RAPTOR loads its configuration from the repo directory. If you run `claude` from any other directory, you get plain Claude Code, not RAPTOR. The `raptor` launcher avoids this failure mode entirely.
 
 ### Option 2: Run in a container (recommended)

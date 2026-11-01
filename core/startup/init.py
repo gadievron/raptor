@@ -12,6 +12,7 @@ import os
 import shutil
 import stat
 import sys
+import textwrap
 from pathlib import Path
 
 from . import REPO_ROOT
@@ -1203,11 +1204,26 @@ def check_active_project() -> str | None:
 # Main
 # ---------------------------------------------------------------------------
 
+def installation_protection_notice() -> str | None:
+    """Report protection only after checking the current kernel state."""
+    if os.environ.get("RAPTOR_INSTALL_PROTECTED") != "1":
+        return None
+    try:
+        from .install_guard import verify_inside
+        verify_inside()
+    except (OSError, RuntimeError, ValueError):
+        return "Warning: installation protection could not be verified."
+    return ("Installation protection is active. RAPTOR's installed files are read-only; "
+            "output and scratch remain writable. To edit RAPTOR, start a new session "
+            "without --protect-install.")
+
+
 def main() -> None:
     from core.config import RaptorConfig
 
     logo = read_logo(RaptorConfig.effective_version())
     quote = read_random_quote()
+    notice = installation_protection_notice()
 
     try:
         try:
@@ -1227,19 +1243,25 @@ def main() -> None:
             env_warnings + lang_warnings,
             project_line, lang_line,
             tool_updates=tool_updates,
+            protection_notice=notice,
         )
     except Exception:  # noqa: BLE001
-        output = f"{logo}\n\nraptor:~$ {quote}"
+        status = (textwrap.fill(notice, width=77, initial_indent="  ",
+                                subsequent_indent="  ") + "\n\n") if notice else ""
+        output = f"{logo}\n\n{status}raptor:~$ {quote}"
 
     # Print FIRST: the banner must reach the operator even when the
     # persist fails (read-only checkout, full disk) — pre-fix a write
     # failure killed both.
     print(output)
+    output_file = (REPO_ROOT / "out" / ".startup-output"
+                   if os.environ.get("RAPTOR_INSTALL_PROTECTED") == "1" else OUTPUT_FILE)
     try:
-        OUTPUT_FILE.write_text(output, encoding="utf-8")
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_file.write_text(output, encoding="utf-8")
     except OSError as exc:
         print(
-            f"warning: could not persist banner to {OUTPUT_FILE}: {exc}",
+            f"warning: could not persist banner to {output_file}: {exc}",
             file=sys.stderr,
         )
 

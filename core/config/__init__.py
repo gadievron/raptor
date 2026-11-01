@@ -581,7 +581,7 @@ class RaptorConfig:
         # Both are validated by get_out_dir() (refuses system paths)
         # so an attacker setting them gains nothing beyond what they
         # already had with same-UID write access to ~/raptor-out.
-        "RAPTOR_OUT_DIR", "RAPTOR_DIR",
+        "RAPTOR_OUT_DIR", "RAPTOR_DIR", "RAPTOR_INSTALL_PROTECTED",
         # Preserve the operator's first-use download opt-out through launchers
         # and diagnostic subprocesses. This flag only disables installation.
         "RAPTOR_CODEQL_AUTO_INSTALL",
@@ -714,7 +714,7 @@ class RaptorConfig:
         # do (libexec lifecycle helpers, nested skill dispatches) run
         # on the keep-trust dispatch arm, which retains the full set
         # by contract.
-        "RAPTOR_DIR", "RAPTOR_OUT_DIR", "RAPTOR_TARGET_KIND",
+        "RAPTOR_DIR", "RAPTOR_OUT_DIR", "RAPTOR_TARGET_KIND", "RAPTOR_INSTALL_PROTECTED",
         "RAPTOR_SCORECARD_PATH",
         # Operator-registry override: framework tell plus a host path
         # that leaks the operator's registry layout. No target
@@ -1118,6 +1118,13 @@ class RaptorConfig:
                 "Import a complete bundle with engine/semgrep/tools/cache-packs.py, then run check."
             )
         return pack_id
+
+    @staticmethod
+    def get_codeql_db_dir() -> Path:
+        """Keep default database writes under output in protected sessions."""
+        if os.environ.get("RAPTOR_INSTALL_PROTECTED") == "1":
+            return RaptorConfig.get_out_dir() / "codeql_dbs"
+        return RaptorConfig.CODEQL_DB_DIR
 
     @staticmethod
     def get_out_dir() -> Path:
@@ -1580,7 +1587,7 @@ class RaptorConfig:
             RaptorConfig.MCP_JOB_DIR,
             RaptorConfig.LOG_DIR,
             RaptorConfig.SCHEMAS_DIR,
-            RaptorConfig.CODEQL_DB_DIR,
+            RaptorConfig.get_codeql_db_dir(),
             RaptorConfig.CODEQL_SUITES_DIR,
         ]
         for directory in directories:

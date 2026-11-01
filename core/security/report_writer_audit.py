@@ -542,6 +542,10 @@ _REPORT_WRITER_FILES = (
     # Cleanup records include operator/target-influenced paths. Terminal-only
     # output uses the canonical bounded sanitizer, loaded from this checkout.
     "core/security/scratch_lifecycle.py",
+    # Native launcher setup reports syscall/validation failures to the terminal;
+    # _term loads the canonical bounded sanitizer from the owning checkout.
+    "core/startup/_install_namespace.py",
+    "core/startup/install_guard.py",
     # Confined Joern worker launcher: runtime/path errors are terminal text,
     # sanitised through sanitise_for_terminal before printing.
     "packages/joern/worker_guard.py",

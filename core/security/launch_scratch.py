@@ -207,7 +207,9 @@ def _packet(entry: Path, pid: int, token: str, kind: str = 'launch') -> str:
                        'token': token, 'kind': kind})
 
 
-def _restore_authorized(raw: str) -> tuple[Path, str]:
+def _restore_authorized(raw: str, *, require_sealed: bool = True) -> tuple[Path, str]:
+    # Only the namespace setup guard opts out of sealing before it installs
+    # the read-only mount. Normal helper restoration always requires sealing.
     # Scratch-only delegation must never restore project settings or session
     # credentials. Its issuer must be a live ancestor in this PID view.
     value = json.loads(raw)
@@ -269,7 +271,7 @@ def _restore_authorized(raw: str) -> tuple[Path, str]:
         if not fields.get('scratch_metadata'):
             raise ValueError('scratch issuer metadata is missing')
         metadata = Path(fields['scratch_metadata'])
-    return metadata, read(metadata)
+    return metadata, read(metadata, require_sealed=require_sealed)
 
 
 def restore() -> None:
