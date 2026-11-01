@@ -58,3 +58,20 @@ and upstream advisories. RAPTOR's selection and generated assessments do
 not relicense upstream descriptions. NVD API attribution:
 
 > This product uses the NVD API but is not endorsed or certified by the NVD.
+
+## Dataflow corpus source excerpts
+
+The finding JSONs under `core/dataflow/corpus/findings/` retain selected
+source lines from OWASP Benchmark Java, WebGoat, Juice Shop, curl, and
+Linux kernel files. These excerpts retain their upstream licences,
+including GPLv2 variants, MIT, the curl licence, and a Broadcom permissive
+grant. The complete upstream fixture repositories are fetched separately.
+
+The [corpus source and licence inventory](core/dataflow/corpus/SOURCES.md#licensing-of-retained-excerpts)
+identifies each origin and scope. Copyright/author notices, permission and
+warranty notices, and licence texts are preserved in the corpus
+[licence directory](core/dataflow/corpus/licenses/). Preserve that inventory
+and licence directory when redistributing the excerpt collection.
+
+RAPTOR's independently authored code and annotations retain the MIT licence;
+it does not replace the licences of the copied source excerpts.

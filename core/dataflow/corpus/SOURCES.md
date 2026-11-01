@@ -13,6 +13,45 @@ This file is the single home of each pin:
 a regression test keeps duplicated constants (e.g.
 `core/recall/owasp_manifest.py`) equal to the pins here.
 
+## Licensing of retained excerpts
+
+The complete upstream fixture repositories are fetched out of tree. The
+committed finding JSONs nevertheless contain source excerpts in the
+`source`, `sink`, and `intermediate_steps` snippet fields. Those excerpts
+retain the licences of their upstream files. RAPTOR's independently authored
+code, annotations, and labels remain MIT-licensed.
+
+The JSONs identify each excerpt's fixture path and source line. The source
+entries below identify the corresponding upstream revision. The
+[upstream notices](licenses/UPSTREAM-NOTICES.txt) preserve the original
+copyright, author, licence, and warranty notices for the referenced files,
+including the Broadcom permission grant. Excerpts select lines and encode
+them as JSON strings; they omit surrounding source context. This notice
+bundle was added on 2026-11-01; extraction and edit history is retained in Git.
+
+| Fixture paths under `out/dataflow-corpus-fixtures/` | Excerpt licence | Included licence/notice |
+| --- | --- | --- |
+| `owasp-benchmark-java/` | GPL-2.0-only | [GPLv2](licenses/GPL-2.0.txt), [file notices](licenses/UPSTREAM-NOTICES.txt) |
+| `webgoat/` | GPL-2.0-or-later | [GPLv2](licenses/GPL-2.0.txt), [WebGoat notice](licenses/WebGoat.txt), [file notices](licenses/UPSTREAM-NOTICES.txt) |
+| `juice-shop/data/static/codefixes/` | MIT | [Juice Shop copyright and permission](licenses/Juice-Shop.txt) |
+| `curl/lib/curl_ntlm_core.c` | curl licence | [Copyright and permission](licenses/curl.txt), [file notice](licenses/UPSTREAM-NOTICES.txt) |
+| `linux-cve-2017-7541/drivers/net/wireless/broadcom/brcm80211/brcmfmac/cfg80211.c` | ISC-style permissive grant | [Broadcom copyright and permission](licenses/UPSTREAM-NOTICES.txt) |
+| `linux-cve-2019-12382/drivers/gpu/drm/drm_edid_load.c` | GPL-2.0-or-later | [GPLv2](licenses/GPL-2.0.txt), [file notice](licenses/UPSTREAM-NOTICES.txt) |
+| `linux-cve-2019-12614/arch/powerpc/platforms/pseries/dlpar.c` | GPL-2.0-only | [GPLv2](licenses/GPL-2.0.txt), [file notice](licenses/UPSTREAM-NOTICES.txt) |
+| `linux-cve-2019-12615/arch/sparc/kernel/mdesc.c` | GPL-2.0-only (upstream legacy `GPL-2.0` identifier) | [GPLv2](licenses/GPL-2.0.txt), [file notice](licenses/UPSTREAM-NOTICES.txt) |
+| `linux-cve-2019-15291/drivers/media/usb/b2c2/flexcop-usb.c` | GPL-2.0-only | [GPLv2](licenses/GPL-2.0.txt), [file notice and referenced copyright](licenses/UPSTREAM-NOTICES.txt) |
+| `linux-cve-2021-37159/drivers/net/usb/hso.c` | GPL-2.0-only | [GPLv2](licenses/GPL-2.0.txt), [file notice](licenses/UPSTREAM-NOTICES.txt) |
+| `linux-cve-2022-32250/net/netfilter/nf_tables_api.c` | GPL-2.0-only | [GPLv2](licenses/GPL-2.0.txt), [file notice](licenses/UPSTREAM-NOTICES.txt) |
+
+The `iris_e2e` and `iris_e2e_multilang` fixtures under
+`packages/llm_analysis/tests/fixtures/` are RAPTOR-authored and remain MIT.
+The GPL entries above apply to the retained upstream excerpts; they do not
+assign a GPL licence to unrelated RAPTOR code or independent fixtures.
+
+Distribute this file and `licenses/` with the retained excerpt collection,
+including source archives. When adding or refreshing an external excerpt,
+check the upstream file's terms and update its provenance and notices here.
+
 ## OWASP Benchmark Java
 
 - Upstream: https://github.com/OWASP-Benchmark/BenchmarkJava
@@ -117,7 +156,7 @@ Pinned upstream sources for the source_intel arc's memory-corruption seed (PR0 s
 - Local path: `out/dataflow-corpus-fixtures/curl/`
 - Bug location: `lib/curl_ntlm_core.c`, function `Curl_ntlm_core_mk_nt_hash`, line 560
 - CWE: CWE-190 → CWE-122 (integer overflow in `malloc(len * 2)` where `len = strlen(password)`, wraps on 32-bit when password > 2GB → undersized buffer → heap overflow on subsequent write)
-- Why this fixture: classic integer-promotion → undersized-alloc pattern. Exercises source_intel axis 3 (size_kind=multiplied, user-controlled source) and axis 7 (integer-promotion hazard catalog). License: curl is MIT/X11 derivative; verbatim ≤10-line snippet in the Finding record is fair-use research excerpt.
+- Why this fixture: classic integer-promotion → undersized-alloc pattern. Exercises source_intel axis 3 (size_kind=multiplied, user-controlled source) and axis 7 (integer-promotion hazard catalog). The retained source excerpts use the curl licence; see the copyright and permission notice in `licenses/curl.txt`.
 - Setup:
   ```
   git clone --depth 1 https://github.com/curl/curl \
