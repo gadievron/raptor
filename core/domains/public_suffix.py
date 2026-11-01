@@ -64,7 +64,9 @@ def parse_suffix_list(text: str) -> SuffixRules:
         for edge in ("BEGIN", "END"):
             if f"// ==={edge} {section} DOMAINS===" not in text:
                 raise ValueError("incomplete public suffix list")
-    exact, wildcard, exceptions = set(), set(), set()
+    exact: set[str] = set()
+    wildcard: set[str] = set()
+    exceptions: set[str] = set()
     for line in text.splitlines():
         if not line or line.startswith("//"):
             continue

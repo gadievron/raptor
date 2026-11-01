@@ -294,10 +294,10 @@ def supervise(metadata: Path, command: list[str], *, delegated: bool = False,
     if delegated:
         return _delegated(session_id, command, attempt=attempt) if cgroups is not None else 125
     if sys.platform == 'linux' and cgroups is not None:
-        code = _delegated(session_id, command)
+        delegated_code = _delegated(session_id, command)
         with lifecycle.locked(session_id) as (_, value):
             if value['backend'] != 'untracked' or value['owner_pid'] != os.getpid():
-                return code
+                return delegated_code
     code = _try_delegated(metadata, session_id, command)
     if code is not None:
         return code

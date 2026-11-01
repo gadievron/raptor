@@ -199,7 +199,8 @@ def create_listener(socket_path: str) -> socket.socket:
         if __package__:
             from .unix_socket import socket_address
         else:
-            from unix_socket import socket_address
+            from unix_socket import socket_address as standalone_socket_address  # type: ignore[import-not-found]
+            socket_address = standalone_socket_address
         with socket_address(socket_path) as address:
             listener.bind(address)
     except BaseException:

@@ -125,6 +125,9 @@ def _system_tmpdir(platform: str) -> str:
 # environment changes. Launcher-authenticated scratch overrides this below.
 _startup_tmpdir = os.environ.get('TMPDIR') or None
 
+# The OS default may be unavailable until a launcher supplies a base.
+_default_subprocess_tmpdir: str | None
+
 # Resolve the startup default before fork/sandbox restriction, never from a mutable
 # TMPDIR value. On macOS this is the OS-provided per-user private directory.
 try:

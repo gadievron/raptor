@@ -138,18 +138,21 @@ class GraphServices:
     def status(self, lease: str) -> dict:
         with self.changed:
             key = self.leases.get(lease)
-            entry = self.workers.get(key)
+            entry = self.workers.get(key) if key is not None else None
             if entry is None:
                 return {"ready": False, "generation": 0, "state": "closed"}
-            process = getattr(entry.server, "_proc", None)
+            server, graph = entry.server, entry.graph
+            if server is None or graph is None:
+                return {"ready": False, "generation": entry.generation, "state": entry.state}
+            process = getattr(server, "_proc", None)
             alive = process is None or process.poll() is None
-            return {"ready": entry.state == "ready" and entry.server._cpg_loaded and alive,
+            return {"ready": entry.state == "ready" and server._cpg_loaded and alive,
                     "generation": entry.generation,
                     "pending": entry.pending,
                     "state": entry.state,
                     "heap_mb": getattr(entry.server, "_heap_mb", None),
                     "heap_is_derived": getattr(entry.server, "_heap_is_derived", False),
-                    "graph_bytes": entry.graph.path.stat().st_size}
+                    "graph_bytes": graph.path.stat().st_size}
 
     def has_lease(self, lease: str) -> bool:
         with self.changed:
@@ -158,20 +161,25 @@ class GraphServices:
     def interrupt(self, lease: str, request_id: object):
         """Abort only the execution identified by this handler's private token."""
         with self.changed:
-            entry = self.workers.get(self.leases.get(lease))
+            key = self.leases.get(lease)
+            entry = self.workers.get(key) if key is not None else None
             if entry is None:
                 # A control connection may have released the lease already.
                 entry = next((item for item in self.workers.values()
                               if item.active_lease == lease), None)
             if entry is None or entry.active_request is not request_id:
                 return
-            entry.server.interrupt()
+            server = entry.server
+            if server is not None:
+                server.interrupt()
 
     def recover(self, lease: str, *, cooldown_s=300) -> dict:
         with self.changed:
-            entry = self.workers.get(self.leases.get(lease))
-            if entry is None or entry.state in ("starting", "recovering", "draining"):
+            key = self.leases.get(lease)
+            entry = self.workers.get(key) if key is not None else None
+            if entry is None or entry.state in ("starting", "recovering", "draining") or entry.server is None:
                 return {"ready": False, "generation": 0}
+        server = entry.server
         if not entry.serial.acquire(blocking=False):
             return self.status(lease)
         try:
@@ -187,11 +195,11 @@ class GraphServices:
                 entry.state = "recovering"
             recovered = False
             try:
-                recovered = bool(entry.server.restart())
+                recovered = bool(server.restart())
             finally:
                 with self.changed:
                     entry.generation += 1
-                    entry.state = ("ready" if recovered and entry.server._cpg_loaded else "failed") if entry.leases else "draining"
+                    entry.state = ("ready" if recovered and server._cpg_loaded else "failed") if entry.leases else "draining"
                     self.changed.notify_all()
             return self.status(lease)
         finally:
@@ -200,9 +208,14 @@ class GraphServices:
     def release(self, lease: str) -> bool:
         with self.changed:
             key = self.leases.pop(lease, None)
+            if key is None:
+                return True
             entry = self.workers.get(key)
             if entry is None:
                 return True
+            server, graph = entry.server, entry.graph
+            if server is None or graph is None:
+                return False
             entry.leases.discard(lease)
             if entry.leases:
                 return True
@@ -211,14 +224,14 @@ class GraphServices:
         # An acquisition cannot create a replacement while teardown runs.
         with entry.serial:
             try:
-                stopped = entry.server.stop()
+                stopped = server.stop()
             except Exception:
                 stopped = False
             with self.changed:
                 if stopped is False:
                     entry.state = "retained"
                 else:
-                    entry.graph.close()
+                    graph.close()
                     self.workers.pop(key, None)
                 self.changed.notify_all()
             return stopped is not False
@@ -239,7 +252,7 @@ class GraphServices:
                  no_restart=False, request_id=None):
         with self.changed:
             key = self.leases.get(lease)
-            entry = self.workers.get(key)
+            entry = self.workers.get(key) if key is not None else None
             if entry is None:
                 return JoernResult(query=query, errors=["Joern lease is closed"])
             if entry.state != "ready":

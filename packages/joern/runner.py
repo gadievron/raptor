@@ -2325,12 +2325,15 @@ def build_cpg_cached(
                 requested_languages=languages,
             )
             _prune_scoped_cpg_slots(cache_dir, active_slot=cpg_dir.name)
+            manifest = _read_cpg_manifest(cpg_dir)
+            if manifest is None:
+                raise RuntimeError("Joern CPG manifest unavailable after build")
             return JoernCPG(
                 path=cpg_dir / "cpg.bin",
                 target=cpg.target,
                 languages=cpg.languages,
                 build_time_ms=cpg.build_time_ms,
-                content_digest=_read_cpg_manifest(cpg_dir)["graph_digest"],
+                content_digest=manifest["graph_digest"],
             )
         finally:
             if not keep:

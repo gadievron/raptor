@@ -2911,10 +2911,6 @@
     "count": 12,
     "kind": "literal"
   },
-  "packages/sca/discovery.py::MANIFEST_FILENAMES": {
-    "count": 32,
-    "kind": "literal"
-  },
   "packages/sca/dockerfile_from.py::_IMAGE_DISCOVERY_EXCLUDE_PARENT_DIRS": {
     "count": 11,
     "kind": "literal"
