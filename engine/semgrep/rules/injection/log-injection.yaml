@@ -1,16 +1,18 @@
+# CWE-117 concerns the serialized record boundary, not format-string safety.
+# Generic logger receivers assume line-oriented text; confirm their encoder.
+# Sanitizer contracts assume standard string operations, not custom overrides.
 rules:
   # ---------------------------------------------------------------------------
-  # Python — taint: web framework sources → logging format-string position
+  # Python — taint: web framework sources → logging message/arguments
   # CWE-117: Log Injection / Log Forging via CRLF in log messages.
-  # Only fires when user input IS the format string / message, NOT when it
-  # is a format argument (logging.info("User: %s", user_input) is safe).
+  # Parameterization defers formatting; it does not escape CR/LF in %s.
   # ---------------------------------------------------------------------------
   - id: raptor.injection.log-injection.taint.python
     message: >-
       Untrusted data flows into the log message string. An attacker can
       inject CRLF sequences to forge log entries or corrupt log parsers.
-      Sanitise newlines before logging, or pass user data as format
-      arguments (logging.info("User: %s", user_input)).
+      Strip or encode CR/LF for the final output format. Parameterized
+      messages alone do not escape newlines; verify the configured encoder.
     languages: [python]
     severity: MEDIUM
     mode: taint
@@ -71,13 +73,101 @@ rules:
       - patterns:
           - pattern: $LOGGER.critical($MSG, ...)
           - focus-metavariable: $MSG
+      # One placeholder and one value: raw formatting can forge records.
+      # Encoded conversions are excluded; Go type errors also expose strings.
+      - patterns:
+          - pattern-either:
+              - pattern: $LOGGER.info($FORMAT, $VALUE)
+              - pattern: $LOGGER.warning($FORMAT, $VALUE)
+              - pattern: $LOGGER.error($FORMAT, $VALUE)
+              - pattern: $LOGGER.debug($FORMAT, $VALUE)
+              - pattern: $LOGGER.critical($FORMAT, $VALUE)
+              - pattern: $LOGGER.exception($FORMAT, $VALUE)
+          - metavariable-regex:
+              metavariable: $FORMAT
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\%\r\n]|%%)*%[s](?:[^"\\%\r\n]|%%)*"|'(?:[^'\\%\r\n]|%%)*%[s](?:[^'\\%\r\n]|%%)*')$
+          - focus-metavariable: $VALUE
     # A sanitizer must handle BOTH \n and \r — a single-character
     # replace (or a "\r\n" pair replace) still lets the other bare
     # character forge entries.
+    # Literal CR/LF value contracts, shared with header sanitization.
+    # Guarded assignment results preserve safe locals on Semgrep 1.177.
+    # Dynamic/encoded literals remain conservative; normalization is allowed
+    # only when the outer operation removes the introduced control.
     pattern-sanitizers:
-      - pattern: $X.replace("\n", ...).replace("\r", ...)
+      - patterns:
+          - pattern-either:
+              - pattern: $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+              - pattern: $X.replace($FIRST, $INNER).replace($SECOND, $OUTER, -1)
+              - pattern: $X.replace($FIRST, $INNER, -1).replace($SECOND, $OUTER)
+              - pattern: $X.replace($FIRST, $INNER, -1).replace($SECOND, $OUTER, -1)
+              - patterns:
+                  - pattern-either:
+                      - pattern: $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+                      - pattern: $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER, -1)
+                      - pattern: $SAFE = $X.replace($FIRST, $INNER, -1).replace($SECOND, $OUTER)
+                      - pattern: $SAFE = $X.replace($FIRST, $INNER, -1).replace($SECOND, $OUTER, -1)
+                  - metavariable-regex:
+                      metavariable: $SAFE
+                      regex: ^[A-Za-z_$][A-Za-z0-9_$]*$
+          - metavariable-regex:
+              metavariable: $INNER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n]|\\[\\"tr])*"|'(?:[^'\\\r\n]|\\[\\'tr])*')$
+          - metavariable-regex:
+              metavariable: $OUTER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n]|\\[\\"t])*"|'(?:[^'\\\r\n]|\\[\\'t])*')$
+          - metavariable-regex:
+              metavariable: $FIRST
+              constant-propagation: false
+              regex: >-
+                ^(?:"\\n"|'\\n')$
+          - metavariable-regex:
+              metavariable: $SECOND
+              constant-propagation: false
+              regex: >-
+                ^(?:"\\r"|'\\r')$
         exact: true
-      - pattern: $X.replace("\r", ...).replace("\n", ...)
+      - patterns:
+          - pattern-either:
+              - pattern: $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+              - pattern: $X.replace($FIRST, $INNER).replace($SECOND, $OUTER, -1)
+              - pattern: $X.replace($FIRST, $INNER, -1).replace($SECOND, $OUTER)
+              - pattern: $X.replace($FIRST, $INNER, -1).replace($SECOND, $OUTER, -1)
+              - patterns:
+                  - pattern-either:
+                      - pattern: $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+                      - pattern: $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER, -1)
+                      - pattern: $SAFE = $X.replace($FIRST, $INNER, -1).replace($SECOND, $OUTER)
+                      - pattern: $SAFE = $X.replace($FIRST, $INNER, -1).replace($SECOND, $OUTER, -1)
+                  - metavariable-regex:
+                      metavariable: $SAFE
+                      regex: ^[A-Za-z_$][A-Za-z0-9_$]*$
+          - metavariable-regex:
+              metavariable: $INNER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n]|\\[\\"tn])*"|'(?:[^'\\\r\n]|\\[\\'tn])*')$
+          - metavariable-regex:
+              metavariable: $OUTER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n]|\\[\\"t])*"|'(?:[^'\\\r\n]|\\[\\'t])*')$
+          - metavariable-regex:
+              metavariable: $FIRST
+              constant-propagation: false
+              regex: >-
+                ^(?:"\\r"|'\\r')$
+          - metavariable-regex:
+              metavariable: $SECOND
+              constant-propagation: false
+              regex: >-
+                ^(?:"\\n"|'\\n')$
         exact: true
     metadata:
       cwe: ["CWE-117"]
@@ -91,7 +181,7 @@ rules:
     message: >-
       Untrusted data flows into the log format string. An attacker can
       inject newlines to forge log entries. Sanitise newlines before
-      logging, or use structured logging (slog) with typed fields.
+      logging, or use a handler that encodes message and field values.
     languages: [go]
     severity: MEDIUM
     mode: taint
@@ -137,19 +227,16 @@ rules:
       - patterns:
           - pattern: log.Print($MSG, ...)
           - focus-metavariable: $MSG
-      # slog — structured logger message string
+      # Print/Println serialize every argument without quoting strings.
       - patterns:
-          - pattern: slog.Info($MSG, ...)
-          - focus-metavariable: $MSG
-      - patterns:
-          - pattern: slog.Warn($MSG, ...)
-          - focus-metavariable: $MSG
-      - patterns:
-          - pattern: slog.Error($MSG, ...)
-          - focus-metavariable: $MSG
-      - patterns:
-          - pattern: slog.Debug($MSG, ...)
-          - focus-metavariable: $MSG
+          - pattern-either:
+              - pattern: log.Print(..., $VALUE, ...)
+              - pattern: log.Println(..., $VALUE, ...)
+              - pattern: $LOGGER.Print(..., $VALUE, ...)
+              - pattern: $LOGGER.Println(..., $VALUE, ...)
+          - focus-metavariable: $VALUE
+      # Standard slog TextHandler/JSONHandler encode messages and fields.
+      # Custom handlers are not inferred from the slog API name here.
       # Logger instance
       - patterns:
           - pattern: $LOGGER.Printf($FMT, ...)
@@ -157,12 +244,99 @@ rules:
       - patterns:
           - pattern: $LOGGER.Println($MSG, ...)
           - focus-metavariable: $MSG
+      # One placeholder and one value: raw formatting can forge records.
+      # Encoded conversions are excluded; Go type errors also expose strings.
+      - patterns:
+          - pattern-either:
+              - pattern: $LOGGER.Printf($FORMAT, $VALUE)
+              - pattern: $LOGGER.Fatalf($FORMAT, $VALUE)
+              - pattern: $LOGGER.Panicf($FORMAT, $VALUE)
+          - metavariable-regex:
+              metavariable: $FORMAT
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\%\r\n]|%%)*%(?![qxXT])[A-Za-z](?:[^"\\%\r\n]|%%)*")$
+          - focus-metavariable: $VALUE
+      # fmt reports unused string arguments verbatim in EXTRA diagnostics.
+      - patterns:
+          - pattern-either:
+              - pattern: $LOGGER.Printf($FORMAT, $VALUE)
+              - pattern: $LOGGER.Fatalf($FORMAT, $VALUE)
+              - pattern: $LOGGER.Panicf($FORMAT, $VALUE)
+          - metavariable-regex:
+              metavariable: $FORMAT
+              constant-propagation: false
+              regex: >-
+                ^"(?:[^"\\%\r\n]|%%)*"$
+          - focus-metavariable: $VALUE
     # Both \n and \r must be handled — a single ReplaceAll leaves the
     # other character usable for forging.
+    # Literal CR/LF value contracts, shared with header sanitization.
+    # Guarded assignment results preserve safe locals on Semgrep 1.177.
+    # Dynamic/encoded literals remain conservative; normalization is allowed
+    # only when the outer operation removes the introduced control.
     pattern-sanitizers:
-      - pattern: strings.ReplaceAll(strings.ReplaceAll($X, "\n", ...), "\r", ...)
+      - patterns:
+          - pattern-either:
+              - pattern: strings.ReplaceAll(strings.ReplaceAll($X, $FIRST, $INNER), $SECOND, $OUTER)
+              - patterns:
+                  - pattern-either:
+                      - pattern: $SAFE := strings.ReplaceAll(strings.ReplaceAll($X, $FIRST, $INNER), $SECOND, $OUTER)
+                      - pattern: $SAFE = strings.ReplaceAll(strings.ReplaceAll($X, $FIRST, $INNER), $SECOND, $OUTER)
+                  - metavariable-regex:
+                      metavariable: $SAFE
+                      regex: ^[A-Za-z_$][A-Za-z0-9_$]*$
+          - metavariable-regex:
+              metavariable: $INNER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n]|\\[\\"tr])*")$
+          - metavariable-regex:
+              metavariable: $OUTER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n]|\\[\\"t])*")$
+          - metavariable-regex:
+              metavariable: $FIRST
+              constant-propagation: false
+              regex: >-
+                ^(?:"\\n")$
+          - metavariable-regex:
+              metavariable: $SECOND
+              constant-propagation: false
+              regex: >-
+                ^(?:"\\r")$
         exact: true
-      - pattern: strings.ReplaceAll(strings.ReplaceAll($X, "\r", ...), "\n", ...)
+      - patterns:
+          - pattern-either:
+              - pattern: strings.ReplaceAll(strings.ReplaceAll($X, $FIRST, $INNER), $SECOND, $OUTER)
+              - patterns:
+                  - pattern-either:
+                      - pattern: $SAFE := strings.ReplaceAll(strings.ReplaceAll($X, $FIRST, $INNER), $SECOND, $OUTER)
+                      - pattern: $SAFE = strings.ReplaceAll(strings.ReplaceAll($X, $FIRST, $INNER), $SECOND, $OUTER)
+                  - metavariable-regex:
+                      metavariable: $SAFE
+                      regex: ^[A-Za-z_$][A-Za-z0-9_$]*$
+          - metavariable-regex:
+              metavariable: $INNER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n]|\\[\\"tn])*")$
+          - metavariable-regex:
+              metavariable: $OUTER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n]|\\[\\"t])*")$
+          - metavariable-regex:
+              metavariable: $FIRST
+              constant-propagation: false
+              regex: >-
+                ^(?:"\\r")$
+          - metavariable-regex:
+              metavariable: $SECOND
+              constant-propagation: false
+              regex: >-
+                ^(?:"\\n")$
         exact: true
     metadata:
       cwe: ["CWE-117"]
@@ -175,9 +349,9 @@ rules:
   - id: raptor.injection.log-injection.taint.java
     message: >-
       Untrusted data flows into the log message string. An attacker can
-      inject CRLF sequences to forge log entries. Sanitise newlines or
-      use structured logging with parameterised messages
-      (logger.info("User: {}", userInput)).
+      inject CRLF sequences to forge log entries in plain-text output.
+      Strip or encode CR/LF for the final output format. Parameterized
+      messages alone do not escape newlines; verify the configured encoder.
     languages: [java]
     severity: MEDIUM
     mode: taint
@@ -209,16 +383,110 @@ rules:
       - patterns:
           - pattern: (Logger $LOG).trace($MSG, ...)
           - focus-metavariable: $MSG
+      # One placeholder and one value: raw formatting can forge records.
+      # Encoded conversions are excluded; Go type errors also expose strings.
+      - patterns:
+          - pattern-either:
+              - pattern: (Logger $LOG).info($FORMAT, $VALUE)
+              - pattern: (Logger $LOG).warn($FORMAT, $VALUE)
+              - pattern: (Logger $LOG).error($FORMAT, $VALUE)
+              - pattern: (Logger $LOG).debug($FORMAT, $VALUE)
+              - pattern: (Logger $LOG).trace($FORMAT, $VALUE)
+          - metavariable-regex:
+              metavariable: $FORMAT
+              constant-propagation: false
+              regex: >-
+                ^(?:"[^"\\{}\r\n]*\{\}[^"\\{}\r\n]*")$
+          - focus-metavariable: $VALUE
     # Both \n and \r must be handled — the regex-class replaceAll does,
     # single-character replaces only qualify chained in both orders.
+    # Literal CR/LF value contracts, shared with header sanitization.
+    # Guarded assignment results preserve safe locals on Semgrep 1.177.
+    # Dynamic/encoded literals remain conservative; normalization is allowed
+    # only when the outer operation removes the introduced control.
     pattern-sanitizers:
-      - pattern: $X.replaceAll("[\n\r]", ...)
+      - patterns:
+          - pattern-either:
+              - pattern: $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+              - patterns:
+                  - pattern-either:
+                      - pattern: $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER);
+                      - pattern: String $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER);
+                  - metavariable-regex:
+                      metavariable: $SAFE
+                      regex: ^[A-Za-z_$][A-Za-z0-9_$]*$
+          - metavariable-regex:
+              metavariable: $INNER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n]|\\[\\"tr])*")$
+          - metavariable-regex:
+              metavariable: $OUTER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n]|\\[\\"t])*")$
+          - metavariable-regex:
+              metavariable: $FIRST
+              constant-propagation: false
+              regex: >-
+                ^(?:"\\n")$
+          - metavariable-regex:
+              metavariable: $SECOND
+              constant-propagation: false
+              regex: >-
+                ^(?:"\\r")$
         exact: true
-      - pattern: $X.replaceAll("[\r\n]", ...)
+      - patterns:
+          - pattern-either:
+              - pattern: $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+              - patterns:
+                  - pattern-either:
+                      - pattern: $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER);
+                      - pattern: String $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER);
+                  - metavariable-regex:
+                      metavariable: $SAFE
+                      regex: ^[A-Za-z_$][A-Za-z0-9_$]*$
+          - metavariable-regex:
+              metavariable: $INNER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n]|\\[\\"tn])*")$
+          - metavariable-regex:
+              metavariable: $OUTER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n]|\\[\\"t])*")$
+          - metavariable-regex:
+              metavariable: $FIRST
+              constant-propagation: false
+              regex: >-
+                ^(?:"\\r")$
+          - metavariable-regex:
+              metavariable: $SECOND
+              constant-propagation: false
+              regex: >-
+                ^(?:"\\n")$
         exact: true
-      - pattern: $X.replace("\n", ...).replace("\r", ...)
-        exact: true
-      - pattern: $X.replace("\r", ...).replace("\n", ...)
+      - patterns:
+          - pattern-either:
+              - pattern: $X.replaceAll($SEARCH, $OUTER)
+              - patterns:
+                  - pattern-either:
+                      - pattern: $SAFE = $X.replaceAll($SEARCH, $OUTER);
+                      - pattern: String $SAFE = $X.replaceAll($SEARCH, $OUTER);
+                  - metavariable-regex:
+                      metavariable: $SAFE
+                      regex: ^[A-Za-z_$][A-Za-z0-9_$]*$
+          - metavariable-regex:
+              metavariable: $SEARCH
+              constant-propagation: false
+              regex: >-
+                ^"\[(?:\\{1,2}r\\{1,2}n|\\{1,2}n\\{1,2}r)\]"$
+          - metavariable-regex:
+              metavariable: $OUTER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n$]|\\[\\"t])*")$
         exact: true
     metadata:
       cwe: ["CWE-117"]
@@ -232,7 +500,7 @@ rules:
     message: >-
       Untrusted data flows into a log message. An attacker can inject
       newlines to forge log entries or corrupt log parsers. Sanitise
-      newlines before logging.
+      newlines or use an encoder that escapes them in the final output.
     languages: [javascript, typescript]
     severity: MEDIUM
     mode: taint
@@ -282,7 +550,7 @@ rules:
       - patterns:
           - pattern: console.info($MSG, ...)
           - focus-metavariable: $MSG
-      # winston / bunyan / pino logger instances
+      # Generic application loggers; verify the concrete output encoder.
       - patterns:
           - pattern: $LOGGER.info($MSG, ...)
           - focus-metavariable: $MSG
@@ -295,17 +563,131 @@ rules:
       - patterns:
           - pattern: $LOGGER.debug($MSG, ...)
           - focus-metavariable: $MSG
+      # One placeholder and one value: raw formatting can forge records.
+      # Encoded conversions are excluded; Go type errors also expose strings.
+      - patterns:
+          - pattern-either:
+              - pattern: console.log($FORMAT, $VALUE)
+              - pattern: console.warn($FORMAT, $VALUE)
+              - pattern: console.error($FORMAT, $VALUE)
+              - pattern: console.info($FORMAT, $VALUE)
+              - pattern: console.debug($FORMAT, $VALUE)
+          - metavariable-regex:
+              metavariable: $FORMAT
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\%\r\n]|%%)*%[s](?:[^"\\%\r\n]|%%)*"|'(?:[^'\\%\r\n]|%%)*%[s](?:[^'\\%\r\n]|%%)*')$
+          - focus-metavariable: $VALUE
+      # With no consuming directive, console appends string arguments raw.
+      - patterns:
+          - pattern-either:
+              - pattern: console.log($FORMAT, $VALUE)
+              - pattern: console.warn($FORMAT, $VALUE)
+              - pattern: console.error($FORMAT, $VALUE)
+              - pattern: console.info($FORMAT, $VALUE)
+              - pattern: console.debug($FORMAT, $VALUE)
+          - metavariable-regex:
+              metavariable: $FORMAT
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\%\r\n]|%%)*"|'(?:[^'\\%\r\n]|%%)*')$
+          - focus-metavariable: $VALUE
     # Both \n and \r must be handled — the character-class replace
     # does, single-character replaces only qualify chained in both
     # orders.
+    # Literal CR/LF value contracts, shared with header sanitization.
+    # Guarded assignment results preserve safe locals on Semgrep 1.177.
+    # Dynamic/encoded literals remain conservative; normalization is allowed
+    # only when the outer operation removes the introduced control.
     pattern-sanitizers:
-      - pattern: $X.replace(/[\r\n]/g, ...)
+      - patterns:
+          - pattern-either:
+              - pattern: $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+              - patterns:
+                  - pattern-either:
+                      - pattern: $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+                      - pattern: const $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+                      - pattern: let $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+                      - pattern: var $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+                  - metavariable-regex:
+                      metavariable: $SAFE
+                      regex: ^[A-Za-z_$][A-Za-z0-9_$]*$
+          - metavariable-regex:
+              metavariable: $INNER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n$]|\\[\\"tr])*"|'(?:[^'\\\r\n$]|\\[\\'tr])*')$
+          - metavariable-regex:
+              metavariable: $OUTER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n$]|\\[\\"t])*"|'(?:[^'\\\r\n$]|\\[\\'t])*')$
+          - metavariable-regex:
+              metavariable: $FIRST
+              constant-propagation: false
+              regex: >-
+                ^/\\n/(?=[gimsu]*g)[gimsu]*$
+          - metavariable-regex:
+              metavariable: $SECOND
+              constant-propagation: false
+              regex: >-
+                ^/\\r/(?=[gimsu]*g)[gimsu]*$
         exact: true
-      - pattern: $X.replace(/[\n\r]/g, ...)
+      - patterns:
+          - pattern-either:
+              - pattern: $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+              - patterns:
+                  - pattern-either:
+                      - pattern: $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+                      - pattern: const $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+                      - pattern: let $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+                      - pattern: var $SAFE = $X.replace($FIRST, $INNER).replace($SECOND, $OUTER)
+                  - metavariable-regex:
+                      metavariable: $SAFE
+                      regex: ^[A-Za-z_$][A-Za-z0-9_$]*$
+          - metavariable-regex:
+              metavariable: $INNER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n$]|\\[\\"tn])*"|'(?:[^'\\\r\n$]|\\[\\'tn])*')$
+          - metavariable-regex:
+              metavariable: $OUTER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n$]|\\[\\"t])*"|'(?:[^'\\\r\n$]|\\[\\'t])*')$
+          - metavariable-regex:
+              metavariable: $FIRST
+              constant-propagation: false
+              regex: >-
+                ^/\\r/(?=[gimsu]*g)[gimsu]*$
+          - metavariable-regex:
+              metavariable: $SECOND
+              constant-propagation: false
+              regex: >-
+                ^/\\n/(?=[gimsu]*g)[gimsu]*$
         exact: true
-      - pattern: $X.replace(/\n/g, ...).replace(/\r/g, ...)
-        exact: true
-      - pattern: $X.replace(/\r/g, ...).replace(/\n/g, ...)
+      - patterns:
+          - pattern-either:
+              - pattern: $X.replace($CLASS, $OUTER)
+              - patterns:
+                  - pattern-either:
+                      - pattern: $SAFE = $X.replace($CLASS, $OUTER)
+                      - pattern: const $SAFE = $X.replace($CLASS, $OUTER)
+                      - pattern: let $SAFE = $X.replace($CLASS, $OUTER)
+                      - pattern: var $SAFE = $X.replace($CLASS, $OUTER)
+                  - metavariable-regex:
+                      metavariable: $SAFE
+                      regex: ^[A-Za-z_$][A-Za-z0-9_$]*$
+          - metavariable-regex:
+              metavariable: $CLASS
+              constant-propagation: false
+              regex: >-
+                ^/\[(?:\\r\\n|\\n\\r)\]/(?=[gimsu]*g)[gimsu]*$
+          - metavariable-regex:
+              metavariable: $OUTER
+              constant-propagation: false
+              regex: >-
+                ^(?:"(?:[^"\\\r\n$]|\\[\\"t])*"|'(?:[^'\\\r\n$]|\\[\\'t])*')$
         exact: true
     metadata:
       cwe: ["CWE-117"]
