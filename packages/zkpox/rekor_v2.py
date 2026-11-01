@@ -8,7 +8,6 @@ import base64
 from dataclasses import replace
 import hashlib
 import json
-from pathlib import Path
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
