@@ -765,3 +765,91 @@ def test_version_suffix_removed_from_probe_context(tmp_path):
     from core.audit.corpus.run_corpus import _build_probe_context
     label = _load(_write_label(tmp_path / "l.label.json", function_id="src/a.go:Scanner.scanNumber@go1.24.5", source={"file": "src/a.go"}))
     assert _build_probe_context(label, "package p")['function'] == "Scanner.scanNumber"
+
+
+class TestKernelDefinitionSyntax:
+    def kernel_check(self, tmp_path, text, *, end=None):
+        tree = tmp_path / "kernel"
+        (tree / "src").mkdir(parents=True, exist_ok=True)
+        (tree / "src/a.c").write_text(text)
+        path = _write_label(tmp_path / "k.label.json", source={"repo": "linux-kernel", "line_start": 1, "line_end": end or len(text.splitlines())})
+        label = _load(path)
+        return verify_pin(label, tree)
+
+    @pytest.mark.parametrize("text", [
+        "static __always_inline int target_fn(char __user *p) { return 0; }\n",
+        "static void __sched target_fn(void) { return; }\n",
+        "int target_fn(void) { list_for_each_entry(p, &list, member) { use(p); } return 0; }\n",
+        "int target_fn(void) { perf_event_groups_for_each(p, &groups) { use(p); } return 0; }\n",
+        "int target_fn(void) { list_for_each_entry_safe(p, tmp, &list, member) use(p); return 0; }\n",
+        "int target_fn(void) { scoped_guard(mutex, &lock) { use(p); } return 0; }\n",
+        "int target_fn(void) { scoped_cond_guard(mutex_intr, return -ERR, &lock) { use(p); } return 0; }\n",
+        "void *target_fn(void *p) { return container_of(p, struct node, entry); }\n",
+        "int target_fn(void) { union { int x; } value __aligned(8); return 0; }\n",
+    ])
+    def test_recognized_kernel_syntax_keeps_complete_pin(self, tmp_path, text):
+        assert self.kernel_check(tmp_path, text).outcome == PIN_OK
+
+    @pytest.mark.parametrize("text", [
+        "int target_fn(void) { scoped_guard(mutex, ???) { return 0; } }\n",
+        "int target_fn(void) { scoped_guard(mutex, &lock) { return ???; } }\n",
+        "int target_fn(void) { unknown_for_each(p, &list, member) { return 0; } }\n",
+        "int target_fn(void) { union { int x; } v __aligned(???); return 0; }\n",
+        "int target_fn(void) { return container_of(p, struct ???, member); }\n",
+    ])
+    def test_unknown_or_malformed_syntax_still_refuses(self, tmp_path, text):
+        assert self.kernel_check(tmp_path, text).outcome == lint.PIN_UNVERIFIABLE
+
+    def test_partial_kernel_function_is_not_certified(self, tmp_path):
+        text = "static __always_inline int target_fn(void) {\n scoped_guard(mutex, &lock) { use(p); }\n return 0;\n}\n"
+        check = self.kernel_check(tmp_path, text, end=2)
+        assert (check.outcome, check.suggested_start, check.suggested_end) == (PIN_RELOCATABLE, 1, len(text.splitlines()))
+
+    def test_comments_strings_directives_and_unicode_preserve_source(self):
+        from core.audit.corpus.kernel_syntax import kernel_parse_view
+        from core.inventory.extractors import _ts_parser_for
+        text = '#define __user annotation\n// café scoped_guard(a,b) {}\nchar *s="__user container_of(p, struct node, field)";\nstatic __always_inline int target_fn(void) {\n scoped_guard(mutex, &lock) { return 0; }\n}\n'
+        view = kernel_parse_view(text, _ts_parser_for("c"))
+        assert view.splitlines()[:3] == text.splitlines()[:3]
+        assert view.count("\n") == text.count("\n")
+        assert len(view) == len(text)
+
+    def test_nested_macro_work_is_bounded_before_probes(self):
+        from core.audit.corpus.kernel_syntax import kernel_parse_view
+        class NoProbes:
+            def parse(self, *args):
+                pytest.fail("budget exhaustion should retain the original before probing arguments")
+        text = "int target_fn(void) { return " + "container_of(p, struct node, " * 3000 + "field" + ")" * 3000 + "; }"
+        assert kernel_parse_view(text, NoProbes()) == text
+
+
+def test_kernel_macro_loop_variable_is_not_a_function(tmp_path):
+    tree = tmp_path / "tree"
+    (tree / "src").mkdir(parents=True)
+    text = "void wrapper(void) { for_each_possible_cpu(cpu) { use(cpu); } }\n"
+    (tree / "src/a.c").write_text(text)
+    path = _write_label(tmp_path / "l.label.json", function_id="src/a.c:cpu", source={"repo": "linux-kernel", "line_start": 1, "line_end": 1})
+    assert verify_pin(_load(path), tree).outcome == PIN_MISSING
+
+
+@pytest.mark.parametrize("declarator", ["int target_fn", "int *target_fn"])
+def test_c_body_without_function_declarator_is_not_verified(tmp_path, declarator):
+    tree = tmp_path / "tree"
+    (tree / "src").mkdir(parents=True)
+    (tree / "src/a.c").write_text(declarator + " { return 0; }\n")
+    path = _write_label(tmp_path / "l.label.json", source={"line_start": 1, "line_end": 1})
+    assert verify_pin(_load(path), tree).outcome == lint.PIN_UNVERIFIABLE
+
+
+def test_kernel_view_keeps_gnu_directive_continuations():
+    from core.audit.corpus.kernel_syntax import kernel_parse_view
+    from core.inventory.extractors import _ts_parser_for
+    text = "#define M \\	\n scoped_guard(mutex, &lock) \\	\n __user\nint target_fn(void) { return 0; }\n"
+    assert kernel_parse_view(text, _ts_parser_for("c")) == text
+
+
+def test_kernel_view_preserves_nonascii_identifier_continuations():
+    from core.audit.corpus.kernel_syntax import kernel_parse_view
+    from core.inventory.extractors import _ts_parser_for
+    text = "int f\u0301__user(void) { f\u0301scoped_guard(mutex, &lock); return 0; }\n"
+    assert kernel_parse_view(text, _ts_parser_for("c")) == text
