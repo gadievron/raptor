@@ -100,6 +100,9 @@ class TestCensus:
         "engine/coccinelle/rules/scratch",
         "engine/codeql/queries/cpp/extra.yml",  # non-manifest .yml must
                                                 # not ride in as "a pack"
+        "engine/codeql/tests/java/log-injection/LogInjection.actual",
+        "engine/codeql/tests/java/log-injection/output.testproj/data.db",
+        "engine/codeql/tests/java/extra.yml",
         "engine/negative_controls/notes",
         "core/audit/rules/decompiler/scratch",
     ])
@@ -138,6 +141,12 @@ class TestCensus:
             "engine/coccinelle/api_pack_renderer.py",
             "engine/codeql/queries/cpp/UseAfterMove.ql",
             "engine/codeql/queries/cpp/qlpack.yml",
+            "engine/codeql/queries/java/LogInjectionFlow.qll",
+            "engine/codeql/tests/java/qlpack.yml",
+            "engine/codeql/tests/java/.gitignore",
+            "engine/codeql/tests/java/log-injection/LogCases.java",
+            "engine/codeql/tests/java/log-injection/LogInjection.ql",
+            "engine/codeql/tests/java/log-injection/LogInjection.expected",
             "engine/codeql/suites/README.md",
             "engine/negative_controls/xxe.c",
             "core/audit/rules/decompiler/format-string.yaml",

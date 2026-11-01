@@ -34,9 +34,19 @@ on:
     # it runs alone.
     - cron: '0 7 * * *'
   workflow_dispatch:
+    inputs:
+      suite:
+        description: Test suites to run (focused modes skip the full slow/integration batch)
+        type: choice
+        default: full
+        options:
+          - full
+          - semgrep
+          - java-log
+          - scan-and-java-log
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.suite || 'full' }}
   cancel-in-progress: true
 
 permissions:
@@ -49,6 +59,7 @@ env:
 
 jobs:
   slow-integration:
+    if: github.event_name != 'workflow_dispatch' || inputs.suite == 'full'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -280,5 +291,172 @@ jobs:
           path: |
             ${{ runner.temp }}/slow.xml
             ${{ runner.temp }}/integration-attempt-*.xml
+          retention-days: 14
+          if-no-files-found: ignore
+
+  java-log-query:
+    if: github.event_name != 'workflow_dispatch' || inputs.suite != 'semgrep'
+    # Separate tool-backed regression: no optional-tool skip and no added
+    # time or memory contention in the existing slow/integration job.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961  # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Restore CodeQL CLI
+        id: codeql_cli
+        continue-on-error: true  # Cache availability must not gate execution.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
+        with:
+          path: ${{ runner.temp }}/java-log-codeql
+          key: java-log-codeql-${{ runner.os }}-${{ runner.arch }}-2.23.8-v1
+
+      - name: Install CodeQL CLI
+        if: steps.codeql_cli.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 \
+            https://github.com/github/codeql-cli-binaries/releases/download/v2.23.8/codeql-linux64.zip \
+            --output "$RUNNER_TEMP/codeql-linux64.zip"
+          printf '%s  %s\n' \
+            e61bc8aa8d86d45acd9d1c36629a12bbfb3365cd07a31666a2ebc91c6a1940b2 \
+            "$RUNNER_TEMP/codeql-linux64.zip" | sha256sum --check
+          mkdir -p "$RUNNER_TEMP/java-log-codeql"
+          unzip -q -o "$RUNNER_TEMP/codeql-linux64.zip" -d "$RUNNER_TEMP/java-log-codeql"
+
+      - name: Save CodeQL CLI
+        if: steps.codeql_cli.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
+        with:
+          path: ${{ runner.temp }}/java-log-codeql
+          key: java-log-codeql-${{ runner.os }}-${{ runner.arch }}-2.23.8-v1
+
+      - name: Checkout matching CodeQL Java libraries
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: github/codeql
+          ref: 28b6aa8616a393ebb45186e3ba4df004a0f3ef4e  # codeql-cli/v2.23.8
+          path: .codeql-java-log-libraries
+          sparse-checkout: |
+            java/ql/lib
+            shared
+          persist-credentials: false
+
+      - name: Run Java log-injection query regression
+        run: |
+          set -euo pipefail
+          cli="$RUNNER_TEMP/java-log-codeql/codeql/codeql"
+          "$cli" version
+          mkdir -p "$RUNNER_TEMP/java-log-tests"
+          cp -R engine/codeql/queries "$RUNNER_TEMP/java-log-tests/queries"
+          cp -R engine/codeql/tests/java "$RUNNER_TEMP/java-log-tests/tests"
+          "$cli" test run --threads=2 --ram=4096 --format=json \
+            --search-path="$GITHUB_WORKSPACE/.codeql-java-log-libraries" \
+            --additional-packs="$RUNNER_TEMP/java-log-tests/queries/java:$RUNNER_TEMP/java-log-tests/tests" \
+            "$RUNNER_TEMP/java-log-tests/tests/log-injection" \
+            > "$RUNNER_TEMP/java-log-tests/results.json"
+
+      - name: Compile production Java log query
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/java-log-codeql/codeql/codeql" query compile --threads=2 --ram=4096 \
+            --search-path="$GITHUB_WORKSPACE/.codeql-java-log-libraries" \
+            --additional-packs="$RUNNER_TEMP/java-log-tests/queries/java" \
+            "$RUNNER_TEMP/java-log-tests/queries/java/LogInjection.ql" \
+            2>&1 | tee "$RUNNER_TEMP/java-log-tests/production-compile.log"
+
+      - name: Upload Java query test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: nightly-java-log-query-results
+          path: |
+            ${{ runner.temp }}/java-log-tests/results.json
+            ${{ runner.temp }}/java-log-tests/tests/log-injection/*.actual
+            ${{ runner.temp }}/java-log-tests/tests/log-injection/*.expected
+            ${{ runner.temp }}/java-log-tests/production-compile.log
+          retention-days: 14
+          if-no-files-found: ignore
+
+  semgrep-regressions:
+    if: github.event_name == 'workflow_dispatch' && (inputs.suite == 'semgrep' || inputs.suite == 'scan-and-java-log')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Restore or rebuild venv
+        uses: ./.github/actions/setup-venv
+        with:
+          cache-key-prefix: venv-scan-regressions
+          save-on-rebuild: 'true'
+
+      - name: Install Semgrep
+        run: |
+          uv tool install semgrep==1.177.0
+          semgrep --version
+
+      - name: Run sanitizer regressions
+        run: |
+          set -euo pipefail
+          source "$VENV_PATH/bin/activate"
+          # Focus on the header/log changes rather than the broader
+          # command/PHP sanitizer matrix. Require both patches on the ref
+          # so a missing log regression cannot silently pass selection.
+          scan_tests=(
+            engine/semgrep/tests/test_header_sanitizer_precision.py
+            engine/semgrep/tests/test_log_sanitizer_precision.py
+          )
+          for scan_test in "${scan_tests[@]}"; do
+            if [ ! -f "$scan_test" ]; then
+              echo "::error::Missing $scan_test — apply the corresponding sanitizer patch to this ref"
+              exit 1
+            fi
+          done
+          printf '%s\n' "${scan_tests[@]}"
+          python -m pytest "${scan_tests[@]}" -m 'not corpus and not integration' -q \
+            --junitxml="$RUNNER_TEMP/scan-regressions.xml"
+          python - "$RUNNER_TEMP/scan-regressions.xml" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+          cases = list(ET.parse(sys.argv[1]).getroot().iter("testcase"))
+          if not cases:
+              sys.exit("No sanitizer regression tests executed")
+          skipped = [case.get("name") for case in cases if case.find("skipped") is not None]
+          if skipped:
+              sys.exit(f"Sanitizer regression tests skipped: {skipped}")
+          print(f"Verified {len(cases)} sanitizer regressions executed without skips")
+          PY
+
+      - name: Upload sanitizer test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: focused-semgrep-regression-results
+          path: ${{ runner.temp }}/scan-regressions.xml
           retention-days: 14
           if-no-files-found: ignore
