@@ -77,7 +77,7 @@ class SensitiveFileCheck(Check):
     def run(self, client, target_url, session=None, discovery=None):
         import secrets
 
-        from packages.web.sensitive_paths import SENSITIVE_PATHS
+        from packages.web.sensitive_paths import SENSITIVE_PATHS, served_content
 
         findings = []
         probes = list(SENSITIVE_PATHS.items())
@@ -87,10 +87,10 @@ class SensitiveFileCheck(Check):
             (path, label) for path, label in external if path not in known
         )
 
-        # Soft-404 / blanket-403 calibration: probe a path that cannot
-        # exist and remember how the target answers it. SPA catch-alls
-        # (200 + app shell for every path) and WAFs (403 for every
-        # path) would otherwise turn the whole catalog into findings.
+        # Soft-404 calibration: probe a path that cannot exist and
+        # remember how the target answers it. SPA catch-alls (200 + app
+        # shell for every path) would otherwise turn the whole catalog
+        # into findings.
         control_status: int | None = None
         control_length: int | None = None
         try:
@@ -118,25 +118,32 @@ class SensitiveFileCheck(Check):
                 # control is the catch-all answer, not the file.
                 if _matches_control(resp):
                     continue
-                if resp.status_code in (200, 403):
-                    severity = "critical" if any(
-                        kw in path for kw in (".env", "config", "secret", "database", "heapdump")
-                    ) else "high"
-                    findings.append(self._result(
-                        passed=False, url=target_url.rstrip("/") + path,
-                        evidence=f"GET {path} returned HTTP {resp.status_code}",
-                        detail=(
-                            f"{label} at '{path}' (HTTP {resp.status_code}). "
-                            "This path may expose credentials, internal configuration, or "
-                            "debugging information that significantly aids an attacker."
-                        ),
-                        recommendation=(
-                            f"Block public access to '{path}' at the web server level. "
-                            "Remove debug endpoints and sensitive files from production deployments. "
-                            "A 403 still confirms the path exists -- a 404 is safer."
-                        ),
-                        severity=severity, asvs_ref="ASVS 5.0 V8.3.4",
-                    ))
+                # A 403 is the server refusing the path -- often a WAF or
+                # deny rule matching on the name alone -- so it proves
+                # neither that the file exists nor that it is exposed.
+                if resp.status_code != 200:
+                    continue
+                matched = served_content(path, resp.content)
+                if matched is None:
+                    continue
+                severity = "critical" if any(
+                    kw in path for kw in (".env", "config", "secret", "database", "heapdump")
+                ) else "high"
+                findings.append(self._result(
+                    passed=False, url=target_url.rstrip("/") + path,
+                    evidence=f"GET {path} returned HTTP 200 with {matched}",
+                    detail=(
+                        f"{label} at '{path}' (HTTP 200, body shows {matched}). "
+                        "This path may expose credentials, internal configuration, or "
+                        "debugging information that significantly aids an attacker."
+                    ),
+                    recommendation=(
+                        f"Remove '{path}' from the web root or block it at the web server "
+                        "level, and rotate any credential it contained. Remove debug "
+                        "endpoints from production deployments."
+                    ),
+                    severity=severity, asvs_ref="ASVS 5.0 V8.3.4",
+                ))
             except Exception:
                 continue
         return findings
