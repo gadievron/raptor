@@ -2642,6 +2642,7 @@ def queue_reading_list_item(
     priority: str = "normal",
     resolution: str = "identifier",
     context: str = "",
+    scope_warning: str = "",
 ) -> bool:
     """Queue an item to the reading list for future study.
 
@@ -2676,6 +2677,7 @@ def queue_reading_list_item(
         priority=priority,
         resolution=resolution,
         context=context,
+        scope_warning=scope_warning,
     )
 
     from core.atomic_fs.fs_lock import artifact_lock
