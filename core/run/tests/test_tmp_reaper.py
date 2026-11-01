@@ -100,6 +100,7 @@ class TestDirReaping:
 
     def test_stale_prefixed_dirs_reaped(self, tmp_root):
         dirs = [
+            _make_old_dir(tmp_root, "raptor-native-ns-probe-abc12345"),
             _make_old_dir(tmp_root, "raptor-llm-raptor-cafe0001-abc123"),
             _make_old_dir(tmp_root, "raptor-cc-cwd-abc123"),
             _make_old_dir(tmp_root, "raptor-joern-ws-abc123"),
