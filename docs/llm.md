@@ -364,7 +364,7 @@ Entry fields:
 | `provider` | No | Inferred from model name if unambiguous (`claude-*` = anthropic, `gpt-*` = openai, `us.anthropic.*` / `anthropic.*` = bedrock) |
 | `model` | Mostly | Model identifier. Anthropic aliases auto-resolve to dated snapshots. Optional for `bedrock` (backfilled — see Minimal Configuration) and `claudecode` (session default). |
 | `api_key` | No | Falls back to provider env var. Not needed for Bedrock SigV4 (the dispatcher signs) or claudecode (the CLI authenticates itself). |
-| `role` | No | `analysis`, `code`, `consensus`, `fallback`, `judge`, `aggregate` |
+| `role` | No | `analysis`, `code`, `exploit`, `consensus`, `fallback`, `judge`, `aggregate` |
 | `max_context` | No | Context window size (tokens) |
 | `max_output` | No | Maximum output tokens |
 | `timeout` | No | Request timeout (seconds) |
@@ -375,6 +375,28 @@ Entry fields:
 A `{"provider": "claudecode", "role": "fallback"}` entry declares the
 Claude Code CLI transport as an explicit safety net behind an API
 primary — resolvable whenever the `claude` binary is installed.
+
+### Separate exploit and patch generation
+
+Use the `exploit` role to select a separate model for both `/exploit` and
+`/patch` generation while keeping vulnerability analysis on its own model:
+
+```json
+{
+  "models": [
+    { "provider": "anthropic", "model": "claude-opus-4-6", "role": "analysis" },
+    { "provider": "ollama", "model": "qwen3-coder", "role": "exploit" }
+  ]
+}
+```
+
+Generation selects the `exploit` model, falling back to the `code` model,
+then the analysis model when those roles are absent. With no roles configured,
+the primary model handles analysis and generation. Configure at most one
+`exploit` model. On commands exposing `--exploit-model MODEL`, that explicit
+selection overrides the configured exploit-role model for the invocation.
+This role selects the generation model; it does not establish that its exploit
+or patch is correct.
 
 ### Model Selection Logic
 
