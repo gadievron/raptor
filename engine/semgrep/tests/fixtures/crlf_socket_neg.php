@@ -24,16 +24,6 @@ function fixed_command($host) {
     $sock = fsockopen($host, 25);
     fwrite($sock, "QUIT\r\n");
 }
-function noop_replace_launder() {
-    // Documented FN: the replace never touches CR/LF but still
-    // clears taint — a real finding goes silent. Kept executable
-    // here because gate resolution keeps CWE-93 dark-when-silent
-    // (core/audit/tool_coverage.py), so the silence cannot resolve
-    // the claim clean.
-    $rcpt = str_replace('~', '~', $_GET['rcpt']);
-    $sock = fsockopen("mail.example", 25);
-    fwrite($sock, "RCPT TO:<" . $rcpt . ">\r\n");
-}
 class MailerShape {
     private $conn;
     public function connect() {
