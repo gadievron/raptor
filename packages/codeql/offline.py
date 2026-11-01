@@ -310,8 +310,6 @@ def _import_verified(kit, expected, boot, data, cache):
             content = read_capped(staged / 'locks' / rel / LOCK, 1024**2, raise_on_refusal=True)
             write_text_atomically(ROOT / rel / LOCK, content.decode('utf-8'))
     check(data['languages'], data['modes'])
-    marker = {'schema_version': 1, 'manifest_sha256': expected, 'selection': data}
-    write_text_atomically(cache / 'raptor-offline.json', json.dumps(marker, indent=2) + '\n')
     cli = boot['ensure_installed'](install=False)
     print('Imported and verified. Run these commands in the shell used for RAPTOR:')
     print('export CODEQL_CLI=' + shlex.quote(str(cli)))
