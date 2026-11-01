@@ -412,3 +412,10 @@ def test_census_gate_is_wired_into_the_pr_gate() -> None:
         "tracked-file census (with --require-git) dropped from the "
         "daily sweep"
     )
+
+
+def test_codeql_offline_entry_point_is_allowed_without_widening_tools():
+    assert census_violations(["engine/codeql/tools/offline.py"]) == {}
+    for stray in ["engine/codeql/tools/scratch.py", "engine/codeql/tools/offline.py.bak",
+                  "engine/codeql/tools/nested/offline.py"]:
+        assert census_violations([stray]) == {"engine/codeql": [stray]}
