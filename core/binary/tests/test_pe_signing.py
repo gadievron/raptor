@@ -512,11 +512,11 @@ class TestSkimBudgets:
         assert time.perf_counter() - start < 0.5
         assert caps      # degraded marker-visibly, never raised
 
-    def test_node_budget_fires_at_real_cap_on_tlv_flood(self):
+    def test_node_budget_fires_at_real_cap_on_tlv_flood(self, monkeypatch):
         """The op-count regression pin: a flood of 2-byte TLVs in
         signerInfos must hit the NODE budget (a lifted or removed
-        ``_MAX_DER_NODES`` fails this test), and the capped parse
-        stays flat-time while the flood grows."""
+        ``_MAX_DER_NODES`` fails this test). Count header operations
+        rather than comparing wall times on a shared CI runner."""
         def flood_blob(n: int) -> bytes:
             signed = der(
                 0x30,
@@ -526,23 +526,26 @@ class TestSkimBudgets:
             return der(0x30, der(0x06, _OID_SIGNED_DATA)
                        + der(0xA0, signed))
 
-        small = flood_blob(100_000)
-        large = flood_blob(400_000)
-        caps: set[str] = set()
-        start = time.perf_counter()
-        assert _skim_claimed_signer(small, caps) is None
-        t_small = time.perf_counter() - start
-        assert "signer_skim_nodes_capped" in caps
-        caps = set()
-        start = time.perf_counter()
-        assert _skim_claimed_signer(large, caps) is None
-        t_large = time.perf_counter() - start
-        assert "signer_skim_nodes_capped" in caps
-        # Work is bounded by the node budget, not input size: the
-        # 4x flood must not cost 4x (generous 2.5x + 20ms floor
-        # absorbs timer noise; the UNCAPPED walk measures ~4.3x).
-        assert t_large < max(t_small * 2.5, t_small + 0.02), (
-            t_small, t_large)
+        header = pe_mod._DerSkim._header
+        counts = {"attempted": 0, "parsed": 0}
+
+        def counted_header(skim, off, end):
+            counts["attempted"] += 1
+            node = header(skim, off, end)
+            if node is not None:
+                counts["parsed"] += 1
+            return node
+
+        monkeypatch.setattr(pe_mod._DerSkim, "_header", counted_header)
+        for n in (100_000, 400_000):
+            counts.update(attempted=0, parsed=0)
+            caps: set[str] = set()
+            assert _skim_claimed_signer(flood_blob(n), caps) is None
+            assert "signer_skim_nodes_capped" in caps
+            # Pin the real limit independently of the implementation's
+            # constant. One final header attempt reports exhaustion;
+            # a fourfold input increase must add no parsing work.
+            assert counts == {"attempted": 4_097, "parsed": 4_096}, n
 
     def test_oid_flood_in_the_subject_stays_bounded(self):
         """Thousands of non-CN attributes ahead of the CN: every
