@@ -419,3 +419,16 @@ class TestHostileRunArtifacts:
         assert index.tools == {}
         index.add(index.tools, "k", "tok")
         assert index.tools == {"k": {"tok"}}
+
+
+def test_versioned_label_joins_qualified_source_receipt():
+    index = SignalIndex()
+    index.tools['src/scanner.go:Scanner.scanNumber'] = {'semgrep'}
+    row = _row('src/scanner.go:Scanner.scanNumber@go1.24.5', 'clean', 'clean')
+    assert 'semgrep' in observed_mechanisms(row, index)
+    assert row['function_id'].endswith('@go1.24.5')
+
+
+def test_null_source_identity_does_not_crash_receipt_attribution():
+    row = _row(None, "clean", "clean")
+    assert observed_mechanisms(row, SignalIndex()) == set()

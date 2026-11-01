@@ -14,6 +14,8 @@ Steps:
 
 from __future__ import annotations
 
+from .definitions import function_name, source_function_id
+
 import argparse
 import hashlib
 import json
@@ -479,8 +481,12 @@ def _resolve_source_dirs(
     repos: dict[str, str] = {}
     for label in labels:
         key = label.source.repo
-        if key not in repos:
-            repos[key] = label.source.sha
+        if key in repos and repos[key] != label.source.sha:
+            raise ValueError(
+                f"multiple pinned revisions for {key!r}: {repos[key]!r} and "
+                f"{label.source.sha!r}; run each revision separately"
+            )
+        repos[key] = label.source.sha
 
     resolved = {}
     for key, sha in repos.items():
@@ -778,7 +784,7 @@ def _verify_label_functions(
         src_file = src_dir / label.source.file
         if not src_file.is_file():
             continue
-        name = label.function_id.rsplit(":", 1)[-1].rsplit(".", 1)[-1]
+        name = function_name(label.function_id)
         if not name:
             continue
         try:
@@ -1101,18 +1107,18 @@ def _run_audit(
 
             group_rows: list[dict[str, Any]] = []
             for label in repo_labels:
-                outcome = outcomes.get(label.function_id)
+                outcome = outcomes.get(source_function_id(label.function_id))
                 if outcome is None:
                     # audit log keys use bare function name (no class/receiver),
                     # so Type.Method → Method — try the stripped form
                     parts = label.function_id.rsplit(":", 1)
-                    if len(parts) == 2 and "." in parts[1]:
-                        stripped = parts[0] + ":" + parts[1].rsplit(".", 1)[-1]
+                    if len(parts) == 2 and ("." in parts[1] or "@" in parts[1]):
+                        stripped = parts[0] + ":" + function_name(label.function_id)
                         same_stripped = [
                             lb for lb in repo_labels
                             if lb.function_id != label.function_id
                             and lb.function_id.rsplit(":", 1)[0] == parts[0]
-                            and lb.function_id.rsplit(".", 1)[-1] == parts[1].rsplit(".", 1)[-1]
+                            and function_name(lb.function_id) == function_name(label.function_id)
                         ]
                         if not same_stripped:
                             outcome = outcomes.get(stripped)
@@ -1125,7 +1131,7 @@ def _run_audit(
                                     outcome = bare
                 error_reason = ""
                 if outcome is None:
-                    fn_name = label.function_id.rsplit(":", 1)[-1]
+                    fn_name = source_function_id(label.function_id).rsplit(":", 1)[-1]
                     if ":interstitial:" in label.function_id:
                         # Interstitial names carry a colon
                         # (``interstitial:<start>-<end>``), so the
@@ -1446,7 +1452,7 @@ def _run_audit_on_target(
     fn_specs: list[str] = []
     pin_specs: list[str] = []
     for label in labels:
-        parts = label.function_id.split(":")
+        parts = source_function_id(label.function_id).split(":")
         name = parts[-1] if len(parts) >= 2 else parts[0]
         file = ":".join(parts[:-1]) if len(parts) >= 2 else ""
         fn_specs.append(f"{file}:{name}:{label.source.line_start}")
@@ -1745,11 +1751,7 @@ def _build_probe_context(
     ``/understand --study``.
     """
     file_path = label.source.file
-    func_name = (
-        label.function_id.split(":")[-1]
-        if ":" in label.function_id
-        else label.function_id
-    )
+    func_name = function_name(label.function_id, qualified=True)
 
     ctx: dict[str, Any] = {
         "file": file_path,
@@ -3208,7 +3210,7 @@ def _suppress_quality_findings(
                 # not un-do it (moby CVE-2024-36623/36621 class).
                 continue
             fence_receipts = standing_receipts_for(
-                receipt_index, r.get("function_id", ""),
+                receipt_index, source_function_id(r.get("function_id", "")),
                 repo=r.get("repo"),
                 ambiguous_bare_keys=ambiguous_bare,
             )
@@ -3768,7 +3770,11 @@ def main(argv: list[str] | None = None) -> int:
     for extra in model_labels[1:]:
         print(f"Additional model: {extra}", flush=True)
 
-    source_dirs = _resolve_source_dirs(labels, do_fetch=args.fetch)
+    try:
+        source_dirs = _resolve_source_dirs(labels, do_fetch=args.fetch)
+    except ValueError as exc:
+        print(f"Source resolution refused: {exc}", file=sys.stderr)
+        return EXIT_GATE_FAIL
     errors = _verify_labels(labels, source_dirs)
     if errors:
         print(f"{len(errors)} label verification error(s):", file=sys.stderr)
@@ -3801,7 +3807,8 @@ def main(argv: list[str] | None = None) -> int:
     print(lint_mod.format_pin_report(pin_checks))
     drifted_pins = [
         c for c in pin_checks
-        if c.outcome in (lint_mod.PIN_RELOCATABLE, lint_mod.PIN_MISSING)
+        if c.outcome in (lint_mod.PIN_RELOCATABLE, lint_mod.PIN_MISSING,
+                         lint_mod.PIN_UNVERIFIABLE)
     ]
     unverified_pins = [
         c for c in pin_checks if c.outcome == lint_mod.PIN_NO_FIXTURE

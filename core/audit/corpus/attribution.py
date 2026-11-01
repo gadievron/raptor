@@ -46,6 +46,8 @@ to add receipts, not a licence to infer.
 
 from __future__ import annotations
 
+from .definitions import source_function_id
+
 import logging
 import re
 from dataclasses import dataclass, field
@@ -321,7 +323,7 @@ def observed_mechanisms(
             observed |= _gate_tokens(m.group(1))
 
     if index is not None:
-        fid = row.get("function_id", "")
+        fid = source_function_id(row.get("function_id", ""))
         for gate in index.gates.get(fid, ()):
             observed |= _gate_tokens(gate)
         for tool in index.tools.get(fid, ()):
