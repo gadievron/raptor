@@ -31,6 +31,7 @@ def _run_rule(tmp_path: Path, source: str) -> list[dict]:
         ["spatch", "--sp-file", str(_RULE), str(src), "--no-show-diff"],
         capture_output=True, text=True, timeout=120,
     )
+    assert proc.returncode == 0, proc.stderr
     results = []
     for stream in (proc.stdout, proc.stderr):
         for line in stream.splitlines():
@@ -93,3 +94,16 @@ class TestNegatives:
             }
         """)
         assert results == []
+
+
+def test_transient_pointer_and_cross_object_lock_refuse(tmp_path):
+    assert _run_rule(tmp_path, """
+        void operation(struct state *s, struct buffer *b) {
+            spin_lock(&s->lock);
+            b->count++;
+            header(b)->count++;
+            spin_unlock(&s->lock);
+            report(b->count);
+            report(header(b)->count);
+        }
+    """) == []
