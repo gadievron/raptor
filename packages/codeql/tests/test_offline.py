@@ -76,7 +76,6 @@ def test_prepare_import_and_offline_check(setup, tmp_path, monkeypatch):
     offline.import_kit(kit, digest)
     assert (home / '.codeql/packages/codeql/python-all/1.0.0/qlpack.yml').is_file()
     assert (pack / offline.LOCK).is_file()
-    assert (home / '.codeql/raptor-offline.json').is_file()
     assert not any(c[0] == 'download' or (c[0] == 'command' and c[1]) for c in calls)
     offline.import_kit(kit, digest)  # repeat import preserves matching cache
 
@@ -130,13 +129,13 @@ def test_different_cached_version_is_not_overwritten(setup, tmp_path):
     assert (cached / 'qlpack.yml').read_text() == 'different existing cache'
 
 
-def test_failed_check_does_not_publish_ready_receipt(setup, tmp_path, monkeypatch):
+def test_failed_check_does_not_report_success(setup, tmp_path, monkeypatch, capsys):
     _, _, home, _ = setup
     kit, digest = prepared(tmp_path)
     monkeypatch.setattr(offline, '_check', lambda *args: (_ for _ in ()).throw(RuntimeError('missing library')))
     with pytest.raises(RuntimeError, match='missing library'):
         offline.import_kit(kit, digest)
-    assert not (home / '.codeql/raptor-offline.json').exists()
+    assert 'Imported and verified' not in capsys.readouterr().out
 
 
 def test_prepare_refuses_offline_and_existing_output(setup, tmp_path, monkeypatch):
