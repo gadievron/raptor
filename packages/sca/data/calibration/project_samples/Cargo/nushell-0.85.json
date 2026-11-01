@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-10-29T21:54:52Z",
+    "fetched_at": "2026-11-01T12:57:58Z",
     "git_ref": "0.85.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of nushell-0.85",
@@ -451,85 +451,6 @@
     },
     {
       "advisory": {
-        "aliases": [],
-        "cwe_ids": [
-          "CWE-119"
-        ],
-        "fixed_versions": [
-          "0.12.1"
-        ],
-        "id": "GHSA-qwgh-2vcv-g2f7",
-        "modified": "2026-08-19T19:30:06.686866+00:00",
-        "published": "2026-08-19T19:15:34+00:00",
-        "references": [
-          "https://github.com/RustCrypto/utils/security/advisories/GHSA-qwgh-2vcv-g2f7",
-          "https://github.com/RustCrypto/utils",
-          "https://github.com/RustCrypto/utils/releases/tag/block-buffer-v0.12.1"
-        ],
-        "severity": {
-          "score": 6.3,
-          "severity": "medium",
-          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N"
-        },
-        "summary": "block_buffer: panic corrupts inline buffer position"
-      },
-      "cvss_score": 6.3,
-      "dep_name": "block-buffer",
-      "dep_version": "0.10.4",
-      "direct": false,
-      "ecosystem": "Cargo",
-      "epss": null,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "exposure_factor": 0.0,
-      "finding_id": "sca:vuln:Cargo:block-buffer:0.10.4:GHSA-qwgh-2vcv-g2f7",
-      "in_kev": false,
-      "parser_confidence": {
-        "level": "high",
-        "numeric": 0.95
-      },
-      "purl": "pkg:cargo/block-buffer@0.10.4",
-      "raptor_risk_estimate": 9.36390840023764,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use block-buffer` / `extern crate block-buffer` found"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "needs_retune",
-        "cvss_base": 63.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.77,
-        "epss_multiplier": 0.66885,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.45,
-        "final": 9.36390840023764,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.71062,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null,
-      "transitive_depth": 1,
-      "version_match_confidence": {
-        "level": "high",
-        "numeric": 0.95
-      }
-    },
-    {
-      "advisory": {
         "aliases": [
           "CVE-2026-25541",
           "RUSTSEC-2026-0007"
@@ -562,7 +483,7 @@
       "dep_version": "1.4.0",
       "direct": false,
       "ecosystem": "Cargo",
-      "epss": 0.0061,
+      "epss": 0.00601,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -578,7 +499,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:cargo/bytes@1.4.0",
-      "raptor_risk_estimate": 15.894104214708074,
+      "raptor_risk_estimate": 15.892617762186898,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -595,10 +516,10 @@
         "cvss_base": 55.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44200173,
+        "epss_multiplier": 0.441960393,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 15.894104214708074,
+        "final": 15.892617762186898,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4750,7 +4671,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:cargo/zip@0.6.6",
-      "raptor_risk_estimate": 8.941520845801293,
+      "raptor_risk_estimate": 15.818295136128013,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -4770,11 +4691,12 @@
         "epss_multiplier": 0.439893543,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 8.941520845801293,
+        "final": 15.818295136128013,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
       "severity": "medium",

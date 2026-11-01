@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-10-29T22:00:10Z",
+    "fetched_at": "2026-11-01T13:01:00Z",
     "git_ref": "v2.0.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of orchardcore-2.0",
@@ -322,7 +322,7 @@
           "1.2.1.0+ds-1"
         ],
         "id": "DEBIAN-CVE-2026-111497",
-        "modified": "2026-10-29T10:00:12.694256+00:00",
+        "modified": "2026-10-31T09:47:25.535412+00:00",
         "published": "2026-10-22T14:17:37.190000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-111497"
@@ -697,7 +697,7 @@
         ],
         "fixed_versions": [],
         "id": "DEBIAN-CVE-2025-5278",
-        "modified": "2026-10-15T09:47:33.262088+00:00",
+        "modified": "2026-10-31T10:00:53.709244+00:00",
         "published": "2025-05-27T21:15:23.197000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2025-5278"
@@ -3464,20 +3464,24 @@
         ],
         "fixed_versions": [],
         "id": "DEBIAN-CVE-2026-107928",
-        "modified": "2026-10-23T17:47:42.518052+00:00",
+        "modified": "2026-10-31T10:00:43.569094+00:00",
         "published": "2026-10-20T21:17:15.470000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-107928"
         ],
-        "severity": null,
+        "severity": {
+          "score": 8.1,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 8.1,
       "dep_name": "curl",
       "dep_version": "7.88.1-10+deb12u15",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00293,
+      "epss": 0.00705,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3493,7 +3497,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/curl@7.88.1-10+deb12u15",
-      "raptor_risk_estimate": 4.390614402351817,
+      "raptor_risk_estimate": 12.85713269837777,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3505,20 +3509,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 81.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440545749,
+        "epss_multiplier": 0.442438065,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.390614402351817,
+        "final": 12.85713269837777,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -3534,20 +3539,24 @@
         ],
         "fixed_versions": [],
         "id": "DEBIAN-CVE-2026-107929",
-        "modified": "2026-10-23T17:47:39.559128+00:00",
+        "modified": "2026-10-31T10:00:43.503817+00:00",
         "published": "2026-10-20T21:17:15.593000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-107929"
         ],
-        "severity": null,
+        "severity": {
+          "score": 8.1,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 8.1,
       "dep_name": "curl",
       "dep_version": "7.88.1-10+deb12u15",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00239,
+      "epss": 0.00667,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3563,7 +3572,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/curl@7.88.1-10+deb12u15",
-      "raptor_risk_estimate": 4.388142538833053,
+      "raptor_risk_estimate": 12.852060786677816,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3575,20 +3584,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 81.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44029772699999997,
+        "epss_multiplier": 0.442263531,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.388142538833053,
+        "final": 12.852060786677816,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -5617,20 +5627,24 @@
           "8.22.0-1"
         ],
         "id": "DEBIAN-CVE-2026-86409",
-        "modified": "2026-10-23T17:47:33.763391+00:00",
+        "modified": "2026-10-30T10:00:31.068555+00:00",
         "published": "2026-10-20T20:17:25.223000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-86409"
         ],
-        "severity": null,
+        "severity": {
+          "score": 8.1,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 8.1,
       "dep_name": "curl",
       "dep_version": "7.88.1-10+deb12u15",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00313,
+      "epss": 0.01096,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5646,7 +5660,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/curl@7.88.1-10+deb12u15",
-      "raptor_risk_estimate": 4.391529907358768,
+      "raptor_risk_estimate": 12.909320000343092,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -5658,20 +5672,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 81.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440637609,
+        "epss_multiplier": 0.444233928,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.391529907358768,
+        "final": 12.909320000343092,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -5687,20 +5702,24 @@
         ],
         "fixed_versions": [],
         "id": "DEBIAN-CVE-2026-86410",
-        "modified": "2026-10-23T17:47:26.474738+00:00",
+        "modified": "2026-10-30T10:00:31.281028+00:00",
         "published": "2026-10-20T20:17:25.380000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-86410"
         ],
-        "severity": null,
+        "severity": {
+          "score": 8.1,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 8.1,
       "dep_name": "curl",
       "dep_version": "7.88.1-10+deb12u15",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00252,
+      "epss": 0.00766,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5716,7 +5735,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/curl@7.88.1-10+deb12u15",
-      "raptor_risk_estimate": 4.38873761708757,
+      "raptor_risk_estimate": 12.865274451369801,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -5728,20 +5747,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 81.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440357436,
+        "epss_multiplier": 0.442718238,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.38873761708757,
+        "final": 12.865274451369801,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -5759,20 +5779,24 @@
           "8.22.0-1"
         ],
         "id": "DEBIAN-CVE-2026-86411",
-        "modified": "2026-10-23T17:47:32.365990+00:00",
+        "modified": "2026-10-30T10:00:31.323679+00:00",
         "published": "2026-10-20T20:17:25.533000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-86411"
         ],
-        "severity": null,
+        "severity": {
+          "score": 9.1,
+          "severity": "critical",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 9.1,
       "dep_name": "curl",
       "dep_version": "7.88.1-10+deb12u15",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00153,
+      "epss": 0.00433,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5788,7 +5812,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/curl@7.88.1-10+deb12u15",
-      "raptor_risk_estimate": 4.384205867303168,
+      "raptor_risk_estimate": 14.403646820205667,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -5800,20 +5824,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 90.99999999999999,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.439902729,
+        "epss_multiplier": 0.441188769,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.384205867303168,
+        "final": 14.403646820205667,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "critical",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -5829,20 +5854,24 @@
         ],
         "fixed_versions": [],
         "id": "DEBIAN-CVE-2026-86412",
-        "modified": "2026-10-23T17:47:35.604984+00:00",
+        "modified": "2026-10-30T10:00:30.008593+00:00",
         "published": "2026-10-20T20:17:25.667000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-86412"
         ],
-        "severity": null,
+        "severity": {
+          "score": 8.1,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 8.1,
       "dep_name": "curl",
       "dep_version": "7.88.1-10+deb12u15",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00266,
+      "epss": 0.00828,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5858,7 +5887,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/curl@7.88.1-10+deb12u15",
-      "raptor_risk_estimate": 4.389378470592434,
+      "raptor_risk_estimate": 12.873549675722359,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -5870,20 +5899,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 81.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44042173799999995,
+        "epss_multiplier": 0.443003004,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.389378470592434,
+        "final": 12.873549675722359,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -5899,20 +5929,24 @@
         ],
         "fixed_versions": [],
         "id": "DEBIAN-CVE-2026-86413",
-        "modified": "2026-10-23T17:47:41.398722+00:00",
+        "modified": "2026-10-31T10:02:05.913586+00:00",
         "published": "2026-10-20T20:17:25.787000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-86413"
         ],
-        "severity": null,
+        "severity": {
+          "score": 9.1,
+          "severity": "critical",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 9.1,
       "dep_name": "curl",
       "dep_version": "7.88.1-10+deb12u15",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00319,
+      "epss": 0.00731,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5928,7 +5962,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/curl@7.88.1-10+deb12u15",
-      "raptor_risk_estimate": 4.391804558860852,
+      "raptor_risk_estimate": 19.23072951063365,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -5940,20 +5974,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 90.99999999999999,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44066516699999997,
+        "epss_multiplier": 0.442557483,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.391804558860852,
+        "final": 19.23072951063365,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
-        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "critical",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -5969,20 +6004,24 @@
         ],
         "fixed_versions": [],
         "id": "DEBIAN-CVE-2026-86414",
-        "modified": "2026-10-23T17:47:22.901764+00:00",
+        "modified": "2026-10-31T10:02:06.958612+00:00",
         "published": "2026-10-20T21:17:19.947000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-86414"
         ],
-        "severity": null,
+        "severity": {
+          "score": 9.1,
+          "severity": "critical",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 9.1,
       "dep_name": "curl",
       "dep_version": "7.88.1-10+deb12u15",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00266,
+      "epss": 0.00676,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5998,7 +6037,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/curl@7.88.1-10+deb12u15",
-      "raptor_risk_estimate": 4.389378470592434,
+      "raptor_risk_estimate": 19.21975247166823,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -6010,20 +6049,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 90.99999999999999,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44042173799999995,
+        "epss_multiplier": 0.44230486799999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.389378470592434,
+        "final": 19.21975247166823,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
-        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "critical",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -6039,20 +6079,24 @@
         ],
         "fixed_versions": [],
         "id": "DEBIAN-CVE-2026-86415",
-        "modified": "2026-10-23T17:47:32.786433+00:00",
+        "modified": "2026-10-31T10:02:06.802131+00:00",
         "published": "2026-10-20T21:17:20.067000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-86415"
         ],
-        "severity": null,
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 7.5,
       "dep_name": "curl",
       "dep_version": "7.88.1-10+deb12u15",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00216,
+      "epss": 0.00419,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6068,7 +6112,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/curl@7.88.1-10+deb12u15",
-      "raptor_risk_estimate": 4.3870897080750595,
+      "raptor_risk_estimate": 8.243216407304255,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -6080,20 +6124,20 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440192088,
+        "epss_multiplier": 0.44112446699999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.3870897080750595,
+        "final": 8.243216407304255,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -6109,20 +6153,24 @@
         ],
         "fixed_versions": [],
         "id": "DEBIAN-CVE-2026-87861",
-        "modified": "2026-10-23T17:47:38.151334+00:00",
+        "modified": "2026-10-31T10:01:59.267700+00:00",
         "published": "2026-10-20T21:17:20.167000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-87861"
         ],
-        "severity": null,
+        "severity": {
+          "score": 9.1,
+          "severity": "critical",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 9.1,
       "dep_name": "curl",
       "dep_version": "7.88.1-10+deb12u15",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00266,
+      "epss": 0.00676,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6138,7 +6186,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/curl@7.88.1-10+deb12u15",
-      "raptor_risk_estimate": 4.389378470592434,
+      "raptor_risk_estimate": 19.21975247166823,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -6150,20 +6198,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 90.99999999999999,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44042173799999995,
+        "epss_multiplier": 0.44230486799999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.389378470592434,
+        "final": 19.21975247166823,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
-        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "critical",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -6179,20 +6228,24 @@
         ],
         "fixed_versions": [],
         "id": "DEBIAN-CVE-2026-87862",
-        "modified": "2026-10-23T17:47:30.216176+00:00",
+        "modified": "2026-10-31T10:02:09.928184+00:00",
         "published": "2026-10-20T21:17:20.270000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-87862"
         ],
-        "severity": null,
+        "severity": {
+          "score": 8.1,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 8.1,
       "dep_name": "curl",
       "dep_version": "7.88.1-10+deb12u15",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00314,
+      "epss": 0.00995,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6208,7 +6261,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/curl@7.88.1-10+deb12u15",
-      "raptor_risk_estimate": 4.3915756826091155,
+      "raptor_risk_estimate": 12.895839392930053,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -6220,20 +6273,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 81.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440642202,
+        "epss_multiplier": 0.443770035,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.3915756826091155,
+        "final": 12.895839392930053,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -6249,20 +6303,24 @@
         ],
         "fixed_versions": [],
         "id": "DEBIAN-CVE-2026-87863",
-        "modified": "2026-10-23T17:47:31.522989+00:00",
+        "modified": "2026-10-31T10:01:53.472892+00:00",
         "published": "2026-10-20T21:17:20.380000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-87863"
         ],
-        "severity": null,
+        "severity": {
+          "score": 8.1,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 8.1,
       "dep_name": "curl",
       "dep_version": "7.88.1-10+deb12u15",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00266,
+      "epss": 0.00828,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6278,7 +6336,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/curl@7.88.1-10+deb12u15",
-      "raptor_risk_estimate": 4.389378470592434,
+      "raptor_risk_estimate": 12.873549675722359,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -6290,20 +6348,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 81.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44042173799999995,
+        "epss_multiplier": 0.443003004,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.389378470592434,
+        "final": 12.873549675722359,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -6321,20 +6380,24 @@
           "8.22.0-1"
         ],
         "id": "DEBIAN-CVE-2026-87864",
-        "modified": "2026-10-23T17:47:31.022050+00:00",
+        "modified": "2026-10-31T10:02:11.189688+00:00",
         "published": "2026-10-20T21:17:20.497000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-87864"
         ],
-        "severity": null,
+        "severity": {
+          "score": 8.1,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 8.1,
       "dep_name": "curl",
       "dep_version": "7.88.1-10+deb12u15",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00221,
+      "epss": 0.00828,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6350,7 +6413,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/curl@7.88.1-10+deb12u15",
-      "raptor_risk_estimate": 4.387318584326798,
+      "raptor_risk_estimate": 12.873549675722359,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -6362,20 +6425,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 81.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44021505299999997,
+        "epss_multiplier": 0.443003004,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.387318584326798,
+        "final": 12.873549675722359,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -6391,20 +6455,24 @@
         ],
         "fixed_versions": [],
         "id": "DEBIAN-CVE-2026-87865",
-        "modified": "2026-10-23T17:47:47.866139+00:00",
+        "modified": "2026-10-31T10:02:11.298166+00:00",
         "published": "2026-10-20T21:17:20.693000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-87865"
         ],
-        "severity": null,
+        "severity": {
+          "score": 7.4,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 7.4,
       "dep_name": "curl",
       "dep_version": "7.88.1-10+deb12u15",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00244,
+      "epss": 0.00604,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6420,7 +6488,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/curl@7.88.1-10+deb12u15",
-      "raptor_risk_estimate": 4.388371415084789,
+      "raptor_risk_estimate": 12.66288958005486,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -6432,20 +6500,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 74.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44032069199999996,
+        "epss_multiplier": 0.441974172,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.388371415084789,
+        "final": 12.66288958005486,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -6461,20 +6530,24 @@
         ],
         "fixed_versions": [],
         "id": "DEBIAN-CVE-2026-87866",
-        "modified": "2026-10-23T17:47:48.740374+00:00",
+        "modified": "2026-10-30T10:00:32.130095+00:00",
         "published": "2026-10-20T21:17:20.833000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-87866"
         ],
-        "severity": null,
+        "severity": {
+          "score": 9.1,
+          "severity": "critical",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 9.1,
       "dep_name": "curl",
       "dep_version": "7.88.1-10+deb12u15",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00208,
+      "epss": 0.0051,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6490,7 +6563,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/curl@7.88.1-10+deb12u15",
-      "raptor_risk_estimate": 4.38672350607228,
+      "raptor_risk_estimate": 19.18662177224533,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -6502,20 +6575,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 90.99999999999999,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440155344,
+        "epss_multiplier": 0.44154243,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.38672350607228,
+        "final": 19.18662177224533,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
-        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "critical",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -7072,20 +7146,24 @@
         ],
         "fixed_versions": [],
         "id": "DEBIAN-CVE-2026-92386",
-        "modified": "2026-10-23T17:47:32.351383+00:00",
+        "modified": "2026-10-30T10:00:34.252911+00:00",
         "published": "2026-10-20T21:17:21.017000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-92386"
         ],
-        "severity": null,
+        "severity": {
+          "score": 8.1,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 8.1,
       "dep_name": "curl",
       "dep_version": "7.88.1-10+deb12u15",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00257,
+      "epss": 0.00828,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7101,7 +7179,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/curl@7.88.1-10+deb12u15",
-      "raptor_risk_estimate": 4.388966493339308,
+      "raptor_risk_estimate": 12.873549675722359,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -7113,20 +7191,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 81.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440380401,
+        "epss_multiplier": 0.443003004,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.388966493339308,
+        "final": 12.873549675722359,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -7142,20 +7221,24 @@
         ],
         "fixed_versions": [],
         "id": "DEBIAN-CVE-2026-92387",
-        "modified": "2026-10-23T17:47:51.281043+00:00",
+        "modified": "2026-10-30T10:00:34.264370+00:00",
         "published": "2026-10-20T21:17:21.133000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-92387"
         ],
-        "severity": null,
+        "severity": {
+          "score": 8.1,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 8.1,
       "dep_name": "curl",
       "dep_version": "7.88.1-10+deb12u15",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00341,
+      "epss": 0.01045,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7171,7 +7254,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/curl@7.88.1-10+deb12u15",
-      "raptor_risk_estimate": 4.3928116143684965,
+      "raptor_risk_estimate": 12.902512960956308,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -7183,20 +7266,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 81.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44076621299999996,
+        "epss_multiplier": 0.443999685,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.3928116143684965,
+        "final": 12.902512960956308,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -7212,20 +7296,24 @@
         ],
         "fixed_versions": [],
         "id": "DEBIAN-CVE-2026-92388",
-        "modified": "2026-10-23T17:47:30.686938+00:00",
+        "modified": "2026-10-31T10:02:35.631584+00:00",
         "published": "2026-10-20T21:17:21.243000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-92388"
         ],
-        "severity": null,
+        "severity": {
+          "score": 9.1,
+          "severity": "critical",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:H"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 9.1,
       "dep_name": "curl",
       "dep_version": "7.88.1-10+deb12u15",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00257,
+      "epss": 0.00699,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7241,7 +7329,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/curl@7.88.1-10+deb12u15",
-      "raptor_risk_estimate": 4.388966493339308,
+      "raptor_risk_estimate": 19.224342869781044,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -7253,20 +7341,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 90.99999999999999,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440380401,
+        "epss_multiplier": 0.44241050699999995,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.388966493339308,
+        "final": 19.224342869781044,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
-        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "critical",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -7282,20 +7371,24 @@
         ],
         "fixed_versions": [],
         "id": "DEBIAN-CVE-2026-92389",
-        "modified": "2026-10-23T17:47:34.418148+00:00",
+        "modified": "2026-10-31T10:02:36.267220+00:00",
         "published": "2026-10-20T21:17:21.457000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-92389"
         ],
-        "severity": null,
+        "severity": {
+          "score": 8.1,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 8.1,
       "dep_name": "curl",
       "dep_version": "7.88.1-10+deb12u15",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00257,
+      "epss": 0.00721,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7311,7 +7404,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/curl@7.88.1-10+deb12u15",
-      "raptor_risk_estimate": 4.388966493339308,
+      "raptor_risk_estimate": 12.859268240146173,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -7323,20 +7416,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 81.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440380401,
+        "epss_multiplier": 0.442511553,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.388966493339308,
+        "final": 12.859268240146173,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -7352,20 +7446,24 @@
         ],
         "fixed_versions": [],
         "id": "DEBIAN-CVE-2026-92390",
-        "modified": "2026-10-23T17:47:39.791659+00:00",
+        "modified": "2026-10-31T10:02:21.647168+00:00",
         "published": "2026-10-20T21:17:21.703000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-92390"
         ],
-        "severity": null,
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 7.5,
       "dep_name": "curl",
       "dep_version": "7.88.1-10+deb12u15",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00257,
+      "epss": 0.00589,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7381,7 +7479,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/curl@7.88.1-10+deb12u15",
-      "raptor_risk_estimate": 4.388966493339308,
+      "raptor_risk_estimate": 16.85167877930943,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -7393,20 +7491,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440380401,
+        "epss_multiplier": 0.441905277,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.388966493339308,
+        "final": 16.85167877930943,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
-        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -7422,20 +7521,24 @@
         ],
         "fixed_versions": [],
         "id": "DEBIAN-CVE-2026-92391",
-        "modified": "2026-10-23T17:47:30.221448+00:00",
+        "modified": "2026-10-31T10:02:23.742132+00:00",
         "published": "2026-10-20T21:17:21.920000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-92391"
         ],
-        "severity": null,
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 7.5,
       "dep_name": "curl",
       "dep_version": "7.88.1-10+deb12u15",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00358,
+      "epss": 0.01166,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7451,7 +7554,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/curl@7.88.1-10+deb12u15",
-      "raptor_risk_estimate": 4.393589793624405,
+      "raptor_risk_estimate": 16.952740396379575,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -7463,20 +7566,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44084429399999997,
+        "epss_multiplier": 0.44455543799999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.393589793624405,
+        "final": 16.952740396379575,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
-        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -7569,20 +7673,24 @@
         ],
         "fixed_versions": [],
         "id": "DEBIAN-CVE-2026-94265",
-        "modified": "2026-10-23T17:47:24.676971+00:00",
+        "modified": "2026-10-31T10:02:31.083605+00:00",
         "published": "2026-10-20T21:17:22.183000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-94265"
         ],
-        "severity": null,
+        "severity": {
+          "score": 9.1,
+          "severity": "critical",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 9.1,
       "dep_name": "curl",
       "dep_version": "7.88.1-10+deb12u15",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00338,
+      "epss": 0.00776,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7598,7 +7706,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/curl@7.88.1-10+deb12u15",
-      "raptor_risk_estimate": 4.392674288617455,
+      "raptor_risk_estimate": 19.23971072433263,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -7610,20 +7718,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 90.99999999999999,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44075243399999997,
+        "epss_multiplier": 0.44276416799999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.392674288617455,
+        "final": 19.23971072433263,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
-        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "critical",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -7639,20 +7748,24 @@
         ],
         "fixed_versions": [],
         "id": "DEBIAN-CVE-2026-94266",
-        "modified": "2026-10-23T17:47:33.497702+00:00",
+        "modified": "2026-10-31T10:01:41.196000+00:00",
         "published": "2026-10-20T21:17:22.290000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-94266"
         ],
-        "severity": null,
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 7.5,
       "dep_name": "curl",
       "dep_version": "7.88.1-10+deb12u15",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00237,
+      "epss": 0.00556,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7668,7 +7781,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/curl@7.88.1-10+deb12u15",
-      "raptor_risk_estimate": 4.388050988332357,
+      "raptor_risk_estimate": 16.845898825473522,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -7680,20 +7793,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440288541,
+        "epss_multiplier": 0.44175370799999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.388050988332357,
+        "final": 16.845898825473522,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
-        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -7939,10 +8053,11 @@
           "CVE-2026-107161"
         ],
         "fixed_versions": [
+          "2.1.28+dfsg-10+deb12u1",
           "2.1.28+dfsg1-12"
         ],
         "id": "DEBIAN-CVE-2026-107161",
-        "modified": "2026-10-19T16:01:22.631647+00:00",
+        "modified": "2026-10-31T09:47:32.555381+00:00",
         "published": "2026-10-07T20:17:10.977000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-107161"
@@ -7959,7 +8074,7 @@
       "dep_version": "2.1.28+dfsg-10",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00337,
+      "epss": 0.00376,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7975,7 +8090,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/cyrus-sasl2@2.1.28+dfsg-10",
-      "raptor_risk_estimate": 8.236178462563325,
+      "raptor_risk_estimate": 8.239525777744987,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -7990,10 +8105,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440747841,
+        "epss_multiplier": 0.440926968,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 8.236178462563325,
+        "final": 8.239525777744987,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -11726,7 +11841,7 @@
           "14.4.0-3"
         ],
         "id": "DEBIAN-CVE-2026-102010",
-        "modified": "2026-10-29T09:47:45.255701+00:00",
+        "modified": "2026-11-01T09:47:30.340528+00:00",
         "published": "2026-09-28T19:16:48.830000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-102010"
@@ -11803,7 +11918,7 @@
           "14.4.0-3"
         ],
         "id": "DEBIAN-CVE-2026-95619",
-        "modified": "2026-10-27T10:02:21.628762+00:00",
+        "modified": "2026-11-01T09:47:26.072467+00:00",
         "published": "2026-09-22T13:17:13.300000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-95619"
@@ -16398,6 +16513,80 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-84243"
+        ],
+        "fixed_versions": [],
+        "id": "DEBIAN-CVE-2026-84243",
+        "modified": "2026-10-31T07:47:31.485545+00:00",
+        "published": "2026-10-30T18:18:13.650000+00:00",
+        "references": [
+          "https://security-tracker.debian.org/tracker/CVE-2026-84243"
+        ],
+        "severity": {
+          "score": 7.0,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": ""
+      },
+      "cvss_score": 7.0,
+      "dep_name": "glibc",
+      "dep_version": "2.36-9+deb12u14",
+      "direct": true,
+      "ecosystem": "Debian",
+      "epss": 0.00297,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:Debian:glibc:2.36-9+deb12u14:DEBIAN-CVE-2026-84243",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:deb/glibc@2.36-9+deb12u14",
+      "raptor_risk_estimate": 7.683895630868113,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "reachability not implemented for Debian"
+        },
+        "evidence": [],
+        "verdict": "not_evaluated"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 70.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.440564121,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 7.683895630868113,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.6135,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2026-8674"
         ],
         "fixed_versions": [
@@ -18714,7 +18903,7 @@
           "3.8.13-1"
         ],
         "id": "DEBIAN-CVE-2026-42009",
-        "modified": "2026-10-27T09:47:34.090126+00:00",
+        "modified": "2026-10-31T09:47:37.556289+00:00",
         "published": "2026-05-18T13:16:32.707000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-42009"
@@ -18792,7 +18981,7 @@
           "3.8.13-1"
         ],
         "id": "DEBIAN-CVE-2026-42010",
-        "modified": "2026-10-27T09:47:32.780629+00:00",
+        "modified": "2026-10-31T09:47:31.418345+00:00",
         "published": "2026-05-07T12:16:17.977000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-42010"
@@ -18870,7 +19059,7 @@
           "3.8.13-1"
         ],
         "id": "DEBIAN-CVE-2026-42011",
-        "modified": "2026-10-29T09:47:40.844086+00:00",
+        "modified": "2026-10-31T09:47:28.612812+00:00",
         "published": "2026-05-07T15:16:09.760000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-42011"
@@ -18948,7 +19137,7 @@
           "3.8.13-1"
         ],
         "id": "DEBIAN-CVE-2026-42012",
-        "modified": "2026-10-29T09:47:40.432476+00:00",
+        "modified": "2026-10-31T09:47:34.512662+00:00",
         "published": "2026-05-26T22:16:41.913000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-42012"
@@ -19026,7 +19215,7 @@
           "3.8.13-1"
         ],
         "id": "DEBIAN-CVE-2026-42013",
-        "modified": "2026-10-29T09:47:27.406227+00:00",
+        "modified": "2026-10-31T09:47:22.979492+00:00",
         "published": "2026-05-26T22:16:42.050000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-42013"
@@ -19260,7 +19449,7 @@
           "3.8.13-1"
         ],
         "id": "DEBIAN-CVE-2026-5260",
-        "modified": "2026-10-29T09:47:27.754406+00:00",
+        "modified": "2026-10-31T09:47:23.635748+00:00",
         "published": "2026-05-26T22:16:44.170000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-5260"
@@ -19560,7 +19749,7 @@
         ],
         "fixed_versions": [],
         "id": "DEBIAN-CVE-2026-88648",
-        "modified": "2026-10-23T18:04:42.582120+00:00",
+        "modified": "2026-10-30T09:49:03.025219+00:00",
         "published": "2026-10-08T19:20:52.703000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-88648"
@@ -19577,7 +19766,7 @@
       "dep_version": "3.7.9-2+deb12u7",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00203,
+      "epss": 0.00195,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -19593,7 +19782,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/gnutls28@3.7.9-2+deb12u7",
-      "raptor_risk_estimate": 4.057507532584002,
+      "raptor_risk_estimate": 4.05716879573143,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -19608,10 +19797,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44013237899999996,
+        "epss_multiplier": 0.440095635,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.057507532584002,
+        "final": 4.05716879573143,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -20923,7 +21112,7 @@
           "1.22.1-3"
         ],
         "id": "DEBIAN-CVE-2026-11850",
-        "modified": "2026-10-01T03:02:01.407156+00:00",
+        "modified": "2026-11-01T09:47:40.013918+00:00",
         "published": "2026-06-11T10:16:21.217000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-11850"
@@ -22892,7 +23081,7 @@
           "7.5.0-1"
         ],
         "id": "DEBIAN-CVE-2023-44487",
-        "modified": "2026-10-26T18:02:11.801128+00:00",
+        "modified": "2026-10-30T18:00:11.780437+00:00",
         "published": "2023-10-10T14:15:10.883000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2023-44487"
@@ -23571,7 +23760,7 @@
         ],
         "fixed_versions": [],
         "id": "DEBIAN-CVE-2026-22185",
-        "modified": "2026-10-01T03:02:58.560357+00:00",
+        "modified": "2026-10-30T09:49:19.499810+00:00",
         "published": "2026-01-07T21:16:01.733000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-22185"
@@ -25440,7 +25629,7 @@
       "dep_version": "3.0.22-1~deb12u2",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00443,
+      "epss": 0.00453,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -25456,7 +25645,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/openssl@3.0.22-1~deb12u2",
-      "raptor_risk_estimate": 7.145906121093906,
+      "raptor_risk_estimate": 7.146649968912053,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -25471,10 +25660,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44123469899999995,
+        "epss_multiplier": 0.441280629,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.145906121093906,
+        "final": 7.146649968912053,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -27143,7 +27332,7 @@
       "dep_version": "3.0.22-1~deb12u2",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00479,
+      "epss": 0.00497,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -27159,7 +27348,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/openssl@3.0.22-1~deb12u2",
-      "raptor_risk_estimate": 5.828845393564299,
+      "raptor_risk_estimate": 5.829937133285088,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -27174,10 +27363,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44140004699999996,
+        "epss_multiplier": 0.44148272099999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 5.828845393564299,
+        "final": 5.829937133285088,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -27455,7 +27644,7 @@
       "dep_version": "3.0.22-1~deb12u2",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00428,
+      "epss": 0.00444,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -27471,7 +27660,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/openssl@3.0.22-1~deb12u2",
-      "raptor_risk_estimate": 4.067034506562576,
+      "raptor_risk_estimate": 4.067711980267718,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -27486,10 +27675,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441165804,
+        "epss_multiplier": 0.441239292,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.067034506562576,
+        "final": 4.067711980267718,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -27532,7 +27721,7 @@
       "dep_version": "3.0.22-1~deb12u2",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00696,
+      "epss": 0.00722,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -27548,7 +27737,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/openssl@3.0.22-1~deb12u2",
-      "raptor_risk_estimate": 8.266990927953486,
+      "raptor_risk_estimate": 8.269222471407929,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -27563,10 +27752,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44239672799999996,
+        "epss_multiplier": 0.442516146,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 8.266990927953486,
+        "final": 8.269222471407929,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -29139,7 +29328,7 @@
           "0.26.2-2"
         ],
         "id": "DEBIAN-CVE-2026-2100",
-        "modified": "2026-10-15T09:47:41.793421+00:00",
+        "modified": "2026-10-30T09:49:20.200594+00:00",
         "published": "2026-03-26T21:17:04.247000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-2100"
@@ -34104,7 +34293,7 @@
       "dep_version": "252.39-1~deb12u2",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00147,
+      "epss": 0.0015,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -34120,7 +34309,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/systemd@252.39-1~deb12u2",
-      "raptor_risk_estimate": 7.343084786466813,
+      "raptor_risk_estimate": 7.343314807099809,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -34135,10 +34324,10 @@
         "cvss_base": 67.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.43987517099999995,
+        "epss_multiplier": 0.43988895,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.343084786466813,
+        "final": 7.343314807099809,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -34386,7 +34575,7 @@
         ],
         "fixed_versions": [],
         "id": "DEBIAN-CVE-2026-18477",
-        "modified": "2026-09-23T09:00:13.311516+00:00",
+        "modified": "2026-10-31T10:01:23.566846+00:00",
         "published": "2026-08-03T17:16:33.897000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-18477"
@@ -34460,7 +34649,7 @@
         ],
         "fixed_versions": [],
         "id": "DEBIAN-CVE-2026-18508",
-        "modified": "2026-09-23T09:00:13.220992+00:00",
+        "modified": "2026-10-31T10:00:58.791594+00:00",
         "published": "2026-08-03T16:16:28.387000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-18508"
@@ -34761,7 +34950,7 @@
           "2.42.2-1"
         ],
         "id": "DEBIAN-CVE-2026-13595",
-        "modified": "2026-10-01T03:02:14.087002+00:00",
+        "modified": "2026-10-31T09:47:33.644271+00:00",
         "published": "2026-06-29T09:16:28.303000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-13595"
@@ -34855,7 +35044,7 @@
       "dep_version": "1:2.38.1-5+deb12u3",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00151,
+      "epss": 0.00157,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -34871,7 +35060,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/util-linux@1:2.38.1-5+deb12u3",
-      "raptor_risk_estimate": 12.603278007811086,
+      "raptor_risk_estimate": 12.60406756505935,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -34886,10 +35075,10 @@
         "cvss_base": 47.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.439893543,
+        "epss_multiplier": 0.439921101,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 12.603278007811086,
+        "final": 12.60406756505935,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -34932,7 +35121,7 @@
       "dep_version": "1:2.38.1-5+deb12u3",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00436,
+      "epss": 0.00444,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -34948,7 +35137,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/util-linux@1:2.38.1-5+deb12u3",
-      "raptor_risk_estimate": 5.82623734867575,
+      "raptor_risk_estimate": 5.826722566329434,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -34963,10 +35152,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44120254799999997,
+        "epss_multiplier": 0.441239292,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 5.82623734867575,
+        "final": 5.826722566329434,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -35222,7 +35411,7 @@
           "2.42.4-1"
         ],
         "id": "DEBIAN-CVE-2026-78408",
-        "modified": "2026-10-23T17:47:24.774210+00:00",
+        "modified": "2026-10-31T09:47:33.678548+00:00",
         "published": "2026-09-02T16:17:23.687000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-78408"
@@ -35299,7 +35488,7 @@
           "2.42.3-1"
         ],
         "id": "DEBIAN-CVE-2026-78409",
-        "modified": "2026-10-23T17:47:27.969535+00:00",
+        "modified": "2026-10-31T19:00:41.451351+00:00",
         "published": "2026-09-02T16:17:23.833000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-78409"
@@ -35376,7 +35565,7 @@
           "2.42.3-1"
         ],
         "id": "DEBIAN-CVE-2026-78410",
-        "modified": "2026-10-23T17:47:40.737419+00:00",
+        "modified": "2026-10-31T09:47:28.394020+00:00",
         "published": "2026-09-02T16:17:23.983000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-78410"
@@ -35682,7 +35871,7 @@
           "2.42.2-1"
         ],
         "id": "DEBIAN-CVE-2026-13595",
-        "modified": "2026-10-01T03:02:14.087002+00:00",
+        "modified": "2026-10-31T09:47:33.644271+00:00",
         "published": "2026-06-29T09:16:28.303000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-13595"
@@ -35776,7 +35965,7 @@
       "dep_version": "2.38.1-5+deb12u3",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00151,
+      "epss": 0.00157,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -35792,7 +35981,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/util-linux@2.38.1-5+deb12u3",
-      "raptor_risk_estimate": 12.603278007811086,
+      "raptor_risk_estimate": 12.60406756505935,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -35807,10 +35996,10 @@
         "cvss_base": 47.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.439893543,
+        "epss_multiplier": 0.439921101,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 12.603278007811086,
+        "final": 12.60406756505935,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -35853,7 +36042,7 @@
       "dep_version": "2.38.1-5+deb12u3",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00436,
+      "epss": 0.00444,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -35869,7 +36058,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/util-linux@2.38.1-5+deb12u3",
-      "raptor_risk_estimate": 5.82623734867575,
+      "raptor_risk_estimate": 5.826722566329434,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -35884,10 +36073,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44120254799999997,
+        "epss_multiplier": 0.441239292,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 5.82623734867575,
+        "final": 5.826722566329434,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -36298,7 +36487,7 @@
           "2.42.4-1"
         ],
         "id": "DEBIAN-CVE-2026-78408",
-        "modified": "2026-10-23T17:47:24.774210+00:00",
+        "modified": "2026-10-31T09:47:33.678548+00:00",
         "published": "2026-09-02T16:17:23.687000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-78408"
@@ -36375,7 +36564,7 @@
           "2.42.3-1"
         ],
         "id": "DEBIAN-CVE-2026-78409",
-        "modified": "2026-10-23T17:47:27.969535+00:00",
+        "modified": "2026-10-31T19:00:41.451351+00:00",
         "published": "2026-09-02T16:17:23.833000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-78409"
@@ -36452,7 +36641,7 @@
           "2.42.3-1"
         ],
         "id": "DEBIAN-CVE-2026-78410",
-        "modified": "2026-10-23T17:47:40.737419+00:00",
+        "modified": "2026-10-31T09:47:28.394020+00:00",
         "published": "2026-09-02T16:17:23.983000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-78410"
@@ -36756,7 +36945,7 @@
           "1.25.0-3"
         ],
         "id": "DEBIAN-CVE-2026-15146",
-        "modified": "2026-10-26T11:47:28.760459+00:00",
+        "modified": "2026-10-30T09:49:15.904079+00:00",
         "published": "2026-07-10T19:17:20.307000+00:00",
         "references": [
           "https://security-tracker.debian.org/tracker/CVE-2026-15146"
@@ -36773,7 +36962,7 @@
       "dep_version": "1.21.3-1+deb12u1",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00165,
+      "epss": 0.00166,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -36789,7 +36978,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/wget@1.21.3-1+deb12u1",
-      "raptor_risk_estimate": 6.4675138762033235,
+      "raptor_risk_estimate": 6.467581394697586,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -36804,10 +36993,10 @@
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.43995784499999996,
+        "epss_multiplier": 0.43996243799999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 6.4675138762033235,
+        "final": 6.467581394697586,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -37374,7 +37563,7 @@
       "dep_version": "5.4.1-1+deb12u2",
       "direct": true,
       "ecosystem": "Debian",
-      "epss": 0.00514,
+      "epss": 0.00534,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -37390,7 +37579,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/xz-utils@5.4.1-1+deb12u2",
-      "raptor_risk_estimate": 5.830968220799165,
+      "raptor_risk_estimate": 5.832181264933373,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -37405,10 +37594,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441560802,
+        "epss_multiplier": 0.441652662,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 5.830968220799165,
+        "final": 5.832181264933373,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -37688,7 +37877,7 @@
       "dep_version": "8.2.871-beta",
       "direct": true,
       "ecosystem": "NuGet",
-      "epss": 0.00278,
+      "epss": 0.00274,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -37704,7 +37893,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:nuget/HtmlSanitizer@8.2.871-beta",
-      "raptor_risk_estimate": 8.008677257205086,
+      "raptor_risk_estimate": 8.00834322054179,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -37719,10 +37908,10 @@
         "cvss_base": 63.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440476854,
+        "epss_multiplier": 0.440458482,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 8.008677257205086,
+        "final": 8.00834322054179,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -39250,12 +39439,18 @@
           "1.0.3-1ubuntu1.3+esm1",
           "1.0.7-6ubuntu0.1+esm1",
           "1.0.9-2ubuntu0.1",
+          "8.0.133-8.0.33-0ubuntu1~22.04.1",
           "1.1.0-2ubuntu0.1",
+          "10.0.114-10.0.14-0ubuntu1~24.04.1",
+          "8.0.133-8.0.33-0ubuntu1~24.04.1",
           "1.2.0-4ubuntu0.1",
-          "1.2.0-3ubuntu0.1"
+          "10.0.114-10.0.14-0ubuntu1~26.10.1",
+          "11.0.100-11.0.0~rc3-0ubuntu1~26.10.1",
+          "1.2.0-3ubuntu0.1",
+          "10.0.114-10.0.14-0ubuntu1~26.04.1"
         ],
         "id": "UBUNTU-CVE-2026-111497",
-        "modified": "2026-10-29T20:04:29.218368+00:00",
+        "modified": "2026-10-30T03:11:59.566204+00:00",
         "published": "2026-10-23T00:00:00+00:00",
         "references": [
           "https://ubuntu.com/security/CVE-2026-111497",
@@ -41498,7 +41693,7 @@
       "dep_version": "7.68.0-1ubuntu2.11",
       "direct": true,
       "ecosystem": "Ubuntu",
-      "epss": 0.00358,
+      "epss": 0.01166,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -41514,7 +41709,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/curl@7.68.0-1ubuntu2.11",
-      "raptor_risk_estimate": 4.393589793624405,
+      "raptor_risk_estimate": 16.952740396379575,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -41529,14 +41724,15 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44084429399999997,
+        "epss_multiplier": 0.44455543799999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.393589793624405,
+        "final": 16.952740396379575,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
-        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
       "severity": "medium",
@@ -41660,7 +41856,7 @@
       "dep_version": "7.68.0-1ubuntu2.11",
       "direct": true,
       "ecosystem": "Ubuntu",
-      "epss": 0.00257,
+      "epss": 0.00589,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -41676,7 +41872,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/curl@7.68.0-1ubuntu2.11",
-      "raptor_risk_estimate": 4.388966493339308,
+      "raptor_risk_estimate": 16.85167877930943,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -41691,14 +41887,15 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440380401,
+        "epss_multiplier": 0.441905277,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.388966493339308,
+        "final": 16.85167877930943,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
-        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
       "severity": "medium",
@@ -41895,7 +42092,7 @@
       "dep_version": "2.1.27+dfsg-2ubuntu0.1",
       "direct": true,
       "ecosystem": "Ubuntu",
-      "epss": 0.00337,
+      "epss": 0.00376,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -41911,7 +42108,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/cyrus-sasl2@2.1.27+dfsg-2ubuntu0.1",
-      "raptor_risk_estimate": 8.236178462563325,
+      "raptor_risk_estimate": 8.239525777744987,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -41926,10 +42123,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440747841,
+        "epss_multiplier": 0.440926968,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 8.236178462563325,
+        "final": 8.239525777744987,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -44040,6 +44237,315 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-114690"
+        ],
+        "fixed_versions": [],
+        "id": "UBUNTU-CVE-2026-114690",
+        "modified": "2026-10-31T03:30:13.047994+00:00",
+        "published": "2026-10-30T00:00:00+00:00",
+        "references": [
+          "https://ubuntu.com/security/CVE-2026-114690",
+          "https://www.cve.org/CVERecord?id=CVE-2026-114690",
+          "https://access.redhat.com/security/cve/CVE-2026-114690",
+          "https://bugzilla.redhat.com/show_bug.cgi?id=2478652"
+        ],
+        "severity": {
+          "score": 6.2,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": ""
+      },
+      "cvss_score": 6.2,
+      "dep_name": "gcc-10",
+      "dep_version": "10.3.0-1ubuntu1~20.04",
+      "direct": true,
+      "ecosystem": "Ubuntu",
+      "epss": 0.00107,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:Ubuntu:gcc-10:10.3.0-1ubuntu1~20.04:UBUNTU-CVE-2026-114690",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:deb/gcc-10@10.3.0-1ubuntu1~20.04",
+      "raptor_risk_estimate": 6.792255318970132,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "reachability not implemented for Ubuntu"
+        },
+        "evidence": [],
+        "verdict": "not_evaluated"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 62.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.43969145099999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 6.792255318970132,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.6135,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-114691"
+        ],
+        "fixed_versions": [],
+        "id": "UBUNTU-CVE-2026-114691",
+        "modified": "2026-10-31T03:30:13.026276+00:00",
+        "published": "2026-10-30T00:00:00+00:00",
+        "references": [
+          "https://ubuntu.com/security/CVE-2026-114691",
+          "https://www.cve.org/CVERecord?id=CVE-2026-114691",
+          "https://access.redhat.com/security/cve/CVE-2026-114691",
+          "https://bugzilla.redhat.com/show_bug.cgi?id=2478508"
+        ],
+        "severity": {
+          "score": 5.9,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": ""
+      },
+      "cvss_score": 5.9,
+      "dep_name": "gcc-10",
+      "dep_version": "10.3.0-1ubuntu1~20.04",
+      "direct": true,
+      "ecosystem": "Ubuntu",
+      "epss": 0.00395,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:Ubuntu:gcc-10:10.3.0-1ubuntu1~20.04:UBUNTU-CVE-2026-114691",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:deb/gcc-10@10.3.0-1ubuntu1~20.04",
+      "raptor_risk_estimate": 6.483043129883712,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "reachability not implemented for Ubuntu"
+        },
+        "evidence": [],
+        "verdict": "not_evaluated"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 59.00000000000001,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.441014235,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 6.483043129883712,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.6135,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-115455"
+        ],
+        "fixed_versions": [],
+        "id": "UBUNTU-CVE-2026-115455",
+        "modified": "2026-10-31T03:30:08.925799+00:00",
+        "published": "2026-10-30T00:00:00+00:00",
+        "references": [
+          "https://ubuntu.com/security/CVE-2026-115455",
+          "https://www.cve.org/CVERecord?id=CVE-2026-115455",
+          "https://access.redhat.com/security/cve/CVE-2026-115455",
+          "https://bugzilla.redhat.com/show_bug.cgi?id=2562933",
+          "https://gcc.gnu.org/cgit/gcc/commit/?id=5d419c69ce2e6b86d7da75f18736904885674219"
+        ],
+        "severity": {
+          "score": 6.5,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:H"
+        },
+        "summary": ""
+      },
+      "cvss_score": 6.5,
+      "dep_name": "gcc-10",
+      "dep_version": "10.3.0-1ubuntu1~20.04",
+      "direct": true,
+      "ecosystem": "Ubuntu",
+      "epss": 0.00303,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:Ubuntu:gcc-10:10.3.0-1ubuntu1~20.04:UBUNTU-CVE-2026-115455",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:deb/gcc-10@10.3.0-1ubuntu1~20.04",
+      "raptor_risk_estimate": 7.13549225163985,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "reachability not implemented for Ubuntu"
+        },
+        "evidence": [],
+        "verdict": "not_evaluated"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 65.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.44059167899999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 7.13549225163985,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.6135,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-115456"
+        ],
+        "fixed_versions": [],
+        "id": "UBUNTU-CVE-2026-115456",
+        "modified": "2026-10-31T03:30:12.734012+00:00",
+        "published": "2026-10-30T00:00:00+00:00",
+        "references": [
+          "https://ubuntu.com/security/CVE-2026-115456",
+          "https://www.cve.org/CVERecord?id=CVE-2026-115456",
+          "https://access.redhat.com/security/cve/CVE-2026-115456",
+          "https://bugzilla.redhat.com/show_bug.cgi?id=2563044"
+        ],
+        "severity": {
+          "score": 3.7,
+          "severity": "low",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "summary": ""
+      },
+      "cvss_score": 3.7,
+      "dep_name": "gcc-10",
+      "dep_version": "10.3.0-1ubuntu1~20.04",
+      "direct": true,
+      "ecosystem": "Ubuntu",
+      "epss": 0.00221,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:Ubuntu:gcc-10:10.3.0-1ubuntu1~20.04:UBUNTU-CVE-2026-115456",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:deb/gcc-10@10.3.0-1ubuntu1~20.04",
+      "raptor_risk_estimate": 4.0582696905022875,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "reachability not implemented for Ubuntu"
+        },
+        "evidence": [],
+        "verdict": "not_evaluated"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 37.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.44021505299999997,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 4.0582696905022875,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.6135,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "low",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2026-95619"
         ],
         "fixed_versions": [
@@ -44606,7 +45112,7 @@
       "dep_version": "2.31-0ubuntu9.9",
       "direct": true,
       "ecosystem": "Ubuntu",
-      "epss": 0.02221,
+      "epss": 0.01926,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -44622,7 +45128,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/glibc@2.31-0ubuntu9.9",
-      "raptor_risk_estimate": 6.6063319004071515,
+      "raptor_risk_estimate": 6.5864139445996965,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -44637,10 +45143,10 @@
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.449401053,
+        "epss_multiplier": 0.448046118,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 6.6063319004071515,
+        "final": 6.5864139445996965,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -47693,7 +48199,7 @@
       "dep_version": "3.6.13-2ubuntu1.6",
       "direct": true,
       "ecosystem": "Ubuntu",
-      "epss": 0.00203,
+      "epss": 0.00195,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -47709,7 +48215,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/gnutls28@3.6.13-2ubuntu1.6",
-      "raptor_risk_estimate": 4.057507532584002,
+      "raptor_risk_estimate": 4.05716879573143,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -47724,10 +48230,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44013237899999996,
+        "epss_multiplier": 0.440095635,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.057507532584002,
+        "final": 4.05716879573143,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -52048,7 +52554,7 @@
       "dep_version": "2:3.49.1-1ubuntu1.7",
       "direct": true,
       "ecosystem": "Ubuntu",
-      "epss": 0.00949,
+      "epss": 0.00956,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -52064,7 +52570,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/nss@2:3.49.1-1ubuntu1.7",
-      "raptor_risk_estimate": 9.725414526475511,
+      "raptor_risk_estimate": 9.726119465330864,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -52079,10 +52585,10 @@
         "cvss_base": 88.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44355875699999997,
+        "epss_multiplier": 0.443590908,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 9.725414526475511,
+        "final": 9.726119465330864,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -58052,7 +58558,7 @@
           "3.46.1-9ubuntu0.1"
         ],
         "id": "UBUNTU-CVE-2026-11822",
-        "modified": "2026-09-17T02:45:07.271443+00:00",
+        "modified": "2026-10-31T03:30:09.471353+00:00",
         "published": "2026-06-09T20:16:00+00:00",
         "references": [
           "https://ubuntu.com/security/CVE-2026-11822",
@@ -58062,18 +58568,18 @@
           "https://ubuntu.com/security/notices/USN-8480-1"
         ],
         "severity": {
-          "score": 8.5,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:P/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
+          "score": 6.8,
+          "severity": "medium",
+          "vector": "CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:P/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N"
         },
         "summary": ""
       },
-      "cvss_score": 8.5,
+      "cvss_score": 6.8,
       "dep_name": "sqlite3",
       "dep_version": "3.31.1-4ubuntu0.3",
       "direct": true,
       "ecosystem": "Ubuntu",
-      "epss": 0.00364,
+      "epss": 0.00195,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -58089,7 +58595,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/sqlite3@3.31.1-4ubuntu0.3",
-      "raptor_risk_estimate": 9.33696194589379,
+      "raptor_risk_estimate": 7.456418327290196,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -58101,20 +58607,20 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 85.0,
+        "cvss_base": 68.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44087185199999995,
+        "epss_multiplier": 0.440095635,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 9.33696194589379,
+        "final": 7.456418327290196,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "high",
+      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -59936,7 +60442,7 @@
       "dep_version": "2.34-0.1ubuntu9.3",
       "direct": true,
       "ecosystem": "Ubuntu",
-      "epss": 0.00151,
+      "epss": 0.00157,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -59952,7 +60458,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/util-linux@2.34-0.1ubuntu9.3",
-      "raptor_risk_estimate": 12.603278007811086,
+      "raptor_risk_estimate": 12.60406756505935,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -59967,10 +60473,10 @@
         "cvss_base": 47.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.439893543,
+        "epss_multiplier": 0.439921101,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 12.603278007811086,
+        "final": 12.60406756505935,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -60648,7 +61154,7 @@
       "dep_version": "5.2.4-1ubuntu1.1",
       "direct": true,
       "ecosystem": "Ubuntu",
-      "epss": 0.00514,
+      "epss": 0.00534,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -60664,7 +61170,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/xz-utils@5.2.4-1ubuntu1.1",
-      "raptor_risk_estimate": 5.830968220799165,
+      "raptor_risk_estimate": 5.832181264933373,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -60679,10 +61185,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441560802,
+        "epss_multiplier": 0.441652662,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 5.830968220799165,
+        "final": 5.832181264933373,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -63433,7 +63939,7 @@
       "dep_version": "0.21.4",
       "direct": true,
       "ecosystem": "npm",
-      "epss": 0.00708,
+      "epss": 0.00729,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -63449,7 +63955,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/axios@0.21.4",
-      "raptor_risk_estimate": 19.543522950365947,
+      "raptor_risk_estimate": 19.547783372024696,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -63464,10 +63970,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.442451844,
+        "epss_multiplier": 0.442548297,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 19.543522950365947,
+        "final": 19.547783372024696,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -64035,7 +64541,7 @@
       "dep_version": "1.1.11",
       "direct": false,
       "ecosystem": "npm",
-      "epss": 0.0042,
+      "epss": 0.00428,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -64051,7 +64557,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/brace-expansion@1.1.11",
-      "raptor_risk_estimate": 5.195524700836083,
+      "raptor_risk_estimate": 5.195957463890976,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -64066,10 +64572,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44112905999999996,
+        "epss_multiplier": 0.441165804,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 5.195524700836083,
+        "final": 5.195957463890976,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -64122,7 +64628,7 @@
       "dep_version": "1.1.11",
       "direct": false,
       "ecosystem": "npm",
-      "epss": 0.00455,
+      "epss": 0.00491,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -64138,7 +64644,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/brace-expansion@1.1.11",
-      "raptor_risk_estimate": 7.354836847926283,
+      "raptor_risk_estimate": 7.357592650398475,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -64153,10 +64659,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.441289815,
+        "epss_multiplier": 0.441455163,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.354836847926283,
+        "final": 7.357592650398475,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -64730,7 +65236,7 @@
       "dep_version": "2.0.1",
       "direct": false,
       "ecosystem": "npm",
-      "epss": 0.0042,
+      "epss": 0.00428,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -64746,7 +65252,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/brace-expansion@2.0.1",
-      "raptor_risk_estimate": 5.195524700836083,
+      "raptor_risk_estimate": 5.195957463890976,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -64761,10 +65267,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44112905999999996,
+        "epss_multiplier": 0.441165804,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 5.195524700836083,
+        "final": 5.195957463890976,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -64817,7 +65323,7 @@
       "dep_version": "2.0.1",
       "direct": false,
       "ecosystem": "npm",
-      "epss": 0.00455,
+      "epss": 0.00491,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -64833,7 +65339,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/brace-expansion@2.0.1",
-      "raptor_risk_estimate": 7.354836847926283,
+      "raptor_risk_estimate": 7.357592650398475,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -64848,10 +65354,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.441289815,
+        "epss_multiplier": 0.441455163,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.354836847926283,
+        "final": 7.357592650398475,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -66804,6 +67310,95 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-118773"
+        ],
+        "cwe_ids": [
+          "CWE-400"
+        ],
+        "fixed_versions": [
+          "14.0.2"
+        ],
+        "id": "GHSA-3g3m-2fjr-6pw4",
+        "modified": "2026-10-30T23:15:04.503965+00:00",
+        "published": "2026-10-30T23:09:11+00:00",
+        "references": [
+          "https://github.com/isaacs/node-glob/security/advisories/GHSA-3g3m-2fjr-6pw4",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-118773",
+          "https://github.com/isaacs/node-glob/commit/4682e8c9babee1b385202ede36389634e12076d7",
+          "https://github.com/isaacs/node-glob",
+          "https://github.com/isaacs/node-glob/releases/tag/v14.0.2"
+        ],
+        "severity": {
+          "score": 6.3,
+          "severity": "medium",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
+        },
+        "summary": "Glob: AbortSignal cancellation bypass allows post-timeout filesystem traversal"
+      },
+      "cvss_score": 6.3,
+      "dep_name": "glob",
+      "dep_version": "10.3.12",
+      "direct": true,
+      "ecosystem": "npm",
+      "epss": 0.0035,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:npm:glob:10.3.12:GHSA-3g3m-2fjr-6pw4",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:npm/glob@10.3.12",
+      "raptor_risk_estimate": 11.27844687335625,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import/require found in non-test source"
+        },
+        "evidence": [
+          "gulpfile.js:2",
+          ".scripts/cleanup.js:5",
+          ".scripts/install.js:5",
+          ".scripts/project.js:23",
+          ".scripts/update.js:5"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 63.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.44080755,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 11.27844687335625,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2025-64756"
         ],
         "cwe_ids": [
@@ -67015,7 +67610,7 @@
       "dep_version": "3.8.2",
       "direct": true,
       "ecosystem": "npm",
-      "epss": 0.01015,
+      "epss": 0.00904,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -67031,7 +67626,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/immutable@3.8.2",
-      "raptor_risk_estimate": 12.553681019315977,
+      "raptor_risk_estimate": 12.539261770017024,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -67046,10 +67641,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44386189499999995,
+        "epss_multiplier": 0.443352072,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 12.553681019315977,
+        "final": 12.539261770017024,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -67276,7 +67871,7 @@
       "dep_version": "4.0.0",
       "direct": false,
       "ecosystem": "npm",
-      "epss": 0.01015,
+      "epss": 0.00904,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -67292,7 +67887,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/immutable@4.0.0",
-      "raptor_risk_estimate": 9.666334384873302,
+      "raptor_risk_estimate": 9.655231562913109,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -67307,10 +67902,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44386189499999995,
+        "epss_multiplier": 0.443352072,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 9.666334384873302,
+        "final": 9.655231562913109,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -67537,7 +68132,7 @@
       "dep_version": "4.3.0",
       "direct": false,
       "ecosystem": "npm",
-      "epss": 0.01015,
+      "epss": 0.00904,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -67553,7 +68148,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/immutable@4.3.0",
-      "raptor_risk_estimate": 9.666334384873302,
+      "raptor_risk_estimate": 9.655231562913109,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -67568,10 +68163,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44386189499999995,
+        "epss_multiplier": 0.443352072,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 9.666334384873302,
+        "final": 9.655231562913109,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -67872,7 +68467,7 @@
       "dep_version": "3.0.3",
       "direct": false,
       "ecosystem": "npm",
-      "epss": 0.00644,
+      "epss": 0.00467,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -67888,7 +68483,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/linkify-it@3.0.3",
-      "raptor_risk_estimate": 15.038514882289247,
+      "raptor_risk_estimate": 15.010864745723957,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -67903,10 +68498,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.442157892,
+        "epss_multiplier": 0.441344931,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 15.038514882289247,
+        "final": 15.010864745723957,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -69548,6 +70143,89 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-118764"
+        ],
+        "cwe_ids": [
+          "CWE-405"
+        ],
+        "fixed_versions": [
+          "11.0.1"
+        ],
+        "id": "GHSA-g3hv-75wg-m249",
+        "modified": "2026-10-30T23:15:07.420159+00:00",
+        "published": "2026-10-30T23:09:55+00:00",
+        "references": [
+          "https://github.com/isaacs/minimatch/security/advisories/GHSA-g3hv-75wg-m249",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-118764",
+          "https://github.com/isaacs/minimatch/commit/77a0f5c4b80bdc641c3c930a1d9edf5ad2db57f8",
+          "https://github.com/isaacs/minimatch",
+          "https://github.com/isaacs/minimatch/releases/tag/v11.0.1"
+        ],
+        "severity": {
+          "score": 6.9,
+          "severity": "medium",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
+        },
+        "summary": "minimatch has potential denial of service via globparts amplification"
+      },
+      "cvss_score": 6.9,
+      "dep_name": "minimatch",
+      "dep_version": "3.0.4",
+      "direct": false,
+      "ecosystem": "npm",
+      "epss": 0.00291,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:npm:minimatch:3.0.4:GHSA-g3hv-75wg-m249",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:npm/minimatch@3.0.4",
+      "raptor_risk_estimate": 6.75490002573094,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'minimatch' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 69.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.440536563,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 6.75490002573094,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.71062,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2026-27904"
         ],
         "cwe_ids": [
@@ -69817,6 +70495,89 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-118764"
+        ],
+        "cwe_ids": [
+          "CWE-405"
+        ],
+        "fixed_versions": [
+          "11.0.1"
+        ],
+        "id": "GHSA-g3hv-75wg-m249",
+        "modified": "2026-10-30T23:15:07.420159+00:00",
+        "published": "2026-10-30T23:09:55+00:00",
+        "references": [
+          "https://github.com/isaacs/minimatch/security/advisories/GHSA-g3hv-75wg-m249",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-118764",
+          "https://github.com/isaacs/minimatch/commit/77a0f5c4b80bdc641c3c930a1d9edf5ad2db57f8",
+          "https://github.com/isaacs/minimatch",
+          "https://github.com/isaacs/minimatch/releases/tag/v11.0.1"
+        ],
+        "severity": {
+          "score": 6.9,
+          "severity": "medium",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
+        },
+        "summary": "minimatch has potential denial of service via globparts amplification"
+      },
+      "cvss_score": 6.9,
+      "dep_name": "minimatch",
+      "dep_version": "3.1.2",
+      "direct": false,
+      "ecosystem": "npm",
+      "epss": 0.00291,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:npm:minimatch:3.1.2:GHSA-g3hv-75wg-m249",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:npm/minimatch@3.1.2",
+      "raptor_risk_estimate": 6.75490002573094,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'minimatch' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 69.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.440536563,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 6.75490002573094,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.71062,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2026-27904"
         ],
         "cwe_ids": [
@@ -70075,6 +70836,89 @@
         "version_match_confidence": 0.95
       },
       "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-118764"
+        ],
+        "cwe_ids": [
+          "CWE-405"
+        ],
+        "fixed_versions": [
+          "11.0.1"
+        ],
+        "id": "GHSA-g3hv-75wg-m249",
+        "modified": "2026-10-30T23:15:07.420159+00:00",
+        "published": "2026-10-30T23:09:55+00:00",
+        "references": [
+          "https://github.com/isaacs/minimatch/security/advisories/GHSA-g3hv-75wg-m249",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-118764",
+          "https://github.com/isaacs/minimatch/commit/77a0f5c4b80bdc641c3c930a1d9edf5ad2db57f8",
+          "https://github.com/isaacs/minimatch",
+          "https://github.com/isaacs/minimatch/releases/tag/v11.0.1"
+        ],
+        "severity": {
+          "score": 6.9,
+          "severity": "medium",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
+        },
+        "summary": "minimatch has potential denial of service via globparts amplification"
+      },
+      "cvss_score": 6.9,
+      "dep_name": "minimatch",
+      "dep_version": "9.0.4",
+      "direct": false,
+      "ecosystem": "npm",
+      "epss": 0.00291,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:npm:minimatch:9.0.4:GHSA-g3hv-75wg-m249",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:npm/minimatch@9.0.4",
+      "raptor_risk_estimate": 6.75490002573094,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'minimatch' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 69.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.440536563,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 6.75490002573094,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.71062,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 1,

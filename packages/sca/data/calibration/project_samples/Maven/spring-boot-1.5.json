@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-10-29T21:48:01Z",
+    "fetched_at": "2026-11-01T12:50:57Z",
     "git_ref": "v1.5.10.RELEASE",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of spring-boot-1.5",
@@ -13960,7 +13960,7 @@
       "dep_version": "5.14.5",
       "direct": false,
       "ecosystem": "Maven",
-      "epss": 0.00794,
+      "epss": 0.00872,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -13976,7 +13976,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:maven/org.apache.activemq/activemq-mqtt@5.14.5",
-      "raptor_risk_estimate": 7.478211802747454,
+      "raptor_risk_estimate": 7.48426152250854,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -13995,10 +13995,10 @@
         "cvss_base": 54.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44284684199999996,
+        "epss_multiplier": 0.44320509599999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.478211802747454,
+        "final": 7.48426152250854,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -14849,7 +14849,7 @@
       "dep_version": "1.9.3",
       "direct": true,
       "ecosystem": "Maven",
-      "epss": 0.01769,
+      "epss": 0.01754,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -14865,7 +14865,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:maven/org.apache.ant/ant@1.9.3",
-      "raptor_risk_estimate": 7.021631408186945,
+      "raptor_risk_estimate": 7.0205499678974865,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -14880,10 +14880,10 @@
         "cvss_base": 63.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.447325017,
+        "epss_multiplier": 0.447256122,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.021631408186945,
+        "final": 7.0205499678974865,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -14933,7 +14933,7 @@
       "dep_version": "1.9.3",
       "direct": true,
       "ecosystem": "Maven",
-      "epss": 0.0263,
+      "epss": 0.02642,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -14949,7 +14949,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:maven/org.apache.ant/ant@1.9.3",
-      "raptor_risk_estimate": 6.184187848319147,
+      "raptor_risk_estimate": 6.1849431399498815,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -14964,10 +14964,10 @@
         "cvss_base": 55.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.45127958999999995,
+        "epss_multiplier": 0.451334706,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 6.184187848319147,
+        "final": 6.1849431399498815,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -15103,7 +15103,7 @@
       "dep_version": "1.9.3",
       "direct": true,
       "ecosystem": "Maven",
-      "epss": 0.02521,
+      "epss": 0.02532,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -15119,7 +15119,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:maven/org.apache.ant/ant@1.9.3",
-      "raptor_risk_estimate": 6.177327282673316,
+      "raptor_risk_estimate": 6.178019633334823,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -15134,10 +15134,10 @@
         "cvss_base": 55.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.450778953,
+        "epss_multiplier": 0.450829476,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 6.177327282673316,
+        "final": 6.178019633334823,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -18135,7 +18135,7 @@
       "dep_version": "8.5.27",
       "direct": true,
       "ecosystem": "Maven",
-      "epss": 0.00562,
+      "epss": 0.00755,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -18151,7 +18151,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:maven/org.apache.tomcat.embed/tomcat-embed-core@8.5.27",
-      "raptor_risk_estimate": 10.787173464503475,
+      "raptor_risk_estimate": 10.808818291630288,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -18166,10 +18166,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441781266,
+        "epss_multiplier": 0.44266771499999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 10.787173464503475,
+        "final": 10.808818291630288,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -18834,7 +18834,7 @@
       "dep_version": "8.5.27",
       "direct": true,
       "ecosystem": "Maven",
-      "epss": 0.00538,
+      "epss": 0.00654,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -18850,7 +18850,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:maven/org.apache.tomcat.embed/tomcat-embed-core@8.5.27",
-      "raptor_risk_estimate": 10.01416174551282,
+      "raptor_risk_estimate": 10.026241834079524,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -18865,10 +18865,10 @@
         "cvss_base": 90.99999999999999,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44167103399999996,
+        "epss_multiplier": 0.44220382199999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 10.01416174551282,
+        "final": 10.026241834079524,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -19178,7 +19178,7 @@
       "dep_version": "8.5.27",
       "direct": true,
       "ecosystem": "Maven",
-      "epss": 0.00491,
+      "epss": 0.00643,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -19194,7 +19194,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:maven/org.apache.tomcat.embed/tomcat-embed-core@8.5.27",
-      "raptor_risk_estimate": 10.009267226869413,
+      "raptor_risk_estimate": 10.025096308439581,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -19209,10 +19209,10 @@
         "cvss_base": 90.99999999999999,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441455163,
+        "epss_multiplier": 0.442153299,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 10.009267226869413,
+        "final": 10.025096308439581,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -23234,7 +23234,7 @@
       "dep_version": "9.4.8.v20171121",
       "direct": false,
       "ecosystem": "Maven",
-      "epss": 0.00165,
+      "epss": 0.00182,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -23250,7 +23250,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:maven/org.eclipse.jetty/jetty-http@9.4.8.v20171121",
-      "raptor_risk_estimate": 5.090532795519805,
+      "raptor_risk_estimate": 5.091436231827908,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -23269,10 +23269,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.43995784499999996,
+        "epss_multiplier": 0.44003592599999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 5.090532795519805,
+        "final": 5.091436231827908,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -27312,7 +27312,7 @@
       "dep_version": "5.3.6.Final",
       "direct": true,
       "ecosystem": "Maven",
-      "epss": 0.00749,
+      "epss": 0.00781,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -27328,7 +27328,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:maven/org.hibernate/hibernate-validator@5.3.6.Final",
-      "raptor_risk_estimate": 20.671508633884034,
+      "raptor_risk_estimate": 20.678372483909676,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -27347,10 +27347,10 @@
         "cvss_base": 73.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.442640157,
+        "epss_multiplier": 0.442787133,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 20.671508633884034,
+        "final": 20.678372483909676,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -38385,7 +38385,7 @@
       "dep_version": "1.17",
       "direct": true,
       "ecosystem": "Maven",
-      "epss": 0.01905,
+      "epss": 0.02032,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -38401,7 +38401,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:maven/org.yaml/snakeyaml@1.17",
-      "raptor_risk_estimate": 11.825031250378125,
+      "raptor_risk_estimate": 11.840429567069997,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -38420,10 +38420,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.447949665,
+        "epss_multiplier": 0.44853297599999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 11.825031250378125,
+        "final": 11.840429567069997,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -38473,7 +38473,7 @@
       "dep_version": "1.17",
       "direct": true,
       "ecosystem": "Maven",
-      "epss": 0.02526,
+      "epss": 0.02695,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -38489,7 +38489,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:maven/org.yaml/snakeyaml@1.17",
-      "raptor_risk_estimate": 21.052666805620355,
+      "raptor_risk_estimate": 21.088916513568268,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -38508,10 +38508,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.45080191799999997,
+        "epss_multiplier": 0.451578135,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 21.052666805620355,
+        "final": 21.088916513568268,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -38562,7 +38562,7 @@
       "dep_version": "1.17",
       "direct": true,
       "ecosystem": "Maven",
-      "epss": 0.02061,
+      "epss": 0.02199,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -38578,7 +38578,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:maven/org.yaml/snakeyaml@1.17",
-      "raptor_risk_estimate": 11.843945718125624,
+      "raptor_risk_estimate": 11.860677747286875,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -38597,10 +38597,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.448666173,
+        "epss_multiplier": 0.449300007,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 11.843945718125624,
+        "final": 11.860677747286875,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -38650,7 +38650,7 @@
       "dep_version": "1.17",
       "direct": true,
       "ecosystem": "Maven",
-      "epss": 0.01253,
+      "epss": 0.01268,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -38666,7 +38666,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:maven/org.yaml/snakeyaml@1.17",
-      "raptor_risk_estimate": 9.938904863394376,
+      "raptor_risk_estimate": 9.940443762397498,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -38685,10 +38685,10 @@
         "cvss_base": 55.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.444955029,
+        "epss_multiplier": 0.44502392399999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 9.938904863394376,
+        "final": 9.940443762397498,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,

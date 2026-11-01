@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-10-29T21:49:26Z",
+    "fetched_at": "2026-11-01T12:52:11Z",
     "git_ref": "v3.5.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of helm-3.5",
@@ -7014,7 +7014,7 @@
       "dep_version": "v0.0.0-20200130152716-5d0cf8839492",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.00501,
+      "epss": 0.00549,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7030,7 +7030,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/github.com/docker/cli@v0.0.0-20200130152716-5d0cf8839492",
-      "raptor_risk_estimate": 3.9244576805787705,
+      "raptor_risk_estimate": 3.9264173623367755,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -7045,10 +7045,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44150109299999996,
+        "epss_multiplier": 0.441721557,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 3.9244576805787705,
+        "final": 3.9264173623367755,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -8958,7 +8958,7 @@
       "dep_version": "v1.4.2-0.20200203170920-46ec8731fbce",
       "direct": true,
       "ecosystem": "Go",
-      "epss": 0.00165,
+      "epss": 0.00177,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -8974,7 +8974,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/github.com/docker/docker@v1.4.2-0.20200203170920-46ec8731fbce",
-      "raptor_risk_estimate": 4.340228642661021,
+      "raptor_risk_estimate": 4.3407723675760055,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -8989,10 +8989,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.43995784499999996,
+        "epss_multiplier": 0.440012961,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.340228642661021,
+        "final": 4.3407723675760055,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.60727,
@@ -20500,7 +20500,7 @@
       "dep_version": "v0.0.0-20171113213409-9f005a07e0d3",
       "direct": true,
       "ecosystem": "Go",
-      "epss": 0.01118,
+      "epss": 0.01193,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -20516,7 +20516,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/crypto@v0.0.0-20171113213409-9f005a07e0d3",
-      "raptor_risk_estimate": 13.53416559868125,
+      "raptor_risk_estimate": 13.544658091884374,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -20540,10 +20540,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.444334974,
+        "epss_multiplier": 0.444679449,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 13.53416559868125,
+        "final": 13.544658091884374,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -23331,7 +23331,7 @@
       "dep_version": "v0.0.0-20180904163835-0709b304e793",
       "direct": true,
       "ecosystem": "Go",
-      "epss": 0.01118,
+      "epss": 0.01193,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -23347,7 +23347,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/crypto@v0.0.0-20180904163835-0709b304e793",
-      "raptor_risk_estimate": 13.53416559868125,
+      "raptor_risk_estimate": 13.544658091884374,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -23371,10 +23371,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.444334974,
+        "epss_multiplier": 0.444679449,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 13.53416559868125,
+        "final": 13.544658091884374,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -26162,7 +26162,7 @@
       "dep_version": "v0.0.0-20181029021203-45a5f77698d3",
       "direct": true,
       "ecosystem": "Go",
-      "epss": 0.01118,
+      "epss": 0.01193,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -26178,7 +26178,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/crypto@v0.0.0-20181029021203-45a5f77698d3",
-      "raptor_risk_estimate": 13.53416559868125,
+      "raptor_risk_estimate": 13.544658091884374,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -26202,10 +26202,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.444334974,
+        "epss_multiplier": 0.444679449,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 13.53416559868125,
+        "final": 13.544658091884374,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -28993,7 +28993,7 @@
       "dep_version": "v0.0.0-20181203042331-505ab145d0a9",
       "direct": true,
       "ecosystem": "Go",
-      "epss": 0.01118,
+      "epss": 0.01193,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -29009,7 +29009,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/crypto@v0.0.0-20181203042331-505ab145d0a9",
-      "raptor_risk_estimate": 13.53416559868125,
+      "raptor_risk_estimate": 13.544658091884374,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -29033,10 +29033,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.444334974,
+        "epss_multiplier": 0.444679449,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 13.53416559868125,
+        "final": 13.544658091884374,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -31824,7 +31824,7 @@
       "dep_version": "v0.0.0-20190308221718-c2843e01d9a2",
       "direct": true,
       "ecosystem": "Go",
-      "epss": 0.01118,
+      "epss": 0.01193,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -31840,7 +31840,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/crypto@v0.0.0-20190308221718-c2843e01d9a2",
-      "raptor_risk_estimate": 13.53416559868125,
+      "raptor_risk_estimate": 13.544658091884374,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -31864,10 +31864,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.444334974,
+        "epss_multiplier": 0.444679449,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 13.53416559868125,
+        "final": 13.544658091884374,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -34655,7 +34655,7 @@
       "dep_version": "v0.0.0-20190320223903-b7391e95e576",
       "direct": true,
       "ecosystem": "Go",
-      "epss": 0.01118,
+      "epss": 0.01193,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -34671,7 +34671,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/crypto@v0.0.0-20190320223903-b7391e95e576",
-      "raptor_risk_estimate": 13.53416559868125,
+      "raptor_risk_estimate": 13.544658091884374,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -34695,10 +34695,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.444334974,
+        "epss_multiplier": 0.444679449,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 13.53416559868125,
+        "final": 13.544658091884374,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -37393,7 +37393,7 @@
       "dep_version": "v0.0.0-20190325154230-a5d413f7728c",
       "direct": true,
       "ecosystem": "Go",
-      "epss": 0.01118,
+      "epss": 0.01193,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -37409,7 +37409,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/crypto@v0.0.0-20190325154230-a5d413f7728c",
-      "raptor_risk_estimate": 13.53416559868125,
+      "raptor_risk_estimate": 13.544658091884374,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -37433,10 +37433,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.444334974,
+        "epss_multiplier": 0.444679449,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 13.53416559868125,
+        "final": 13.544658091884374,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -40119,7 +40119,7 @@
       "dep_version": "v0.0.0-20190510104115-cbcb75029529",
       "direct": true,
       "ecosystem": "Go",
-      "epss": 0.01118,
+      "epss": 0.01193,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -40135,7 +40135,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/crypto@v0.0.0-20190510104115-cbcb75029529",
-      "raptor_risk_estimate": 13.53416559868125,
+      "raptor_risk_estimate": 13.544658091884374,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -40158,10 +40158,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.444334974,
+        "epss_multiplier": 0.444679449,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 13.53416559868125,
+        "final": 13.544658091884374,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -42735,7 +42735,7 @@
       "dep_version": "v0.0.0-20190605123033-f99c8df09eb5",
       "direct": true,
       "ecosystem": "Go",
-      "epss": 0.01118,
+      "epss": 0.01193,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -42751,7 +42751,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/crypto@v0.0.0-20190605123033-f99c8df09eb5",
-      "raptor_risk_estimate": 13.53416559868125,
+      "raptor_risk_estimate": 13.544658091884374,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -42774,10 +42774,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.444334974,
+        "epss_multiplier": 0.444679449,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 13.53416559868125,
+        "final": 13.544658091884374,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -45351,7 +45351,7 @@
       "dep_version": "v0.0.0-20190611184440-5c40567a22f8",
       "direct": true,
       "ecosystem": "Go",
-      "epss": 0.01118,
+      "epss": 0.01193,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -45367,7 +45367,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/crypto@v0.0.0-20190611184440-5c40567a22f8",
-      "raptor_risk_estimate": 13.53416559868125,
+      "raptor_risk_estimate": 13.544658091884374,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -45390,10 +45390,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.444334974,
+        "epss_multiplier": 0.444679449,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 13.53416559868125,
+        "final": 13.544658091884374,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -47967,7 +47967,7 @@
       "dep_version": "v0.0.0-20190617133340-57b3e21c3d56",
       "direct": true,
       "ecosystem": "Go",
-      "epss": 0.01118,
+      "epss": 0.01193,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -47983,7 +47983,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/crypto@v0.0.0-20190617133340-57b3e21c3d56",
-      "raptor_risk_estimate": 13.53416559868125,
+      "raptor_risk_estimate": 13.544658091884374,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -48006,10 +48006,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.444334974,
+        "epss_multiplier": 0.444679449,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 13.53416559868125,
+        "final": 13.544658091884374,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -50583,7 +50583,7 @@
       "dep_version": "v0.0.0-20190621222207-cc06ce4a13d4",
       "direct": true,
       "ecosystem": "Go",
-      "epss": 0.01118,
+      "epss": 0.01193,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -50599,7 +50599,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/crypto@v0.0.0-20190621222207-cc06ce4a13d4",
-      "raptor_risk_estimate": 13.53416559868125,
+      "raptor_risk_estimate": 13.544658091884374,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -50622,10 +50622,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.444334974,
+        "epss_multiplier": 0.444679449,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 13.53416559868125,
+        "final": 13.544658091884374,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -53199,7 +53199,7 @@
       "dep_version": "v0.0.0-20190701094942-4def268fd1a4",
       "direct": true,
       "ecosystem": "Go",
-      "epss": 0.01118,
+      "epss": 0.01193,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -53215,7 +53215,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/crypto@v0.0.0-20190701094942-4def268fd1a4",
-      "raptor_risk_estimate": 13.53416559868125,
+      "raptor_risk_estimate": 13.544658091884374,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -53238,10 +53238,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.444334974,
+        "epss_multiplier": 0.444679449,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 13.53416559868125,
+        "final": 13.544658091884374,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -55815,7 +55815,7 @@
       "dep_version": "v0.0.0-20191011191535-87dc89f01550",
       "direct": true,
       "ecosystem": "Go",
-      "epss": 0.01118,
+      "epss": 0.01193,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -55831,7 +55831,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/crypto@v0.0.0-20191011191535-87dc89f01550",
-      "raptor_risk_estimate": 13.53416559868125,
+      "raptor_risk_estimate": 13.544658091884374,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -55854,10 +55854,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.444334974,
+        "epss_multiplier": 0.444679449,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 13.53416559868125,
+        "final": 13.544658091884374,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -58431,7 +58431,7 @@
       "dep_version": "v0.0.0-20191206172530-e9b2fee46413",
       "direct": true,
       "ecosystem": "Go",
-      "epss": 0.01118,
+      "epss": 0.01193,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -58447,7 +58447,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/crypto@v0.0.0-20191206172530-e9b2fee46413",
-      "raptor_risk_estimate": 13.53416559868125,
+      "raptor_risk_estimate": 13.544658091884374,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -58470,10 +58470,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.444334974,
+        "epss_multiplier": 0.444679449,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 13.53416559868125,
+        "final": 13.544658091884374,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -60952,7 +60952,7 @@
       "dep_version": "v0.0.0-20200128174031-69ecbb4d6d5d",
       "direct": true,
       "ecosystem": "Go",
-      "epss": 0.01118,
+      "epss": 0.01193,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -60968,7 +60968,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/crypto@v0.0.0-20200128174031-69ecbb4d6d5d",
-      "raptor_risk_estimate": 13.53416559868125,
+      "raptor_risk_estimate": 13.544658091884374,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -60991,10 +60991,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.444334974,
+        "epss_multiplier": 0.444679449,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 13.53416559868125,
+        "final": 13.544658091884374,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -63379,7 +63379,7 @@
       "dep_version": "v0.0.0-20200414173820-0848c9571904",
       "direct": true,
       "ecosystem": "Go",
-      "epss": 0.01118,
+      "epss": 0.01193,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -63395,7 +63395,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/crypto@v0.0.0-20200414173820-0848c9571904",
-      "raptor_risk_estimate": 13.53416559868125,
+      "raptor_risk_estimate": 13.544658091884374,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -63418,10 +63418,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.444334974,
+        "epss_multiplier": 0.444679449,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 13.53416559868125,
+        "final": 13.544658091884374,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -65806,7 +65806,7 @@
       "dep_version": "v0.0.0-20200622213623-75b288015ac9",
       "direct": true,
       "ecosystem": "Go",
-      "epss": 0.01118,
+      "epss": 0.01193,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -65822,7 +65822,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/crypto@v0.0.0-20200622213623-75b288015ac9",
-      "raptor_risk_estimate": 13.53416559868125,
+      "raptor_risk_estimate": 13.544658091884374,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -65845,10 +65845,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.444334974,
+        "epss_multiplier": 0.444679449,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 13.53416559868125,
+        "final": 13.544658091884374,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -68233,7 +68233,7 @@
       "dep_version": "v0.0.0-20201002170205-7f63de1d35b0",
       "direct": true,
       "ecosystem": "Go",
-      "epss": 0.01118,
+      "epss": 0.01193,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -68249,7 +68249,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/crypto@v0.0.0-20201002170205-7f63de1d35b0",
-      "raptor_risk_estimate": 13.53416559868125,
+      "raptor_risk_estimate": 13.544658091884374,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -68272,10 +68272,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.444334974,
+        "epss_multiplier": 0.444679449,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 13.53416559868125,
+        "final": 13.544658091884374,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -73401,7 +73401,7 @@
       "dep_version": "v0.0.0-20180724234803-3673e40ba225",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -73417,7 +73417,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20180724234803-3673e40ba225",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -73432,10 +73432,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -76241,7 +76241,7 @@
       "dep_version": "v0.0.0-20180826012351-8a410e7b638d",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -76257,7 +76257,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20180826012351-8a410e7b638d",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -76272,10 +76272,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -79081,7 +79081,7 @@
       "dep_version": "v0.0.0-20180906233101-161cd47e91fd",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -79097,7 +79097,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20180906233101-161cd47e91fd",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -79112,10 +79112,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -81837,7 +81837,7 @@
       "dep_version": "v0.0.0-20181005035420-146acd28ed58",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -81853,7 +81853,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20181005035420-146acd28ed58",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -81868,10 +81868,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -84509,7 +84509,7 @@
       "dep_version": "v0.0.0-20181023162649-9b4f9f5ad519",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -84525,7 +84525,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20181023162649-9b4f9f5ad519",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -84540,10 +84540,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -87181,7 +87181,7 @@
       "dep_version": "v0.0.0-20181114220301-adae6a3d119a",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -87197,7 +87197,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20181114220301-adae6a3d119a",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -87212,10 +87212,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -89853,7 +89853,7 @@
       "dep_version": "v0.0.0-20181201002055-351d144fa1fc",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -89869,7 +89869,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20181201002055-351d144fa1fc",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -89884,10 +89884,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -92525,7 +92525,7 @@
       "dep_version": "v0.0.0-20181220203305-927f97764cc3",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -92541,7 +92541,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20181220203305-927f97764cc3",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -92556,10 +92556,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -95197,7 +95197,7 @@
       "dep_version": "v0.0.0-20190108225652-1e06a53dbb7e",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -95213,7 +95213,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20190108225652-1e06a53dbb7e",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -95228,10 +95228,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -97783,7 +97783,7 @@
       "dep_version": "v0.0.0-20190125091013-d26f9f9a57f3",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -97799,7 +97799,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20190125091013-d26f9f9a57f3",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -97814,10 +97814,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -100285,7 +100285,7 @@
       "dep_version": "v0.0.0-20190213061140-3a22650c66bd",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -100301,7 +100301,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20190213061140-3a22650c66bd",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -100316,10 +100316,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -102787,7 +102787,7 @@
       "dep_version": "v0.0.0-20190311183353-d8887717615a",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -102803,7 +102803,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20190311183353-d8887717615a",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -102818,10 +102818,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -105289,7 +105289,7 @@
       "dep_version": "v0.0.0-20190320064053-1272bf9dcd53",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -105305,7 +105305,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20190320064053-1272bf9dcd53",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -105320,10 +105320,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -107791,7 +107791,7 @@
       "dep_version": "v0.0.0-20190404232315-eb5bcb51f2a3",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -107807,7 +107807,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20190404232315-eb5bcb51f2a3",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -107822,10 +107822,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -110293,7 +110293,7 @@
       "dep_version": "v0.0.0-20190501004415-9ce7a6920f09",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -110309,7 +110309,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20190501004415-9ce7a6920f09",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -110324,10 +110324,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -112795,7 +112795,7 @@
       "dep_version": "v0.0.0-20190503192946-f4e77d36d62c",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -112811,7 +112811,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20190503192946-f4e77d36d62c",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -112826,10 +112826,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -115297,7 +115297,7 @@
       "dep_version": "v0.0.0-20190522155817-f3200d17e092",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -115313,7 +115313,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20190522155817-f3200d17e092",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -115328,10 +115328,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -117799,7 +117799,7 @@
       "dep_version": "v0.0.0-20190603091049-60506f45cf65",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -117815,7 +117815,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20190603091049-60506f45cf65",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -117830,10 +117830,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -120301,7 +120301,7 @@
       "dep_version": "v0.0.0-20190613194153-d28f0bde5980",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -120317,7 +120317,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20190613194153-d28f0bde5980",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -120332,10 +120332,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -122803,7 +122803,7 @@
       "dep_version": "v0.0.0-20190619014844-b5b0513f8c1b",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -122819,7 +122819,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20190619014844-b5b0513f8c1b",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -122834,10 +122834,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -125305,7 +125305,7 @@
       "dep_version": "v0.0.0-20190620200207-3b0461eec859",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -125321,7 +125321,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20190620200207-3b0461eec859",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -125336,10 +125336,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -127807,7 +127807,7 @@
       "dep_version": "v0.0.0-20190724013045-ca1201d0de80",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -127823,7 +127823,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20190724013045-ca1201d0de80",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -127838,10 +127838,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -130222,7 +130222,7 @@
       "dep_version": "v0.0.0-20190813141303-74dc4d7220e7",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -130238,7 +130238,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20190813141303-74dc4d7220e7",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -130253,10 +130253,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -132637,7 +132637,7 @@
       "dep_version": "v0.0.0-20190827160401-ba9fcec4b297",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -132653,7 +132653,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20190827160401-ba9fcec4b297",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -132668,10 +132668,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -135052,7 +135052,7 @@
       "dep_version": "v0.0.0-20191209160850-c0dbc17a3553",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -135068,7 +135068,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20191209160850-c0dbc17a3553",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -135083,10 +135083,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -137467,7 +137467,7 @@
       "dep_version": "v0.0.0-20200114155413-6afb5195e5aa",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -137483,7 +137483,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20200114155413-6afb5195e5aa",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -137498,10 +137498,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -139882,7 +139882,7 @@
       "dep_version": "v0.0.0-20200202094626-16171245cfb2",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -139898,7 +139898,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20200202094626-16171245cfb2",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -139913,10 +139913,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -142297,7 +142297,7 @@
       "dep_version": "v0.0.0-20200222125558-5a598a2470a0",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -142313,7 +142313,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20200222125558-5a598a2470a0",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -142328,10 +142328,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -144712,7 +144712,7 @@
       "dep_version": "v0.0.0-20200226121028-0de0cce0169b",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -144728,7 +144728,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20200226121028-0de0cce0169b",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -144743,10 +144743,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -147127,7 +147127,7 @@
       "dep_version": "v0.0.0-20200301022130-244492dfa37a",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -147143,7 +147143,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20200301022130-244492dfa37a",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -147158,10 +147158,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -149542,7 +149542,7 @@
       "dep_version": "v0.0.0-20200324143707-d3edc9973b7e",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -149558,7 +149558,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20200324143707-d3edc9973b7e",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -149573,10 +149573,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -151957,7 +151957,7 @@
       "dep_version": "v0.0.0-20200707034311-ab3426394381",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -151973,7 +151973,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20200707034311-ab3426394381",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -151988,10 +151988,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -154372,7 +154372,7 @@
       "dep_version": "v0.0.0-20201110031124-69a78807bb2b",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.03269,
+      "epss": 0.03487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -154388,7 +154388,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/golang.org/x/net@v0.0.0-20201110031124-69a78807bb2b",
-      "raptor_risk_estimate": 7.570248741169426,
+      "raptor_risk_estimate": 7.5869366561399305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -154403,10 +154403,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.454214517,
+        "epss_multiplier": 0.455215791,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.570248741169426,
+        "final": 7.5869366561399305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -177087,7 +177087,7 @@
       "dep_version": "v1.13.0",
       "direct": false,
       "ecosystem": "Go",
-      "epss": 0.00785,
+      "epss": 0.00844,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -177103,7 +177103,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:golang/k8s.io/kubernetes@v1.13.0",
-      "raptor_risk_estimate": 3.936052464313631,
+      "raptor_risk_estimate": 3.9384612398078445,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -177118,10 +177118,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.442805505,
+        "epss_multiplier": 0.443076492,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 3.936052464313631,
+        "final": 3.9384612398078445,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,

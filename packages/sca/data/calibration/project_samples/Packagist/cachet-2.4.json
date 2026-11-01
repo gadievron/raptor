@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-10-29T21:56:49Z",
+    "fetched_at": "2026-11-01T12:59:42Z",
     "git_ref": "v2.4.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of cachet-2.4",
@@ -5053,7 +5053,7 @@
       "dep_version": "v2.15.5",
       "direct": true,
       "ecosystem": "Packagist",
-      "epss": 0.00435,
+      "epss": 0.00431,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5069,7 +5069,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/twig/twig@v2.15.5",
-      "raptor_risk_estimate": 3.94199342843625,
+      "raptor_risk_estimate": 3.9418292792092506,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -5087,10 +5087,10 @@
         "cvss_base": 22.000000000000004,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441197955,
+        "epss_multiplier": 0.441179583,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 3.94199342843625,
+        "final": 3.9418292792092506,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -7827,7 +7827,7 @@
       "dep_version": "0.19",
       "direct": true,
       "ecosystem": "npm",
-      "epss": 0.00708,
+      "epss": 0.00729,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7843,7 +7843,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/axios@0.19",
-      "raptor_risk_estimate": 27.502072767957483,
+      "raptor_risk_estimate": 27.508068126459566,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -7861,10 +7861,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.442451844,
+        "epss_multiplier": 0.442548297,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 27.502072767957483,
+        "final": 27.508068126459566,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,

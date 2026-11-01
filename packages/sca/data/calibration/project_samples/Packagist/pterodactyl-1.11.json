@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-10-29T21:52:11Z",
+    "fetched_at": "2026-11-01T12:54:26Z",
     "git_ref": "v1.11.7",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of pterodactyl-1.11",
@@ -4966,7 +4966,7 @@
       "dep_version": "3.3.5-r0",
       "direct": true,
       "ecosystem": "Alpine:v3.21",
-      "epss": 0.00428,
+      "epss": 0.00444,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4982,7 +4982,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:apk/openssl@3.3.5-r0",
-      "raptor_risk_estimate": 4.067034506562576,
+      "raptor_risk_estimate": 4.067711980267718,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4997,10 +4997,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441165804,
+        "epss_multiplier": 0.441239292,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.067034506562576,
+        "final": 4.067711980267718,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -5654,7 +5654,7 @@
       "dep_version": "5.6.3-r1",
       "direct": true,
       "ecosystem": "Alpine:v3.21",
-      "epss": 0.00514,
+      "epss": 0.00534,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5670,7 +5670,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:apk/xz@5.6.3-r1",
-      "raptor_risk_estimate": 5.830968220799165,
+      "raptor_risk_estimate": 5.832181264933373,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -5685,10 +5685,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441560802,
+        "epss_multiplier": 0.441652662,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 5.830968220799165,
+        "final": 5.832181264933373,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -6021,20 +6021,24 @@
           "8.23.0-r0"
         ],
         "id": "ALPINE-CVE-2026-107928",
-        "modified": "2026-10-25T16:30:02.568848+00:00",
+        "modified": "2026-10-31T09:30:02.537707+00:00",
         "published": "2026-10-20T21:17:15.470000+00:00",
         "references": [
           "https://security.alpinelinux.org/vuln/CVE-2026-107928"
         ],
-        "severity": null,
+        "severity": {
+          "score": 8.1,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 8.1,
       "dep_name": "curl",
       "dep_version": "8.22.0-r0",
       "direct": true,
       "ecosystem": "Alpine:v3.24",
-      "epss": 0.00293,
+      "epss": 0.00705,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6050,7 +6054,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:apk/curl@8.22.0-r0",
-      "raptor_risk_estimate": 4.390614402351817,
+      "raptor_risk_estimate": 12.85713269837777,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -6062,20 +6066,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 81.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440545749,
+        "epss_multiplier": 0.442438065,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.390614402351817,
+        "final": 12.85713269837777,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -6093,20 +6098,24 @@
           "8.23.0-r0"
         ],
         "id": "ALPINE-CVE-2026-107929",
-        "modified": "2026-10-25T16:30:02.568638+00:00",
+        "modified": "2026-10-31T09:30:02.543454+00:00",
         "published": "2026-10-20T21:17:15.593000+00:00",
         "references": [
           "https://security.alpinelinux.org/vuln/CVE-2026-107929"
         ],
-        "severity": null,
+        "severity": {
+          "score": 8.1,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 8.1,
       "dep_name": "curl",
       "dep_version": "8.22.0-r0",
       "direct": true,
       "ecosystem": "Alpine:v3.24",
-      "epss": 0.00239,
+      "epss": 0.00667,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6122,7 +6131,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:apk/curl@8.22.0-r0",
-      "raptor_risk_estimate": 4.388142538833053,
+      "raptor_risk_estimate": 12.852060786677816,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -6134,20 +6143,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 81.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44029772699999997,
+        "epss_multiplier": 0.442263531,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.388142538833053,
+        "final": 12.852060786677816,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -6165,20 +6175,24 @@
           "8.23.0-r0"
         ],
         "id": "ALPINE-CVE-2026-86409",
-        "modified": "2026-10-25T16:30:02.573907+00:00",
+        "modified": "2026-10-30T09:30:03.980484+00:00",
         "published": "2026-10-20T20:17:25.223000+00:00",
         "references": [
           "https://security.alpinelinux.org/vuln/CVE-2026-86409"
         ],
-        "severity": null,
+        "severity": {
+          "score": 8.1,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 8.1,
       "dep_name": "curl",
       "dep_version": "8.22.0-r0",
       "direct": true,
       "ecosystem": "Alpine:v3.24",
-      "epss": 0.00313,
+      "epss": 0.01096,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6194,7 +6208,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:apk/curl@8.22.0-r0",
-      "raptor_risk_estimate": 4.391529907358768,
+      "raptor_risk_estimate": 12.909320000343092,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -6206,20 +6220,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 81.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440637609,
+        "epss_multiplier": 0.444233928,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.391529907358768,
+        "final": 12.909320000343092,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -6237,20 +6252,24 @@
           "8.23.0-r0"
         ],
         "id": "ALPINE-CVE-2026-86410",
-        "modified": "2026-10-25T16:30:03.598149+00:00",
+        "modified": "2026-10-30T09:30:04.196270+00:00",
         "published": "2026-10-20T20:17:25.380000+00:00",
         "references": [
           "https://security.alpinelinux.org/vuln/CVE-2026-86410"
         ],
-        "severity": null,
+        "severity": {
+          "score": 8.1,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 8.1,
       "dep_name": "curl",
       "dep_version": "8.22.0-r0",
       "direct": true,
       "ecosystem": "Alpine:v3.24",
-      "epss": 0.00252,
+      "epss": 0.00766,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6266,7 +6285,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:apk/curl@8.22.0-r0",
-      "raptor_risk_estimate": 4.38873761708757,
+      "raptor_risk_estimate": 12.865274451369801,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -6278,20 +6297,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 81.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440357436,
+        "epss_multiplier": 0.442718238,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.38873761708757,
+        "final": 12.865274451369801,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -6309,20 +6329,24 @@
           "8.23.0-r0"
         ],
         "id": "ALPINE-CVE-2026-86411",
-        "modified": "2026-10-25T16:30:03.601130+00:00",
+        "modified": "2026-10-30T09:30:04.199710+00:00",
         "published": "2026-10-20T20:17:25.533000+00:00",
         "references": [
           "https://security.alpinelinux.org/vuln/CVE-2026-86411"
         ],
-        "severity": null,
+        "severity": {
+          "score": 9.1,
+          "severity": "critical",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 9.1,
       "dep_name": "curl",
       "dep_version": "8.22.0-r0",
       "direct": true,
       "ecosystem": "Alpine:v3.24",
-      "epss": 0.00153,
+      "epss": 0.00433,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6338,7 +6362,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:apk/curl@8.22.0-r0",
-      "raptor_risk_estimate": 4.384205867303168,
+      "raptor_risk_estimate": 14.403646820205667,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -6350,20 +6374,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 90.99999999999999,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.439902729,
+        "epss_multiplier": 0.441188769,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.384205867303168,
+        "final": 14.403646820205667,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "critical",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -6381,20 +6406,24 @@
           "8.23.0-r0"
         ],
         "id": "ALPINE-CVE-2026-86412",
-        "modified": "2026-10-25T16:30:03.530659+00:00",
+        "modified": "2026-10-30T09:30:04.186623+00:00",
         "published": "2026-10-20T20:17:25.667000+00:00",
         "references": [
           "https://security.alpinelinux.org/vuln/CVE-2026-86412"
         ],
-        "severity": null,
+        "severity": {
+          "score": 8.1,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 8.1,
       "dep_name": "curl",
       "dep_version": "8.22.0-r0",
       "direct": true,
       "ecosystem": "Alpine:v3.24",
-      "epss": 0.00266,
+      "epss": 0.00828,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6410,7 +6439,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:apk/curl@8.22.0-r0",
-      "raptor_risk_estimate": 4.389378470592434,
+      "raptor_risk_estimate": 12.873549675722359,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -6422,20 +6451,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 81.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44042173799999995,
+        "epss_multiplier": 0.443003004,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.389378470592434,
+        "final": 12.873549675722359,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -6453,20 +6483,24 @@
           "8.23.0-r0"
         ],
         "id": "ALPINE-CVE-2026-86413",
-        "modified": "2026-10-25T16:30:04.023684+00:00",
+        "modified": "2026-10-31T09:30:02.516152+00:00",
         "published": "2026-10-20T20:17:25.787000+00:00",
         "references": [
           "https://security.alpinelinux.org/vuln/CVE-2026-86413"
         ],
-        "severity": null,
+        "severity": {
+          "score": 9.1,
+          "severity": "critical",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 9.1,
       "dep_name": "curl",
       "dep_version": "8.22.0-r0",
       "direct": true,
       "ecosystem": "Alpine:v3.24",
-      "epss": 0.00319,
+      "epss": 0.00731,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6482,7 +6516,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:apk/curl@8.22.0-r0",
-      "raptor_risk_estimate": 4.391804558860852,
+      "raptor_risk_estimate": 19.23072951063365,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -6494,20 +6528,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 90.99999999999999,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44066516699999997,
+        "epss_multiplier": 0.442557483,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.391804558860852,
+        "final": 19.23072951063365,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
-        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "critical",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -6525,20 +6560,24 @@
           "8.23.0-r0"
         ],
         "id": "ALPINE-CVE-2026-86414",
-        "modified": "2026-10-25T16:30:03.587749+00:00",
+        "modified": "2026-10-31T09:30:02.519302+00:00",
         "published": "2026-10-20T21:17:19.947000+00:00",
         "references": [
           "https://security.alpinelinux.org/vuln/CVE-2026-86414"
         ],
-        "severity": null,
+        "severity": {
+          "score": 9.1,
+          "severity": "critical",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 9.1,
       "dep_name": "curl",
       "dep_version": "8.22.0-r0",
       "direct": true,
       "ecosystem": "Alpine:v3.24",
-      "epss": 0.00266,
+      "epss": 0.00676,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6554,7 +6593,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:apk/curl@8.22.0-r0",
-      "raptor_risk_estimate": 4.389378470592434,
+      "raptor_risk_estimate": 19.21975247166823,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -6566,20 +6605,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 90.99999999999999,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44042173799999995,
+        "epss_multiplier": 0.44230486799999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.389378470592434,
+        "final": 19.21975247166823,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
-        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "critical",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -6597,20 +6637,24 @@
           "8.23.0-r0"
         ],
         "id": "ALPINE-CVE-2026-86415",
-        "modified": "2026-10-25T16:30:03.601485+00:00",
+        "modified": "2026-10-31T09:30:02.519989+00:00",
         "published": "2026-10-20T21:17:20.067000+00:00",
         "references": [
           "https://security.alpinelinux.org/vuln/CVE-2026-86415"
         ],
-        "severity": null,
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 7.5,
       "dep_name": "curl",
       "dep_version": "8.22.0-r0",
       "direct": true,
       "ecosystem": "Alpine:v3.24",
-      "epss": 0.00216,
+      "epss": 0.00419,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6626,7 +6670,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:apk/curl@8.22.0-r0",
-      "raptor_risk_estimate": 4.3870897080750595,
+      "raptor_risk_estimate": 8.243216407304255,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -6638,20 +6682,20 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440192088,
+        "epss_multiplier": 0.44112446699999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.3870897080750595,
+        "final": 8.243216407304255,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -6669,20 +6713,24 @@
           "8.23.0-r0"
         ],
         "id": "ALPINE-CVE-2026-87861",
-        "modified": "2026-10-25T16:30:02.575246+00:00",
+        "modified": "2026-10-31T09:30:02.533447+00:00",
         "published": "2026-10-20T21:17:20.167000+00:00",
         "references": [
           "https://security.alpinelinux.org/vuln/CVE-2026-87861"
         ],
-        "severity": null,
+        "severity": {
+          "score": 9.1,
+          "severity": "critical",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 9.1,
       "dep_name": "curl",
       "dep_version": "8.22.0-r0",
       "direct": true,
       "ecosystem": "Alpine:v3.24",
-      "epss": 0.00266,
+      "epss": 0.00676,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6698,7 +6746,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:apk/curl@8.22.0-r0",
-      "raptor_risk_estimate": 4.389378470592434,
+      "raptor_risk_estimate": 19.21975247166823,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -6710,20 +6758,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 90.99999999999999,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44042173799999995,
+        "epss_multiplier": 0.44230486799999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.389378470592434,
+        "final": 19.21975247166823,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
-        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "critical",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -6741,20 +6790,24 @@
           "8.23.0-r0"
         ],
         "id": "ALPINE-CVE-2026-87862",
-        "modified": "2026-10-25T16:30:02.584553+00:00",
+        "modified": "2026-10-31T09:30:02.537028+00:00",
         "published": "2026-10-20T21:17:20.270000+00:00",
         "references": [
           "https://security.alpinelinux.org/vuln/CVE-2026-87862"
         ],
-        "severity": null,
+        "severity": {
+          "score": 8.1,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 8.1,
       "dep_name": "curl",
       "dep_version": "8.22.0-r0",
       "direct": true,
       "ecosystem": "Alpine:v3.24",
-      "epss": 0.00314,
+      "epss": 0.00995,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6770,7 +6823,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:apk/curl@8.22.0-r0",
-      "raptor_risk_estimate": 4.3915756826091155,
+      "raptor_risk_estimate": 12.895839392930053,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -6782,20 +6835,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 81.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440642202,
+        "epss_multiplier": 0.443770035,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.3915756826091155,
+        "final": 12.895839392930053,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -6813,20 +6867,24 @@
           "8.23.0-r0"
         ],
         "id": "ALPINE-CVE-2026-87863",
-        "modified": "2026-10-25T16:30:03.608279+00:00",
+        "modified": "2026-10-31T09:30:03.590426+00:00",
         "published": "2026-10-20T21:17:20.380000+00:00",
         "references": [
           "https://security.alpinelinux.org/vuln/CVE-2026-87863"
         ],
-        "severity": null,
+        "severity": {
+          "score": 8.1,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 8.1,
       "dep_name": "curl",
       "dep_version": "8.22.0-r0",
       "direct": true,
       "ecosystem": "Alpine:v3.24",
-      "epss": 0.00266,
+      "epss": 0.00828,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6842,7 +6900,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:apk/curl@8.22.0-r0",
-      "raptor_risk_estimate": 4.389378470592434,
+      "raptor_risk_estimate": 12.873549675722359,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -6854,20 +6912,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 81.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44042173799999995,
+        "epss_multiplier": 0.443003004,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.389378470592434,
+        "final": 12.873549675722359,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -6885,20 +6944,24 @@
           "8.23.0-r0"
         ],
         "id": "ALPINE-CVE-2026-87864",
-        "modified": "2026-10-25T16:30:03.601148+00:00",
+        "modified": "2026-10-31T09:30:03.624320+00:00",
         "published": "2026-10-20T21:17:20.497000+00:00",
         "references": [
           "https://security.alpinelinux.org/vuln/CVE-2026-87864"
         ],
-        "severity": null,
+        "severity": {
+          "score": 8.1,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 8.1,
       "dep_name": "curl",
       "dep_version": "8.22.0-r0",
       "direct": true,
       "ecosystem": "Alpine:v3.24",
-      "epss": 0.00221,
+      "epss": 0.00828,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6914,7 +6977,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:apk/curl@8.22.0-r0",
-      "raptor_risk_estimate": 4.387318584326798,
+      "raptor_risk_estimate": 12.873549675722359,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -6926,20 +6989,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 81.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44021505299999997,
+        "epss_multiplier": 0.443003004,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.387318584326798,
+        "final": 12.873549675722359,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -6957,20 +7021,24 @@
           "8.23.0-r0"
         ],
         "id": "ALPINE-CVE-2026-87865",
-        "modified": "2026-10-25T16:30:03.596863+00:00",
+        "modified": "2026-10-31T09:30:03.590778+00:00",
         "published": "2026-10-20T21:17:20.693000+00:00",
         "references": [
           "https://security.alpinelinux.org/vuln/CVE-2026-87865"
         ],
-        "severity": null,
+        "severity": {
+          "score": 7.4,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 7.4,
       "dep_name": "curl",
       "dep_version": "8.22.0-r0",
       "direct": true,
       "ecosystem": "Alpine:v3.24",
-      "epss": 0.00244,
+      "epss": 0.00604,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6986,7 +7054,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:apk/curl@8.22.0-r0",
-      "raptor_risk_estimate": 4.388371415084789,
+      "raptor_risk_estimate": 12.66288958005486,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -6998,20 +7066,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 74.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44032069199999996,
+        "epss_multiplier": 0.441974172,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.388371415084789,
+        "final": 12.66288958005486,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -7029,20 +7098,24 @@
           "8.23.0-r0"
         ],
         "id": "ALPINE-CVE-2026-87866",
-        "modified": "2026-10-25T16:30:03.637870+00:00",
+        "modified": "2026-10-30T09:30:04.206331+00:00",
         "published": "2026-10-20T21:17:20.833000+00:00",
         "references": [
           "https://security.alpinelinux.org/vuln/CVE-2026-87866"
         ],
-        "severity": null,
+        "severity": {
+          "score": 9.1,
+          "severity": "critical",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 9.1,
       "dep_name": "curl",
       "dep_version": "8.22.0-r0",
       "direct": true,
       "ecosystem": "Alpine:v3.24",
-      "epss": 0.00208,
+      "epss": 0.0051,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7058,7 +7131,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:apk/curl@8.22.0-r0",
-      "raptor_risk_estimate": 4.38672350607228,
+      "raptor_risk_estimate": 19.18662177224533,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -7070,20 +7143,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 90.99999999999999,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440155344,
+        "epss_multiplier": 0.44154243,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.38672350607228,
+        "final": 19.18662177224533,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
-        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "critical",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -7101,20 +7175,24 @@
           "8.23.0-r0"
         ],
         "id": "ALPINE-CVE-2026-92386",
-        "modified": "2026-10-25T16:30:04.531809+00:00",
+        "modified": "2026-10-30T09:30:04.190178+00:00",
         "published": "2026-10-20T21:17:21.017000+00:00",
         "references": [
           "https://security.alpinelinux.org/vuln/CVE-2026-92386"
         ],
-        "severity": null,
+        "severity": {
+          "score": 8.1,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 8.1,
       "dep_name": "curl",
       "dep_version": "8.22.0-r0",
       "direct": true,
       "ecosystem": "Alpine:v3.24",
-      "epss": 0.00257,
+      "epss": 0.00828,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7130,7 +7208,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:apk/curl@8.22.0-r0",
-      "raptor_risk_estimate": 4.388966493339308,
+      "raptor_risk_estimate": 12.873549675722359,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -7142,20 +7220,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 81.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440380401,
+        "epss_multiplier": 0.443003004,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.388966493339308,
+        "final": 12.873549675722359,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -7173,20 +7252,24 @@
           "8.23.0-r0"
         ],
         "id": "ALPINE-CVE-2026-92387",
-        "modified": "2026-10-25T16:30:02.604435+00:00",
+        "modified": "2026-10-30T09:30:04.203857+00:00",
         "published": "2026-10-20T21:17:21.133000+00:00",
         "references": [
           "https://security.alpinelinux.org/vuln/CVE-2026-92387"
         ],
-        "severity": null,
+        "severity": {
+          "score": 8.1,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 8.1,
       "dep_name": "curl",
       "dep_version": "8.22.0-r0",
       "direct": true,
       "ecosystem": "Alpine:v3.24",
-      "epss": 0.00341,
+      "epss": 0.01045,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7202,7 +7285,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:apk/curl@8.22.0-r0",
-      "raptor_risk_estimate": 4.3928116143684965,
+      "raptor_risk_estimate": 12.902512960956308,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -7214,20 +7297,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 81.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44076621299999996,
+        "epss_multiplier": 0.443999685,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.3928116143684965,
+        "final": 12.902512960956308,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -7245,20 +7329,24 @@
           "8.23.0-r0"
         ],
         "id": "ALPINE-CVE-2026-92388",
-        "modified": "2026-10-25T16:30:04.531606+00:00",
+        "modified": "2026-10-31T09:30:02.530757+00:00",
         "published": "2026-10-20T21:17:21.243000+00:00",
         "references": [
           "https://security.alpinelinux.org/vuln/CVE-2026-92388"
         ],
-        "severity": null,
+        "severity": {
+          "score": 9.1,
+          "severity": "critical",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:H"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 9.1,
       "dep_name": "curl",
       "dep_version": "8.22.0-r0",
       "direct": true,
       "ecosystem": "Alpine:v3.24",
-      "epss": 0.00257,
+      "epss": 0.00699,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7274,7 +7362,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:apk/curl@8.22.0-r0",
-      "raptor_risk_estimate": 4.388966493339308,
+      "raptor_risk_estimate": 19.224342869781044,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -7286,20 +7374,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 90.99999999999999,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440380401,
+        "epss_multiplier": 0.44241050699999995,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.388966493339308,
+        "final": 19.224342869781044,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
-        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "critical",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -7317,20 +7406,24 @@
           "8.23.0-r0"
         ],
         "id": "ALPINE-CVE-2026-92389",
-        "modified": "2026-10-25T16:30:04.533932+00:00",
+        "modified": "2026-10-31T09:30:02.514286+00:00",
         "published": "2026-10-20T21:17:21.457000+00:00",
         "references": [
           "https://security.alpinelinux.org/vuln/CVE-2026-92389"
         ],
-        "severity": null,
+        "severity": {
+          "score": 8.1,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 8.1,
       "dep_name": "curl",
       "dep_version": "8.22.0-r0",
       "direct": true,
       "ecosystem": "Alpine:v3.24",
-      "epss": 0.00257,
+      "epss": 0.00721,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7346,7 +7439,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:apk/curl@8.22.0-r0",
-      "raptor_risk_estimate": 4.388966493339308,
+      "raptor_risk_estimate": 12.859268240146173,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -7358,20 +7451,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 81.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440380401,
+        "epss_multiplier": 0.442511553,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.388966493339308,
+        "final": 12.859268240146173,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -7389,20 +7483,24 @@
           "8.23.0-r0"
         ],
         "id": "ALPINE-CVE-2026-92390",
-        "modified": "2026-10-25T16:30:03.602643+00:00",
+        "modified": "2026-10-31T09:30:03.597338+00:00",
         "published": "2026-10-20T21:17:21.703000+00:00",
         "references": [
           "https://security.alpinelinux.org/vuln/CVE-2026-92390"
         ],
-        "severity": null,
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 7.5,
       "dep_name": "curl",
       "dep_version": "8.22.0-r0",
       "direct": true,
       "ecosystem": "Alpine:v3.24",
-      "epss": 0.00257,
+      "epss": 0.00589,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7418,7 +7516,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:apk/curl@8.22.0-r0",
-      "raptor_risk_estimate": 4.388966493339308,
+      "raptor_risk_estimate": 16.85167877930943,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -7430,20 +7528,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440380401,
+        "epss_multiplier": 0.441905277,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.388966493339308,
+        "final": 16.85167877930943,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
-        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -7461,20 +7560,24 @@
           "8.23.0-r0"
         ],
         "id": "ALPINE-CVE-2026-92391",
-        "modified": "2026-10-25T16:30:02.596557+00:00",
+        "modified": "2026-10-31T09:30:03.608794+00:00",
         "published": "2026-10-20T21:17:21.920000+00:00",
         "references": [
           "https://security.alpinelinux.org/vuln/CVE-2026-92391"
         ],
-        "severity": null,
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 7.5,
       "dep_name": "curl",
       "dep_version": "8.22.0-r0",
       "direct": true,
       "ecosystem": "Alpine:v3.24",
-      "epss": 0.00358,
+      "epss": 0.01166,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7490,7 +7593,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:apk/curl@8.22.0-r0",
-      "raptor_risk_estimate": 4.393589793624405,
+      "raptor_risk_estimate": 16.952740396379575,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -7502,20 +7605,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44084429399999997,
+        "epss_multiplier": 0.44455543799999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.393589793624405,
+        "final": 16.952740396379575,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
-        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -7612,20 +7716,24 @@
           "8.23.0-r0"
         ],
         "id": "ALPINE-CVE-2026-94265",
-        "modified": "2026-10-25T16:30:02.576878+00:00",
+        "modified": "2026-10-31T09:30:02.560740+00:00",
         "published": "2026-10-20T21:17:22.183000+00:00",
         "references": [
           "https://security.alpinelinux.org/vuln/CVE-2026-94265"
         ],
-        "severity": null,
+        "severity": {
+          "score": 9.1,
+          "severity": "critical",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 9.1,
       "dep_name": "curl",
       "dep_version": "8.22.0-r0",
       "direct": true,
       "ecosystem": "Alpine:v3.24",
-      "epss": 0.00338,
+      "epss": 0.00776,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7641,7 +7749,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:apk/curl@8.22.0-r0",
-      "raptor_risk_estimate": 4.392674288617455,
+      "raptor_risk_estimate": 19.23971072433263,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -7653,20 +7761,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 90.99999999999999,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44075243399999997,
+        "epss_multiplier": 0.44276416799999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.392674288617455,
+        "final": 19.23971072433263,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
-        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "critical",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -7684,20 +7793,24 @@
           "8.23.0-r0"
         ],
         "id": "ALPINE-CVE-2026-94266",
-        "modified": "2026-10-25T16:30:02.582640+00:00",
+        "modified": "2026-10-31T09:30:03.585699+00:00",
         "published": "2026-10-20T21:17:22.290000+00:00",
         "references": [
           "https://security.alpinelinux.org/vuln/CVE-2026-94266"
         ],
-        "severity": null,
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+        },
         "summary": ""
       },
-      "cvss_score": null,
+      "cvss_score": 7.5,
       "dep_name": "curl",
       "dep_version": "8.22.0-r0",
       "direct": true,
       "ecosystem": "Alpine:v3.24",
-      "epss": 0.00237,
+      "epss": 0.00556,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7713,7 +7826,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:apk/curl@8.22.0-r0",
-      "raptor_risk_estimate": 4.388050988332357,
+      "raptor_risk_estimate": 16.845898825473522,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -7725,20 +7838,21 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440288541,
+        "epss_multiplier": 0.44175370799999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.388050988332357,
+        "final": 16.845898825473522,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
-        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -15817,6 +15931,315 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-114690"
+        ],
+        "fixed_versions": [],
+        "id": "UBUNTU-CVE-2026-114690",
+        "modified": "2026-10-31T03:30:13.047994+00:00",
+        "published": "2026-10-30T00:00:00+00:00",
+        "references": [
+          "https://ubuntu.com/security/CVE-2026-114690",
+          "https://www.cve.org/CVERecord?id=CVE-2026-114690",
+          "https://access.redhat.com/security/cve/CVE-2026-114690",
+          "https://bugzilla.redhat.com/show_bug.cgi?id=2478652"
+        ],
+        "severity": {
+          "score": 6.2,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": ""
+      },
+      "cvss_score": 6.2,
+      "dep_name": "gcc-10",
+      "dep_version": "10.5.0-1ubuntu1~20.04",
+      "direct": true,
+      "ecosystem": "Ubuntu",
+      "epss": 0.00107,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:Ubuntu:gcc-10:10.5.0-1ubuntu1~20.04:UBUNTU-CVE-2026-114690",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:deb/gcc-10@10.5.0-1ubuntu1~20.04",
+      "raptor_risk_estimate": 6.792255318970132,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "reachability not implemented for Ubuntu"
+        },
+        "evidence": [],
+        "verdict": "not_evaluated"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 62.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.43969145099999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 6.792255318970132,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.6135,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-114691"
+        ],
+        "fixed_versions": [],
+        "id": "UBUNTU-CVE-2026-114691",
+        "modified": "2026-10-31T03:30:13.026276+00:00",
+        "published": "2026-10-30T00:00:00+00:00",
+        "references": [
+          "https://ubuntu.com/security/CVE-2026-114691",
+          "https://www.cve.org/CVERecord?id=CVE-2026-114691",
+          "https://access.redhat.com/security/cve/CVE-2026-114691",
+          "https://bugzilla.redhat.com/show_bug.cgi?id=2478508"
+        ],
+        "severity": {
+          "score": 5.9,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": ""
+      },
+      "cvss_score": 5.9,
+      "dep_name": "gcc-10",
+      "dep_version": "10.5.0-1ubuntu1~20.04",
+      "direct": true,
+      "ecosystem": "Ubuntu",
+      "epss": 0.00395,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:Ubuntu:gcc-10:10.5.0-1ubuntu1~20.04:UBUNTU-CVE-2026-114691",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:deb/gcc-10@10.5.0-1ubuntu1~20.04",
+      "raptor_risk_estimate": 6.483043129883712,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "reachability not implemented for Ubuntu"
+        },
+        "evidence": [],
+        "verdict": "not_evaluated"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 59.00000000000001,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.441014235,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 6.483043129883712,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.6135,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-115455"
+        ],
+        "fixed_versions": [],
+        "id": "UBUNTU-CVE-2026-115455",
+        "modified": "2026-10-31T03:30:08.925799+00:00",
+        "published": "2026-10-30T00:00:00+00:00",
+        "references": [
+          "https://ubuntu.com/security/CVE-2026-115455",
+          "https://www.cve.org/CVERecord?id=CVE-2026-115455",
+          "https://access.redhat.com/security/cve/CVE-2026-115455",
+          "https://bugzilla.redhat.com/show_bug.cgi?id=2562933",
+          "https://gcc.gnu.org/cgit/gcc/commit/?id=5d419c69ce2e6b86d7da75f18736904885674219"
+        ],
+        "severity": {
+          "score": 6.5,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:H"
+        },
+        "summary": ""
+      },
+      "cvss_score": 6.5,
+      "dep_name": "gcc-10",
+      "dep_version": "10.5.0-1ubuntu1~20.04",
+      "direct": true,
+      "ecosystem": "Ubuntu",
+      "epss": 0.00303,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:Ubuntu:gcc-10:10.5.0-1ubuntu1~20.04:UBUNTU-CVE-2026-115455",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:deb/gcc-10@10.5.0-1ubuntu1~20.04",
+      "raptor_risk_estimate": 7.13549225163985,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "reachability not implemented for Ubuntu"
+        },
+        "evidence": [],
+        "verdict": "not_evaluated"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 65.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.44059167899999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 7.13549225163985,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.6135,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-115456"
+        ],
+        "fixed_versions": [],
+        "id": "UBUNTU-CVE-2026-115456",
+        "modified": "2026-10-31T03:30:12.734012+00:00",
+        "published": "2026-10-30T00:00:00+00:00",
+        "references": [
+          "https://ubuntu.com/security/CVE-2026-115456",
+          "https://www.cve.org/CVERecord?id=CVE-2026-115456",
+          "https://access.redhat.com/security/cve/CVE-2026-115456",
+          "https://bugzilla.redhat.com/show_bug.cgi?id=2563044"
+        ],
+        "severity": {
+          "score": 3.7,
+          "severity": "low",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "summary": ""
+      },
+      "cvss_score": 3.7,
+      "dep_name": "gcc-10",
+      "dep_version": "10.5.0-1ubuntu1~20.04",
+      "direct": true,
+      "ecosystem": "Ubuntu",
+      "epss": 0.00221,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:Ubuntu:gcc-10:10.5.0-1ubuntu1~20.04:UBUNTU-CVE-2026-115456",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:deb/gcc-10@10.5.0-1ubuntu1~20.04",
+      "raptor_risk_estimate": 4.0582696905022875,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "reachability not implemented for Ubuntu"
+        },
+        "evidence": [],
+        "verdict": "not_evaluated"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 37.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.44021505299999997,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 4.0582696905022875,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.6135,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "low",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2026-95619"
         ],
         "fixed_versions": [
@@ -18551,7 +18974,7 @@
       "dep_version": "3.6.13-2ubuntu1.12",
       "direct": true,
       "ecosystem": "Ubuntu",
-      "epss": 0.00203,
+      "epss": 0.00195,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -18567,7 +18990,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/gnutls28@3.6.13-2ubuntu1.12",
-      "raptor_risk_estimate": 4.057507532584002,
+      "raptor_risk_estimate": 4.05716879573143,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -18582,10 +19005,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44013237899999996,
+        "epss_multiplier": 0.440095635,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.057507532584002,
+        "final": 4.05716879573143,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -19102,7 +19525,7 @@
       "dep_version": "1.643-1ubuntu0.1",
       "direct": true,
       "ecosystem": "Ubuntu",
-      "epss": 0.00275,
+      "epss": 0.00254,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -19118,7 +19541,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/libdbi-perl@1.643-1ubuntu0.1",
-      "raptor_risk_estimate": 4.389790447845562,
+      "raptor_risk_estimate": 4.3888291675882645,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -19133,10 +19556,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440463075,
+        "epss_multiplier": 0.440366622,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.389790447845562,
+        "final": 4.3888291675882645,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -19261,7 +19684,7 @@
       "dep_version": "1.643-1ubuntu0.1",
       "direct": true,
       "ecosystem": "Ubuntu",
-      "epss": 0.00176,
+      "epss": 0.00327,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -19277,7 +19700,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/libdbi-perl@1.643-1ubuntu0.1",
-      "raptor_risk_estimate": 4.385258698061159,
+      "raptor_risk_estimate": 4.392170760863633,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -19292,10 +19715,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440008368,
+        "epss_multiplier": 0.440701911,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.385258698061159,
+        "final": 4.392170760863633,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -27225,7 +27648,7 @@
           "3.46.1-9ubuntu0.1"
         ],
         "id": "UBUNTU-CVE-2026-11822",
-        "modified": "2026-09-17T02:45:07.271443+00:00",
+        "modified": "2026-10-31T03:30:09.471353+00:00",
         "published": "2026-06-09T20:16:00+00:00",
         "references": [
           "https://ubuntu.com/security/CVE-2026-11822",
@@ -27235,18 +27658,18 @@
           "https://ubuntu.com/security/notices/USN-8480-1"
         ],
         "severity": {
-          "score": 8.5,
-          "severity": "high",
-          "vector": "CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:P/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
+          "score": 6.8,
+          "severity": "medium",
+          "vector": "CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:P/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N"
         },
         "summary": ""
       },
-      "cvss_score": 8.5,
+      "cvss_score": 6.8,
       "dep_name": "sqlite3",
       "dep_version": "3.31.1-4ubuntu0.7",
       "direct": true,
       "ecosystem": "Ubuntu",
-      "epss": 0.00364,
+      "epss": 0.00195,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -27262,7 +27685,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/sqlite3@3.31.1-4ubuntu0.7",
-      "raptor_risk_estimate": 9.33696194589379,
+      "raptor_risk_estimate": 7.456418327290196,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -27274,20 +27697,20 @@
       },
       "risk_components": {
         "calibration_status": "needs_retune",
-        "cvss_base": 85.0,
+        "cvss_base": 68.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44087185199999995,
+        "epss_multiplier": 0.440095635,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 9.33696194589379,
+        "final": 7.456418327290196,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "high",
+      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 0,
@@ -28774,7 +29197,7 @@
       "dep_version": "2.34-0.1ubuntu9.6",
       "direct": true,
       "ecosystem": "Ubuntu",
-      "epss": 0.00151,
+      "epss": 0.00157,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -28790,7 +29213,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/util-linux@2.34-0.1ubuntu9.6",
-      "raptor_risk_estimate": 12.603278007811086,
+      "raptor_risk_estimate": 12.60406756505935,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -28805,10 +29228,10 @@
         "cvss_base": 47.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.439893543,
+        "epss_multiplier": 0.439921101,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 12.603278007811086,
+        "final": 12.60406756505935,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -29410,7 +29833,7 @@
       "dep_version": "5.2.4-1ubuntu1.1",
       "direct": true,
       "ecosystem": "Ubuntu",
-      "epss": 0.00514,
+      "epss": 0.00534,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -29426,7 +29849,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/xz-utils@5.2.4-1ubuntu1.1",
-      "raptor_risk_estimate": 5.830968220799165,
+      "raptor_risk_estimate": 5.832181264933373,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -29441,10 +29864,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441560802,
+        "epss_multiplier": 0.441652662,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 5.830968220799165,
+        "final": 5.832181264933373,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -32428,7 +32851,7 @@
       "dep_version": "0.27.2",
       "direct": true,
       "ecosystem": "npm",
-      "epss": 0.00708,
+      "epss": 0.00729,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -32444,7 +32867,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/axios@0.27.2",
-      "raptor_risk_estimate": 27.502072767957483,
+      "raptor_risk_estimate": 27.508068126459566,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -32466,10 +32889,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.442451844,
+        "epss_multiplier": 0.442548297,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 27.502072767957483,
+        "final": 27.508068126459566,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -33386,7 +33809,7 @@
       "dep_version": "1.1.11",
       "direct": false,
       "ecosystem": "npm",
-      "epss": 0.0042,
+      "epss": 0.00428,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -33402,7 +33825,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/brace-expansion@1.1.11",
-      "raptor_risk_estimate": 5.195524700836083,
+      "raptor_risk_estimate": 5.195957463890976,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -33417,10 +33840,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44112905999999996,
+        "epss_multiplier": 0.441165804,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 5.195524700836083,
+        "final": 5.195957463890976,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -33473,7 +33896,7 @@
       "dep_version": "1.1.11",
       "direct": false,
       "ecosystem": "npm",
-      "epss": 0.00455,
+      "epss": 0.00491,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -33489,7 +33912,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/brace-expansion@1.1.11",
-      "raptor_risk_estimate": 7.354836847926283,
+      "raptor_risk_estimate": 7.357592650398475,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -33504,10 +33927,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.441289815,
+        "epss_multiplier": 0.441455163,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.354836847926283,
+        "final": 7.357592650398475,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -37740,7 +38163,7 @@
       "dep_version": "1.4.1",
       "direct": true,
       "ecosystem": "npm",
-      "epss": 0.00217,
+      "epss": 0.00318,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -37756,7 +38179,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/i18next-http-backend@1.4.1",
-      "raptor_risk_estimate": 20.557397127207768,
+      "raptor_risk_estimate": 20.579061153851193,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -37773,10 +38196,10 @@
         "cvss_base": 31.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440196681,
+        "epss_multiplier": 0.44066057399999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 20.557397127207768,
+        "final": 20.579061153851193,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -41326,6 +41749,89 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-118764"
+        ],
+        "cwe_ids": [
+          "CWE-405"
+        ],
+        "fixed_versions": [
+          "11.0.1"
+        ],
+        "id": "GHSA-g3hv-75wg-m249",
+        "modified": "2026-10-30T23:15:07.420159+00:00",
+        "published": "2026-10-30T23:09:55+00:00",
+        "references": [
+          "https://github.com/isaacs/minimatch/security/advisories/GHSA-g3hv-75wg-m249",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-118764",
+          "https://github.com/isaacs/minimatch/commit/77a0f5c4b80bdc641c3c930a1d9edf5ad2db57f8",
+          "https://github.com/isaacs/minimatch",
+          "https://github.com/isaacs/minimatch/releases/tag/v11.0.1"
+        ],
+        "severity": {
+          "score": 6.9,
+          "severity": "medium",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
+        },
+        "summary": "minimatch has potential denial of service via globparts amplification"
+      },
+      "cvss_score": 6.9,
+      "dep_name": "minimatch",
+      "dep_version": "3.1.2",
+      "direct": false,
+      "ecosystem": "npm",
+      "epss": 0.00291,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:npm:minimatch:3.1.2:GHSA-g3hv-75wg-m249",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:npm/minimatch@3.1.2",
+      "raptor_risk_estimate": 6.75490002573094,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'minimatch' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 69.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.440536563,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 6.75490002573094,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.71062,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2021-44906"
         ],
         "cwe_ids": [
@@ -41997,6 +42503,257 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-118780"
+        ],
+        "cwe_ids": [
+          "CWE-295",
+          "CWE-471"
+        ],
+        "fixed_versions": [
+          "1.4.1"
+        ],
+        "id": "GHSA-4487-j8r4-4g2f",
+        "modified": "2026-10-30T23:15:05.499229+00:00",
+        "published": "2026-10-30T23:02:14+00:00",
+        "references": [
+          "https://github.com/digitalbazaar/forge/security/advisories/GHSA-4487-j8r4-4g2f",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-118780",
+          "https://github.com/digitalbazaar/forge/commit/f6555609bd30f442fbfacd543155928ceccf98d0",
+          "https://github.com/digitalbazaar/forge",
+          "https://github.com/digitalbazaar/forge/releases/tag/v1.4.1"
+        ],
+        "severity": {
+          "score": 3.7,
+          "severity": "low",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "summary": "Forge: verifyCertificateChain() removes trusted CA certificates with the same subject from the CA store"
+      },
+      "cvss_score": 3.7,
+      "dep_name": "node-forge",
+      "dep_version": "0.9.0",
+      "direct": false,
+      "ecosystem": "npm",
+      "epss": 0.00172,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:npm:node-forge:0.9.0:GHSA-4487-j8r4-4g2f",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:npm/node-forge@0.9.0",
+      "raptor_risk_estimate": 3.617698768056099,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'node-forge' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 37.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.439989996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 3.617698768056099,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.71062,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "low",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-118775"
+        ],
+        "cwe_ids": [
+          "CWE-190"
+        ],
+        "fixed_versions": [
+          "1.4.1"
+        ],
+        "id": "GHSA-4642-5mcj-2rqw",
+        "modified": "2026-10-30T23:15:04.474856+00:00",
+        "published": "2026-10-30T23:02:40+00:00",
+        "references": [
+          "https://github.com/digitalbazaar/forge/security/advisories/GHSA-4642-5mcj-2rqw",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-118775",
+          "https://github.com/digitalbazaar/forge/commit/e56a3dde8e4e63bae566bb32546eeaf92f515e1e",
+          "https://github.com/digitalbazaar/forge",
+          "https://github.com/digitalbazaar/forge/releases/tag/v1.4.1"
+        ],
+        "severity": {
+          "score": 3.7,
+          "severity": "low",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N"
+        },
+        "summary": "Forge: ASN.1 OID first arc truncation in asn1.oidToDer"
+      },
+      "cvss_score": 3.7,
+      "dep_name": "node-forge",
+      "dep_version": "0.9.0",
+      "direct": false,
+      "ecosystem": "npm",
+      "epss": 0.00313,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:npm:node-forge:0.9.0:GHSA-4642-5mcj-2rqw",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:npm/node-forge@0.9.0",
+      "raptor_risk_estimate": 11.259810341666077,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'node-forge' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 37.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.440637609,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 11.259810341666077,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.71062,
+        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "low",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-118778"
+        ],
+        "cwe_ids": [
+          "CWE-476"
+        ],
+        "fixed_versions": [
+          "1.4.1"
+        ],
+        "id": "GHSA-525v-9gp9-w22h",
+        "modified": "2026-10-30T23:15:06.416126+00:00",
+        "published": "2026-10-30T23:02:30+00:00",
+        "references": [
+          "https://github.com/digitalbazaar/forge/security/advisories/GHSA-525v-9gp9-w22h",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-118778",
+          "https://github.com/digitalbazaar/forge/commit/7be9fbd40df2e2f15f29fea2846b1c87d58f6888",
+          "https://github.com/digitalbazaar/forge",
+          "https://github.com/digitalbazaar/forge/releases/tag/v1.4.1"
+        ],
+        "severity": {
+          "score": 5.9,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Forge: TLS client crash when the server sends no certificate"
+      },
+      "cvss_score": 5.9,
+      "dep_name": "node-forge",
+      "dep_version": "0.9.0",
+      "direct": false,
+      "ecosystem": "npm",
+      "epss": 0.00204,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:npm:node-forge:0.9.0:GHSA-525v-9gp9-w22h",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:npm/node-forge@0.9.0",
+      "raptor_risk_estimate": 5.770689920809151,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'node-forge' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 59.00000000000001,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.44013697199999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 5.770689920809151,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.71062,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2025-66031"
         ],
         "cwe_ids": [
@@ -42067,6 +42824,91 @@
         "version_match_confidence": 0.95
       },
       "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-119186"
+        ],
+        "cwe_ids": [
+          "CWE-1284",
+          "CWE-354"
+        ],
+        "fixed_versions": [
+          "1.4.1"
+        ],
+        "id": "GHSA-5cwg-6vw7-rj6p",
+        "modified": "2026-10-30T23:15:05.406416+00:00",
+        "published": "2026-10-30T23:02:09+00:00",
+        "references": [
+          "https://github.com/digitalbazaar/forge/security/advisories/GHSA-5cwg-6vw7-rj6p",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-119186",
+          "https://github.com/digitalbazaar/forge/commit/236845d96c71207259f91638d0138bba8e2fd624",
+          "https://github.com/digitalbazaar/forge",
+          "https://github.com/digitalbazaar/forge/releases/tag/v1.4.1"
+        ],
+        "severity": {
+          "score": 5.9,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:N"
+        },
+        "summary": "Forge: AES-GCM authentication bypass via unvalidated tagLength option"
+      },
+      "cvss_score": 5.9,
+      "dep_name": "node-forge",
+      "dep_version": "0.9.0",
+      "direct": false,
+      "ecosystem": "npm",
+      "epss": 0.00206,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:npm:node-forge:0.9.0:GHSA-5cwg-6vw7-rj6p",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:npm/node-forge@0.9.0",
+      "raptor_risk_estimate": 11.247252073966727,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'node-forge' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 59.00000000000001,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.44014615799999995,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 11.247252073966727,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.71062,
+        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 1,
@@ -42318,6 +43160,91 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-119190"
+        ],
+        "cwe_ids": [
+          "CWE-295",
+          "CWE-436"
+        ],
+        "fixed_versions": [
+          "1.4.1"
+        ],
+        "id": "GHSA-5x38-2vff-x55p",
+        "modified": "2026-10-30T23:15:08.080586+00:00",
+        "published": "2026-10-30T23:01:46+00:00",
+        "references": [
+          "https://github.com/digitalbazaar/forge/security/advisories/GHSA-5x38-2vff-x55p",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-119190",
+          "https://github.com/digitalbazaar/forge/commit/58c06bc251856b409c30ecb35a93f5f6c9bbc84a",
+          "https://github.com/digitalbazaar/forge",
+          "https://github.com/digitalbazaar/forge/releases/tag/v1.4.1"
+        ],
+        "severity": {
+          "score": 7.4,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N"
+        },
+        "summary": "Forge: X.509 basicConstraints bypass in verifyCertificateChain() via deprecated extension OIDs 2.5.29.10 and 2.5.29.13"
+      },
+      "cvss_score": 7.4,
+      "dep_name": "node-forge",
+      "dep_version": "0.9.0",
+      "direct": false,
+      "ecosystem": "npm",
+      "epss": 0.00246,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:npm:node-forge:0.9.0:GHSA-5x38-2vff-x55p",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:npm/node-forge@0.9.0",
+      "raptor_risk_estimate": 11.251946753480505,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'node-forge' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 74.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.44032987799999995,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 11.251946753480505,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.71062,
+        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2025-66030"
         ],
         "cwe_ids": [
@@ -42389,6 +43316,174 @@
         "version_match_confidence": 0.95
       },
       "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-118777"
+        ],
+        "cwe_ids": [
+          "CWE-1321"
+        ],
+        "fixed_versions": [
+          "1.4.1"
+        ],
+        "id": "GHSA-6wvx-3r32-xmcg",
+        "modified": "2026-10-30T23:15:05.413239+00:00",
+        "published": "2026-10-30T23:02:35+00:00",
+        "references": [
+          "https://github.com/digitalbazaar/forge/security/advisories/GHSA-6wvx-3r32-xmcg",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-118777",
+          "https://github.com/digitalbazaar/forge/commit/797c3f816a22748a96fceebb34eb3a6716853991",
+          "https://github.com/digitalbazaar/forge",
+          "https://github.com/digitalbazaar/forge/releases/tag/v1.4.1"
+        ],
+        "severity": {
+          "score": 4.8,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:L"
+        },
+        "summary": "Forge: Prototype Pollution in forge.http cookie handling via a malicious Set-Cookie"
+      },
+      "cvss_score": 4.8,
+      "dep_name": "node-forge",
+      "dep_version": "0.9.0",
+      "direct": false,
+      "ecosystem": "npm",
+      "epss": 0.00255,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:npm:node-forge:0.9.0:GHSA-6wvx-3r32-xmcg",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:npm/node-forge@0.9.0",
+      "raptor_risk_estimate": 4.697297173882798,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'node-forge' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 48.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.440371215,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 4.697297173882798,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.71062,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-118779"
+        ],
+        "cwe_ids": [
+          "CWE-1333",
+          "CWE-400"
+        ],
+        "fixed_versions": [
+          "1.4.1"
+        ],
+        "id": "GHSA-7wch-p9px-956x",
+        "modified": "2026-10-30T23:15:07.474415+00:00",
+        "published": "2026-10-30T23:02:25+00:00",
+        "references": [
+          "https://github.com/digitalbazaar/forge/security/advisories/GHSA-7wch-p9px-956x",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-118779",
+          "https://github.com/digitalbazaar/forge/commit/412345db583cd28a9d23636d0d93e9f751b935f3",
+          "https://github.com/digitalbazaar/forge",
+          "https://github.com/digitalbazaar/forge/releases/tag/v1.4.1"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Forge: Regular expression denial of service in PEM decoding (pem.decode)"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "node-forge",
+      "dep_version": "0.9.0",
+      "direct": false,
+      "ecosystem": "npm",
+      "epss": 0.00556,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:npm:node-forge:0.9.0:GHSA-7wch-p9px-956x",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:npm/node-forge@0.9.0",
+      "raptor_risk_estimate": 15.02476792173701,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'node-forge' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.44175370799999997,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 15.02476792173701,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.71062,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 1,
@@ -42513,7 +43608,7 @@
       "dep_version": "0.9.0",
       "direct": false,
       "ecosystem": "npm",
-      "epss": 0.00839,
+      "epss": 0.00867,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -42529,7 +43624,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/node-forge@0.9.0",
-      "raptor_risk_estimate": 6.005842087094362,
+      "raptor_risk_estimate": 6.007585387324922,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -42544,10 +43639,10 @@
         "cvss_base": 61.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.443053527,
+        "epss_multiplier": 0.443182131,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 6.005842087094362,
+        "final": 6.007585387324922,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -42555,6 +43650,90 @@
         "version_match_confidence": 0.95
       },
       "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-119188"
+        ],
+        "cwe_ids": [
+          "CWE-248",
+          "CWE-476"
+        ],
+        "fixed_versions": [
+          "1.4.1"
+        ],
+        "id": "GHSA-8hrf-8g6f-7xwp",
+        "modified": "2026-10-30T23:15:08.387649+00:00",
+        "published": "2026-10-30T23:02:00+00:00",
+        "references": [
+          "https://github.com/digitalbazaar/forge/security/advisories/GHSA-8hrf-8g6f-7xwp",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-119188",
+          "https://github.com/digitalbazaar/forge/commit/700d977d39f9f8f896c55b0763eebb940a2c087e",
+          "https://github.com/digitalbazaar/forge",
+          "https://github.com/digitalbazaar/forge/releases/tag/v1.4.1"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Forge: Denial of service in TLS record processing via a record interleaved with a fragmented handshake message"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "node-forge",
+      "dep_version": "0.9.0",
+      "direct": false,
+      "ecosystem": "npm",
+      "epss": 0.00411,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:npm:node-forge:0.9.0:GHSA-8hrf-8g6f-7xwp",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:npm/node-forge@0.9.0",
+      "raptor_risk_estimate": 7.351468644904711,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'node-forge' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.441087723,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 7.351468644904711,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.71062,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 1,
@@ -42798,6 +43977,256 @@
         "version_match_confidence": 0.95
       },
       "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-118781"
+        ],
+        "cwe_ids": [
+          "CWE-835"
+        ],
+        "fixed_versions": [
+          "1.4.1"
+        ],
+        "id": "GHSA-h6cr-wjv9-3cpp",
+        "modified": "2026-10-30T23:15:04.479846+00:00",
+        "published": "2026-10-30T23:02:20+00:00",
+        "references": [
+          "https://github.com/digitalbazaar/forge/security/advisories/GHSA-h6cr-wjv9-3cpp",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-118781",
+          "https://github.com/digitalbazaar/forge/commit/e96c47b7f006dec66fb7bb1934e7375498b04a72",
+          "https://github.com/digitalbazaar/forge",
+          "https://github.com/digitalbazaar/forge/releases/tag/v1.4.1"
+        ],
+        "severity": {
+          "score": 2.9,
+          "severity": "low",
+          "vector": "CVSS:3.1/AV:L/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "summary": "Forge: Denial of Service via infinite loop in BigInteger.modInverse() with negative input (incomplete fix of CVE-2026-33891)"
+      },
+      "cvss_score": 2.9,
+      "dep_name": "node-forge",
+      "dep_version": "0.9.0",
+      "direct": false,
+      "ecosystem": "npm",
+      "epss": 0.00119,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:npm:node-forge:0.9.0:GHSA-h6cr-wjv9-3cpp",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:npm/node-forge@0.9.0",
+      "raptor_risk_estimate": 2.8339248629429563,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'node-forge' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 28.999999999999996,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.439746567,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 2.8339248629429563,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.71062,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "low",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-119187"
+        ],
+        "cwe_ids": [
+          "CWE-674"
+        ],
+        "fixed_versions": [
+          "1.4.1"
+        ],
+        "id": "GHSA-hqq3-7jhf-c5jx",
+        "modified": "2026-10-30T23:15:07.576305+00:00",
+        "published": "2026-10-30T23:01:54+00:00",
+        "references": [
+          "https://github.com/digitalbazaar/forge/security/advisories/GHSA-hqq3-7jhf-c5jx",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-119187",
+          "https://github.com/digitalbazaar/forge/commit/817e2ce0d0f6d8a25bc9c2670615c38a9ffdc51c",
+          "https://github.com/digitalbazaar/forge",
+          "https://github.com/digitalbazaar/forge/releases/tag/v1.4.1"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Forge: Denial of service in TLS record processing via call stack exhaustion"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "node-forge",
+      "dep_version": "0.9.0",
+      "direct": false,
+      "ecosystem": "npm",
+      "epss": 0.00415,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:npm:node-forge:0.9.0:GHSA-hqq3-7jhf-c5jx",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:npm/node-forge@0.9.0",
+      "raptor_risk_estimate": 7.3517748451794,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'node-forge' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.441106095,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 7.3517748451794,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.71062,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-118782"
+        ],
+        "cwe_ids": [
+          "CWE-1284",
+          "CWE-354"
+        ],
+        "fixed_versions": [
+          "1.4.1"
+        ],
+        "id": "GHSA-jc66-7q78-782g",
+        "modified": "2026-10-30T23:15:04.512936+00:00",
+        "published": "2026-10-30T23:02:05+00:00",
+        "references": [
+          "https://github.com/digitalbazaar/forge/security/advisories/GHSA-jc66-7q78-782g",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-118782",
+          "https://github.com/digitalbazaar/forge/commit/d9584aa56824972858366d5187b3d29e46bf3656",
+          "https://github.com/digitalbazaar/forge",
+          "https://github.com/digitalbazaar/forge/releases/tag/v1.4.1"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+        },
+        "summary": "Forge: PKCS#12 MAC forgery and constant-key PBE via zero iteration count"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "node-forge",
+      "dep_version": "0.9.0",
+      "direct": false,
+      "ecosystem": "npm",
+      "epss": 0.00125,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:npm:node-forge:0.9.0:GHSA-jc66-7q78-782g",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:npm/node-forge@0.9.0",
+      "raptor_risk_estimate": 7.329575325264506,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'node-forge' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.43977412499999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 7.329575325264506,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.71062,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 1,
@@ -50325,7 +51754,7 @@
       "dep_version": "3.11.0",
       "direct": true,
       "ecosystem": "npm",
-      "epss": 0.00573,
+      "epss": 0.00598,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -50341,7 +51770,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/webpack-dev-server@3.11.0",
-      "raptor_risk_estimate": 14.662760725331962,
+      "raptor_risk_estimate": 14.666571341820417,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -50356,10 +51785,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441831789,
+        "epss_multiplier": 0.44194661399999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 14.662760725331962,
+        "final": 14.666571341820417,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -50492,7 +51921,7 @@
       "dep_version": "3.11.0",
       "direct": true,
       "ecosystem": "npm",
-      "epss": 0.00342,
+      "epss": 0.00357,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -50508,7 +51937,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/webpack-dev-server@3.11.0",
-      "raptor_risk_estimate": 14.62755062897865,
+      "raptor_risk_estimate": 14.629836998871722,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -50523,10 +51952,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44077080599999996,
+        "epss_multiplier": 0.440839701,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 14.62755062897865,
+        "final": 14.629836998871722,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
