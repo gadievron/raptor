@@ -1834,6 +1834,17 @@ _ALLOWLIST: tuple[AllowlistEntry, ...] = (
             "_line"
         ),
     ),
+    AllowlistEntry(
+        file="core/concepts/audit_bridge.py",
+        func_name="study_list_structural_context",
+        kind="unsanitised_llm_value",
+        detail="file",
+        audit_note=(
+            "prompt-context builder only; core.audit.context wraps the "
+            "returned structural block with wrap_untrusted before "
+            "prompt assembly; this site does not render a report"
+        ),
+    ),
 )
 
 
