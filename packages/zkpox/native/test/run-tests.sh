@@ -118,10 +118,8 @@ fi
 PARALLEL="${ZKPOX_TEST_PARALLEL:-4}"
 TMPDIR=$(mktemp -d -t zkpox-regression-XXXXXX)
 trap "rm -rf '$TMPDIR'" EXIT
-SALT_ARGS=()
 if [[ "$MODE" == "--prove" ]]; then
     head -c 32 /dev/urandom > "$TMPDIR/salt.bin"
-    SALT_ARGS=(--salt "$TMPDIR/salt.bin")
 fi
 
 # Phase 1: spawn all SP1 invocations in parallel (throttled), one
@@ -137,8 +135,13 @@ for w in "${witness_set[@]}"; do
     esac
 
     (
-        RAYON_NUM_THREADS=1 "$BIN" --witness "$w" "--target=$target" \
-                "$MODE" "${SALT_ARGS[@]}" --tag "regression:$base" \
+        # Keep the command array nonempty under Bash 3.2 + nounset.
+        prover_cmd=("$BIN" --witness "$w" "--target=$target" "$MODE"
+                 --tag "regression:$base")
+        if [[ "$MODE" == "--prove" ]]; then
+            prover_cmd+=(--salt "$TMPDIR/salt.bin")
+        fi
+        RAYON_NUM_THREADS=1 "${prover_cmd[@]}" \
             > "$TMPDIR/$base.out" 2>/dev/null
         echo "$?" > "$TMPDIR/$base.rc"
     ) &
