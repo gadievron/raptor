@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import sys
+
 import pytest
 
 from core.llm.dispatcher.auth import CredentialStore
@@ -419,6 +421,10 @@ class TestSocketPathBudget:
         monkeypatch.setenv("TMPDIR", str(deep))
         _tempfile.tempdir = None  # re-derive gettempdir from env
         try:
+            if sys.platform != "linux":
+                with pytest.raises(OSError, match="shorter temporary base"):
+                    LLMDispatcher(run_id="deep-tmpdir-e2e", creds=creds)
+                return
             d = LLMDispatcher(
                 run_id="deep-tmpdir-e2e",
                 creds=creds,
@@ -461,6 +467,10 @@ class TestSocketPathBudget:
         monkeypatch.setenv("TMPDIR", bad_str)
         monkeypatch.setattr(_tempfile, "tempdir", None)
 
+        if sys.platform != "linux":
+            with pytest.raises(OSError, match="shorter temporary base"):
+                LLMDispatcher(run_id="srg-tmpdir-e2e", creds=creds)
+            return
         d = LLMDispatcher(
             run_id="srg-tmpdir-e2e",
             creds=creds,
@@ -468,7 +478,11 @@ class TestSocketPathBudget:
         )
         try:
             assert d.socket_path.exists()
-            assert not str(d._sock_dir).startswith(bad_str)
+            if sys.platform == "linux":
+                assert d._sock_dir.parent == Path(bad_str)
+                assert str(d.child_socket_path).startswith(f"/proc/{os.getpid()}/fd/")
+            else:
+                assert d._sock_dir.parent == Path(bad_str)
             assert len(os.fsencode(d.child_socket_path)) <= 104
         finally:
             d.shutdown()

@@ -67,6 +67,7 @@ import secrets
 import select
 import socket
 import socketserver
+import stat
 import struct
 import sys
 import tempfile
@@ -1176,14 +1177,15 @@ _UPSTREAM_STATE_PRE = "pre-response"
 # in-process self-serve route (``raptor-llm-inproc-<hex8>-``) both mint
 # under it, so one dead-owner sweep covers the whole family.
 _SOCK_DIR_SWEEP_PREFIX = "raptor-llm-"
+# Capture before target processing; never re-adopt a later ambient base.
+_SERVICE_TMP_BASE = os.environ.get("_RAPTOR_SERVICE_TMP_BASE")
 
 # Socket-path budget, in BYTES of the fsencoded path — the unit the
 # kernel compares against sun_path (108 bytes on Linux including the
 # trailing NUL; 104 on the BSD family). 100 keeps headroom under the
 # tightest common cap. Higher (toward 107) admits dirs whose sockets
-# fail bind() on smaller-sun_path platforms; lower diverts to the
-# system-global /tmp fallback needlessly, abandoning the caller's
-# TMPDIR containment. Measured against "llm-child.sock" — the longest
+# fail bind() on smaller-sun_path platforms; lower needlessly selects
+# an indirect address. Socket storage always stays in the caller's base. Measured against "llm-child.sock" — the longest
 # socket name in the dir — so the budget covers its siblings too.
 _SUN_PATH_BUDGET = 100
 
@@ -1472,42 +1474,41 @@ class LLMDispatcher:
         self._loopback_lock = threading.Lock()
 
         # L1 — filesystem isolation.
-        # AF_UNIX sun_path tops out around 108 bytes: a deep TMPDIR
-        # (nested session/pytest scratch layers) pushes
-        # ``<dir>/llm-child.sock`` past it and bind() fails at init.
-        # Fall back to the system-global /tmp (short by construction)
-        # with the SAME 0700 + owner-marker discipline; the run-id
-        # part of the prefix is clamped so a pathological run_id can't
-        # re-create the overflow. Residual: a SIGKILL'd owner's
-        # fallback dir is reclaimed by the dead-owner sweep only when
-        # gettempdir() is /tmp — bounded by the owner marker either
-        # way.
-        # Reclaim orphaned sibling socket dirs before minting a new
-        # one. shutdown()/atexit remove the dir on normal teardown,
-        # but a SIGTERM'd or SIGKILL'd owner skips both. Sweeping here
-        # — the one chokepoint every construction route passes through
-        # — covers run-scoped dirs (``raptor-llm-<run_id>-`` via
-        # dispatcher_for_run) and in-process dirs alike; the previous
-        # lifecycle-level sweep matched only ``raptor-llm-inproc-``,
-        # so a hard-killed launcher's run-scoped dir waited on the
-        # 24 h age-based reaper after all. The broad prefix is safe:
-        # the sweep removes a dir only when its recorded owner pid is
-        # dead (marker-less: only past the 24 h legacy age gate) and
-        # no live process holds it (cwd / answering-socket probes).
-        # Best-effort by contract — never blocks construction.
+        # Socket storage stays beneath the selected temporary base. Long
+        # Linux paths use a pinned directory descriptor as their short address;
+        # clients in this PID view can resolve the owning server's procfs path.
+        # No writable system-global /tmp fallback is required.
         sweep_dead_owner_dirs(_SOCK_DIR_SWEEP_PREFIX)
-        _sock_prefix = f"raptor-llm-{run_id[:40]}-"
-        sock_dir = Path(tempfile.mkdtemp(prefix=_sock_prefix))
-        # os.fsencode, not str.encode(): the budget is in bytes as the
-        # kernel sees them, and an undecodable TMPDIR reaches Python
-        # as surrogate-escaped str — bare .encode() raised
-        # UnicodeEncodeError here, killing construction before this
-        # very fallback could rescue the path.
+        sock_dir = Path(tempfile.mkdtemp(prefix=f"raptor-llm-{run_id[:40]}-"))
+        socket_parent = sock_dir
+        self._socket_dir_finalizer = None
         if len(os.fsencode(sock_dir / "llm-child.sock")) > _SUN_PATH_BUDGET:
-            fallback = Path(tempfile.mkdtemp(prefix=_sock_prefix, dir="/tmp"))
-            with contextlib.suppress(OSError):
-                os.rmdir(sock_dir)
-            sock_dir = fallback
+            if sys.platform == "linux":
+                import weakref
+                descriptor = os.open(sock_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+                self._socket_dir_finalizer = weakref.finalize(self, os.close, descriptor)
+                socket_parent = Path(f"/proc/{os.getpid()}/fd/{descriptor}")
+            else:
+                # macOS lacks the Linux procfs address. The launcher's
+                # original selected base avoids the deep session suffix while
+                # respecting custom placement and the OS-private default.
+                base = Path(_SERVICE_TMP_BASE) if _SERVICE_TMP_BASE else sock_dir.parent
+                if not base.is_absolute():
+                    sock_dir.rmdir()
+                    raise OSError("dispatcher temporary base must be absolute")
+                info = base.stat()
+                if (info.st_uid not in {0, os.geteuid()}
+                        or (info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX)):
+                    sock_dir.rmdir()
+                    raise OSError("dispatcher temporary base must be owned by you or root, and private or sticky")
+                if base == sock_dir.parent:
+                    sweep_dead_owner_dirs("rll-")
+                compact = Path(tempfile.mkdtemp(prefix="rll-", dir=base))
+                sock_dir.rmdir()
+                sock_dir = socket_parent = compact
+                if len(os.fsencode(compact / "llm-child.sock")) > _SUN_PATH_BUDGET:
+                    compact.rmdir()
+                    raise OSError("dispatcher socket path too long; select a shorter temporary base")
         self._sock_dir = sock_dir
         # 0o700 = owner-only — the socket lives here and must not be
         # group/other-readable on a multi-user host.
@@ -1518,7 +1519,7 @@ class LLMDispatcher:
         # reclaim the orphan instead of waiting on the 24 h age-based
         # reaper.
         write_owner_marker(self._sock_dir)
-        self.socket_path = self._sock_dir / "llm.sock"
+        self.socket_path = socket_parent / "llm.sock"
         # Child-plane UDS: same peer-UID gate, REDUCED surface (scoped
         # child tokens only — no worker tokens, no /_child/* admin, no
         # /_token/renew). This is the only dispatcher socket that may
@@ -1527,7 +1528,7 @@ class LLMDispatcher:
         # passes peer-UID verification and must not carry admin
         # capability. Derivable from socket_path by name so worker-side
         # code (skill_dispatch) can find it without a second env var.
-        self.child_socket_path = self._sock_dir / "llm-child.sock"
+        self.child_socket_path = socket_parent / "llm-child.sock"
 
         # Audit log
         self._audit_path = audit_path
@@ -1566,6 +1567,8 @@ class LLMDispatcher:
                 self._sock_dir.rmdir()
             except OSError:
                 pass
+            if self._socket_dir_finalizer is not None:
+                self._socket_dir_finalizer()
             raise
 
     def _init_server(self, run_id: str) -> None:
@@ -2454,6 +2457,8 @@ class LLMDispatcher:
                 self._sock_dir, exc_info=True,
             )
             errors.append("sock_dir_rmdir")
+        if self._socket_dir_finalizer is not None:
+            self._socket_dir_finalizer()
         self._audit(AuditEvent(
             ts=time.time(), event="server.stop",
             peer_pid=None, peer_uid=None,

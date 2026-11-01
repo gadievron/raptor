@@ -25,6 +25,7 @@ sys.path.insert(0, os.environ["RAPTOR_DIR"])
 from core.config import RaptorConfig
 from core.logging import get_logger
 from core.sandbox import SandboxSetupError
+from packages.codeql.temp_env import temporary_command
 from packages.codeql.tunables import CodeQLTunables
 
 logger = get_logger()
@@ -290,7 +291,7 @@ class QueryRunner:
         version = None
         try:
             result = subprocess.run(
-                [self.codeql_cli, "version"],  # type: ignore[list-item]
+                temporary_command([self.codeql_cli, "version"]),  # type: ignore[list-item]
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -533,7 +534,7 @@ class QueryRunner:
         try:
             from core.sandbox import run as sandbox_run
             result = sandbox_run(
-                cmd,
+                temporary_command(cmd),
                 block_network=True,
                 tool_paths=self._sandbox_tool_paths(),
                 # audit_run_dir = where audit JSONL lands when --audit
@@ -580,7 +581,7 @@ class QueryRunner:
 
                     def _download():
                         return sandbox_run(
-                            [self.codeql_cli, "pack", "download", pack_name],
+                            temporary_command([self.codeql_cli, "pack", "download", pack_name]),
                             use_egress_proxy=True,
                             # The pack name is parsed out of `codeql
                             # analyze` stderr over a database built
@@ -637,7 +638,7 @@ class QueryRunner:
                     if dl.returncode == 0:
                         logger.info("✓ Downloaded %s — retrying analysis", pack_name)
                         result = sandbox_run(
-                            cmd, block_network=True,
+                            temporary_command(cmd), block_network=True,
                             tool_paths=self._sandbox_tool_paths(),
                             audit_run_dir=str(out_dir),
                             capture_output=True, text=True,
@@ -816,7 +817,7 @@ class QueryRunner:
         try:
             from core.sandbox import run as sandbox_run
             result = sandbox_run(
-                cmd,  # type: ignore[arg-type]
+                temporary_command(cmd),  # type: ignore[arg-type]
                 block_network=True,
                 tool_paths=self._sandbox_tool_paths(),
                 audit_run_dir=str(out_dir),
@@ -1211,7 +1212,7 @@ class QueryRunner:
                 # first-run dep fetch (00015 requires the netns tier
                 # only for repo-influenced egress).
                 install_proc = sandbox_run(
-                    [self.codeql_cli, "pack", "install", str(pack_dir)],  # type: ignore[list-item]
+                    temporary_command([self.codeql_cli, "pack", "install", str(pack_dir)]),  # type: ignore[list-item]
                     use_egress_proxy=True,
                     proxy_hosts=proxy_hosts_for_codeql(self.codeql_cli),
                     caller_label="codeql-pack-install",
@@ -1261,7 +1262,7 @@ class QueryRunner:
         analysis_start = time.time()
         try:
             proc = sandbox_run(
-                cmd, block_network=True,  # type: ignore[arg-type]
+                temporary_command(cmd), block_network=True,  # type: ignore[arg-type]
                 tool_paths=self._sandbox_tool_paths(),
                 audit_run_dir=str(out_dir),
                 capture_output=True, text=True,

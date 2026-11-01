@@ -20,6 +20,7 @@ the runtime side (``LLMDispatcher``'s own /tmp fallback) is pinned in
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
@@ -198,13 +199,15 @@ def test_sun_path_budget_exact_value(
             )
             try:
                 assert d.socket_path.exists()
-                stayed = str(d._sock_dir).startswith(root + os.sep)
-                assert stayed == must_stay, (
-                    f"worst-case socket path at pinned budget"
-                    f"{'+1' if overshoot else ''} "
-                    f"({_PINNED_SUN_PATH_BUDGET + overshoot} bytes) "
-                    f"{'diverted to /tmp' if must_stay else 'stayed'}"
-                )
+                assert d._sock_dir.parent == Path(root)
+                addressed_directly = d.child_socket_path.parent == d._sock_dir
+                if sys.platform == "linux":
+                    assert addressed_directly == must_stay
+                else:
+                    assert addressed_directly
+                    if not must_stay:
+                        assert d._sock_dir.name.startswith("rll-")
+                assert len(os.fsencode(d.child_socket_path)) <= _PINNED_SUN_PATH_BUDGET
                 if must_stay:
                     # Landed exactly AT the boundary, not merely under
                     # it — this also self-validates the padding math
