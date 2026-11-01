@@ -225,6 +225,7 @@ class TestPopulatedSarifCacheSeam:
             target_path=target, out_dir=out, resume=False,
             inventory=checklist, batch_sloc_threshold=0,
             verdict_reuse=False,
+            immediate_verify=False,
         )
         result = run_orchestrator(config, _review_fn)
         return result, out

@@ -1204,6 +1204,7 @@ class TestSweepValidation:
         config = OrchestratorConfig(
             target_path=target, out_dir=out, resume=False,
             sweep_validate_findings=True, batch_sloc_threshold=0,
+            immediate_verify=False,
         )
         result = run_orchestrator(config, review_fn)
         assert result.sweep_demoted == 1
@@ -1803,6 +1804,7 @@ class TestSuspiciousPromotion:
             validate=False,
             target_path=target, out_dir=out, resume=False,
             sweep_validate_findings=True, batch_sloc_threshold=0,
+            immediate_verify=False,
             # Hermetic: with Joern installed, the suspicious-demotion
             # gate (suspicious + no verification evidence -> clean)
             # would flip the stubbed verdict before the sweep promotes
@@ -5510,6 +5512,7 @@ class TestSageCombinedPathway:
             target_path=target, out_dir=out, resume=False,
             sweep_validate_findings=False,
             batch_sloc_threshold=0,
+            immediate_verify=False,
         )
 
         with _patch("core.sage.hooks.store_audit_hypothesis_verdict", side_effect=capture_store):
