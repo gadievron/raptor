@@ -1,99 +1,87 @@
 #!/usr/bin/env bash
-# zkpox-cve-2017-9047-demo.sh — independent verification walk-through.
-# Prereqs: SP1 toolchain (`curl -L https://sp1up.succinct.xyz | bash; sp1up`)
-#          + Python 3.12+ + `pip install -r requirements-dev.txt`.
+# Independent verification walk-through for the curated libxml2 bug extraction.
+# Prerequisites and pinned toolchain: packages/zkpox/README.md.
+# This generates a real Groth16 proof and may take tens of minutes on CPU.
 
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
+umask 077
 
-# 1. Build prover + the full-verify verifier. ~20 min cold cache.
+NATIVE="$PWD/packages/zkpox/native"
+TARGET_DIR="${CARGO_TARGET_DIR:-$NATIVE/target}"
+if [[ "$TARGET_DIR" != /* ]]; then
+    TARGET_DIR="$PWD/$TARGET_DIR"
+fi
+BIN_DIR="$TARGET_DIR/release"
+export PATH="$BIN_DIR:$PATH"
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/zkpox-demo-XXXXXX")
+PRIVATE="$WORK/private"
+PUBLIC="$WORK/public"
+mkdir "$PRIVATE"
+echo "== working directory: $WORK =="
+
 echo "== building prover + full-verify verifier =="
-cargo build --release --features full-verify \
-    --manifest-path packages/zkpox/native/Cargo.toml
+cargo build --release --locked --features full-verify \
+    --manifest-path "$NATIVE/Cargo.toml"
 
-# 2. Regenerate the witness corpus (includes the CVE-2017-9047
-#    trigger at witnesses/03-overflow1-crash.bin).
-python3 packages/zkpox/native/test/witnesses/generate.py
+python3 "$NATIVE/test/witnesses/generate.py"
+WITNESS="$NATIVE/test/witnesses/03-overflow1-crash.bin"
 
-# 3. Confirm the prover finds the bug in execute mode (no STARK
-#    wrap — fast). The verdicts the guest publishes include
-#    `oob_detected=true`, `oob_count`, `oob_first_offset` — that's
-#    the proof's binding to the bug.
-echo "== prover sees the overflow =="
-./packages/zkpox/native/target/release/zkpox-prove \
-    --witness packages/zkpox/native/test/witnesses/03-overflow1-crash.bin \
-    --execute --target 3 \
-    | jq '.verdicts'   # expect oob_detected:true, oob_count > 0
+echo "== prover sees the curated overflow =="
+"$BIN_DIR/zkpox-prove" --witness "$WITNESS" --execute --target 03 \
+    | jq -e '.verdicts | select(.oob_detected == true and .oob_count > 0)'
 
-# 4. Produce a real ZK proof + a CBOR disclosure bundle.
-#    --wrap core is the fast wrap (~5 min); --wrap groth16 is the
-#    shippable form (~17 min on CPU).
-WORK=$(mktemp -d)
-cp packages/zkpox/native/test/witnesses/03-overflow1-crash.bin "$WORK/witness.bin"
-
-python3 - "$WORK" <<'PY'
-"""Build a minimal Tier 0/1 bundle dir cmd_prove will read."""
-import hashlib, json, sys
+cp "$WITNESS" "$PRIVATE/witness.bin"
+python3 - "$PRIVATE" <<'PY'
+import hashlib
+import json
+import sys
 from pathlib import Path
 from packages.zkpox import ZKPoXBundle
-from core.hash import sha256_file
+from packages.zkpox.statement import source_hash
 
 work = Path(sys.argv[1])
-w = (work / "witness.bin").read_bytes()
-# The bundle binds to *some* target artefact's hash; for the demo
-# we hash the SP1 guest ELF as the witnessed artefact (its bytes
-# are what the proof actually runs against).
-elf_path = next(Path("packages/zkpox/native/target/release/build").rglob("zkpox-guest"))
+witness = (work / "witness.bin").read_bytes()
 manifest = ZKPoXBundle(
-    witness_hash=hashlib.sha256(w).hexdigest(),
-    witness_len=len(w),
-    source="fuzz", observed_outcome="exit_signal",
-    outcome_detail={"finding_id": "CVE-2017-9047"},
-    target_binary_hash=sha256_file(elf_path),
-    target_source_hash=None,
-    produced_by="cve-demo-script", timestamp=None,
-    attestation={"claim": "input triggers CVE-2017-9047 in target 03"},
+    witness_hash=hashlib.sha256(witness).hexdigest(),
+    witness_len=len(witness),
+    source="fuzz", observed_outcome="unknown", outcome_detail={},
+    target_binary_hash=None, target_source_hash=source_hash(3).hex(),
+    produced_by="curated-source-demo", timestamp=None,
+    attestation={"scope": "freestanding libxml2 bug extraction, not the full library"},
     tier="0/1", reproduction=None,
 )
 (work / "manifest.json").write_text(json.dumps(manifest.as_dict(), indent=2))
-print(f"bundle dir prepared at {work}")
 PY
 
-echo "== producing the disclosure bundle (real STARK + real hashes) =="
-python3 raptor.py zkpox prove "$WORK" \
-    --wrap core \
-    --gadget-id "memory-safety::oob-write@0.1.0" \
-    --no-anchor
+echo "== producing a Groth16 disclosure for curated target 03 =="
+# Anchoring is opt-in; this command does not publish to a transparency log.
+python3 raptor.py zkpox prove "$PRIVATE" \
+    --target 03 --gadget oob_write --out "$PUBLIC"
 
-# 5. The headline check — Phase 1.5.4 strict mode (default).
-#    Exit 0 means: STARK verified against the embedded guest ELF AND
-#    the bundle's vkey/harness hashes match the verifier's derivation.
-echo "== verifying under default strict =="
-./packages/zkpox/native/target/release/zkpox-verify "$WORK/bundle.cbor"
-echo "verify exit: $?  (0 = pass; non-zero would be a FAIL)"
+echo "== verifying proof, statement and guest/key identities =="
+"$BIN_DIR/zkpox-verify" "$PUBLIC/bundle.cbor"
 
-# 6. Tamper test — flip one bit in the proof bytes. Strict must fail.
-echo "== tamper test: flip a bit in proof.bytes =="
-cp "$WORK/bundle.cbor" "$WORK/tampered.cbor"
-python3 - <<PY
+echo "== tamper test: change the proof bytes, preserving canonical CBOR =="
+python3 - "$PUBLIC/bundle.cbor" "$WORK/tampered.cbor" <<'PY'
+from dataclasses import replace
 from pathlib import Path
-p = Path("$WORK/tampered.cbor")
-b = bytearray(p.read_bytes())
-# Flip a byte near the middle (proof.bytes region — large CBOR bstr).
-b[len(b)//2] ^= 0x01
-p.write_bytes(b)
+import sys
+from packages.zkpox.disclosure import from_cbor, to_cbor
+
+bundle = from_cbor(Path(sys.argv[1]).read_bytes())
+proof = bytearray(bundle.proof.bytes)
+assert proof, "the real prover must produce nonempty proof bytes"
+proof[len(proof) // 2] ^= 1
+changed = replace(bundle, proof=replace(bundle.proof, bytes=bytes(proof)))
+Path(sys.argv[2]).write_bytes(to_cbor(changed))
 PY
 
-if ./packages/zkpox/native/target/release/zkpox-verify "$WORK/tampered.cbor"; then
-    echo "REGRESSION: tampered bundle passed strict — investigate."
+if "$BIN_DIR/zkpox-verify" "$WORK/tampered.cbor"; then
+    echo "REGRESSION: tampered proof passed verification." >&2
     exit 1
 fi
-echo "OK: tampered bundle correctly rejected under default strict"
 
-# 7. Confirm the rejection is precise — the verifier prints which
-#    check failed (STARK / harness hash / vkey hash). Useful for
-#    proving to a reviewer that the failure isn't generic.
-./packages/zkpox/native/target/release/zkpox-verify "$WORK/tampered.cbor" 2>&1 \
-    | grep -E "FAIL|stark_verification|harness|verifier_key_hash" || true
-
-echo "== independent verification complete =="
+echo "== independent verification complete; tampered proof rejected =="
+echo "Public disclosure: $PUBLIC/bundle.cbor"
+echo "Keep the private input directory private: $PRIVATE"
