@@ -19,6 +19,7 @@ sys.path.insert(0, os.environ['RAPTOR_DIR'])
 
 from core.atomic_fs import write_text_atomically  # noqa: E402
 from core.config import RaptorConfig  # noqa: E402
+from core.json import dumps_canonical  # noqa: E402
 from core.security.capped_read import read_capped  # noqa: E402
 
 ROOT = RaptorConfig.REPO_ROOT
@@ -195,7 +196,7 @@ def prepare(output: Path, languages, modes):
         inventory = _tree(kit)
         metadata = {'schema_version': 1, 'codeql_version': boot['VERSION'], 'asset': asset,
                     'languages': list(languages), 'modes': list(modes), 'packs': provenance, 'files': inventory}
-        manifest = json.dumps(metadata, indent=2, sort_keys=True) + '\n'
+        manifest = dumps_canonical(metadata)
         (kit / 'manifest.json').write_text(manifest, encoding='utf-8')
         os.replace(kit, output)
     checksum = hashlib.sha256(manifest.encode()).hexdigest()
