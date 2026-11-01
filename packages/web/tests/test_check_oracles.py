@@ -335,6 +335,112 @@ def test_distinct_sensitive_file_response_is_still_flagged():
     assert "/.env" in findings[0].url
 
 
+def _probe(responses: dict[str, FakeResponse], *, external=None):
+    """Run the check against a site whose catch-all is the SPA shell."""
+    from packages.web.checks.information import SensitiveFileCheck
+
+    shell = FakeResponse(200, "<!doctype html><html><body>app shell</body></html>")
+
+    def handler(method, path, **_kw):
+        return responses.get(path, shell)
+
+    discovery = {"external_paths": external} if external else None
+    return SensitiveFileCheck().run(
+        FakeClient(handler), "https://t.example", discovery=discovery,
+    )
+
+
+def test_name_based_403_is_not_an_exposure():
+    # The edge refuses /.env and /.git/* by name while every other path
+    # (including the calibration probe) gets the SPA shell.
+    forbidden = FakeResponse(403, "<html><title>403 Forbidden</title></html>")
+    assert _probe({"/.env": forbidden, "/.git/HEAD": forbidden,
+                   "/.git/config": forbidden}) == []
+
+
+def test_200_that_is_not_the_file_is_not_flagged():
+    login = FakeResponse(200, "<!DOCTYPE html><html><form>Sign in to continue"
+                              " to the admin console</form></html>")
+    not_json = FakeResponse(200, "Not Found")
+    assert _probe({"/.env": login, "/secrets.json": not_json,
+                   "/id_rsa": FakeResponse(200, "")}) == []
+
+
+def test_served_file_is_flagged_with_what_the_body_showed():
+    findings = _probe({
+        "/.git/HEAD": FakeResponse(200, "ref: refs/heads/main\n"),
+        "/phpinfo.php": FakeResponse(
+            200, "<!DOCTYPE html><html><title>PHP 8.3.1 - phpinfo()</title>"
+                 "<h1>PHP Version 8.3.1</h1></html>"),
+    })
+    by_url = {f.url: f for f in findings}
+    assert set(by_url) == {"https://t.example/.git/HEAD",
+                           "https://t.example/phpinfo.php"}
+    assert "a git HEAD ref" in by_url["https://t.example/.git/HEAD"].evidence
+    assert "403" not in by_url["https://t.example/phpinfo.php"].recommendation
+
+
+def test_external_candidate_needs_a_non_html_body():
+    findings = _probe(
+        {"/db.bak": FakeResponse(200, "\x00\x01binary backup"),
+         "/old.bak": FakeResponse(200, "<html><body>Custom error</body></html>")},
+        external=[("/db.bak", "Backup file exposed"),
+                  ("/old.bak", "Backup file exposed")],
+    )
+    assert [f.url for f in findings] == ["https://t.example/db.bak"]
+
+
+_REAL_BODIES = {
+    "/.git/HEAD": b"ref: refs/heads/main\n",
+    "/.git/config": b"[core]\n\trepositoryformatversion = 0\n",
+    "/.svn/entries": b"12\n",
+    "/.hg/hgrc": b"[paths]\ndefault = https://hg.example/repo\n",
+    "/.env": b"APP_ENV=production\nDB_PASSWORD=x\n",
+    "/.env.local": b"export API_KEY=abc\n",
+    "/.env.production": b"# prod\nSECRET_KEY = abc\n",
+    "/phpinfo.php": b"<html><h1 class=\"p\">PHP Version 8.3.1</h1></html>",
+    "/info.php": b"<html><title>PHP 7.4 - phpinfo()</title></html>",
+    "/server-status": b"<html><h1>Apache Server Status for t.example</h1></html>",
+    "/server-info": b"<html><h1>Apache Server Information</h1></html>",
+    "/nginx_status": b"Active connections: 3 \nserver accepts handled requests\n",
+    "/actuator/env": b'{"activeProfiles":["prod"],"propertySources":[]}',
+    "/actuator/heapdump": b"JAVA PROFILE 1.0.2\x00\x00\x00\x04",
+    "/actuator/threaddump": b'{"threads":[{"threadName":"main"}]}',
+    "/debug/vars": b'{"cmdline":["/srv/app"],"memstats":{}}',
+    "/debug/pprof": b"<html>Types of profiles available:</html>",
+    "/config.php": b"<?php\n$db_pass = 'x';\n",
+    "/wp-config.php": b"<?php\ndefine( 'DB_PASSWORD', 'x' );\n",
+    "/database.yml": b"production:\n  adapter: postgresql\n  password: x\n",
+    "/secrets.json": b'{"stripe_secret_key": "sk_live_x"}',
+    "/id_rsa": b"-----BEGIN OPENSSH PRIVATE KEY-----\nb3Blbn\n",
+    "/.ssh/id_rsa": b"-----BEGIN RSA PRIVATE KEY-----\nMIIE\n",
+    "/backup.sql": b"-- MySQL dump 10.13\nCREATE TABLE `users` (\n",
+    "/dump.sql": b"--\n-- PostgreSQL database dump\n--\n",
+    "/.DS_Store": b"\x00\x00\x00\x01Bud1\x00\x00\x10\x00",
+    "/web.config": b'<?xml version="1.0"?>\n<configuration>\n',
+    "/composer.json": b'{"require": {"php": ">=8.1"}}',
+    "/package.json": b'{"name": "app", "dependencies": {}}',
+    "/test.php": b"ok",
+}
+
+
+def test_every_catalog_path_recognises_its_real_file():
+    from packages.web.sensitive_paths import SENSITIVE_PATHS, served_content
+
+    assert set(_REAL_BODIES) == set(SENSITIVE_PATHS)
+    for path, body in _REAL_BODIES.items():
+        assert served_content(path, body), path
+
+
+def test_no_catalog_path_accepts_an_html_error_page():
+    from packages.web.sensitive_paths import SENSITIVE_PATHS, served_content
+
+    page = (b"<!DOCTYPE html><html><head><title>Page not found</title></head>"
+            b"<body><h1>Sorry, that page does not exist</h1></body></html>")
+    for path in SENSITIVE_PATHS:
+        assert served_content(path, page) is None, path
+
+
 # -- OAuth missing-state scoping -------------------------------------------------
 
 
