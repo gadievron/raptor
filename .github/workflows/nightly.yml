@@ -191,6 +191,7 @@ jobs:
       # timeout for setup and report uploads. Keep the tripwire enabled so
       # further growth remains visible before the job is forcibly cancelled.
       - name: Run slow tests
+        id: slow_tests
         env:
           RAPTOR_RANDOMISE_TESTS: ${{ github.run_id }}
           RAPTOR_MAX_SESSION_SECONDS: '2700'
@@ -205,12 +206,18 @@ jobs:
       # Full-collection lane, so --full: a count below the recorded
       # one is stale headroom worth a warning, not a filtered subset.
       - name: Check slow-lane skip count against its recorded budget
+        if: ${{ !cancelled() && (steps.slow_tests.outcome == 'success' || steps.slow_tests.outcome == 'failure') }}
         run: |
           python3 .github/scripts/check_skip_budget.py \
             --lane nightly-slow --full \
             --junit-xml "$RUNNER_TEMP/slow.xml"
 
       - name: Run integration tests (retry once on external outage)
+        id: integration_tests
+        # Preserve integration coverage after a slow-test or skip-budget
+        # failure. Require the slow step to have run so setup failures
+        # do not launch tests in an unprepared environment.
+        if: ${{ !cancelled() && (steps.slow_tests.outcome == 'success' || steps.slow_tests.outcome == 'failure') }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
@@ -232,6 +239,7 @@ jobs:
       # Budget over the attempt that produced the green: attempt 2
       # exists only when attempt 1 failed and was retried.
       - name: Check integration skip count against its recorded budget
+        if: ${{ !cancelled() && (steps.integration_tests.outcome == 'success' || steps.integration_tests.outcome == 'failure') }}
         run: |
           xml="$RUNNER_TEMP/integration-attempt-2.xml"
           [ -f "$xml" ] || xml="$RUNNER_TEMP/integration-attempt-1.xml"
@@ -272,6 +280,8 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: nightly-slow-integration-results
-          path: ${{ runner.temp }}/integration-attempt-*.xml
+          path: |
+            ${{ runner.temp }}/slow.xml
+            ${{ runner.temp }}/integration-attempt-*.xml
           retention-days: 14
           if-no-files-found: ignore
