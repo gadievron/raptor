@@ -25,6 +25,7 @@ This page is split into:
 | Code scanning | GitHub CodeQL Advanced | Python, C/C++, GitHub Actions |
 | Slash-command metadata lint | In-tree Python checker | `.claude/commands/*.md` dispatch metadata |
 | Dependency regression gate | RAPTOR SCA | PR merge result versus `main` dependency surface |
+| ZKPoX native checks | Cargo + Pytest | Path-filtered native statement/parser checks; opt-in full-proof validation on a provisioned SP1 runner |
 | Corpus label schema lint | In-tree Python linter | Corpus label JSON files |
 | Corpus label pin lint (PR) | In-tree Python linter | Changed label files in a PR |
 | SARIF known-FP suppressions | In-tree Python script | CodeQL SARIF output |
@@ -42,6 +43,7 @@ This page is split into:
 
 ### Gate details and local reproduction
 
+- **ZKPoX native checks** — [`zkpox-native.yml`](../.github/workflows/zkpox-native.yml) on PRs touching the configured ZKPoX/witness paths, pushes to `main` touching the package/workflow paths, and manual dispatch. The hosted `statement-and-parser` job uses Rust 1.95.0 and locked dependencies to test the shared statement and structural verifier, including inspection-mode CLI behavior. Real Groth16 positive/negative, production CLI and delivery tests run when manually dispatched with `full_proofs=true`, on a provisioned `[self-hosted, linux, x64, sp1]` runner; setup is documented in [`packages/zkpox/README.md`](../packages/zkpox/README.md). Locally: `cargo test --locked --manifest-path packages/zkpox/native/Cargo.toml -p zkpox-statement` and `cargo test --locked --manifest-path packages/zkpox/native/Cargo.toml -p zkpox-verify --no-default-features --features structural`.
 - **Python lint gate** — [`lint.yml`](../.github/workflows/lint.yml) on `pull_request` and `merge_group`. Rules `F401`, `F811`, `F821`, `F841`; Python 3.12 target (config in `pyproject.toml`). Locally: `ruff check <changed .py files>`.
 - **Full-tree Python lint audit** — [`lint.yml`](../.github/workflows/lint.yml) on `push: main`, weekly cron, manual run. Same rule set as the PR gate. Locally: `ruff check .`.
 - **Fast Python test suite** — [`tests.yml`](../.github/workflows/tests.yml) on PRs, pushes, merge queue; tiers computed by [`test_scope.py`](../.github/scripts/test_scope.py). Default excludes `slow` and `integration` (markers in `pytest.ini`); `RAPTOR_MAX_TEST_SECONDS=10` per-test wall-clock guard. Locally: `python3 -m pytest core packages engine` (the `engine/` rule-precision tests skip themselves when coccinelle/semgrep are not installed).
