@@ -342,3 +342,14 @@ def test_operator_entry_point_works_outside_checkout_without_ambient_root(tmp_pa
     result = subprocess.run([sys.executable, str(entry), '--help'], cwd=tmp_path, env=env,
                             capture_output=True, text=True, timeout=15, check=True)
     assert 'prepare' in result.stdout and 'import' in result.stdout and 'check' in result.stdout
+
+
+def test_import_accepts_previously_prepared_indented_manifest(setup, tmp_path):
+    import hashlib
+    kit, _ = prepared(tmp_path)
+    path = kit / 'manifest.json'
+    # Previously exported kits hash these original display-form bytes.
+    legacy = json.dumps(json.loads(path.read_text()), indent=2, sort_keys=True) + '\n'
+    path.write_text(legacy, encoding='utf-8')
+    digest = hashlib.sha256(legacy.encode('utf-8')).hexdigest()
+    offline.import_kit(kit, digest)
