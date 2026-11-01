@@ -1042,10 +1042,10 @@
     "note": "framework-internal enum/namespace vocabulary (not target API names)"
   },
   "core/audit/sandbox_policy.py::_LLM_PHASES": {
-    "count": 65,
+    "count": 66,
     "kind": "literal",
-    "note": "Closed cost-ledger phase identifiers used by the advisory sandbox-policy validator to distinguish framework LLM spend classes from external tool invocations; includes iris_refinement_skipped. Infrastructure phase names, not a learned target API vocabulary.",
-    "reviewed": "2026-10-31"
+    "note": "Closed cost-ledger phase identifiers for the advisory sandbox-policy validator. Includes prep_edge_pass, an orchestrator-owned ledger phase, alongside iris_refinement_skipped; these are framework LLM spend classes, not learned target API names.",
+    "reviewed": "2026-11-01"
   },
   "core/audit/sandbox_policy.py::_TOOL_POLICIES": {
     "count": 14,
@@ -1267,10 +1267,10 @@
     "note": "subprocess env allowlist (infrastructure env-var names, not a learned name vocabulary); grew by the RAPTOR_SANITIZER_CUT* transport family"
   },
   "core/config/__init__.py::TARGET_ENV_STRIP_SET": {
-    "count": 17,
+    "count": 20,
     "kind": "literal",
-    "note": "target-facing env strip set (trust markers, session credential, framework-identity tells incl. the RAPTOR_SANITIZER_CUT* transport family) - infrastructure env-var names, not a learned name vocabulary; crossed the seed threshold when the sanitizer-cut transport joined",
-    "reviewed": "2026-10-31"
+    "note": "Closed target-environment security policy: trust/session markers, framework identity and sanitizer-cut transport names. Includes RAPTOR_REGISTRY_HOME, _RAPTOR_LAUNCH_METADATA and RAPTOR_LLM_TRANSCRIPT, which must not leak operator paths or framework identity to targets; these are infrastructure variables, not learned target vocabulary.",
+    "reviewed": "2026-11-01"
   },
   "core/config/__init__.py::TOOL_DEPS": {
     "count": 11,
@@ -1885,11 +1885,6 @@
     "kind": "literal",
     "note": "Linux syscall names (POSIX/kernel ABI), permitted like libc vocab"
   },
-  "core/sandbox/triage.py::_KNOWN_2LD_TLDS": {
-    "count": 18,
-    "kind": "literal",
-    "note": "closed set of known two-level-domain TLD suffixes (co.uk, com.au, etc.) for the dns_exfil_indicator triage signal\u2019s effective-parent-domain extraction \u2014 IANA registry data, not a learned name vocabulary"
-  },
   "core/sarif/import_normalizer.py::_DEPENDENCY_MANIFEST_NAMES": {
     "count": 22,
     "kind": "literal"
@@ -2121,9 +2116,10 @@
     "note": "graph schema edge-kind enum (CALLS/READS/WRITES/AFFECTS/...) \u2014 fixed taxonomy for the understand graph, not target API names"
   },
   "core/understand_graph/schema.py::NODE_KINDS": {
-    "count": 19,
+    "count": 20,
     "kind": "literal",
-    "note": "graph schema node-kind enum (entry_point/sink/function/...) \u2014 fixed taxonomy for the understand graph, not target API names"
+    "note": "Central understand-graph node-kind taxonomy, including annotation. These values define the graph serialization/schema contract, not names inferred from target APIs.",
+    "reviewed": "2026-11-01"
   },
   "libexec/raptor-audit::_run_config_from_args": {
     "count": 47,
@@ -2151,10 +2147,10 @@
     "kind": "literal"
   },
   "libexec/raptor-seatbelt-shim::_strip": {
-    "count": 19,
+    "count": 22,
     "kind": "literal",
-    "note": "target environment-strip tuple mirrored from core.config.TARGET_ENV_STRIP_SET for the isolated macOS shim, not a learned name vocabulary",
-    "reviewed": "2026-10-31"
+    "note": "Closed macOS target-environment security policy mirroring core.config.TARGET_ENV_STRIP_SET, plus the private status/death FD variables. Includes the registry, launch-metadata and LLM-transcript names; infrastructure/security identifiers, not learned target vocabulary.",
+    "reviewed": "2026-11-01"
   },
   "libexec/raptor-self-test::_LLM_ENV_VARS": {
     "count": 10,
