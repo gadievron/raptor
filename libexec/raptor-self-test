@@ -1079,10 +1079,10 @@ def _matrix_specs(ctx: Ctx) -> list[dict]:
     # joern CPG build in the runner shape (target=src, output=cpg
     # dir, block_network). joern-parse is a shell wrapper spawning a
     # JVM. Use production's scratch environment and declared tool paths.
-    jp = shutil.which("joern-parse")
+    from packages.joern.prereqs import _joern_parse_path, joern_tool_paths
+    jp = _joern_parse_path()
     if jp:
         from packages.joern.runner import _jvm_scratch_command
-        from packages.joern.prereqs import joern_tool_paths
         command = _jvm_scratch_command(
             [jp, f"-J-Djava.io.tmpdir={out}", fx, "--output", f"{out}/cpg.bin"], Path(out))
         spec("joern-parse", jp, command,

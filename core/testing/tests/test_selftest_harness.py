@@ -379,3 +379,28 @@ class TestHelpTextTruthful:
         # the help must not promise a single total ceiling.
         assert "per-case USD ceiling" in proc.stdout
         assert "total USD ceiling" not in proc.stdout
+
+
+def test_joern_matrix_resolves_host_launcher_symlink(selftest, tmp_path, monkeypatch):
+    from packages.joern import prereqs, runner
+
+    installation = tmp_path / "installation"
+    installation.mkdir()
+    launcher = installation / "joern-parse"
+    launcher.write_text("#!/bin/sh\nexit 0\n")
+    launcher.chmod(0o755)
+    alias = tmp_path / "user-bin" / "joern-parse"
+    alias.parent.mkdir()
+    alias.symlink_to(launcher)
+    monkeypatch.setattr(selftest.shutil, "which",
+                        lambda name: str(alias) if name == "joern-parse" else None)
+    monkeypatch.setattr(prereqs, "_joern_parse_resolved", False)
+    monkeypatch.setattr(prereqs, "_resolved_joern_parse", None)
+    monkeypatch.setattr(prereqs, "joern_tool_paths", lambda: [str(installation)])
+    monkeypatch.setattr(runner, "_jvm_scratch_command", lambda command, directory: command)
+    ctx = _make_ctx(selftest, tmp_path / "scratch")
+    entry = next(spec for spec in selftest._matrix_specs(ctx) if spec["name"] == "joern-parse")
+    assert entry["argv"][0] == str(launcher)
+    assert entry["require"] == str(launcher)
+    assert str(alias) not in entry["argv"]
+    assert entry["kwargs"]["tool_paths"] == [str(installation)]
