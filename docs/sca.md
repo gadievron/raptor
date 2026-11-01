@@ -186,12 +186,12 @@ bin/raptor-sca /path/to/project --spdx
 This writes `sbom.spdx.json` in addition to the default `sbom.cdx.json`.
 The SPDX emitter consumes the same resolved dependency data as the
 CycloneDX emitter, rendered to the SPDX 2.3 JSON schema. SPDX 2.3 does
-not have a native VEX block (SPDX 3.0 will); operators wanting
+not have a native VEX block; operators wanting
 VEX-in-SPDX should use an external VEX overlay.
 
 ### Importing Existing SBOMs
 
-The `--sbom` flag imports a CycloneDX SBOM as the dependency list,
+The `--sbom` flag imports CycloneDX 1.5 or SPDX 2.3 JSON as scan input,
 bypassing manifest discovery and parser dispatch:
 
 ```bash
@@ -204,7 +204,9 @@ scan the exact resolved deps the build produced rather than re-parsing
 manifests. When combined with `--repo`, RAPTOR uses the source tree for
 reachability analysis while taking the dep list from the SBOM.
 
-Import currently supports CycloneDX **1.5 JSON**. Unsupported versions,
+Import supports CycloneDX **1.5 JSON** and SPDX **2.3 JSON**, detected from
+the document contents. Validation covers the structures used by the importer;
+it is not complete schema or specification conformance validation. Unsupported versions,
 malformed input, duplicate JSON keys or BOM references, conflicting package
 versions, and dangling dependency references fail the scan. Invalid UTF-8 is
 rejected rather than replacing bytes in licence or provenance evidence.
@@ -234,9 +236,37 @@ updates its scan metadata. A document signature is removed from the modified
 output; the input file remains untouched. Component signatures are also
 removed if adding missing component references changes their signed content.
 
-`--spdx` still emits the scan projection rather than a complete cross-format
-conversion of an imported document. A diagnostic records that limitation;
-the full retained inventory and evidence remain in `sbom.cdx.json`.
+For CycloneDX input, `--spdx` emits the scan projection rather than a complete
+cross-format conversion. A diagnostic records that limitation; the full
+retained inventory and evidence remain in `sbom.cdx.json`.
+
+For SPDX input, `sbom.spdx.json` is always written, even without `--spdx`.
+It preserves the complete original document as JSON data, including package
+occurrences, files, snippets, checksums, source relationships, custom
+`LicenseRef` definitions, and declared versus concluded licences. Formatting
+may change; source metadata and document identity are retained. Scan results
+are separate findings artifacts. `sbom.cdx.json` contains the package scan/VEX
+projection, and `analysis-gaps.jsonl` records that conversion's limited coverage.
+
+SPDX package matching requires a supported PURL. Multiple distinct PURLs for
+one package, conflicting versions, duplicate IDs, dangling element references,
+undefined local `LicenseRef` identifiers, and malformed licence expressions
+fail the scan. External SPDX documents are retained but never fetched. Only
+package **declared** licences enter licence policy; conclusions remain distinct,
+and differences are reported. `NONE`, `NOASSERTION`, and missing declarations
+receive unknown-licence handling; registry enrichment does not replace them.
+Custom licence text is retained without inferring an equivalent standard
+licence; policy can match its `LicenseRef` identifier explicitly. File/snippet
+licences remain evidence outside package-policy coverage, with a diagnostic.
+
+Dependency depth uses `documentDescribes`/`DESCRIBES` roots and `DEPENDS_ON` or
+inverse dependency relationships. `CONTAINS` and source relationships do not
+imply dependency depth. Unconnected packages have unknown directness and are
+conservatively treated as direct. Distro packages without an explicit source
+package purpose receive a diagnostic that binary-to-source correspondence has
+not been established; retained source relationships do not imply a resolved
+advisory mapping. Generated SPDX 2.3 documents retain the
+required `CC0-1.0` metadata licence; this does not change component licences.
 
 ---
 
@@ -481,7 +511,7 @@ Every scan run produces:
 | `findings.json` | RAPTOR findings schema | Other RAPTOR commands (`/validate`, `/patch`) |
 | `report.md` | Human-readable | Operators |
 | `sbom.cdx.json` | CycloneDX 1.5 + VEX | SBOM consumers, Dependency-Track, etc. |
-| `sbom.spdx.json` | SPDX 2.3 | Compliance pipelines (only when `--spdx` passed) |
+| `sbom.spdx.json` | SPDX 2.3 | Compliance pipelines (`--spdx`, or preserved SPDX input) |
 | `findings.sarif` | SARIF 2.1.0 | GitHub / GitLab / IDE integrations |
 
 ### Render Flags

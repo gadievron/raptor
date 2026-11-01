@@ -232,7 +232,7 @@ class RunOptions:
                                                 # logs / file redirect).
                                                 # ``--no-progress``
                                                 # forces off explicitly.
-    sbom_input: Path | None = None            # CycloneDX SBOM to
+    sbom_input: Path | None = None            # CycloneDX/SPDX JSON to
                                                 # import as the dep list
                                                 # in place of discovery
                                                 # + parser dispatch.
@@ -384,8 +384,8 @@ def run_sca(
             # (cargo auditable, Maven cyclonedx-plugin, etc.) and
             # we want to scan the exact resolved deps the build
             # produced rather than re-parse the manifests.
-            from .sbom_import import read_cyclonedx
-            imported_bom = read_cyclonedx(options.sbom_input)
+            from .sbom_import import read_sbom
+            imported_bom = read_sbom(options.sbom_input)
             raw_deps = imported_bom.dependencies
             from core.run.gaps import record_analysis_gap
             for warning in imported_bom.coverage_gaps:
@@ -698,13 +698,14 @@ def run_sca(
                     exc_info=True,
                 )
                 policy = DEFAULT_POLICY
-        # Enrichment fetches from PyPI / npm registries. Skipped
-        # offline (cache may still populate via prior runs).
+        # SPDX input is an evidence snapshot: NONE/NOASSERTION must not be
+        # replaced with registry metadata or a different licence conclusion.
+        # Enrichment fetches from PyPI / npm registries for other inputs.
         # ``--no-cache`` passes cache=None (the harden shape): the
         # license fetchers hardcode their read TTLs internally, so a
         # zeroed-TTL cache can't be threaded through them — a cache-
         # less run forces the refetch the flag documents.
-        if not options.offline:
+        if not options.offline and (imported_bom is None or imported_bom.format != "SPDX"):
             try:
                 enriched = enrich_licenses(
                     joined, http=http,
@@ -1146,16 +1147,19 @@ def run_sca(
         target_name=target.name,
         image_fingerprints=image_fingerprints or None,
         project_license=project_license,
-        source_bom=imported_bom,
+        source_bom=imported_bom if imported_bom is not None and imported_bom.format == "CycloneDX" else None,
     )
 
-    # Optional SPDX 2.3 SBOM alongside CycloneDX. Some compliance
-    # programmes mandate SPDX (NTIA's Minimum Elements treats
-    # both as acceptable; specific procurement programmes may
-    # require one). Default off because most tooling consumes
-    # CycloneDX directly.
-    if options.emit_spdx_sbom:
-        if imported_bom is not None:
+    # SPDX input always keeps its full inventory in SPDX output. CycloneDX
+    # remains the scan/VEX projection; it cannot represent all SPDX evidence.
+    spdx_source = imported_bom if imported_bom is not None and imported_bom.format == "SPDX" else None
+    if spdx_source is not None:
+        from core.run.gaps import record_analysis_gap
+        record_analysis_gap(output_dir, file_path=str(options.sbom_input),
+                            reason="sbom_format_projection", tool="sca",
+                            detail="CycloneDX output contains the scan projection; full imported inventory and evidence remain in sbom.spdx.json")
+    if options.emit_spdx_sbom or spdx_source is not None:
+        if imported_bom is not None and spdx_source is None:
             record_analysis_gap(output_dir, file_path=str(options.sbom_input),
                                 reason="sbom_format_projection", tool="sca",
                                 detail="SPDX output contains the scan projection; full imported inventory and evidence remain in CycloneDX output")
@@ -1165,6 +1169,7 @@ def run_sca(
             deps=joined,
             target_name=target.name,
             project_license=project_license,
+            source_bom=spdx_source,
         )
 
     # Re-read the rows we just wrote — SARIF emission consumes the

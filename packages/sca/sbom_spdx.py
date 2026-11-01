@@ -4,16 +4,15 @@ Some compliance pipelines mandate SPDX (NTIA's Minimum Elements
 for an SBOM cite both CycloneDX and SPDX as acceptable; specific
 procurement programmes may require one). This module emits SPDX
 2.3 JSON alongside the existing CycloneDX 1.5 output when the
-operator passes ``--spdx``.
+operator passes ``--spdx``, or preserves an SPDX input document.
 
-Pure data-shape conversion — same Dependency / VulnFinding inputs
-the CycloneDX emitter consumes, just rendered to the SPDX schema.
-No semantic difference; downstream consumers pick whichever
-format they're set up for.
+For SPDX input, preserve the complete source document unchanged in meaning.
+Otherwise export the dependency scan projection; this is not a complete
+cross-format inventory conversion. Findings are emitted separately.
 
 SPDX 2.3 spec: https://spdx.github.io/spdx-spec/v2.3/
 
-What's emitted:
+What's emitted for generated scan projections:
 
   * One ``packages[]`` entry per Dependency (the SPDX equivalent
     of CycloneDX's ``components[]``).
@@ -22,17 +21,19 @@ What's emitted:
   * ``relationships[]`` linking the SPDX document to its packages
     via ``DESCRIBES``.
 
-What's NOT emitted (deferred):
+What generated scan projections do NOT add:
 
   * Vulnerability assertions — SPDX 2.3 doesn't have a native VEX
-    block (SPDX 3.0 will). Operators wanting VEX-in-SPDX should
+    block. Operators wanting VEX-in-SPDX should
     use the CycloneDX output for now.
-  * File-level metadata, snippets, hashes — RAPTOR-side scans
+  * File-level metadata, snippets, hashes — retained for SPDX input,
+    but RAPTOR-side scans
     don't compute file checksums per dep.
 """
 
 from __future__ import annotations
 
+from copy import deepcopy
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -43,6 +44,7 @@ from core.json import save_json
 if TYPE_CHECKING:
     from collections.abc import Iterable
     from .models import Dependency
+    from .sbom_import import ImportedBom
     from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -61,12 +63,13 @@ def write_sbom_spdx_json(
     target_name: str,
     namespace_uri: str | None = None,
     project_license: str | None = None,
+    source_bom: ImportedBom | None = None,
 ) -> None:
     """Render an SPDX 2.3 JSON SBOM and write it atomically."""
     doc = render_sbom_spdx(
         deps=deps, target_name=target_name,
         namespace_uri=namespace_uri,
-        project_license=project_license,
+        project_license=project_license, source_bom=source_bom,
     )
     save_json(path, doc)
 
@@ -77,6 +80,7 @@ def render_sbom_spdx(
     target_name: str,
     namespace_uri: str | None = None,
     project_license: str | None = None,
+    source_bom: ImportedBom | None = None,
 ) -> dict[str, Any]:
     """Build the SPDX 2.3 document dict (does not write to disk).
 
@@ -85,6 +89,12 @@ def render_sbom_spdx(
     as ``licenseDeclared``; dep packages never do — a dep's license
     only ever comes from data that describes that dep.
     """
+    if source_bom is not None:
+        if source_bom.format != "SPDX":
+            raise ValueError("SPDX preservation requires an SPDX source document")
+        # No scan assertions are inserted: retain namespace, creators, evidence
+        # and declared/concluded licences exactly. Findings are separate artifacts.
+        return deepcopy(source_bom.document)
     deps_list = list(deps)
     spdx_doc_id = "SPDXRef-DOCUMENT"
     created = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

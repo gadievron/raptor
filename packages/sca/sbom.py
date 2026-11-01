@@ -111,6 +111,8 @@ def build_bom(
     """
     generated_at = generated_at or datetime.now(timezone.utc)
     if source_bom is not None:
+        if source_bom.format != "CycloneDX":
+            raise ValueError("CycloneDX preservation requires a CycloneDX source document")
         return _enrich_imported_bom(source_bom, vuln_findings, generated_at)
     if serial_number is None:
         serial_number = f"urn:uuid:{uuid.uuid4()}"

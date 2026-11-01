@@ -71,7 +71,7 @@ A successful scan writes the following to `--out`:
 | `report.md` | Markdown | Humans. Severity-sorted, KEV-flagged, dedup-grouped. |
 | `report.html` | HTML | CI artefact uploads / compliance attachments. Enable with `--html`. |
 | `sbom.cdx.json` | CycloneDX 1.5 + VEX | Dependency-Track, OWASP CycloneDX CLI, GitHub dependency review. |
-| `sbom.spdx.json` | SPDX 2.3 | Operators that need SPDX over CycloneDX. Enable with `--spdx`. |
+| `sbom.spdx.json` | SPDX 2.3 | Operators that need SPDX over CycloneDX. Enable with `--spdx`; always preserves the full document for SPDX input. |
 | `findings.sarif` | SARIF 2.1.0 | GitHub code-scanning, GitLab SAST, Sonar, etc. Suppressed findings emit a `suppressions` block. |
 | `coverage-sca.json` | JSON | RAPTOR coverage layer (which files were examined). |
 
