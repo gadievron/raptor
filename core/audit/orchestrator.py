@@ -9391,6 +9391,31 @@ def _run_audit_body(
         if _env_guard is not None:
             _env_guard.tick()
         _joern_tick(gap)
+        # Gap 3: drain mid-loop requeue keys from the study consumer.
+        with shared._requeue_lock:
+            pending_requeue = set(shared.midloop_requeue_keys)
+            shared.midloop_requeue_keys.clear()
+        if pending_requeue:
+            injected = 0
+            for key in pending_requeue:
+                parts = key.split(":", 1)
+                if len(parts) != 2:
+                    continue
+                fpath, fname = parts
+                ci_gap = shared.checklist_index.get((fpath, fname))
+                if not ci_gap:
+                    continue
+                g = dict(ci_gap)
+                g["force_review"] = True
+                gk = f"{fpath}:{fname}:{g.get('line_start', 0)}"
+                if graph.inject_task(gk, g, 900.0, requeue=True):
+                    injected += 1
+            if injected:
+                logger.info(
+                    "mid-loop requeue: %d function(s) requeued with "
+                    "new mechanical evidence",
+                    injected,
+                )
 
     # --- Main executor pass ---
     # Schedule: with >1 worker, most-expensive-first (LPT) packing
@@ -12090,22 +12115,25 @@ def _compile_eager_invariants(
     config: OrchestratorConfig,
     shared: SharedState,
     checklist: dict[str, Any],
-) -> None:
+) -> set[str]:
     """Compile domain-model invariants from the eager study into rules.
 
     Runs on the study-consumer thread after the eager ``run_study``
     succeeds.  Compiles any invariant without a ``mechanical_rule`` field,
     sweeps the target, and injects matches into ``shared.mechanical_findings``
     so the review loop picks them up.
+
+    Returns the set of ``file:function`` keys that received new
+    mechanical findings (callers use this for mid-loop requeue).
     """
     dm = shared.domain_model
     if not dm:
         try:
             dm = _load_domain_model(config)
         except Exception:
-            return
+            return set()
     if not dm:
-        return
+        return set()
 
     from core.concepts.model import CONFIDENCE_GRADES
 
@@ -12125,7 +12153,7 @@ def _compile_eager_invariants(
         and CONFIDENCE_GRADES.index(inv.get("confidence", "inferred")) >= _floor
     ]
     if not uncompiled:
-        return
+        return set()
 
     from core.concepts.compiler import compile_invariant
     from core.concepts.model import Invariant
@@ -12186,7 +12214,7 @@ def _compile_eager_invariants(
             compiled_count += 1
 
     if not compiled_count:
-        return
+        return set()
 
     logger.info(
         "eager compile: %d/%d invariant(s) compiled", compiled_count, len(uncompiled),
@@ -12211,13 +12239,16 @@ def _compile_eager_invariants(
     ]
 
     mechanical_findings = shared.mechanical_findings
+    pre_keys = set(mechanical_findings.keys())
     n = _run_invariant_prescreening(dm, config, gaps, mechanical_findings)
+    matched_keys = set(mechanical_findings.keys()) - pre_keys
     if n:
         logger.info("eager compile prescreening: %d match(es) injected", n)
         if config.out_dir:
             with contextlib.suppress(OSError, ValueError):
                 mech_path = config.out_dir / "mechanical-findings.json"
                 save_json(mech_path, mechanical_findings)
+    return matched_keys
 
 
 def _run_invariant_prescreening(
@@ -17815,14 +17846,18 @@ def _study_consumer_loop(
 
             _src_root = Path(config.study_root or config.target_path)
             for req in fresh:
+                _scope_warn = ""
                 if req.source_file:
                     try:
                         _sf = Path(req.source_file)
                         if _sf.is_absolute() and not _sf.is_relative_to(_src_root):
-                            logger.debug(
-                                "reading-list: out-of-scope %s", req.source_file,
+                            _scope_warn = (
+                                f"out-of-root: {req.source_file} is outside "
+                                f"{_src_root}"
                             )
-                            continue
+                            logger.debug(
+                                "reading-list: %s", _scope_warn,
+                            )
                     except (ValueError, OSError):
                         pass
                 queue_reading_list_item(
@@ -17833,6 +17868,7 @@ def _study_consumer_loop(
                     priority=req.priority,
                     resolution=req.resolution,
                     context=req.context,
+                    scope_warning=_scope_warn,
                 )
         except Exception:
             logger.warning(
@@ -18180,11 +18216,16 @@ def _study_consumer_loop(
         n_after_i = len(shared.domain_model.get("invariants", [])
                         ) if shared.domain_model else 0
 
-        # Gap 3: mid-loop rule compilation from newly-arrived invariants
+        # Gap 3: mid-loop rule compilation from newly-arrived invariants.
+        # Matched keys are queued for requeue so the main executor
+        # re-reviews already-completed functions with new evidence.
         if shared.domain_model and (n_after_c > n_before_c
                                     or n_after_i > n_before_i):
             try:
-                _compile_eager_invariants(config, shared, checklist)
+                matched = _compile_eager_invariants(config, shared, checklist)
+                if matched:
+                    with shared._requeue_lock:
+                        shared.midloop_requeue_keys.update(matched)
             except Exception:
                 logger.debug(
                     "study-consumer: mid-loop compile failed", exc_info=True,

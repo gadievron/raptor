@@ -294,3 +294,101 @@ class TestConceptRefutation:
             assert changed == 0, f"verdict={verdict} should skip unknown confidence"
             assert dm["invariants"][0]["confidence"] == "bogus_typo"
             assert "state" not in dm["invariants"][0]
+
+
+class TestEagerCompileReturnKeys:
+    """Gap 3: _compile_eager_invariants returns matched file:function keys."""
+
+    def test_returns_matched_keys(self, tmp_path: Path) -> None:
+        from core.audit.orchestrator import (
+            OrchestratorConfig,
+            _compile_eager_invariants,
+        )
+
+        dm = {
+            "invariants": [
+                {
+                    "id": "inv1",
+                    "statement": "s",
+                    "negation": "n",
+                    "confidence": "traced",
+                },
+            ],
+        }
+
+        shared = MagicMock()
+        shared.domain_model = dm
+        shared.mechanical_findings = {}
+
+        config = OrchestratorConfig(
+            target_path=tmp_path,
+            out_dir=tmp_path,
+            resume=False,
+        )
+
+        checklist = {
+            "a.c:foo": {
+                "file": "a.c", "name": "foo",
+                "line_start": 1, "line_end": 10,
+            },
+        }
+
+        class _FakeResult:
+            success = True
+            rule_id = "r1"
+            rule_body = ""
+            errors: list = []
+
+        def _prescreen(dm, config, gaps, mf):
+            mf["a.c:foo"] = [{"detector": "test"}]
+            return 1
+
+        with (
+            patch(
+                "core.concepts.compiler.compile_invariant",
+                return_value=_FakeResult(),
+            ),
+            patch(
+                "core.audit.orchestrator._run_invariant_prescreening",
+                side_effect=_prescreen,
+            ),
+            patch(
+                "core.audit.orchestrator._run_llm_client",
+                return_value=type("C", (), {
+                    "generate_structured": lambda *a, **kw: ({}, None),
+                })(),
+            ),
+        ):
+            keys = _compile_eager_invariants(config, shared, checklist)
+
+        assert "a.c:foo" in keys
+
+    def test_returns_empty_set_no_invariants(self, tmp_path: Path) -> None:
+        from core.audit.orchestrator import (
+            OrchestratorConfig,
+            _compile_eager_invariants,
+        )
+
+        shared = MagicMock()
+        shared.domain_model = None
+
+        config = OrchestratorConfig(
+            target_path=tmp_path,
+            out_dir=tmp_path,
+            resume=False,
+        )
+
+        result = _compile_eager_invariants(config, shared, {})
+        assert result == set()
+
+
+class TestScopeWarning:
+    """Item 2: out-of-scope reading-list items carry scope_warning."""
+
+    def test_scope_warning_field_exists(self) -> None:
+        from core.concepts.reading_list import ReadingListItem
+        item = ReadingListItem(
+            id="t", question="q", source_command="/audit",
+            scope_warning="out-of-root: /other/file.c is outside /target",
+        )
+        assert item.scope_warning.startswith("out-of-root")

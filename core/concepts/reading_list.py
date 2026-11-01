@@ -106,6 +106,7 @@ class ReadingListItem:
     # re-studied.
     unresolvable: bool = False
     unresolvable_reason: str = ""
+    scope_warning: str = ""
 
     def __post_init__(self) -> None:
         # Producers hand LLM-derived values into the str-typed fields,
