@@ -86,6 +86,8 @@ class CampaignPlan:
     #: (binds witnesses; locates the seed-corpus convention).
     jazzer_target: str | None = None
     jazzer_target_source: Path | None = None
+    #: Fresh /understand entry-to-sink candidates used during planning.
+    graph_targets: list[dict[str, Any]] = field(default_factory=list)
 
     def summary(self) -> str:
         lines = [
@@ -117,6 +119,12 @@ class CampaignPlan:
         ]
         if self.fuzzer:
             lines.append(f"Selected fuzzer: {self.fuzzer}")
+        if self.graph_targets:
+            from core.security.log_sanitisation import sanitise_for_terminal
+            lines.append("Graph-ranked target functions (candidates):")
+            for candidate in self.graph_targets:
+                lines.append(sanitise_for_terminal(
+                    f"  {candidate['file']}:{candidate['function']} -> {candidate['dangerous_sink']}"))
         if self.env_build:
             lines.append(
                 "Env build: AFL-instrumented build in the pinned AFL++ "
@@ -212,6 +220,13 @@ class FuzzingOrchestrator:
         target = detect_target(Path(target_path))
         plan = CampaignPlan(target=target, capabilities=self.capabilities,
                             env_build_consent=env_build)
+        try:
+            from core.understand_graph import fuzz_targets, graph_path_for_run
+            graph = graph_path_for_run(run_dir or target.path, str(target.path))
+            if graph.exists():
+                plan.graph_targets = fuzz_targets(graph, str(target.path))
+        except Exception:  # noqa: BLE001 — no graph retains existing planning behavior
+            logger.warning("fuzz graph context unavailable", exc_info=True)
         if env_build and not target.path.is_dir():
             plan.hints.append(
                 "--env-build applies to source-tree targets; ignored "
@@ -302,6 +317,11 @@ class FuzzingOrchestrator:
         elif kind == "python-pkg":
             plan.fuzzer = "atheris" if not target.blockers else None
             if plan.fuzzer:
+                if py_harness is None and not py_entry:
+                    selected = self._graph_python_entry(plan)
+                    if selected is not None:
+                        py_entry, py_payload = selected
+                        plan.hints.append("Selected a source-checked one-argument Python entry from the graph ranking.")
                 self._plan_atheris_harness(
                     plan, py_harness, py_entry, py_payload,
                 )
@@ -359,6 +379,164 @@ class FuzzingOrchestrator:
             )
 
         return plan
+
+    @staticmethod
+    def _unambiguous_python_function(tree, name):
+        """Reject module bindings that could replace the selected definition.
+
+        This is deliberately conservative: an ambiguous module falls back to
+        the operator-specified harness/entry flow. Do not execute imports just
+        to inspect a callable in the planning process.
+        """
+        import ast
+
+        class Bindings(ast.NodeVisitor):
+            count = 0
+            dynamic = False
+            defined = False
+
+            def bind(self, bound):
+                if bound == name:
+                    self.count += 1
+
+            def visit_Name(self, node):
+                if isinstance(node.ctx, (ast.Store, ast.Del)):
+                    self.bind(node.id)
+
+            def visit_FunctionDef(self, node):
+                self.bind(node.name)
+                self.defined |= node.name == name
+                if node.decorator_list:
+                    self.dynamic = True
+                # Defaults/decorators execute in module scope, bodies do not.
+                self.visit(node.args)
+                if node.returns is not None:
+                    self.visit(node.returns)
+                for param in getattr(node, "type_params", ()):
+                    self.visit(param)
+                for decorator in node.decorator_list:
+                    self.visit(decorator)
+
+            visit_AsyncFunctionDef = visit_FunctionDef
+
+            def visit_Lambda(self, node):
+                self.visit(node.args)
+
+            def visit_ClassDef(self, node):
+                self.bind(node.name)
+                # Class construction executes its body and metaclass hooks;
+                # static function selection cannot establish their effects.
+                self.dynamic = True
+                for expr in [*node.bases, *node.keywords, *node.decorator_list]:
+                    self.visit(expr)
+                # A class body executes now and can explicitly bind globals.
+                if any(isinstance(n, ast.Global) and name in n.names for n in ast.walk(node)):
+                    self.dynamic = True
+
+            def visit_Import(self, node):
+                self.dynamic |= self.defined
+                for alias in node.names:
+                    self.bind(alias.asname or alias.name.split(".")[0])
+
+            def visit_ImportFrom(self, node):
+                self.dynamic |= self.defined
+                for alias in node.names:
+                    if alias.name == "*":
+                        self.dynamic = True
+                    self.bind(alias.asname or alias.name)
+
+            def visit_ExceptHandler(self, node):
+                self.bind(node.name)
+                self.generic_visit(node)
+
+            def visit_MatchAs(self, node):
+                self.bind(node.name)
+                self.generic_visit(node)
+
+            visit_MatchStar = visit_MatchAs
+
+            def visit_MatchMapping(self, node):
+                self.bind(node.rest)
+                self.generic_visit(node)
+
+            def visit_Attribute(self, node):
+                if isinstance(node.ctx, (ast.Store, ast.Del)):
+                    root = node.value
+                    while isinstance(root, (ast.Attribute, ast.Subscript)):
+                        root = root.value
+                    if node.attr == name or isinstance(root, ast.Name) and root.id == name:
+                        self.count += 1
+                self.generic_visit(node)
+
+            def visit_Subscript(self, node):
+                if isinstance(node.ctx, (ast.Store, ast.Del)):
+                    root = node.value
+                    while isinstance(root, (ast.Attribute, ast.Subscript)):
+                        root = root.value
+                    if ((isinstance(node.slice, ast.Constant) and node.slice.value == name)
+                            or isinstance(root, ast.Name) and root.id == name):
+                        self.count += 1
+                self.generic_visit(node)
+
+            def visit_Call(self, node):
+                # Any module-scope call can mutate the module namespace.
+                # Calls inside function bodies are intentionally not visited.
+                self.dynamic = True
+                self.generic_visit(node)
+
+        bindings = Bindings()
+        bindings.visit(tree)
+        definitions = [node for node in tree.body
+                       if isinstance(node, ast.FunctionDef) and node.name == name]
+        if bindings.count == 1 and not bindings.dynamic and len(definitions) == 1:
+            return definitions[0]
+        return None
+
+    @staticmethod
+    def _graph_python_entry(plan: CampaignPlan) -> tuple[str, str] | None:
+        """Select only source-confirmed bytes/str callables; never import code.
+
+        Graph text alone cannot authorize an arbitrary expression or establish
+        a callable's signature. Explicit operator harness/entry flags win.
+        """
+        import ast
+        from core.security.capped_read import read_capped_text
+        from packages.fuzzing.atheris_harness import AtherisHarnessSpec
+
+        root = plan.target.path.resolve()
+        if not root.is_dir():
+            root = root.parent
+        for candidate in plan.graph_targets:
+            try:
+                path = (root / candidate["file"]).resolve()
+                rel = path.relative_to(root)
+                if path.suffix != ".py":
+                    continue
+                text = read_capped_text(path, max_bytes=1024 * 1024)
+                tree = ast.parse(text)
+                node = FuzzingOrchestrator._unambiguous_python_function(tree, candidate["function"])
+                if node is None:
+                    continue
+                args = node.args
+                positional = args.posonlyargs + args.args
+                if (len(positional) != 1 or args.vararg or args.kwarg or args.kwonlyargs
+                        or node.decorator_list):
+                    continue
+                annotation = positional[0].annotation
+                kind = (annotation.id if isinstance(annotation, ast.Name) else
+                        annotation.value if isinstance(annotation, ast.Constant) else None)
+                if kind not in ("bytes", "str"):
+                    continue
+                parts = list(rel.with_suffix("").parts)
+                if parts[-1] == "__init__":
+                    parts.pop()
+                spec = AtherisHarnessSpec(
+                    entry=f"{'.'.join(parts)}:{node.name}",
+                    payload="text" if kind == "str" else "bytes")
+                return spec.entry, spec.payload
+            except (OSError, ValueError, TypeError, KeyError, SyntaxError):
+                continue
+        return None
 
     @staticmethod
     def _plan_atheris_harness(
@@ -676,6 +854,7 @@ class FuzzingOrchestrator:
                 },
                 "fuzzer": plan.fuzzer,
                 "needs_harness": plan.needs_harness,
+                "graph_targets": plan.graph_targets,
                 **(
                     {
                         "atheris_harness": (
@@ -905,6 +1084,7 @@ class FuzzingOrchestrator:
         # gcov, and the plan target is the project directory — a JVM
         # coverage lane is a later phase.
         if plan.fuzzer in ("atheris", "cargo-fuzz", "jazzer"):
+            self._persist_graph_evidence(plan, out_dir, result)
             return result
         try:
             from packages.fuzzing.coverage_bridge import emit_fuzz_coverage
@@ -939,7 +1119,17 @@ class FuzzingOrchestrator:
                 result["fuzz_coverage"] = str(cov_path)
         except Exception as e:  # noqa: BLE001 — bridge is best-effort
             logger.warning("Fuzz coverage bridge failed (non-fatal): %s", e)
+        self._persist_graph_evidence(plan, out_dir, result)
         return result
+
+    @staticmethod
+    def _persist_graph_evidence(plan, out_dir, result):
+        try:
+            from core.understand_graph import ingest_fuzz_evidence
+            save_json(out_dir / "fuzzing-result.json", result)
+            ingest_fuzz_evidence(out_dir, str(plan.target.path), result=result)
+        except Exception:  # noqa: BLE001 — never turn a completed campaign into failure
+            logger.warning("fuzz graph enrichment skipped", exc_info=True)
 
     @staticmethod
     def _iterations_from_stats(stats: dict[str, Any]) -> int:

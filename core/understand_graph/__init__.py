@@ -15,6 +15,13 @@ from .ingest import (
     ingest_validation_outcomes,
     rebuild_graph,
 )
+from .evidence import (
+    ingest_fuzz_evidence,
+    ingest_sca_evidence,
+    ingest_threat_model,
+    ingest_web_evidence,
+)
+from .integration import agentic_graph_groups, ingest_agentic_findings
 from .queries import (
     alternative_paths,
     attack_paths,
@@ -29,6 +36,7 @@ from .queries import (
     propagate_binary_verdicts,
     reachable_sinks,
     sca_reachability,
+    sca_reachability_batch,
     scan_dedup_chains,
     threat_model_graph_context,
     verified_mechanical_call_edges,
@@ -44,6 +52,7 @@ from .store import (
 __all__ = [
     "GRAPH_FILENAME",
     "alternative_paths",
+    "agentic_graph_groups",
     "attack_paths",
     "build_context_map",
     "coverage_residual",
@@ -54,9 +63,14 @@ __all__ = [
     "graph_summary",
     "hypothesis_seeds",
     "ingest_annotations",
+    "ingest_agentic_findings",
     "ingest_audit_hypotheses",
     "ingest_call_edges",
     "ingest_codeql_sarif",
+    "ingest_fuzz_evidence",
+    "ingest_sca_evidence",
+    "ingest_threat_model",
+    "ingest_web_evidence",
     "ingest_run",
     "ingest_scan_findings",
     "ingest_validation_outcomes",
@@ -68,6 +82,7 @@ __all__ = [
     "rebuild_graph",
     "remove_graph_db",
     "sca_reachability",
+    "sca_reachability_batch",
     "scan_dedup_chains",
     "threat_model_graph_context",
     "verified_mechanical_call_edges",

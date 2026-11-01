@@ -930,6 +930,12 @@ def save_model(
         # Atomic like the JSON sibling — a reader (or a crash) mid-
         # write must never observe a truncated THREAT_MODEL.md.
         write_text_atomically(markdown_path, render_markdown(model))
+        try:
+            from core.understand_graph import ingest_threat_model
+            ingest_threat_model(
+                json_path.parent, model.target, model=model.to_dict(), source_path=json_path)
+        except Exception:  # noqa: BLE001 — a graph failure must not revoke a saved model
+            logger.warning("threat model graph enrichment skipped", exc_info=True)
 
 
 def save_report(

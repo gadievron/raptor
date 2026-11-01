@@ -860,6 +860,12 @@ def run_sca(
             logger.info("sca.pipeline: /understand context-map "
                          "augmented %d reachability verdicts",
                          len(reachability_map))
+        try:
+            from .understand_bridge import annotate_graph_reachability
+            reachability_map = annotate_graph_reachability(
+                reachability_map, canonical, target, output_dir)
+        except Exception:  # noqa: BLE001 — optional memory must not break SCA
+            logger.warning("SCA graph context unavailable", exc_info=True)
         progress.done(f"{len(reachability_map)} verdicts")
 
     # 7. Build VulnFindings.
@@ -1093,6 +1099,11 @@ def run_sca(
         license_findings=license_findings,
         scan_health=scan_health,
     )
+    try:
+        from core.understand_graph import ingest_sca_evidence
+        ingest_sca_evidence(output_dir, str(target))
+    except Exception:  # noqa: BLE001 — JSON output remains authoritative
+        logger.warning("SCA graph enrichment skipped", exc_info=True)
     md = render_markdown_report(
         target=target,
         deps_analysed=len(joined),

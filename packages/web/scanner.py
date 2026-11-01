@@ -2869,6 +2869,12 @@ class WebScanner:
         if not self.verify_findings:
             self._write_finding_attempts(findings)
 
+        try:
+            from core.understand_graph import ingest_web_evidence
+            ingest_web_evidence(self.out_dir, self.base_url)
+        except Exception:  # noqa: BLE001 — preserve the JSON report if memory fails
+            logger.warning("web graph enrichment skipped", exc_info=True)
+
         # Portable PoC artifacts: curl reproducer + nuclei replay template
         # per oracle-proven finding (soft; 0600 — payloads may carry
         # credentials).

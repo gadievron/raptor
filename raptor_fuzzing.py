@@ -1494,6 +1494,11 @@ Examples:
 
     report_file = out_dir / "fuzzing_report.json"
     save_json(report_file, report)
+    try:
+        from core.understand_graph import ingest_fuzz_evidence
+        ingest_fuzz_evidence(out_dir, str(binary_path), result=report)
+    except Exception:  # noqa: BLE001 — legacy campaign output remains usable
+        logger.warning("fuzz graph enrichment skipped", exc_info=True)
     # Store end-of-run strategy outcome through the canonical SAGE path.
     store_fuzzing_strategy_outcome(
         repo_path=str(binary_path.parent),
