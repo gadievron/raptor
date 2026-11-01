@@ -21,3 +21,13 @@ def _isolated_home(tmp_path: Path,
     at a per-test tmp dir so bare runs never touch real user state.
     """
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+
+@pytest.fixture(autouse=True)
+def _isolated_scope_probe_cache():
+    """Capability reuse must not leak between tests that replace tool probes."""
+    from packages.semgrep import runner
+
+    runner._reset_scope_probe_cache()
+    yield
+    runner._reset_scope_probe_cache()
