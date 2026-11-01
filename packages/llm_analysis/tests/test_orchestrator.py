@@ -4,6 +4,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -194,6 +195,67 @@ def _clear_prep_caches():
 
 class TestOrchestrate:
     """Test the main orchestrate() function routing."""
+
+    @pytest.mark.parametrize("generation_role", ["exploit", "code", "analysis", None])
+    def test_generation_model_role_reaches_client(self, tmp_path, generation_role):
+        """Real resolution and dispatch route both generators independently of analysis."""
+        from core.llm.config import LLMConfig, ModelConfig
+        from core.security.envelope_probe import ProbeResult
+
+        analysis = ModelConfig(provider="anthropic", model_name="analysis-test",
+                               role="analysis" if generation_role else None)
+        code = ModelConfig(provider="ollama", model_name="code-test", role="code")
+        exploit = ModelConfig(provider="ollama", model_name="exploit-test", role="exploit")
+        specialists = ([code, exploit] if generation_role == "exploit" else
+                       [code] if generation_role == "code" else [])
+        # A competing fallback makes the primary-only cases non-vacuous:
+        # generation must not select a secondary model just because it exists.
+        specialists.append(ModelConfig(provider="ollama", model_name="fallback-test",
+                                       role="fallback" if generation_role else None))
+        expected = exploit if generation_role == "exploit" else (
+            code if generation_role == "code" else analysis)
+        config = LLMConfig(primary_model=analysis, fallback_models=specialists,
+                           max_cost_per_scan=0)
+        report_path = tmp_path / "report.json"
+        report_path.write_text(json.dumps(_make_prep_report()))
+        # Keep generation out of the analysis response so neither generation
+        # task can be skipped because the fixture already supplied its output.
+        analysis_result = _make_cc_result("finding-001")
+        analysis_result["exploit_code"] = None
+        analysis_result["patch_code"] = None
+        probe = ProbeResult(compatible=True, valid_json=True, correct_verdict=True,
+                            nonce_leaked=False, raw_response="{}")
+
+        def response(model, **payload):
+            return SimpleNamespace(cost=0, tokens_used=0, duration=0,
+                                   model=model.model_name, resolved_model=None, **payload)
+
+        with patch("core.llm.client.LLMClient") as client_cls, \
+             patch("core.security.envelope_probe.probe_envelope_compatibility",
+                   return_value=probe), \
+             patch("packages.llm_analysis.prefilter.make_prefilter_fn", return_value=None), \
+             patch("packages.llm_analysis.tasks.PatchTask._gate_patch", return_value=None):
+            client = client_cls.return_value
+            client.config = config
+            client.short_circuits = 0
+            client.scorecard = None
+            client.get_fired_models.return_value = []
+            client.generate_structured.return_value = response(analysis, result=analysis_result)
+            client.generate.return_value = response(expected, content="# generated fixture")
+            result = orchestrate(
+                prep_report_path=report_path, repo_path=tmp_path,
+                out_dir=tmp_path / "orch", llm_config=config, max_parallel=1,
+                dataflow_validation_enabled=False, deep_validate_disabled=True,
+            )
+
+        assert result is not None
+        assert client.generate_structured.call_count == 1
+        assert client.generate_structured.call_args.kwargs["model_config"] is analysis
+        assert client.generate.call_count == 2
+        assert all(call.kwargs["model_config"] is expected for call in client.generate.call_args_list)
+        finding = result["results"][0]
+        assert finding["exploit_code"] == "# generated fixture"
+        assert finding["patch_code"] == "# generated fixture"
 
     def test_full_report_passthrough(self, tmp_path):
         """mode:'full' returns None (Phase 3 already did analysis)."""
