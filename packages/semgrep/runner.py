@@ -20,6 +20,7 @@ and JSON output. Callers add their own concerns on top:
 """
 
 import atexit
+from concurrent.futures import Future
 import logging
 import os
 import shutil
@@ -151,6 +152,109 @@ def version() -> str | None:
     return info.first_line if info is not None else None
 
 
+# Only the latest successful capability probe is retained. CLI scans and
+# scanner worker threads share it; diagnostics through version() stay fresh.
+_SCOPE_PROBE_LOCK = threading.Lock()
+_SCOPE_PROBE_CACHE: tuple[tuple[object, ...], tuple[int, ...]] | None = None
+_SCOPE_PROBE_PENDING: tuple[tuple[object, ...], Future[tuple[int, ...] | None]] | None = None
+
+
+def _reset_scope_probe_cache() -> None:
+    """Clear process state; also replace a possibly inherited locked mutex."""
+    global _SCOPE_PROBE_LOCK, _SCOPE_PROBE_CACHE, _SCOPE_PROBE_PENDING
+    _SCOPE_PROBE_LOCK = threading.Lock()
+    _SCOPE_PROBE_CACHE = None
+    _SCOPE_PROBE_PENDING = None
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_scope_probe_cache)
+
+
+def _scope_probe_key() -> tuple[object, ...] | None:
+    """Fingerprint the selected launcher and its dispatch/sandbox context."""
+    from core.config import RaptorConfig
+
+    binary = shutil.which(_SEMGREP_BIN)
+    if binary is None:
+        return None
+    try:
+        path = Path(binary).absolute()
+        resolved = path.resolve(strict=True)
+        stat = resolved.stat()
+        return (str(path), str(resolved), stat.st_dev, stat.st_ino,
+                stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns,
+                os.environ.get("PATH", ""), str(Path.cwd()),
+                RaptorConfig.SEMGREP_OFFLINE)
+    except (OSError, RuntimeError):
+        # Missing/unstatable launchers and symlink loops are never cached.
+        return None
+
+
+def _probe_scope_version(key: tuple[object, ...] | None) -> tuple[int, ...] | None:
+    info = _version_probe()
+    if info is None or info.returncode != 0:
+        return None
+    parsed = info.version_tuple()
+    if key is None or parsed is None:
+        return parsed
+    try:
+        same_tool = str(Path(info.path).resolve(strict=True)) == key[1]
+    except (OSError, RuntimeError):
+        same_tool = False
+    return parsed if same_tool else None
+
+
+def _scope_version() -> tuple[int, ...] | None:
+    global _SCOPE_PROBE_CACHE, _SCOPE_PROBE_PENDING
+
+    with _SCOPE_PROBE_LOCK:
+        key = _scope_probe_key()
+        future: Future[tuple[int, ...] | None] | None = None
+        owner = False
+        if key is not None:
+            if _SCOPE_PROBE_CACHE is not None:
+                cached_key, cached_version = _SCOPE_PROBE_CACHE
+                if key == cached_key:
+                    return cached_version
+            if _SCOPE_PROBE_PENDING is not None and _SCOPE_PROBE_PENDING[0] == key:
+                future = _SCOPE_PROBE_PENDING[1]
+            else:
+                future = Future()
+                owner = True
+                # Keep only one in-flight entry. A concurrent context switch
+                # may probe independently, without an identity-keyed map.
+                if _SCOPE_PROBE_PENDING is None:
+                    _SCOPE_PROBE_PENDING = (key, future)
+    if key is None:
+        return _probe_scope_version(None)
+    assert future is not None
+    if not owner:
+        parsed = future.result()
+        return parsed if key == _scope_probe_key() else None
+
+    try:
+        parsed = _probe_scope_version(key)
+        with _SCOPE_PROBE_LOCK:
+            # Revalidate at publication, including changes during probing.
+            if key != _scope_probe_key():
+                parsed = None
+            if parsed is not None:
+                _SCOPE_PROBE_CACHE = (key, parsed)
+            if _SCOPE_PROBE_PENDING is not None and _SCOPE_PROBE_PENDING[1] is future:
+                _SCOPE_PROBE_PENDING = None
+            future.set_result(parsed)
+        return parsed
+    except BaseException as exc:
+        # Current waiters share this failure; a later call starts a fresh
+        # attempt. Do not serialize repeated timeouts behind the same lock.
+        with _SCOPE_PROBE_LOCK:
+            if _SCOPE_PROBE_PENDING is not None and _SCOPE_PROBE_PENDING[1] is future:
+                _SCOPE_PROBE_PENDING = None
+            future.set_exception(exc)
+        raise
+
+
 def scope_isolation_available() -> bool:
     """True when semgrep supports ``--x-ignore-semgrepignore-files``.
 
@@ -158,13 +262,8 @@ def scope_isolation_available() -> bool:
     ``.semgrepignore`` files.  Callers should log a warning and pass
     ``scope_isolation=False`` to :func:`build_cmd`.
     """
-    info = _version_probe()
-    if info is None:
-        return False
-    vt = info.version_tuple()
-    if vt is None:
-        return False
-    return vt >= _SCOPE_ISOLATION_MIN_VERSION
+    vt = _scope_version()
+    return vt is not None and vt >= _SCOPE_ISOLATION_MIN_VERSION
 
 
 def build_cmd(
