@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-10-29T21:52:59Z",
+    "fetched_at": "2026-11-01T12:55:01Z",
     "git_ref": "v1.0.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of firecracker-1.0",
@@ -4585,6 +4585,315 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-114690"
+        ],
+        "fixed_versions": [],
+        "id": "UBUNTU-CVE-2026-114690",
+        "modified": "2026-10-31T03:30:13.047994+00:00",
+        "published": "2026-10-30T00:00:00+00:00",
+        "references": [
+          "https://ubuntu.com/security/CVE-2026-114690",
+          "https://www.cve.org/CVERecord?id=CVE-2026-114690",
+          "https://access.redhat.com/security/cve/CVE-2026-114690",
+          "https://bugzilla.redhat.com/show_bug.cgi?id=2478652"
+        ],
+        "severity": {
+          "score": 6.2,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": ""
+      },
+      "cvss_score": 6.2,
+      "dep_name": "gcc-8",
+      "dep_version": "8.4.0-1ubuntu1~18.04",
+      "direct": true,
+      "ecosystem": "Ubuntu",
+      "epss": 0.00107,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:Ubuntu:gcc-8:8.4.0-1ubuntu1~18.04:UBUNTU-CVE-2026-114690",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:deb/gcc-8@8.4.0-1ubuntu1~18.04",
+      "raptor_risk_estimate": 6.792255318970132,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "reachability not implemented for Ubuntu"
+        },
+        "evidence": [],
+        "verdict": "not_evaluated"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 62.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.43969145099999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 6.792255318970132,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.6135,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-114691"
+        ],
+        "fixed_versions": [],
+        "id": "UBUNTU-CVE-2026-114691",
+        "modified": "2026-10-31T03:30:13.026276+00:00",
+        "published": "2026-10-30T00:00:00+00:00",
+        "references": [
+          "https://ubuntu.com/security/CVE-2026-114691",
+          "https://www.cve.org/CVERecord?id=CVE-2026-114691",
+          "https://access.redhat.com/security/cve/CVE-2026-114691",
+          "https://bugzilla.redhat.com/show_bug.cgi?id=2478508"
+        ],
+        "severity": {
+          "score": 5.9,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": ""
+      },
+      "cvss_score": 5.9,
+      "dep_name": "gcc-8",
+      "dep_version": "8.4.0-1ubuntu1~18.04",
+      "direct": true,
+      "ecosystem": "Ubuntu",
+      "epss": 0.00395,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:Ubuntu:gcc-8:8.4.0-1ubuntu1~18.04:UBUNTU-CVE-2026-114691",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:deb/gcc-8@8.4.0-1ubuntu1~18.04",
+      "raptor_risk_estimate": 6.483043129883712,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "reachability not implemented for Ubuntu"
+        },
+        "evidence": [],
+        "verdict": "not_evaluated"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 59.00000000000001,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.441014235,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 6.483043129883712,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.6135,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-115455"
+        ],
+        "fixed_versions": [],
+        "id": "UBUNTU-CVE-2026-115455",
+        "modified": "2026-10-31T03:30:08.925799+00:00",
+        "published": "2026-10-30T00:00:00+00:00",
+        "references": [
+          "https://ubuntu.com/security/CVE-2026-115455",
+          "https://www.cve.org/CVERecord?id=CVE-2026-115455",
+          "https://access.redhat.com/security/cve/CVE-2026-115455",
+          "https://bugzilla.redhat.com/show_bug.cgi?id=2562933",
+          "https://gcc.gnu.org/cgit/gcc/commit/?id=5d419c69ce2e6b86d7da75f18736904885674219"
+        ],
+        "severity": {
+          "score": 6.5,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:H"
+        },
+        "summary": ""
+      },
+      "cvss_score": 6.5,
+      "dep_name": "gcc-8",
+      "dep_version": "8.4.0-1ubuntu1~18.04",
+      "direct": true,
+      "ecosystem": "Ubuntu",
+      "epss": 0.00303,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:Ubuntu:gcc-8:8.4.0-1ubuntu1~18.04:UBUNTU-CVE-2026-115455",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:deb/gcc-8@8.4.0-1ubuntu1~18.04",
+      "raptor_risk_estimate": 7.13549225163985,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "reachability not implemented for Ubuntu"
+        },
+        "evidence": [],
+        "verdict": "not_evaluated"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 65.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.44059167899999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 7.13549225163985,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.6135,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-115456"
+        ],
+        "fixed_versions": [],
+        "id": "UBUNTU-CVE-2026-115456",
+        "modified": "2026-10-31T03:30:12.734012+00:00",
+        "published": "2026-10-30T00:00:00+00:00",
+        "references": [
+          "https://ubuntu.com/security/CVE-2026-115456",
+          "https://www.cve.org/CVERecord?id=CVE-2026-115456",
+          "https://access.redhat.com/security/cve/CVE-2026-115456",
+          "https://bugzilla.redhat.com/show_bug.cgi?id=2563044"
+        ],
+        "severity": {
+          "score": 3.7,
+          "severity": "low",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "summary": ""
+      },
+      "cvss_score": 3.7,
+      "dep_name": "gcc-8",
+      "dep_version": "8.4.0-1ubuntu1~18.04",
+      "direct": true,
+      "ecosystem": "Ubuntu",
+      "epss": 0.00221,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:Ubuntu:gcc-8:8.4.0-1ubuntu1~18.04:UBUNTU-CVE-2026-115456",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:deb/gcc-8@8.4.0-1ubuntu1~18.04",
+      "raptor_risk_estimate": 4.0582696905022875,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "reachability not implemented for Ubuntu"
+        },
+        "evidence": [],
+        "verdict": "not_evaluated"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 37.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.44021505299999997,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 4.0582696905022875,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.6135,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "low",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 0,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2026-95619"
         ],
         "fixed_versions": [
@@ -5532,7 +5841,7 @@
       "dep_version": "2.27-3ubuntu1.6",
       "direct": true,
       "ecosystem": "Ubuntu",
-      "epss": 0.02221,
+      "epss": 0.01926,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5548,7 +5857,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/glibc@2.27-3ubuntu1.6",
-      "raptor_risk_estimate": 6.6063319004071515,
+      "raptor_risk_estimate": 6.5864139445996965,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -5563,10 +5872,10 @@
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.449401053,
+        "epss_multiplier": 0.448046118,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 6.6063319004071515,
+        "final": 6.5864139445996965,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -8360,7 +8669,7 @@
       "dep_version": "3.5.18-1ubuntu1.6",
       "direct": true,
       "ecosystem": "Ubuntu",
-      "epss": 0.00203,
+      "epss": 0.00195,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -8376,7 +8685,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/gnutls28@3.5.18-1ubuntu1.6",
-      "raptor_risk_estimate": 4.057507532584002,
+      "raptor_risk_estimate": 4.05716879573143,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -8391,10 +8700,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44013237899999996,
+        "epss_multiplier": 0.440095635,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.057507532584002,
+        "final": 4.05716879573143,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -13389,7 +13698,7 @@
       "dep_version": "2.31.1-0.4ubuntu3.7",
       "direct": true,
       "ecosystem": "Ubuntu",
-      "epss": 0.00151,
+      "epss": 0.00157,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -13405,7 +13714,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/util-linux@2.31.1-0.4ubuntu3.7",
-      "raptor_risk_estimate": 12.603278007811086,
+      "raptor_risk_estimate": 12.60406756505935,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -13420,10 +13729,10 @@
         "cvss_base": 47.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.439893543,
+        "epss_multiplier": 0.439921101,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 12.603278007811086,
+        "final": 12.60406756505935,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -13951,7 +14260,7 @@
       "dep_version": "5.2.2-1.3ubuntu0.1",
       "direct": true,
       "ecosystem": "Ubuntu",
-      "epss": 0.00514,
+      "epss": 0.00534,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -13967,7 +14276,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:deb/xz-utils@5.2.2-1.3ubuntu0.1",
-      "raptor_risk_estimate": 5.830968220799165,
+      "raptor_risk_estimate": 5.832181264933373,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -13982,10 +14291,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441560802,
+        "epss_multiplier": 0.441652662,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 5.830968220799165,
+        "final": 5.832181264933373,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,

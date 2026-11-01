@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-10-29T21:59:17Z",
+    "fetched_at": "2026-11-01T13:00:13Z",
     "git_ref": "12.5.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of drush-12",
@@ -1441,7 +1441,7 @@
       "dep_version": "10.1.4",
       "direct": false,
       "ecosystem": "Packagist",
-      "epss": null,
+      "epss": 0.00326,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1457,7 +1457,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 8.3664105525,
+      "raptor_risk_estimate": 5.5125285068007,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1479,10 +1479,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.66885,
+        "epss_multiplier": 0.440697318,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 8.3664105525,
+        "final": 5.5125285068007,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1523,7 +1523,7 @@
       "dep_version": "10.1.4",
       "direct": false,
       "ecosystem": "Packagist",
-      "epss": null,
+      "epss": 0.00197,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1539,7 +1539,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 8.3664105525,
+      "raptor_risk_estimate": 5.50511716920165,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1561,10 +1561,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.66885,
+        "epss_multiplier": 0.440104821,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 8.3664105525,
+        "final": 5.50511716920165,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -6226,7 +6226,7 @@
       "dep_version": "v3.6.1",
       "direct": false,
       "ecosystem": "Packagist",
-      "epss": 0.00435,
+      "epss": 0.00431,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6242,7 +6242,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 2.1569697149888336,
+      "raptor_risk_estimate": 2.1568798962415916,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -6257,10 +6257,10 @@
         "cvss_base": 22.000000000000004,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.441197955,
+        "epss_multiplier": 0.441179583,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 2.1569697149888336,
+        "final": 2.1568798962415916,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,

@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-10-29T21:47:29Z",
+    "fetched_at": "2026-11-01T12:50:28Z",
     "git_ref": "v7.1.2",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of rails",
@@ -2605,7 +2605,7 @@
       "dep_version": "1.0.6",
       "direct": false,
       "ecosystem": "RubyGems",
-      "epss": null,
+      "epss": 0.00486,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2621,7 +2621,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:gem/crass@1.0.6",
-      "raptor_risk_estimate": 9.36390840023764,
+      "raptor_risk_estimate": 6.180056316046296,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2636,10 +2636,10 @@
         "cvss_base": 63.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.66885,
+        "epss_multiplier": 0.441432198,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 9.36390840023764,
+        "final": 6.180056316046296,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -2688,7 +2688,7 @@
       "dep_version": "1.0.6",
       "direct": false,
       "ecosystem": "RubyGems",
-      "epss": null,
+      "epss": 0.00386,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2704,7 +2704,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:gem/crass@1.0.6",
-      "raptor_risk_estimate": 13.228378533669048,
+      "raptor_risk_estimate": 8.721471806582988,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2719,10 +2719,10 @@
         "cvss_base": 89.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.66885,
+        "epss_multiplier": 0.440972898,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 13.228378533669048,
+        "final": 8.721471806582988,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -2770,7 +2770,7 @@
       "dep_version": "1.0.6",
       "direct": false,
       "ecosystem": "RubyGems",
-      "epss": null,
+      "epss": 0.00486,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2786,7 +2786,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:gem/crass@1.0.6",
-      "raptor_risk_estimate": 9.36390840023764,
+      "raptor_risk_estimate": 6.180056316046296,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2801,10 +2801,10 @@
         "cvss_base": 63.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.66885,
+        "epss_multiplier": 0.441432198,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 9.36390840023764,
+        "final": 6.180056316046296,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -2935,7 +2935,7 @@
       "dep_version": "1.0.6",
       "direct": false,
       "ecosystem": "RubyGems",
-      "epss": null,
+      "epss": 0.00486,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2951,7 +2951,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:gem/crass@1.0.6",
-      "raptor_risk_estimate": 9.36390840023764,
+      "raptor_risk_estimate": 6.180056316046296,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2966,10 +2966,10 @@
         "cvss_base": 63.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.66885,
+        "epss_multiplier": 0.441432198,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 9.36390840023764,
+        "final": 6.180056316046296,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -9890,7 +9890,7 @@
       "dep_version": "3.0.8",
       "direct": true,
       "ecosystem": "RubyGems",
-      "epss": 0.0024,
+      "epss": 0.0025,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -9906,7 +9906,7 @@
         "numeric": 0.7
       },
       "purl": "pkg:gem/rack@3.0.8",
-      "raptor_risk_estimate": 5.145593062679999,
+      "raptor_risk_estimate": 5.1461298236249995,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -9928,10 +9928,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44030231999999997,
+        "epss_multiplier": 0.44034825,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 5.145593062679999,
+        "final": 5.1461298236249995,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -10167,7 +10167,7 @@
       "dep_version": "3.0.8",
       "direct": true,
       "ecosystem": "RubyGems",
-      "epss": 0.00369,
+      "epss": 0.00375,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -10183,7 +10183,7 @@
         "numeric": 0.7
       },
       "purl": "pkg:gem/rack@3.0.8",
-      "raptor_risk_estimate": 7.2912980361375,
+      "raptor_risk_estimate": 7.2917537765625,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -10205,10 +10205,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440894817,
+        "epss_multiplier": 0.440922375,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.2912980361375,
+        "final": 7.2917537765625,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -10257,7 +10257,7 @@
       "dep_version": "3.0.8",
       "direct": true,
       "ecosystem": "RubyGems",
-      "epss": 0.00192,
+      "epss": 0.002,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -10273,7 +10273,7 @@
         "numeric": 0.7
       },
       "purl": "pkg:gem/rack@3.0.8",
-      "raptor_risk_estimate": 4.657826363903999,
+      "raptor_risk_estimate": 4.6582152624,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -10295,10 +10295,10 @@
         "cvss_base": 48.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440081856,
+        "epss_multiplier": 0.44011859999999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.657826363903999,
+        "final": 4.6582152624,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -10441,7 +10441,7 @@
       "dep_version": "3.0.8",
       "direct": true,
       "ecosystem": "RubyGems",
-      "epss": 0.00387,
+      "epss": 0.00394,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -10457,7 +10457,7 @@
         "numeric": 0.7
       },
       "purl": "pkg:gem/rack@3.0.8",
-      "raptor_risk_estimate": 7.292665257412498,
+      "raptor_risk_estimate": 7.2931969545749995,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -10479,10 +10479,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440977491,
+        "epss_multiplier": 0.441009642,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.292665257412498,
+        "final": 7.2931969545749995,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -10626,7 +10626,7 @@
       "dep_version": "3.0.8",
       "direct": true,
       "ecosystem": "RubyGems",
-      "epss": 0.00147,
+      "epss": 0.00152,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -10642,7 +10642,7 @@
         "numeric": 0.7
       },
       "purl": "pkg:gem/rack@3.0.8",
-      "raptor_risk_estimate": 4.655638809863999,
+      "raptor_risk_estimate": 4.655881871423999,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -10664,10 +10664,10 @@
         "cvss_base": 48.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.43987517099999995,
+        "epss_multiplier": 0.439898136,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.655638809863999,
+        "final": 4.655881871423999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -10717,7 +10717,7 @@
       "dep_version": "3.0.8",
       "direct": true,
       "ecosystem": "RubyGems",
-      "epss": 0.00195,
+      "epss": 0.00202,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -10733,7 +10733,7 @@
         "numeric": 0.7
       },
       "purl": "pkg:gem/rack@3.0.8",
-      "raptor_risk_estimate": 5.143177638427499,
+      "raptor_risk_estimate": 5.1435533710889985,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -10755,10 +10755,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440095635,
+        "epss_multiplier": 0.44012778599999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 5.143177638427499,
+        "final": 5.1435533710889985,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -10807,7 +10807,7 @@
       "dep_version": "3.0.8",
       "direct": true,
       "ecosystem": "RubyGems",
-      "epss": 0.00179,
+      "epss": 0.00186,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -10823,7 +10823,7 @@
         "numeric": 0.7
       },
       "purl": "pkg:gem/rack@3.0.8",
-      "raptor_risk_estimate": 4.657194403847999,
+      "raptor_risk_estimate": 4.657534690032,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -10845,10 +10845,10 @@
         "cvss_base": 48.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440022147,
+        "epss_multiplier": 0.44005429799999995,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.657194403847999,
+        "final": 4.657534690032,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -10898,7 +10898,7 @@
       "dep_version": "3.0.8",
       "direct": true,
       "ecosystem": "RubyGems",
-      "epss": 0.00234,
+      "epss": 0.00243,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -10914,7 +10914,7 @@
         "numeric": 0.7
       },
       "purl": "pkg:gem/rack@3.0.8",
-      "raptor_risk_estimate": 5.727754516239,
+      "raptor_risk_estimate": 5.7282922899405,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -10936,10 +10936,10 @@
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440274762,
+        "epss_multiplier": 0.44031609899999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 5.727754516239,
+        "final": 5.7282922899405,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -11084,7 +11084,7 @@
       "dep_version": "3.0.8",
       "direct": true,
       "ecosystem": "RubyGems",
-      "epss": 0.0043,
+      "epss": 0.00447,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -11100,7 +11100,7 @@
         "numeric": 0.7
       },
       "purl": "pkg:gem/rack@3.0.8",
-      "raptor_risk_estimate": 7.295931397124999,
+      "raptor_risk_estimate": 7.297222661662498,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -11122,10 +11122,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44117499,
+        "epss_multiplier": 0.441253071,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.295931397124999,
+        "final": 7.297222661662498,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -11176,7 +11176,7 @@
       "dep_version": "3.0.8",
       "direct": true,
       "ecosystem": "RubyGems",
-      "epss": 0.00475,
+      "epss": 0.00494,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -11192,7 +11192,7 @@
         "numeric": 0.7
       },
       "purl": "pkg:gem/rack@3.0.8",
-      "raptor_risk_estimate": 7.299349450312499,
+      "raptor_risk_estimate": 7.300792628325,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -11214,10 +11214,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441381675,
+        "epss_multiplier": 0.441468942,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.299349450312499,
+        "final": 7.300792628325,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -11267,7 +11267,7 @@
       "dep_version": "3.0.8",
       "direct": true,
       "ecosystem": "RubyGems",
-      "epss": 0.00253,
+      "epss": 0.00262,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -11283,7 +11283,7 @@
         "numeric": 0.7
       },
       "purl": "pkg:gem/rack@3.0.8",
-      "raptor_risk_estimate": 5.146290851908499,
+      "raptor_risk_estimate": 5.146773936758998,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -11305,10 +11305,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.440362029,
+        "epss_multiplier": 0.44040336599999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 5.146290851908499,
+        "final": 5.146773936758998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -11451,7 +11451,7 @@
       "dep_version": "3.0.8",
       "direct": true,
       "ecosystem": "RubyGems",
-      "epss": 0.0038,
+      "epss": 0.00395,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -11467,7 +11467,7 @@
         "numeric": 0.7
       },
       "purl": "pkg:gem/rack@3.0.8",
-      "raptor_risk_estimate": 5.153107715909999,
+      "raptor_risk_estimate": 5.153912857327499,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -11489,10 +11489,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44094533999999996,
+        "epss_multiplier": 0.441014235,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 5.153107715909999,
+        "final": 5.153912857327499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -12442,8 +12442,8 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activejob/lib/active_job/queue_adapters/resque_adapter.rb:8",
-          "activejob/lib/active_job/queue_adapters/resque_adapter.rb:11"
+          "activejob/lib/active_job/queue_adapters/resque_adapter.rb:11",
+          "activejob/lib/active_job/queue_adapters/resque_adapter.rb:8"
         ],
         "verdict": "imported"
       },
@@ -16125,7 +16125,7 @@
       "dep_version": "1.1.11",
       "direct": false,
       "ecosystem": "npm",
-      "epss": 0.0042,
+      "epss": 0.00428,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -16141,7 +16141,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/brace-expansion@1.1.11",
-      "raptor_risk_estimate": 5.195524700836083,
+      "raptor_risk_estimate": 5.195957463890976,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -16156,10 +16156,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44112905999999996,
+        "epss_multiplier": 0.441165804,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 5.195524700836083,
+        "final": 5.195957463890976,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -16212,7 +16212,7 @@
       "dep_version": "1.1.11",
       "direct": false,
       "ecosystem": "npm",
-      "epss": 0.00455,
+      "epss": 0.00491,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -16228,7 +16228,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/brace-expansion@1.1.11",
-      "raptor_risk_estimate": 7.354836847926283,
+      "raptor_risk_estimate": 7.357592650398475,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -16243,10 +16243,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.441289815,
+        "epss_multiplier": 0.441455163,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.354836847926283,
+        "final": 7.357592650398475,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -20256,6 +20256,89 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-118764"
+        ],
+        "cwe_ids": [
+          "CWE-405"
+        ],
+        "fixed_versions": [
+          "11.0.1"
+        ],
+        "id": "GHSA-g3hv-75wg-m249",
+        "modified": "2026-10-30T23:15:07.420159+00:00",
+        "published": "2026-10-30T23:09:55+00:00",
+        "references": [
+          "https://github.com/isaacs/minimatch/security/advisories/GHSA-g3hv-75wg-m249",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-118764",
+          "https://github.com/isaacs/minimatch/commit/77a0f5c4b80bdc641c3c930a1d9edf5ad2db57f8",
+          "https://github.com/isaacs/minimatch",
+          "https://github.com/isaacs/minimatch/releases/tag/v11.0.1"
+        ],
+        "severity": {
+          "score": 6.9,
+          "severity": "medium",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
+        },
+        "summary": "minimatch has potential denial of service via globparts amplification"
+      },
+      "cvss_score": 6.9,
+      "dep_name": "minimatch",
+      "dep_version": "3.1.2",
+      "direct": false,
+      "ecosystem": "npm",
+      "epss": 0.00291,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:npm:minimatch:3.1.2:GHSA-g3hv-75wg-m249",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:npm/minimatch@3.1.2",
+      "raptor_risk_estimate": 6.75490002573094,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'minimatch' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 69.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.440536563,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 6.75490002573094,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.71062,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2020-7598"
         ],
         "cwe_ids": [
@@ -23062,7 +23145,7 @@
       "dep_version": "2.1.1",
       "direct": false,
       "ecosystem": "npm",
-      "epss": 0.00739,
+      "epss": 0.00745,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -23078,7 +23161,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/socket.io@2.1.1",
-      "raptor_risk_estimate": 4.229237518659375,
+      "raptor_risk_estimate": 4.229500850895607,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -23093,10 +23176,10 @@
         "cvss_base": 43.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44259422699999995,
+        "epss_multiplier": 0.442621785,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 4.229237518659375,
+        "final": 4.229500850895607,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,

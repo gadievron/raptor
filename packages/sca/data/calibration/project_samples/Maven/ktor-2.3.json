@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-10-29T22:00:07Z",
+    "fetched_at": "2026-11-01T13:00:56Z",
     "git_ref": "2.3.7",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of ktor-2.3",
@@ -4064,7 +4064,7 @@
       "dep_version": "10.1.16",
       "direct": true,
       "ecosystem": "Maven",
-      "epss": 0.00562,
+      "epss": 0.00755,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4080,7 +4080,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:maven/org.apache.tomcat.embed/tomcat-embed-core@10.1.16",
-      "raptor_risk_estimate": 10.787173464503475,
+      "raptor_risk_estimate": 10.808818291630288,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4095,10 +4095,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441781266,
+        "epss_multiplier": 0.44266771499999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 10.787173464503475,
+        "final": 10.808818291630288,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -4410,7 +4410,7 @@
       "dep_version": "10.1.16",
       "direct": true,
       "ecosystem": "Maven",
-      "epss": 0.00538,
+      "epss": 0.00654,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4426,7 +4426,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:maven/org.apache.tomcat.embed/tomcat-embed-core@10.1.16",
-      "raptor_risk_estimate": 10.01416174551282,
+      "raptor_risk_estimate": 10.026241834079524,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4441,10 +4441,10 @@
         "cvss_base": 90.99999999999999,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44167103399999996,
+        "epss_multiplier": 0.44220382199999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 10.01416174551282,
+        "final": 10.026241834079524,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -4840,7 +4840,7 @@
       "dep_version": "10.1.16",
       "direct": true,
       "ecosystem": "Maven",
-      "epss": 0.00491,
+      "epss": 0.00643,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4856,7 +4856,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:maven/org.apache.tomcat.embed/tomcat-embed-core@10.1.16",
-      "raptor_risk_estimate": 10.009267226869413,
+      "raptor_risk_estimate": 10.025096308439581,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4871,10 +4871,10 @@
         "cvss_base": 90.99999999999999,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441455163,
+        "epss_multiplier": 0.442153299,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 10.009267226869413,
+        "final": 10.025096308439581,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -7165,7 +7165,7 @@
       "dep_version": "9.0.83",
       "direct": true,
       "ecosystem": "Maven",
-      "epss": 0.00562,
+      "epss": 0.00755,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7181,7 +7181,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:maven/org.apache.tomcat.embed/tomcat-embed-core@9.0.83",
-      "raptor_risk_estimate": 10.787173464503475,
+      "raptor_risk_estimate": 10.808818291630288,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -7196,10 +7196,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441781266,
+        "epss_multiplier": 0.44266771499999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 10.787173464503475,
+        "final": 10.808818291630288,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -7511,7 +7511,7 @@
       "dep_version": "9.0.83",
       "direct": true,
       "ecosystem": "Maven",
-      "epss": 0.00538,
+      "epss": 0.00654,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7527,7 +7527,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:maven/org.apache.tomcat.embed/tomcat-embed-core@9.0.83",
-      "raptor_risk_estimate": 10.01416174551282,
+      "raptor_risk_estimate": 10.026241834079524,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -7542,10 +7542,10 @@
         "cvss_base": 90.99999999999999,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44167103399999996,
+        "epss_multiplier": 0.44220382199999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 10.01416174551282,
+        "final": 10.026241834079524,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -7941,7 +7941,7 @@
       "dep_version": "9.0.83",
       "direct": true,
       "ecosystem": "Maven",
-      "epss": 0.00491,
+      "epss": 0.00643,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7957,7 +7957,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:maven/org.apache.tomcat.embed/tomcat-embed-core@9.0.83",
-      "raptor_risk_estimate": 10.009267226869413,
+      "raptor_risk_estimate": 10.025096308439581,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -7972,10 +7972,10 @@
         "cvss_base": 90.99999999999999,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441455163,
+        "epss_multiplier": 0.442153299,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 10.009267226869413,
+        "final": 10.025096308439581,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -9748,7 +9748,7 @@
       "dep_version": "10.1.16",
       "direct": true,
       "ecosystem": "Maven",
-      "epss": 0.00562,
+      "epss": 0.00755,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -9764,7 +9764,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:maven/org.apache.tomcat/tomcat-catalina@10.1.16",
-      "raptor_risk_estimate": 10.787173464503475,
+      "raptor_risk_estimate": 10.808818291630288,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -9779,10 +9779,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441781266,
+        "epss_multiplier": 0.44266771499999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 10.787173464503475,
+        "final": 10.808818291630288,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -10007,7 +10007,7 @@
       "dep_version": "10.1.16",
       "direct": true,
       "ecosystem": "Maven",
-      "epss": 0.00538,
+      "epss": 0.00654,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -10023,7 +10023,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:maven/org.apache.tomcat/tomcat-catalina@10.1.16",
-      "raptor_risk_estimate": 10.01416174551282,
+      "raptor_risk_estimate": 10.026241834079524,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -10038,10 +10038,10 @@
         "cvss_base": 90.99999999999999,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44167103399999996,
+        "epss_multiplier": 0.44220382199999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 10.01416174551282,
+        "final": 10.026241834079524,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -10351,7 +10351,7 @@
       "dep_version": "10.1.16",
       "direct": true,
       "ecosystem": "Maven",
-      "epss": 0.00491,
+      "epss": 0.00643,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -10367,7 +10367,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:maven/org.apache.tomcat/tomcat-catalina@10.1.16",
-      "raptor_risk_estimate": 10.009267226869413,
+      "raptor_risk_estimate": 10.025096308439581,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -10382,10 +10382,10 @@
         "cvss_base": 90.99999999999999,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441455163,
+        "epss_multiplier": 0.442153299,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 10.009267226869413,
+        "final": 10.025096308439581,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -11816,7 +11816,7 @@
       "dep_version": "9.0.83",
       "direct": true,
       "ecosystem": "Maven",
-      "epss": 0.00562,
+      "epss": 0.00755,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -11832,7 +11832,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:maven/org.apache.tomcat/tomcat-catalina@9.0.83",
-      "raptor_risk_estimate": 10.787173464503475,
+      "raptor_risk_estimate": 10.808818291630288,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -11847,10 +11847,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441781266,
+        "epss_multiplier": 0.44266771499999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 10.787173464503475,
+        "final": 10.808818291630288,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -12075,7 +12075,7 @@
       "dep_version": "9.0.83",
       "direct": true,
       "ecosystem": "Maven",
-      "epss": 0.00538,
+      "epss": 0.00654,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -12091,7 +12091,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:maven/org.apache.tomcat/tomcat-catalina@9.0.83",
-      "raptor_risk_estimate": 10.01416174551282,
+      "raptor_risk_estimate": 10.026241834079524,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -12106,10 +12106,10 @@
         "cvss_base": 90.99999999999999,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44167103399999996,
+        "epss_multiplier": 0.44220382199999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 10.01416174551282,
+        "final": 10.026241834079524,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -12419,7 +12419,7 @@
       "dep_version": "9.0.83",
       "direct": true,
       "ecosystem": "Maven",
-      "epss": 0.00491,
+      "epss": 0.00643,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -12435,7 +12435,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:maven/org.apache.tomcat/tomcat-catalina@9.0.83",
-      "raptor_risk_estimate": 10.009267226869413,
+      "raptor_risk_estimate": 10.025096308439581,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -12450,10 +12450,10 @@
         "cvss_base": 90.99999999999999,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.441455163,
+        "epss_multiplier": 0.442153299,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 10.009267226869413,
+        "final": 10.025096308439581,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6135,
@@ -14801,7 +14801,7 @@
       "dep_version": "1.1.11",
       "direct": false,
       "ecosystem": "npm",
-      "epss": 0.0042,
+      "epss": 0.00428,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -14817,7 +14817,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/brace-expansion@1.1.11",
-      "raptor_risk_estimate": 5.195524700836083,
+      "raptor_risk_estimate": 5.195957463890976,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -14832,10 +14832,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44112905999999996,
+        "epss_multiplier": 0.441165804,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 5.195524700836083,
+        "final": 5.195957463890976,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -14888,7 +14888,7 @@
       "dep_version": "1.1.11",
       "direct": false,
       "ecosystem": "npm",
-      "epss": 0.00455,
+      "epss": 0.00491,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -14904,7 +14904,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/brace-expansion@1.1.11",
-      "raptor_risk_estimate": 7.354836847926283,
+      "raptor_risk_estimate": 7.357592650398475,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -14919,10 +14919,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.441289815,
+        "epss_multiplier": 0.441455163,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.354836847926283,
+        "final": 7.357592650398475,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -15496,7 +15496,7 @@
       "dep_version": "2.0.1",
       "direct": false,
       "ecosystem": "npm",
-      "epss": 0.0042,
+      "epss": 0.00428,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -15512,7 +15512,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/brace-expansion@2.0.1",
-      "raptor_risk_estimate": 5.195524700836083,
+      "raptor_risk_estimate": 5.195957463890976,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -15527,10 +15527,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.44112905999999996,
+        "epss_multiplier": 0.441165804,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 5.195524700836083,
+        "final": 5.195957463890976,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -15583,7 +15583,7 @@
       "dep_version": "2.0.1",
       "direct": false,
       "ecosystem": "npm",
-      "epss": 0.00455,
+      "epss": 0.00491,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -15599,7 +15599,7 @@
         "numeric": 0.95
       },
       "purl": "pkg:npm/brace-expansion@2.0.1",
-      "raptor_risk_estimate": 7.354836847926283,
+      "raptor_risk_estimate": 7.357592650398475,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -15614,10 +15614,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.77,
-        "epss_multiplier": 0.441289815,
+        "epss_multiplier": 0.441455163,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.45,
-        "final": 7.354836847926283,
+        "final": 7.357592650398475,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.71062,
@@ -17993,6 +17993,89 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-118764"
+        ],
+        "cwe_ids": [
+          "CWE-405"
+        ],
+        "fixed_versions": [
+          "11.0.1"
+        ],
+        "id": "GHSA-g3hv-75wg-m249",
+        "modified": "2026-10-30T23:15:07.420159+00:00",
+        "published": "2026-10-30T23:09:55+00:00",
+        "references": [
+          "https://github.com/isaacs/minimatch/security/advisories/GHSA-g3hv-75wg-m249",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-118764",
+          "https://github.com/isaacs/minimatch/commit/77a0f5c4b80bdc641c3c930a1d9edf5ad2db57f8",
+          "https://github.com/isaacs/minimatch",
+          "https://github.com/isaacs/minimatch/releases/tag/v11.0.1"
+        ],
+        "severity": {
+          "score": 6.9,
+          "severity": "medium",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
+        },
+        "summary": "minimatch has potential denial of service via globparts amplification"
+      },
+      "cvss_score": 6.9,
+      "dep_name": "minimatch",
+      "dep_version": "3.1.1",
+      "direct": false,
+      "ecosystem": "npm",
+      "epss": 0.00291,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:npm:minimatch:3.1.1:GHSA-g3hv-75wg-m249",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:npm/minimatch@3.1.1",
+      "raptor_risk_estimate": 6.75490002573094,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'minimatch' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 69.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.440536563,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 6.75490002573094,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.71062,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2026-27904"
         ],
         "cwe_ids": [
@@ -18251,6 +18334,89 @@
         "version_match_confidence": 0.95
       },
       "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null,
+      "transitive_depth": 1,
+      "version_match_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      }
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-118764"
+        ],
+        "cwe_ids": [
+          "CWE-405"
+        ],
+        "fixed_versions": [
+          "11.0.1"
+        ],
+        "id": "GHSA-g3hv-75wg-m249",
+        "modified": "2026-10-30T23:15:07.420159+00:00",
+        "published": "2026-10-30T23:09:55+00:00",
+        "references": [
+          "https://github.com/isaacs/minimatch/security/advisories/GHSA-g3hv-75wg-m249",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-118764",
+          "https://github.com/isaacs/minimatch/commit/77a0f5c4b80bdc641c3c930a1d9edf5ad2db57f8",
+          "https://github.com/isaacs/minimatch",
+          "https://github.com/isaacs/minimatch/releases/tag/v11.0.1"
+        ],
+        "severity": {
+          "score": 6.9,
+          "severity": "medium",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
+        },
+        "summary": "minimatch has potential denial of service via globparts amplification"
+      },
+      "cvss_score": 6.9,
+      "dep_name": "minimatch",
+      "dep_version": "5.0.1",
+      "direct": false,
+      "ecosystem": "npm",
+      "epss": 0.00291,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "exposure_factor": 0.0,
+      "finding_id": "sca:vuln:npm:minimatch:5.0.1:GHSA-g3hv-75wg-m249",
+      "in_kev": false,
+      "parser_confidence": {
+        "level": "high",
+        "numeric": 0.95
+      },
+      "purl": "pkg:npm/minimatch@5.0.1",
+      "raptor_risk_estimate": 6.75490002573094,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'minimatch' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "needs_retune",
+        "cvss_base": 69.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.77,
+        "epss_multiplier": 0.440536563,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.45,
+        "final": 6.75490002573094,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.71062,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null,
       "transitive_depth": 1,
