@@ -122,6 +122,7 @@ SUBSYSTEMS: dict[str, tuple[str, ...]] = {
                                          # scratch beside themselves
     ),
     "engine/codeql": (
+        "tools/offline.py",  # operator entry point for verified airgap provisioning
         "queries/**/*.ql",
         "queries/**/*.qll",       # shared production flow configurations
         "queries/**/qlpack.yml",  # pack manifests only — a stray .yml
