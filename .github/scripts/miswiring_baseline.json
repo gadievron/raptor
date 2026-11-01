@@ -1,9 +1,6 @@
 {
  "_comment": "Accepted miswiring-detector findings. Keys are class:kind:file:symbol (no line numbers). Add an entry ONLY with a note explaining why the finding is accepted; prefer fixing. check_miswiring.py fails CI on any finding not listed here and warns on stale entries.",
  "entries": {
-  "artifacts:orphan_reader::INSTALL_RECEIPT.json": {
-   "note": "External input produced by Homebrew when installing a formula. Joern prereqs reads the bounded, regular, non-symlink receipt from the verified keg to resolve its stable package version and declared OpenJDK dependency; RAPTOR must not write or alter Homebrew installation metadata."
-  },
   "artifacts:orphan_reader::*-metadata.json": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },
@@ -34,6 +31,9 @@
   "artifacts:orphan_reader::.raptor.json": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },
+  "artifacts:orphan_reader::INSTALL_RECEIPT.json": {
+   "note": "External input produced by Homebrew when installing a formula. Joern prereqs reads the bounded, regular, non-symlink receipt from the verified keg to resolve its stable package version and declared OpenJDK dependency; RAPTOR must not write or alter Homebrew installation metadata."
+  },
   "artifacts:orphan_reader::README.txt": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },
@@ -59,7 +59,7 @@
    "note": "glob-reader/concrete-writer false positive: run_corpus._clear_resume_state sweeps finished-run resume sidecars via glob(\"checkpoint-*-groups.json\"); the writers spell the concrete names (literal checkpoint-sec-groups.json / checkpoint-bf-groups.json paths and f\"checkpoint-{mode}-groups.json\", all written through _checkpoint_write), which the artifact indexer keys separately from the glob pattern, so the reader looks orphaned; twin of the baselined *.osv.json entry"
   },
   "artifacts:orphan_reader::codeql-pack.lock.yml": {
-   "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+   "note": "external input: CodeQL CLI generates the lock file during pack resolution; RAPTOR reads it to check pack freshness"
   },
   "artifacts:orphan_reader::codeql-workspace.yml": {
    "note": "external-input pattern: _codeql_workspace_root walks up from a pack root looking for the CodeQL workspace manifest; the file is part of the CodeQL installation, not written by repo python"
@@ -313,6 +313,21 @@
   "artifacts:write_only_artifact::credential-posture.json": {
    "note": "durable operator/audit record by design: the env-direct credential-downgrade banner drops it into the run dir as evidence of the posture a run launched with; consumed by the operator and tests, no production reader intended"
   },
+  "artifacts:write_only_artifact::cross-entry-error.json": {
+   "note": "operator-facing diagnostic: cross-entry prep error record written to the run directory for triage when indexing or slicing fails"
+  },
+  "artifacts:write_only_artifact::cross-entry-index.json": {
+   "note": "operator-facing diagnostic: cross-entry typed access index snapshot written to the run directory for calibration and debugging"
+  },
+  "artifacts:write_only_artifact::cross-entry-slices.json": {
+   "note": "operator-facing diagnostic: cross-entry consumer-centred slice selection written to the run directory for calibration and debugging"
+  },
+  "artifacts:write_only_artifact::cross-entry-study.json": {
+   "note": "operator-facing diagnostic: cross-entry study-engine output written to the run directory for calibration and debugging"
+  },
+  "artifacts:write_only_artifact::dark-verify-early-results.json": {
+   "note": "operator-facing run output: early dark-probe verdicts from the concurrent submission pass, same reader contract as dark-verify-results.json"
+  },
   "artifacts:write_only_artifact::dark-verify-results.json": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },
@@ -368,9 +383,6 @@
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },
   "artifacts:write_only_artifact::fuzzing_plan.json": {
-   "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
-  },
-  "artifacts:write_only_artifact::fuzzing_report.json": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },
   "artifacts:write_only_artifact::generated-corpus.json": {
@@ -547,9 +559,6 @@
   "artifacts:write_only_artifact::verification.json": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },
-  "artifacts:write_only_artifact::verified-outcomes.json": {
-   "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
-  },
   "artifacts:write_only_artifact::verify-enforced.json": {
    "note": "raptor-recall-measure verify-enforced subcommand output: machine-readable dual of verify-enforced.md; the review verdict also rides the exit code (non-clean set exits 1)"
   },
@@ -575,9 +584,6 @@
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },
   "artifacts:write_only_artifact::web-tool-adapters.json": {
-   "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
-  },
-  "artifacts:write_only_artifact::web_findings.json": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },
   "artifacts:write_only_artifact::web_findings_for_validation.json": {
@@ -744,9 +750,6 @@
   },
   "plumbing:orphan_config_field:core/llm/tool_use/types.py:TurnStarted.input_token_estimate": {
    "note": "kept: published observability API (2026-08-17 config-orphan pass). TurnStarted is a frozen event dataclass exported in core.llm.tool_use.__all__ for external subscribers; per-turn input-token telemetry is the point of the event. The in-repo hunt_dispatch subscriber deliberately skips TurnStarted; the value is computed regardless for the context-policy gate (loop.py)."
-  },
-  "artifacts:write_only_artifact::dark-verify-early-results.json": {
-   "note": "operator-facing run output: early dark-probe verdicts from the concurrent submission pass, same reader contract as dark-verify-results.json"
   }
  },
  "version": 1

@@ -79,7 +79,7 @@ class Types:
         self.visible: dict[str,set[str]] = {}
         includes: dict[str,set[str]] = defaultdict(set)
         for fp,(_,src) in trees.items():
-            for name in re.findall(r'^\s*#\s*include\s*[<"]([^>"\n]+)[>"]',src.decode(errors="replace"),re.MULTILINE):
+            for name in re.findall(r'^[ \t]*#[ \t]*include[ \t]*[<"]([^>"\n]+)[>"]',src.decode(errors="replace"),re.MULTILINE):
                 options = [posixpath.normpath(posixpath.join(posixpath.dirname(fp),name)),name,"include/"+name]
                 selected = (include_edges or {}).get(fp,{}).get(name)
                 matches = [selected] if selected in trees else [p for p in options if p in trees]

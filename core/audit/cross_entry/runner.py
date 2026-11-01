@@ -76,7 +76,7 @@ def prepare(target,gaps,*,mode,out_dir,limits=None,client=None,entry_points=(),m
     resolve_model = getattr(config,"get_model_for_task",None)
     model = resolve_model("study") if callable(resolve_model) else None
     identity = {k:getattr(model,k,None) for k in ("provider","model_name","temperature")}
-    implementation = {p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in Path(__file__).parent.glob("*.py")}
+    implementation = {p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in Path(__file__).parent.glob("*.py")}  # raw-open: __file__-relative module source for namespace key
     namespace = digest({"root":str(root),"target":str(target),"mode":mode,
                         "include_dirs":[str(p) for p in include_dirs],
                         "model":[model_key,identity],"settings":limits.content_settings(),"code":implementation})
