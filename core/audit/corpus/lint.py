@@ -16,7 +16,9 @@ Two modes:
 ``--mode pins``
     Verify each label's source pin against the pinned tree: file
     exists, line range in bounds, ``span_sha`` matches (when
-    present), and the function name appears within the pinned span.
+    present), and a complete function definition is contained in the pinned span
+    (currently Python, C and Go; unsupported or uncertain parses fail
+    as ``unverifiable``).
     Trees are resolved from the fixtures dir (only when the checkout
     is at the pinned ref), from the linter's sparse cache, or — with
     ``--fetch-missing`` — by fetching just the labelled files at the
@@ -31,6 +33,7 @@ Per-label pin outcomes:
 - ``missing``      the function is absent from the pinned file (and,
                    with ``--tree-search``, from the whole tree), or
                    the pinned ref is no longer fetchable upstream
+- ``unverifiable`` definition identity/bounds cannot be established
 - ``no-fixture``   no tree available to verify against (warn, not
                    fail, unless ``--require-fixtures``)
 
@@ -41,7 +44,7 @@ label is never stamped.
 Exit codes:
     0  clean
     1  usage / infrastructure error (bad path, unreadable label dir)
-    2  lint failures (schema errors; any relocatable/missing pin;
+    2  lint failures (schema errors; relocatable/missing/unverifiable pin;
        no-fixture under --require-fixtures)
 """
 
@@ -61,6 +64,7 @@ from core.json import dumps_artifact, load_json
 
 from .label import FunctionLabel, compute_span_sha, load_label
 from .sources import FIXTURES_DIR
+from .definitions import definitions, function_name
 from core.source.lines import split_lines
 
 LABELS_DIR = Path(__file__).parent / "labels"
@@ -81,6 +85,7 @@ PIN_OK = "ok"
 PIN_RELOCATABLE = "relocatable"
 PIN_MISSING = "missing"
 PIN_NO_FIXTURE = "no-fixture"
+PIN_UNVERIFIABLE = "unverifiable"
 
 # Prefixes probed when a label's file is missing from the tree root —
 # mirrors the runner's probe (some repos pin src/-relative paths; see
@@ -123,8 +128,7 @@ class PinCheck:
 
 def _function_name(label: FunctionLabel) -> str:
     """Bare function name — same derivation as the runner."""
-    name = label.function_id.rsplit(":", 1)[-1]
-    return name.rsplit(".", 1)[-1]
+    return function_name(label.function_id)
 
 
 def _name_re(name: str) -> re.Pattern:
@@ -462,27 +466,6 @@ def _relocate_by_hash(
     return None
 
 
-def _relocate_by_name(
-    lines: list[str], name: str, _span_len: int,
-) -> int | None:
-    """Best-effort 1-indexed start line for *name*'s definition."""
-    pattern = _name_re(name)
-    candidates = [
-        i + 1 for i, line in enumerate(lines) if pattern.search(line)
-    ]
-    if not candidates:
-        return None
-    # Prefer a line that looks like a definition/declaration site
-    # (name immediately followed by an open paren).
-    call_like = re.compile(
-        rf"(?<![A-Za-z0-9_]){re.escape(name)}\s*\(",
-    )
-    for cand in candidates:
-        if call_like.search(lines[cand - 1]):
-            return cand
-    return candidates[0]
-
-
 def _tree_search(tree: Path, name: str, limit: int = 3) -> list[str]:
     """Search *tree* for *name*; returns up to *limit* ``file:line``
     hits."""
@@ -560,65 +543,51 @@ def _check_span(
     n = len(lines)
     in_bounds = 1 <= src.line_start <= src.line_end <= n
 
-    if in_bounds:
-        span_text = "\n".join(lines[src.line_start - 1:src.line_end])
-        current = compute_span_sha(
-            "\n".join(lines), src.line_start, src.line_end,
-        )
-        name_in_span = bool(_name_re(name).search(span_text))
-        sha_ok = (not src.span_sha) or current == src.span_sha
-        if sha_ok and name_in_span and rel_file == src.file:
-            dead = _span_preprocessor_dead(
-                rel_file, lines, src.line_start, src.line_end,
-            )
+    text = "\n".join(lines)
+    wanted = function_name(label.function_id, qualified=True)
+    try:
+        candidates = [d for d in definitions(text, rel_file)
+                      if d.name == wanted or (
+                          "." not in wanted and d.name.rsplit(".", 1)[-1] == wanted)]
+    except (ImportError, ValueError, SyntaxError, RuntimeError) as exc:
+        return PinCheck(label=label, path=path, outcome=PIN_UNVERIFIABLE,
+                        detail=f"definition verification unavailable: {exc}")
+
+    # The pin must contain a complete definition. Extra surrounding
+    # context is allowed. A call, comment, or partial body is not proof.
+    covered = [d for d in candidates
+               if src.line_start <= d.start and d.end <= src.line_end]
+    if len(covered) > 1 or (not covered and len(candidates) > 1):
+        return PinCheck(label=label, path=path, outcome=PIN_UNVERIFIABLE,
+                        detail=f"ambiguous definition for {wanted!r}; pin one complete variant")
+    chosen = covered[0] if covered else (candidates[0] if candidates else None)
+    if chosen is not None and chosen.uncertain:
+        return PinCheck(label=label, path=path, outcome=PIN_UNVERIFIABLE,
+                        detail=f"parse errors within {wanted!r}; cannot verify definition boundaries")
+    if in_bounds and covered:
+        current = compute_span_sha(text, src.line_start, src.line_end)
+        if (not src.span_sha or current == src.span_sha) and rel_file == src.file:
+            dead = _span_preprocessor_dead(rel_file, lines, src.line_start, src.line_end)
             return PinCheck(
                 label=label, path=path, outcome=PIN_OK,
-                detail=(
-                    "preprocessor-dead (#if 0 arm) — the inventory "
-                    "excludes it; the runner scores dormant"
-                    if dead else ""
-                ),
-                current_span_sha=current,
-                preprocessor_dead=dead,
+                detail=("preprocessor-dead (#if 0 arm) — the inventory excludes it; "
+                        "the runner scores dormant" if dead else ""),
+                current_span_sha=current, preprocessor_dead=dead,
             )
-
-    # Relocation: exact span by hash first, then the function name.
-    if src.span_sha:
-        start = _relocate_by_hash(lines, src.span_sha, span_len)
-        if start is not None:
-            return PinCheck(
-                label=label, path=path, outcome=PIN_RELOCATABLE,
-                detail=(
-                    f"span found at {rel_file}:{start}-"
-                    f"{start + span_len - 1} (pinned "
-                    f"{src.line_start}-{src.line_end})"
-                ),
-                suggested_file=rel_file,
-                suggested_start=start,
-                suggested_end=start + span_len - 1,
-            )
-    start = _relocate_by_name(lines, name, span_len)
-    if start is not None:
-        end = min(start + span_len - 1, n)
-        why = (
-            "span content changed"
-            if in_bounds and src.span_sha
-            else (
-                "name outside pinned range"
-                if in_bounds
-                else f"range {src.line_start}-{src.line_end} out of "
-                     f"bounds ({n} lines)"
-            )
-        )
+    if chosen is not None:
+        # Preserve an exact old context window only if its hash also
+        # encloses this definition. Never relocate to a hashed call site.
+        start, end = chosen.start, chosen.end
+        if src.span_sha:
+            hashed = _relocate_by_hash(lines, src.span_sha, span_len)
+            if hashed is not None and hashed <= start and end <= hashed + span_len - 1:
+                start, end = hashed, hashed + span_len - 1
+        why = (f"range {src.line_start}-{src.line_end} out of bounds ({n} lines)"
+               if not in_bounds else "pin does not verify a complete unchanged definition")
         return PinCheck(
             label=label, path=path, outcome=PIN_RELOCATABLE,
-            detail=(
-                f"{why}; {name!r} found at {rel_file}:{start} — "
-                f"suggest {start}-{end}"
-            ),
-            suggested_file=rel_file,
-            suggested_start=start,
-            suggested_end=end,
+            detail=f"{why}; suggest {rel_file}:{start}-{end}",
+            suggested_file=rel_file, suggested_start=start, suggested_end=end,
         )
 
     detail = f"{name!r} absent from {rel_file}"
@@ -781,6 +750,7 @@ def stamp_labels(checks: Sequence[PinCheck]) -> list[Path]:
 def pin_census(checks: Sequence[PinCheck]) -> dict[str, int]:
     census = {
         PIN_OK: 0, PIN_RELOCATABLE: 0, PIN_MISSING: 0, PIN_NO_FIXTURE: 0,
+        PIN_UNVERIFIABLE: 0,
     }
     for check in checks:
         census[check.outcome] += 1
@@ -799,6 +769,7 @@ def format_pin_report(checks: Sequence[PinCheck]) -> str:
         f"Pin census: {census[PIN_OK]} ok, "
         f"{census[PIN_RELOCATABLE]} relocatable, "
         f"{census[PIN_MISSING]} missing, "
+        f"{census[PIN_UNVERIFIABLE]} unverifiable, "
         f"{census[PIN_NO_FIXTURE]} no-fixture "
         f"({len(checks)} label(s))"
     )
@@ -818,7 +789,7 @@ def main(argv: list[str] | None = None) -> int:
             "exit codes:\n"
             "  0  clean\n"
             "  1  usage / infrastructure error\n"
-            "  2  lint failures (schema errors, drifted pins, or "
+            "  2  lint failures (schema errors, drifted/unverifiable pins, or "
             "no-fixture\n"
             "     under --require-fixtures)"
         ),
@@ -918,7 +889,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Stamped {len(stamped)} label file(s)")
 
     census = pin_census(checks)
-    failures = census[PIN_RELOCATABLE] + census[PIN_MISSING]
+    failures = (census[PIN_RELOCATABLE] + census[PIN_MISSING]
+                + census[PIN_UNVERIFIABLE])
     if args.require_fixtures:
         failures += census[PIN_NO_FIXTURE]
     elif census[PIN_NO_FIXTURE]:

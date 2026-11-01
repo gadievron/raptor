@@ -1350,12 +1350,13 @@ class TestSpendGate:
         rc = run_corpus.main(["--output", str(out), *(argv or [])])
         return rc, ran
 
+    @pytest.mark.parametrize("outcome", ["missing", "unverifiable"])
     def test_drifted_pin_refuses_before_run(
-        self, tmp_path, monkeypatch, capsys,
+        self, tmp_path, monkeypatch, capsys, outcome,
     ):
         rc, ran = self._run_main(
             tmp_path, monkeypatch,
-            [{"outcome": "missing", "detail": "gone"}],
+            [{"outcome": outcome, "detail": "gone"}],
         )
         assert rc == 2
         assert ran == [], "LLM run started despite drifted pins"

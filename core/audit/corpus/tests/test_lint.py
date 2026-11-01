@@ -658,3 +658,93 @@ class TestProvenanceCheck:
         )
         rc = lint.main([str(tmp_path), "--mode", "schema"])
         assert rc == 0
+
+
+class TestDefinitionIdentity:
+    def check(self, tmp_path, text, *, name="target_fn", suffix=".c", start=1, end=None, span_sha=""):
+        tree = tmp_path / "tree"
+        tree.mkdir(exist_ok=True)
+        filename = "src/a" + suffix
+        source = tree / filename
+        source.parent.mkdir(exist_ok=True)
+        source.write_text(text)
+        label = _write_label(tmp_path / "l.label.json", function_id=filename + ":" + name,
+                             source={"file": filename, "line_start": start,
+                                     "line_end": end or len(text.splitlines()), "span_sha": span_sha})
+        return verify_pin(_load(label), tree)
+
+    @pytest.mark.parametrize("text", [
+        "int caller(void) { return target_fn(); }\n",
+        "// target_fn is intentionally absent\nint other(void) { return 0; }\n",
+        'char *s = "target_fn";\n',
+        "int target_fn(void);\n",
+    ])
+    def test_mentions_and_declarations_are_not_definitions(self, tmp_path, text):
+        assert self.check(tmp_path, text).outcome == PIN_MISSING
+
+    def test_call_before_definition_relocates_complete_body(self, tmp_path):
+        text = "int caller(void) { return target_fn(); }\n\nint target_fn(void) {\n return 0;\n}\n"
+        check = self.check(tmp_path, text, start=1, end=1)
+        assert (check.outcome, check.suggested_start, check.suggested_end) == (PIN_RELOCATABLE, 3, 5)
+
+    def test_matching_hash_does_not_certify_call_site(self, tmp_path):
+        text = "int caller(void) { return target_fn(); }\nint target_fn(void) { return 0; }\n"
+        check = self.check(tmp_path, text, end=1, span_sha=compute_span_sha(text, 1, 1))
+        assert (check.outcome, check.suggested_start, check.suggested_end) == (PIN_RELOCATABLE, 2, 2)
+
+    def test_incomplete_body_relocated_to_full_definition(self, tmp_path):
+        check = self.check(tmp_path, "int target_fn(void) {\n return 0;\n}\n", end=1)
+        assert (check.outcome, check.suggested_start, check.suggested_end) == (PIN_RELOCATABLE, 1, 3)
+
+    def test_conditional_definitions_require_one_complete_variant(self, tmp_path):
+        text = "#ifdef FAST\nint target_fn(void) { return 1; }\n#else\nint target_fn(void) { return 2; }\n#endif\n"
+        assert self.check(tmp_path, text).outcome == lint.PIN_UNVERIFIABLE
+        assert self.check(tmp_path, text, start=2, end=2).outcome == PIN_OK
+
+    def test_python_qualified_method_does_not_match_another_class(self, tmp_path):
+        text = "class Wrong:\n def target_fn(self):\n  pass\nclass Right:\n def target_fn(self):\n  return 1\n"
+        check = self.check(tmp_path, text, suffix=".py", name="Right.target_fn", end=3)
+        assert (check.outcome, check.suggested_start, check.suggested_end) == (PIN_RELOCATABLE, 5, 6)
+
+    def test_go_version_suffix_and_receiver(self, tmp_path):
+        text = "package p\ntype Scanner struct {}\nfunc (s *Scanner) scanNumber() {\n}\n"
+        check = self.check(tmp_path, text, suffix=".go", name="Scanner.scanNumber@go1.24.5", start=3, end=4)
+        assert check.outcome == PIN_OK
+
+    def test_unsupported_language_is_not_stamped(self, tmp_path):
+        check = self.check(tmp_path, "function target_fn() {}\n", suffix=".js")
+        assert check.outcome == lint.PIN_UNVERIFIABLE
+        assert not check.current_span_sha
+
+    def test_parse_error_in_definition_is_unverifiable(self, tmp_path):
+        check = self.check(tmp_path, "int target_fn(void) { return ???; }\n")
+        assert check.outcome == lint.PIN_UNVERIFIABLE
+
+    def test_unverifiable_cli_fails_even_without_require_fixtures(self, tmp_path, monkeypatch):
+        check = self.check(tmp_path, "function target_fn() {}\n", suffix=".js")
+        monkeypatch.setattr(lint, "verify_pins", lambda *a, **kw: [check])
+        assert lint.main(["--mode", "pins", str(tmp_path / "l.label.json")]) == lint.EXIT_LINT
+
+
+def test_runner_refuses_mixed_revisions_before_fetch(tmp_path, monkeypatch):
+    from core.audit.corpus import run_corpus
+    a = _load(_write_label(tmp_path / "a.label.json"))
+    b = _load(_write_label(tmp_path / "b.label.json", source={"sha": "v2.0.0"}))
+    monkeypatch.setattr(run_corpus, "_fetch_source", lambda *a: pytest.fail("must refuse before fetching"))
+    for labels in ([a, b], [b, a]):
+        with pytest.raises(ValueError, match="multiple pinned revisions"):
+            run_corpus._resolve_source_dirs(labels, do_fetch=True)
+
+
+def test_version_normalization_preserves_source_path_and_qualification():
+    from core.audit.corpus.definitions import function_name, source_function_id
+    label_id = "vendor/@scope/a.go:Scanner.scanNumber@go1.24.5"
+    assert source_function_id(label_id) == "vendor/@scope/a.go:Scanner.scanNumber"
+    assert function_name(label_id) == "scanNumber"
+    assert function_name(label_id, qualified=True) == "Scanner.scanNumber"
+
+
+def test_version_suffix_removed_from_probe_context(tmp_path):
+    from core.audit.corpus.run_corpus import _build_probe_context
+    label = _load(_write_label(tmp_path / "l.label.json", function_id="src/a.go:Scanner.scanNumber@go1.24.5", source={"file": "src/a.go"}))
+    assert _build_probe_context(label, "package p")['function'] == "Scanner.scanNumber"
