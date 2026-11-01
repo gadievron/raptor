@@ -10,8 +10,8 @@ denial noise.
 Signals: escape_primitive_denied, escape_burst (temporal clustering),
 hostile_syscall_argument, seccomp_denied_unattributed, resolved_ip_screened,
 host_recon_pattern, host_retry_pattern, credential_path_touch,
-volume_anomaly, udp_posture_gap, dns_exfil_indicator, domain_fronting_attempt,
-port_probe, telemetry_tampering, provenance_unavailable.
+volume_anomaly, udp_posture_gap, dns_exfil_indicator, telemetry_tampering,
+provenance_unavailable, dns_exfil_unavailable.
 
 Pure, rules-based, offline: no LLM call, no network, no cost — cheap
 enough that core/run/metadata.py runs it unconditionally on every
@@ -21,14 +21,14 @@ re-runs it by hand (stranded runs, post-hoc re-classification after
 editing telemetry). This is the cheap deterministic pre-filter a future
 LLM-based deeper-reasoning pass would consume, not a replacement for one.
 
-Syscall argument enrichment: tracer.py:_write_record calls
-escalation_signatures.decode_syscall_args on every denial, decorating
-records with socket_family/socket_type (socket) and ioctl_cmd (ioctl).
-_check_hostile_syscall_args consumes these via hostile_arg_label to
-distinguish AF_PACKET/SOCK_RAW/TIOCSTI escape attempts from ordinary
-AF_UNIX/AF_NETLINK noise. Residual: the target AF_UNIX *path* (e.g.
-docker.sock) is not captured because seccomp blocks the socket() call
-before connect() runs — inherent to the enforcement model.
+Known limitation: socket()/ioctl() denials collapse to a generic
+syscall="socket"/"ioctl" under audit tracing (see
+core/sandbox/tracer.py:_NAME_TO_TYPE) — the AF_UNIX/AF_NETLINK/AF_PACKET
+family and TIOCSTI/TIOCCONS/TIOCSCTTY ioctl-cmd detail isn't captured by the
+current tracer record shape, so escape_primitive_denied can't distinguish a
+docker.sock-escape attempt from an ordinary blocked AF_UNIX call. Fixing
+this means enriching tracer.py's record with decoded syscall arguments — a
+separate, larger change.
 """
 
 from __future__ import annotations
@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Any
 
 from core.atomic_fs import write_text_atomically
+from core.domains import DomainBoundary, InvalidHostname, domain_boundary, load_suffix_rules
 from core.json import dumps_artifact
 from core.sandbox import telemetry_mac
 from core.sandbox.escalation_signatures import (
@@ -634,8 +635,6 @@ def triage_run(run_dir: Path, *,
     signals += _check_host_retry(proxy_events)
     signals += _check_dns_exfil_indicator(proxy_events)
     signals += _check_udp_posture_gap(posture)
-    signals += _check_domain_fronting(proxy_events)
-    signals += _check_port_probe(proxy_events)
 
     # Destruction detection: an artifact that exists but yields no
     # usable content (garbage bytes, oversized blob, FIFO, symlink)
@@ -842,7 +841,7 @@ def _check_resolved_ip_screened(proxy_events: list[dict]) -> list[dict]:
 
 
 def _check_host_recon(proxy_events: list[dict], threshold: int) -> list[dict]:
-    hosts = {e["host"].lower() for e in proxy_events
+    hosts = {e.get("host") for e in proxy_events
              if e.get("result") in ("denied_host", "would_deny_host")
              and e.get("host")}
     if len(hosts) < threshold:
@@ -950,7 +949,7 @@ def _check_host_retry(proxy_events: list[dict]) -> list[dict]:
         if e.get("result") in ("denied_host", "would_deny_host"):
             host = e.get("host")
             if host:
-                host_counts[host.lower()] += 1
+                host_counts[host] += 1
     retried = {h: c for h, c in host_counts.items()
                if c >= _HOST_RETRY_THRESHOLD}
     if not retried:
@@ -966,24 +965,13 @@ def _check_host_retry(proxy_events: list[dict]) -> list[dict]:
     }]
 
 
-_KNOWN_2LD_TLDS = frozenset({
-    "co.uk", "co.jp", "co.kr", "co.nz", "co.za", "co.in",
-    "com.au", "com.br", "com.cn", "com.hk", "com.mx", "com.sg",
-    "com.tw", "net.au", "org.uk", "org.au", "ac.uk", "gov.uk",
-})
-
-
-def _effective_parent(host: str) -> str | None:
-    """Extract the registrable parent domain, handling common 2LD TLDs."""
-    parts = host.lower().split(".")
-    if len(parts) < 3:
+def _effective_parent(host: str) -> DomainBoundary | None:
+    """Group subdomains, retaining whether the boundary is only heuristic."""
+    boundary = domain_boundary(host, allow_underscores=True)
+    if (boundary.registrable_domain is None
+            or boundary.hostname == boundary.registrable_domain):
         return None
-    tail2 = ".".join(parts[-2:])
-    if tail2 in _KNOWN_2LD_TLDS:
-        if len(parts) < 4:
-            return None
-        return ".".join(parts[-3:])
-    return tail2
+    return boundary
 
 
 def _check_dns_exfil_indicator(proxy_events: list[dict]) -> list[dict]:
@@ -992,62 +980,59 @@ def _check_dns_exfil_indicator(proxy_events: list[dict]) -> list[dict]:
     allowed = [e for e in proxy_events
                if e.get("result") in ("allowed", "proxied")
                and e.get("host")]
+    if not allowed:
+        return []
     parent_map: dict[str, set[str]] = defaultdict(set)
-    for e in allowed:
-        parent = _effective_parent(e["host"])
-        if parent:
-            parent_map[parent].add(e["host"])
+    invalid_hosts = 0
+    heuristic_parents: set[str] = set()
+    try:
+        # Preflight also covers IP-only telemetry, whose identity lookups
+        # do not need to read the snapshot themselves.
+        load_suffix_rules()
+        for e in allowed:
+            try:
+                boundary = _effective_parent(e["host"])
+            except InvalidHostname:
+                # A malformed telemetry host must not discard detections
+                # from the valid hosts in this same run.
+                invalid_hosts += 1
+                continue
+            if boundary is not None:
+                parent = boundary.registrable_domain
+                parent_map[parent].add(boundary.hostname)
+                if boundary.source == "default":
+                    heuristic_parents.add(parent)
+    except (OSError, ValueError):
+        # Preserve the rest of triage, but never report a clean run
+        # when this detector could not evaluate its domain boundaries.
+        return [{
+            "type": "dns_exfil_unavailable",
+            "severity": SEVERITY_MEDIUM,
+            "count": 1,
+            "evidence": ["DNS-exfiltration grouping unavailable: Public Suffix "
+                         "List data is missing, unreadable, or invalid"],
+        }]
+    incomplete = [{
+        "type": "dns_exfil_unavailable",
+        "severity": SEVERITY_MEDIUM,
+        "count": invalid_hosts,
+        "evidence": ["DNS-exfiltration grouping skipped invalid telemetry hostnames"],
+    }] if invalid_hosts else []
     suspects = {parent: subs for parent, subs in parent_map.items()
                 if len(subs) >= _DNS_EXFIL_SUBDOMAIN_THRESHOLD}
     if not suspects:
-        return []
-    return [{
+        return incomplete
+    return incomplete + [{
         "type": "dns_exfil_indicator",
         "severity": SEVERITY_HIGH,
         "count": sum(len(s) for s in suspects.values()),
         "evidence": _cap_evidence([
             f"{parent}: {len(subs)} distinct subdomain(s)"
+            + (" (heuristic grouping: suffix absent from PSL)"
+               if parent in heuristic_parents else "")
             for parent, subs
             in sorted(suspects.items(), key=lambda x: -len(x[1]))
         ]),
-    }]
-
-
-def _check_domain_fronting(proxy_events: list[dict]) -> list[dict]:
-    """Detect TLS SNI mismatch — a domain-fronting attempt.
-
-    Any ``denied_sni`` is purely adversarial: the child sent a
-    ClientHello whose SNI differs from the authorised CONNECT host.
-    """
-    hits = [e for e in proxy_events if e.get("result") == "denied_sni"]
-    if not hits:
-        return []
-    return [{
-        "type": "domain_fronting_attempt",
-        "severity": SEVERITY_HIGH,
-        "count": len(hits),
-        "evidence": _cap_evidence(sorted({
-            f"{e.get('host', '?')} (SNI: {e.get('reason', '?')})"
-            for e in hits})),
-    }]
-
-
-def _check_port_probe(proxy_events: list[dict]) -> list[dict]:
-    """Detect out-of-policy port access attempts.
-
-    ``denied_port`` means the child tried a port outside the
-    caller-declared contract.
-    """
-    hits = [e for e in proxy_events if e.get("result") == "denied_port"]
-    if not hits:
-        return []
-    return [{
-        "type": "port_probe",
-        "severity": SEVERITY_MEDIUM,
-        "count": len(hits),
-        "evidence": _cap_evidence(sorted({
-            f"{e.get('host', '?')}:{e.get('port', '?')}"
-            for e in hits})),
     }]
 
 

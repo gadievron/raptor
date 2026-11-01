@@ -31,6 +31,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from core.domains import InvalidHostname, domain_boundary, load_suffix_rules, same_registrable_domain
 from core.json import load_json_bounded
 
 from .._test_paths import TEST_DIR_NAMES as _SHARED_TEST_DIR_NAMES
@@ -115,6 +116,16 @@ def scan_target(
 ) -> list[TyposquatDomainFinding]:
     """Walk the project, extract URLs, flag near-miss hostnames."""
     target = target.resolve()
+    # Validate the prerequisite even for an empty tree or hosts that would
+    # otherwise be skipped. Missing data must not produce a clean scan.
+    try:
+        load_suffix_rules()
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(
+            "Domain-typosquat scan unavailable: bundled Public Suffix List "
+            "is missing, unreadable, or invalid. Restore "
+            "core/domains/data/public_suffix_list.dat before scanning."
+        ) from exc
     popular = _load_popular_domains()
     if not popular:
         return []
@@ -153,7 +164,12 @@ def scan_target(
             if host in near_miss_cache:
                 best = near_miss_cache[host]
             else:
-                best = _nearest_popular(host, popular)
+                try:
+                    best = _nearest_popular(host, popular)
+                except InvalidHostname:
+                    # Invalid source-text URLs are not DNS destinations.
+                    # Only reject that URL; PSL availability failures propagate.
+                    continue
                 near_miss_cache[host] = best
             if best is None:
                 continue
@@ -224,28 +240,22 @@ def _hosts_in(text: str) -> Iterable[tuple[str, int]]:
 def _nearest_popular(
     host: str, popular: set[str],
 ) -> tuple[int, str] | None:
-    """Best near-miss for ``host`` against the popular set —
-    whole-host comparison PLUS trailing 2- / 3-label suffixes.
+    """Compare whole hosts and the PSL registrable tenant of nested hosts.
 
-    The suffix pass exists for the module's own motivating attack
-    shape: ``scan.aquasecurtiy.org`` (CVE-2026-33634) is distance ≥5
-    from ``aquasecurity.org`` as a whole host, but its registrable
-    suffix is distance 1 — attackers control DNS for the squat
-    domain, so subdomain hosting is the OBSERVED shape.  An exact
-    suffix match means the host is a subdomain of a popular domain
-    (only that domain's owner can serve it) and is skipped as
-    in-family.
+    Private suffixes keep independent hosting tenants distinct. A lookup
+    failure propagates rather than silently suppressing potential findings.
     """
+    domain = domain_boundary(host, allow_underscores=True).registrable_domain
     best = _nearest_whole(host, popular)
-    labels = host.split(".")
-    for n in (2, 3):
-        if len(labels) <= n:
-            continue
-        suffix = ".".join(labels[-n:])
-        if suffix in popular:
-            # Subdomain of a popular domain — same owner, not a squat.
-            return best
-        cand = _nearest_whole(suffix, popular)
+    if domain is None:
+        return best
+    # Preserve meaningful subdomain labels (e.g. files.pythonhosted.org),
+    # but never compare a shared public suffix as if it were a tenant.
+    labels = host.rstrip(".").split(".")
+    tenant_labels = len(domain.split("."))
+    for start in range(1, len(labels) - tenant_labels + 1):
+        candidate = ".".join(labels[start:])
+        cand = _nearest_whole(candidate, popular)
         if cand is not None and (best is None or cand[0] < best[0]):
             best = cand
     return best
@@ -275,39 +285,8 @@ def _nearest_whole(
 
 
 def _same_registrable_domain(a: str, b: str) -> bool:
-    """Heuristic for "same registrable domain" without a publicsuffix
-    list dep. True when both hostnames have >= 3 labels AND their
-    trailing N-1 labels (everything except the leftmost) are
-    identical — i.e. they differ only in the leftmost subdomain
-    label.
-
-    Examples:
-      * ``registry-2.docker.io`` <-> ``registry-1.docker.io`` ->
-        trailing ``docker.io`` matches, 3 labels each -> True
-        (in-family, not a squat).
-      * ``goagle.com`` <-> ``google.com`` -> 2 labels each, fails
-        the >= 3-label gate -> False (real typosquat caught).
-      * ``api.shop.example.com`` <-> ``cdn.shop.example.com`` ->
-        trailing ``shop.example.com`` matches -> True (in-family).
-      * ``evil.com`` <-> ``evil.io`` -> trailing TLDs differ ->
-        False (different domain).
-
-    The >= 3-label gate is the load-bearing guard against false
-    negatives on bare TLD attacks (``goagle.com`` -> ``google.com``).
-    Without publicsuffix data we can't tell ``co.uk`` from ``.com``,
-    so the rule errs toward flagging anything where both sides have
-    only 2 labels.
-    """
-    a_parts = a.split(".")
-    b_parts = b.split(".")
-    if len(a_parts) != len(b_parts):
-        return False
-    if len(a_parts) < 3:
-        # Fewer than 3 labels means trailing-N-1 is just the TLD;
-        # we can't safely declare "same owner" without publicsuffix
-        # data so default to "different".
-        return False
-    return a_parts[1:] == b_parts[1:]
+    """Whether two hosts share a non-public PSL tenant boundary."""
+    return same_registrable_domain(a, b, allow_underscores=True)
 
 
 def _damerau_levenshtein(a: str, b: str, cap: int) -> int:
