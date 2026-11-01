@@ -123,10 +123,18 @@ SUBSYSTEMS: dict[str, tuple[str, ...]] = {
     ),
     "engine/codeql": (
         "queries/**/*.ql",
+        "queries/**/*.qll",       # shared production flow configurations
         "queries/**/qlpack.yml",  # pack manifests only — a stray .yml
                                   # that is not a manifest must not
                                   # ride in as "some YAML"
         "tests/**/*.py",
+        # Native Java query tests: source/API fixtures, query and stable
+        # expected rows. Generated .actual/.testproj output stays excluded.
+        "tests/java/qlpack.yml",
+        "tests/java/.gitignore",
+        "tests/java/**/*.java",
+        "tests/java/**/*.ql",
+        "tests/java/**/*.expected",
     ),
     "engine/negative_controls": (
         # Flat corpus of intentionally-clean sources, per language.

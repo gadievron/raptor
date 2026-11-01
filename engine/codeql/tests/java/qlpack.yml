@@ -1,0 +1,6 @@
+name: raptor/java-query-tests
+dependencies:
+  raptor/java-custom-queries: "*"
+  codeql/java-all: "*"
+extractor: java
+tests: .
