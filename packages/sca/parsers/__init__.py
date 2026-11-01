@@ -306,6 +306,7 @@ from . import gomod               # noqa: E402,F401
 from . import gradle_dsl          # noqa: E402,F401
 from . import gradle_lockfile     # noqa: E402,F401
 from . import helm_chart          # noqa: E402,F401
+from . import github_release_pins  # noqa: E402,F401
 from . import inline_installs     # noqa: E402,F401
 from . import kubernetes          # noqa: E402,F401
 from . import nuget               # noqa: E402,F401

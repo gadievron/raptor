@@ -485,6 +485,7 @@ def build_element_attr_version_pattern(
 # propagate). See ``parsers/directory_packages_props`` +
 # ``parsers/gradle_version_catalog`` for the read-side.
 from . import (
+    github_release_pins,  # noqa: F401
     csproj,  # noqa: F401
     directory_build_targets,  # noqa: F401
     directory_packages_props,  # noqa: F401
