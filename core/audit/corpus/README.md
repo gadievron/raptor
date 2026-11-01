@@ -327,12 +327,13 @@ python3 -m core.audit.corpus.rule_eval --engine codeql --out out/rule-eval-ql
 ```
 
 Rules are discovered the same way the production scanners enumerate
-them (never a parallel hardcoded list). A hit joins a label when it
-lands in the pinned file within `line_start - slop .. line_end + slop`
-(`--slop`, default 2). A rule *targets* a label when the label pins it
-via the optional `expected_rule_hits` field, or by CWE intersection
-(label `cwe`, else the bug class's CWE family) plus language
-compatibility. Scoring is per rule (TP / FP / miss / untargeted hit)
+them (never a parallel hardcoded list). A primary finding location must
+belong to the verified named function, not merely its surrounding pin
+context. `--slop` remains available to direct join callers, but cannot
+expand the CLI's scoring boundary into a neighbour. Exact, reviewed
+`expected_rule_hits` establish rule expectations; CWE intersections plus
+language compatibility provide candidates for review. Scoring is per rule
+(confirmed TP / false alarm / complete-analysis miss / candidate hit)
 and per class, with every per-rule row tagged by provenance
 (`shipped` vs `graduated`) and the summary separating the two
 populations — measuring synthesized-rule quality against corpus
@@ -495,3 +496,30 @@ Older labels without `span_sha` still load. Backfill it with the
 corpus linter once a pin verifies against the pinned tree
 (`python3 -m core.audit.corpus.lint --mode pins --stamp`); the linter
 never stamps a pin that fails verification.
+
+### Scoring and incomplete analysis
+
+Rule evaluation scores primary finding locations inside the verified named
+function, including its decorators where pinned. Surrounding pin context,
+line slop, neighbouring functions, and nested named function bodies cannot
+claim a hit for that target. Ambiguous or unavailable definitions are skipped.
+
+Scoring version 2 distinguishes exact, reviewed `expected_rule_hits` from
+CWE/language candidates. Only exact expectations produce confirmed `tp` and
+`misses`; CWE-only matches remain `candidate_hits`/`candidate_no_hit`. A raw
+hit on another mechanism in a vulnerable function is not a confirmed
+detection. Populate exact expectations after reviewing the mechanism, without
+changing the label's vulnerability CWE to fit rule metadata.
+
+The summary separates source-eligible labels, engine exposure, and complete
+analysis. Parse failures, failed/timed-out rules, and partial or unreported
+CodeQL extraction cannot establish a miss. Hits remain available for review.
+Parametric-only Coccinelle rules declare `@requires-defines` and are reported
+as unconfigured in this bulk evaluator; their production callers supply the
+confirmed bindings. Semgrep categories with no compatible source language
+are omitted from execution while the complete inventory remains visible.
+
+Each completed engine writes its raw hits, errors, failed-file/rule sets,
+and analysis status to `engine-results/`; `meta.engine_artifacts` indexes
+these by repository and engine. Those records survive a later engine failure
+or interruption and allow inspection of hits outside the labelled functions.

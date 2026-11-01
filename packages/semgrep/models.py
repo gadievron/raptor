@@ -203,6 +203,15 @@ def parse_sarif(text: str) -> list[SemgrepFinding]:
     except ValueError:
         # Malformed, whitespace-only, or over-budget output.
         return []
+    return parse_sarif_data(data)
+
+
+def parse_sarif_data(data: Any) -> list[SemgrepFinding]:
+    """Interpret an already decoded document; callers bound its input read.
+
+    Shared with text parsing so artifact consumers need no second read,
+    serialization, or decode merely to obtain finding objects.
+    """
     if not isinstance(data, dict):
         return []
 

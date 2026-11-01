@@ -27,6 +27,8 @@ class Definition:
     start: int
     end: int
     uncertain: bool = False
+    decorator_start: int | None = None
+    line_isolated: bool = True
 
 
 def definitions(text: str, filename: str, *, kernel_extensions: bool = False) -> list[Definition]:
@@ -46,7 +48,9 @@ def definitions(text: str, filename: str, *, kernel_extensions: bool = False) ->
                 if not isinstance(node, ast.ClassDef):
                     # Decorators may be included as context but are not
                     # necessary to establish function/body coverage.
-                    found.append(Definition(".".join(nested), node.lineno, node.end_lineno))
+                    found.append(Definition(".".join(nested), node.lineno, node.end_lineno,
+                                            decorator_start=min((d.lineno for d in node.decorator_list),
+                                                                default=node.lineno)))
             for child in ast.iter_child_nodes(node):
                 visit(child, nested)
         visit(tree)
@@ -65,6 +69,10 @@ def definitions(text: str, filename: str, *, kernel_extensions: bool = False) ->
     tree = parser.parse(data)
     if tree is None:
         raise ValueError(f"{language} definition parser returned no tree")
+    from core.audit.source_view import _strip_c_family, _C_FAMILY_SPECS
+    code_view = _strip_c_family(text, _C_FAMILY_SPECS[language])
+    code_lines = code_view.splitlines()
+    raw_lines = text.splitlines()
     stack = [tree.root_node]
     while stack:
         node = stack.pop()
@@ -93,5 +101,15 @@ def definitions(text: str, filename: str, *, kernel_extensions: bool = False) ->
                     name = data[part.start_byte:part.end_byte].decode("utf-8") + "." + name
                     break
                 pending.extend(reversed(part.named_children))
-        found.append(Definition(name, node.start_point.row + 1, node.end_point.row + 1, node.has_error or not explicit_function))
+        start_row, start_byte = node.start_point
+        end_row, end_byte = node.end_point
+        if node.has_error or not explicit_function or end_row >= len(raw_lines):
+            found.append(Definition(name, start_row + 1, end_row + 1, uncertain=True))
+            continue
+        start_col = len(raw_lines[start_row].encode("utf-8")[:start_byte].decode("utf-8"))
+        end_col = len(raw_lines[end_row].encode("utf-8")[:end_byte].decode("utf-8"))
+        isolated = not (code_lines[start_row][:start_col].strip(" ;\t\r")
+                        or code_lines[end_row][end_col:].strip(" ;\t\r"))
+        found.append(Definition(name, start_row + 1, end_row + 1,
+                                node.has_error or not explicit_function, line_isolated=isolated))
     return found
