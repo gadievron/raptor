@@ -228,6 +228,7 @@ class TestVerifyImmediate:
         out = _verify_hypotheses_immediate(o, cfg, result)
         assert out.status == "finding"
         assert out.evidence_tool == "semgrep:test"
+        assert "semgrep" in (out.tools_dispatched or set())
 
     @patch("core.audit.orchestrator._run_tool_chain")
     @patch("core.audit.orchestrator._hypothesis_to_tool_chain")
@@ -248,6 +249,7 @@ class TestVerifyImmediate:
         out = _verify_hypotheses_immediate(o, cfg, result)
         assert out.status == "clean"
         assert out.review_result["ihv_all_refuted"] is True
+        assert "smt" in (out.tools_dispatched or set())
 
     @patch("core.audit.orchestrator._run_tool_chain")
     @patch("core.audit.orchestrator._hypothesis_to_tool_chain")

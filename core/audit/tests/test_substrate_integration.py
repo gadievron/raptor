@@ -195,6 +195,7 @@ class TestPhpTreeWithStrayCFile:
             # glance batch would bypass the per-function stub
             # transport this fixture keys its hypotheses on.
             batch_sloc_threshold=0,
+            immediate_verify=False,
         )
         result = run_orchestrator(config, _review_fn)
         return result, out, spatch_targets

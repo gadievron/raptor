@@ -158,6 +158,7 @@ def _hermetic_config(target: Path, out: Path) -> OrchestratorConfig:
         # shortcuts (sink_unreachable scope-narrowing on this tiny
         # fixture) must not resolve the function without review.
         prefilter_skip=False,
+        immediate_verify=False,
     )
 
 

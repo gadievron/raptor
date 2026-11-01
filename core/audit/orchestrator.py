@@ -24292,6 +24292,7 @@ def _verify_hypotheses_immediate(
 
         _errored: set[str] = set()
         _inconclusive: set[str] = set()
+        _skipped: set[str] = set()
         tools_confirmed = _run_tool_chain(
             chain,
             config=config,
@@ -24305,8 +24306,28 @@ def _verify_hypotheses_immediate(
             evidence_index=evidence_index,
             cwe=hyp_cwe,
             errored_types=_errored,
+            skipped_types=_skipped,
             inconclusive_types=_inconclusive,
         )
+
+        _dispatched = {
+            e["type"] for e in chain if e.get("type")
+        } - _skipped
+        _fold_inconclusive_record(
+            outcome, ran=_dispatched,
+            inconclusive=_inconclusive, errored=_errored,
+        )
+        outcome.tools_dispatched = (
+            outcome.tools_dispatched or set()
+        ) | _dispatched
+        if _errored:
+            outcome.tools_errored = (
+                outcome.tools_errored or set()
+            ) | _errored
+        if _skipped:
+            outcome.tools_skipped = (
+                outcome.tools_skipped or set()
+            ) | _skipped
 
         if tools_confirmed:
             confirmed_tools.extend(tools_confirmed)
