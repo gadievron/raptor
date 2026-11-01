@@ -145,7 +145,7 @@ jobs:
             # only this job's installs, and --reinstall --download-only
             # fetches exactly those packages (dependencies included)
             # without touching the installed state.
-            mkdir -p "$DEBS_DIR/partial"
+            sudo mkdir -p "$DEBS_DIR"
             # Entries in the log line look like ``name:arch (version,
             # automatic)`` — match on the ``name:arch (`` shape so the
             # comma inside the parens can't leak stray tokens.
@@ -155,11 +155,8 @@ jobs:
             [ -n "$pkgs" ]
             sudo apt-get install -y --reinstall --download-only \
               -o Dir::Cache::archives="$DEBS_DIR" $pkgs
-            # Keep only .deb files — apt leaves auxiliary files
-            # (partial/, lock, pkgcache.bin) that background apt-daily
-            # can mutate before the cache/save step archives the dir,
-            # causing tar exit-code 2 ("file changed as we read it").
-            find "$DEBS_DIR" -mindepth 1 ! -name '*.deb' -depth -delete
+            sudo find "$DEBS_DIR" -mindepth 1 ! -name '*.deb' -depth -delete
+            sudo chown -R "$(id -u):$(id -g)" "$DEBS_DIR"
           fi
           sudo update-alternatives --install /usr/bin/clang clang \
             /usr/bin/clang-21 100
