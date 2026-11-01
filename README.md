@@ -32,7 +32,7 @@
 **Authors:** Gadi Evron, Daniel Cuthbert, Thomas Dullien (Halvar Flake), Michael Bargury, John Cartwright
 ([@gadievron](https://github.com/gadievron), [@danielcuthbert](https://github.com/danielcuthbert), [@thomasdullien](https://github.com/thomasdullien), [@mbrg](https://github.com/mbrg), [@grokjc](https://github.com/grokjc))
 
-**Licence:** MIT, see LICENSE. Note that CodeQL has its own licence and does not permit commercial use.
+**Licence:** MIT, see [LICENSE](LICENSE). CodeQL and other third-party components have their own licence terms; see [third-party notices](THIRD_PARTY_NOTICES.md) and [dependencies](docs/dependencies.md).
 
 **Repository:** https://github.com/gadievron/raptor
 
@@ -100,7 +100,7 @@ Running plain `claude` from inside the repo directory also works -- Claude Code 
 
 ### Option 2: Run in a container (recommended)
 
-Using containers is a common security practice to restrict agents from accessing areas of your filesystem you don't want them to, as well as limiting the blast radius of any malicious code that may execute (e.g via supply-chain attack). The image is large (around 6 GB). It starts from the Microsoft Python 3.12 devcontainer and adds static analysis, fuzzing, and browser automation tooling.
+Using containers is a common security practice to restrict agents from accessing areas of your filesystem you don't want them to, as well as limiting the blast radius of any malicious code that may execute (e.g via supply-chain attack). The image is large. It starts from the Microsoft Python 3.14 devcontainer and adds static analysis, fuzzing, and browser automation tooling.
 
 You can pull down a pre-built image:
 ```bash
@@ -109,7 +109,7 @@ docker pull danielcuthbert/raptor:latest
 
 or build it locally using the included `Dockerfile`:
 ```bash
-docker build -f .devcontainer/Dockerfile -t raptor:latest .
+docker build -f .devcontainer/Dockerfile -t danielcuthbert/raptor:latest .
 ```
 
 The image expects the RAPTOR framework (this repo) to be mounted into `/workspaces/raptor` on startup. You can optionally mount a target folder for local analysis.
@@ -118,7 +118,7 @@ To start the container:
 ```bash
 docker run -it \
   -v "$(pwd):/workspaces/raptor" \
-  raptor:latest
+  danielcuthbert/raptor:latest
 ```
 
 To mount a target folder as well:
@@ -126,7 +126,7 @@ To mount a target folder as well:
 docker run -it \
   -v "$(pwd):/workspaces/raptor" \
   -v "/path/to/target-folder:/workspaces/target" \
-  raptor:latest
+  danielcuthbert/raptor:latest
 ```
 
 Add `--privileged` if you need the `rr` deterministic debugger.
@@ -144,6 +144,8 @@ Then open the repo in VS Code — it will prompt you to reopen in the container:
 cd /path/to/raptor
 code .
 ```
+
+The container installs the pinned CodeQL bundle on first use. To install it ahead of time, run `codeql --raptor-install`; set `RAPTOR_CODEQL_AUTO_INSTALL=0` to require explicit installation. See [CodeQL setup](docs/codeql.md) for cache locations and offline provisioning.
 
 Either way, once you're inside the container, run `raptor` to get started.
 
@@ -173,7 +175,7 @@ This runs the full pipeline: scan, deduplicate, then send each finding through t
 
 ## Security model
 
-RAPTOR runs LLM-generated code and analyses untrusted repositories. Subprocesses that handle untrusted content are sandboxed using Linux namespaces, Landlock, and seccomp. The sandbox blocks network access, restricts filesystem visibility, and limits resource consumption. See `docs/sandbox.md` for the full threat model and configuration.
+RAPTOR runs LLM-generated code and analyses untrusted repositories. Subprocesses that handle untrusted content are sandboxed using Linux namespaces, Landlock, and seccomp. The sandbox blocks network access or routes it through an allowlisted egress proxy according to the tool policy, restricts filesystem visibility, and limits resource consumption. See `docs/sandbox.md` for the full threat model and configuration.
 
 Environment variables that could inject code into the launcher chain are stripped at startup (`core/security/_dangerous_env_strip.sh`). File paths from scanned repositories are never interpolated into shell strings — all subprocess calls use list-based arguments.
 
@@ -324,28 +326,37 @@ Z3 is pre-installed in the devcontainer. For manual installs: `uv pip install z3
 
 ## Running offline and in air-gapped pipelines
 
-RAPTOR's custom rules under `engine/semgrep/rules/` are fully local and run without network access.
-
-For registry packs (`p/security-audit`, `p/owasp-top-ten`, etc.), the cache directory ships empty. A cache tool (`engine/semgrep/tools/cache-packs.py`) handles population:
+RAPTOR's custom Semgrep rules run locally. To use registry packs such as
+`p/security-audit` offline, prepare a bundle on a connected machine:
 
 ```bash
-# On a connected machine — update the local cache directly:
-python3 engine/semgrep/tools/cache-packs.py update
-
-# Or fetch into a zip bundle for airgap transfer:
-python3 engine/semgrep/tools/cache-packs.py fetch
-# → produces semgrep-cache-YYYY-MM-DD.zip
-
-# On the airgapped machine — import the bundle:
-python3 engine/semgrep/tools/cache-packs.py import semgrep-cache-2026-07-16.zip
-
-# Check what's cached:
-python3 engine/semgrep/tools/cache-packs.py list
+python3 engine/semgrep/tools/cache-packs.py fetch --output semgrep-cache.zip
+# Retain the printed SHA256 separately, then transfer the zip to the offline host.
 ```
 
-Once populated, the scanner resolves pack IDs to local files and no network call happens. Without the cache, RAPTOR will attempt to fetch registry packs from semgrep.dev at scan time; if offline, it drops uncached packs gracefully and runs with custom rules only.
+On the offline host, with Semgrep installed:
 
-CodeQL needs network access only during initial setup to download the CLI and query packs. Once installed it runs offline.
+```bash
+python3 engine/semgrep/tools/cache-packs.py import semgrep-cache.zip --sha256 'REPLACE_WITH_RETAINED_SHA256'
+python3 engine/semgrep/tools/cache-packs.py check
+export RAPTOR_SEMGREP_OFFLINE=1
+```
+
+Import verifies the bundle before updating the cache; `check` loads the cached
+rules with networking denied. With `RAPTOR_SEMGREP_OFFLINE=1`, missing or invalid
+packs fail the scan instead of falling back to the registry or dropping coverage.
+Repeat fetch and verified import to refresh the rules. See the
+[offline guide](docs/concepts.md#offline-and-airgapped-use) for pack selection.
+
+For CodeQL, follow the [airgapped setup](docs/codeql.md#airgapped-setup) to prepare
+and transfer the pinned CLI bundle and dependencies for your selected languages
+and query modes. Import verifies the files and checks the queries with networking
+denied, then prints the `CODEQL_CLI`, `PATH`, and `RAPTOR_CODEQL_OFFLINE=1` exports
+to apply before running RAPTOR.
+
+Run scans through the [standalone Python CLI](#running-fully-standalone-no-claude-code),
+with local model providers for LLM analysis and target build dependencies installed
+locally. Enforce host or container egress controls for the full workflow.
 
 ---
 
@@ -456,7 +467,7 @@ Budget control:
 python3 raptor.py agentic --repo /code --max-cost-usd 5.00
 ```
 
-Ollama works well for analysis; reliability for exploit/patch code generation tracks model scale and quantization rather than being a fixed property of local models — see [Quality Tradeoffs](llm.md#quality-tradeoffs) in the LLM guide, and check `/scorecard` for what your specific model is actually measuring.
+Ollama works well for analysis; reliability for exploit/patch code generation tracks model scale and quantization rather than being a fixed property of local models — see [Quality Tradeoffs](docs/llm.md#quality-tradeoffs) in the LLM guide, and check `/scorecard` for what your specific model is actually measuring.
 
 ### Running fully standalone (no Claude Code)
 
@@ -618,7 +629,7 @@ https://join.slack.com/t/promptgtfo/shared_invite/zt-3v2b4sll3-SfyzFRw2lykx_XQX7
 
 MIT -- Copyright (c) 2025-2026 Gadi Evron, Daniel Cuthbert, Thomas Dullien (Halvar Flake), Michael Bargury, John Cartwright.
 
-See LICENSE for the full text. Review the licences for all dependencies before commercial use -- CodeQL in particular does not permit it.
+See [LICENSE](LICENSE) for the full text. Third-party components retain their own terms; see [third-party notices](THIRD_PARTY_NOTICES.md), [dependencies](docs/dependencies.md), and the [CodeQL licence terms](https://github.com/github/codeql-cli-binaries/blob/main/LICENSE.md).
 
 **Issues:** https://github.com/gadievron/raptor/issues
 
