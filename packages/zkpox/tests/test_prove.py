@@ -17,6 +17,28 @@ pytest.importorskip("cbor2")
 
 from packages.zkpox import prove
 
+import shutil
+import sys
+
+
+def _mount_ns_usable() -> bool:
+    if sys.platform != "linux":
+        return False
+    if not shutil.which("newuidmap") or not shutil.which("newgidmap"):
+        return False
+    sysctl = Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
+    if sysctl.exists() and sysctl.read_text().strip() == "1":
+        return False
+    return True
+
+
+_needs_sandbox = pytest.mark.skipif(
+    not _mount_ns_usable(),
+    reason="prove needs mount-ns sandbox (uidmap + apparmor userns=0)",
+)
+
+
+
 def test_default_binary_under_repo_root(monkeypatch, tmp_path):
     monkeypatch.setenv("RAPTOR_DIR", str(tmp_path))
     expected = tmp_path / "packages" / "zkpox" / "native" / "target" / "release" / "zkpox-prove"
