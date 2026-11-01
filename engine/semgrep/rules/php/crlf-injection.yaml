@@ -5,13 +5,10 @@ rules:
   # protocol command and append their own.
   #
   # Known FP/FN modes:
-  #   - Any str_replace/preg_replace call on the tainted path counts
-  #     as a sanitizer even when its arguments do not touch CR/LF, so
-  #     a no-op replace silences a real finding. That is a missed
-  #     finding and never a false confirmation of the code — and it
-  #     stays harmless only while CWE-93 is absent from the
-  #     gate-resolution coverage map (core/audit/tool_coverage.py):
-  #     silence classifies the claim dark there, never clean.
+  #   - Sanitizers recognize conservative literal CR/LF removal contracts.
+  #     Dynamic patterns/replacements and split-statement sanitization may
+  #     report safe code. Direct same-namespace function shadows are
+  #     excluded; imported/runtime-defined targets are not resolved here.
   #   - A socket handle received as a function parameter or stored on
   #     $this between methods (the mailer-class shape) is not
   #     recognised, so those writes are missed (FN, not FP).
@@ -35,17 +32,225 @@ rules:
           - pattern: $_REQUEST[...]
           - pattern: $_COOKIE[...]
     pattern-sanitizers:
-      - pattern: str_replace(...)
+      # Exact call results plus simple-local assignment results: Semgrep
+      # 1.177 needs the latter to retain sanitization across statements.
+      # The local-only guard avoids clearing a whole property/container.
+      # Require literal removal of BOTH controls and a literal replacement
+      # without controls, interpolation, escapes, or PCRE backreferences.
+      # Inspect source spelling: PHP '\r' is NOT a carriage return.
+      # Dynamic search/replacement expressions stay tainted for review.
+      - patterns:
+          - pattern-either:
+              - pattern: $SANITIZER($SEARCH, $REPLACEMENT, $VALUE)
+              - pattern: $SANITIZER($SEARCH, $REPLACEMENT, $VALUE, $COUNT)
+              - patterns:
+                  - pattern-either:
+                      - pattern: $SAFE = $SANITIZER($SEARCH, $REPLACEMENT, $VALUE)
+                      - pattern: $SAFE = $SANITIZER($SEARCH, $REPLACEMENT, $VALUE, $COUNT)
+                  - metavariable-regex:
+                      metavariable: $SAFE
+                      regex: '^\$[A-Za-z_][A-Za-z0-9_]*$'
+          - metavariable-regex:
+              metavariable: $SANITIZER
+              constant-propagation: false
+              regex: '(?i)^\\?str_replace$'
+          # Named statement captures exclude nested class methods.
+          # An explicit same-namespace definition is application code.
+          # Reusing the callee binding leaves \builtin(...) unaffected.
+          - pattern-not-inside: |
+              namespace $N;
+              $...BEFORE;
+              function $SANITIZER(...) { ... }
+              $...AFTER;
+          - pattern-not-inside: |
+              namespace $N {
+                $...BEFORE;
+                function $SANITIZER(...) { ... }
+                $...AFTER;
+              }
+          - metavariable-regex:
+              metavariable: $SEARCH
+              constant-propagation: false
+              regex: >-
+                ^(?:\[\s*"\\r"\s*,\s*"\\n"\s*\]|\[\s*"\\n"\s*,\s*"\\r"\s*\]|(?:array)?\(\s*"\\r"\s*,\s*"\\n"\s*\)|(?:array)?\(\s*"\\n"\s*,\s*"\\r"\s*\))$
+          - metavariable-regex:
+              metavariable: $REPLACEMENT
+              constant-propagation: false
+              regex: >-
+                ^(?:'[^'\\$\r\n]*'|"[^"\\$\r\n]*")$
         exact: true
-      - pattern: preg_replace(...)
+      - patterns:
+          - pattern-either:
+              - pattern: $SANITIZER($SEARCH, [$FIRST, $SECOND], $VALUE)
+              - pattern: $SANITIZER($SEARCH, [$FIRST, $SECOND], $VALUE, $COUNT)
+              - patterns:
+                  - pattern-either:
+                      - pattern: $SAFE = $SANITIZER($SEARCH, [$FIRST, $SECOND], $VALUE)
+                      - pattern: $SAFE = $SANITIZER($SEARCH, [$FIRST, $SECOND], $VALUE, $COUNT)
+                  - metavariable-regex:
+                      metavariable: $SAFE
+                      regex: '^\$[A-Za-z_][A-Za-z0-9_]*$'
+          - metavariable-regex:
+              metavariable: $SANITIZER
+              constant-propagation: false
+              regex: '(?i)^\\?str_replace$'
+          # Named statement captures exclude nested class methods.
+          # An explicit same-namespace definition is application code.
+          # Reusing the callee binding leaves \builtin(...) unaffected.
+          - pattern-not-inside: |
+              namespace $N;
+              $...BEFORE;
+              function $SANITIZER(...) { ... }
+              $...AFTER;
+          - pattern-not-inside: |
+              namespace $N {
+                $...BEFORE;
+                function $SANITIZER(...) { ... }
+                $...AFTER;
+              }
+          - metavariable-regex:
+              metavariable: $SEARCH
+              constant-propagation: false
+              regex: >-
+                ^(?:\[\s*"\\r"\s*,\s*"\\n"\s*\]|\[\s*"\\n"\s*,\s*"\\r"\s*\]|(?:array)?\(\s*"\\r"\s*,\s*"\\n"\s*\)|(?:array)?\(\s*"\\n"\s*,\s*"\\r"\s*\))$
+          - metavariable-regex:
+              metavariable: $FIRST
+              constant-propagation: false
+              regex: >-
+                ^(?:'[^'\\$\r\n]*'|"[^"\\$\r\n]*")$
+          - metavariable-regex:
+              metavariable: $SECOND
+              constant-propagation: false
+              regex: >-
+                ^(?:'[^'\\$\r\n]*'|"[^"\\$\r\n]*")$
         exact: true
-      - pattern: urlencode(...)
+      - patterns:
+          - pattern-either:
+              - pattern: $SANITIZER($CR, $CR_REPLACEMENT, $SANITIZER($LF, $LF_REPLACEMENT, $VALUE))
+              - pattern: $SANITIZER($LF, $LF_REPLACEMENT, $SANITIZER($CR, $CR_REPLACEMENT, $VALUE))
+              - patterns:
+                  - pattern-either:
+                      - pattern: $SAFE = $SANITIZER($CR, $CR_REPLACEMENT, $SANITIZER($LF, $LF_REPLACEMENT, $VALUE))
+                      - pattern: $SAFE = $SANITIZER($LF, $LF_REPLACEMENT, $SANITIZER($CR, $CR_REPLACEMENT, $VALUE))
+                  - metavariable-regex:
+                      metavariable: $SAFE
+                      regex: '^\$[A-Za-z_][A-Za-z0-9_]*$'
+          - metavariable-regex:
+              metavariable: $SANITIZER
+              constant-propagation: false
+              regex: '(?i)^\\?str_replace$'
+          # Named statement captures exclude nested class methods.
+          # An explicit same-namespace definition is application code.
+          # Reusing the callee binding leaves \builtin(...) unaffected.
+          - pattern-not-inside: |
+              namespace $N;
+              $...BEFORE;
+              function $SANITIZER(...) { ... }
+              $...AFTER;
+          - pattern-not-inside: |
+              namespace $N {
+                $...BEFORE;
+                function $SANITIZER(...) { ... }
+                $...AFTER;
+              }
+          - metavariable-regex:
+              metavariable: $CR
+              constant-propagation: false
+              regex: '^"\\r"$'
+          - metavariable-regex:
+              metavariable: $LF
+              constant-propagation: false
+              regex: '^"\\n"$'
+          - metavariable-regex:
+              metavariable: $CR_REPLACEMENT
+              constant-propagation: false
+              regex: >-
+                ^(?:'[^'\\$\r\n]*'|"[^"\\$\r\n]*")$
+          - metavariable-regex:
+              metavariable: $LF_REPLACEMENT
+              constant-propagation: false
+              regex: >-
+                ^(?:'[^'\\$\r\n]*'|"[^"\\$\r\n]*")$
         exact: true
-      - pattern: rawurlencode(...)
+      - patterns:
+          - pattern-either:
+              - pattern: $SANITIZER($PATTERN, $REPLACEMENT, $VALUE)
+              - pattern: $SANITIZER($PATTERN, $REPLACEMENT, $VALUE, -1)
+              - pattern: $SANITIZER($PATTERN, $REPLACEMENT, $VALUE, -1, $COUNT)
+          # Only an entire CR/LF character class, globally replaced.
+          # A positive limit, pair-only regex, or anchored regex can leave
+          # hostile controls behind. Other regex forms remain reviewable.
+              - patterns:
+                  - pattern-either:
+                      - pattern: $SAFE = $SANITIZER($PATTERN, $REPLACEMENT, $VALUE)
+                      - pattern: $SAFE = $SANITIZER($PATTERN, $REPLACEMENT, $VALUE, -1)
+                      - pattern: $SAFE = $SANITIZER($PATTERN, $REPLACEMENT, $VALUE, -1, $COUNT)
+                  - metavariable-regex:
+                      metavariable: $SAFE
+                      regex: '^\$[A-Za-z_][A-Za-z0-9_]*$'
+          - metavariable-regex:
+              metavariable: $SANITIZER
+              constant-propagation: false
+              regex: '(?i)^\\?preg_replace$'
+          # Named statement captures exclude nested class methods.
+          # An explicit same-namespace definition is application code.
+          # Reusing the callee binding leaves \builtin(...) unaffected.
+          - pattern-not-inside: |
+              namespace $N;
+              $...BEFORE;
+              function $SANITIZER(...) { ... }
+              $...AFTER;
+          - pattern-not-inside: |
+              namespace $N {
+                $...BEFORE;
+                function $SANITIZER(...) { ... }
+                $...AFTER;
+              }
+          - metavariable-regex:
+              metavariable: $PATTERN
+              constant-propagation: false
+              regex: >-
+                ^(['"])([/#~])\[(?:\\r\\n|\\n\\r)\][+*]?\2\1$
+          - metavariable-regex:
+              metavariable: $REPLACEMENT
+              constant-propagation: false
+              regex: >-
+                ^(?:'[^'\\$\r\n]*'|"[^"\\$\r\n]*")$
         exact: true
-      - pattern: intval(...)
+      - patterns:
+          - pattern-either:
+              - pattern: $SANITIZER(...)
+              - patterns:
+                  - pattern: $SAFE = $SANITIZER(...)
+                  - metavariable-regex:
+                      metavariable: $SAFE
+                      regex: '^\$[A-Za-z_][A-Za-z0-9_]*$'
+          - metavariable-regex:
+              metavariable: $SANITIZER
+              constant-propagation: false
+              regex: '(?i)^\\?(?:urlencode|rawurlencode|intval)$'
+          # Named statement captures exclude nested class methods.
+          # An explicit same-namespace definition is application code.
+          # Reusing the callee binding leaves \builtin(...) unaffected.
+          - pattern-not-inside: |
+              namespace $N;
+              $...BEFORE;
+              function $SANITIZER(...) { ... }
+              $...AFTER;
+          - pattern-not-inside: |
+              namespace $N {
+                $...BEFORE;
+                function $SANITIZER(...) { ... }
+                $...AFTER;
+              }
         exact: true
       - pattern: (int) $X
+        exact: true
+      - patterns:
+          - pattern: $SAFE = (int) $VALUE
+          - metavariable-regex:
+              metavariable: $SAFE
+              regex: '^\$[A-Za-z_][A-Za-z0-9_]*$'
         exact: true
     pattern-sinks:
       # fwrite/fputs count only when the handle is provably a network
