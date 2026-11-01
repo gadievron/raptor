@@ -10151,6 +10151,10 @@ def _run_audit_body(
 
     _pass_ledger.end_phase()  # live_sink_requeue (when it ran)
 
+    _dark_outcomes: list[ReviewOutcome] = []
+    _dark_futures: list = []
+    _dark_executor = None
+
     if config.sweep_validate_findings:
         _pass_ledger.start_phase("sweep_promotion")
         pre_sweep = {
@@ -10182,11 +10186,6 @@ def _run_audit_body(
                 max_workers=resolved_workers,
             )
             logger.debug("exited _promote_suspicious")
-
-        # 5c: submit dark probes early so they overlap with Phase I.
-        _dark_outcomes: list[ReviewOutcome] = []
-        _dark_futures: list = []
-        _dark_executor = None
         if config.immediate_verify:
             try:
                 _dark_client = _run_llm_client(config)
@@ -24291,6 +24290,8 @@ def _verify_hypotheses_immediate(
         if not chain:
             continue
 
+        _errored: set[str] = set()
+        _inconclusive: set[str] = set()
         tools_confirmed = _run_tool_chain(
             chain,
             config=config,
@@ -24303,6 +24304,8 @@ def _verify_hypotheses_immediate(
             tier_counters=result.tier_counters,
             evidence_index=evidence_index,
             cwe=hyp_cwe,
+            errored_types=_errored,
+            inconclusive_types=_inconclusive,
         )
 
         if tools_confirmed:
@@ -24314,7 +24317,10 @@ def _verify_hypotheses_immediate(
                 mechanism[:60], tools_confirmed,
             )
         else:
-            refuted_count += 1
+            _chain_types = {e["type"] for e in chain}
+            _ran_clean = _chain_types - _errored - _inconclusive
+            if _ran_clean:
+                refuted_count += 1
 
     # Step 4: aggregate (context gates run inside)
     return _aggregate_ihv_verdicts(
