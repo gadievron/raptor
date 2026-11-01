@@ -73,7 +73,10 @@ from core.logging import log_security_event as _log_security_event
 from core.security.redaction import redact_secrets
 
 from . import evidence as _evidence
-from .escalation_signatures import HOSTILE_IOCTL_CMDS, HOSTILE_SOCKET_ARGS
+from .escalation_signatures import (
+    ESCAPE_PRIMITIVE_SYSCALLS, HOSTILE_IOCTL_CMDS, HOSTILE_SOCKET_ARGS,
+    hostile_arg_label,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1496,6 +1499,50 @@ _CONTAINER_ESCAPE_PATHS = frozenset({
 _MAX_TRIAGE_EXAMPLES = 5
 
 
+def classify_denial(rec: dict) -> tuple[str, str]:
+    """Return one category and full signature label for a denial record.
+
+    Shared by per-run summaries and authenticated campaign correlation.
+    Display truncation must happen after identity is established.
+    """
+    dtype = rec.get("type", "")
+    raw_cmd = str(rec.get("cmd", ""))
+    cmd = raw_cmd.lower()
+    path = str(rec.get("path", ""))
+    if rec.get("audit", False) or rec.get("observe", False):
+        if path in _CONTAINER_ESCAPE_PATHS:
+            return "escape_primitives", f"connect:{path}"
+        for field, prefix, values in (
+            ("socket_family", "socket", HOSTILE_SOCKET_ARGS),
+            ("socket_type", "socket", HOSTILE_SOCKET_ARGS),
+            ("ioctl_cmd", "ioctl", HOSTILE_IOCTL_CMDS),
+        ):
+            value = rec.get(field, "")
+            if isinstance(value, str) and value in values:
+                return "escape_primitives", f"{prefix}({value})"
+    if dtype == "seccomp":
+        syscall = rec.get("syscall")
+        if isinstance(syscall, str) and syscall in ESCAPE_PRIMITIVE_SYSCALLS:
+            return "escape_primitives", syscall
+        if syscall in ("socket", "ioctl"):
+            label = hostile_arg_label(syscall, rec.get("args") or [])
+            if label is not None:
+                return "escape_primitives", label
+        # Deterministic when a command mentions multiple primitive names.
+        for keyword in sorted(_ESCAPE_PRIMITIVE_KEYWORDS):
+            if keyword in cmd:
+                return "escape_primitives", keyword
+    if dtype == "udp":
+        return "udp_egress", raw_cmd or "udp"
+    if dtype == "write" and path:
+        if path.startswith(_FILESYSTEM_ESCAPE_PREFIXES) or path == "/":
+            return "filesystem_escape", path
+        return "routine", f"write:{path}"
+    if dtype == "network":
+        return "network_probing", raw_cmd
+    return "routine", f"{dtype}:{raw_cmd}"
+
+
 def _triage_denials(records: list[dict]) -> dict[str, Any]:
     """Classify denial records into escape-attempt signature categories.
 
@@ -1516,55 +1563,18 @@ def _triage_denials(records: list[dict]) -> dict[str, Any]:
     }
 
     for rec in records:
-        dtype = rec.get("type", "")
-        cmd = str(rec.get("cmd", "")).lower()
-        path = str(rec.get("path", ""))
-        is_audit = rec.get("audit", False) or rec.get("observe", False)
-
-        if is_audit:
-            sock_fam = rec.get("socket_family", "")
-            sock_type = rec.get("socket_type", "")
-            ioctl_cmd = rec.get("ioctl_cmd", "")
-
-            if path in _CONTAINER_ESCAPE_PATHS:
-                buckets["escape_primitives"].append(
-                    f"connect:{path}")
-                continue
-            if sock_fam in HOSTILE_SOCKET_ARGS:
-                buckets["escape_primitives"].append(
-                    f"socket({sock_fam})")
-                continue
-            if sock_type in HOSTILE_SOCKET_ARGS:
-                buckets["escape_primitives"].append(
-                    f"socket({sock_type})")
-                continue
-            if ioctl_cmd in HOSTILE_IOCTL_CMDS:
-                buckets["escape_primitives"].append(
-                    f"ioctl({ioctl_cmd})")
-                continue
-
-        # Escape primitives: syscall-level denials only (type=seccomp).
-        # Matching against cmd alone — not paths or other detail fields
-        # — avoids false positives from filenames containing keywords
-        # (e.g. /home/user/ptrace_test/output.txt).
-        if dtype == "seccomp" and any(
-            kw in cmd for kw in _ESCAPE_PRIMITIVE_KEYWORDS
-        ):
-            label = next(
-                kw for kw in _ESCAPE_PRIMITIVE_KEYWORDS if kw in cmd)
-            buckets["escape_primitives"].append(label)
-        elif dtype == "udp":
-            buckets["udp_egress"].append(cmd[:80] if cmd else "udp")
-        elif dtype == "write" and path:
-            if (path.startswith(_FILESYSTEM_ESCAPE_PREFIXES)
-                    or path == "/"):
-                buckets["filesystem_escape"].append(path[:120])
-            else:
-                buckets["routine"].append(f"write:{path[:80]}")
-        elif dtype == "network":
-            buckets["network_probing"].append(cmd[:80])
-        else:
-            buckets["routine"].append(f"{dtype}:{cmd[:60]}")
+        category, label = classify_denial(rec)
+        if category in ("udp_egress", "network_probing"):
+            label = label.lower()
+        # Keep the historical per-run display bounds. Campaign identity uses
+        # the complete label, before display truncation or example-list caps.
+        if category == "routine":
+            label = (f"write:{str(rec['path'])[:80]}"
+                     if rec.get("type") == "write" and rec.get("path") else
+                     f"{rec.get('type', '')}:{str(rec.get('cmd', '')).lower()[:60]}")
+        limit = {"filesystem_escape": 120, "network_probing": 80,
+                 "udp_egress": 80}.get(category)
+        buckets[category].append(label[:limit] if limit else label)
 
     result: dict[str, Any] = {}
     for cat, items in buckets.items():

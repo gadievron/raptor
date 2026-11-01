@@ -848,6 +848,55 @@ libexec/raptor-sandbox-triage <run_dir> [--json] [--deep]
 default LLM, which judges each signal as attack attempt vs tool noise.
 Advisory only: the rules verdict and exit code never change.
 
+### Campaign triage
+
+`raptor project correlate` correlates sandbox denial summaries across runs.
+It verifies each summary's provenance and run binding, then recomputes
+classification from its authenticated denial records. The editable `triage`
+buckets embedded in a summary do not drive campaign results. Legacy, forged,
+malformed, replayed, or known key-exposed summaries cannot supply trusted
+signatures. Missing evidence, unavailable provenance, degraded audits, and
+summaries reaching the denial cap remain explicit visibility gaps. Disabled
+sandbox runs, containment-floor refusals, sampling/budget markers, and
+authenticated per-run provenance warnings also prevent negative evidence. Such gaps
+set `integrity` to `degraded` and impose at least `elevated` campaign severity;
+that floor identifies uncertainty, not proof of an attack.
+
+Campaign output uses `schema_version: 2`. Each target has:
+
+- `signatures`: individual category/label identities, keyed by a stable hash of
+  the complete label. Identity precedes display truncation and example caps;
+  path case, internal whitespace, and distinct command tails remain distinct.
+- `categories`: separate category rollups, retaining category counts/examples.
+  Consumers of the old category-keyed `signatures` should read `categories`.
+- `runs_total`, `runs_with_triage`, and `runs_unknown`: all considered runs,
+  runs with verified denial summaries, and runs without complete usable
+  visibility. A verified but capped/degraded summary counts in both latter
+  fields: its positive observations remain useful, its absences do not.
+- `persistence`: the fraction of **all considered runs** observing a signature
+  or category. `persistence_upper` also includes unknown absences. Missing
+  telemetry therefore widens uncertainty instead of proving disappearance.
+- `trend`: `new`, `stable`, `resolved`, or `unknown`, using up to three recent
+  runs versus earlier runs. `new` and `resolved` require usable negative
+  evidence in the comparison window; an unobserved window is `unknown`.
+  `resolved` means absent from those observed summaries, not proven eliminated.
+
+Repeated individual signatures can raise severity after at least four verified
+runs; unrelated signatures sharing a category do not trigger that upgrade.
+Run metadata supplies target grouping and timestamps (directory name breaks
+ordering ties); the provenance claim applies to denial evidence, not to
+cryptographic authentication of every metadata label. Correlation reads run
+artifacts without rewriting them. If no telemetry evidence or surviving run
+metadata indicating triage exists anywhere, it returns no campaign result;
+complete erasure of both evidence and its surviving indicators cannot be
+inferred from these files alone.
+
+Coverage remains bounded by the telemetry collected. In-kernel hard denials
+can bypass tracer notification, so enforcement does not imply attribution of
+every attempt. macOS containment likewise does not establish detection parity
+with Linux. Campaign triage does not add automatic killing or LLM verdict
+rewriting.
+
 ---
 
 ## Resource limits

@@ -1707,6 +1707,11 @@
     "count": 11,
     "kind": "literal"
   },
+  "core/project/sandbox_campaign.py::entry": {
+    "count": 11,
+    "kind": "literal",
+    "note": "campaign triage entry/report field names (integrity, completeness, signature counts and metadata); these are internal record-schema keys, not a learned function-name vocabulary"
+  },
   "core/recall/cvefix_manifest.py::fp_twin": {
     "count": 10,
     "kind": "literal",
