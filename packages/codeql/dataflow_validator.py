@@ -21,7 +21,8 @@ from pathlib import Path
 # root marker — see CLAUDE.md "Python path safety"; a KeyError here
 # surfaces the configuration problem at startup instead of a
 # positional `parents[2]` walk silently breaking under relocation.
-sys.path.insert(0, os.environ["RAPTOR_DIR"])
+if __name__ == "__main__":
+    sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
 from core.dataflow.evidence_renderer import render_evidence_for_prompt
 from core.dataflow.sanitizer_evidence import SanitizerEvidence

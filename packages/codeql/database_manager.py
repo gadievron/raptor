@@ -25,7 +25,8 @@ from pathlib import Path
 # (no fallback) is the canonical project root marker — see CLAUDE.md
 # "Python path safety"; a KeyError surfaces the configuration problem
 # at startup instead of a positional walk silently breaking.
-sys.path.insert(0, os.environ["RAPTOR_DIR"])
+if __name__ == "__main__":
+    sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
 from core.build.build_detector import BuildSystem
 from core.config import RaptorConfig
