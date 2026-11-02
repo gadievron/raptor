@@ -185,6 +185,21 @@ covering C/C++ structural patterns that require control-flow sensitivity:
 
 Run `ls engine/coccinelle/rules/` for the current file list.
 
+### Memory leaks on error paths
+
+`resource_leak_err` reports kernel allocations that may remain allocated
+when a function returns an error. It checks allocations made in assignments
+and variable declarations. Returning because allocation failed is not a leak;
+cleanup with `kfree_sensitive` is recognized.
+
+In C files, the rule can recognize correct conditional cleanup for buffers
+that use either stack or heap storage. It may still warn about these patterns
+in C++ files and headers.
+
+Review a warning against every path to the reported return. If another
+function takes ownership of the allocation, or a custom cleanup function
+releases it, the warning may be a false alarm.
+
 ### Prerequisites
 
 `spatch` (the Coccinelle binary) must be on `PATH`. Minimum version

@@ -572,7 +572,9 @@ class TestLockImbalanceMarkerSymmetry:
         result = render(self.RULES_DIR / "resource_leak_err.cocci", vocab)
         assert result is not None
         text = result.read_text()
-        assert "ptr =@p_alloc xmalloc(...);" in text
+        assert "kvmalloc, xmalloc};" in text
+        assert "T ptr =@p_alloc alloc(...);" in text
         # Outer liability guard AND inner error-path guard both extend.
-        assert text.count("when != xfree(...)") == 2
+        assert text.count(r"\|xfree\)(ptr)") == 2
+        assert "kfree_sensitive, xfree};" in text
         Path(result).unlink()
