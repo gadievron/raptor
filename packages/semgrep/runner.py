@@ -426,7 +426,7 @@ def _reset_sandbox_scratch() -> None:
         _scratch_parent = None
 
 
-def _default_sandbox_runner(target: Path, config: str, *, extra_targets=()):
+def _default_sandbox_runner(target: Path, config: str, *, extra_targets=(), output_dir=None):
     """subprocess.run-shaped wrapper over core.sandbox.run, or None.
 
     Returns None when core.sandbox is unavailable on this host — the
@@ -503,7 +503,7 @@ def _default_sandbox_runner(target: Path, config: str, *, extra_targets=()):
             target=sandbox_target,
             caller_label="semgrep-runner",
             env_caller_filtered=True,
-            output=_invocation_scratch_dir(),
+            output=output_dir or _invocation_scratch_dir(),
             fake_home=True,
             tool_paths=list(dict.fromkeys(tool_paths)),
             **net_kwargs,
@@ -604,11 +604,17 @@ def run_rule(
             v, floor,
         )
 
+    # The scanner must write its sidecar inside the SAME output directory
+    # the sandbox grants. Host /tmp is not writable in a scoped invocation.
+    # External output paths remain parent-owned; never grant their directory
+    # to a tool parsing target-controlled source.
+    sandbox_output = (_invocation_scratch_dir()
+                      if subprocess_runner is None and not unsandboxed else None)
     cleanup_json = False
-    json_path = json_output_path
+    json_path = None if sandbox_output is not None else json_output_path
     if json_path is None:
         with NamedTemporaryFile(prefix="semgrep_", suffix=".json",
-                                delete=False) as tmp:
+                                dir=sandbox_output, delete=False) as tmp:
             json_path = Path(tmp.name)
         cleanup_json = True
 
@@ -642,7 +648,8 @@ def run_rule(
             if unsandboxed:
                 runner = subprocess.run
             else:
-                runner = _default_sandbox_runner(target, config, extra_targets=extra_targets)
+                runner = _default_sandbox_runner(target, config, extra_targets=extra_targets,
+                                                 output_dir=sandbox_output)
                 if runner is None:
                     return SemgrepResult(
                         name=name, config=config, target=str(target),
@@ -709,24 +716,27 @@ def run_rule(
             budget_errors.append(msg)
             sarif_text = ""
         json_text = ""
-        if json_path.exists():
-            # Size gate BEFORE the read: the --json payload is
-            # produced over the scanned (possibly hostile) repo,
-            # which can inflate it arbitrarily.
+        if os.path.lexists(json_path):
+            from core.security.capped_read import read_capped_text
             try:
-                json_size = json_path.stat().st_size
-                if json_size > _MAX_TOOL_OUTPUT_BYTES:
-                    msg = (
-                        f"semgrep --json output is {json_size} bytes"
-                        f" — exceeds the {_MAX_TOOL_OUTPUT_BYTES}-byte"
-                        " budget; scan metadata unavailable"
-                    )
-                    logger.warning("%s: %s", msg, json_path)
-                    budget_errors.append(msg)
-                else:
-                    json_text = json_path.read_text(encoding="utf-8")
-            except OSError:
-                json_text = ""
+                # Open once with O_NOFOLLOW and enforce the cap during the
+                # read: a compromised scanner must not replace this sidecar
+                # with a symlink to a host file for the parent to follow.
+                json_text = read_capped_text(
+                    json_path, _MAX_TOOL_OUTPUT_BYTES,
+                    errors="strict", raise_on_refusal=True,
+                )
+            except (OSError, ValueError) as exc:
+                budget_errors.append(
+                    f"semgrep --json metadata unavailable within output budget "
+                    f"({_MAX_TOOL_OUTPUT_BYTES} bytes): {exc}"
+                )
+        if sandbox_output is not None and json_output_path is not None and json_text:
+            from core.atomic_fs import write_text_atomically
+            try:
+                write_text_atomically(json_output_path, json_text)
+            except OSError as exc:
+                budget_errors.append(f"cannot save semgrep --json output: {exc}")
     finally:
         if cleanup_json:
             _safe_unlink(json_path)

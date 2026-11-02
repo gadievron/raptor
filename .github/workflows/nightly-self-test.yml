@@ -59,7 +59,7 @@ jobs:
           uv venv $VENV_PATH
           source $VENV_PATH/bin/activate
           uv export --locked --no-hashes | uv pip install -r -
-          uv tool install semgrep==1.177.0
+          uv tool install --python "$(command -v python3)" semgrep==1.177.0
 
       - name: Install external tools (radare2 + gcc)
         continue-on-error: true

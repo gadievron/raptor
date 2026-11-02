@@ -42,6 +42,13 @@ def _run(args, **kwargs):
     )
 
 
+def _confirmed_sweep(args):
+    result = _run(args)
+    assert result.returncode == 0, result.stderr
+    assert "→ confirmed" in result.stdout, result.stdout + "\n" + result.stderr
+    return result
+
+
 _VULN_C = """\
 #include <stdio.h>
 #include <string.h>
@@ -155,7 +162,7 @@ class TestAuditE2E:
               "--line", "8", "--out", str(out_dir)])
 
         rule_path = _write_semgrep_rule(out_dir)
-        _run([_AUDIT_CLI, "sweep",
+        _confirmed_sweep([_AUDIT_CLI, "sweep",
               "--rule-file", rule_path,
               "--tool", "semgrep",
               "--file", "vuln.c", "--function", "vuln_fn",
@@ -229,7 +236,7 @@ void orphan_fn(char *user_input) {
               "--line", "3", "--out", str(out_dir)])
 
         rule_path = _write_semgrep_rule(out_dir)
-        _run([_AUDIT_CLI, "sweep",
+        _confirmed_sweep([_AUDIT_CLI, "sweep",
               "--rule-file", rule_path,
               "--tool", "semgrep",
               "--file", "orphan.c", "--function", "orphan_fn",
@@ -268,7 +275,7 @@ void orphan_fn(char *user_input) {
               "--line", "8", "--out", str(out_dir)])
 
         rule_path = _write_semgrep_rule(out_dir)
-        _run([_AUDIT_CLI, "sweep",
+        _confirmed_sweep([_AUDIT_CLI, "sweep",
               "--rule-file", rule_path,
               "--tool", "semgrep",
               "--file", "vuln.c", "--function", "vuln_fn",
@@ -301,7 +308,7 @@ void orphan_fn(char *user_input) {
               "--file", "vuln.c", "--function", "vuln_fn",
               "--line", "8", "--out", str(out_dir)])
         rule_path = _write_semgrep_rule(out_dir)
-        _run([_AUDIT_CLI, "sweep",
+        _confirmed_sweep([_AUDIT_CLI, "sweep",
               "--rule-file", rule_path,
               "--tool", "semgrep",
               "--file", "vuln.c", "--function", "vuln_fn",
@@ -335,7 +342,7 @@ void orphan_fn(char *user_input) {
                   "--line", "8", "--out", str(out_dir)])
         assert r.returncode == 0, r.stderr
         rule_path = _write_semgrep_rule(out_dir)
-        r = _run([_AUDIT_CLI, "sweep",
+        r = _confirmed_sweep([_AUDIT_CLI, "sweep",
                   "--rule-file", rule_path,
                   "--tool", "semgrep",
                   "--file", "vuln.c", "--function", "vuln_fn",
@@ -408,7 +415,7 @@ void orphan_fn(char *user_input) {
               "--file", "vuln.c", "--function", "vuln_fn",
               "--line", "8", "--out", str(out_dir)])
         rule_path = _write_semgrep_rule(out_dir)
-        _run([_AUDIT_CLI, "sweep",
+        _confirmed_sweep([_AUDIT_CLI, "sweep",
               "--rule-file", rule_path,
               "--tool", "semgrep",
               "--file", "vuln.c", "--function", "vuln_fn",

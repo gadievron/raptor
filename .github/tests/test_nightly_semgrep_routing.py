@@ -91,11 +91,14 @@ def test_engine_cases_are_excluded_from_both_broad_lanes_and_retry():
     dedicated = list(_commands(jobs["semgrep-regressions"]))
     assert len(dedicated) == 1
     assert "engine/semgrep/tests" in dedicated[0]
+    metadata_case = "packages/semgrep/tests/test_runner.py::TestSandboxMetadataIntegration"
+    assert metadata_case in dedicated[0]
     assert dedicated[0][dedicated[0].index("-m") + 1] == "slow or integration"
     broad = list(_commands(jobs["slow-integration"]))
     assert len(broad) == 3  # Slow, integration, integration retry.
     for command in broad:
         assert "--ignore=engine/semgrep/tests" in command
+        assert "--deselect=" + metadata_case in command
     assert {command[command.index("-m") + 1] for command in broad} == {"slow", "integration"}
 
 

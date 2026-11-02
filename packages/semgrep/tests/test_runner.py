@@ -914,7 +914,8 @@ class TestIntegration:
         target.write_text("a = 1\n")
         result = run_rule(target, "p/python", timeout=120)
         # paths.scanned should include at least our file
-        assert any("x.py" in f for f in result.files_examined) or result.files_examined == []
+        assert result.ok, result.errors
+        assert any("x.py" in f for f in result.files_examined)
 
 
 class TestOutputBudget:
@@ -1102,3 +1103,72 @@ def test_registry_identifier_is_not_rewritten_by_local_path_collision(tmp_path, 
         wrapper(['/usr/bin/semgrep', '--config', configuration, str(target)])
     assert run.call_args.kwargs['use_egress_proxy'] is True
     assert str(Path(configuration).absolute()) not in run.call_args.kwargs['tool_paths']
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(not is_available(), reason="semgrep not installed")
+class TestSandboxMetadataIntegration:
+    @pytest.mark.parametrize("external_output", [False, True])
+    def test_positive_control_keeps_sidecar_inside_writable_output(self, tmp_path, monkeypatch, external_output):
+        import core.sandbox.context as context
+        actual_run = context.run
+        seen = []
+        def scoped(command, **kwargs):
+            kwargs["restrict_reads"] = True
+            seen.append((command, kwargs))
+            return actual_run(command, **kwargs)
+        monkeypatch.setattr(context, "run", scoped)
+        target = tmp_path / "target.py"
+        target.write_text("foo()\n")
+        rule = tmp_path / "rule.yaml"
+        rule.write_text('rules:\n- id: positive\n  languages: [python]\n  pattern: foo()\n  message: positive\n  severity: ERROR\n')
+        output = tmp_path / "metadata.json" if external_output else None
+        result = run_rule(target, str(rule), timeout=60, json_output_path=output)
+        assert result.ok, result.errors
+        assert len(result.findings) == 1
+        assert str(target) in result.files_examined
+        scan, scope = next((cmd, kw) for cmd, kw in seen if "scan" in cmd)
+        sidecar = Path(scan[scan.index("--json-output") + 1])
+        assert sidecar.parent == Path(scope["output"])
+        assert not sidecar.exists()  # parsed and cleaned even with explicit output
+        if output is not None:
+            assert json.loads(output.read_text())["paths"]["scanned"]
+            assert str(tmp_path) not in scope.get("writable_paths", [])
+
+
+class TestSandboxSidecarSafety:
+    @pytest.mark.parametrize("mode", ["scanner-symlink", "destination-symlink", "save-error"])
+    def test_parent_refuses_unsafe_sidecar_and_keeps_explicit_destination_confined(self, tmp_path, monkeypatch, mode):
+        import subprocess
+        import core.sandbox.context as context
+        import packages.semgrep.runner as module
+        monkeypatch.setattr(module, "is_available", lambda: True)
+        source = tmp_path / "source.py"
+        source.write_text("foo()\n")
+        secret = tmp_path / "host-secret"
+        secret.write_text("private-content")
+        output = tmp_path / "metadata.json"
+        if mode == "destination-symlink":
+            output.symlink_to(secret)
+        elif mode == "save-error":
+            output.mkdir()
+        def execute(command, **scope):
+            sidecar = Path(command[command.index("--json-output") + 1])
+            assert sidecar.parent == Path(scope["output"])
+            if mode == "scanner-symlink":
+                sidecar.unlink()
+                sidecar.symlink_to(secret)
+            else:
+                sidecar.write_text(_make_json_output(scanned=[str(source)]))
+            return subprocess.CompletedProcess(command, 0, _make_sarif(), "")
+        monkeypatch.setattr(context, "run", execute)
+        result = run_rule(source, "local-rule.yaml", json_output_path=output)
+        assert secret.read_text() == "private-content"
+        assert "private-content" not in result.json_output
+        if mode == "destination-symlink":
+            assert result.ok, result.errors
+            assert not output.is_symlink()
+            assert json.loads(output.read_text())["paths"]["scanned"] == [str(source)]
+        else:
+            assert not result.ok
+            assert result.errors
