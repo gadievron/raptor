@@ -17,6 +17,9 @@ import sys
 import textwrap
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 GUARD = REPO_ROOT / "libexec" / "raptor-sage-mcp-guard"
@@ -329,15 +332,15 @@ class TestMcpGuardFailClosed(_GuardHarness):
 def _load_guard():
     import importlib.machinery
     import importlib.util
-    import os
-    os.environ.setdefault("_RAPTOR_TRUSTED", "1")
     spec = importlib.util.spec_from_file_location(
         "raptor_sage_mcp_guard_test", GUARD,
         loader=importlib.machinery.SourceFileLoader(
             "raptor_sage_mcp_guard_test", str(GUARD)),
     )
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    with pytest.MonkeyPatch.context() as mp, patch.object(sys, "path", sys.path.copy()):
+        mp.setenv("_RAPTOR_TRUSTED", "1")
+        spec.loader.exec_module(mod)
     return mod
 
 

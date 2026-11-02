@@ -18,24 +18,28 @@ import importlib.machinery
 import importlib.util
 import io
 import json
-import os
+import sys
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 GUARD = REPO_ROOT / "libexec" / "raptor-sage-mcp-guard"
 
 
 def _load_guard():
-    os.environ.setdefault("_RAPTOR_TRUSTED", "1")
     spec = importlib.util.spec_from_file_location(
         "raptor_sage_mcp_guard_hybrid", GUARD,
         loader=importlib.machinery.SourceFileLoader(
             "raptor_sage_mcp_guard_hybrid", str(GUARD)),
     )
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    with pytest.MonkeyPatch.context() as mp, patch.object(sys, "path", sys.path.copy()):
+        mp.setenv("_RAPTOR_TRUSTED", "1")
+        spec.loader.exec_module(mod)
     return mod
 
 

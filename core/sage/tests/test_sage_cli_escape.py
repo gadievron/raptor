@@ -12,12 +12,14 @@ clipboard writes.
 import contextlib
 import importlib.util
 import io
-import os
+import sys
 import unittest
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -35,13 +37,14 @@ def setUpModule():
     global _cli
     # The CLI refuses to run without the launcher trust marker; tests
     # are the documented bypass.
-    os.environ.setdefault("_RAPTOR_TRUSTED", "1")
     loader = SourceFileLoader(
         "raptor_sage_cli", str(REPO_ROOT / "libexec" / "raptor-sage"),
     )
     spec = importlib.util.spec_from_loader("raptor_sage_cli", loader)
     _cli = importlib.util.module_from_spec(spec)
-    loader.exec_module(_cli)
+    with pytest.MonkeyPatch.context() as mp, patch.object(sys, "path", sys.path.copy()):
+        mp.setenv("_RAPTOR_TRUSTED", "1")
+        loader.exec_module(_cli)
 
 
 def _run(fn, client, args) -> str:
