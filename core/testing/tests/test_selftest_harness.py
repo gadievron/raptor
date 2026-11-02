@@ -169,6 +169,16 @@ class TestTier0LlmScrub:
 
 class TestChildSessionIsolation:
     @pytest.mark.parametrize("mode", ["tier0", "isolated-home", "llm"])
+    def test_child_env_preserves_install_protection(
+        self, selftest, tmp_path, monkeypatch, mode,
+    ):
+        monkeypatch.setenv("RAPTOR_INSTALL_PROTECTED", "1")
+        ctx = _make_ctx(selftest, tmp_path / "scratch")
+        env = (ctx.env_llm() if mode == "llm" else
+               ctx.env_t0(isolated_home=mode == "isolated-home"))
+        assert env["RAPTOR_INSTALL_PROTECTED"] == "1"
+
+    @pytest.mark.parametrize("mode", ["tier0", "isolated-home", "llm"])
     @pytest.mark.parametrize("ci", [False, True])
     def test_real_child_cannot_restore_operator_session(
         self, selftest, tmp_path, monkeypatch, mode, ci,
@@ -186,7 +196,10 @@ class TestChildSessionIsolation:
         }
         for key, value in inherited.items():
             monkeypatch.setenv(key, value)
-        monkeypatch.setenv("RAPTOR_INSTALL_PROTECTED", "1")
+        # This child is launched without a protected mount namespace.
+        # Marker propagation is checked separately above; claiming protection
+        # here correctly makes process_init reject an ordinary CI checkout.
+        monkeypatch.delenv("RAPTOR_INSTALL_PROTECTED", raising=False)
         if ci:
             monkeypatch.setenv("CI", "true")
         else:
@@ -215,7 +228,7 @@ class TestChildSessionIsolation:
         for key in inherited:
             if key not in {"RAPTOR_REGISTRY_HOME", "RAPTOR_OUT_DIR"}:
                 assert key not in env
-        assert env["RAPTOR_INSTALL_PROTECTED"] == "1"
+        assert "RAPTOR_INSTALL_PROTECTED" not in env
         assert (env.get("CI") == "true") == ci
         assert ("ANTHROPIC_API_KEY" in env) == (mode == "llm")
 
