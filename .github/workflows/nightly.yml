@@ -609,6 +609,7 @@ jobs:
           python -m pytest engine/semgrep/tests \
             packages/semgrep/tests/test_runner.py::TestSandboxMetadataIntegration \
             -m 'slow or integration' -q \
+            --basetemp="$RUNNER_TEMP/semgrep-tests" \
             --junitxml="$RUNNER_TEMP/scan-regressions.xml"
           python - "$RUNNER_TEMP/scan-regressions.xml" <<'PY'
           import sys
@@ -627,6 +628,11 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: focused-semgrep-regression-results
-          path: ${{ runner.temp }}/scan-regressions.xml
+          path: |
+            ${{ runner.temp }}/scan-regressions.xml
+            ${{ runner.temp }}/semgrep-tests/**/sandbox-diagnostics.json
+            ${{ runner.temp }}/semgrep-tests/**/sandbox-stderr.txt
+            ${{ runner.temp }}/semgrep-tests/**/sandbox-replay-stderr.txt
+            ${{ runner.temp }}/semgrep-tests/**/sandbox-observe.jsonl
           retention-days: 14
           if-no-files-found: ignore
