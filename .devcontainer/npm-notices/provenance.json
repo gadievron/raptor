@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "npm_version": "11.19.0",
+  "scope": "Reviewed upstream evidence added to future container images; not captured from the previously published image. Registry integrity is a publisher claim, not an independently verified signature. Unresolved entries remain gaps.",
+  "packages": [
+    {
+      "name": "@npmcli/agent",
+      "version": "4.0.2",
+      "license": "ISC",
+      "source_commit": "db7852869c74ceb8985d7c36b291a2e7a866741c",
+      "registry_metadata_url": "https://registry.npmjs.org/%40npmcli%2Fagent/4.0.2",
+      "release_url": "https://registry.npmjs.org/@npmcli/agent/-/agent-4.0.2.tgz",
+      "release_integrity": "sha512-EUEuWAxnL07Sp5/iC/1X6Xj+XThUvnbei9zfRWZdEXa7lss9RTHMhAHBeg+MZ5To9s/gGaSI+UwZTPdYMvKSeg==",
+      "release_sha256": "88dcd3e47fbb0ab7b9160014531c0e99a7ab478656d465a7985c25c759701b9a",
+      "status": "unresolved",
+      "reason": "ISC declaration only; no applicable package notice recovered. Fixture licences do not cover this package."
+    },
+    {
+      "name": "@sigstore/verify",
+      "version": "3.1.1",
+      "license": "Apache-2.0",
+      "source_commit": "c1dc7d4778a450787fc72b083f2490ad02b714c6",
+      "registry_metadata_url": "https://registry.npmjs.org/%40sigstore%2Fverify/3.1.1",
+      "release_url": "https://registry.npmjs.org/@sigstore/verify/-/verify-3.1.1.tgz",
+      "release_integrity": "sha512-qv7+G3J2cc6wwFj3yKvXOamzqhMwSk1ogPGmhpS8iXllcPrJaIIBA+4HbttlHVu1pqWTdmaCH/WE7UOC51kdoA==",
+      "release_sha256": "66fba97654e6850703065d461678965f604aba69f6f792b3fed316a6ffba4154",
+      "source_kind": "pinned_upstream_repository",
+      "source_url": "https://raw.githubusercontent.com/sigstore/sigstore-js/c1dc7d4778a450787fc72b083f2490ad02b714c6/LICENSE",
+      "source_path": "LICENSE",
+      "installed_filename": "LICENSE",
+      "scope": "Upstream repository root licence; package metadata declares Apache-2.0.",
+      "status": "upstream_evidence_retained",
+      "notice_file": "sigstore-verify-LICENSE",
+      "sha256": "364a130d2ca340bd56eb1e6d045fc6929bb0f9d0aa018f2c1949b29517e1cdd0"
+    },
+    {
+      "name": "spdx-exceptions",
+      "version": "2.5.0",
+      "license": "CC-BY-3.0",
+      "source_commit": "3aa64bec339abc6a3eca00c3436aaa7e154b8799",
+      "registry_metadata_url": "https://registry.npmjs.org/spdx-exceptions/2.5.0",
+      "release_url": "https://registry.npmjs.org/spdx-exceptions/-/spdx-exceptions-2.5.0.tgz",
+      "release_integrity": "sha512-PiU42r+xO4UbUS1buo3LPJkjlO7430Xn5SVAhdpzzsPHsjbYVflnnFdATgabnLude+Cqu25p6N+g2lw/PFsa4w==",
+      "release_sha256": "c5295dd22415e8b60a5af2560e7461954f660bcb591be7c5622e463956d33256",
+      "source_kind": "integrity_checked_package_release",
+      "source_url": "https://registry.npmjs.org/spdx-exceptions/-/spdx-exceptions-2.5.0.tgz",
+      "source_path": "package/README.md",
+      "installed_filename": "NOTICE",
+      "scope": "Verbatim upstream README containing attribution or licence declaration; not the full Creative Commons legal text.",
+      "status": "upstream_evidence_retained",
+      "notice_file": "spdx-exceptions-README.md",
+      "sha256": "554b19eee11d2964e9f7b244e47944c08d52ca75539260a04f3227e6c0144513"
+    },
+    {
+      "name": "spdx-license-ids",
+      "version": "3.0.23",
+      "license": "CC0-1.0",
+      "source_commit": "a2a975daf48bbc2afdc8e7c304405b44c656fd53",
+      "registry_metadata_url": "https://registry.npmjs.org/spdx-license-ids/3.0.23",
+      "release_url": "https://registry.npmjs.org/spdx-license-ids/-/spdx-license-ids-3.0.23.tgz",
+      "release_integrity": "sha512-CWLcCCH7VLu13TgOH+r8p1O/Znwhqv/dbb6lqWy67G+pT1kHmeD/+V36AVb/vq8QMIQwVShJ6Ssl5FPh0fuSdw==",
+      "release_sha256": "fea7d95340e83a403c73463ea683cdde960029d956a86a023af6e283fd1e82fe",
+      "source_kind": "integrity_checked_package_release",
+      "source_url": "https://registry.npmjs.org/spdx-license-ids/-/spdx-license-ids-3.0.23.tgz",
+      "source_path": "package/README.md",
+      "installed_filename": "NOTICE",
+      "scope": "Verbatim upstream README containing attribution or licence declaration; not the full Creative Commons legal text.",
+      "status": "upstream_evidence_retained",
+      "notice_file": "spdx-license-ids-README.md",
+      "sha256": "b4807793db6058c819f76c023362b7d522b3d19c9b41563fcc01c2b2c5b1ccd3"
+    }
+  ]
+}

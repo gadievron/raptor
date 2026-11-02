@@ -135,6 +135,9 @@ RUN apt-get update \
 # Capture-then-execute the nodesource setup script so a curl failure isn't
 # silently swallowed by the pipeline (curl | bash ignores curl's exit status).
 # Node 24 is the current stable release, and is supported by the latest Claude CLI.
+COPY .devcontainer/npm-notices/ /usr/share/doc/raptor-npm-notices/
+COPY .devcontainer/install-npm-notices.py /usr/local/libexec/install-npm-notices.py
+
 # Install upstream npm explicitly to retain its bundled dependency notices,
 # which are omitted from the npm tree shipped in the NodeSource package.
 RUN curl -fsSL https://deb.nodesource.com/setup_24.x -o /tmp/nodesource_setup.sh \
@@ -143,6 +146,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_24.x -o /tmp/nodesource_setup.sh
     && apt-get install -y --no-install-recommends nodejs=24.21.0-1nodesource1 \
     && apt-get clean && rm -rf /var/lib/apt/lists/* \
     && npm install -g --prefix /usr npm@11.19.0 --ignore-scripts --no-audit --no-fund \
+    && python3 /usr/local/libexec/install-npm-notices.py \
     && npm install -g @anthropic-ai/claude-code@2.1.269
 
 # ============================================================================
