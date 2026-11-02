@@ -3,8 +3,10 @@
 import argparse
 import importlib.util
 import json
+import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -17,7 +19,8 @@ def _load_review_module():
     spec = importlib.util.spec_from_loader(
         "raptor_review_cli_digest", loader)
     mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
+    with patch.object(sys, "path", sys.path.copy()):
+        loader.exec_module(mod)
     return mod
 
 

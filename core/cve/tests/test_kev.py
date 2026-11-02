@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict
 
-
 from core.cve.kev import KEV_URL, KevClient
 from core.http import HttpError
 from core.json import JsonCache
@@ -333,6 +332,15 @@ class TestKevJunkCatalog:
                 if name == "core.json" or name.startswith("core.json."):
                     del sys.modules[name]
             sys.modules.update(purged)
+            # Re-importing a child also rebinds core.json on its parent.
+            # Restoring sys.modules alone leaves attribute-based imports
+            # pointing at a different module from string-based patches.
+            core_pkg = sys.modules.get("core")
+            if core_pkg is not None:
+                if "core.json" in purged:
+                    core_pkg.json = purged["core.json"]
+                else:
+                    core_pkg.__dict__.pop("json", None)
 
 
 # ---------------------------------------------------------------------------

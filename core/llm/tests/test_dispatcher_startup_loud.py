@@ -21,7 +21,6 @@ from unittest import mock
 
 import pytest
 
-
 # parents[3] climbs:
 #   [0] core/llm/tests/  (this file's directory)
 #   [1] core/llm/
@@ -38,14 +37,16 @@ def fresh_raptor_module():
     and ``_dispatcher_failure_reason`` are None at the start of each
     test (the prod module is imported at most once per process; tests
     that share the import would leak state)."""
-    # Clear the cached module if any earlier test imported it.
-    sys.modules.pop("raptor", None)
-    raptor = importlib.import_module("raptor")
-    yield raptor
-    # Reset for cleanliness — clear the module-level cache.
-    raptor._active_dispatcher = None
-    raptor._dispatcher_failure_reason = None
-    sys.modules.pop("raptor", None)
+    # Other tests retain references to the original module; restore that
+    # object so later string-based patches reach the same namespace.
+    previous = sys.modules.pop("raptor", None)
+    try:
+        raptor = importlib.import_module("raptor")
+        yield raptor
+    finally:
+        sys.modules.pop("raptor", None)
+        if previous is not None:
+            sys.modules["raptor"] = previous
 
 
 def test_dispatcher_startup_failure_records_the_reason(

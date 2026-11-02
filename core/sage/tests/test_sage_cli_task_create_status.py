@@ -14,10 +14,12 @@ import contextlib
 import importlib.util
 import io
 import os
+import sys
 import unittest
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -37,7 +39,8 @@ def setUpModule() -> None:
         "raptor_sage_cli_task_create_status", loader,
     )
     _cli = importlib.util.module_from_spec(spec)
-    loader.exec_module(_cli)
+    with patch.object(sys, "path", sys.path.copy()):
+        loader.exec_module(_cli)
 
 
 class _FakeClient:

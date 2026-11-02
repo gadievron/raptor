@@ -16,6 +16,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -88,22 +90,32 @@ class TestArmDecision:
         monkeypatch.setenv(parent_liveness.WATCHDOG_ENV, "yes please")
         assert parent_liveness.maybe_start_orphan_watchdog("t") is None
 
-    def test_plain_enable_arms_daemon_thread(self, monkeypatch):
+    def test_plain_enable_arms_daemon_thread(self, monkeypatch, _thread_factory):
         monkeypatch.setenv(parent_liveness.WATCHDOG_ENV, "1")
-        # Our real parent stays alive throughout, so the thread idles.
         t = parent_liveness.maybe_start_orphan_watchdog("t", poll_s=60.0)
-        assert t is not None
-        assert t.daemon
-        assert t.is_alive()
+        assert t is _thread_factory.return_value
+        assert _thread_factory.call_args.kwargs["daemon"] is True
+        assert callable(_thread_factory.call_args.kwargs["target"])
+        t.start.assert_called_once_with()
 
-    def test_pid_value_arms(self, monkeypatch, _stub_terminate):
+    def test_pid_value_arms(self, monkeypatch, _thread_factory):
         monkeypatch.setenv(
             parent_liveness.WATCHDOG_ENV, str(os.getppid()),
         )
         t = parent_liveness.maybe_start_orphan_watchdog("t", poll_s=60.0)
-        assert t is not None
-        assert t.is_alive()
-        assert _stub_terminate == []
+        assert t is _thread_factory.return_value
+        t.start.assert_called_once_with()
+
+
+@pytest.fixture
+def _thread_factory(monkeypatch):
+    # Arm-decision tests must not leave a real process-group-killing daemon
+    # behind after their patches are undone. The trigger/E2E tests below
+    # exercise real threads. Replace this module's binding, not threading.Thread
+    # globally, so unrelated threads retain their normal implementation.
+    factory = Mock()
+    monkeypatch.setattr(parent_liveness, "threading", SimpleNamespace(Thread=factory))
+    return factory
 
 
 @pytest.fixture
@@ -126,22 +138,33 @@ class TestTrigger:
             return real_ppid + 1 if seen["flipped"] else real_ppid
 
         monkeypatch.setattr(parent_liveness.os, "getppid", fake_getppid)
-        parent_liveness.start_orphan_watchdog("trigger", poll_s=0.05)
-        time.sleep(0.2)
-        assert _stub_terminate == []  # parent "alive": no fire
-        seen["flipped"] = True
-        _wait_for(lambda: _stub_terminate == ["trigger"], 5.0,
-                  "watchdog to fire on ppid change")
+        thread = parent_liveness.start_orphan_watchdog("trigger", poll_s=0.05)
+        try:
+            time.sleep(0.2)
+            assert _stub_terminate == []  # parent "alive": no fire
+            seen["flipped"] = True
+            _wait_for(lambda: _stub_terminate == ["trigger"], 5.0,
+                      "watchdog to fire on ppid change")
+        finally:
+            # Finish even if an assertion failed, while _terminate_group is
+            # still stubbed. A late daemon must never regain the real action.
+            seen["flipped"] = True
+            thread.join(timeout=5)
+            assert not thread.is_alive()
 
     def test_already_orphaned_expected_parent_fires(self, _stub_terminate):
         # The spawner recorded its pid, then died inside the spawn
         # window: getppid() never matches the recorded parent, so the
         # action fires at once instead of never.
-        parent_liveness.start_orphan_watchdog(
+        thread = parent_liveness.start_orphan_watchdog(
             "orphaned", expected_parent=os.getppid() + 1, poll_s=0.05,
         )
-        _wait_for(lambda: _stub_terminate == ["orphaned"], 5.0,
-                  "watchdog to fire for an already-orphaned child")
+        try:
+            _wait_for(lambda: _stub_terminate == ["orphaned"], 5.0,
+                      "watchdog to fire for an already-orphaned child")
+        finally:
+            thread.join(timeout=5)
+            assert not thread.is_alive()
 
 
 @pytest.mark.linux_native

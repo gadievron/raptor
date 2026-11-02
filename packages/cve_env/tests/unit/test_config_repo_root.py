@@ -17,8 +17,13 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+from cve_env.config import _find_repo_root
 
-from cve_env.config import REPO_ROOT, _find_repo_root
+
+@pytest.fixture(autouse=True)
+def _isolated_repo_override(monkeypatch):
+    monkeypatch.delenv("CVE_ENV_REPO_ROOT", raising=False)
 
 
 def test_repo_root_resolves_to_existing_ancestor() -> None:
@@ -31,9 +36,10 @@ def test_repo_root_resolves_to_existing_ancestor() -> None:
     import cve_env.config as _cfg
 
     config_file = Path(_cfg.__file__).resolve()
-    assert REPO_ROOT.is_dir(), f"REPO_ROOT={REPO_ROOT} should be a real dir"
-    assert REPO_ROOT in config_file.parents, (
-        f"REPO_ROOT={REPO_ROOT} should be an ancestor of {config_file}"
+    repo_root = _find_repo_root()
+    assert repo_root.is_dir(), f"REPO_ROOT={repo_root} should be a real dir"
+    assert repo_root in config_file.parents, (
+        f"REPO_ROOT={repo_root} should be an ancestor of {config_file}"
     )
 
 
@@ -105,7 +111,9 @@ def test_finder_falls_back_when_no_marker_anywhere(tmp_path: Path) -> None:
     this change introduces no regression for pip-installed users (who
     were already required to use --audit-root). The test ensures we
     don't silently raise instead."""
-    # tmp_path has no pyproject.toml or .git anywhere upward
+    # tmp_path itself is empty, but its real ancestors can have markers
+    # (for example a shared TMPDIR inside a checkout). Model their absence
+    # explicitly rather than depending on the host's filesystem layout.
     isolated_file = tmp_path / "a" / "b" / "c" / "module.py"
     isolated_file.parent.mkdir(parents=True)
     isolated_file.write_text("# fake")
@@ -115,6 +123,8 @@ def test_finder_falls_back_when_no_marker_anywhere(tmp_path: Path) -> None:
     with (
         patch("cve_env.config.__file__", str(isolated_file)),
         patch.dict(os.environ, env_clean, clear=True),
+        patch.object(Path, "is_file", return_value=False),
+        patch.object(Path, "is_dir", return_value=False),
     ):
         result = _find_repo_root()
 
