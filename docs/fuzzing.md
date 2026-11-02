@@ -14,6 +14,21 @@ command).  The legacy `raptor_fuzzing.py` script is still present but
 `raptor.py fuzz` is the recommended path -- it manages the run lifecycle
 automatically.
 
+**On this page:**
+
+- [Supported Engines](#supported-engines)
+- [Target Detection](#target-detection)
+- [Prerequisites](#prerequisites)
+- [Usage](#usage)
+- [Corpus Management](#corpus-management)
+- [Crash Triage and Replay](#crash-triage-and-replay)
+- [Env Build-on-Demand (source trees)](#env-build-on-demand-source-trees)
+- [Harness Generation](#harness-generation)
+- [Binary Pre-Analysis](#binary-pre-analysis)
+- [Sandbox Integration](#sandbox-integration)
+- [Platform Notes](#platform-notes)
+- [Output Structure](#output-structure)
+
 ## Supported Engines
 
 ### AFL++

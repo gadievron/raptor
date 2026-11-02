@@ -20,6 +20,19 @@ analysis workflow is affected.
 [dependencies](dependencies.md)
 
 
+**On this page:**
+
+- [Architecture](#architecture)
+- [Quick Start](#quick-start)
+- [HMAC key setup](#hmac-key-setup)
+- [CPU vs GPU](#cpu-vs-gpu)
+- [Use cases](#use-cases)
+- [SAGE Domains](#sage-domains)
+- [Configuration](#configuration)
+- [How It Works](#how-it-works)
+- [Upgrading and migrating](#upgrading-and-migrating)
+- [Troubleshooting](#troubleshooting)
+
 ## Architecture
 
 RAPTOR uses a **hybrid integration**: the Python pipelines talk to SAGE

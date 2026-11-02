@@ -18,6 +18,24 @@ records that accumulate across runs, and a findings file compatible with
 [coverage](commands.md#review)
 
 
+**On this page:**
+
+- [Usage](#usage)
+- [Pipeline](#pipeline)
+- [Execution Model](#execution-model)
+- [Strategies](#strategies)
+- [Tool Menu](#tool-menu)
+- [Gates](#gates)
+- [Statuses](#statuses)
+- [Open Discovery](#open-discovery)
+- [Checker Synthesis (Mode 2)](#checker-synthesis-mode-2)
+- [Vocabulary Packs](#vocabulary-packs)
+- [Cost forecasting](#cost-forecasting)
+- [Running long audits](#running-long-audits)
+- [Post-run Workflows](#post-run-workflows)
+- [Output](#output)
+- [Integration](#integration)
+
 ## Usage
 
 ```

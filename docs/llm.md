@@ -4,6 +4,23 @@ RAPTOR uses large language models for vulnerability analysis, exploit generation
 validation, and autonomous decision-making. This guide covers provider configuration,
 model selection, multi-model workflows, and cost management.
 
+**On this page:**
+
+- [Supported Providers](#supported-providers)
+- [Quick Start](#quick-start)
+- [AWS Bedrock](#aws-bedrock)
+- [Model Configuration](#model-configuration)
+- [Multi-Model Workflows](#multi-model-workflows)
+- [Scorecard](#scorecard)
+- [Cost Management](#cost-management)
+- [Transcript Record / Replay](#transcript-record--replay)
+- [Rate Limiting](#rate-limiting)
+- [Credential Isolation](#credential-isolation)
+- [Ollama (Offline / Airgapped)](#ollama-offline--airgapped)
+- [Gemini](#gemini)
+- [HTTP Transport Tuning](#http-transport-tuning)
+- [Environment Variables Summary](#environment-variables-summary)
+
 ## Supported Providers
 
 Eight providers are supported. RAPTOR probes for configured providers in this order

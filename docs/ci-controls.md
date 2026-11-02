@@ -42,24 +42,109 @@ This page is split into:
 
 ### Gate details and local reproduction
 
-- **Python lint gate** — [`lint.yml`](../.github/workflows/lint.yml) on `pull_request` and `merge_group`. Rules `F401`, `F811`, `F821`, `F841`; Python 3.12 target (config in `pyproject.toml`). Locally: `ruff check <changed .py files>`.
-- **Full-tree Python lint audit** — [`lint.yml`](../.github/workflows/lint.yml) on `push: main`, weekly cron, manual run. Same rule set as the PR gate. Locally: `ruff check .`.
-- **Fast Python test suite** — [`tests.yml`](../.github/workflows/tests.yml) on PRs, pushes, merge queue; tiers computed by [`test_scope.py`](../.github/scripts/test_scope.py). Default excludes `slow` and `integration` (markers in `pytest.ini`); `RAPTOR_MAX_TEST_SECONDS=10` per-test wall-clock guard. Locally: `python3 -m pytest core packages engine` (the `engine/` rule-precision tests skip themselves when coccinelle/semgrep are not installed).
+- **Python lint gate** — [`lint.yml`](../.github/workflows/lint.yml) on `pull_request` and `merge_group`. Rules `F401`, `F811`, `F821`, `F841`; Python 3.12 target (config in `pyproject.toml`).
+
+  **Run locally:**
+
+  ```bash
+  ruff check <changed .py files>
+  ```
+
+- **Full-tree Python lint audit** — [`lint.yml`](../.github/workflows/lint.yml) on `push: main`, weekly cron, manual run. Same rule set as the PR gate.
+
+  **Run locally:**
+
+  ```bash
+  ruff check .
+  ```
+
+- **Fast Python test suite** — [`tests.yml`](../.github/workflows/tests.yml) on PRs, pushes, merge queue; tiers computed by [`test_scope.py`](../.github/scripts/test_scope.py). Default excludes `slow` and `integration` (markers in `pytest.ini`); `RAPTOR_MAX_TEST_SECONDS=10` per-test wall-clock guard.
+
+  **Run locally:** `python3 -m pytest core packages engine` (the `engine/` rule-precision tests skip themselves when coccinelle/semgrep are not installed).
+
 - **Sandbox slow/integration tier** — [`tests.yml`](../.github/workflows/tests.yml), second step of the sandbox job on sandbox-gated PRs, with a package-scoped mirror step in the exploit-feasibility job for PRs that fire only that gate. Any CI-equivalent local gate run must include it: `python3 -m pytest -m "slow or integration" core/sandbox packages/exploit_feasibility` (~90s serial).
-- **Darwin-emulation gate** — [`tests.yml`](../.github/workflows/tests.yml), third step of the sandbox job on sandbox-gated PRs. Re-runs the sandbox test files with `RAPTOR_TEST_EMULATE_PLATFORM=darwin` so Linux-authored assertions against platform-resolved values (or the Linux tmp layout) fail in the cheap Linux lane instead of on the macOS runner; `*_native`-marked tests are deselected because emulation never stacks on real kernel behaviour. Locally: `RAPTOR_TEST_EMULATE_PLATFORM=darwin python3 -m pytest core/sandbox` (~45s serial).
-- **Sandbox feature-matrix PR subset** — [`tests.yml`](../.github/workflows/tests.yml), `sandbox-feature-matrix` job, on sandbox-gated PRs. Runs the u24 × {`full`, `default`} cells of the weekly feature matrix against the prebuilt GHCR image (published by [`sandbox-matrix-image.yml`](../.github/workflows/sandbox-matrix-image.yml); the package is owner-managed and private, like `raptor-ci-deps`). Fork PRs cannot pull it and build the image on the runner instead (slower, never blocked); the weekly matrix is the unfiltered backstop. Locally: `core/sandbox/scripts/feature-matrix/run-matrix.sh --image 24 --lanes full,default` (drop `--skip-build` unless the image is already built).
-- **Prompt-envelope audit** — [`tests.yml`](../.github/workflows/tests.yml), `python-prompt-audit` job. Narrow AST-based audit. Locally: `python3 -m pytest core/security/tests/test_prompt_envelope_audit.py -q`.
+
+- **Darwin-emulation gate** — [`tests.yml`](../.github/workflows/tests.yml), third step of the sandbox job on sandbox-gated PRs. Re-runs the sandbox test files with `RAPTOR_TEST_EMULATE_PLATFORM=darwin` so Linux-authored assertions against platform-resolved values (or the Linux tmp layout) fail in the cheap Linux lane instead of on the macOS runner; `*_native`-marked tests are deselected because emulation never stacks on real kernel behaviour.
+
+  **Run locally:** `RAPTOR_TEST_EMULATE_PLATFORM=darwin python3 -m pytest core/sandbox` (~45s serial).
+
+- **Sandbox feature-matrix PR subset** — [`tests.yml`](../.github/workflows/tests.yml), `sandbox-feature-matrix` job, on sandbox-gated PRs. Runs the u24 × {`full`, `default`} cells of the weekly feature matrix against the prebuilt GHCR image (published by [`sandbox-matrix-image.yml`](../.github/workflows/sandbox-matrix-image.yml); the package is owner-managed and private, like `raptor-ci-deps`). Fork PRs cannot pull it and build the image on the runner instead (slower, never blocked); the weekly matrix is the unfiltered backstop.
+
+  **Run locally:** `core/sandbox/scripts/feature-matrix/run-matrix.sh --image 24 --lanes full,default` (drop `--skip-build` unless the image is already built).
+
+- **Prompt-envelope audit** — [`tests.yml`](../.github/workflows/tests.yml), `python-prompt-audit` job. Narrow AST-based audit.
+
+  **Run locally:**
+
+  ```bash
+  python3 -m pytest core/security/tests/test_prompt_envelope_audit.py -q
+  ```
+
 - **Code scanning** — [`codeql.yml`](../.github/workflows/codeql.yml) on PRs, pushes, merge queue, weekly cron. Languages `python`, `c-cpp`, `actions`; path exclusions in [`codeql-config.yml`](../.github/codeql/codeql-config.yml); import-graph scope narrowing via [`codeql_scope.py`](../.github/scripts/codeql_scope.py) for PRs. Local CodeQL requires the CLI and packs — use the GitHub workflow.
-- **Slash-command metadata lint** — [`lint.yml`](../.github/workflows/lint.yml) on every lint run. Validates `dispatch:` targets and exclusion-list drift. Locally: `python3 .github/scripts/check_command_metadata.py`.
-- **Dependency regression gate** — [`sca-pr-gate.yml`](../.github/workflows/sca-pr-gate.yml) on manifest, lockfile, workflow, and container changes. Fails on new findings at `high` severity or above. Locally: `bin/raptor-sca . --out /tmp/sca-pr`, then `bin/raptor-sca diff <base>/findings.json <pr>/findings.json --fail-on-severity high`.
-- **Corpus label schema lint** — [`corpus-labels.yml`](../.github/workflows/corpus-labels.yml) on PRs, pushes, merge queue, over `core/audit/corpus/labels/**/*.label.json`. Field sanity, no network, pure stdlib. Locally: `python3 -m core.audit.corpus.lint --mode schema`.
-- **Corpus label pin lint (PR)** — [`corpus-labels.yml`](../.github/workflows/corpus-labels.yml) on PRs and merge queue. Sparse-fetches pinned upstream trees to verify pins still resolve. Locally: `python3 -m core.audit.corpus.lint --mode pins --fetch-missing <changed files>`.
-- **SARIF known-FP suppressions** — [`codeql.yml`](../.github/workflows/codeql.yml) post-analysis step. Suppresses known false-positive flow classes (e.g. path variables named `*_secret_key` that hold file paths, not secrets). Locally: `python3 .github/scripts/sarif_known_fp_suppressions.py`.
-- **CI controls doc guard** — [`tests.yml`](../.github/workflows/tests.yml) on PRs. Validates ruff config lives in `pyproject.toml`, the lint workflow uses config-file discovery, the README links to this doc, and all documented paths exist on disk. Locally: `python3 -m pytest .github/tests/test_ci_controls_docs.py -v`.
-- **PR preflight hazards** — [`preflight.yml`](../.github/workflows/preflight.yml) on PRs. Re-runs the PR's changed tests under CI-reality hazards: hidden optional deps, hidden tree-sitter, duration guard, tree hygiene, two shuffle legs. Locally: run the changed tests with the hazard env toggles from the workflow.
-- **Repo-invariant detectors (miswiring, env-docs, vocab-lists, canonical-json, optional-dep-imports, report-writer-closure, console-chokepoint, workflow-pipefail, tracked-file-census, run-dir-reads)** — [`lint.yml`](../.github/workflows/lint.yml) `repo-invariants` job on PRs, pushes to `main`, and the merge queue; no paths filter (the invariants are repo-global and the whole set runs in ~2 minutes). A NEW finding fails the job; deliberate exceptions go in the detector's baseline JSON with a review note (the console-chokepoint and tracked-file-census gates are baseline-less — fix the finding or extend their in-script allowed shapes, with rationale). The whole set also runs in the daily [`miswiring-scan.yml`](../.github/workflows/miswiring-scan.yml) sweep (see below); exact-set parity between the two lists is test-enforced. Locally: `python3 .github/scripts/check_miswiring.py`, and likewise `check_env_docs.py`, `check_vocab_lists.py`, `check_canonical_json.py`, `check_optional_dep_imports.py`, `check_report_writer_closure.py`, `check_console_chokepoint.py`, `check_workflow_pipefail.py`, `check_tracked_file_census.py`, `check_run_dir_reads.py`.
-- **Replay-determinism gate** — [`replay-determinism.yml`](../.github/workflows/replay-determinism.yml) on PRs and pushes touching the LLM prompt/orchestration/classifier-context paths (derivation documented in the workflow header), plus a daily no-path-filter sweep. Three jobs: the transcript-seam census ([`check_transcript_seam.py`](../.github/scripts/check_transcript_seam.py) vs [`transcript_seam_baseline.json`](../.github/scripts/transcript_seam_baseline.json)) fails on any LLM dispatch construction outside the frozen-transcript record/replay seam; the public hermetic tier runs the transcript unit + acceptance suites and the synthetic-corpus harness tests (replay determinism, loud miss, leftover detection); the private-case lane replays locally supplied case bundles under `core/audit/corpus/replay-cases` and skips with notice where none exist, with the skip recorded against the lane's skip budget. Locally: `python3 .github/scripts/check_transcript_seam.py` and `python3 -m pytest .github/evals`.
-- **Per-lane skip budget** — [`check_skip_budget.py`](../.github/scripts/check_skip_budget.py) after the pytest step of the `_tier.yml` tiers and the nightly lanes. Compares the lane's junit skip count against the count recorded in [`skip_budget_baseline.json`](../.github/scripts/skip_budget_baseline.json); a count above the recorded one fails the lane. Lanes without a recorded count report the observed number and pass — record it from a CI run with `--write-baseline` and commit the baseline. Locally: `python3 .github/scripts/check_skip_budget.py --lane <name> --junit-xml <pytest junitxml>`.
+
+- **Slash-command metadata lint** — [`lint.yml`](../.github/workflows/lint.yml) on every lint run. Validates `dispatch:` targets and exclusion-list drift.
+
+  **Run locally:**
+
+  ```bash
+  python3 .github/scripts/check_command_metadata.py
+  ```
+
+- **Dependency regression gate** — [`sca-pr-gate.yml`](../.github/workflows/sca-pr-gate.yml) on manifest, lockfile, workflow, and container changes. Fails on new findings at `high` severity or above.
+
+  **Run locally:** `bin/raptor-sca . --out /tmp/sca-pr`, then `bin/raptor-sca diff <base>/findings.json <pr>/findings.json --fail-on-severity high`.
+
+- **Corpus label schema lint** — [`corpus-labels.yml`](../.github/workflows/corpus-labels.yml) on PRs, pushes, merge queue, over `core/audit/corpus/labels/**/*.label.json`. Field sanity, no network, pure stdlib.
+
+  **Run locally:**
+
+  ```bash
+  python3 -m core.audit.corpus.lint --mode schema
+  ```
+
+- **Corpus label pin lint (PR)** — [`corpus-labels.yml`](../.github/workflows/corpus-labels.yml) on PRs and merge queue. Sparse-fetches pinned upstream trees to verify pins still resolve.
+
+  **Run locally:**
+
+  ```bash
+  python3 -m core.audit.corpus.lint --mode pins --fetch-missing <changed files>
+  ```
+
+- **SARIF known-FP suppressions** — [`codeql.yml`](../.github/workflows/codeql.yml) post-analysis step. Suppresses known false-positive flow classes (e.g. path variables named `*_secret_key` that hold file paths, not secrets).
+
+  **Run locally:**
+
+  ```bash
+  python3 .github/scripts/sarif_known_fp_suppressions.py
+  ```
+
+- **CI controls doc guard** — [`tests.yml`](../.github/workflows/tests.yml) on PRs. Validates ruff config lives in `pyproject.toml`, the lint workflow uses config-file discovery, the README links to this doc, and all documented paths exist on disk.
+
+  **Run locally:**
+
+  ```bash
+  python3 -m pytest .github/tests/test_ci_controls_docs.py -v
+  ```
+
+- **PR preflight hazards** — [`preflight.yml`](../.github/workflows/preflight.yml) on PRs. Re-runs the PR's changed tests under CI-reality hazards: hidden optional deps, hidden tree-sitter, duration guard, tree hygiene, two shuffle legs.
+
+  **Run locally:** run the changed tests with the hazard env toggles from the workflow.
+
+- **Repo-invariant detectors (miswiring, env-docs, vocab-lists, canonical-json, optional-dep-imports, report-writer-closure, console-chokepoint, workflow-pipefail, tracked-file-census, run-dir-reads)** — [`lint.yml`](../.github/workflows/lint.yml) `repo-invariants` job on PRs, pushes to `main`, and the merge queue; no paths filter (the invariants are repo-global and the whole set runs in ~2 minutes). A NEW finding fails the job; deliberate exceptions go in the detector's baseline JSON with a review note (the console-chokepoint and tracked-file-census gates are baseline-less — fix the finding or extend their in-script allowed shapes, with rationale). The whole set also runs in the daily [`miswiring-scan.yml`](../.github/workflows/miswiring-scan.yml) sweep (see below); exact-set parity between the two lists is test-enforced.
+
+  **Run locally:** `python3 .github/scripts/check_miswiring.py`, and likewise `check_env_docs.py`, `check_vocab_lists.py`, `check_canonical_json.py`, `check_optional_dep_imports.py`, `check_report_writer_closure.py`, `check_console_chokepoint.py`, `check_workflow_pipefail.py`, `check_tracked_file_census.py`, `check_run_dir_reads.py`.
+
+- **Replay-determinism gate** — [`replay-determinism.yml`](../.github/workflows/replay-determinism.yml) on PRs and pushes touching the LLM prompt/orchestration/classifier-context paths (derivation documented in the workflow header), plus a daily no-path-filter sweep. Three jobs: the transcript-seam census ([`check_transcript_seam.py`](../.github/scripts/check_transcript_seam.py) vs [`transcript_seam_baseline.json`](../.github/scripts/transcript_seam_baseline.json)) fails on any LLM dispatch construction outside the frozen-transcript record/replay seam; the public hermetic tier runs the transcript unit + acceptance suites and the synthetic-corpus harness tests (replay determinism, loud miss, leftover detection); the private-case lane replays locally supplied case bundles under `core/audit/corpus/replay-cases` and skips with notice where none exist, with the skip recorded against the lane's skip budget.
+
+  **Run locally:** `python3 .github/scripts/check_transcript_seam.py` and `python3 -m pytest .github/evals`.
+
+- **Per-lane skip budget** — [`check_skip_budget.py`](../.github/scripts/check_skip_budget.py) after the pytest step of the `_tier.yml` tiers and the nightly lanes. Compares the lane's junit skip count against the count recorded in [`skip_budget_baseline.json`](../.github/scripts/skip_budget_baseline.json); a count above the recorded one fails the lane. Lanes without a recorded count report the observed number and pass — record it from a CI run with `--write-baseline` and commit the baseline.
+
+  **Run locally:**
+
+  ```bash
+  python3 .github/scripts/check_skip_budget.py --lane <name> --junit-xml <pytest junitxml>
+  ```
 
 ## Stuff That Runs On A Timer
 

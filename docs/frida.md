@@ -19,6 +19,17 @@ See also: [commands](commands.md), [binary analysis](binary-analysis.md),
 
 ---
 
+**On this page:**
+
+- [Setup](#setup)
+- [Usage](#usage)
+- [Bundled Templates](#bundled-templates)
+- [Pipeline Integration](#pipeline-integration)
+- [Patch Verification](#patch-verification)
+- [Custom Scripts](#custom-scripts)
+- [Output](#output)
+- [Common Failure Modes](#common-failure-modes)
+
 ## Setup
 
 ### Host Install
