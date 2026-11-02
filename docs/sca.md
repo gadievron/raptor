@@ -412,7 +412,23 @@ unsupported compression fail capture. A failed output write can leave an
 incomplete directory; `evidence.json` is written last as the completion record.
 
 Selection includes catalogue licence locations, conventional notice filenames,
-Debian common-licence files, and conventional npm notice probes. A licence
+Debian common-licence files, and npm notice probes. It also scans package-local
+notice filenames while reading layers, including case variants such as
+`license-MIT`, declared npm licence-file pointers, and nested Python vendor
+notices inside the owning `.dist-info`/`.egg-info` directory. Files in its dedicated
+`licenses/` subtree are included even with nonstandard names such as
+`THIRD-PARTY-NOTICES.md`. Nested npm
+`node_modules` directories require their own package identity.
+
+Python [RECORD inventories](https://packaging.python.org/en/latest/specifications/recording-installed-packages/#the-record-file)
+can name notices absent from Syft's top-level file index. Capture format 2
+requires those files within the owning distribution's metadata directory and
+checks recorded SHA-256 and size claims when present. Relative and absolute
+paths stay inside that directory; traversal, conflicting claims and unsupported
+notice digest algorithms fail capture. Unindexed files retain unconfirmed final
+filesystem visibility even when their origin-layer bytes and RECORD hashes match.
+Preparation accepts existing format-1 captures, while format 2 also requires the
+RECORD-listed notices. No licence conclusions are inferred from file membership. A licence
 location can point to package metadata rather than the licence text: the report
 distinguishes package manifests and Python `METADATA`/`PKG-INFO` records. Optional probes have unconfirmed runtime
 visibility; origin-layer evidence does not independently replay filesystem
@@ -441,7 +457,8 @@ not refetch layers or treat an unsigned capture as an attestation.
 
 Associations come from exact catalogue licence locations, notice candidates
 within the same layer's Python distribution metadata directory or npm package
-directory, and explicit npm licence-file pointers. Nested npm dependencies do not
+directory, verified Python RECORD notice claims, and explicit npm licence-file
+pointers. Nested npm dependencies do not
 inherit their parent's association. Debian copyright references can additionally
 link to a captured common licence file; missing or ambiguous versions remain gaps.
 Conventional directory matches are candidates, not conclusions about applicable

@@ -434,3 +434,13 @@ def test_empty_media_type_defaults_to_gzip():
         _stream(blob), {"var/lib/dpkg/status"}, media_type="",
     )
     assert out == {"var/lib/dpkg/status": b"x"}
+
+
+def test_discovery_without_explicit_paths_uses_the_same_limits():
+    blob = _make_gzipped_tar({'pkg/license-MIT': b'notice', 'pkg/lib.py': b'code'})
+    discover = lambda path: path.endswith('license-MIT')
+    assert extract_files_from_layer([blob], set(), discover_path=discover) == {'pkg/license-MIT': b'notice'}
+    with pytest.raises(WantedEntryRefused):
+        extract_files_from_layer([blob], set(), discover_path=discover, max_entry_bytes=5)
+    with pytest.raises(ValueError, match='memory budget'):
+        extract_files_from_layer([blob], set(), discover_path=discover, max_selected_bytes=5)

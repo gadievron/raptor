@@ -10,19 +10,19 @@ import base64
 import hashlib
 import json
 import re
-import unicodedata
 from collections.abc import Callable, Iterable
 from pathlib import PurePosixPath
 
 from core.oci.blob import UnresolvedLayerHardlinks, extract_files_from_layer
 from core.oci.manifest import LayerDescriptor, parse_image_manifest
+from core.oci.notice_paths import (
+    METADATA_NAMES as _METADATA_NAMES, NOTICE_NAME as _NOTICE,
+    SOURCE_SUFFIXES as _SOURCE_SUFFIXES, image_path as _path, PackageNoticePaths,
+)
 
 MAX_CAPTURE_BYTES = 128 * 1024 * 1024
 MAX_LAYER_SELECTED_BYTES = 64 * 1024 * 1024
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
-_NOTICE = re.compile(r"(?:licen[cs]e|copying|copyright|notice|authors)(?:[._-].*)?\Z", re.I)
-_METADATA_NAMES = frozenset({"package.json", "METADATA", "PKG-INFO", "pyproject.toml", "Cargo.toml", "pom.xml"})
-_SOURCE_SUFFIXES = frozenset({".py", ".pyc", ".js", ".ts", ".c", ".h", ".go", ".java", ".class", ".so", ".a", ".o", ".exe", ".dll", ".bin"})
 
 
 def _unique(pairs: list) -> dict:
@@ -49,16 +49,6 @@ def read_catalogue(raw: bytes) -> dict:
 def _digest(value: str) -> str:
     if not isinstance(value, str) or not _DIGEST.fullmatch(value):
         raise ValueError("expected a sha256 digest")
-    return value
-
-
-def _path(value: str) -> str:
-    if not isinstance(value, str) or not value.startswith("/"):
-        raise ValueError("image path must be absolute")
-    normal = unicodedata.normalize("NFKC", value)
-    if (normal != value or "\\" in value or any(ord(c) < 32 or ord(c) == 127 for c in value)
-            or any(p in {"", ".", ".."} for p in value[1:].split("/"))):
-        raise ValueError("unsafe or ambiguous image path")
     return value
 
 
@@ -128,8 +118,9 @@ def capture(catalogue: dict, reader: Callable[[LayerDescriptor], Iterable[bytes]
             *, identify: tuple[str, ...] = ()) -> tuple[dict, dict[str, bytes]]:
     """Return evidence and content-addressed notice bytes, only after verification.
 
-    Required catalogue locations must be recoverable. Conventional npm notice
-    probes are optional and explicitly have unconfirmed runtime visibility.
+    Required catalogue and Python RECORD locations must be recoverable.
+    Directory discovery and conventional probes remain notice candidates,
+    with unconfirmed runtime visibility for files absent from the file index.
     Identity targets are hashed but their executable bytes are never returned.
     """
     image, layers = subject(catalogue)
@@ -137,6 +128,9 @@ def capture(catalogue: dict, reader: Callable[[LayerDescriptor], Iterable[bytes]
     layer_ids = set(origins.values())
     files = {}
     targets = {}
+    package_paths = PackageNoticePaths(catalogue.get("artifacts", []))
+    if any(origin not in layer_ids for _, origin in package_paths.directories):
+        raise ValueError("package notice directory references an unrelated layer")
 
     def location(loc: dict) -> tuple[str, str]:
         path, layer = _path(loc["path"]), _digest(loc["layerID"])
@@ -181,6 +175,12 @@ def capture(catalogue: dict, reader: Callable[[LayerDescriptor], Iterable[bytes]
                 parent = PurePosixPath(path).parent
                 for name in ("LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING", "NOTICE", "README.md"):
                     target((str(parent / name), layer), "conventional_package_notice_probe", package_id, False)
+    for key, record in package_paths.records.items():
+        for identifier in sorted(record["package_ids"]):
+            target(key, "python_record_notice", identifier)
+    for (directory, layer), names in package_paths.pointers.items():
+        for name in names:
+            target((directory + "/" + name, layer), "declared_notice_pointer", required=False)
     for path in identify:
         path = _path(path)
         matches = [key for key in files if key[0] == path]
@@ -194,7 +194,8 @@ def capture(catalogue: dict, reader: Callable[[LayerDescriptor], Iterable[bytes]
     total = 0
     for layer in layers:
         selected = {path: entry for (path, origin), entry in targets.items() if origin == origins[layer.digest]}
-        if not selected:
+        discover = lambda name: bool(package_paths.matches("/" + name, origins[layer.digest]))
+        if not selected and not any(origin == origins[layer.digest] for _, origin in package_paths.directories):
             continue
         wanted = {path.lstrip("/") for path in selected}
         for attempt in range(5):
@@ -203,12 +204,18 @@ def capture(catalogue: dict, reader: Callable[[LayerDescriptor], Iterable[bytes]
                     _verified(reader(layer), layer), wanted,
                     media_type=layer.media_type, compressed_size=layer.size,
                     max_selected_bytes=MAX_LAYER_SELECTED_BYTES, resolve_selected_hardlinks=True,
-                    expected_diff_id=origins[layer.digest])
+                    expected_diff_id=origins[layer.digest], discover_path=discover)
                 break
             except UnresolvedLayerHardlinks as exc:
                 if attempt == 4:
                     raise ValueError("hard-link resolution exceeded replay bound") from exc
                 wanted.update(exc.paths)
+        for name in contents:
+            path = "/" + name
+            for identifier, reason in package_paths.matches(path, origins[layer.digest]):
+                _path(path)
+                target((path, origins[layer.digest]), reason, identifier, False)
+                selected[path] = targets[(path, origins[layer.digest])]
         for path, entry in sorted(selected.items()):
             data = contents.get(path.lstrip("/"))
             if data is None:
@@ -223,12 +230,16 @@ def capture(catalogue: dict, reader: Callable[[LayerDescriptor], Iterable[bytes]
             expected_size = file.get("metadata", {}).get("size")
             if expected_size is not None and expected_size != len(data):
                 raise ValueError("catalogue file size mismatch")
+            recorded = package_paths.records.get((path, origins[layer.digest]))
+            if recorded and ((recorded["sha256"] is not None and recorded["sha256"] != sha)
+                             or (recorded["size"] is not None and recorded["size"] != len(data))):
+                raise ValueError("Python RECORD notice hash or size mismatch")
             for expected in file.get("digests", []):
                 if expected["algorithm"].lower() == "sha256" and expected["value"].lower() != sha:
                     raise ValueError("catalogue file digest mismatch")
             record = {"path": path, "layer_blob_digest": layer.digest, "catalogue_layer_diff_id": origins[layer.digest], "sha256": sha, "size": len(data),
                       "roles": sorted(entry["roles"]), "package_ids": sorted(entry["packages"]),
-                      "visibility": "catalogue_location" if entry["required"] else "layer_probe_runtime_visibility_unconfirmed"}
+                      "visibility": "catalogue_location" if entry["required"] and (file or "catalogue_licence_location" in entry["roles"]) else "layer_probe_runtime_visibility_unconfirmed"}
             record["content_kind"] = ("identity" if entry["roles"] == {"identity_only"}
                                       else "package_metadata" if PurePosixPath(path).name in _METADATA_NAMES
                                       else "notice_candidate")
@@ -238,7 +249,7 @@ def capture(catalogue: dict, reader: Callable[[LayerDescriptor], Iterable[bytes]
             records.append(record)
     with_notices = {package for row in records if row["content_kind"] == "notice_candidate"
                     for package in row["package_ids"]}
-    report = {"version": 1, "gaps": {
+    report = {"version": 2, "gaps": {
                   "package_ids_without_associated_notice_candidate": sorted(
                       package["id"] for package in packages if package["id"] not in with_notices),
                   "identity_targets_without_version_or_build_source_verification": list(identify)}, "subject": image, "packages": packages, "files": records,

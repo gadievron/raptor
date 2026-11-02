@@ -238,3 +238,37 @@ def test_shared_directory_cannot_explode_association_count(fixture, monkeypatch)
     monkeypatch.setattr(sbom_notices, 'MAX_ASSOCIATIONS', 1)
     with pytest.raises(ValueError, match='association count'):
         load_notices(root, native, digest, report)
+
+
+def with_record(fixture):
+    root, native, _, report, cdx, spdx = fixture
+    row = next(r for r in report['files'] if r['path'].endswith('/licenses/LICENSE'))
+    native['artifacts'][0]['metadata'] = {'files': [{'path': 'pkg-1.dist-info/licenses/LICENSE',
+        'digest': {'algorithm': 'sha256', 'value': base64.urlsafe_b64encode(bytes.fromhex(row['sha256'])).rstrip(b'=').decode()},
+        'size': str(row['size'])}]}
+    native['files'] = [f for f in native['files'] if f['location']['path'] != row['path']]
+    digest = sha(json.dumps(native).encode())
+    report['catalogue_sha256'] = digest
+    return root, native, digest, report, row
+
+
+def test_version_two_requires_record_notices_but_legacy_capture_remains_usable(fixture):
+    root, native, digest, report, row = with_record(fixture)
+    report['files'].remove(row)
+    summary, _ = load_notices(root, native, digest, report)
+    assert summary['packages'][0]['status'] == 'metadata_only'
+    report['version'] = 2
+    with pytest.raises(ValueError, match='missing required'):
+        load_notices(root, native, digest, report)
+
+
+def test_unindexed_record_notice_checked_and_associated(fixture):
+    root, native, digest, report, row = with_record(fixture)
+    report['version'] = 2
+    row['visibility'] = 'layer_probe_runtime_visibility_unconfirmed'
+    summary, _ = load_notices(root, native, digest, report)
+    record = next(r for r in summary['packages'][0]['files'] if r['path'] == row['path'])
+    assert 'python_record_membership' in record['reasons']
+    row['size'] += 1
+    with pytest.raises(ValueError, match='RECORD'):
+        load_notices(root, native, digest, report)
