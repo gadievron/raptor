@@ -296,6 +296,7 @@ class CredentialStore:
             "perplexity": _read_env_keep("PERPLEXITY_API_KEY"),
             # Replicate — uses ``Token <key>`` prefix, not ``Bearer``.
             "replicate":  _read_env_keep("REPLICATE_API_TOKEN"),
+            "runcrate":   _read_env_keep("RUNCRATE_API_KEY"),
             "together":   _read_env_keep("TOGETHER_API_KEY"),
             "yapi":       _read_env_keep("YAPI_API_KEY"),
             # --- cloud gateways ---
@@ -1339,6 +1340,13 @@ def build_rules(creds: CredentialStore) -> dict[str, ProviderRule]:
             name="replicate",
             upstream_base_url="https://api.replicate.com",
             inject_headers=_replicate_headers,
+        ),
+        "runcrate": ProviderRule(
+            name="runcrate",
+            # /v1 root (OpenAI-compatible); bare host is the correct
+            # upstream, SDK path preserved end-to-end.
+            upstream_base_url="https://api.runcrate.ai",
+            inject_headers=_bearer_headers("runcrate"),
         ),
         "together": ProviderRule(
             name="together",
