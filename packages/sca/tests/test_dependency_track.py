@@ -10,6 +10,7 @@ from typing import Any, Dict, List
 
 import pytest
 
+from core.testing.logging_state import isolated_cli_logging
 from packages.sca import dependency_track
 from packages.sca.dependency_track import (
     _redact_url,
@@ -300,6 +301,7 @@ def test_build_egress_client_accepts_http_and_https():
 # ---------------------------------------------------------------------------
 
 
+@isolated_cli_logging()
 def test_cli_dispatch_routes_dt_push(tmp_path: Path, monkeypatch,
                                        capsys):
     """The dt-push subcommand routes through cli._dispatch and
@@ -398,6 +400,7 @@ def _capture_push(monkeypatch) -> Dict[str, Any]:
     return captured
 
 
+@isolated_cli_logging()
 def test_cli_env_key_is_primary_path(tmp_path: Path, monkeypatch,
                                      capsys):
     """$DT_API_KEY alone drives the upload — the primary path — with
@@ -421,6 +424,7 @@ def test_cli_env_key_is_primary_path(tmp_path: Path, monkeypatch,
     assert "deprecated" not in err
 
 
+@isolated_cli_logging()
 def test_cli_env_key_wins_when_both_set(tmp_path: Path, monkeypatch,
                                         capsys):
     """When both --api-key and $DT_API_KEY are set the env var wins,
@@ -448,6 +452,7 @@ def test_cli_env_key_wins_when_both_set(tmp_path: Path, monkeypatch,
         assert "argv-key-loses" not in stream
 
 
+@isolated_cli_logging()
 def test_cli_argv_key_warns_deprecated(tmp_path: Path, monkeypatch,
                                        capsys):
     """--api-key alone still works (deprecated fallback for existing
@@ -476,6 +481,7 @@ def test_cli_argv_key_warns_deprecated(tmp_path: Path, monkeypatch,
         assert "argv-only-key" not in stream
 
 
+@isolated_cli_logging()
 def test_cli_missing_api_key_returns_2(
     tmp_path: Path, monkeypatch, capsys,
 ):
@@ -496,6 +502,7 @@ def test_cli_missing_api_key_returns_2(
     assert "DT_API_KEY" in err
 
 
+@isolated_cli_logging()
 def test_cli_no_auto_create_threads_through(
     tmp_path: Path, monkeypatch,
 ):
@@ -522,6 +529,7 @@ def test_cli_no_auto_create_threads_through(
     assert captured["auto_create"] is False
 
 
+@isolated_cli_logging()
 def test_cli_upload_failure_exits_1(
     tmp_path: Path, monkeypatch, capsys,
 ):
