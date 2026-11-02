@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import threading
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -422,27 +424,41 @@ class TestDegrade:
         """The compute leg is wall-bounded: a wedged engine (untimed
         lock, pathological substrate) degrades to engine_timeout
         instead of pinning audit start."""
-        import time
-
         import core.audit.auto_siblings as mod
         binary, sha = _make_binary(tmp_path)
         _write_map_run(tmp_path, binary, sha)
         out_dir = _audit_dir(tmp_path)
         monkeypatch.setattr(mod, "ENGINE_WALL_S", 0.2)
 
+        release = threading.Event()
+        workers = []
+
+        def tracked_thread(*args, **kwargs):
+            worker = threading.Thread(*args, **kwargs)
+            workers.append(worker)
+            return worker
+
+        monkeypatch.setattr(mod, "threading", SimpleNamespace(Thread=tracked_thread))
+
         def _wedged(*_a, **_k):
-            time.sleep(1.0)
+            release.wait(10)
             return {"hypothesis_seeds_emitted": 1}
 
-        with caplog.at_level(logging.WARNING,
-                             logger="core.audit.auto_siblings"):
-            receipt = run_auto_siblings(out_dir, binary, engine=_wedged)
+        try:
+            with caplog.at_level(logging.WARNING,
+                                 logger="core.audit.auto_siblings"):
+                receipt = run_auto_siblings(out_dir, binary, engine=_wedged)
 
-        assert receipt["status"] == "degraded"
-        assert receipt["reason"] == "engine_timeout"
-        assert not (out_dir / SEEDS_FILENAME).exists()
-        assert any("auto-siblings skipped" in r.getMessage()
-                   for r in caplog.records)
+            assert receipt["status"] == "degraded"
+            assert receipt["reason"] == "engine_timeout"
+            assert not (out_dir / SEEDS_FILENAME).exists()
+            assert any("auto-siblings skipped" in r.getMessage()
+                       for r in caplog.records)
+        finally:
+            release.set()
+            for worker in workers:
+                worker.join(timeout=5)
+                assert not worker.is_alive(), "siblings engine worker did not stop"
 
     def test_over_budget_produced_file_degrades(self, tmp_path):
         """Capture bounds: a produced seed file over the intake's

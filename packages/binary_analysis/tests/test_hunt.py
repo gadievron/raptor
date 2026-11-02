@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 import random
+import threading
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 from core.json import save_json
 
@@ -134,16 +137,30 @@ class TestAnchorMatcher(unittest.TestCase):
         the scan."""
         from packages.binary_analysis import hunt as hunt_module
 
+        release = threading.Event()
+        workers = []
+
+        def tracked_thread(*args, **kwargs):
+            worker = threading.Thread(*args, **kwargs)
+            workers.append(worker)
+            return worker
+
         class _Stuck:
             def search(self, _subject):
-                import time
-                time.sleep(30)
+                release.wait(10)
 
-        started = __import__("time").monotonic()
-        outcome = hunt_module._search_with_budget([_Stuck()], "x", 0.05)
-        elapsed = __import__("time").monotonic() - started
-        self.assertIs(outcome, hunt_module._MATCH_TIMED_OUT)
-        self.assertLess(elapsed, 5.0)
+        with patch.object(hunt_module, "threading", SimpleNamespace(Thread=tracked_thread)):
+            try:
+                started = __import__("time").monotonic()
+                outcome = hunt_module._search_with_budget([_Stuck()], "x", 0.05)
+                elapsed = __import__("time").monotonic() - started
+                self.assertIs(outcome, hunt_module._MATCH_TIMED_OUT)
+                self.assertLess(elapsed, 5.0)
+            finally:
+                release.set()
+                for worker in workers:
+                    worker.join(timeout=5)
+                    self.assertFalse(worker.is_alive(), "regex worker did not stop")
 
     def test_match_budget_breaker_disables_regex_matching(self):
         """After the breaker count of budget overruns, regex matching
