@@ -11,6 +11,7 @@ import importlib.util
 import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from unittest.mock import patch
 from types import SimpleNamespace
 
 
@@ -21,7 +22,8 @@ def _load_cli():
     loader = SourceFileLoader("raptor_audit_cli_test", cli_path)
     spec = importlib.util.spec_from_loader("raptor_audit_cli_test", loader)
     mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
+    with patch.object(sys, "path", sys.path.copy()):
+        loader.exec_module(mod)
     return mod
 
 

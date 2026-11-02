@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from unittest.mock import patch
 from types import SimpleNamespace
 
 from core.audit.hypothesis_intake import (
@@ -275,7 +277,8 @@ def _load_cli():
         "raptor_audit_cli_hyp_seeds", loader,
     )
     mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
+    with patch.object(sys, "path", sys.path.copy()):
+        loader.exec_module(mod)
     return mod
 
 

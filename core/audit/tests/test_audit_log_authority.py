@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from unittest.mock import patch
 from types import SimpleNamespace
 
 import pytest
@@ -140,7 +142,8 @@ class TestRecordGatesVerified:
         spec = importlib.util.spec_from_loader(
             "raptor_audit_cli_auth", loader)
         mod = importlib.util.module_from_spec(spec)
-        loader.exec_module(mod)
+        with patch.object(sys, "path", sys.path.copy()):
+            loader.exec_module(mod)
         return mod
 
     def _args(self, out_dir: Path, target: Path, **overrides):

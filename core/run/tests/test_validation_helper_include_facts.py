@@ -9,8 +9,10 @@ validation-helper prep tests.
 import importlib.util
 import json
 import os
+import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -22,7 +24,8 @@ def _load_helper():
     spec = importlib.util.spec_from_loader(
         "raptor_validation_helper", loader)
     mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
+    with patch.object(sys, "path", sys.path.copy()):
+        loader.exec_module(mod)
     return mod
 
 
