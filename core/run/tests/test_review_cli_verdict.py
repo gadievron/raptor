@@ -8,6 +8,7 @@ import subprocess
 import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -30,7 +31,8 @@ def _load_review_module():
              ("PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME")
              if k in os.environ}
     try:
-        loader.exec_module(mod)
+        with patch.object(sys, "path", sys.path.copy()):
+            loader.exec_module(mod)
     finally:
         os.environ.update(saved)
     return mod
