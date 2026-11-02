@@ -355,8 +355,23 @@ recorded explicitly. Update the manifest after checking the new upstream tag
 and commit; a package bump never silently reuses an older version's source pin.
 The script performs no network access, installation or publication.
 
+For repository input, the manifest's `bundles` rules also inventory committed
+PSL data, retained dataflow source excerpts, calibration data and CVE-diff
+sample metadata. File bytes and notice files must match their Git blob
+identities before their SHA-256 values and commit-specific retrieval URLs are
+emitted. Dirty, missing or unclassified material fails preparation. Source
+excerpts carry their upstream licence scope; original RAPTOR annotations retain
+MIT. Mixed data terms remain explicit unknowns with per-file source credits.
+
+Bundle entries use CycloneDX `data` components and SPDX 2.3 `OTHER` packages,
+with the data classification retained in provenance. Relationships express
+repository containment. The original scanner components and relationships
+remain intact. Unpopulated gitlinks are recorded as references. Preparation currently refuses
+populated submodules; combining their separate inventories is not supported. Repository rules are not applied to container
+exports, where actual image bytes must establish inclusion.
+
 This is a provenance preparation step, not a complete repository/container
-licence inventory. Bundled-data supplements, original installed notices and
+licence inventory. Original installed notices, reviewed mixed-data terms and
 complete build-source evidence still need their own generation inputs. The
 prepared exports can be passed to `raptor-sca --sbom` like other supported SBOMs.
 
