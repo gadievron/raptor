@@ -167,7 +167,11 @@ def test_runtime_offline_never_installs_local_pack_dependencies(tmp_path, monkey
     result = runner._run_local_pack('python', tmp_path / 'db', tmp_path / 'pack', tmp_path / 'out',
                                     suite_name='local', sarif_name='out.sarif', label='offline')
     assert not result.success
-    assert len(commands) == 1 and commands[0][1:3] == ['database', 'analyze']
+    assert len(commands) == 1
+    # A trusted temporary-directory wrapper may precede the CLI. Offline
+    # mode must still issue only database analysis, never pack installation.
+    cli_index = commands[0].index(runner.codeql_cli)
+    assert commands[0][cli_index + 1:cli_index + 3] == ['database', 'analyze']
 
 
 def test_forged_bundle_metadata_cannot_override_repository_pin(setup, tmp_path):

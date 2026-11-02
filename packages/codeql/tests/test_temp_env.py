@@ -91,3 +91,16 @@ def test_steering_uses_current_python_if_system_python_is_absent(readonly_tmp, m
                             capture_output=True, text=True, timeout=5)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == 'executed'
+
+
+def test_scoped_query_steers_java_even_with_writable_system_tmp(tmp_path, monkeypatch):
+    monkeypatch.setattr(os, 'statvfs', lambda _: SimpleNamespace(f_flag=0))
+    monkeypatch.setattr(RaptorConfig, 'get_safe_env', staticmethod(lambda: {'TMPDIR': str(tmp_path)}))
+    command = [sys.executable, '-I', '-S', '-c', 'import os; print(os.environ["_JAVA_OPTIONS"])']
+    wrapped = temporary_command(command, scoped=True)
+    assert wrapped[0] == sys.executable
+    selected = tmp_path/'private'
+    selected.mkdir()
+    result = subprocess.run(wrapped, env={'TMPDIR': str(selected)}, capture_output=True, text=True, timeout=5)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == '-Djava.io.tmpdir='+str(selected)
