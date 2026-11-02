@@ -306,7 +306,7 @@ def observe_paired(
     target_name = target_binary.name[:15]  # TASK_COMM_LEN truncation
 
     frida_cmd = [
-        sys.executable, "-m", "packages.frida.cli",
+        sys.executable, "-P", "-m", "packages.frida.cli",
         "--target", target_name,
         "--template", template,
         "--duration", str(max(1, int(duration_sec))),

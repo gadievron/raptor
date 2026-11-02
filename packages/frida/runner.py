@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import signal
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -455,6 +456,23 @@ def _import_frida():
         import frida  # type: ignore[import-untyped, import-not-found]
         return frida
     except ImportError as e:
+        # The explicit unsafe-attach route bypasses sandboxed.main(), which
+        # normally adds bindings from an installed pipx/venv CLI. Discover
+        # them without running package code in the discovery subprocess.
+        from .sandboxed import _find_frida_site
+        site = _find_frida_site()
+        if site and site not in sys.path:
+            sys.path.append(site)
+            loaded = False
+            try:
+                import frida  # type: ignore[import-untyped, import-not-found]
+                loaded = True
+                return frida
+            except ImportError:
+                pass
+            finally:
+                if not loaded:
+                    sys.path.remove(site)
         msg = (
             "frida-python not installed. Install via: "
             "uv tool install frida-tools"

@@ -47,17 +47,13 @@ def _fresh_cache(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.fixture()
 def scratch_import_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Make ``tmp_path`` importable by BOTH the test process and any
-    probe child: sys.path for in-process imports, PYTHONPATH for the
-    spawned interpreter (the probe child inherits the parent env).
+    """Explicitly load trusted fixture modules AFTER safe interpreter startup.
+
+    Production probes must ignore ambient PYTHONPATH, so test hazards are
+    installed through this test-only source override rather than env.
     """
-    monkeypatch.syspath_prepend(str(tmp_path))
-    existing = os.environ.get("PYTHONPATH")
-    joined = (
-        str(tmp_path) if not existing
-        else str(tmp_path) + os.pathsep + existing
-    )
-    monkeypatch.setenv("PYTHONPATH", joined)
+    monkeypatch.setattr(_availability, '_CHILD_PROBE_SOURCE',
+        f"import sys; sys.path.insert(0, {str(tmp_path)!r}); " + _availability._CHILD_PROBE_SOURCE)
     return tmp_path
 
 
@@ -80,8 +76,10 @@ def test_probe_survives_import_that_aborts_the_process(
     maps the child's signal death to False and the caller survives.
     """
     mod = scratch_import_path / "raptor_scratch_abort_on_import.py"
-    mod.write_text("import os\nos.abort()\n")
+    mod.write_text("import os, resource\nresource.setrlimit(resource.RLIMIT_CORE, (0, 0))\n"
+                   "open(__file__ + 'entered', 'w').close()\nos.abort()\n")
     assert _probe("scratch-abort", "raptor_scratch_abort_on_import") is False
+    assert Path(str(mod)+"entered").exists(), "probe did not enter aborting module"
     # Still alive to assert anything at all — that IS the fix.
     assert _probe("scratch-json2", "json") is True
 
@@ -92,11 +90,12 @@ def test_probe_hung_import_times_out_to_false(
     """A hung import must not hang the run: the probe child is
     bounded and the timeout reads as unavailable."""
     mod = scratch_import_path / "raptor_scratch_sleep_on_import.py"
-    mod.write_text("import time\ntime.sleep(600)\n")
+    mod.write_text("import time\nopen(__file__ + 'entered', 'w').close()\ntime.sleep(600)\n")
     monkeypatch.setattr(_availability, "_PROBE_TIMEOUT_S", 2.0)
     t0 = time.monotonic()
     assert _probe("scratch-sleep", "raptor_scratch_sleep_on_import") is False
     assert time.monotonic() - t0 < 30.0
+    assert Path(str(mod)+"entered").exists(), "probe did not enter hanging module"
 
 
 def test_probe_memoizes_no_second_child(
@@ -130,6 +129,7 @@ def test_probe_child_module_rides_as_argv() -> None:
 
     def _spy_run(cmd: list[str], **kwargs: object):
         captured["cmd"] = cmd
+        assert kwargs["cwd"] == os.sep
         return real_run(cmd, **kwargs)
 
     with pytest.MonkeyPatch.context() as mp:
@@ -137,6 +137,16 @@ def test_probe_child_module_rides_as_argv() -> None:
         assert _probe("scratch-argv", "json") is True
     cmd = captured["cmd"]
     assert cmd == [
-        sys.executable, "-c", _availability._CHILD_PROBE_SOURCE, "json",
+        sys.executable, "-E", "-c", _availability._CHILD_PROBE_SOURCE, "json",
     ]
     assert "json" not in _availability._CHILD_PROBE_SOURCE
+
+
+def test_probe_ignores_target_module_and_pythonpath(tmp_path, monkeypatch):
+    marker = tmp_path/'executed'
+    (tmp_path/'z3.py').write_text(
+        f'from pathlib import Path\nPath({str(marker)!r}).write_text("bad")\n')
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv('PYTHONPATH', str(tmp_path))
+    _availability._import_probe_child('z3', 'z3')
+    assert not marker.exists()
