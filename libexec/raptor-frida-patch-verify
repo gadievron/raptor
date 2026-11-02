@@ -60,6 +60,8 @@ export RAPTOR_DIR
 # PYTHONPATH: prepend RAPTOR_DIR only — do NOT inherit parent PYTHONPATH
 # to prevent module injection from untrusted parent processes.
 export PYTHONPATH="$RAPTOR_DIR"
+# -P below removes cwd from module discovery while retaining this pinned
+# PYTHONPATH and installed user packages. Keep cwd for relative CLI inputs.
 
 # ─── short-circuit help (no lifecycle dir for a usage query) ────────
 for a in "$@"; do
@@ -68,7 +70,7 @@ for a in "$@"; do
             break
             ;;
         -h|--help)
-            exec python3 -m packages.frida.patch_oracle "$@"
+            exec python3 -P -m packages.frida.patch_oracle "$@"
             ;;
     esac
 done
@@ -150,9 +152,9 @@ trap '_on_signal HUP'  HUP
 
 set +e
 if [ "$CHILD_GROUP" -eq 1 ]; then
-    setsid python3 -m packages.frida.patch_oracle "${PASS_ARGS[@]}" &
+    setsid python3 -P -m packages.frida.patch_oracle "${PASS_ARGS[@]}" &
 else
-    python3 -m packages.frida.patch_oracle "${PASS_ARGS[@]}" &
+    python3 -P -m packages.frida.patch_oracle "${PASS_ARGS[@]}" &
 fi
 CHILD_PID=$!
 wait $CHILD_PID

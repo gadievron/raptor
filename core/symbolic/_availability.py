@@ -23,7 +23,6 @@ return the cached bool without re-attempting.
 from __future__ import annotations
 
 import logging
-import os
 import subprocess
 import sys
 import tempfile
@@ -78,31 +77,14 @@ def _import_probe_child(name: str, module: str) -> bool:
         raise ValueError(
             f"_import_probe_child: module {module!r} not in allowlist"
         )
-    env: dict[str, str] = dict(os.environ)
-    # Propagate this process's EFFECTIVE temp dir: under the symex
-    # sandbox (core.symbolic._isolate) the parent pins
-    # ``tempfile.tempdir`` to its private Landlock write grant, and
-    # an in-process pin does not cross exec on its own. pyvex writes
-    # its ffi-parser cache to the temp dir at import time, so a
-    # probe child that fell back to the (write-denied) shared temp
-    # dir would misreport angr as unavailable inside the sandbox.
-    env["TMPDIR"] = tempfile.gettempdir()
-    cmd: list[str] = [sys.executable, "-c", _CHILD_PROBE_SOURCE, module]
+    from core.security.python_probe import run_python_probe
     try:
-        # All three stdio channels are pipes, never subprocess.DEVNULL:
-        # DEVNULL opens /dev/null O_RDWR — a write-open, which the
-        # symex sandbox's Landlock ruleset (core.symbolic._isolate)
-        # denies outside the child's private temp grant. This probe
-        # runs inside those sandboxed children (availability_gate),
-        # so its plumbing must carry no filesystem access at all.
-        # ``input=b""`` gives the child an immediately-closed stdin.
-        proc = subprocess.run(
-            cmd,
-            input=b"",
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=env,
-            timeout=_PROBE_TIMEOUT_S,
+        # Preserve the worker's effective scratch grant, but never its full
+        # environment or target cwd. Pipes avoid opening /dev/null in a
+        # read-restricted symbolic worker.
+        proc = run_python_probe(
+            sys.executable, _CHILD_PROBE_SOURCE, module,
+            timeout=_PROBE_TIMEOUT_S, tmpdir=tempfile.gettempdir(),
         )
     except subprocess.TimeoutExpired:
         log.debug(

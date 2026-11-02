@@ -24,14 +24,15 @@ import subprocess
 import sys
 from pathlib import Path
 
-_KNOWN_PYTHON_PREFIXES = ("/usr/", "/opt/", "/home/", "/nix/")
+_KNOWN_PYTHON_PREFIXES = ("/usr/", "/opt/", "/home/", "/nix/", "/Users/", "/Library/")
 
 
 def _find_frida_site() -> str | None:
     """Locate frida's site-packages directory.
 
-    Probes sys.executable first, then follows the ``frida`` CLI
-    shebang (covers pipx / venv installs). Returns the site-packages
+    Searches sys.executable first, then follows the ``frida`` CLI
+    shebang (covers pipx / venv installs), without initializing frida.
+    Returns the site-packages
     directory, or None if frida is not installed.
     """
     import shutil
@@ -40,20 +41,17 @@ def _find_frida_site() -> str | None:
         if not python or not os.path.isfile(python):
             return None
         try:
-            # Sanitised env (the codeql version-probe idiom): a bare
-            # python probe would import through the shell's
-            # PYTHONPATH / PYTHONSTARTUP.
-            from core.security.env_sanitisation import (
-                safe_subprocess_env,
-            )
-            r = subprocess.run(
-                [python, "-c",
-                 "import frida; print(frida.__file__)"],
-                capture_output=True, text=True, timeout=5,
-                env=safe_subprocess_env(strip_target_markers=True),
+            from core.security.python_probe import run_python_probe
+            # Locate the installed package without executing its __init__ or
+            # native extension in this unsandboxed discovery process.
+            r = run_python_probe(
+                python,
+                "import importlib.util; s = importlib.util.find_spec('frida'); "
+                "print(s.origin if s and s.submodule_search_locations and s.origin else '')",
+                timeout=5,
             )
             if r.returncode == 0 and r.stdout.strip():
-                site = Path(r.stdout.strip()).parent.parent
+                site = Path(os.fsdecode(r.stdout).strip()).resolve().parent.parent
                 if site.is_dir():
                     return str(site)
         except (OSError, subprocess.SubprocessError):

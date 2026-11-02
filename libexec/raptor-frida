@@ -67,6 +67,8 @@ export RAPTOR_DIR
 # PYTHONPATH: prepend RAPTOR_DIR only — do NOT inherit parent PYTHONPATH
 # to prevent module injection from untrusted parent processes.
 export PYTHONPATH="$RAPTOR_DIR"
+# -P below removes cwd from module discovery while retaining this pinned
+# PYTHONPATH and installed user packages. Keep cwd for relative CLI inputs.
 
 # ─── short-circuit query modes (no target / lifecycle needed) ───────
 # --list-templates and -h/--help just print and exit; running them
@@ -78,7 +80,7 @@ for a in "$@"; do
             break
             ;;
         --list-templates|-h|--help)
-            exec python3 -m packages.frida.cli "$@"
+            exec python3 -P -m packages.frida.cli "$@"
             ;;
     esac
 done
@@ -298,17 +300,13 @@ _spawn() {
 set +e
 if [ "$UNSAFE_ATTACH" -eq 1 ]; then
     echo "raptor-frida: WARNING --unsafe-attach: running WITHOUT sandbox" >&2
-    # Strip --unsafe-attach from PASS_ARGS before forwarding to CLI
-    FILTERED_ARGS=()
-    for a in "${PASS_ARGS[@]}"; do
-        [ "$a" = "--unsafe-attach" ] || FILTERED_ARGS+=("$a")
-    done
-    _spawn python3 -m packages.frida.cli "${FILTERED_ARGS[@]}"
+    # The CLI accepts this flag and records the explicit bypass in metadata.
+    _spawn python3 -P -m packages.frida.cli "${PASS_ARGS[@]}"
 else
     SANDBOX_ARGS=("--out" "$OUT")
     [ "$IS_SPAWN" -eq 1 ] && SANDBOX_ARGS+=("--spawn")
-    _spawn python3 -m packages.frida.sandboxed "${SANDBOX_ARGS[@]}" -- \
-        python3 -m packages.frida.cli "${PASS_ARGS[@]}"
+    _spawn python3 -P -m packages.frida.sandboxed "${SANDBOX_ARGS[@]}" -- \
+        python3 -P -m packages.frida.cli "${PASS_ARGS[@]}"
 fi
 wait $CHILD_PID
 RC=$?
