@@ -130,6 +130,51 @@ class TestAnchorFileMode(unittest.TestCase):
                               "https://bar.co.uk/x")
             self.assertEqual(rc, 2)
 
+    def test_shared_hosting_unrelated_tenants_blocked_and_subdomains_allowed(self):
+        """Multi-tenant PSL suffixes (surge.sh, up.railway.app, s3.amazonaws.com)
+        must isolate unrelated tenants while allowing subdomains of the
+        anchored tenant."""
+        cases = [
+            (
+                "https://tenant-a.surge.sh/report",
+                "https://cdn.tenant-a.surge.sh/asset.js",
+                "https://tenant-b.surge.sh/exfil",
+                "https://surge.sh/",
+            ),
+            (
+                "https://app-a.up.railway.app/bug",
+                "https://api.app-a.up.railway.app/v1",
+                "https://app-b.up.railway.app/exfil",
+                "https://up.railway.app/",
+            ),
+            (
+                "https://bucket-a.s3.amazonaws.com/crash.dmp",
+                "https://sub.bucket-a.s3.amazonaws.com/part",
+                "https://bucket-b.s3.amazonaws.com/steal",
+                "https://s3.amazonaws.com/",
+            ),
+        ]
+        for anchor_url, allowed_sub, unrelated_tenant, bare_suffix in cases:
+            with self.subTest(anchor=anchor_url), TemporaryDirectory() as tmp:
+                anchor = self._anchor(tmp, anchor_url)
+                rc, err = _run_hook(["--anchor-file", str(anchor)], allowed_sub)
+                self.assertEqual(rc, 0, f"{allowed_sub} should be allowed: {err}")
+                rc, _ = _run_hook(["--anchor-file", str(anchor)], unrelated_tenant)
+                self.assertEqual(rc, 2, f"{unrelated_tenant} must be blocked")
+                rc, _ = _run_hook(["--anchor-file", str(anchor)], bare_suffix)
+                self.assertEqual(rc, 2, f"{bare_suffix} must be blocked")
+
+    def test_unknown_suffix_remains_exact_host_only(self):
+        """Default-rule suffixes not in the PSL do not grant sibling access."""
+        with TemporaryDirectory() as tmp:
+            anchor = self._anchor(tmp, "https://a.internal.invalid/report")
+            rc, _ = _run_hook(["--anchor-file", str(anchor)],
+                              "https://a.internal.invalid/other")
+            self.assertEqual(rc, 0)
+            rc, _ = _run_hook(["--anchor-file", str(anchor)],
+                              "https://b.internal.invalid/other")
+            self.assertEqual(rc, 2)
+
     def test_extra_host_line_allowed_and_logged(self):
         with TemporaryDirectory() as tmp:
             anchor = self._anchor(
