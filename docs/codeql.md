@@ -595,3 +595,33 @@ The native XXE suite executes the shared production logic. CI separately
 type-checks its reporting wrapper with `codeql query compile --check-only`
 to avoid a duplicate optimizer run; `xxe-production-check.log` is included
 in the Java job's artifacts.
+
+### Curated C/C++ narrowing casts
+
+The integer-truncation query compares the range immediately before each
+explicit narrowing cast with that destination type's bounds, including
+signedness and typedefs. A guard that fits `int` does not establish safety
+for `signed char`. Earlier bounded values do not suppress a later cast after
+arithmetic or reassignment. Boolean conversions are excluded. Memory-risk annotations follow the converted
+cast result into allocations and buffer lengths.
+
+This remains a wide-function-return to explicit-cast query, rather than a
+complete integer-conversion analysis. Range analysis can be conservative;
+unknown bounds remain reportable. Its floating-point bounds need strict
+interior checks at very wide integer endpoints, so valid 128-to-64-bit
+endpoint checks can remain reportable instead of rounded bounds hiding a
+truncation. Same-width signedness changes and implicit casts remain outside
+this rule's scope.
+
+The native C/C++ tests use self-contained fixed-target declarations for the
+standalone test extractor. CI also compiles the same case bodies with real
+system headers. The separate C/C++ job runs on the full nightly and can be
+selected without the Java or slow/integration jobs:
+
+```sh
+gh workflow run nightly.yml --ref main -f suite=cpp-truncation
+```
+
+Results, expected/actual rows and the production-wrapper type-check log are
+uploaded as `focused-codeql-cpp-truncation-results`. The query logic is
+shared with the native tests; CI type-checks the thin reporting wrapper.

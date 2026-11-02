@@ -136,6 +136,13 @@ SUBSYSTEMS: dict[str, tuple[str, ...]] = {
         "tests/java/**/*.java",
         "tests/java/**/*.ql",
         "tests/java/**/*.expected",
+        # Native C/C++ tests use the same query/expected convention.
+        "tests/cpp/qlpack.yml",
+        "tests/cpp/.gitignore",
+        "tests/cpp/**/*.c",
+        "tests/cpp/**/*.cpp",
+        "tests/cpp/**/*.ql",
+        "tests/cpp/**/*.expected",
     ),
     "engine/negative_controls": (
         # Flat corpus of intentionally-clean sources, per language.

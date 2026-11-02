@@ -1,0 +1,6 @@
+name: raptor/cpp-query-tests
+dependencies:
+  raptor/cpp-custom-queries: "*"
+  codeql/cpp-all: "*"
+extractor: cpp
+tests: .

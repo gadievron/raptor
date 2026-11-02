@@ -44,6 +44,7 @@ on:
           - semgrep
           - java-log
           - scan-and-java-log
+          - cpp-truncation
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.suite || 'full' }}
@@ -296,7 +297,7 @@ jobs:
 
   java-log-query:
     name: Java query regressions
-    if: github.event_name != 'workflow_dispatch' || inputs.suite != 'semgrep'
+    if: github.event_name != 'workflow_dispatch' || inputs.suite == 'full' || inputs.suite == 'java-log' || inputs.suite == 'scan-and-java-log'
     # Separate tool-backed regression: no optional-tool skip and no added
     # time or memory contention in the existing slow/integration job.
     runs-on: ubuntu-latest
@@ -407,6 +408,108 @@ jobs:
             ${{ runner.temp }}/java-log-tests/tests/xxe/*.expected
             ${{ runner.temp }}/java-log-tests/production-compile.log
             ${{ runner.temp }}/java-log-tests/xxe-production-check.log
+          retention-days: 14
+          if-no-files-found: ignore
+
+  cpp-truncation-query:
+    name: C/C++ truncation query regression
+    if: github.event_name != 'workflow_dispatch' || inputs.suite == 'full' || inputs.suite == 'cpp-truncation'
+    # Independent of the Java and slow/integration jobs. Reuse the pinned
+    # CLI cache; keep C/C++ libraries and native tests in this job.
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Restore CodeQL CLI
+        id: codeql_cli
+        continue-on-error: true  # Cache availability must not gate execution.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
+        with:
+          path: ${{ runner.temp }}/java-log-codeql
+          key: java-log-codeql-${{ runner.os }}-${{ runner.arch }}-2.23.8-v1
+
+      - name: Install CodeQL CLI
+        if: steps.codeql_cli.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 \
+            https://github.com/github/codeql-cli-binaries/releases/download/v2.23.8/codeql-linux64.zip \
+            --output "$RUNNER_TEMP/codeql-linux64.zip"
+          printf '%s  %s\n' \
+            e61bc8aa8d86d45acd9d1c36629a12bbfb3365cd07a31666a2ebc91c6a1940b2 \
+            "$RUNNER_TEMP/codeql-linux64.zip" | sha256sum --check
+          mkdir -p "$RUNNER_TEMP/java-log-codeql"
+          unzip -q -o "$RUNNER_TEMP/codeql-linux64.zip" -d "$RUNNER_TEMP/java-log-codeql"
+
+      - name: Save CodeQL CLI
+        if: steps.codeql_cli.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
+        with:
+          path: ${{ runner.temp }}/java-log-codeql
+          key: java-log-codeql-${{ runner.os }}-${{ runner.arch }}-2.23.8-v1
+
+      - name: Checkout matching CodeQL C/C++ libraries
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: github/codeql
+          ref: 28b6aa8616a393ebb45186e3ba4df004a0f3ef4e  # codeql-cli/v2.23.8
+          path: .codeql-cpp-libraries
+          sparse-checkout: |
+            cpp/ql/lib
+            shared
+          persist-credentials: false
+
+      - name: Compile fixtures with system headers
+        run: |
+          set -euo pipefail
+          gcc --version
+          g++ --version
+          mkdir -p "$RUNNER_TEMP/cpp-truncation"
+          # Without __CODEQL_TEST__, the fixtures use system headers.
+          gcc -c engine/codeql/tests/cpp/truncation/TruncationCases.c \
+            -o "$RUNNER_TEMP/cpp-truncation/c.o"
+          g++ -c engine/codeql/tests/cpp/truncation/TruncationCases.cpp \
+            -o "$RUNNER_TEMP/cpp-truncation/cpp.o"
+
+      - name: Run C/C++ truncation query regression
+        run: |
+          set -euo pipefail
+          cli="$RUNNER_TEMP/java-log-codeql/codeql/codeql"
+          "$cli" version
+          cp -R engine/codeql/queries/cpp "$RUNNER_TEMP/cpp-truncation/queries"
+          cp -R engine/codeql/tests/cpp "$RUNNER_TEMP/cpp-truncation/tests"
+          "$cli" test run --threads=2 --ram=4096 --format=json \
+            --search-path="$GITHUB_WORKSPACE/.codeql-cpp-libraries" \
+            --additional-packs="$RUNNER_TEMP/cpp-truncation/queries:$RUNNER_TEMP/cpp-truncation/tests" \
+            "$RUNNER_TEMP/cpp-truncation/tests/truncation" \
+            > "$RUNNER_TEMP/cpp-truncation/results.json"
+
+      - name: Check production truncation query wrapper
+        run: |
+          set -euo pipefail
+          # The native test executes the shared production flow. Avoid
+          # repeating optimization just for the thin reporting wrapper.
+          "$RUNNER_TEMP/java-log-codeql/codeql/codeql" query compile --check-only --threads=2 --ram=4096 \
+            --search-path="$GITHUB_WORKSPACE/.codeql-cpp-libraries" \
+            --additional-packs="$RUNNER_TEMP/cpp-truncation/queries" \
+            "$RUNNER_TEMP/cpp-truncation/queries/IntegerTruncationInCast.ql" \
+            2>&1 | tee "$RUNNER_TEMP/cpp-truncation/production-check.log"
+
+      - name: Upload C/C++ query test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: focused-codeql-cpp-truncation-results
+          path: |
+            ${{ runner.temp }}/cpp-truncation/results.json
+            ${{ runner.temp }}/cpp-truncation/tests/truncation/*.actual
+            ${{ runner.temp }}/cpp-truncation/tests/truncation/*.expected
+            ${{ runner.temp }}/cpp-truncation/production-check.log
           retention-days: 14
           if-no-files-found: ignore
 

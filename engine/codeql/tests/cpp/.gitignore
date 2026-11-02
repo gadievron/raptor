@@ -1,0 +1,5 @@
+# Native CodeQL test/compiler output; expected rows remain tracked.
+*.actual
+*.testproj/
+*.qlo
+*.qlx
