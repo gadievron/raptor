@@ -45,7 +45,7 @@ def canonical_name(value: str) -> str:
     return re.sub(r"[-_.]+", "-", value).lower()
 
 
-def install(site_packages: Path, evidence: Path) -> int:
+def install(site_packages: Path, evidence: Path, *, skip_absent: bool = False) -> int:
     manifest = json.loads(read_regular(regular_path(evidence, "provenance.json")))
     if manifest.get("schema_version") != 1:
         raise ValueError("unsupported evidence manifest")
@@ -56,6 +56,13 @@ def install(site_packages: Path, evidence: Path) -> int:
         if not directory.endswith(".dist-info"):
             raise ValueError("expected a dist-info metadata directory")
         package = regular_path(site_packages, directory)
+        if skip_absent and not package.exists():
+            for candidate in site_packages.glob("*.dist-info/METADATA"):
+                installed = BytesParser().parsebytes(read_regular(regular_path(site_packages, str(candidate.relative_to(site_packages)))))
+                if any(canonical_name(name.strip()) == canonical_name(entry["name"])
+                       for name in installed.get_all("Name", [])):
+                    raise ValueError("installed distribution changed; refresh notice evidence")
+            continue
         metadata = BytesParser().parsebytes(read_regular(regular_path(package, "METADATA")))
         license_header = entry.get("license_header", "License")
         if license_header not in {"License", "License-Expression"}:
@@ -72,7 +79,11 @@ def install(site_packages: Path, evidence: Path) -> int:
         if (canonical_name(values["Name"]), values["Version"], values[license_header]) != (
             canonical_name(entry["name"]), entry["version"], entry["license"],
         ):
-            raise ValueError("installed distribution changed; review notice evidence")
+            raise ValueError(
+                "installed distribution changed; refresh notice evidence with "
+                f"python .devcontainer/refresh-python-notices.py --package {entry['name']} "
+                f"--version {values['Version']}"
+            )
         data = read_regular(regular_path(evidence, entry["notice_file"]))
         if hashlib.sha256(data).hexdigest() != entry["sha256"]:
             raise ValueError("upstream notice checksum mismatch")
@@ -95,9 +106,11 @@ if __name__ == "__main__":
                         default=Path(sysconfig.get_paths()["purelib"]))
     parser.add_argument("--evidence", type=Path,
                         default=Path("/usr/share/doc/raptor-python-notices"))
+    parser.add_argument("--skip-absent", action="store_true",
+                        help="ignore recipes for distributions removed from this environment")
     args = parser.parse_args()
     try:
-        count = install(args.site_packages, args.evidence)
+        count = install(args.site_packages, args.evidence, skip_absent=args.skip_absent)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         parser.exit(1, f"Python notice installation failed: {exc}\n")
     print(f"Retained {count} reviewed upstream Python notice files")

@@ -51,6 +51,22 @@ class PythonNoticeTests(unittest.TestCase):
             self.assertEqual((self.package / "METADATA").read_bytes(), self.metadata)
             self.assertEqual((self.package / "RECORD").read_bytes(), b"original wheel inventory\n")
 
+    def test_removed_distribution_can_be_skipped(self):
+        shutil.rmtree(self.package)
+        self.assertEqual(INSTALLER.install(self.site, self.evidence, skip_absent=True), 0)
+        with self.assertRaises(FileNotFoundError):
+            self.install()
+
+    def test_skip_absent_does_not_hide_version_mismatch(self):
+        self.package.rename(self.site / "other-version.dist-info")
+        with self.assertRaisesRegex(ValueError, "distribution changed"):
+            INSTALLER.install(self.site, self.evidence, skip_absent=True)
+
+    def test_present_distribution_still_requires_valid_metadata(self):
+        (self.package / "METADATA").unlink()
+        with self.assertRaises(FileNotFoundError):
+            INSTALLER.install(self.site, self.evidence, skip_absent=True)
+
     def test_changed_identity_requires_review(self):
         for header, value in [("Name", "other-project"), ("Version", "99.0.0"), (self.license_header, "other licence")]:
             with self.subTest(header=header):
