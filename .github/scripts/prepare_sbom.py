@@ -65,7 +65,54 @@ def local_project(artifact: dict, project: dict) -> bool:
             and any(location.get("path") in {"uv.lock", "/uv.lock"} for location in artifact.get("locations", [])))
 
 
-def plan(artifact: dict, candidates: dict, project: dict | None) -> dict | None:
+def _python_name(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _https_url(value: str) -> bool:
+    if not isinstance(value, str) or any(ord(c) < 33 for c in value):
+        return False
+    parsed = urllib.parse.urlsplit(value)
+    return parsed.scheme == "https" and bool(parsed.hostname) and not parsed.username and not parsed.password and not parsed.fragment
+
+
+def locked_sources(lock: dict) -> dict[tuple[str, str, str], dict]:
+    """Retain lock-declared source archives; no download/build verification."""
+    packages = lock.get("package")
+    if not isinstance(packages, list):
+        raise ValueError("lockfile package inventory is unavailable")
+    entries = {}
+    for package in packages:
+        if not isinstance(package, dict) or not isinstance(package.get("source"), dict):
+            raise ValueError("invalid lockfile package source")
+        source = package["source"]
+        if "registry" not in source:
+            continue
+        name, version, registry = package.get("name"), package.get("version"), source["registry"]
+        if not isinstance(name, str) or not name or not isinstance(version, str) or not version or not _https_url(registry):
+            raise ValueError("invalid locked registry identity")
+        key = _python_name(name), version, registry
+        if key in entries:
+            raise ValueError("duplicate locked registry identity")
+        entry = {"name": name, "version": version, "registry": registry}
+        if "sdist" in package:
+            archive = package["sdist"]
+            if not isinstance(archive, dict) or not _https_url(archive.get("url")) or not isinstance(archive.get("hash"), str) or not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", archive["hash"]):
+                raise ValueError("invalid locked source archive URL or SHA-256")
+            entry["source"] = {"type": "distribution", "url": archive["url"],
+                               "status": "lockfile_source_archive_content_unverified",
+                               "registry": registry,
+                               "hashes": [{"alg": "SHA-256", "content": archive["hash"][7:].lower()}]}
+        entries[key] = entry
+    return entries
+
+
+def root_lock_package(artifact: dict) -> bool:
+    return artifact.get("type") == "python" and any(
+        location.get("path") in {"uv.lock", "/uv.lock"} for location in artifact.get("locations", []))
+
+
+def plan(artifact: dict, candidates: dict, project: dict | None, locked: dict | None = None) -> dict | None:
     kind, name, version = (artifact.get(k) for k in ("type", "name", "version"))
     metadata = artifact.get("metadata") or {}
     result = {"id": artifact["id"], "name": name, "version": version,
@@ -91,6 +138,14 @@ def plan(artifact: dict, candidates: dict, project: dict | None) -> dict | None:
                 result["purl"] += "?arch=" + urllib.parse.quote(arch, safe="")
             result["origin"] = "https://deb.nodesource.com"
         result["gaps"].append("exact vendor source and build correspondence unavailable; do not use Debian source")
+    if locked is not None and root_lock_package(artifact) and not (project and local_project(artifact, project)):
+        entry = locked.get((_python_name(name), version, metadata.get("index", "")))
+        if entry is None:
+            result["gaps"].append("root-lock package identity/origin does not match the supplied lockfile")
+        elif "source" not in entry:
+            result["gaps"].append("lockfile declares no source archive for this package version")
+        else:
+            result["sources"].append(deepcopy(entry["source"]))
     key = kind, name, version
     candidate = candidates.get(key)
     # An nvm pin is useful only after its upstream origin is independently identified.
@@ -119,12 +174,16 @@ def _properties(component: dict, record: dict) -> None:
         props.append({"name": "raptor:provenance:gap", "value": gap})
     refs = component.setdefault("externalReferences", [])
     for source in record["sources"]:
-        refs.append({"type": source["type"], "url": source["url"], "comment": source["status"]})
-        refs.append({"type": "license", "url": source["licence_url"], "comment": source["status"]})
+        reference = {"type": source["type"], "url": source["url"], "comment": source["status"]}
+        if source.get("hashes"):
+            reference["hashes"] = deepcopy(source["hashes"])
+        refs.append(reference)
+        if source.get("licence_url"):
+            refs.append({"type": "license", "url": source["licence_url"], "comment": source["status"]})
         props.append({"name": "raptor:provenance:source-status", "value": source["status"]})
 
 
-def prepare(native: dict, cdx: dict, spdx: dict, manifest: dict, project: dict | None = None) -> tuple[dict, dict, dict]:
+def prepare(native: dict, cdx: dict, spdx: dict, manifest: dict, project: dict | None = None, lock: dict | None = None) -> tuple[dict, dict, dict]:
     if native.get("schema", {}).get("version", "").split(".", 1)[0] != "16":
         raise ValueError("expected Syft JSON schema 16.x")
     if cdx.get("bomFormat") != "CycloneDX" or cdx.get("specVersion") != "1.5" or spdx.get("spdxVersion") != "SPDX-2.3":
@@ -136,6 +195,9 @@ def prepare(native: dict, cdx: dict, spdx: dict, manifest: dict, project: dict |
         raise ValueError("duplicate Syft package identity")
     if project and sum(local_project(a, project) for a in artifacts) != 1:
         raise ValueError("native inventory does not identify exactly one local RAPTOR project")
+    if lock is not None and project is None:
+        raise ValueError("lock source enrichment requires repository provenance")
+    locked = locked_sources(lock) if lock is not None else None
     candidates = source_entries(manifest)
     cdx, spdx = deepcopy(cdx), deepcopy(spdx)
     # Keep bom-ref/SPDXID stable: these are occurrence identifiers, not lookup
@@ -177,7 +239,7 @@ def prepare(native: dict, cdx: dict, spdx: dict, manifest: dict, project: dict |
         purls = [r["referenceLocator"] for r in package.get("externalRefs", []) if r.get("referenceType") == "purl"]
         if (component.get("name"), component.get("version", ""), component.get("purl", "")) != (artifact["name"], artifact.get("version", ""), artifact.get("purl", "")) or package.get("name") != artifact["name"] or package.get("versionInfo", "") != artifact.get("version", "") or purls != ([artifact["purl"]] if artifact.get("purl") else []):
             raise ValueError("paired exports conflict with native package identity")
-        record = plan(artifact, candidates, project)
+        record = plan(artifact, candidates, project, locked)
         if record is None:
             continue
         records.append(record)
@@ -204,6 +266,14 @@ def prepare(native: dict, cdx: dict, spdx: dict, manifest: dict, project: dict |
     report = {"version": 1, "packages": records,
               "scope": "identity corrections and source candidates only; not a complete licence/source inventory",
               "gaps": ["original installed licence texts and build-source correspondence remain separate evidence requirements"]}
+    if locked is not None:
+        observed = {(_python_name(a["name"]), a["version"], (a.get("metadata") or {}).get("index", ""))
+                    for a in artifacts if root_lock_package(a)}
+        missing = [entry for key, entry in locked.items() if key not in observed]
+        report["lock_inventory"] = {"expected_packages": len(locked), "matched_packages": len(locked) - len(missing),
+                                    "missing_packages": [{k: e[k] for k in ("name", "version", "registry")} for e in missing]}
+        if missing:
+            raise ValueError("native inventory is missing package identities from the supplied root lockfile")
     return cdx, spdx, report
 
 
@@ -219,7 +289,8 @@ def main() -> None:
     paths = [args.syft, args.cyclonedx, args.spdx, args.provenance]
     loaded = [read_document(p) for p in paths]
     native, cdx, spdx, manifest = [d for d, _ in loaded]
-    project = None
+    project, lock = None, None
+    repo_inputs = []
     if native.get("source", {}).get("name") == REPOSITORY and native.get("source", {}).get("type") == "directory" and not args.repo:
         raise ValueError("RAPTOR directory inventory requires --repo for local-project provenance")
     if args.repo:
@@ -233,19 +304,22 @@ def main() -> None:
             raise ValueError("checkout revision does not match the inventoried repository")
         subprocess.run(["git", "-C", str(args.repo), "diff", "--no-ext-diff", "--no-textconv", "--exit-code", "HEAD", "--", "pyproject.toml", "uv.lock"], check=True, stdout=subprocess.DEVNULL)
         lock_raw = read_capped(args.repo / "uv.lock", MAX_BYTES, raise_on_refusal=True)
-        local = [p for p in tomllib.loads(lock_raw.decode("utf-8")).get("package", [])
+        lock = tomllib.loads(lock_raw.decode("utf-8"))
+        local = [p for p in lock.get("package", [])
                  if (p.get("name"), p.get("version")) == (config["name"], config["version"])]
         if len(local) != 1 or local[0].get("source") not in ({"editable": "."}, {"virtual": "."}):
             raise ValueError("lockfile does not establish a local RAPTOR project")
         project = {"name": config["name"], "version": config["version"], "revision": revision}
-    prepared_cdx, prepared_spdx, report = prepare(native, cdx, spdx, manifest, project)
+        repo_inputs = [{"path": str(args.repo / name), "sha256": hashlib.sha256(raw).hexdigest()}
+                       for name, raw in [("pyproject.toml", config_raw), ("uv.lock", lock_raw)]]
+    prepared_cdx, prepared_spdx, report = prepare(native, cdx, spdx, manifest, project, lock)
     # Refuse malformed retained evidence before creating any output artifacts.
     _read_cyclonedx(prepared_cdx, args.cyclonedx)
     _read_spdx(prepared_spdx, args.spdx)
     outputs = [args.out / name for name in ("sbom.cdx.json", "sbom.spdx.json", "provenance.json")]
     if any(output.exists() for output in outputs) or any(args.out.resolve() == p.parent.resolve() for p in paths):
         raise ValueError("use a fresh output directory; input artifacts must remain unchanged")
-    report["inputs"] = [{"path": str(p), "sha256": digest} for p, (_, digest) in zip(paths, loaded)]
+    report["inputs"] = [{"path": str(p), "sha256": digest} for p, (_, digest) in zip(paths, loaded)] + repo_inputs
     args.out.mkdir(parents=True, exist_ok=True)
     for path, document in zip(outputs, (prepared_cdx, prepared_spdx, report)):
         save_json(path, document)

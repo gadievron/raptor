@@ -209,3 +209,89 @@ def test_occurrence_qualifiers_are_bounded():
     cdx["components"][0]["bom-ref"] = "pkg:pypi/raptor@3.1.0?" + "&".join(f"x{i}=v" for i in range(65))
     with pytest.raises(ValueError):
         mod.prepare(native, cdx, spdx, MANIFEST, PROJECT)
+
+
+
+def archive_fixture():
+    native, cdx, spdx = documents()
+    extra_n, extra_c, extra_s = documents(name="Example_Package", version="1.0", metadata={"index": "https://pypi.org/simple"})
+    extra_n["artifacts"][0]["id"] = "d" * 16
+    extra_c["components"][0]["bom-ref"] = "d" * 16
+    extra_s["packages"][1]["SPDXID"] = "SPDXRef-Package-python-example-" + "d" * 16
+    native["artifacts"] += extra_n["artifacts"]
+    cdx["components"].append(extra_c["components"][0])
+    spdx["packages"].append(extra_s["packages"][1])
+    lock = {"package": [{"name": "example-package", "version": "1.0",
+                         "source": {"registry": "https://pypi.org/simple"},
+                         "sdist": {"url": "https://files.pythonhosted.org/example-1.0.tar.gz", "hash": "sha256:" + "e" * 64}}]}
+    return native, cdx, spdx, lock
+
+
+def test_locked_archives_preserve_binary_hashes_and_download_location():
+    native, cdx, spdx, lock = archive_fixture()
+    cdx["components"][-1]["hashes"] = [{"alg": "SHA-256", "content": "f" * 64}]
+    spdx["packages"][-1]["checksums"] = [{"algorithm": "SHA256", "checksumValue": "f" * 64}]
+    spdx["packages"][-1]["downloadLocation"] = "https://example.org/installed.whl"
+    originals = deepcopy((native, cdx, spdx, lock))
+    c, s, report = mod.prepare(native, cdx, spdx, MANIFEST, PROJECT, lock)
+    assert (native, cdx, spdx, lock) == originals
+    reference = c["components"][-1]["externalReferences"][0]
+    assert reference["url"] == lock["package"][0]["sdist"]["url"]
+    assert reference["hashes"] == [{"alg": "SHA-256", "content": "e" * 64}]
+    assert reference["comment"] == "lockfile_source_archive_content_unverified"
+    assert c["components"][-1]["hashes"] == cdx["components"][-1]["hashes"]
+    assert s["packages"][-1]["checksums"] == spdx["packages"][-1]["checksums"]
+    assert s["packages"][-1]["downloadLocation"] == "https://example.org/installed.whl"
+    assert s["packages"][-1]["licenseDeclared"] == "NOASSERTION"
+    assert '"content": "' + "e" * 64 in s["packages"][-1]["sourceInfo"]
+    assert report["lock_inventory"] == {"expected_packages": 1, "matched_packages": 1, "missing_packages": []}
+
+
+@pytest.mark.parametrize("field,value", [("index", "https://other.example/simple"), ("path", "/nested/uv.lock")])
+def test_source_archive_is_not_borrowed_from_a_different_origin_or_location(field, value):
+    native, cdx, spdx, lock = archive_fixture()
+    if field == "index":
+        native["artifacts"][-1]["metadata"]["index"] = value
+    else:
+        native["artifacts"][-1]["locations"][0]["path"] = value
+    entries = mod.locked_sources(lock)
+    result = mod.plan(native["artifacts"][-1], {}, PROJECT, entries)
+    assert result is None or not result["sources"]
+    with pytest.raises(ValueError, match="missing package identities"):
+        mod.prepare(native, cdx, spdx, MANIFEST, PROJECT, lock)
+
+
+def test_wheel_only_locked_release_has_an_explicit_source_gap():
+    native, cdx, spdx, lock = archive_fixture()
+    del lock["package"][0]["sdist"]
+    c, s, report = mod.prepare(native, cdx, spdx, MANIFEST, PROJECT, lock)
+    record = report["packages"][-1]
+    assert not record["sources"]
+    assert "no source archive" in record["gaps"][0]
+    assert any("no source archive" in p["value"] for p in c["components"][-1]["properties"])
+    assert "no source archive" in s["packages"][-1]["sourceInfo"]
+
+
+@pytest.mark.parametrize("change", [
+    lambda p: p["sdist"].update(hash="sha256:abc"),
+    lambda p: p["sdist"].update(url="file:///tmp/source.tar.gz"),
+    lambda p: p["sdist"].update(url="https://user:password@example.org/source.tar.gz"),
+    lambda p: p["source"].update(registry="http://example.org/simple"),
+    lambda p: p.update(source=None),
+    lambda p: p.update(source="unsupported"),
+])
+def test_invalid_archive_evidence_is_refused(change):
+    native, cdx, spdx, lock = archive_fixture()
+    change(lock["package"][0])
+    with pytest.raises(ValueError):
+        mod.prepare(native, cdx, spdx, MANIFEST, PROJECT, lock)
+
+
+def test_duplicate_and_missing_lock_entries_cannot_look_complete():
+    native, cdx, spdx, lock = archive_fixture()
+    lock["package"].append(deepcopy(lock["package"][0]))
+    with pytest.raises(ValueError, match="duplicate locked"):
+        mod.prepare(native, cdx, spdx, MANIFEST, PROJECT, lock)
+    lock["package"][-1]["version"] = "2.0"
+    with pytest.raises(ValueError, match="missing package identities"):
+        mod.prepare(native, cdx, spdx, MANIFEST, PROJECT, lock)
