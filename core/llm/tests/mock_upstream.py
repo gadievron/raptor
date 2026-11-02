@@ -113,9 +113,11 @@ class MockUpstream:
         self._listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._listener.bind(("127.0.0.1", 0))
         self._listener.listen(64)
+        self._listener.settimeout(0.1)
         self.port = self._listener.getsockname()[1]
         self.base_url = f"http://127.0.0.1:{self.port}"
         self._threads: list[threading.Thread] = []
+        self._clients: set[socket.socket] = set()
         self._accept_thread = threading.Thread(
             target=self._accept_loop, daemon=True,
         )
@@ -125,12 +127,25 @@ class MockUpstream:
 
     def shutdown(self) -> None:
         self._stop.set()
+        # close() alone need not wake accept() in another thread.
+        with contextlib.suppress(OSError):
+            self._listener.shutdown(socket.SHUT_RDWR)
         with contextlib.suppress(OSError):
             self._listener.close()
-        # Handler threads are daemons blocked on client sockets at
-        # most; give them a beat to notice the stop flag.
+        self._accept_thread.join(timeout=2.0)
+        # No more handlers can be added once the accept thread exits.
+        with self._lock:
+            clients = list(self._clients)
+        for conn in clients:
+            with contextlib.suppress(OSError):
+                conn.shutdown(socket.SHUT_RDWR)
+            with contextlib.suppress(OSError):
+                conn.close()
         for t in self._threads:
-            t.join(timeout=1.0)
+            t.join(timeout=2.0)
+        alive = [t.name for t in (self._accept_thread, *self._threads) if t.is_alive()]
+        if alive:
+            raise RuntimeError(f"MockUpstream threads did not stop: {alive}")
 
     def __enter__(self) -> MockUpstream:
         return self
@@ -158,13 +173,20 @@ class MockUpstream:
         while not self._stop.is_set():
             try:
                 conn, _addr = self._listener.accept()
+            except TimeoutError:
+                continue
             except OSError:
+                return
+            if self._stop.is_set():
+                conn.close()
                 return
             self._bump("connections")
             t = threading.Thread(
                 target=self._handle, args=(conn,), daemon=True,
             )
-            self._threads.append(t)
+            with self._lock:
+                self._clients.add(conn)
+                self._threads.append(t)
             t.start()
 
     def _read_request(self, conn: socket.socket) -> bytes | None:
@@ -233,8 +255,8 @@ class MockUpstream:
                 if request is None:
                     return  # orderly client close between requests
                 self._bump("requests_processed")
-                if self.response_delay_s:
-                    time.sleep(self.response_delay_s)
+                if self.response_delay_s and self._stop.wait(self.response_delay_s):
+                    return
                 if self.mode == "no-response-close":
                     conn.close()
                     return
@@ -252,6 +274,8 @@ class MockUpstream:
         finally:
             with contextlib.suppress(OSError):
                 conn.close()
+            with self._lock:
+                self._clients.discard(conn)
 
     def _on_idle_timeout(self, conn: socket.socket) -> None:
         self._bump("condemnations")
