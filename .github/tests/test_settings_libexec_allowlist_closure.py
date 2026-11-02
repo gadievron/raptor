@@ -29,6 +29,7 @@ can rot.
 from __future__ import annotations
 
 import json
+import os
 import re
 import unittest
 from pathlib import Path
@@ -71,8 +72,34 @@ PENDING_OPERATOR_DECISION: dict[str, str] = {}
 
 def _doc_files() -> list[Path]:
     docs = [REPO / "CLAUDE.md"]
-    docs += sorted((REPO / ".claude").rglob("*.md"))
+    claude = REPO / ".claude"
+    for directory, children, names in os.walk(claude):
+        if Path(directory) == claude:
+            # Other checkouts do not define this checkout's permission needs.
+            children[:] = [name for name in children if name != "worktrees"]
+        docs.extend(Path(directory) / name for name in names if name.endswith(".md"))
     return [p for p in docs if p.is_file()]
+
+
+def test_references_exclude_other_worktrees_but_keep_owned_commands(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setitem(globals(), "REPO", tmp_path)
+    (tmp_path / "CLAUDE.md").write_text("checkout instructions\n")
+    own_doc = tmp_path / ".claude" / "skills" / "owned" / "SKILL.md"
+    foreign_doc = tmp_path / ".claude" / "worktrees" / "other" / "CLAUDE.md"
+    for doc, command in ((own_doc, "raptor-owned"),
+                         (foreign_doc, "raptor-foreign")):
+        doc.parent.mkdir(parents=True, exist_ok=True)
+        doc.write_text(f"Run libexec/{command}\n")
+        script = tmp_path / "libexec" / command
+        script.parent.mkdir(exist_ok=True)
+        script.touch()
+    (tmp_path / ".claude" / "settings.json").write_text(
+        json.dumps({"permissions": {"allow": []}}),
+    )
+    assert _referenced_commands() == {"raptor-owned"}
+    assert _referenced_commands() - _allowlisted_commands() == {"raptor-owned"}
 
 
 def _referenced_commands() -> set[str]:
