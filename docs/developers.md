@@ -162,6 +162,84 @@ truth, so read them instead of assuming; that `$HOME`, `/tmp`, or the
 network inside a sandbox are the host's; or that it may bypass
 `core.sandbox` for subprocess work touching untrusted input.
 
+## Writing hermetic tests
+
+A test must pass independently and leave the process ready for the next
+test, including after an assertion, import failure, or timeout. Pytest
+workers reuse processes; xdist does not isolate tests from earlier tests
+on the same worker or from files shared by other workers.
+
+- **Own writable state.** Put homes, registries, caches, output directories,
+  sockets, and configuration under `tmp_path` or a managed temporary
+  directory. Pass explicit paths where supported. Do not discover the
+  operator's active project, credentials, or installed tool cache unless
+  that host integration is the stated, appropriately marked test scope.
+- **Register cleanup before mutation.** Use `monkeypatch`, context managers,
+  or fixture finalizers for environment variables, cwd, globals, logging
+  handlers, signals, and module replacements. Register cleanup immediately
+  after acquiring a resource, before work that can fail; code after a
+  fixture's `yield` does not run if setup fails before reaching it.
+- **Preserve inherited values.** A missing environment key differs from an
+  empty value. A missing `sys.modules` entry differs from an entry set to
+  `None`. Restore the original object when callers may retain references.
+  If production code writes an environment key directly, register that
+  key with monkeypatch before calling it; deleting an already-absent key
+  alone does not register a restoration value.
+- **Isolate CLI execution.** Imported scripts and `main()` calls can change
+  `sys.path`, `sys.argv`, session pins, and logging. Scope both loading and
+  execution where needed. Use a temporary path list rather than inserting
+  a path and later removing the first equal string. Prefer a subprocess
+  when the behavior requires interpreter startup or process-lifetime
+  initialization. Library imports should leave path setup to entry points.
+- **Finish background work.** Stop and join owned threads, shut down
+  executors and servers, and terminate and reap owned children in teardown.
+  A daemon flag does not provide test cleanup. Use events or a readiness
+  handshake instead of sleeps, and report bounded timeout failures with
+  child output. A deadline-calculation test should not start a real worker.
+- **Keep fakes local to the seam.** Patch the consumer's binding rather
+  than changing a shared module such as `threading.Event` for every user.
+  Stub incidental network, paid LLM, JVM, or tool startup when testing a
+  different behavior. Preserve real execution when that boundary is the
+  behavior under test, and use the corresponding integration markers.
+- **Choose stable assertions.** Verify outcomes and bounded work rather
+  than fragile elapsed-time ratios. Include actionable diagnostics for
+  child startup failures and ensure resources are cleaned up on failure.
+
+For example, loading a dispatch script should preserve the caller's path
+object and restore its trust marker:
+
+```python
+import sys
+from unittest.mock import patch
+
+def load_cli(monkeypatch, loader, module):
+    monkeypatch.setenv("_RAPTOR_TRUSTED", "1")
+    with patch.object(sys, "path", sys.path.copy()):
+        loader.exec_module(module)
+    return module
+```
+
+This example scopes import-time path changes only; check `main()` separately
+if it also mutates process state. A module-scoped fixture cannot depend on
+the function-scoped `monkeypatch` fixture: use `pytest.MonkeyPatch.context()`
+with the required lifetime instead.
+
+For a change involving shared state, run the affected tests alone and with
+their related tests in one process. Then exercise randomized order and
+multiple workers, for example:
+
+```bash
+RAPTOR_RANDOMISE_TESTS=123 pytest -q path/to/tests
+RAPTOR_RANDOMISE_TESTS=456 pytest -q -n 4 path/to/tests
+```
+
+Use real test paths and retain a failing seed when reporting a flake.
+Randomization and xdist are useful checks, not proof of isolation. For a
+suspected leak, compare the relevant state before setup and after teardown,
+including object identity or live resources where relevant. Do not hide
+leaks with a blanket teardown reset: clean up at the owning fixture or fix
+the shared helper or library import that causes them.
+
 ## Mechanical gates you will hit
 
 The full control inventory, triggers, and reproduce-locally commands
