@@ -18,6 +18,7 @@ lanes to the script's posture.
 
 from __future__ import annotations
 
+import os
 import re
 import unittest
 from pathlib import Path
@@ -31,8 +32,26 @@ _REQUIRED = ("-nx", "set auto-load off", "set auto-load safe-path /dev/null")
 
 
 def _doc_files() -> list[Path]:
-    return [p for p in sorted((REPO / ".claude").rglob("*.md"))
-            if p.is_file()]
+    docs = []
+    claude = REPO / ".claude"
+    for directory, children, names in os.walk(claude):
+        if Path(directory) == claude:
+            # Other checkouts and their generated output are not our docs.
+            children[:] = [name for name in children if name != "worktrees"]
+        docs.extend(Path(directory) / name for name in names if name.endswith(".md"))
+    return sorted(p for p in docs if p.is_file())
+
+
+def test_doc_scan_excludes_other_worktrees(tmp_path, monkeypatch):
+    monkeypatch.setitem(globals(), "REPO", tmp_path)
+    own_doc = tmp_path / ".claude" / "skills" / "owned" / "SKILL.md"
+    own_doc.parent.mkdir(parents=True)
+    own_doc.write_text("rr replay trace -- -nx -iex 'set auto-load off' "
+                       "-iex 'set auto-load safe-path /dev/null'\n")
+    foreign = tmp_path / ".claude" / "worktrees" / "other" / "docs" / "replay.md"
+    foreign.parent.mkdir(parents=True)
+    foreign.write_text("rr replay trace\n")
+    assert _doc_files() == [own_doc]
 
 
 class RrReplayHardeningTests(unittest.TestCase):
