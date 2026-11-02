@@ -31,7 +31,7 @@ def test_sigterm_in_fork_child_dies_without_postmortem(
     status: dict[str, int] = {}
 
     def fake_sweep(*, samples, git_clone_timeout, sca_timeout,
-                   max_workers, results_sink):
+                   max_workers, results_sink, completed_sink):
         # The handler is installed by run_sweep_and_report before this
         # runs; the forked child inherits it. The child must die from
         # the SIGTERM itself — reaching os._exit(42) would mean the
