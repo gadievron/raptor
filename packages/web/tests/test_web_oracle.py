@@ -214,6 +214,20 @@ def test_markers_shared_between_fuzzer_and_oracle_tiers():
     assert not marker_present("nosuchclass", body)
 
 
+def test_sqli_marker_catches_the_sqlite3_driver_error_code():
+    """Node's `sqlite3` npm driver (e.g. OWASP Juice Shop) reports errors as
+    "SQLITE_ERROR: <detail>", distinct from the Python/C++ `sqlite3::exception`
+    class name already covered — a syntax error from it never matched before."""
+    assert marker_present("sqli", 'SQLITE_ERROR: near "\'%\'": syntax error')
+    assert marker_present("sqli", 'SQLITE_ERROR: near "UNION": syntax error')
+    assert marker_present(
+        "sqli",
+        "SQLITE_ERROR: SELECTs to the left and right of UNION do not have "
+        "the same number of result columns",
+    )
+    assert not marker_present("sqli", "syntax error in your config near the top")
+
+
 def test_fuzzer_hit_records_base_data_for_replay():
     """Form hits carry their sibling fields so Phase 6v replay legs can
     reproduce the exact request shape that confirmed the hit."""
