@@ -77,7 +77,9 @@ class SensitiveFileCheck(Check):
     def run(self, client, target_url, session=None, discovery=None):
         import secrets
 
-        from packages.web.sensitive_paths import SENSITIVE_PATHS, served_content
+        from packages.web.sensitive_paths import (
+            SENSITIVE_PATHS, UNCONFIRMED_CONTENT, served_content,
+        )
 
         findings = []
         probes = list(SENSITIVE_PATHS.items())
@@ -129,19 +131,29 @@ class SensitiveFileCheck(Check):
                 severity = "critical" if any(
                     kw in path for kw in (".env", "config", "secret", "database", "heapdump")
                 ) else "high"
+                unconfirmed = matched == UNCONFIRMED_CONTENT
+                if unconfirmed:
+                    severity = "medium"
+                finding_label = f"Possible {label}" if unconfirmed else label
+                recommendation = (
+                    f"Verify whether the response at '{path}' contains sensitive data. "
+                    "Its format was not confirmed; a custom error response may also match. "
+                    "If sensitive, remove it from the web root or block access and rotate "
+                    "any exposed credentials."
+                    if unconfirmed else
+                    f"Remove '{path}' from the web root or block it at the web server "
+                    "level, and rotate any credential it contained. Remove debug "
+                    "endpoints from production deployments."
+                )
                 findings.append(self._result(
                     passed=False, url=target_url.rstrip("/") + path,
                     evidence=f"GET {path} returned HTTP 200 with {matched}",
                     detail=(
-                        f"{label} at '{path}' (HTTP 200, body shows {matched}). "
+                        f"{finding_label} at '{path}' (HTTP 200, body shows {matched}). "
                         "This path may expose credentials, internal configuration, or "
                         "debugging information that significantly aids an attacker."
                     ),
-                    recommendation=(
-                        f"Remove '{path}' from the web root or block it at the web server "
-                        "level, and rotate any credential it contained. Remove debug "
-                        "endpoints from production deployments."
-                    ),
+                    recommendation=recommendation,
                     severity=severity, asvs_ref="ASVS 5.0 V8.3.4",
                 ))
             except Exception:

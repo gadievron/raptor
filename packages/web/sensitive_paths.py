@@ -165,10 +165,15 @@ _HTML = re.compile(rb"\A(?:\xef\xbb\xbf)?\s*(?:<\?xml[^>]*\?>\s*)?"
 _PAGE_FALLBACKS = {"/test.php": _PHPINFO}
 # Signatures sit near the top of every file they describe.
 _SNIFF_BYTES = 64 * 1024
+UNCONFIRMED_CONTENT = "a non-HTML body (format not confirmed)"
 
 
 def served_content(path: str, body: bytes) -> str | None:
     """What in ``body`` shows the file at ``path`` is really served, or None.
+
+    File-signature mismatches return UNCONFIRMED_CONTENT for a lower-severity
+    finding. Empty and HTML responses remain excluded. Status pages still
+    require their own markers.
 
     A path with no signature (a shape-rule or external candidate, or a
     catalog entry like ``/test.php``) must at least be a non-empty,
@@ -187,7 +192,7 @@ def served_content(path: str, body: bytes) -> str | None:
         return None
     if key in FILE_SIGNATURES:
         pattern, description = FILE_SIGNATURES[key]
-        return description if pattern.search(head) else None
+        return description if pattern.search(head) else UNCONFIRMED_CONTENT
     return "a non-HTML body"
 
 

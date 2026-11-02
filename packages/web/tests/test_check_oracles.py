@@ -358,11 +358,10 @@ def test_name_based_403_is_not_an_exposure():
                    "/.git/config": forbidden}) == []
 
 
-def test_200_that_is_not_the_file_is_not_flagged():
+def test_html_and_empty_200_are_not_flagged():
     login = FakeResponse(200, "<!DOCTYPE html><html><form>Sign in to continue"
                               " to the admin console</form></html>")
-    not_json = FakeResponse(200, "Not Found")
-    assert _probe({"/.env": login, "/secrets.json": not_json,
+    assert _probe({"/.env": login,
                    "/id_rsa": FakeResponse(200, "")}) == []
 
 
@@ -424,6 +423,44 @@ _REAL_BODIES = {
 }
 
 
+def test_unconfirmed_file_formats_are_medium_and_explicit():
+    bodies = {"/.env": "encrypted-config-data", "/backup.sql": "opaque-dump-data",
+              "/secrets.json": '{"error": "not found"}'}
+    findings = _probe({path: FakeResponse(200, body) for path, body in bodies.items()})
+    assert {f.url.rsplit("/", 1)[-1] for f in findings} == {".env", "backup.sql", "secrets.json"}
+    for finding in findings:
+        assert finding.severity == "medium"
+        assert "format not confirmed" in finding.evidence
+        assert finding.detail.startswith("Possible ")
+        assert "Verify whether" in finding.recommendation
+        assert all(body not in finding.evidence for body in bodies.values())
+
+
+def test_confirmed_file_signatures_keep_their_severity():
+    findings = _probe({"/.env": FakeResponse(200, "DB_PASSWORD=sample-value"),
+                       "/backup.sql": FakeResponse(200, "CREATE TABLE users (id int);")})
+    assert {f.url: f.severity for f in findings} == {
+        "https://t.example/.env": "critical", "https://t.example/backup.sql": "high"}
+    assert all("format not confirmed" not in f.evidence for f in findings)
+
+
+def test_every_file_signature_has_only_a_non_html_nonempty_fallback():
+    from packages.web.sensitive_paths import FILE_SIGNATURES, UNCONFIRMED_CONTENT, served_content
+
+    for path in FILE_SIGNATURES:
+        assert served_content(path, b"opaque-format") == UNCONFIRMED_CONTENT, path
+        for body in (b"", b" \n\t", b"<html>Error</html>",
+                     b'<?xml version="1.0"?><html>Error</html>'):
+            assert served_content(path, body) is None, (path, body)
+
+
+def test_page_signature_mismatch_does_not_get_a_file_fallback():
+    from packages.web.sensitive_paths import PAGE_SIGNATURES, served_content
+
+    for path in PAGE_SIGNATURES:
+        assert served_content(path, b"Not Found") is None, path
+
+
 def test_every_catalog_path_recognises_its_real_file():
     from packages.web.sensitive_paths import SENSITIVE_PATHS, served_content
 
@@ -442,25 +479,25 @@ def test_no_catalog_path_accepts_an_html_error_page():
 
 
 def test_secret_json_key_must_start_a_word():
-    from packages.web.sensitive_paths import served_content
+    from packages.web.sensitive_paths import UNCONFIRMED_CONTENT, served_content
 
     for body in (b'{"apiKey": "x"}', b'{"accessToken": "x"}', b'{"apikey": "x"}',
                  b'{"DB_PASSWORD": "x"}', b'{"stripe_secret_key": "x"}',
                  b'{"privateKeyId": "x"}', b'{"credentials": {}}', b'{"Secret": "x"}',
                  b'{"password1": "x"}', b'{"db_password1": "x"}',
                  b'{"PASSWORD2": "x"}', b'{"APIKey": "x"}', b'{"IDToken": "x"}'):
-        assert served_content("/secrets.json", body), body
+        assert served_content("/secrets.json", body) == "secret-named JSON keys", body
     for body in (b'{"monkey": 1}', b'{"hockey_score": 2}', b'{"tokenizer": "bpe"}',
                  b'{"keyboard": "us"}', b'{"passwordless": true}',
                  b'{"MONKEY": 1}', b'{"name": "key"}'):
-        assert served_content("/secrets.json", body) is None, body
+        assert served_content("/secrets.json", body) == UNCONFIRMED_CONTENT, body
 
 
 def test_database_yml_key_stays_on_its_line():
-    from packages.web.sensitive_paths import served_content
+    from packages.web.sensitive_paths import UNCONFIRMED_CONTENT, served_content
 
     assert served_content("/database.yml", b"production:\n  password: x\n")
-    assert served_content("/database.yml", b"database\n: not yaml\n") is None
+    assert served_content("/database.yml", b"database\n: not yaml\n") == UNCONFIRMED_CONTENT
 
 
 def test_test_php_serving_phpinfo_is_flagged():
