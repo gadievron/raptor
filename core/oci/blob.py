@@ -31,7 +31,7 @@ from core.tar import TarOpenError, extract_files_from_tar
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Iterator
+    from collections.abc import Callable, Iterable, Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -263,6 +263,7 @@ def extract_files_from_layer(
     max_selected_bytes: int | None = None,
     resolve_selected_hardlinks: bool = False,
     expected_diff_id: str | None = None,
+    discover_path: Callable[[str], bool] | None = None,
 ) -> dict[str, bytes]:
     """Pull specific files out of a streamed layer blob.
 
@@ -295,6 +296,9 @@ def extract_files_from_layer(
     ratio-shaped bomb test documented on the module constants.
     ``None`` applies the floor budget.
 
+    ``discover_path`` can additionally select normalised member paths while
+    streaming. Discovered files share all selection, memory and link checks.
+
     ``expected_diff_id`` verifies the complete uncompressed tar stream against
     the image config, in addition to verification of the compressed source.
 
@@ -326,7 +330,7 @@ def extract_files_from_layer(
     if expected_diff_id is not None and not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_diff_id):
         raise ValueError("expected_diff_id must be a sha256 digest")
     mode = _tar_mode_for_media_type(media_type)
-    if not wanted_paths:
+    if not wanted_paths and discover_path is None:
         return {}
 
     normalised_wanted = {_normalise_tar_path(p) for p in wanted_paths}
@@ -335,10 +339,18 @@ def extract_files_from_layer(
     hardlinks: dict[str, str] = {}
     regular_names: set[str] = set()
 
+    def _wanted(name: str) -> bool:
+        if name in normalised_wanted:
+            return True
+        if discover_path is not None and discover_path(name):
+            normalised_wanted.add(name)
+            return True
+        return False
+
     def _select(member) -> str | None:
         nonlocal selected_bytes
         name = _normalise_tar_path(member.name)
-        if name not in normalised_wanted:
+        if not _wanted(name):
             return None
         if name in hardlinks:
             raise ValueError("duplicate selected layer path")
@@ -357,7 +369,7 @@ def extract_files_from_layer(
         # documented on WantedEntryRefused. Unwanted refused entries
         # keep the extractor's debug-level skip.
         name = _normalise_tar_path(member.name)
-        if name in normalised_wanted:
+        if _wanted(name):
             raise WantedEntryRefused(
                 f"layer entry {member.name!r} matches wanted path "
                 f"{name!r} but was refused by the safety filter "
@@ -366,7 +378,7 @@ def extract_files_from_layer(
 
     def _nonregular(member) -> None:
         name = _normalise_tar_path(member.name)
-        if name not in normalised_wanted or member.isdir():
+        if member.isdir() or not _wanted(name):
             return
         if not member.islnk():
             raise WantedEntryRefused("selected layer entry is not a regular file")

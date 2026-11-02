@@ -262,3 +262,40 @@ def test_catalogue_file_size_must_agree():
     catalogue['files'][0]['metadata']['size'] = 1
     with pytest.raises(ValueError, match='file size'):
         capture(catalogue, lambda layer: [blob])
+
+
+@pytest.mark.parametrize("scope", ["squashed", "all-layers"])
+@pytest.mark.parametrize("notice_filename", ["LICENSE", "THIRD-PARTY-NOTICES.md"])
+def test_python_record_recovers_unindexed_vendor_notice(scope, notice_filename):
+    catalogue, blob = fixture_image({'pkg-1.dist-info/METADATA': b'License-Expression: MIT',
+                                     f'pkg-1.dist-info/licenses/vendor/{notice_filename}': b'vendor notice'})
+    catalogue['descriptor']['configuration']['search']['scope'] = scope
+    metadata_file = catalogue['files'][0]
+    catalogue['files'] = [metadata_file]
+    package = catalogue['artifacts'][0]
+    package['type'] = 'python'
+    package['locations'] = [dict(metadata_file['location'])]
+    package['licenses'][0]['locations'] = package['locations']
+    package['metadata'] = {'files': [{'path': f'pkg-1.dist-info/licenses/vendor/{notice_filename}', 'size': '13',
+        'digest': {'algorithm': 'sha256', 'value': base64.urlsafe_b64encode(hashlib.sha256(b'vendor notice').digest()).rstrip(b'=').decode()}}]}
+    report, blobs = capture(catalogue, lambda layer: [blob])
+    assert report['version'] == 2
+    row = next(r for r in report['files'] if r['content_kind'] == 'notice_candidate')
+    assert row['visibility'] == 'layer_probe_runtime_visibility_unconfirmed'
+    assert 'python_record_notice' in row['roles']
+    assert blobs[row['sha256']] == b'vendor notice'
+    package['metadata']['files'][0]['size'] = '14'
+    with pytest.raises(ValueError, match='RECORD'):
+        capture(catalogue, lambda layer: [blob])
+
+
+def test_dynamic_discovery_recovers_unindexed_npm_filename_variant():
+    catalogue, blob = fixture_image({'pkg/package.json': b'{"license":"MIT"}', 'pkg/license-MIT': b'notice'})
+    catalogue['files'] = catalogue['files'][:1]
+    package = catalogue['artifacts'][0]
+    package['locations'] = [dict(catalogue['files'][0]['location'])]
+    package['licenses'][0]['locations'] = package['locations']
+    report, blobs = capture(catalogue, lambda layer: [blob])
+    row = next(r for r in report['files'] if r['path'].endswith('license-MIT'))
+    assert row['package_ids'] == ['package-id']
+    assert blobs[row['sha256']] == b'notice'

@@ -14,26 +14,21 @@ from pathlib import Path, PurePosixPath
 import re
 
 from core.json import dumps_artifact
-from core.oci.evidence import MAX_CAPTURE_BYTES, _METADATA_NAMES, _NOTICE, _SOURCE_SUFFIXES, _path, subject
+from core.oci.evidence import MAX_CAPTURE_BYTES, _METADATA_NAMES, _path, subject
+from core.oci.notice_paths import PackageNoticePaths, notice_name as _notice_name
 from core.security.capped_read import read_capped
 
 MAX_ASSOCIATIONS = 100_000
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _COMMON = re.compile(r"/usr/share/common-licenses/([A-Za-z0-9][A-Za-z0-9.+_-]*)(?![A-Za-z0-9.+_/-])")
-_POINTER = re.compile(r"SEE LICEN[CS]E IN ([A-Za-z0-9][A-Za-z0-9._-]*)", re.I)
 _PROJECTION = ("id", "name", "version", "type", "purl", "licenses")
-
-
-def _notice_name(path: str) -> bool:
-    name = PurePosixPath(path)
-    return bool(_NOTICE.fullmatch(name.name)) and name.suffix.lower() not in _SOURCE_SUFFIXES
 
 
 def load_notices(root: Path, native: dict, native_sha256: str, report: dict) -> tuple[dict, dict[str, bytes]]:
     """Validate a capture and derive associations independently of its package IDs."""
     image, _ = subject(native)
-    if type(report.get("version")) is not int or report["version"] != 1:
+    if type(report.get("version")) is not int or report["version"] not in {1, 2}:
         raise ValueError("unsupported notice evidence version")
     if report.get("subject") != image or report.get("catalogue_sha256") != native_sha256:
         raise ValueError("notice evidence subject, scope or catalogue hash mismatch")
@@ -52,7 +47,10 @@ def load_notices(root: Path, native: dict, native_sha256: str, report: dict) -> 
     required = declared | {key for key, file in native_files.items()
                            if file.get("metadata", {}).get("type") in {None, "RegularFile"}
                            and (_notice_name(key[0]) or key[0].startswith("/usr/share/common-licenses/"))}
-    probes = set()
+    package_paths = PackageNoticePaths(native["artifacts"])
+    if report["version"] == 2:
+        required.update(package_paths.records)
+    probes = {(directory + "/" + name, layer) for (directory, layer), names in package_paths.pointers.items() for name in names}
     for artifact in native["artifacts"]:
         if artifact["type"] == "npm":
             for loc in artifact.get("locations", []):
@@ -90,6 +88,10 @@ def load_notices(root: Path, native: dict, native_sha256: str, report: dict) -> 
                 for digest in file.get("digests", []):
                     if digest["algorithm"].lower() == "sha256" and digest["value"].lower() != sha:
                         raise ValueError("notice hash conflicts with native catalogue")
+            recorded = package_paths.records.get(key)
+            if recorded and ((recorded["sha256"] is not None and recorded["sha256"] != sha)
+                             or (recorded["size"] is not None and recorded["size"] != size)):
+                raise ValueError("notice evidence conflicts with Python RECORD")
             kind = row.get("content_kind")
             expected_kind = "package_metadata" if PurePosixPath(path).name in _METADATA_NAMES else "notice_candidate"
             if kind == "identity":
@@ -97,7 +99,7 @@ def load_notices(root: Path, native: dict, native_sha256: str, report: dict) -> 
                     raise ValueError("identity-only evidence must not contain copied bytes")
                 validated.append(row)
                 continue
-            if key not in required | probes:
+            if key not in required | probes and key not in package_paths.records and not package_paths.matches(path, origin):
                 raise ValueError("unexpected captured notice target")
             if kind != expected_kind or row.get("notice_file") != "notices/sha256/" + sha:
                 raise ValueError("invalid notice classification or storage path")
@@ -126,10 +128,20 @@ def associate(native: dict, image: dict, rows: list[dict], blobs: dict[str, byte
     """Retain exact-location claims and bounded package-directory candidates."""
     by_key = {(r["path"], r["catalogue_layer_diff_id"]): r for r in rows if r["content_kind"] != "identity"}
     by_path = defaultdict(list)
-    by_directory = defaultdict(list)
     for row in by_key.values():
         by_path[row["path"]].append(row)
-        by_directory[(PurePosixPath(row["path"]).parent, row["catalogue_layer_diff_id"])].append(row)
+    package_paths = PackageNoticePaths(native["artifacts"])
+    directory_matches = defaultdict(list)
+    match_count = 0
+    for key, row in by_key.items():
+        matches = package_paths.matches(*key)
+        if key in package_paths.records:
+            matches += [(identifier, "python_record_membership") for identifier in sorted(package_paths.records[key]["package_ids"])]
+        match_count += len(matches)
+        if match_count > MAX_ASSOCIATIONS:
+            raise ValueError("notice association count exceeds memory budget")
+        for identifier, reason in matches:
+            directory_matches[identifier].append((row, reason))
     packages, associated = [], set()
     association_count = 0
     for artifact in native["artifacts"]:
@@ -154,28 +166,8 @@ def associate(native: dict, image: dict, rows: list[dict], blobs: dict[str, byte
                 if row is None:
                     raise ValueError("captured evidence is missing a declared licence location")
                 add(row, "catalogue_licence_location")
-        locations = {(loc["path"], loc.get("layerID")) for loc in artifact.get("locations", [])}
-        for location_path, location_layer in sorted(locations):
-            path = PurePosixPath(location_path)
-            python = (artifact["type"] == "python" and path.name in {"METADATA", "PKG-INFO"}
-                      and path.parent.name.endswith((".dist-info", ".egg-info")))
-            npm = artifact["type"] == "npm" and path.name == "package.json"
-            if not python and not npm:
-                continue
-            parent = path.parent
-            pointer_names = {match[1] for licence in artifact.get("licenses", [])
-                             if (match := _POINTER.fullmatch(licence.get("value", "")))}
-            candidates = list(by_directory[(parent, location_layer)])
-            if python:
-                candidates += by_directory[(parent / "licenses", location_layer)]
-            for row in candidates:
-                if row["content_kind"] != "notice_candidate":
-                    continue
-                candidate = PurePosixPath(row["path"])
-                if python and (candidate.parent == parent or candidate.parent == parent / "licenses") and _notice_name(row["path"]):
-                    add(row, "python_distribution_notice_candidate")
-                elif npm and candidate.parent == parent and (_notice_name(row["path"]) or candidate.name in pointer_names):
-                    add(row, "declared_notice_pointer" if candidate.name in pointer_names else "npm_directory_notice_candidate")
+        for row, reason in directory_matches[artifact["id"]]:
+            add(row, reason)
         # Copyright files can refer to a separately installed Debian common text.
         # Ambiguous all-layer versions stay unresolved rather than being guessed.
         gaps = []
