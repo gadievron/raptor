@@ -59,7 +59,8 @@ from pathlib import Path
 # that strips PYTHONPATH; today's "script-dir on sys.path[0]" default
 # happens to land on the repo root because we live here, but explicit
 # is safer than implicit.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
 import core.startup.process_init  # noqa: F401
 
 # Cache-name helper lives in core.archive (shared with

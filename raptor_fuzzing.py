@@ -22,7 +22,8 @@ from pathlib import Path
 # symlink (or relatively on interpreters that don't absolutise
 # __file__), the unresolved parent points at the wrong tree and
 # core/packages imports resolve against it.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from core.hash import sha256_file
 from core.json import save_json

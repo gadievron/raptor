@@ -38,7 +38,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from packages.openant.config import OpenAntConfig
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from core.json import save_json
 from core.logging import get_logger
