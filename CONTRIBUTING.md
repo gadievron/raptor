@@ -86,6 +86,10 @@ frontmatter field pointing at the CLI entry point. The entry point goes in
 - Tests live in `tests/` subdirectories alongside the code they test.
 - Use `pytest`. No `jsonschema` validation — assert on actual data shapes.
 - Test against production-class object shapes, not toy stubs.
+- Keep tests hermetic: own temporary state and restore process state and
+  resources on success and failure. Follow the
+  [hermetic test guidelines](docs/developers.md#writing-hermetic-tests),
+  including the CLI-loading and randomized-order checks.
 - When testing sandbox behaviour, use the sandbox itself (don't mock it).
 - Gate slow tests (network, LLM, subprocess) with the marker
   doctrine: `@pytest.mark.slow` / `integration` / `corpus` (deselected
