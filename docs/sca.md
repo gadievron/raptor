@@ -336,6 +336,17 @@ occurrence references and relationships remain stable. Original lookup
 coordinates are retained as evidence; speculative CPEs are removed when the
 identity changes. MIT is declared only for RAPTOR's original project code.
 
+With `--repo`, preparation also attaches root-lockfile source archives. Package
+name, version, registry and root `uv.lock` location must agree with the native
+inventory. Every locked registry identity must be present; an incomplete root
+inventory fails preparation. Missing sdists remain explicit per-package gaps.
+Source URLs and expected SHA-256 values come from the checked-out lockfile;
+preparation does not fetch archives or verify build correspondence. CycloneDX
+stores archive hashes on distribution references, and SPDX stores the source
+record in `sourceInfo`. Installed-package hashes, binary download locations and
+licence assertions are preserved. Both repository input files are hashed in
+`provenance.json` alongside the three exports and the provenance manifest.
+
 The reviewed pins in `.github/sbom-provenance.json` attach upstream source and
 licence-file candidates for specific versions. They do not certify that a tag
 accounts for all wheel contents or reproduce the installed binary. Unknown
