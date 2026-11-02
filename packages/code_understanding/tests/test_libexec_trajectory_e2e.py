@@ -24,6 +24,7 @@ import json
 import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -38,7 +39,8 @@ def _load_shim():
     loader = SourceFileLoader("raptor_understand_e2e", str(LIBEXEC))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
+    with patch.object(sys, "path", sys.path.copy()):
+        loader.exec_module(mod)
     return mod
 
 
@@ -141,10 +143,9 @@ def test_understand_hunt_writes_trajectory_at_resolved_out_dir(
     out_dir = tmp_path / "out"
     # Defensive: the shim sets RAPTOR_TRAJECTORY_DIR via os.environ
     # which persists across the test session unless monkeypatch knows
-    # about it. Stage it as "absent" so monkeypatch restores it after
-    # the test instead of letting the shim's mutation leak into other
-    # tests in the same pytest session.
-    monkeypatch.delenv("RAPTOR_TRAJECTORY_DIR", raising=False)
+    # about it. Register an undo with an empty value: delenv(absent) has
+    # no undo entry and cannot clean up a later direct assignment.
+    monkeypatch.setenv("RAPTOR_TRAJECTORY_DIR", "")
 
     mod = _load_shim()
     _patch_shim_for_fake_model(mod, monkeypatch, "fake-haiku-x")

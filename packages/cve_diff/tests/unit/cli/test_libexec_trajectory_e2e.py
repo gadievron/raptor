@@ -60,9 +60,9 @@ def test_cve_diff_shim_sets_trajectory_env_var_before_pipeline_runs(
     """
     out_dir = tmp_path / "out"
     # Defensive: the shim sets RAPTOR_TRAJECTORY_DIR via os.environ.
-    # Register the existing value (or absence) with monkeypatch so the
-    # mutation is undone at teardown instead of leaking forward.
-    monkeypatch.delenv("RAPTOR_TRAJECTORY_DIR", raising=False)
+    # Register an undo even when the variable was absent. delenv(absent)
+    # records nothing, so the shim's direct assignment would otherwise leak.
+    monkeypatch.setenv("RAPTOR_TRAJECTORY_DIR", "")
 
     seen = {}
 

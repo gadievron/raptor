@@ -127,7 +127,7 @@ def _resolver_seam_leak_guard():
 
 
 @pytest.fixture(autouse=True)
-def _consent_env_guard():
+def _consent_env_guard(monkeypatch):
     """Strip the consent variables around every test.
 
     RAPTOR_ALLOW_DEGRADED_UNTRUSTED steers untrusted-run refusal
@@ -142,15 +142,11 @@ def _consent_env_guard():
     both restore in LIFO order.
     """
     _vars = ("RAPTOR_ALLOW_DEGRADED_UNTRUSTED", "RAPTOR_NO_SANDBOX_NONCE")
-    saved = {v: os.environ.pop(v, None) for v in _vars}
-    try:
-        yield
-    finally:
-        for v, val in saved.items():
-            if val is not None:
-                os.environ[v] = val
-            else:
-                os.environ.pop(v, None)
+    # Share the test's undo stack. A separate manual restore runs before
+    # monkeypatch teardown, whose undo would then erase the restored ambient
+    # consent when a test temporarily set its own nonce.
+    for v in _vars:
+        monkeypatch.delenv(v, raising=False)
 
 
 @pytest.fixture
@@ -191,22 +187,20 @@ def no_sandbox_consent(monkeypatch, tmp_path):
 
 
 @pytest.fixture
-def no_sandbox_consent_subprocess():
+def no_sandbox_consent_subprocess(tmp_path):
     """Mint a disable consent a SUBPROCESS can validate.
 
-    The ``no_sandbox_consent`` fixture redirects the consents
-    directory via monkeypatch, which a child process never sees —
-    subprocess-based gate tests (the invocation-shape battery) need
-    the consent file in the REAL per-uid consents directory the child
-    will resolve. Yields the nonce (the test passes it via the child
-    env explicitly); removes the file afterwards. Same conftest-only
-    mint-path rule as above.
+    Yield the nonce and its scratch directory. The test's child harness
+    redirects ONLY the storage lookup to that directory; the real nonce
+    format, ownership, permissions, digest and expiry checks still run.
+    Tests must never mint real sandbox-disable authority in the operator's
+    passwd-derived home, including when a child cannot inherit monkeypatch.
     """
     import secrets
 
     from core.sandbox import disable_consent as dc
 
-    d = dc._consents_dir()
+    d = tmp_path / "consents.d"
     d.mkdir(mode=0o700, parents=True, exist_ok=True)
     nonce = secrets.token_hex(dc.NONCE_HEX_LEN // 2)
     path = d / dc._nonce_filename(nonce)
@@ -216,7 +210,7 @@ def no_sandbox_consent_subprocess():
     finally:
         os.close(fd)
     try:
-        yield nonce
+        yield nonce, d
     finally:
         try:
             path.unlink()

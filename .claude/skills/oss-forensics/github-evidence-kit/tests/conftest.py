@@ -7,6 +7,7 @@ Provides:
 - EvidenceStore instances
 """
 
+import importlib
 import json
 import sys
 import types
@@ -31,15 +32,21 @@ def _stub_google_modules() -> None:
     that accidentally reaches for a live query on a stubbed host
     fails loudly.
     """
-    try:
-        import google.auth
-        import google.cloud.bigquery
-        import google.oauth2.service_account
+    modules_available = True
+    # Probe independently: a missing BigQuery wheel must not prevent loading
+    # an installed oauth2 module before deciding which imports need stubs.
+    for name in (
+        "google.auth", "google.auth.exceptions", "google.cloud",
+        "google.cloud.bigquery", "google.oauth2", "google.oauth2.service_account",
+    ):
+        try:
+            importlib.import_module(name)
+        except ImportError:
+            modules_available = False
+    if modules_available:
         return
-    except ImportError:
-        pass
 
-    google = sys.modules.setdefault("google", types.ModuleType("google"))
+    sys.modules.setdefault("google", types.ModuleType("google"))
 
     auth = types.ModuleType("google.auth")
     auth_exceptions = types.ModuleType("google.auth.exceptions")
@@ -100,9 +107,6 @@ def _stub_google_modules() -> None:
     bigquery.ScalarQueryParameter = _ScalarQueryParameter
     cloud.bigquery = bigquery
 
-    google.auth = auth
-    google.oauth2 = oauth2
-    google.cloud = cloud
     for name, mod in {
         "google.auth": auth,
         "google.auth.exceptions": auth_exceptions,
@@ -111,12 +115,24 @@ def _stub_google_modules() -> None:
         "google.cloud": cloud,
         "google.cloud.bigquery": bigquery,
     }.items():
-        sys.modules.setdefault(name, mod)
+        # Keep the parent attribute consistent with the module cache. A
+        # partial SDK install may already have real auth/oauth2 modules;
+        # setdefault preserves those, so linking a fresh stub onto google
+        # would split attribute-based imports from sys.modules lookups.
+        actual = sys.modules.setdefault(name, mod)
+        parent_name, attr = name.rsplit(".", 1)
+        parent = sys.modules[parent_name]
+        setattr(parent, attr, actual)
 
 
 _stub_google_modules()
 
 from src import EvidenceStore, load_evidence_from_json
+
+
+@pytest.fixture
+def google_module_stubber():
+    return _stub_google_modules
 
 # =============================================================================
 # FIXTURE DATA PATHS

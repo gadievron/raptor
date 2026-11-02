@@ -523,12 +523,18 @@ def _reload_detection(monkeypatch, *, hide=()):
 
 @pytest.fixture
 def _restore_detection_module():
-    """Re-import detection with the real environment after the test."""
-    yield
-    import importlib
-
+    """Restore the original namespace without reloading under import blockers."""
     from core.llm import detection
-    importlib.reload(detection)
+
+    saved = vars(detection).copy()
+    try:
+        yield
+    finally:
+        # This fixture tears down BEFORE monkeypatch removes the SDK import
+        # blockers. Reloading here would persist the simulated availability
+        # flags (and replacement classes) into subsequent tests.
+        vars(detection).clear()
+        vars(detection).update(saved)
 
 
 @needs_botocore

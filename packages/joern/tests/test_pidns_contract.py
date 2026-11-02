@@ -313,6 +313,9 @@ def test_group_boot_reports_group_tier(
     the kill ladder with no namespace behind it."""
     monkeypatch.setattr(nf, "enter_private_netns", lambda **kw: None)
     monkeypatch.setattr(nf, "bring_loopback_up", lambda: None)
+    # This test checks the tier report, not orphan supervision. Calling main
+    # in pytest must not leave a daemon that can later kill pytest's group.
+    monkeypatch.setattr(nf, "_start_orphan_watchdog", lambda *a, **kw: None)
     ready_r, ready_w = os.pipe()
     try:
         rc = nf.main([

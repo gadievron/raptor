@@ -42,9 +42,15 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # root and flags ride sys.argv), so no dynamic values are pasted into
 # the program text. On acceptance it prints the stamped consent source.
 _GATE_PROG = """\
-import sys
+import os, sys
+from pathlib import Path
 sys.path.insert(0, sys.argv[1])
 import argparse
+from core.sandbox import disable_consent as dc
+# Test harness only: keep nonce files out of the real account's consent
+# store while exercising all validation on actual uid-owned scratch files.
+if '_RAPTOR_TEST_CONSENTS_DIR' in os.environ:
+    dc._consents_dir = lambda: Path(os.environ['_RAPTOR_TEST_CONSENTS_DIR'])
 from core.sandbox import add_cli_args, apply_cli_args
 from core.sandbox import state
 p = argparse.ArgumentParser()
@@ -106,7 +112,7 @@ def _run_gate(flags: list[str], env: dict[str, str]) -> subprocess.CompletedProc
 
 
 class TestInvocationShapes:
-    """Subprocess battery: real fd shapes, real gate, no monkeypatching."""
+    """Subprocess battery: real fd shapes and gate, isolated consent storage."""
 
     @pytest.mark.parametrize("flags", [["--no-sandbox"],
                                        ["--sandbox", "none"]])
@@ -136,9 +142,12 @@ class TestInvocationShapes:
     def test_minted_nonce_accepts(self, no_sandbox_consent_subprocess):
         """The CI/launcher lane: a nonce backed by a real uid-owned
         consent file consents, and the stamp names the source."""
-        nonce = no_sandbox_consent_subprocess
+        nonce, directory = no_sandbox_consent_subprocess
         proc = _run_gate(
-            ["--no-sandbox"], _child_env({dc.NONCE_ENV_VAR: nonce}))
+            ["--no-sandbox"], _child_env({
+                dc.NONCE_ENV_VAR: nonce,
+                "_RAPTOR_TEST_CONSENTS_DIR": str(directory),
+            }))
         assert proc.returncode == 0, proc.stderr
         assert "DISABLED consent=nonce" in proc.stdout
 
@@ -146,7 +155,7 @@ class TestInvocationShapes:
             self, no_sandbox_consent_subprocess):
         """The nonce consents, it never requests: without the flag the
         sandbox state stays enabled."""
-        nonce = no_sandbox_consent_subprocess
+        nonce, _directory = no_sandbox_consent_subprocess
         prog = (
             "import sys\n"
             "sys.path.insert(0, sys.argv[1])\n"
@@ -722,8 +731,23 @@ class TestEnvPolicy:
             "mint-no-sandbox-nonce")
         assert script.is_file()
         assert os.access(script, os.X_OK)
+        directory = tmp_path / "consents.d"
+        monkeypatch.setattr(dc, "_consents_dir", lambda: directory)
+        # Run the actual mint script with the same storage-only pin in the
+        # child. HOME cannot relocate the passwd-derived production store.
+        prog = (
+            "import runpy, sys\n"
+            "from pathlib import Path\n"
+            "sys.path.insert(0, sys.argv[1])\n"
+            "from core.sandbox import disable_consent as dc\n"
+            "directory = Path(sys.argv[3])\n"
+            "dc._consents_dir = lambda: directory\n"
+            "script = sys.argv[2]\n"
+            "sys.argv = [script]\n"
+            "runpy.run_path(script, run_name='__main__')\n"
+        )
         proc = subprocess.run(
-            [sys.executable, str(script)],
+            [sys.executable, "-c", prog, str(REPO_ROOT), str(script), str(directory)],
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, timeout=60,
         )
@@ -733,7 +757,6 @@ class TestEnvPolicy:
             assert dc._nonce_format_ok(nonce)
             assert dc._presented_nonce_valid(nonce)
         finally:
-            # The script mints into the REAL per-uid consents dir.
             (dc._consents_dir() / dc._nonce_filename(nonce)).unlink()
 
 
