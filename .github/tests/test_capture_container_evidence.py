@@ -52,3 +52,16 @@ def test_offline_layout_refuses_fifo_without_blocking(tmp_path):
     os.mkfifo(store / ('a' * 64))
     with pytest.raises(ValueError, match='regular'):
         list(mod.layout_reader(tmp_path)(layer))
+
+
+def test_registry_reader_rejects_an_unpinned_or_wrong_subject_before_http():
+    from core.oci.evidence_source import registry_reader
+    for ref in ('example/image:latest', 'example/image@sha256:' + 'b' * 64):
+        with pytest.raises(ValueError, match='manifest digest'):
+            registry_reader('sha256:' + 'a' * 64, ref)
+
+
+def test_registry_reader_never_accepts_an_absent_expected_digest():
+    from core.oci.evidence_source import registry_reader
+    with pytest.raises(ValueError, match='manifest digest'):
+        registry_reader(None, 'example/image:latest')

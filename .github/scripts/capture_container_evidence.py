@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import os
 from pathlib import Path
-import stat
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -14,31 +12,10 @@ sys.path.insert(0, str(ROOT))
 
 from core.json import save_json
 from core.oci.evidence import capture, read_catalogue, subject
-from core.oci.image_ref import parse_image_ref
+from core.oci.evidence_source import layout_reader, registry_reader
 from core.security.capped_read import read_capped
 
 MAX_CATALOGUE_BYTES = 50 * 1024 * 1024
-
-
-def layout_reader(layout: Path):
-    """Stream regular blobs via directory FDs; never follow store symlinks."""
-    def read(layer):
-        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
-        directories = []
-        try:
-            directories.append(os.open(layout, flags | os.O_DIRECTORY))
-            for component in ("blobs", "sha256"):
-                directories.append(os.open(component, flags | os.O_DIRECTORY, dir_fd=directories[-1]))
-            fd = os.open(layer.digest.removeprefix("sha256:"), flags, dir_fd=directories[-1])
-            with os.fdopen(fd, "rb") as stream:
-                if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
-                    raise ValueError("OCI blob is not a regular file")
-                while chunk := stream.read(65536):
-                    yield chunk
-        finally:
-            for directory in reversed(directories):
-                os.close(directory)
-    return read
 
 
 def main(argv=None) -> int:
@@ -58,14 +35,7 @@ def main(argv=None) -> int:
     if args.oci_layout:
         reader = layout_reader(args.oci_layout)
     else:
-        ref = parse_image_ref(args.registry_ref)
-        if ref.digest != image["manifest_digest"]:
-            raise ValueError("registry reference must pin the catalogue platform manifest digest")
-        # Offline imports and pytest-only CI do not require HTTP dependencies.
-        from core.http.urllib_backend import UrllibClient
-        from core.oci.client import OciRegistryClient
-        client = OciRegistryClient(UrllibClient(user_agent="raptor-container-evidence/1"))
-        reader = lambda layer: client.stream_blob(ref, layer.digest)
+        reader = registry_reader(image["manifest_digest"], args.registry_ref)
     report, blobs = capture(catalogue, reader, identify=tuple(args.identify))
     report["catalogue_sha256"] = hashlib.sha256(raw).hexdigest()
     # All required layer/file checks complete before creating output. evidence.json

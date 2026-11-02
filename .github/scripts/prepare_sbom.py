@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Prepare paired Syft exports using explicit repository/build provenance.
 
-No network, installation, image execution or publication. Raw inputs remain
+Offline by default; explicit owner-file verification can read a pinned registry.
+No installation, image execution or publication. Raw inputs remain
 unchanged. Source candidates are never promoted to verified build sources.
 """
 from __future__ import annotations
@@ -487,17 +488,35 @@ def main() -> None:
     scope = parser.add_mutually_exclusive_group()
     scope.add_argument("--repo", type=Path, help="RAPTOR checkout used to produce the directory inventory")
     scope.add_argument("--notice-evidence", type=Path, help="container capture directory containing evidence.json and notices/")
+    owner_source = parser.add_mutually_exclusive_group()
+    owner_source.add_argument("--owner-registry-ref", help="verify missing owner files from IMAGE@sha256:DIGEST")
+    owner_source.add_argument("--owner-oci-layout", type=Path, help="verify missing owner files from an offline OCI blob store")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
+    if (args.owner_registry_ref is not None or args.owner_oci_layout is not None) and not args.notice_evidence:
+        parser.error("owner file verification requires --notice-evidence")
     paths = [args.syft, args.cyclonedx, args.spdx, args.provenance]
     if args.notice_evidence:
         paths.append(args.notice_evidence / "evidence.json")
+    outputs = [args.out / name for name in ("sbom.cdx.json", "sbom.spdx.json", "provenance.json")]
+    if args.notice_evidence and any((args.out / name).exists() or (args.out / name).is_symlink() for name in ("notice-evidence.json", "notices")):
+        raise ValueError("use a fresh notice evidence output directory")
+    if any(output.exists() for output in outputs) or any(args.out.resolve() == p.parent.resolve() for p in paths):
+        raise ValueError("use a fresh output directory; input artifacts must remain unchanged")
     loaded = [read_document(p) for p in paths]
     native, cdx, spdx, manifest = [d for d, _ in loaded[:4]]
     notice_summary, notice_blobs = None, {}
     if args.notice_evidence:
         from packages.sca.sbom_notices import load_notices
-        notice_summary, notice_blobs = load_notices(args.notice_evidence, native, loaded[0][1], loaded[4][0])
+        owner_reader = None
+        if args.owner_registry_ref is not None:
+            from core.oci.evidence import subject
+            from core.oci.evidence_source import registry_reader
+            owner_reader = registry_reader(subject(native)[0]["manifest_digest"], args.owner_registry_ref)
+        elif args.owner_oci_layout is not None:
+            from core.oci.evidence_source import layout_reader
+            owner_reader = layout_reader(args.owner_oci_layout)
+        notice_summary, notice_blobs = load_notices(args.notice_evidence, native, loaded[0][1], loaded[4][0], owner_reader=owner_reader)
     project, lock = None, None
     repo_inputs = []
     if native.get("source", {}).get("name") == REPOSITORY and native.get("source", {}).get("type") == "directory" and not args.repo:
@@ -530,11 +549,6 @@ def main() -> None:
     # Refuse malformed retained evidence before creating any output artifacts.
     _read_cyclonedx(prepared_cdx, args.cyclonedx)
     _read_spdx(prepared_spdx, args.spdx)
-    outputs = [args.out / name for name in ("sbom.cdx.json", "sbom.spdx.json", "provenance.json")]
-    if args.notice_evidence and any((args.out / name).exists() or (args.out / name).is_symlink() for name in ("notice-evidence.json", "notices")):
-        raise ValueError("use a fresh notice evidence output directory")
-    if any(output.exists() for output in outputs) or any(args.out.resolve() == p.parent.resolve() for p in paths):
-        raise ValueError("use a fresh output directory; input artifacts must remain unchanged")
     report["inputs"] = [{"path": str(p), "sha256": digest} for p, (_, digest) in zip(paths, loaded)] + repo_inputs
     args.out.mkdir(parents=True, exist_ok=True)
     if args.notice_evidence:

@@ -13,17 +13,20 @@ import re
 
 from core.oci.notice_paths import image_path
 
+_MATCHED = frozenset({'captured_bytes_match_inventory_checksum', 'verified_image_bytes_match_inventory_checksum'})
+
 _LENGTHS = {'md5': 32, 'sha1': 40, 'sha256': 64, 'sha512': 128}
 
 
 def add_owner_context(native: dict, rows: list[dict], blobs: dict[str, bytes],
-                      records: list[dict], *, limit: int, max_chars: int = 8 * 1024 * 1024) -> dict:
+                      records: list[dict], *, limit: int, verified_files: dict | None = None, max_chars: int = 8 * 1024 * 1024) -> dict:
     """Add context to fresh association records, retaining their own statuses/gaps.
 
     Call after capture validation. Read no files, follow no aliases, and use only
     the exact captured path/layer pair. Ambiguous or conflicting inventories and
     unavailable bytes remain leads without automatic parent-notice links.
     """
+    verified_files = verified_files or {}
     artifacts = {a['id']: a for a in native['artifacts']}
     by_id = {r['id']: r for r in records}
     captured = {(r['path'], r['catalogue_layer_diff_id']): r for r in rows}
@@ -93,6 +96,10 @@ def add_owner_context(native: dict, rows: list[dict], blobs: dict[str, bytes],
             charge(0, payload=[path, origin])
             row = captured.get((path, origin))
             data = blobs[row['sha256']] if row and 'notice_file' in row else None
+            match_status = 'captured_bytes_match_inventory_checksum'
+            if data is None and (path, origin) in verified_files:
+                row, data = verified_files[(path, origin)]
+                match_status = 'verified_image_bytes_match_inventory_checksum'
             if data is not None:
                 charge(0, payload=row['sha256'])
             candidates, matched = [], []
@@ -119,16 +126,16 @@ def add_owner_context(native: dict, rows: list[dict], blobs: dict[str, bytes],
                         # Dpkg MD5/SHA1 values are inventory diagnostics, never
                         # cryptographic authentication or a licence conclusion.
                         checksum_cache[cache_key] = hashlib.new(algorithm, data, usedforsecurity=False).hexdigest()
-                    status = ('captured_bytes_match_inventory_checksum' if checksum_cache[cache_key] == expected
+                    status = (match_status if checksum_cache[cache_key] == expected
                               else 'inventory_checksum_mismatch')
                 candidate = {'owner_package_id': owner_id, 'owner_name': owner['name'],
                              'owner_version': owner.get('version', ''), 'inventory_digest': deepcopy(digest),
                              'verification': status}
                 charge(0, payload=candidate)
                 candidates.append(candidate)
-                if status == 'captured_bytes_match_inventory_checksum':
+                if status in _MATCHED:
                     matched.append(candidate)
-            uncertain = any(c['verification'] not in {'captured_bytes_match_inventory_checksum', 'inventory_checksum_mismatch'}
+            uncertain = any(c['verification'] not in (_MATCHED | {'inventory_checksum_mismatch'})
                             for c in candidates)
             ambiguous = len(matched) > 1 or bool(matched and uncertain)
             if len(matched) == 1 and not ambiguous:

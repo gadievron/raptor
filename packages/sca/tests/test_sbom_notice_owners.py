@@ -167,3 +167,16 @@ def test_supporting_only_locations_do_not_become_primary_by_fallback():
     data[0]['artifacts'][0]['locations'][0]['annotations']['evidence'] = 'supporting'
     assert apply(data)['packages_with_checksum_matched_notice_context'] == 0
     assert 'distro_owner_context' not in data[3][0]
+
+
+def test_transient_verified_bytes_link_context_without_becoming_notice_files():
+    data = inputs()
+    row = data[1][0]
+    raw = data[2][row['sha256']]
+    row.pop('notice_file')
+    measured = {**row, 'method': 'verified_image_layer', 'content_kind': 'identity'}
+    stats = add_owner_context(*data, limit=100, verified_files={(PATH, ORIGIN): (measured, raw)})
+    assert stats['packages_with_checksum_matched_notice_context'] == 1
+    context = data[3][0]['distro_owner_context']['checksum_matched_notices'][0]
+    assert context['matched_locations'][0]['verification'] == 'verified_image_bytes_match_inventory_checksum'
+    assert data[3][0]['files'] == [] and data[3][0]['status'] == 'metadata_only'
