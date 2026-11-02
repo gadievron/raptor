@@ -574,11 +574,12 @@ jobs:
             engine/semgrep/tests/test_header_sanitizer_precision.py
             engine/semgrep/tests/test_log_sanitizer_precision.py
             engine/semgrep/tests/test_go_narrowing_precision.py
+            engine/semgrep/tests/test_jwt_verification_precision.py
             engine/semgrep/tests/test_rule_fixtures.py::test_every_rule_file_validates
           )
           for scan_test in "${scan_tests[@]}"; do
             if [ ! -f "${scan_test%%::*}" ]; then
-              echo "::error::Missing $scan_test — apply the corresponding sanitizer patch to this ref"
+              echo "::error::Missing $scan_test on this ref"
               exit 1
             fi
           done
