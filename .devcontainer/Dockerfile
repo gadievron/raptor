@@ -153,7 +153,12 @@ RUN curl -fsSL https://deb.nodesource.com/setup_24.x -o /tmp/nodesource_setup.sh
 # JS PACKAGE MANAGERS (npm-managed yarn — apt source + package removed above)
 # ============================================================================
 
-RUN npm install -g yarn@1.22.22 pnpm@11.11.0
+COPY .devcontainer/pnpm-notices/ /usr/share/doc/raptor-pnpm-notices/
+
+RUN npm install -g yarn@1.22.22 pnpm@11.11.0 \
+    && python3 /usr/local/libexec/install-npm-notices.py \
+        --package-root /usr/lib/node_modules/pnpm \
+        --evidence /usr/share/doc/raptor-pnpm-notices
 
 # ============================================================================
 # ENVIRONMENT CONFIGURATION
