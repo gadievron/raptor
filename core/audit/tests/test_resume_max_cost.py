@@ -16,6 +16,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import argparse
 
@@ -40,7 +41,8 @@ def audit_cli():
         )
         mod = importlib.util.module_from_spec(spec)
         sys.modules["raptor_audit_cli_max_cost"] = mod
-        spec.loader.exec_module(mod)
+        with patch.object(sys, "path", sys.path.copy()):
+            spec.loader.exec_module(mod)
         yield mod
     finally:
         sys.modules.pop("raptor_audit_cli_max_cost", None)
