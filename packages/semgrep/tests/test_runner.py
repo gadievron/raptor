@@ -1105,6 +1105,60 @@ def test_registry_identifier_is_not_rewritten_by_local_path_collision(tmp_path, 
     assert str(Path(configuration).absolute()) not in run.call_args.kwargs['tool_paths']
 
 
+def _diagnose_failed_semgrep(directory, execute, command, scope, failed):
+    """Collect evidence without replacing or accepting the original failure."""
+    diagnostics = {
+        "original_returncode": failed.returncode,
+        "original_backend": getattr(failed, "sandbox_info", {}),
+        "command": list(map(str, command)),
+        "workflow_python": sys.version,
+    }
+    (directory / "sandbox-stderr.txt").write_text((failed.stderr or "")[-1024 * 1024:])
+    try:
+        selected = shutil.which(command[0]) or command[0]
+        with Path(selected).open("rb") as stream:
+            header = stream.readline(4096).decode("utf-8", errors="replace").strip()
+        diagnostics["launcher"] = header if header.startswith("#!") else "native executable"
+        interpreter = Path(header[2:]) if header.startswith("#!/") else None
+        if interpreter is not None and interpreter.name.startswith("python") and interpreter.is_file():
+            import tempfile
+            with tempfile.TemporaryDirectory(prefix="probe-", dir=directory) as output:
+                probe_scope = dict(scope, output=output)
+                probe = execute([str(interpreter), "-I", "-S", "-c",
+                    "import json,os,resource,sys; print(json.dumps(dict("
+                    "python=sys.version,executable=sys.executable,"
+                    "stack=resource.getrlimit(resource.RLIMIT_STACK),"
+                    "memory=resource.getrlimit(resource.RLIMIT_AS),"
+                    "processes=resource.getrlimit(resource.RLIMIT_NPROC),"
+                    "files=resource.getrlimit(resource.RLIMIT_NOFILE),"
+                    "libc=os.confstr('CS_GNU_LIBC_VERSION'),"
+                    "infinity=resource.RLIM_INFINITY,cpus=os.cpu_count(),"
+                    "affinity=sorted(os.sched_getaffinity(0)))))"], **probe_scope)
+                diagnostics["tool_python_probe"] = {
+                    "returncode": probe.returncode, "stdout": probe.stdout, "stderr": probe.stderr,
+                }
+        replay_scope = dict(scope, observe=True, audit_run_dir=str(directory))
+        replay = execute(command, **replay_scope)
+        diagnostics["observed_replay"] = {
+            "returncode": replay.returncode,
+            "backend": getattr(replay, "sandbox_info", {}),
+        }
+        (directory / "sandbox-replay-stderr.txt").write_text((replay.stderr or "")[-1024 * 1024:])
+        trace = directory / ".audit" / ".sandbox-observe.jsonl"
+        if trace.is_file():
+            # Keep the tail, including the crash/last syscalls, within a
+            # fixed artifact budget. This is diagnostic data, never a receipt.
+            with trace.open("rb") as stream:
+                stream.seek(0, 2)
+                size = stream.tell()
+                stream.seek(max(0, size - 8 * 1024 * 1024))
+                (directory / "sandbox-observe.jsonl").write_bytes(stream.read(8 * 1024 * 1024))
+            diagnostics["trace_bytes"] = size
+    except Exception as exc:  # Diagnostics must never hide the first failure.
+        diagnostics["diagnostic_error"] = str(exc)
+    (directory / "sandbox-diagnostics.json").write_text(json.dumps(diagnostics, indent=2, default=str) + "\n")
+
+
 @pytest.mark.integration
 @pytest.mark.skipif(not is_available(), reason="semgrep not installed")
 class TestSandboxMetadataIntegration:
@@ -1116,7 +1170,13 @@ class TestSandboxMetadataIntegration:
         def scoped(command, **kwargs):
             kwargs["restrict_reads"] = True
             seen.append((command, kwargs))
-            return actual_run(command, **kwargs)
+            completed = actual_run(command, **kwargs)
+            if completed.returncode not in (0, 1):
+                try:
+                    _diagnose_failed_semgrep(tmp_path, actual_run, command, kwargs, completed)
+                except Exception as exc:
+                    print(f"Failure diagnostics unavailable: {exc}", file=sys.stderr)
+            return completed
         monkeypatch.setattr(context, "run", scoped)
         target = tmp_path / "target.py"
         target.write_text("foo()\n")
@@ -1172,3 +1232,25 @@ class TestSandboxSidecarSafety:
         else:
             assert not result.ok
             assert result.errors
+
+
+def test_failure_diagnostics_cannot_launder_a_successful_replay(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    launcher = tmp_path / "semgrep"
+    launcher.write_text("#!/not-an-interpreter\n")
+    first = SimpleNamespace(returncode=139, stderr="original crash", sandbox_info={"backend": "mountless-ns"})
+    calls = []
+    def replay(command, **scope):
+        calls.append(scope)
+        audit = tmp_path / ".audit"
+        audit.mkdir()
+        (audit / ".sandbox-observe.jsonl").write_text('{"syscall": "openat"}\n')
+        return SimpleNamespace(returncode=0, stderr="replay succeeded", sandbox_info={})
+    _diagnose_failed_semgrep(tmp_path, replay, [str(launcher)], {"restrict_reads": True, "block_network": True}, first)
+    saved = json.loads((tmp_path / "sandbox-diagnostics.json").read_text())
+    assert saved["original_returncode"] == first.returncode == 139
+    assert saved["observed_replay"]["returncode"] == 0
+    assert (tmp_path / "sandbox-stderr.txt").read_text() == "original crash"
+    assert calls[0]["restrict_reads"] is True
+    assert calls[0]["block_network"] is True
+    assert (tmp_path / "sandbox-observe.jsonl").is_file()
