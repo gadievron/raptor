@@ -130,3 +130,20 @@ class PackageNoticePaths:
         if matches:
             image_path(original)
         return matches
+
+
+def component_notice_paths(artifact: dict) -> set[tuple[str, str]]:
+    """Probe only explicitly named, adjacent notices for native/Java files.
+
+    LICENSE.<exact filename> is a notice candidate, not a declaration or an
+    enclosing package's license. Its layer must match the component location.
+    """
+    if artifact['type'] not in {'binary', 'java-archive'}:
+        return set()
+    paths = set()
+    for loc in artifact.get('locations', []):
+        path = PurePosixPath(image_path(loc['path']))
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", loc['layerID']):
+            raise ValueError('invalid component notice layer')
+        paths.add((image_path(str(path.with_name('LICENSE.' + path.name))), loc['layerID']))
+    return paths

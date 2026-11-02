@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "node",
+  "version": "24.15.0",
+  "platform": "linux-x64",
+  "binary_sha256": "d1de76d8edf2fededf6f8b30d244e2c0529ac607923a018283b77e9c74bd932c",
+  "notice_sha256": "4573185d56580da2b890ba34a85a409257640f1c5632eade4300137266194d18",
+  "source_archive_url": "https://nodejs.org/dist/v24.15.0/node-v24.15.0-linux-x64.tar.xz",
+  "source_archive_sha256": "472655581fb851559730c48763e0c9d3bc25975c59d518003fc0849d3e4ba0f6",
+  "checksums_url": "https://nodejs.org/dist/v24.15.0/SHASUMS256.txt",
+  "scope": "Complete notice from the official binary distribution, including third-party terms; payload identity checked before installation. This does not certify complete license compliance."
+}

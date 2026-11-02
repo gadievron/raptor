@@ -128,13 +128,17 @@ RUN chmod 0755 /usr/local/libexec/raptor-codeql-bootstrap \
 
 COPY pyproject.toml uv.lock /tmp/
 COPY .devcontainer/python-notices/ /usr/share/doc/raptor-python-notices/
+COPY .devcontainer/node-notices/ /usr/share/doc/raptor-node-notices/
+COPY .devcontainer/refresh-node-notices.py /usr/local/libexec/refresh-node-notices.py
 
 RUN bash -eo pipefail -c \
     'uv export --locked --no-hashes --project /tmp --extra web \
      | uv pip install --system --no-cache -r -' \
     && python3 /usr/local/libexec/refresh-python-notices.py \
         --evidence-root /usr/share/doc --installed-environment --if-version-changed \
-    && python3 /usr/local/libexec/install-python-notices.py --skip-absent
+    && python3 /usr/local/libexec/install-python-notices.py --skip-absent \
+    && python3 /usr/local/libexec/refresh-node-notices.py \
+        --evidence /usr/share/doc/raptor-node-notices
 
 # Retain the source-release notice omitted from pydocstyle's wheel.
 # Reinstall the existing version so metadata and notice share this layer.
