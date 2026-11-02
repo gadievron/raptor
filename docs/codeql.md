@@ -650,9 +650,9 @@ ends move-state tracking; a separate null/bounds bug can still exist afterward.
 See the [C++ move specification](https://eel.is/c++draft/forward) and
 [moved-from library requirements](https://eel.is/c++draft/lib.types.movedfrom).
 
-The `suite=cpp` focused job runs narrowing, use-after-move and iterator
-regressions. The
-`focused-codeql-cpp-regression-results` artifact includes all three suites'
+The `suite=cpp` focused job runs narrowing, use-after-move, iterator
+and format-string regressions. The
+`focused-codeql-cpp-regression-results` artifact includes all four suites'
 expected/actual rows and reporting-wrapper type-check output. The
 standalone move fixtures use small standard-library stand-ins; the same
 case bodies also compile against real system headers in CI.
@@ -682,4 +682,29 @@ prove that every modeled mutation invalidates an iterator on every execution.
 
 Use `gh workflow run nightly.yml --ref main -f suite=cpp` for the generic
 `cpp-query-regressions` job.
-Results for all three suites use `focused-codeql-cpp-regression-results`.
+Results for all four suites use `focused-codeql-cpp-regression-results`.
+
+### Curated C/C++ format-string flow
+
+The format-string query tracks untrusted string contents into the format
+argument of the modeled printf-family and kernel logging calls. Sources use
+CodeQL's existing local/remote input models, including environment variables,
+command-line arguments and read/receive buffers. Copies and interprocedural
+flows use the standard taint engine.
+
+Passing input as data, such as `printf("%s", value)`, is safe for this query.
+Formatting that input into a buffer does not sanitize the buffer for a later
+`printf(buffer)`. Constant replacement of a format pointer removes the flow.
+Unrelated member functions and application namespaces named `printf` are not
+sinks merely because they share that name.
+
+The native suite exercises the shared production configuration with named
+positive and negative controls; CI also compiles the same case bodies against
+system headers and checks the path-reporting wrapper. Run it with
+`gh workflow run nightly.yml --ref main -f suite=cpp` and inspect
+`focused-codeql-cpp-regression-results`.
+
+The sink family remains explicit. Custom formatting wrappers, function-pointer
+calls and additional library APIs need a visible modeled sink or a flow to one;
+this change does not claim complete coverage of them. A clean result also does
+not prove that all input sources in the target are modeled.
