@@ -3392,3 +3392,32 @@ class TestPerRuleVersions:
             result = run_rule(tmp_path, rule, subprocess_runner=execute)
         assert "installed version unknown" in result.errors[0]
         execute.assert_not_called()
+
+
+class TestVersionMatchesExecutedBinary:
+    @pytest.mark.parametrize("remove_pinned", [False, True])
+    def test_path_change_cannot_upgrade_pinned_tools_reported_version(self, tmp_path, monkeypatch, remove_pinned):
+        import os
+
+        from core.analysis.rule_versions import rule_version_refusal
+        from packages.coccinelle import runner as runner_mod
+
+        old_bin = tmp_path / "old" / "spatch"
+        new_bin = tmp_path / "new" / "spatch"
+        for binary, version in [(old_bin, "1.1.1"), (new_bin, "1.3.0")]:
+            binary.parent.mkdir()
+            binary.write_text(f"#!/bin/sh\necho 'spatch version {version}'\n")
+            binary.chmod(0o755)
+        monkeypatch.setattr(runner_mod, "_spatch_resolved", False)
+        monkeypatch.setattr(runner_mod, "_resolved_spatch", None)
+        previous_path = os.environ.get("PATH", "")
+        monkeypatch.setenv("PATH", str(old_bin.parent) + os.pathsep + previous_path)
+        assert runner_mod._spatch_path() == str(old_bin)
+        monkeypatch.setenv("PATH", str(new_bin.parent) + os.pathsep + previous_path)
+        if remove_pinned:
+            old_bin.unlink()
+        assert runner_mod.version() == (None if remove_pinned else "1.1.1")
+        refusal = rule_version_refusal("// raptor-min-version: 1.3.0\n@r@", runner_mod.version)
+        assert refusal
+        assert ("unknown" if remove_pinned else "installed 1.1.1") in refusal
+        assert runner_mod._spatch_path() == str(old_bin)
