@@ -9,6 +9,7 @@ those concerns are tested in the provider-specific test files.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Any
 
@@ -986,10 +987,11 @@ def test_unknown_tool_returns_error_result() -> None:
 
 def test_tool_timeout_returns_error_result() -> None:
     """A handler that exceeds ``tool_timeout_s`` produces an
-    ``is_error=True`` :class:`ToolResult` (sleeps in background but
-    we stop waiting)."""
+    ``is_error=True`` :class:`ToolResult`."""
+    release = threading.Event()
+
     def slow_handler(_inp: dict) -> str:
-        time.sleep(0.5)
+        release.wait(10)
         return "too late"
 
     slow = ToolDef(name="slow", description="d", input_schema={}, handler=slow_handler)
@@ -998,12 +1000,18 @@ def test_tool_timeout_returns_error_result() -> None:
         _text_response("ok"),
     ])
     loop = ToolUseLoop(fp, [slow], tool_timeout_s=0.05)
-    out = loop.run("go")
-    assert out.terminated_by == "complete"
-    second = fp.calls[1]["messages"]
-    last = second[-1].content[0]
-    assert last.is_error is True
-    assert "timeout" in last.content
+    try:
+        out = loop.run("go")
+        assert out.terminated_by == "complete"
+        second = fp.calls[1]["messages"]
+        last = second[-1].content[0]
+        assert last.is_error is True
+        assert "timeout" in last.content
+    finally:
+        release.set()
+        for worker in loop._stranded_tool_threads:
+            worker.join(timeout=5)
+            assert not worker.is_alive(), "tool handler did not stop"
 
 
 def test_tool_timeout_terminate_on_handler_error_raises() -> None:
@@ -1013,8 +1021,10 @@ def test_tool_timeout_terminate_on_handler_error_raises() -> None:
     ``ToolHandlerTimeout`` instead of converting to a tool_result."""
     from core.llm.tool_use import LoopTerminated, ToolHandlerTimeout
 
+    release = threading.Event()
+
     def slow_handler(_inp: dict) -> str:
-        time.sleep(0.5)
+        release.wait(10)
         return "too late"
 
     slow = ToolDef(name="slow", description="d", input_schema={}, handler=slow_handler)
@@ -1026,13 +1036,18 @@ def test_tool_timeout_terminate_on_handler_error_raises() -> None:
         terminate_on_handler_error=True,
         events=seen.append,
     )
-    with pytest.raises(ToolHandlerTimeout, match="exceeded"):
-        loop.run("go")
+    try:
+        with pytest.raises(ToolHandlerTimeout, match="exceeded"):
+            loop.run("go")
 
-    # LoopTerminated event was emitted with reason="tool_timeout" before
-    # the exception propagated.
-    final = next(e for e in seen if isinstance(e, LoopTerminated))
-    assert final.reason == "tool_timeout"
+        # LoopTerminated was emitted before the exception propagated.
+        final = next(e for e in seen if isinstance(e, LoopTerminated))
+        assert final.reason == "tool_timeout"
+    finally:
+        release.set()
+        for worker in loop._stranded_tool_threads:
+            worker.join(timeout=5)
+            assert not worker.is_alive(), "tool handler did not stop"
 
 
 def test_parallel_tool_calls_in_one_turn() -> None:
