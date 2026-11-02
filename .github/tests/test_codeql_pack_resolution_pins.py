@@ -49,6 +49,14 @@ _PINNED = {
      '"--additional-packs", str(search_dir),'),
     ("packages/codeql/query_runner.py",
      'f"--additional-packs={root}" for root in vendored'),
+    # _analysis_scope only inspects the already constructed argv to derive
+    # sandbox read grants; it neither adds flags nor changes their values.
+    # The values come from the model-pack/vendored-root producers pinned
+    # above, not from target repository configuration.
+    ("packages/codeql/query_runner.py",
+     'if str(arg) == "--additional-packs" and index + 1 < len(command):'),
+    ("packages/codeql/query_runner.py",
+     'elif str(arg).startswith("--additional-packs="):'),
     ("core/iris/codeql_runner.py",
      'f"--additional-packs={root}" for root in vendored'),
     ("core/dataflow/codeql_augmented_run.py",
