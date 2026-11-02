@@ -295,3 +295,163 @@ def test_duplicate_and_missing_lock_entries_cannot_look_complete():
     lock["package"][-1]["version"] = "2.0"
     with pytest.raises(ValueError, match="missing package identities"):
         mod.prepare(native, cdx, spdx, MANIFEST, PROJECT, lock)
+
+
+
+@pytest.fixture
+def material_repo(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "data").mkdir()
+    (repo / "data/payload.json").write_text('{"_source":{"license":"source-specific terms"},"value":1}\n')
+    (repo / "NOTICE").write_text("Fixture copyright and licence evidence\n")
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "core.autocrlf=false", "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                    "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "commit", "-qm", "fixture"], check=True)
+    revision = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+    manifest = {"bundles": [{"id": "test-data", "name": "Retained upstream excerpts", "root": "data", "files": ["*.json"],
+        "license": "GPL-2.0-only", "license_scope": "Upstream excerpts; original annotations remain MIT.",
+        "upstream": "https://example.org/upstream", "notice_paths": ["NOTICE"], "source_credits": True}]}
+    return repo, revision, manifest
+
+
+def test_bundled_material_bytes_notices_and_scoped_licences_reach_both_exports(material_repo):
+    import hashlib
+    repo, revision, manifest = material_repo
+    (repo / "data/untracked.json").write_text('{"untracked":true}')
+    records, references = mod.bundled_materials(repo, revision, manifest)
+    assert not references and len(records) == 1
+    record = records[0]
+    assert [f["path"] for f in record["files"]] == ["data/payload.json"]
+    assert record["files"][0]["sha256"] == hashlib.sha256((repo / "data/payload.json").read_bytes()).hexdigest()
+    assert '/'+revision+'/' in record["files"][0]["url"]
+    assert record["source_credits"][0]["source"]["license"] == "source-specific terms"
+    _, cdx, spdx = documents()
+    cdx["metadata"]["component"]["version"] = revision
+    spdx["packages"][0].update(versionInfo=revision, SPDXID="SPDXRef-root")
+    original = deepcopy((cdx, spdx))
+    mod.append_bundles(cdx, spdx, records)
+    bundle = cdx["metadata"]["component"]["components"][0]
+    assert bundle["type"] == "data" and bundle["licenses"] == [{"license": {"id": "GPL-2.0-only"}}]
+    assert bundle["externalReferences"][0]["type"] == "website"
+    assert bundle["externalReferences"][1]["hashes"][0]["content"] == record["files"][0]["sha256"]
+    assert spdx["packages"][-1]["primaryPackagePurpose"] == "OTHER"
+    assert '"material_kind": "data"' in spdx["packages"][-1]["sourceInfo"]
+    assert spdx["packages"][-1]["licenseDeclared"] == "GPL-2.0-only"
+    assert spdx["packages"][-1]["licenseConcluded"] == "NOASSERTION"
+    assert "original annotations remain MIT" in spdx["packages"][-1]["licenseComments"]
+    assert spdx["relationships"][-1]["relationshipType"] == "CONTAINS"
+    assert cdx["components"] == original[0]["components"]
+    assert spdx["files"] == original[1]["files"]
+
+
+def test_changed_worktree_material_is_not_mislabelled_as_committed_bytes(material_repo):
+    repo, revision, manifest = material_repo
+    (repo / "data/payload.json").write_text('{"changed":true}')
+    with pytest.raises(ValueError, match="differs from committed"):
+        mod.bundled_materials(repo, revision, manifest)
+
+
+@pytest.mark.parametrize("change", [
+    lambda r: r.update(root="../outside"),
+    lambda r: r.update(files=["../outside"]),
+    lambda r: r.update(notice_paths=["missing-notice"]),
+    lambda r: r.update(license="invented-license"),
+    lambda r: r.update(files=["missing.json"]),
+    lambda r: r.update(upstream_type="invented-type"),
+])
+def test_invalid_or_unavailable_material_evidence_fails(material_repo, change):
+    repo, revision, manifest = material_repo
+    change(manifest["bundles"][0])
+    with pytest.raises(ValueError):
+        mod.bundled_materials(repo, revision, manifest)
+
+
+def test_unknown_dataset_terms_remain_explicit_unknowns(material_repo):
+    repo, revision, manifest = material_repo
+    manifest["bundles"][0]["license"] = None
+    record = mod.bundled_materials(repo, revision, manifest)[0][0]
+    assert record["gaps"] and record["license"] is None
+    _, cdx, spdx = documents()
+    cdx["metadata"]["component"]["version"] = revision
+    spdx["packages"][0].update(versionInfo=revision, SPDXID="SPDXRef-root")
+    mod.append_bundles(cdx, spdx, [record])
+    assert "licenses" not in cdx["metadata"]["component"]["components"][0]
+    assert spdx["packages"][-1]["licenseDeclared"] == "NOASSERTION"
+
+
+def test_bundle_revision_cannot_be_borrowed_from_another_checkout(material_repo):
+    repo, revision, manifest = material_repo
+    records, _ = mod.bundled_materials(repo, revision, manifest)
+    _, cdx, spdx = documents()
+    with pytest.raises(ValueError, match="revision does not match"):
+        mod.append_bundles(cdx, spdx, records)
+
+
+def test_external_snippet_classification_is_closed_and_scope_is_retained(material_repo):
+    repo, _, manifest = material_repo
+    prefix = "out/dataflow-corpus-fixtures/example/"
+    (repo / "data/payload.json").write_text(json.dumps({"source": {"file_path": prefix+"source.c", "snippet": "example();"}}))
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                    "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "commit", "-qm", "finding"], check=True)
+    revision = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+    rule = manifest["bundles"][0]
+    del rule["files"]
+    rule["snippet_prefix"] = prefix
+    records, _ = mod.bundled_materials(repo, revision, manifest)
+    assert records[0]["snippet_origins"] == [prefix+"source.c"]
+    rule["snippet_prefix"] = prefix+"other/"
+    with pytest.raises(ValueError, match="no committed material"):
+        mod.bundled_materials(repo, revision, manifest)
+
+
+def test_unpopulated_gitlinks_are_references_and_populated_ones_are_not_silently_omitted(material_repo):
+    repo, revision, manifest = material_repo
+    subprocess.run(["git", "-C", str(repo), "update-index", "--add", "--cacheinfo", "160000,"+revision+",submodule"], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                    "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "commit", "-qm", "gitlink"], check=True)
+    current = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+    _, references = mod.bundled_materials(repo, current, manifest)
+    assert references == [{"path": "submodule", "revision": revision, "status": "reference_only_unpopulated_gitlink"}]
+    (repo / "submodule").mkdir()
+    (repo / "submodule/source.c").write_text("populated source")
+    with pytest.raises(ValueError, match="populated submodules"):
+        mod.bundled_materials(repo, current, manifest)
+
+
+
+def test_symlink_swaps_cannot_supply_bundle_evidence(material_repo, tmp_path):
+    repo, revision, manifest = material_repo
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"outside":true}')
+    (repo / "data/payload.json").unlink()
+    (repo / "data/payload.json").symlink_to(outside)
+    with pytest.raises((ValueError, OSError)):
+        mod.bundled_materials(repo, revision, manifest)
+
+
+@pytest.mark.parametrize("path,body", [
+    ("core/domains/data/public_suffix_list.dat", "// source snapshot\ncom\n"),
+    ("packages/sca/data/calibration/example.json", '{"_source":{"license":"upstream terms"}}'),
+    ("core/dataflow/corpus/findings/external.json", '{"source":{"file_path":"out/dataflow-corpus-fixtures/unregistered/source.c","snippet":"example();"}}'),
+])
+def test_deleting_a_whole_material_class_does_not_silently_reduce_coverage(material_repo, path, body):
+    repo, _, manifest = material_repo
+    target = repo / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(body)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                    "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "commit", "-qm", "additional material"], check=True)
+    revision = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+    with pytest.raises(ValueError, match="no (inventory|bundled-material) rule"):
+        mod.bundled_materials(repo, revision, manifest)
+
+
+def test_duplicate_notices_are_refused_before_emitting_invalid_references(material_repo):
+    repo, revision, manifest = material_repo
+    manifest["bundles"][0]["notice_paths"] *= 2
+    with pytest.raises(ValueError, match="duplicate bundle notice"):
+        mod.bundled_materials(repo, revision, manifest)

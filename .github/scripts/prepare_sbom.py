@@ -9,7 +9,8 @@ from __future__ import annotations
 import argparse
 from copy import deepcopy
 import hashlib
-from pathlib import Path
+import fnmatch
+from pathlib import Path, PurePosixPath
 import re
 import sys
 import subprocess
@@ -277,6 +278,197 @@ def prepare(native: dict, cdx: dict, spdx: dict, manifest: dict, project: dict |
     return cdx, spdx, report
 
 
+
+def _relative_path(value: str) -> str:
+    if not isinstance(value, str) or not value or "\\" in value or any(ord(c) < 32 for c in value):
+        raise ValueError("invalid bundle path")
+    path = PurePosixPath(value)
+    if path.is_absolute() or any(p in {".", ".."} for p in path.parts) or str(path) != value:
+        raise ValueError("bundle paths must be normalized and repository-relative")
+    return value
+
+
+def _tracked_tree(repo: Path, revision: str) -> dict[str, tuple[str, str]]:
+    output = subprocess.check_output(["git", "-C", str(repo), "ls-tree", "-rz", "--full-tree", revision])
+    tree = {}
+    for row in output.decode("utf-8").split("\0"):
+        if not row:
+            continue
+        info, name = row.split("\t", 1)
+        mode, _, oid = info.split()
+        tree[_relative_path(name)] = mode, oid
+    return tree
+
+
+def _material_file(repo: Path, path: str, tree: dict, revision: str) -> tuple[dict, bytes]:
+    if path not in tree or tree[path][0] not in {"100644", "100755"}:
+        raise ValueError("bundle evidence must be a committed regular file")
+    raw = read_capped(repo / path, MAX_BYTES, raise_on_refusal=True)
+    # Git's SHA-1 blob identity proves that URL/hash evidence describes the
+    # committed bytes, including refusing worktree EOL conversions. The
+    # published content checksum remains SHA-256.
+    blob = hashlib.sha1(b"blob " + str(len(raw)).encode("ascii") + b"\0" + raw, usedforsecurity=False).hexdigest()
+    if blob != tree[path][1]:
+        raise ValueError("bundle evidence differs from committed bytes")
+    url = "https://raw.githubusercontent.com/gadievron/raptor/" + revision + "/" + urllib.parse.quote(path, safe="/")
+    return {"path": path, "url": url, "sha256": hashlib.sha256(raw).hexdigest()}, raw
+
+
+def _finding_origins(repo: Path, path: str, tree: dict, revision: str) -> list[str]:
+    _, raw = _material_file(repo, path, tree, revision)
+    document = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
+    _check_document(document)
+    if not isinstance(document, dict) or not isinstance(document.get("intermediate_steps", []), list):
+        raise ValueError("finding evidence must have an object/step structure")
+    steps = [document.get("source", {}), document.get("sink", {}), *document.get("intermediate_steps", [])]
+    paths = []
+    for step in steps:
+        if isinstance(step, dict) and step.get("snippet"):
+            paths.append(_relative_path(step.get("file_path")))
+    return paths
+
+
+def bundled_materials(repo: Path, revision: str, manifest: dict) -> tuple[list[dict], list[dict]]:
+    """Inventory committed material; fetched corpus trees are never scanned."""
+    rules = manifest.get("bundles")
+    if not isinstance(rules, list):
+        raise ValueError("repository bundled-material inventory is unavailable")
+    tree = _tracked_tree(repo, revision)
+    records, seen = [], set()
+    findings = {}
+    for rule in rules:
+        if not isinstance(rule, dict) or not re.fullmatch(r"[a-z][a-z0-9-]*", rule.get("id", "")) or rule["id"] in seen:
+            raise ValueError("invalid or duplicate bundled-material identity")
+        seen.add(rule["id"])
+        root = _relative_path(rule["root"])
+        if not isinstance(rule.get("name"), str) or not rule["name"] or not isinstance(rule.get("license_scope"), str) or not rule["license_scope"]:
+            raise ValueError("bundle requires a name and licence scope")
+        if rule.get("license") not in {None, "MIT", "MPL-2.0", "GPL-2.0-only", "GPL-2.0-or-later", "curl"}:
+            raise ValueError("bundle licence requires a reviewed identifier or explicit unknown")
+        if not _https_url(rule.get("upstream")) or not isinstance(rule.get("notice_paths"), list) or not rule["notice_paths"]:
+            raise ValueError("bundle requires upstream and notice evidence")
+        if len(set(rule["notice_paths"])) != len(rule["notice_paths"]):
+            raise ValueError("duplicate bundle notice evidence")
+        if rule.get("upstream_type", "website") not in {"vcs", "website", "distribution"}:
+            raise ValueError("invalid upstream reference type")
+        selector = rule.get("files")
+        snippet = rule.get("snippet_path") or rule.get("snippet_prefix")
+        if bool(selector) == bool(snippet) or (selector and (not isinstance(selector, list) or any(not isinstance(x, str) or not x or ".." in PurePosixPath(x).parts or x.startswith("/") for x in selector))):
+            raise ValueError("bundle requires exactly one file or snippet selector")
+        if snippet:
+            _relative_path(snippet.rstrip("/"))
+            if "snippet_prefix" in rule and not snippet.endswith("/"):
+                raise ValueError("snippet prefix must end at a directory boundary")
+        if "snippet_path" in rule and "snippet_prefix" in rule:
+            raise ValueError("bundle snippet selector is ambiguous")
+        selected = []
+        for path in tree:
+            if not path.startswith(root + "/"):
+                continue
+            relative = path[len(root) + 1:]
+            if selector:
+                if any(fnmatch.fnmatchcase(relative, pattern) for pattern in selector):
+                    selected.append(path)
+            elif path.endswith(".json"):
+                if path not in findings:
+                    findings[path] = _finding_origins(repo, path, tree, revision)
+                if any(p == snippet if "snippet_path" in rule else p.startswith(snippet) for p in findings[path]):
+                    selected.append(path)
+        if not selected:
+            raise ValueError("bundle has no committed material; review stale provenance rules")
+        files, credits = [], []
+        for path in sorted(selected):
+            record, raw = _material_file(repo, path, tree, revision)
+            files.append(record)
+            if rule.get("source_credits") and path.endswith(".json"):
+                document = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
+                _check_document(document)
+                if isinstance(document, dict) and "_source" in document:
+                    credits.append({"path": path, "source": document["_source"]})
+        notices = [_material_file(repo, _relative_path(path), tree, revision)[0] for path in rule["notice_paths"]]
+        record = {k: rule[k] for k in ("id", "name", "license_scope", "upstream")}
+        record.update(material_kind="data", version=revision, license=rule.get("license"), upstream_type=rule.get("upstream_type", "website"), files=files, notices=notices,
+                      source_credits=credits, status="committed_material_bytes_verified_locally", gaps=[])
+        if not record["license"]:
+            record["gaps"].append("no blanket licence asserted; review the retained source credits and notices")
+        if snippet:
+            record["snippet_origins"] = sorted({p for path in selected for p in findings[path]
+                if (p == snippet if "snippet_path" in rule else p.startswith(snippet))})
+        if rule["id"] == "public-suffix-list":
+            body = _material_file(repo, selected[0], tree, revision)[1].decode("utf-8")
+            commit = re.search(r"^// COMMIT: ([0-9a-f]{40})$", body, re.MULTILINE)
+            version = re.search(r"^// VERSION: (.+)$", body, re.MULTILINE)
+            if len(selected) != 1 or not commit or not version:
+                raise ValueError("PSL snapshot upstream revision is unavailable")
+            record["upstream_revision"], record["upstream_version"] = commit[1], version[1]
+        records.append(record)
+    # Coverage floors are part of this RAPTOR producer's contract. They keep
+    # deleting all rules for a material class from silently omitting it.
+    covered = {f["path"] for record in records for f in record["files"]}
+    required = {path for path in tree if path == "core/domains/data/public_suffix_list.dat"
+                or (path.endswith(".json") and (path.startswith("packages/sca/data/calibration/")
+                                                or path.startswith("packages/cve_diff/data/samples/")))}
+    if required - covered:
+        raise ValueError("committed bundled material has no inventory rule")
+    for path in tree:
+        if path.startswith("core/dataflow/corpus/findings/") and path.endswith(".json") and path not in findings:
+            findings[path] = _finding_origins(repo, path, tree, revision)
+    # Every retained non-project snippet must have an explicit scope rule.
+    selectors = [r for r in rules if r.get("snippet_path") or r.get("snippet_prefix")]
+    for paths in findings.values():
+        for path in paths:
+            if path in tree:
+                continue
+            if not any(path == r["snippet_path"] if "snippet_path" in r else path.startswith(r["snippet_prefix"]) for r in selectors):
+                raise ValueError("retained external snippet origin has no bundled-material rule")
+    references = []
+    for path, (mode, oid) in tree.items():
+        if mode != "160000":
+            continue
+        directory = repo / path
+        if directory.is_dir() and any(directory.iterdir()):
+            raise ValueError("populated submodules require their own material inventory")
+        references.append({"path": path, "revision": oid, "status": "reference_only_unpopulated_gitlink"})
+    return records, references
+
+
+def append_bundles(cdx: dict, spdx: dict, records: list[dict]) -> None:
+    root = cdx["metadata"]["component"]
+    subjects = [p for p in spdx["packages"] if (p.get("name"), p.get("versionInfo")) == (root["name"], root["version"])]
+    if len(subjects) != 1:
+        raise ValueError("bundled-material containment requires an unambiguous SPDX subject")
+    for record in records:
+        if record["version"] != root["version"]:
+            raise ValueError("bundled-material revision does not match the inventory subject")
+        identifier = record["id"] + "-" + record["version"]
+        ref = "urn:raptor:bundle:" + identifier
+        spdx_id = "SPDXRef-RaptorBundle-" + identifier
+        component = {"type": "data", "name": record["name"], "version": record["version"],
+                     "bom-ref": ref, "description": record["license_scope"],
+                     "properties": [{"name": "raptor:bundle:status", "value": record["status"]}],
+                     "externalReferences": [{"type": record["upstream_type"], "url": record["upstream"]}]}
+        if record.get("upstream_revision"):
+            component["properties"].append({"name": "raptor:bundle:upstream-revision", "value": record["upstream_revision"]})
+        for role, entries in [("distribution", record["files"]), ("license", record["notices"])]:
+            component["externalReferences"] += [{"type": role, "url": f["url"],
+                "hashes": [{"alg": "SHA-256", "content": f["sha256"]}], "comment": record["license_scope"]} for f in entries]
+        for gap in record["gaps"]:
+            component["properties"].append({"name": "raptor:provenance:gap", "value": gap})
+        if record["license"]:
+            component["licenses"] = [{"license": {"id": record["license"]}}]
+        root.setdefault("components", []).append(component)
+        spdx["packages"].append({"SPDXID": spdx_id, "name": record["name"], "versionInfo": record["version"],
+            "primaryPackagePurpose": "OTHER", "downloadLocation": "NOASSERTION", "filesAnalyzed": False,
+            "licenseDeclared": record["license"] or "NOASSERTION", "licenseConcluded": "NOASSERTION",
+            "licenseComments": record["license_scope"], "copyrightText": "NOASSERTION",
+            "sourceInfo": "RAPTOR bundled material: " + json.dumps(record, ensure_ascii=True, sort_keys=True)})
+        spdx.setdefault("relationships", []).append({"spdxElementId": subjects[0]["SPDXID"],
+            "relationshipType": "CONTAINS", "relatedSpdxElement": spdx_id})
+    if records:
+        root.pop("signature", None)
+        cdx.pop("signature", None)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--syft", type=Path, required=True)
@@ -313,6 +505,11 @@ def main() -> None:
         repo_inputs = [{"path": str(args.repo / name), "sha256": hashlib.sha256(raw).hexdigest()}
                        for name, raw in [("pyproject.toml", config_raw), ("uv.lock", lock_raw)]]
     prepared_cdx, prepared_spdx, report = prepare(native, cdx, spdx, manifest, project, lock)
+    if args.repo:
+        bundles, references = bundled_materials(args.repo, project["revision"], manifest)
+        append_bundles(prepared_cdx, prepared_spdx, bundles)
+        report["bundles"], report["references"] = bundles, references
+        report["scope"] = "repository identity, source archives and committed bundled-material evidence; not a complete build-source or licence assessment"
     # Refuse malformed retained evidence before creating any output artifacts.
     _read_cyclonedx(prepared_cdx, args.cyclonedx)
     _read_spdx(prepared_spdx, args.spdx)

@@ -37,5 +37,221 @@
       "revision": "a885b885fef16fac4bc544188fb25e9e37ae83e8",
       "licence_path": "LICENSE.md"
     }
+  ],
+  "bundles": [
+    {
+      "id": "public-suffix-list",
+      "name": "RAPTOR bundled Public Suffix List",
+      "root": "core/domains/data",
+      "license": "MPL-2.0",
+      "license_scope": "MPL-2.0 applies to the upstream list snapshot. RAPTOR lookup code retains MIT.",
+      "upstream": "https://publicsuffix.org/list/public_suffix_list.dat",
+      "notice_paths": [
+        "core/domains/data/LICENSE.MPL-2.0",
+        "THIRD_PARTY_NOTICES.md"
+      ],
+      "files": [
+        "public_suffix_list.dat"
+      ],
+      "upstream_type": "distribution"
+    },
+    {
+      "id": "dataflow-owasp-benchmark-java-excerpts",
+      "name": "RAPTOR retained owasp-benchmark-java source excerpts",
+      "root": "core/dataflow/corpus/findings",
+      "license": "GPL-2.0-only",
+      "license_scope": "Licence scope: upstream source/sink/intermediate_steps snippets in the listed JSON files. RAPTOR annotations and labels retain MIT.",
+      "upstream": "https://github.com/OWASP-Benchmark/BenchmarkJava",
+      "notice_paths": [
+        "core/dataflow/corpus/SOURCES.md",
+        "core/dataflow/corpus/licenses/UPSTREAM-NOTICES.txt",
+        "core/dataflow/corpus/licenses/GPL-2.0.txt"
+      ],
+      "snippet_prefix": "out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/",
+      "upstream_type": "vcs"
+    },
+    {
+      "id": "dataflow-webgoat-excerpts",
+      "name": "RAPTOR retained webgoat source excerpts",
+      "root": "core/dataflow/corpus/findings",
+      "license": "GPL-2.0-or-later",
+      "license_scope": "Licence scope: upstream source/sink/intermediate_steps snippets in the listed JSON files. RAPTOR annotations and labels retain MIT.",
+      "upstream": "https://github.com/WebGoat/WebGoat",
+      "notice_paths": [
+        "core/dataflow/corpus/SOURCES.md",
+        "core/dataflow/corpus/licenses/UPSTREAM-NOTICES.txt",
+        "core/dataflow/corpus/licenses/WebGoat.txt",
+        "core/dataflow/corpus/licenses/GPL-2.0.txt"
+      ],
+      "snippet_prefix": "out/dataflow-corpus-fixtures/webgoat/src/main/java/org/owasp/webgoat/lessons/",
+      "upstream_type": "vcs"
+    },
+    {
+      "id": "dataflow-juice-shop-excerpts",
+      "name": "RAPTOR retained juice-shop source excerpts",
+      "root": "core/dataflow/corpus/findings",
+      "license": "MIT",
+      "license_scope": "Licence scope: upstream source/sink/intermediate_steps snippets in the listed JSON files. RAPTOR annotations and labels retain MIT.",
+      "upstream": "https://github.com/juice-shop/juice-shop",
+      "notice_paths": [
+        "core/dataflow/corpus/SOURCES.md",
+        "core/dataflow/corpus/licenses/UPSTREAM-NOTICES.txt",
+        "core/dataflow/corpus/licenses/Juice-Shop.txt"
+      ],
+      "snippet_prefix": "out/dataflow-corpus-fixtures/juice-shop/data/static/codefixes/",
+      "upstream_type": "vcs"
+    },
+    {
+      "id": "dataflow-curl-excerpts",
+      "name": "RAPTOR retained curl source excerpts",
+      "root": "core/dataflow/corpus/findings",
+      "license": "curl",
+      "license_scope": "Licence scope: upstream source/sink/intermediate_steps snippets in the listed JSON files. RAPTOR annotations and labels retain MIT.",
+      "upstream": "https://github.com/curl/curl",
+      "notice_paths": [
+        "core/dataflow/corpus/SOURCES.md",
+        "core/dataflow/corpus/licenses/UPSTREAM-NOTICES.txt",
+        "core/dataflow/corpus/licenses/curl.txt"
+      ],
+      "snippet_path": "out/dataflow-corpus-fixtures/curl/lib/curl_ntlm_core.c",
+      "upstream_type": "vcs"
+    },
+    {
+      "id": "dataflow-linux-cve-2017-7541-excerpts",
+      "name": "RAPTOR retained linux-cve-2017-7541 source excerpts",
+      "root": "core/dataflow/corpus/findings",
+      "license": null,
+      "license_scope": "Licence scope: upstream source/sink/intermediate_steps snippets in the listed JSON files. RAPTOR annotations and labels retain MIT.",
+      "upstream": "https://github.com/torvalds/linux",
+      "notice_paths": [
+        "core/dataflow/corpus/SOURCES.md",
+        "core/dataflow/corpus/licenses/UPSTREAM-NOTICES.txt"
+      ],
+      "snippet_path": "out/dataflow-corpus-fixtures/linux-cve-2017-7541/drivers/net/wireless/broadcom/brcm80211/brcmfmac/cfg80211.c",
+      "upstream_type": "vcs"
+    },
+    {
+      "id": "dataflow-linux-cve-2019-12382-excerpts",
+      "name": "RAPTOR retained linux-cve-2019-12382 source excerpts",
+      "root": "core/dataflow/corpus/findings",
+      "license": "GPL-2.0-or-later",
+      "license_scope": "Licence scope: upstream source/sink/intermediate_steps snippets in the listed JSON files. RAPTOR annotations and labels retain MIT.",
+      "upstream": "https://github.com/torvalds/linux",
+      "notice_paths": [
+        "core/dataflow/corpus/SOURCES.md",
+        "core/dataflow/corpus/licenses/UPSTREAM-NOTICES.txt",
+        "core/dataflow/corpus/licenses/GPL-2.0.txt"
+      ],
+      "snippet_path": "out/dataflow-corpus-fixtures/linux-cve-2019-12382/drivers/gpu/drm/drm_edid_load.c",
+      "upstream_type": "vcs"
+    },
+    {
+      "id": "dataflow-linux-cve-2019-12614-excerpts",
+      "name": "RAPTOR retained linux-cve-2019-12614 source excerpts",
+      "root": "core/dataflow/corpus/findings",
+      "license": "GPL-2.0-only",
+      "license_scope": "Licence scope: upstream source/sink/intermediate_steps snippets in the listed JSON files. RAPTOR annotations and labels retain MIT.",
+      "upstream": "https://github.com/torvalds/linux",
+      "notice_paths": [
+        "core/dataflow/corpus/SOURCES.md",
+        "core/dataflow/corpus/licenses/UPSTREAM-NOTICES.txt",
+        "core/dataflow/corpus/licenses/GPL-2.0.txt"
+      ],
+      "snippet_path": "out/dataflow-corpus-fixtures/linux-cve-2019-12614/arch/powerpc/platforms/pseries/dlpar.c",
+      "upstream_type": "vcs"
+    },
+    {
+      "id": "dataflow-linux-cve-2019-12615-excerpts",
+      "name": "RAPTOR retained linux-cve-2019-12615 source excerpts",
+      "root": "core/dataflow/corpus/findings",
+      "license": "GPL-2.0-only",
+      "license_scope": "Licence scope: upstream source/sink/intermediate_steps snippets in the listed JSON files. RAPTOR annotations and labels retain MIT.",
+      "upstream": "https://github.com/torvalds/linux",
+      "notice_paths": [
+        "core/dataflow/corpus/SOURCES.md",
+        "core/dataflow/corpus/licenses/UPSTREAM-NOTICES.txt",
+        "core/dataflow/corpus/licenses/GPL-2.0.txt"
+      ],
+      "snippet_path": "out/dataflow-corpus-fixtures/linux-cve-2019-12615/arch/sparc/kernel/mdesc.c",
+      "upstream_type": "vcs"
+    },
+    {
+      "id": "dataflow-linux-cve-2019-15291-excerpts",
+      "name": "RAPTOR retained linux-cve-2019-15291 source excerpts",
+      "root": "core/dataflow/corpus/findings",
+      "license": "GPL-2.0-only",
+      "license_scope": "Licence scope: upstream source/sink/intermediate_steps snippets in the listed JSON files. RAPTOR annotations and labels retain MIT.",
+      "upstream": "https://github.com/torvalds/linux",
+      "notice_paths": [
+        "core/dataflow/corpus/SOURCES.md",
+        "core/dataflow/corpus/licenses/UPSTREAM-NOTICES.txt",
+        "core/dataflow/corpus/licenses/GPL-2.0.txt"
+      ],
+      "snippet_path": "out/dataflow-corpus-fixtures/linux-cve-2019-15291/drivers/media/usb/b2c2/flexcop-usb.c",
+      "upstream_type": "vcs"
+    },
+    {
+      "id": "dataflow-linux-cve-2021-37159-excerpts",
+      "name": "RAPTOR retained linux-cve-2021-37159 source excerpts",
+      "root": "core/dataflow/corpus/findings",
+      "license": "GPL-2.0-only",
+      "license_scope": "Licence scope: upstream source/sink/intermediate_steps snippets in the listed JSON files. RAPTOR annotations and labels retain MIT.",
+      "upstream": "https://github.com/torvalds/linux",
+      "notice_paths": [
+        "core/dataflow/corpus/SOURCES.md",
+        "core/dataflow/corpus/licenses/UPSTREAM-NOTICES.txt",
+        "core/dataflow/corpus/licenses/GPL-2.0.txt"
+      ],
+      "snippet_path": "out/dataflow-corpus-fixtures/linux-cve-2021-37159/drivers/net/usb/hso.c",
+      "upstream_type": "vcs"
+    },
+    {
+      "id": "dataflow-linux-cve-2022-32250-excerpts",
+      "name": "RAPTOR retained linux-cve-2022-32250 source excerpts",
+      "root": "core/dataflow/corpus/findings",
+      "license": "GPL-2.0-only",
+      "license_scope": "Licence scope: upstream source/sink/intermediate_steps snippets in the listed JSON files. RAPTOR annotations and labels retain MIT.",
+      "upstream": "https://github.com/torvalds/linux",
+      "notice_paths": [
+        "core/dataflow/corpus/SOURCES.md",
+        "core/dataflow/corpus/licenses/UPSTREAM-NOTICES.txt",
+        "core/dataflow/corpus/licenses/GPL-2.0.txt"
+      ],
+      "snippet_path": "out/dataflow-corpus-fixtures/linux-cve-2022-32250/net/netfilter/nf_tables_api.c",
+      "upstream_type": "vcs"
+    },
+    {
+      "id": "sca-calibration-data",
+      "name": "RAPTOR SCA calibration data",
+      "root": "packages/sca/data/calibration",
+      "license": null,
+      "license_scope": "Mixed derived data and original RAPTOR assessments. Per-file source credits and upstream terms remain separate.",
+      "upstream": "https://github.com/gadievron/raptor",
+      "notice_paths": [
+        "packages/sca/data/calibration/ATTRIBUTION.md",
+        "THIRD_PARTY_NOTICES.md"
+      ],
+      "files": [
+        "*.json"
+      ],
+      "source_credits": true,
+      "upstream_type": "vcs"
+    },
+    {
+      "id": "cve-diff-sample-metadata",
+      "name": "RAPTOR CVE-diff sample metadata",
+      "root": "packages/cve_diff/data/samples",
+      "license": null,
+      "license_scope": "Retained vulnerability metadata and advisory descriptions; source terms remain separate from RAPTOR-generated fields.",
+      "upstream": "https://nvd.nist.gov/",
+      "notice_paths": [
+        "THIRD_PARTY_NOTICES.md"
+      ],
+      "files": [
+        "*.json"
+      ],
+      "source_credits": true,
+      "upstream_type": "website"
+    }
   ]
 }
