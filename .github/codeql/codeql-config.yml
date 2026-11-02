@@ -11,6 +11,9 @@
 name: RAPTOR CodeQL config
 
 paths-ignore:
+  # Native CodeQL regression fixtures deliberately contain unsafe C/C++
+  # and Java patterns. Their dedicated query tests still run separately.
+  - engine/codeql/tests/**
   # IRIS Tier 1 dataflow-validation fixtures (intentionally vulnerable
   # Flask + sys.argv command-injection patterns; CodeQL flags them
   # because they ARE vulnerable, by design).
