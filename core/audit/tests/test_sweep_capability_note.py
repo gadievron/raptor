@@ -21,9 +21,10 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
-import os
+import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -116,11 +117,12 @@ class TestCapabilityNote:
 
 @pytest.fixture(scope="module")
 def audit_cli():
-    os.environ.setdefault("_RAPTOR_TRUSTED", "1")
     loader = SourceFileLoader("raptor_audit_cli", str(AUDIT_CLI))
     spec = importlib.util.spec_from_loader("raptor_audit_cli", loader)
     mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
+    with pytest.MonkeyPatch.context() as mp, patch.object(sys, "path", sys.path.copy()):
+        mp.setenv("_RAPTOR_TRUSTED", "1")
+        loader.exec_module(mod)
     return mod
 
 

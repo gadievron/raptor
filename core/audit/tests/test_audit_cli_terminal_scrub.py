@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SCRIPT = _REPO_ROOT / "libexec" / "raptor-audit"
@@ -28,7 +30,8 @@ def _load_cli():
     loader = SourceFileLoader("raptor_audit_cli_scrub", str(_SCRIPT))
     spec = importlib.util.spec_from_loader("raptor_audit_cli_scrub", loader)
     mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
+    with patch.object(sys, "path", sys.path.copy()):
+        loader.exec_module(mod)
     return mod
 
 

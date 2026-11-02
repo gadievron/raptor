@@ -23,9 +23,11 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -46,7 +48,8 @@ def _load_cli():
     prior = os.environ.get("_RAPTOR_TRUSTED")
     os.environ["_RAPTOR_TRUSTED"] = "1"  # script trust gate (see header)
     try:
-        loader.exec_module(mod)
+        with patch.object(sys, "path", sys.path.copy()):
+            loader.exec_module(mod)
     finally:
         if prior is None:
             os.environ.pop("_RAPTOR_TRUSTED", None)

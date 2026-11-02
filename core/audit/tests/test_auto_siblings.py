@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -612,8 +613,8 @@ class TestPipelineSeam:
     def test_pass_failure_never_blocks_the_pipeline(
         self, tmp_path, monkeypatch, caplog,
     ):
-        from core.audit.pipeline import _maybe_auto_siblings
         import core.audit.auto_siblings as mod
+        from core.audit.pipeline import _maybe_auto_siblings
 
         def _boom(*_a, **_k):
             raise RuntimeError("composition exploded")
@@ -680,7 +681,8 @@ def audit_cli():
         )
         mod = importlib.util.module_from_spec(spec)
         sys.modules["raptor_audit_cli_auto_siblings"] = mod
-        spec.loader.exec_module(mod)
+        with patch.object(sys, "path", sys.path.copy()):
+            spec.loader.exec_module(mod)
         yield mod
     finally:
         sys.modules.pop("raptor_audit_cli_auto_siblings", None)
