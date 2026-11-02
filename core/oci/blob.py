@@ -21,9 +21,11 @@ consumer reads into memory rather than to disk, so
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import zlib
+import unicodedata
 
 from core.tar import TarOpenError, extract_files_from_tar
 from typing import TYPE_CHECKING
@@ -243,6 +245,14 @@ def _tar_mode_for_media_type(media_type: str) -> str:
     )
 
 
+class UnresolvedLayerHardlinks(ValueError):
+    """Selected layer-local hard links need additional regular target files."""
+
+    def __init__(self, paths: set[str]):
+        super().__init__("selected hard links require additional layer-local targets")
+        self.paths = paths
+
+
 def extract_files_from_layer(
     layer_chunks: Iterable[bytes],
     wanted_paths: set[str],
@@ -250,6 +260,9 @@ def extract_files_from_layer(
     max_entry_bytes: int = DEFAULT_MAX_ENTRY_BYTES,
     media_type: str = "",
     compressed_size: int | None = None,
+    max_selected_bytes: int | None = None,
+    resolve_selected_hardlinks: bool = False,
+    expected_diff_id: str | None = None,
 ) -> dict[str, bytes]:
     """Pull specific files out of a streamed layer blob.
 
@@ -282,6 +295,17 @@ def extract_files_from_layer(
     ratio-shaped bomb test documented on the module constants.
     ``None`` applies the floor budget.
 
+    ``expected_diff_id`` verifies the complete uncompressed tar stream against
+    the image config, in addition to verification of the compressed source.
+
+    ``resolve_selected_hardlinks`` opts into memory-only resolution against
+    other selected regular files in this same layer. Missing target selections
+    raise ``UnresolvedLayerHardlinks`` for a bounded replay by the caller.
+    Symlinks are always refused. No host links are followed or created.
+
+    ``max_selected_bytes`` optionally bounds the combined selected payload,
+    in addition to the per-entry and decompression limits.
+
     Integrity: ``layer_chunks`` typically comes from
     :meth:`OciRegistryClient.stream_blob`, which verifies the blob's
     sha256 only once the stream is consumed to EOF. The early-exit
@@ -297,15 +321,34 @@ def extract_files_from_layer(
     author show this scanner a benign copy while the runtime saw a
     later, different one.
     """
+    if max_selected_bytes is not None and max_selected_bytes <= 0:
+        raise ValueError("max_selected_bytes must be positive")
+    if expected_diff_id is not None and not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_diff_id):
+        raise ValueError("expected_diff_id must be a sha256 digest")
     mode = _tar_mode_for_media_type(media_type)
     if not wanted_paths:
         return {}
 
     normalised_wanted = {_normalise_tar_path(p) for p in wanted_paths}
 
+    selected_bytes = 0
+    hardlinks: dict[str, str] = {}
+    regular_names: set[str] = set()
+
     def _select(member) -> str | None:
+        nonlocal selected_bytes
         name = _normalise_tar_path(member.name)
-        return name if name in normalised_wanted else None
+        if name not in normalised_wanted:
+            return None
+        if name in hardlinks:
+            raise ValueError("duplicate selected layer path")
+        if member.size < 0:
+            raise WantedEntryRefused("negative selected layer entry size")
+        regular_names.add(name)
+        selected_bytes += member.size
+        if max_selected_bytes is not None and selected_bytes > max_selected_bytes:
+            raise ValueError("selected layer files exceed memory budget")
+        return name
 
     def _refuse_wanted_skip(member, reason: str) -> None:
         # Failures channel for the safety filter: a WANTED path that
@@ -321,6 +364,23 @@ def extract_files_from_layer(
                 f"({reason}, declared size {member.size})"
             )
 
+    def _nonregular(member) -> None:
+        name = _normalise_tar_path(member.name)
+        if name not in normalised_wanted or member.isdir():
+            return
+        if not member.islnk():
+            raise WantedEntryRefused("selected layer entry is not a regular file")
+        target = _normalise_tar_path(member.linkname)
+        for value in (name, target):
+            if (not value or len(value) > 4096 or "\\" in value
+                    or unicodedata.normalize("NFKC", value) != value
+                    or any(ord(c) < 32 or ord(c) == 127 for c in value)
+                    or any(p in {"", ".", ".."} for p in value.split("/"))):
+                raise WantedEntryRefused("unsafe selected hard-link path")
+        if name in hardlinks or name in regular_names:
+            raise ValueError("duplicate selected layer path")
+        hardlinks[name] = target
+
     chunk_iter = iter(layer_chunks)
     if mode == "r|gz":
         # Decompression runs OUTSIDE tarfile so its output budget can
@@ -332,8 +392,22 @@ def extract_files_from_layer(
     else:
         tar_source = chunk_iter
         tar_mode = mode
+
+    def _verify_tar(source):
+        digest = hashlib.sha256()
+        total = 0
+        for chunk in source:
+            total += len(chunk)
+            if total > layer_decompression_budget(compressed_size):
+                raise ValueError("uncompressed layer exceeds decompression budget")
+            digest.update(chunk)
+            yield chunk
+        if "sha256:" + digest.hexdigest() != expected_diff_id:
+            raise ValueError("uncompressed layer diff ID mismatch")
+
+    tar_iter = iter(_verify_tar(tar_source) if expected_diff_id is not None else tar_source)
     found = extract_files_from_tar(
-        tar_source,
+        tar_iter,
         selector=_select,
         mode=tar_mode,
         max_member_bytes=max_entry_bytes,
@@ -355,14 +429,32 @@ def extract_files_from_layer(
         max_entry_count=DEFAULT_MAX_ENTRY_COUNT,
         max_total_bytes=layer_decompression_budget(compressed_size),
         on_skipped=_refuse_wanted_skip,
+        on_nonregular=_nonregular if resolve_selected_hardlinks else None,
     )
     # Drain the source to EOF before returning anything. stream_blob
     # only performs its sha256 check on exhaustion; returning after
     # an early exit would skip the check by construction, so no
     # extracted content leaves this function until the source
     # iterator has run to completion (raising on digest mismatch).
+    if expected_diff_id is not None:
+        for _ in tar_iter:
+            pass
     for _ in chunk_iter:
         pass
+    unresolved = dict(hardlinks)
+    for _ in range(min(len(hardlinks), 32)):
+        previous = len(unresolved)
+        for name, target in list(unresolved.items()):
+            if target in found:
+                found[name] = found[target]
+                del unresolved[name]
+        if not unresolved or len(unresolved) == previous:
+            break
+    if unresolved:
+        missing = set(unresolved.values()) - normalised_wanted
+        if missing:
+            raise UnresolvedLayerHardlinks(missing)
+        raise WantedEntryRefused("cyclic or missing selected hard-link target")
     return found
 
 
@@ -388,5 +480,6 @@ __all__ = [
     "DecompressionBudgetExceeded",
     "UnsupportedLayerMediaType",
     "WantedEntryRefused",
+    "UnresolvedLayerHardlinks",
     "extract_files_from_layer",
 ]
