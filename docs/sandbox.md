@@ -1,5 +1,7 @@
 # Sandbox
 
+[Documentation index](README.md)
+
 RAPTOR's default untrusted-execution entry points sandbox target code,
 LLM-generated PoCs, and repository-derived tool inputs. On Linux they compose
 namespaces, Landlock, seccomp-bpf, and resource limits. The required containment
@@ -18,16 +20,32 @@ For CLI flags, see the [slash-command reference](commands.md).
 
 ---
 
+Start with the guarantees and [containment floor](#containment-floor) before
+choosing a [profile](#profiles). For a refused run, use
+[Troubleshooting](#troubleshooting) to identify the missing host capability.
+
 **On this page:**
 
 - [What a sandboxed run gets you](#what-a-sandboxed-run-gets-you)
-- [Profiles](#profiles)
-- [Containment floor](#containment-floor)
 - [Isolation layers](#isolation-layers)
-- [Platform support](#platform-support)
+- [Containment floor](#containment-floor)
+- [Profiles](#profiles)
+- [Egress proxy](#egress-proxy)
+- [LLM dispatcher response-scan jail](#llm-dispatcher-response-scan-jail)
+- [Audit and observe modes](#audit-and-observe-modes)
+- [Binary calibration](#binary-calibration)
+- [Observability](#observability)
+- [Resource limits](#resource-limits)
 - [When the sandbox cannot engage](#when-the-sandbox-cannot-engage)
+- [Supervised process trees (not a sandbox)](#supervised-process-trees-not-a-sandbox)
+- [Toolchain env for builds](#toolchain-env-for-builds)
+- [Host-fingerprint sanitisation](#host-fingerprint-sanitisation)
+- [Platform support](#platform-support)
+- [Host and network perimeter](#host-and-network-perimeter)
 - [Known limitations](#known-limitations)
 - [Troubleshooting](#troubleshooting)
+- [Namespace supervision outside the sandbox](#namespace-supervision-outside-the-sandbox)
+- [Related documentation](#related-documentation)
 
 ## What a sandboxed run gets you
 

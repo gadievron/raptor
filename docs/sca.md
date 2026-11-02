@@ -1,5 +1,7 @@
 # Software Composition Analysis
 
+[Documentation index](README.md)
+
 RAPTOR's SCA subsystem is a mechanical-tier dependency scanner. It
 extracts every dependency from a project, matches against OSV, CISA KEV
 and EPSS advisories, surfaces hygiene and supply-chain heuristics, and
@@ -31,10 +33,13 @@ See also: [slash-command reference](commands.md#software-composition-analysis),
 
 **In a RAPTOR session:**
 
-```bash
+```text
 /sca /path/to/project
-/sca fix /path/to/project --apply
+/sca fix /path/to/project
 ```
+
+`fix` produces a plan by default. Add `--apply` when you intend to modify
+the target's dependency files.
 
 **In your terminal (CLI entry point):**
 
@@ -77,6 +82,7 @@ The default (no subcommand) is `scan` -- the full analyse pipeline.
 | `fix-diff` | Fetch the upstream fix diffs for findings in a `findings.json` (cap with `--max-cves`). |
 
 ---
+
 
 ## Scanning
 
@@ -872,6 +878,7 @@ raptor-sca clean-cache --max-size-mb 1024 --stress-max-size-mb 256
 cleanup retention/location. Manual `--max-size-mb 0` disables overall size
 pruning while age/stress cleanup still applies. Exit code 1 means cleanup
 was busy, encountered deletion errors, or could not meet the requested budget.
+
 
 ## Limitations
 

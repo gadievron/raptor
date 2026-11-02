@@ -1,5 +1,7 @@
 # Security Model
 
+[Documentation index](README.md)
+
 RAPTOR scans untrusted code. The thing being analysed is also trying to
 attack the analyst. A carefully crafted repository that a security
 researcher has been socially engineered into scanning opens the attack
@@ -10,9 +12,21 @@ This is about RAPTOR's own security posture, not about the `/threat-model`
 feature for operator-created per-project threat models (see
 [threat-model.md](threat-model.md) for that).
 
-See also: [sandbox](sandbox.md), [commands](python-cli.md).
+See also: [sandbox](sandbox.md), [slash commands](commands.md), [Python CLI](python-cli.md).
 
 ---
+
+Use the attack scenarios below to understand the defences and residual
+risks. For operational settings, see [sandbox profiles](sandbox.md#profiles);
+for tool and approval boundaries, see [agent security](agent-security.md).
+
+**On this page:**
+
+- [Adversarial Repository Threat Model](#adversarial-repository-threat-model)
+- [Agent Capabilities and the Rule of Two](#agent-capabilities-and-the-rule-of-two)
+- [Security Invariants](#security-invariants)
+- [Security-Event Stream](#security-event-stream)
+- [Same-target sibling trust](#same-target-sibling-trust)
 
 ## Adversarial Repository Threat Model
 

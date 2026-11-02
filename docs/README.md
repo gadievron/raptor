@@ -3,8 +3,8 @@
 RAPTOR is an autonomous offensive and defensive security research framework. It
 combines static analysis, dataflow validation, binary fuzzing, dynamic
 instrumentation, and LLM-powered reasoning to find, validate, and exploit
-vulnerabilities with minimal human intervention. This directory contains the
-reference documentation for the framework.
+vulnerabilities with minimal human intervention. Use this index to choose a workflow, then follow its guide for setup,
+examples, output, and limitations.
 
 
 ## Getting Started

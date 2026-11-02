@@ -1,5 +1,7 @@
 # Frida Dynamic Instrumentation
 
+[Documentation index](README.md)
+
 RAPTOR wraps the Frida dynamic instrumentation framework into a
 lifecycle-managed session runner. It resolves devices (local, USB,
 remote frida-server), resolves targets (PID, process name, bundle ID, or
@@ -18,6 +20,11 @@ See also: [commands](commands.md), [binary analysis](binary-analysis.md),
 **Status:** Alpha. Templates and runner are minimal starters.
 
 ---
+
+For a first run, install the host tools below, then follow [Usage](#usage)
+to choose a device and target. Check [Output](#output) for the resulting
+events and report, or [Common Failure Modes](#common-failure-modes) if the
+session cannot attach or spawn.
 
 **On this page:**
 
@@ -145,7 +152,7 @@ raptor frida --target some-process --host 127.0.0.1 --template api-trace
 
 **Slash command:**
 
-```bash
+```text
 /frida --target <target> --template <name> --duration <seconds>
 ```
 

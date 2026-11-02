@@ -1,8 +1,14 @@
 # LLM Providers
 
+[Documentation index](README.md)
+
 RAPTOR uses large language models for vulnerability analysis, exploit generation, dataflow
 validation, and autonomous decision-making. This guide covers provider configuration,
 model selection, multi-model workflows, and cost management.
+
+To configure a provider, start with [Quick Start](#quick-start), then check
+[model selection](#model-selection-logic) and [cost management](#cost-management).
+For a local model, follow the [Ollama guide](#ollama-offline--airgapped).
 
 **On this page:**
 
@@ -477,7 +483,7 @@ the model succeeded earlier in the run (one early success previously
 held a dying transport closed for the rest of the work items).
 
 Example:
-```bash
+```text
 /agentic ~/target \
   --model claude-opus-4-6 \
   --model gpt-5.4 \

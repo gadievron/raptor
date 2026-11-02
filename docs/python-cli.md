@@ -1,5 +1,7 @@
 # Python CLI
 
+[Documentation index](README.md)
+
 `raptor.py` is the direct entry point for CI pipelines, scripting, and
 non-interactive use. For interactive analysis via Claude Code, launch with
 `bin/raptor` instead.
@@ -8,9 +10,24 @@ See also: [commands](commands.md), [README](README.md),
 [dependencies](dependencies.md).
 
 
+**On this page:**
+
+- [Usage](#usage)
+- [Modes](#modes)
+- [Sandbox Flags](#sandbox-flags)
+- [Examples](#examples)
+- [Environment Variables](#environment-variables)
+- [Exit Codes](#exit-codes)
+- [Output](#output)
+- [Running fully standalone (no Claude Code)](#running-fully-standalone-no-claude-code)
+
 ## Usage
 
-```
+Run these commands in a terminal from the RAPTOR checkout, with its Python
+dependencies installed. Slash commands belong in a RAPTOR session; see the
+[command reference](commands.md) for that interface.
+
+```sh
 python3 raptor.py <mode> [flags]
 ```
 

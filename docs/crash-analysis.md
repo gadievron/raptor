@@ -1,15 +1,40 @@
 # Crash Analysis - Autonomous Root-Cause Analysis
 
-The `/crash-analysis` command provides autonomous security bug root-cause analysis for C/C++ projects. It combines multiple debugging techniques (rr record-replay, function tracing, code coverage) with a rigorous hypothesis-validation workflow to produce verified root-cause analyses.
+[Documentation index](README.md)
+
+Use `/crash-analysis` to investigate a reported C/C++ crash and produce a
+root-cause analysis backed by debugger evidence. It combines rr record/replay,
+function tracing, and code coverage with an independent hypothesis checker.
+
+Start with a bug-report URL and repository URL. Check the Linux, hardware,
+and tool requirements below before starting a run. For crashes discovered
+during a fuzzing campaign, see [fuzzing](fuzzing.md#crash-triage-and-replay).
+
+See also: [command reference](commands.md#crash-analysis),
+[agent security](agent-security.md), [sandbox](sandbox.md).
+
+**On this page:**
+
+- [Quick Start](#quick-start)
+- [Prerequisites](#prerequisites)
+- [Workflow Overview](#workflow-overview)
+- [Automated debugger and sanitizer replay](#automated-debugger-and-sanitizer-replay)
+- [Output Directory Structure](#output-directory-structure)
+- [Understanding the Output](#understanding-the-output)
+- [Agent Architecture](#agent-architecture)
+- [Troubleshooting](#troubleshooting)
+- [Skills Reference](#skills-reference)
+- [Integration with RAPTOR](#integration-with-raptor)
+- [Limitations](#limitations)
 
 ## Quick Start
 
-```bash
+```text
 /crash-analysis <bug-tracker-url> <git-repo-url>
 ```
 
 Example:
-```bash
+```text
 /crash-analysis https://trac.ffmpeg.org/ticket/11234 https://github.com/FFmpeg/FFmpeg.git
 ```
 
@@ -140,7 +165,7 @@ launcher and do not automatically receive its containment policy.
 crash-analysis-YYYYMMDD_HHMMSS/
 ├── bug-report.json              # Structured bug-tracker facts (schema-gated)
 ├── attachments/                 # Downloaded crash inputs from the report
-├── rr-trace/                    # Packed rr recording (shareable)
+├── rr-trace/                    # Packed rr recording
 │   └── ...
 ├── traces/                      # Function execution traces
 │   ├── trace_1234.log          # Per-thread trace logs
@@ -167,7 +192,7 @@ Each hypothesis document contains:
 5. **Violated Assumption**: What assumption was broken
 
 Example structure:
-```markdown
+````markdown
 ### Step 1: Memory Allocation
 **Location:** `src/codec.c:234`
 **Code:**
@@ -191,7 +216,7 @@ The code intends to parse variable-length codec data...
 
 ## Violated Assumption
 The code assumes that header.length <= allocated_size, but...
-```
+````
 
 ### Viewing Function Traces
 
@@ -203,7 +228,10 @@ Function traces can be viewed in Perfetto:
 
 ### Sharing RR Recordings
 
-The `rr-trace/` directory is packed and can be shared:
+The packed `rr-trace/` directory can be replayed on another compatible host.
+Recordings can contain target memory and inputs; review their contents before
+sharing them. The following is a direct rr invocation and does not itself
+apply RAPTOR sandboxing:
 
 ```bash
 # On another machine with rr installed:

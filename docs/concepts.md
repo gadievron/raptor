@@ -1,5 +1,7 @@
 # Core Concepts
 
+[Documentation index](README.md)
+
 How RAPTOR fits together: the two-layer model, what a run produces, how
 findings move through the pipeline, and the mental model for choosing which
 commands to reach for.  For the detailed file-by-file map, see
@@ -14,6 +16,28 @@ commands to reach for.  For the detailed file-by-file map, see
 [sandbox](sandbox.md) |
 [security](security.md)
 
+
+For a first run, start with [Choosing a command](#choosing-a-command).
+For an existing run, use [Runs and output](#runs-and-output) and
+[The finding lifecycle](#the-finding-lifecycle) to interpret its artefacts.
+
+**On this page:**
+
+- [Two layers](#two-layers)
+- [Analysis dispatch](#analysis-dispatch)
+- [Cost model](#cost-model)
+- [Runs and output](#runs-and-output)
+- [Projects](#projects)
+- [The finding lifecycle](#the-finding-lifecycle)
+- [Sandbox](#sandbox)
+- [Progressive loading](#progressive-loading)
+- [Model scorecard](#model-scorecard)
+- [Coverage tracking](#coverage-tracking)
+- [Annotations](#annotations)
+- [SAGE persistent memory](#sage-persistent-memory)
+- [Offline and airgapped use](#offline-and-airgapped-use)
+- [Choosing a command](#choosing-a-command)
+- [Source vs. binary](#source-vs-binary)
 
 ## Two layers
 
@@ -405,7 +429,7 @@ with a local Ollama model for analysis dispatch.
 
 Most of these compose.  The typical thorough-review workflow:
 
-```bash
+```text
 /project create myapp --target /path/to/code
 /project use myapp
 /agentic --understand --threat-model --validate

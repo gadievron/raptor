@@ -1,8 +1,28 @@
 # RAPTOR Understand Graph
 
-`/understand` still writes the JSON artefacts operators already know:
-`context-map.json`, `flow-trace-*.json`, `variants.json`, and `diagrams.md`.
-The SQLite graph is an extra memory layer behind those files.
+[Documentation index](README.md)
+
+The `/understand` graph stores attack-surface and analysis evidence across
+runs. Use it to query entry-to-sink paths, compare snapshots, and supply
+context to later analysis. The JSON artefacts (`context-map.json`,
+`flow-trace-*.json`, `variants.json`, and `diagrams.md`) remain the public
+contract; the SQLite graph provides a queryable memory layer.
+
+Start with [operator queries](#operator-query) for an existing project. See
+the [/understand reference](commands.md#understand) to produce the initial
+map and [validation](validation.md#integration) for the downstream handoff.
+
+**On this page:**
+
+- [Where It Lives](#where-it-lives)
+- [What Goes In](#what-goes-in)
+- [Who Uses It](#who-uses-it)
+- [Diagram Output](#diagram-output)
+- [Operator Query](#operator-query)
+- [Maintenance](#maintenance)
+- [Snapshot Diff](#snapshot-diff)
+- [Validation Handoff](#validation-handoff)
+- [Pipeline evidence and selection](#pipeline-evidence-and-selection)
 
 ## Where It Lives
 
@@ -83,6 +103,11 @@ Example:
 
 ```bash
 libexec/raptor-graph-query --project myapp --diff --json > out/projects/myapp/graph-diff.json
+```
+
+Then, in a RAPTOR session:
+
+```text
 /diagram out/projects/myapp --target myapp
 ```
 

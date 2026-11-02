@@ -1,5 +1,7 @@
 # SAGE Persistent Memory
 
+[Documentation index](README.md)
+
 RAPTOR integrates with [SAGE](https://github.com/l33tdawg/sage) (Sovereign
 Agent Governed Experience) -- a consensus-validated persistent memory system
 -- to enable cross-session learning across all analysis workflows.  Memories
@@ -22,8 +24,8 @@ analysis workflow is affected.
 
 **On this page:**
 
-- [Architecture](#architecture)
 - [Quick Start](#quick-start)
+- [Architecture](#architecture)
 - [HMAC key setup](#hmac-key-setup)
 - [CPU vs GPU](#cpu-vs-gpu)
 - [Use cases](#use-cases)
@@ -32,16 +34,6 @@ analysis workflow is affected.
 - [How It Works](#how-it-works)
 - [Upgrading and migrating](#upgrading-and-migrating)
 - [Troubleshooting](#troubleshooting)
-
-## Architecture
-
-RAPTOR uses a **hybrid integration**: the Python pipelines talk to SAGE
-through the `sage-agent-sdk` (fuzzing memory, audit hooks, SCA
-short-circuits, CodeQL build recall), and the Claude Code agents
-connect via MCP (stdio transport) for persistent memory across
-sessions. Both paths land on the same SAGE node, a Docker sidecar with
-an Ollama container providing embeddings.
-
 
 ## Quick Start
 
@@ -135,6 +127,16 @@ permissions from `.claude/settings.local.json` (deletes either file if it
 becomes empty), and removes the recorded boot payload.  Data volumes
 are preserved -- use `docker compose -f core/sage/docker-compose.yml down
 -v` to wipe them.  The HMAC key is never removed by uninstall.
+
+
+## Architecture
+
+RAPTOR uses a **hybrid integration**: the Python pipelines talk to SAGE
+through the `sage-agent-sdk` (fuzzing memory, audit hooks, SCA
+short-circuits, CodeQL build recall), and the Claude Code agents
+connect via MCP (stdio transport) for persistent memory across
+sessions. Both paths land on the same SAGE node, a Docker sidecar with
+an Ollama container providing embeddings.
 
 
 ## HMAC key setup

@@ -1,11 +1,30 @@
 # Troubleshooting
 
+[Documentation index](README.md)
+
+Start with the self-test after installation or upgrades. For an active run,
+use run introspection before diagnosing the failing subsystem below. Keep
+the run directory and exact error message available when checking a failure.
+
 **Related documentation:**
 [Sandbox](sandbox.md) |
 [Dependencies](dependencies.md) |
 [LLM Providers](llm.md) |
 [Static Analysis](static-analysis.md)
 
+
+**On this page:**
+
+- [Self-test](#self-test)
+- [Run introspection](#run-introspection)
+- [Sandbox](#sandbox)
+- [Running under endpoint security (EDR)](#running-under-endpoint-security-edr)
+- [Coccinelle](#coccinelle)
+- [CodeQL](#codeql)
+- [LLM providers](#llm-providers)
+- [Semgrep](#semgrep)
+- [Fuzzing](#fuzzing)
+- [Validation pipeline](#validation-pipeline)
 
 ## Self-test
 

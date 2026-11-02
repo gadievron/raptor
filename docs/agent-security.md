@@ -1,5 +1,7 @@
 # Agent security
 
+[Documentation index](README.md)
+
 RAPTOR uses agents to review hostile source code, investigate crashes and
 collect evidence. That makes the agent boundary part of the product's security
 boundary. A repository may contain instructions written to mislead a model, and
@@ -10,6 +12,20 @@ headless LLM workers launched by the Python layer. They complement the process
 isolation described in [Sandbox](sandbox.md) and the wider threat model in
 [Security](security.md).
 
+
+For a dispatch review, start with the [capability rule](#the-capability-rule),
+then check the [agent inventory](#agent-inventory) and
+[human-approval gates](#human-approval). For process-level guarantees and
+platform limitations, use the [sandbox guide](sandbox.md).
+
+**On this page:**
+
+- [The capability rule](#the-capability-rule)
+- [How capabilities are constrained](#how-capabilities-are-constrained)
+- [Untrusted input](#untrusted-input)
+- [Outputs are not trusted](#outputs-are-not-trusted)
+- [Human approval](#human-approval)
+- [Agent inventory](#agent-inventory)
 
 ## The capability rule
 

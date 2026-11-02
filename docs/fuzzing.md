@@ -1,9 +1,10 @@
 # Fuzzing
 
+[Documentation index](README.md)
+
 RAPTOR's fuzzing subsystem orchestrates coverage-guided fuzzing campaigns
-against compiled binaries, source-level targets, and Python packages.  It
-detects what kind of
-target it is looking at, probes the host for available tooling, selects the
+against compiled binaries, source-level targets, and Python packages. It
+detects the target type, probes the host for available tooling, selects the
 appropriate fuzzing engine, manages corpus generation, and triages crashes into
 deduplicated, ranked findings wrapped as `core.witness.Witness` objects for
 downstream consumption by [/validate](validation.md) and
@@ -13,6 +14,10 @@ The canonical entry point is `python3 raptor.py fuzz` (or the `/fuzz` slash
 command).  The legacy `raptor_fuzzing.py` script is still present but
 `raptor.py fuzz` is the recommended path -- it manages the run lifecycle
 automatically.
+
+For a first campaign, check [prerequisites](#prerequisites), then follow
+[Usage](#usage). Consult the engine descriptions below when choosing a
+harness or investigating an engine-specific limitation.
 
 **On this page:**
 

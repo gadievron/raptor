@@ -1,5 +1,7 @@
 # ZKPoX -- Proof of Exploit
 
+[Documentation index](README.md)
+
 ZKPoX proves the statement "I possess an input that makes binary H exhibit
 outcome O" -- ultimately without revealing the input itself. The verifier
 learns that a working, reproducing exploit exists; they do not learn the
@@ -14,6 +16,11 @@ and witness-hiding verification are not implemented yet.
 It is a downstream consumer of the witness substrate: any run that records
 witnesses (`/fuzz`, `/agentic`, crash analysis) produces candidates.
 
+
+Use the run summary to find eligible witnesses, assemble a bundle, then
+reproduce it if you need an execution check. Run the helper commands below
+in a terminal from the RAPTOR checkout. See [fuzzing](fuzzing.md) and
+[validation](validation.md) for the upstream evidence workflows.
 
 ## Tiers
 

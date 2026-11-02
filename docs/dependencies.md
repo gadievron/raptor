@@ -1,5 +1,7 @@
 # Dependencies
 
+[Documentation index](README.md)
+
 A source checkout uses separately installed tools and Python packages, each
 under its own licence. The devcontainer includes preinstalled tools and
 dependencies; CodeQL is installed on first use. See the
@@ -11,6 +13,10 @@ See also: [README](../README.md), [architecture](architecture.md).
 
 Install tools for the capabilities you use. Standalone SCA does not require
 Semgrep, CodeQL, a debugger, or a fuzzing engine.
+
+After installing the tools for your workflow, run the
+[setup self-test](troubleshooting.md#self-test). For a missing-tool failure,
+return to the relevant feature guide for platform-specific requirements.
 
 ## Python
 

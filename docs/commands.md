@@ -1,5 +1,7 @@
 # Command Reference
 
+[Documentation index](README.md)
+
 RAPTOR exposes its capabilities through slash commands in the Claude Code
 session.  Run `/commands` at any time for the live list.  Commands dispatch to
 either a Python entry point (`raptor.py`), a shell script under `libexec/`, or
@@ -16,6 +18,10 @@ authoritative, complete flag list for every command.  Output directories are man
 lifecycle](architecture.md) unless noted otherwise.
 
 ---
+
+Choose the task category below, then follow its feature guide for setup,
+examples, and output interpretation. Slash-command examples run inside a
+RAPTOR session; terminal entry points are listed in the [Python CLI](python-cli.md).
 
 **On this page:**
 

@@ -1,5 +1,7 @@
 # Systematic Code Review
 
+[Documentation index](README.md)
+
 `/audit` is RAPTOR's hypothesis-driven, tool-grounded security review.  It
 works through coverage gaps systematically: for each unreviewed function, the
 LLM forms hypotheses about assumption violations; deterministic tools
@@ -46,7 +48,7 @@ Dispatches as a skill (two-phase: `/understand --map` then
 `libexec/raptor-audit run`).  See [commands.md](commands.md#audit) for the
 full flag table.
 
-```bash
+```text
 /audit /path/to/code                       # review all gaps
 /audit /path/to/code --strategy memory     # focus on memory safety
 /audit /path/to/code --scope net/ipv4/     # restrict to a subsystem
@@ -769,7 +771,7 @@ codebase-wide rules, and suspicious functions with untried tool types.
 
 Query audit state across all four layers:
 
-```bash
+```text
 /review <file> [function]      # unified per-function view
 /review findings               # all findings across runs
 /review gaps                   # what needs review

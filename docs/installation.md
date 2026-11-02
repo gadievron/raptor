@@ -7,8 +7,8 @@ guide](python-cli.md#running-fully-standalone-no-claude-code).
 **On this page:**
 
 - [Prerequisites](#prerequisites)
-- [Manual installation](#option-1-install-manually)
-- [Container installation](#option-2-run-in-a-container-recommended)
+- [Option 1: Install manually](#option-1-install-manually)
+- [Option 2: Run in a container (recommended)](#option-2-run-in-a-container-recommended)
 
 ## Prerequisites
 
