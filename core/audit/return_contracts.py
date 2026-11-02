@@ -164,17 +164,16 @@ def harvest_wur_declarations(
 
 
 _WUR_SCAN_SUFFIXES = (".h", ".hpp", ".hh", ".hxx")
-# Header-count budget, both directions: RAISING it reads more headers
-# per run (each is a capped read + regex sweep — I/O-bound, and header
-# count is target-derived, so an unbounded sweep on a hostile or
-# kernel-scale tree is a time sink). LOWERING it drops wur coverage on
-# ordinary trees that fit comfortably today. When it binds, the budget
-# is spread EVENLY across the sorted tree — index-based even selection
-# that fills the budget EXACTLY — rather than taking the alphabetical
-# prefix (a kernel tree sorts arch/alpha/... first, so a prefix slice
-# reads one corner of the tree), and the selection ratio is disclosed
-# with a warning.
-_MAX_WUR_SCAN_FILES = 400
+# Header-count budget: per-file cost is a capped read + regex sweep,
+# so the file count is proportional to wall time.  The cap must cover
+# kernel-scale trees (Linux ~795 headers) with headroom, while still
+# sampling hostile trees with millions of header-suffixed files.  When
+# it binds, the budget is spread EVENLY across the sorted tree —
+# index-based even selection that fills the budget EXACTLY — rather
+# than taking the alphabetical prefix (a kernel tree sorts
+# arch/alpha/... first, so a prefix slice reads one corner of the
+# tree), and the selection ratio is disclosed with a warning.
+_MAX_WUR_SCAN_FILES = 4_000
 _MAX_WUR_FILE_BYTES = 400_000
 
 
