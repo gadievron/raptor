@@ -39,7 +39,9 @@ def _load_shim():
     # conftest already pin the canonical entries).
     path_before = list(sys.path)
     try:
-        loader.exec_module(mod)
+        # The entry point also defaults CVE_ENV_OUTPUT_ROOT at import time.
+        with patch.dict("os.environ"):
+            loader.exec_module(mod)
     finally:
         sys.path[:] = path_before
     return mod
