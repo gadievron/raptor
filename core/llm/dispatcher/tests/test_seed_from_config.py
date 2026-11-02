@@ -59,6 +59,7 @@ def _make_empty_store() -> CredentialStore:
         "orcarouter": None,
         "perplexity": None,
         "replicate": None,
+        "runcrate": None,
         "together": None,
         "yapi": None,
         # Cloud gateways

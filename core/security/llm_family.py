@@ -97,6 +97,7 @@ _AGGREGATOR_PREFIXES: tuple[str, ...] = (
     "orcarouter/",
     "perplexity/",
     "replicate/",
+    "runcrate/",
     "together/",
     "yapi/",
     # Route-prefixed Bedrock ids (``bedrock/anthropic.claude-…``) — the
