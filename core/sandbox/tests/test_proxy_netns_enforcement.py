@@ -10,11 +10,13 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import ExitStack
 from pathlib import Path
 from unittest import mock
 
 import pytest
 from core.sandbox.tests.capability import requires_landlock
+from core.sandbox.tests.socket_server import SocketServer
 
 RAPTOR_DIR = Path(__file__).resolve().parents[3]
 # Hard-SET (never setdefault): the code under test derives paths from
@@ -32,36 +34,20 @@ class TestProxyUnixSocket:
     """EgressProxy.bind_unix / unbind_unix lifecycle."""
 
     @pytest.fixture(autouse=True)
-    def _proxy(self, tmp_path):
+    def _proxy(self, short_sock_dir):
         from core.sandbox.proxy import EgressProxy
 
-        # Loopback upstream stub: CONNECTs to the allowlisted host
-        # tunnel here and get a deterministic 200 instead of a REAL
-        # dial to example.com (which hangs to its connect timeout on
-        # egress-restricted hosts — these tests spent 20s each on the
-        # wire before this existed). The tests exercise the unix-socket
-        # protocol path; the upstream leg is not what's under test.
-        import threading
+        # The stub keeps CONNECT tests local; its sockets and threads must
+        # also be retired if later fixture setup fails before yield.
+        with ExitStack() as cleanup:
+            self._upstream = cleanup.enter_context(
+                socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+            )
+            self._upstream.bind(("127.0.0.1", 0))
+            self._upstream.listen(8)
+            upstream_port = self._upstream.getsockname()[1]
 
-        self._upstream = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._upstream.bind(("127.0.0.1", 0))
-        self._upstream.listen(8)
-        # Bounded accept wait: close() alone does not wake a thread
-        # blocked in accept(), which would park one daemon thread per
-        # test on a stale fd.
-        self._upstream.settimeout(0.5)
-        upstream_port = self._upstream.getsockname()[1]
-
-        def _serve_upstream():
-            while True:
-                try:
-                    conn, _addr = self._upstream.accept()
-                except TimeoutError:
-                    if self._upstream.fileno() == -1:
-                        return
-                    continue
-                except OSError:
-                    return
+            def _serve_upstream(conn):
                 try:
                     conn.settimeout(5)
                     data = b""
@@ -70,40 +56,20 @@ class TestProxyUnixSocket:
                         if not chunk:
                             break
                         data += chunk
-                    conn.sendall(
-                        b"HTTP/1.1 200 Connection established\r\n\r\n",
-                    )
+                    conn.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
                 except OSError:
                     pass
-                finally:
-                    conn.close()
 
-        self._upstream_thread = threading.Thread(
-            target=_serve_upstream, daemon=True,
-        )
-        self._upstream_thread.start()
-        self.proxy = EgressProxy(
-            ["example.com"],
-            upstream_proxy=f"http://127.0.0.1:{upstream_port}",
-        )
-        # macOS AF_UNIX sun_path limit is 104 bytes; pytest tmp_path
-        # under /private/var/folders/… can exceed that. Use a short
-        # name under /tmp when the default path would be too long.
-        candidate = str(tmp_path / "p.sock")
-        if len(candidate) > 100:
-            import tempfile
-            short_dir = tempfile.mkdtemp(prefix="rpt_")
-            self.sock_path = os.path.join(short_dir, "p.sock")
-            self._short_dir = short_dir
-        else:
-            self.sock_path = candidate
-            self._short_dir = None
-        yield
-        self.proxy.stop(drain_timeout=0)
-        self._upstream.close()
-        if self._short_dir:
-            import shutil
-            shutil.rmtree(self._short_dir, ignore_errors=True)
+            self._upstream_server = cleanup.enter_context(
+                SocketServer(self._upstream, _serve_upstream),
+            )
+            self.proxy = EgressProxy(
+                ["example.com"],
+                upstream_proxy=f"http://127.0.0.1:{upstream_port}",
+            )
+            cleanup.callback(self.proxy.stop, drain_timeout=0)
+            self.sock_path = str(short_sock_dir / "p.sock")
+            yield
 
     def test_bind_creates_socket_file(self):
         self.proxy.bind_unix(self.sock_path)
@@ -178,6 +144,42 @@ class TestProxyUnixSocket:
             assert resp.startswith(b"HTTP/1.1 ")
         finally:
             s.close()
+
+
+@pytest.mark.parametrize("fail_setup", [False, True])
+def test_proxy_fixture_closes_upstream_on_every_exit(monkeypatch, short_sock_dir, fail_setup):
+    from core.sandbox import proxy as proxy_mod
+
+    owner = TestProxyUnixSocket()
+    stopped = []
+
+    class ProbeProxy:
+        def __init__(self, *args, **kwargs):
+            if fail_setup:
+                raise RuntimeError("fixture setup failed")
+
+        def stop(self, *, drain_timeout):
+            # Stop the proxy before tearing down the backend it may still use.
+            assert owner._upstream.fileno() != -1
+            assert owner._upstream_server._accept_thread.is_alive()
+            stopped.append(drain_timeout)
+
+    monkeypatch.setattr(proxy_mod, "EgressProxy", ProbeProxy)
+    fixture = TestProxyUnixSocket._proxy.__wrapped__(owner, short_sock_dir)
+    try:
+        if fail_setup:
+            with pytest.raises(RuntimeError, match="fixture setup failed"):
+                next(fixture)
+        else:
+            next(fixture)
+            fixture.close()
+    finally:
+        fixture.close()
+
+    assert stopped == ([] if fail_setup else [0])
+    assert owner._upstream.fileno() == -1
+    assert not owner._upstream_server._accept_thread.is_alive()
+    assert not owner._upstream_server._clients
 
 
 # ---------------------------------------------------------------------------
