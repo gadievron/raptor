@@ -17,8 +17,10 @@ one sweep heals it.
 
 import json
 import os
+import sys
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -491,7 +493,8 @@ class TestSweepCli:
             "raptor_audit_cli_sweep_test", loader)
         assert spec is not None
         mod = importlib.util.module_from_spec(spec)
-        loader.exec_module(mod)
+        with patch.object(sys, "path", sys.path.copy()):
+            loader.exec_module(mod)
         return mod
 
     def _reindex(self, cli, *, run_dir=None, project=None):

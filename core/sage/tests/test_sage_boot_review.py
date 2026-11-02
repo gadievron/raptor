@@ -21,9 +21,13 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 os.environ.setdefault("_RAPTOR_TRUSTED", "1")
 
@@ -40,8 +44,16 @@ def _load_reviewer():
     return mod
 
 
-bpr = _load_reviewer()
-guard = bpr._load_guard()
+with patch.object(sys, "path", sys.path.copy()):
+    bpr = _load_reviewer()
+    guard = bpr._load_guard()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_guard_import_paths():
+    # Review calls reload standalone guards that bootstrap their own imports.
+    with patch.object(sys, "path", sys.path.copy()):
+        yield
 
 INIT_CLEAN = (
     "[SAGE Auto-Connect] Your persistent memory is online.\n"
