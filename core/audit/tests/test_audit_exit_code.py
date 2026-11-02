@@ -12,6 +12,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -34,7 +35,8 @@ def audit_cli():
         )
         mod = importlib.util.module_from_spec(spec)
         sys.modules["raptor_audit_cli"] = mod
-        spec.loader.exec_module(mod)
+        with patch.object(sys, "path", sys.path.copy()):
+            spec.loader.exec_module(mod)
         yield mod
     finally:
         sys.modules.pop("raptor_audit_cli", None)

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
+from unittest.mock import patch
 
 from core.coverage.journal import (
     INDEX_FILENAME,
@@ -410,7 +412,8 @@ class TestMechanicalEchoRows:
         loader = SourceFileLoader("raptor_review_cli", cli_path)
         spec = importlib.util.spec_from_loader("raptor_review_cli", loader)
         mod = importlib.util.module_from_spec(spec)
-        loader.exec_module(mod)
+        with patch.object(sys, "path", sys.path.copy()):
+            loader.exec_module(mod)
 
         import io
         from contextlib import redirect_stdout
@@ -445,7 +448,8 @@ class TestReviewDiffLive:
         loader = SourceFileLoader("raptor_review_cli_dl", cli_path)
         spec = importlib.util.spec_from_loader("raptor_review_cli_dl", loader)
         mod = importlib.util.module_from_spec(spec)
-        loader.exec_module(mod)
+        with patch.object(sys, "path", sys.path.copy()):
+            loader.exec_module(mod)
         return mod
 
     @staticmethod

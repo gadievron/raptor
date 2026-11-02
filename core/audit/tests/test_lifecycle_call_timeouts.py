@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import importlib.util
 import subprocess
+import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -27,7 +29,8 @@ def _load_cli():
         "raptor_audit_cli_lctimeout", loader,
     )
     mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
+    with patch.object(sys, "path", sys.path.copy()):
+        loader.exec_module(mod)
     return mod
 
 

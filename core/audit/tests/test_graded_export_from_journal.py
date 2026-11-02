@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
+import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -411,7 +412,8 @@ def _load_record_cli():
     spec = importlib.util.spec_from_loader(
         "raptor_audit_cli_export_roundtrip", loader)
     mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
+    with patch.object(sys, "path", sys.path.copy()):
+        loader.exec_module(mod)
     return mod
 
 
@@ -468,13 +470,14 @@ def test_record_out_dot_round_trips_with_receipts(tmp_path, monkeypatch):
 @pytest.fixture(scope="module")
 def helper_module():
     """Import the validate helper CLI (no .py suffix)."""
-    os.environ.setdefault("_RAPTOR_TRUSTED", "1")
     loader = SourceFileLoader(
         "raptor_validation_helper", str(HELPER_PATH))
     spec = importlib.util.spec_from_loader(
         "raptor_validation_helper", loader)
     mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
+    with pytest.MonkeyPatch.context() as mp, patch.object(sys, "path", sys.path.copy()):
+        mp.setenv("_RAPTOR_TRUSTED", "1")
+        loader.exec_module(mod)
     return mod
 
 
