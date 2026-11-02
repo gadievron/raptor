@@ -1,5 +1,6 @@
 [workspace]
 members = ["guest", "prover", "verifier", "statement"]
+exclude = ["vendor/object"]
 # Plain `cargo build` builds only the host-native binaries. The `guest`
 # crate is exclusively cross-compiled to SP1's custom RISC-V triple via
 # `cargo prove build` (its build.rs cross-links a RISC-V64 C archive
@@ -37,3 +38,7 @@ opt-level = 3
 [profile.dev]
 debug = "line-tables-only"
 split-debuginfo = "unpacked"
+
+# SP1 still requires object 0.37; the local copy only updates its decoder.
+[patch.crates-io]
+object = { path = "vendor/object" }

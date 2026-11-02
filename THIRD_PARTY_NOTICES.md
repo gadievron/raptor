@@ -75,3 +75,13 @@ and licence directory when redistributing the excerpt collection.
 
 RAPTOR's independently authored code and annotations retain the MIT licence;
 it does not replace the licences of the copied source excerpts.
+
+## ZKPoX object crate override
+
+- Path: `packages/zkpox/native/vendor/object`.
+- Upstream: [gimli-rs/object](https://github.com/gimli-rs/object), release 0.37.3.
+- License: Apache-2.0 OR MIT, at the recipient's choice.
+- Full licenses: [Apache-2.0](packages/zkpox/native/vendor/object/LICENSE-APACHE)
+  and [MIT](packages/zkpox/native/vendor/object/LICENSE-MIT).
+- Modification: the Cargo manifest selects ruzstd >=0.9.1; upstream Rust source
+  is unchanged. [Provenance and maintenance notes](packages/zkpox/native/vendor/object/UPSTREAM.md).
