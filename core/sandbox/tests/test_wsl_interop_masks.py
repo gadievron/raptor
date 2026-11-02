@@ -106,11 +106,20 @@ def _plan_mounts(monkeypatch, tmp_path, *, wsl: bool,
     root.mkdir()
     for rel in precreate:
         (root / rel.lstrip("/")).mkdir(parents=True, exist_ok=True)
-    mount_ns.setup_mount_ns(
-        target, None,
-        extra_ro_paths=extra_ro_paths,
-        root_path=str(root),
-    )
+    # A real pivot runs in a child, but this plan-only call changes our CWD.
+    # Keep a descriptor so restoration also works for an unlinked caller CWD.
+    saved_cwd = os.open(".", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        mount_ns.setup_mount_ns(
+            target, None,
+            extra_ro_paths=extra_ro_paths,
+            root_path=str(root),
+        )
+    finally:
+        try:
+            os.fchdir(saved_cwd)
+        finally:
+            os.close(saved_cwd)
     return root, mounts
 
 

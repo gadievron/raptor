@@ -85,12 +85,12 @@ class TestCreateDefaultCorpus:
         cwd = tmp_path / "operator_cwd"
         cwd.mkdir()
 
-        # Plain os.chdir + try/finally instead of monkeypatch.chdir():
-        # monkeypatch.chdir calls os.getcwd() to remember the original
-        # cwd, which fails in CI when a prior test left cwd dangling.
-        # Anchor restoration to Path(__file__) (always absolute, no
-        # cwd dependency).
-        safe_restore = Path(__file__).resolve().parent
+        # Restore the caller's directory, retaining the existing fallback
+        # only when a prior test already left an unlinked CWD behind.
+        try:
+            safe_restore = Path.cwd()
+        except FileNotFoundError:
+            safe_restore = Path(__file__).resolve().parent
         os.chdir(cwd)
         try:
             runner = self._make_runner(output_dir)
