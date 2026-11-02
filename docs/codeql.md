@@ -16,6 +16,16 @@ and -- optionally -- LLM-powered analysis with exploit generation.
 [sandbox](sandbox.md)
 
 
+**On this page:**
+
+- [Container installation](#container-installation)
+- [Usage](#usage)
+- [Pipeline](#pipeline)
+- [Autonomous Analysis (`--analyze`)](#autonomous-analysis---analyze)
+- [Custom Queries](#custom-queries)
+- [Supported Languages](#supported-languages)
+- [Prerequisites](#prerequisites)
+
 ## Container installation
 
 The devcontainer image ships a first-use installer. The first CodeQL analysis

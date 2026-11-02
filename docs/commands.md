@@ -17,6 +17,19 @@ lifecycle](architecture.md) unless noted otherwise.
 
 ---
 
+**On this page:**
+
+- [Security Testing](#security-testing)
+- [Systematic Review](#systematic-review)
+- [Exploitability & Validation](#exploitability--validation)
+- [Code Understanding & Forensics](#code-understanding--forensics)
+- [Software Composition Analysis](#software-composition-analysis)
+- [Binary Analysis](#binary-analysis)
+- [Dynamic Instrumentation](#dynamic-instrumentation)
+- [Project Management](#project-management)
+- [Utilities](#utilities)
+- [Python CLI (raptor.py)](#python-cli-raptorpy)
+
 ## Security Testing
 
 ### /scan

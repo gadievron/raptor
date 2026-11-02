@@ -15,9 +15,29 @@ directly with `python3 raptor.py <mode>` for CI pipelines and scripting
 ([Python CLI reference](python-cli.md)).
 
 
+## Choose a workflow
+
+| I want to… | Start here |
+|------------|------------|
+| Run an end-to-end source analysis | [Autonomous workflow](agentic.md#usage) |
+| Review source systematically | [Audit guide](audit.md#usage) |
+| Check dependencies and supply-chain risks | [SCA guide](sca.md#usage) |
+| Investigate a binary | [Binary analysis](binary-analysis.md) |
+| Fuzz a target and investigate crashes | [Fuzzing](fuzzing.md#usage) and [crash analysis](crash-analysis.md#quick-start) |
+| Choose models or control LLM spending | [LLM providers](llm.md#quick-start) and [cost management](llm.md#cost-management) |
+| Understand isolation guarantees or fix sandbox failures | [Sandbox guarantees](sandbox.md#what-a-sandboxed-run-gets-you) and [troubleshooting](sandbox.md#troubleshooting) |
+| Diagnose a failed or stalled run | [Troubleshooting](troubleshooting.md) |
+| Check how RAPTOR tests its own code | [CI controls](ci-controls.md) |
+| Contribute to RAPTOR | [Developer guide](developers.md) |
+
+Use slash commands inside a RAPTOR session. Run `bin/…`, `libexec/…`, and
+`python3 …` examples in your terminal, from the RAPTOR checkout unless a
+guide says otherwise.
+
+
 ## Command Reference
 
-See [commands.md](commands.md) for the complete command reference. Quick
+See the [slash-command reference](commands.md) for syntax and flags. Quick
 overview:
 
 | Command | Purpose |

@@ -23,6 +23,12 @@ See also: [commands](python-cli.md), [validation](validation.md),
 
 ---
 
+**On this page:**
+
+- [/binary -- Black-Box Investigation](#binary----black-box-investigation)
+- [Binary Oracle -- Reachability Filtering](#binary-oracle----reachability-filtering)
+- [Exploit Feasibility](#exploit-feasibility)
+
 ## /binary -- Black-Box Investigation
 
 The `/binary` command is the operator-facing surface for evidence-backed

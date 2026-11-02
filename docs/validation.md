@@ -13,6 +13,13 @@ mechanical -- Python computation with optional light enrichment.  Lettered
 stages (A--F) are LLM reasoning, where the analyst performs the substantive
 assessment work.
 
+**On this page:**
+
+- [Usage](#usage)
+- [Pipeline Stages](#pipeline-stages)
+- [Integration](#integration)
+- [Output](#output)
+
 ## Usage
 
 ```bash

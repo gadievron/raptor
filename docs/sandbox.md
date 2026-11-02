@@ -14,9 +14,20 @@ On macOS, the same machinery routes through `sandbox-exec(1)` and
 Seatbelt profiles. See [Platform support](#platform-support) for the
 capability comparison.
 
-For CLI flag reference, see [commands](commands.md).
+For CLI flags, see the [slash-command reference](commands.md).
 
 ---
+
+**On this page:**
+
+- [What a sandboxed run gets you](#what-a-sandboxed-run-gets-you)
+- [Profiles](#profiles)
+- [Containment floor](#containment-floor)
+- [Isolation layers](#isolation-layers)
+- [Platform support](#platform-support)
+- [When the sandbox cannot engage](#when-the-sandbox-cannot-engage)
+- [Known limitations](#known-limitations)
+- [Troubleshooting](#troubleshooting)
 
 ## What a sandboxed run gets you
 

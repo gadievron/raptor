@@ -7,26 +7,42 @@ proposes hardening patches. No LLM is required for the core pipeline --
 the scanner, advisory matcher, reachability analysis and fix planner are
 all deterministic.
 
-See also: [commands](python-cli.md), [dependencies](dependencies.md).
+See also: [slash-command reference](commands.md#software-composition-analysis),
+[Python CLI reference](python-cli.md), [dependencies](dependencies.md).
 
 ---
 
+**On this page:**
+
+- [Usage](#usage)
+- [Subcommands](#subcommands)
+- [Scanning](#scanning)
+- [SBOM Generation](#sbom-generation)
+- [Preparing RAPTOR inventory exports](#preparing-raptor-inventory-exports)
+- [Reachability Analysis](#reachability-analysis)
+- [Fix Planning](#fix-planning)
+- [Updating Downloaded Tools](#updating-downloaded-tools)
+- [CI Integration](#ci-integration)
+- [Output](#output)
+- [Cache Cleanup](#cache-cleanup)
+- [Limitations](#limitations)
+
 ## Usage
 
-**Slash command:**
+**In a RAPTOR session:**
 
 ```bash
 /sca /path/to/project
 /sca fix /path/to/project --apply
 ```
 
-**CLI entry point:**
+**In your terminal (CLI entry point):**
 
 ```bash
 bin/raptor-sca /path/to/project
 ```
 
-**Python dispatch:**
+**In your terminal (Python dispatch):**
 
 ```bash
 python3 raptor.py sca --repo /path/to/project
@@ -61,31 +77,6 @@ The default (no subcommand) is `scan` -- the full analyse pipeline.
 | `fix-diff` | Fetch the upstream fix diffs for findings in a `findings.json` (cap with `--max-cves`). |
 
 ---
-
-## Cache Cleanup
-
-Online scans attempt cleanup at completion, at most once every ten minutes
-per cache root. `tuning.json` sets `sca_cache_max_mb` (2048 MiB overall) and
-`sca_stress_cache_max_mb` (512 MiB within that budget). These are soft limits:
-active scans can exceed them. A zero overall budget disables automatic
-cleanup; a zero stress budget removes all idle stress checkouts.
-
-Cleanup removes entries older than 30 days and whole stress projects older
-than seven days, then reclaims expired/oldest-used data when over budget,
-targeting 80% of the limit. Stress projects and sharded inventories are
-removed as whole units. Active scans are pinned; fingerprint baselines and
-SQLite databases are preserved and excluded from the disposable budget.
-Offline scans do not trigger cleanup.
-
-```bash
-raptor-sca clean-cache --dry-run
-raptor-sca clean-cache --max-size-mb 1024 --stress-max-size-mb 256
-```
-
-`--max-age DAYS`, `--stress-max-age DAYS`, and `--cache-root PATH` override
-cleanup retention/location. Manual `--max-size-mb 0` disables overall size
-pruning while age/stress cleanup still applies. Exit code 1 means cleanup
-was busy, encountered deletion errors, or could not meet the requested budget.
 
 ## Scanning
 
@@ -856,6 +847,31 @@ Reachability filters apply only to `sca:vulnerable_dependency` rows;
 hygiene, supply-chain, and licence rows are preserved when re-rendering.
 
 ---
+
+## Cache Cleanup
+
+Online scans attempt cleanup at completion, at most once every ten minutes
+per cache root. `tuning.json` sets `sca_cache_max_mb` (2048 MiB overall) and
+`sca_stress_cache_max_mb` (512 MiB within that budget). These are soft limits:
+active scans can exceed them. A zero overall budget disables automatic
+cleanup; a zero stress budget removes all idle stress checkouts.
+
+Cleanup removes entries older than 30 days and whole stress projects older
+than seven days, then reclaims expired/oldest-used data when over budget,
+targeting 80% of the limit. Stress projects and sharded inventories are
+removed as whole units. Active scans are pinned; fingerprint baselines and
+SQLite databases are preserved and excluded from the disposable budget.
+Offline scans do not trigger cleanup.
+
+```bash
+raptor-sca clean-cache --dry-run
+raptor-sca clean-cache --max-size-mb 1024 --stress-max-size-mb 256
+```
+
+`--max-age DAYS`, `--stress-max-age DAYS`, and `--cache-root PATH` override
+cleanup retention/location. Manual `--max-size-mb 0` disables overall size
+pruning while age/stress cleanup still applies. Exit code 1 means cleanup
+was busy, encountered deletion errors, or could not meet the requested budget.
 
 ## Limitations
 

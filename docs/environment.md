@@ -31,27 +31,43 @@ Conventions used below:
   Toggles not yet on the parser state their accepted spellings per row.
 
 
+**On this page:**
+
+- [Core runtime](#core-runtime)
+- [LLM model selection and transport](#llm-model-selection-and-transport)
+- [LLM HTTP transport](#llm-http-transport)
+- [Egress proxy](#egress-proxy)
+- [Analysis pipeline](#analysis-pipeline)
+- [Feature packages](#feature-packages)
+- [SAGE](#sage)
+- [Provider credentials (`LLM_API_KEY_VARS`)](#provider-credentials-llm_api_key_vars)
+- [Transport routing family (`LLM_ROUTING_ENV_VARS`)](#transport-routing-family-llm_routing_env_vars)
+- [External-standard variables](#external-standard-variables)
+- [Test-suite and CI knobs](#test-suite-and-ci-knobs)
+- [Internal plumbing — do not set](#internal-plumbing--do-not-set)
+- [Policy tables](#policy-tables)
+
 ## Core runtime
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `RAPTOR_OUT_DIR` | `out/` under the repo | Output-directory root override. Validated fail-closed by `RaptorConfig.get_out_dir()`: refuses paths under `/etc /usr /bin /sbin /boot /dev /proc /sys` (checked on both the literal and symlink-resolved path, component-boundary matched) and refuses paths whose parent does not exist (typo guard). Propagates to children via the safe-env allowlist so `raptor-run-lifecycle` resolves the same directory. |
-| `RAPTOR_CONFIG` | `~/.config/raptor/models.json` | Path to the models config consumed by `core.llm` (`{"models": [...]}` or a bare list; `//` comments allowed). This variable belongs to `core.llm` alone: `packages/exploit_feasibility` historically read the same name for its *analysis-settings* JSON but cut over to `RAPTOR_EF_CONFIG`. Both readers keep schema guards for stale environments: `core.llm` logs an error (once per path) and loads zero models when the file is AnalysisConfig-shaped; `exploit_feasibility`'s `from_file` raises `ValueError` when the file is models-config-shaped. Both messages name the right variable. |
+| `RAPTOR_OUT_DIR` | `out/` under the repo | Override the output root; protected paths and missing parents are refused. [Details](#raptor_out_dir-details). |
+| `RAPTOR_CONFIG` | `~/.config/raptor/models.json` | Choose the LLM model configuration file; analysis-settings files use `RAPTOR_EF_CONFIG`. [Details](#raptor_config-details). |
 | `RAPTOR_ALLOW_WORLD_READABLE_MODELS_JSON` | unset | Consent to seed dispatcher credentials from a group/other-readable `models.json` that carries inline `api_key` entries. Without it the credential seeder fail-closes with an actionable error (the exact `chmod 600` command); set to exactly `1` (never truthy-parsed) to accept the exposure deliberately, e.g. in a single-user container — the load then proceeds with a loud acknowledged-override warning. A loose-mode file with no inline keys only warns; a `chmod 600` file needs nothing. |
 | `RAPTOR_TARGET_KIND` | auto-detect | Target-classification override: `library`, `hybrid`, or `application` (consumed by `core.inventory.library_detection`; any other value falls through to auto-detection — fail-open to auto). Prefer `/project set target-kind` or the per-run flag; programmatic setting > env > auto. Allowlisted so child inventory rebuilds honour it. |
 | `PYTHONPYCACHEPREFIX` | Python's default | Protected launches ignore inherited cache-prefix overrides and prepare trusted installation bytecode before making the installation read-only. Runtime imports reuse those caches. |
 | `PYTHONDONTWRITEBYTECODE` | Python's default | Protected launches set this after preparing source-checked bytecode, preventing attempted writes during runtime imports. |
 | `RAPTOR_INSTALL_PROTECTED` | unset | Launcher marker for an explicitly protected session. Routes default CodeQL databases and the startup banner into writable output. Setting it does not enable kernel protection; use `bin/raptor --protect-install`. |
 | `CLAUDE_CONFIG_DIR` | Claude's default | Existing Claude configuration override, preserved in protected and ordinary launches. No dedicated directory is required for protection; RAPTOR does not copy or migrate account state. See [installation protection](installation-protection.md). |
-| `RAPTOR_REGISTRY_HOME` | unset (`~/.raptor/projects` + `~/.local/share/raptor/sessions.d`) | Operator-registry relocation override, resolved at call time through one seam (`core.project.registry_home`) by every consumer: the projects registry becomes `<dir>/projects`, the `.active` bookmark `<dir>/projects/.active`, and the sessions registry `<dir>/sessions.d` — all three move together, so the shared-location contract (session binding, bookmark, ledger locking) cannot split. Must be an absolute path (no `~` expansion — the bash consumers `bin/raptor` and the coverage read hook apply the same rule); a relative value is refused loudly. Unset means the historical default locations, byte-identical, so existing operator state keeps working. Propagates to children via the safe-env allowlist; stripped from target-bound envs (`TARGET_ENV_STRIP_SET`). |
-| `RAPTOR_SESSION_PID` | set by `bin/raptor` | The launcher session's PID — one half of the session identity credential that lets deep children (skill dispatches, nested `claude -p` subagents, PID-namespace-blind helpers) resolve this session's project binding in `~/.local/share/raptor/sessions.d/`. Validated on every read: digits, the paired token must match the 0700 registry entry (constant-time compare), and the entry's identity stamp (starttime + boot_id + pidns) must match the live process — a recycled or guessed PID resolves nothing. Never set it by hand; stripped from every target-bound sandbox env (`TARGET_ENV_STRIP_SET`). |
+| `RAPTOR_REGISTRY_HOME` | unset (`~/.raptor/projects` + `~/.local/share/raptor/sessions.d`) | Relocate project and session registries together; requires an absolute path. [Details](#raptor_registry_home-details). |
+| `RAPTOR_SESSION_PID` | set by `bin/raptor` | Launcher-set session identity. Never set manually; stripped from target environments. [Details](#raptor_session_pid-details). |
 | `RAPTOR_SESSION_TOKEN` | set by `bin/raptor` | The launcher-minted random token paired with `RAPTOR_SESSION_PID` — makes the env credential unforgeable against env injection (an attacker able to write the 0700 registry already owns every project file, so the pair grants nothing new). Same strip rule: target code never sees it. |
 | `RAPTOR_LOG_FILE_LEVEL` | `INFO` | Level of the per-process JSONL audit-log file handler (`core.logging`). Any `logging` level name, case-insensitive; unknown names fall back to `INFO` rather than erroring during bootstrap. `DEBUG` opts into the full firehose. |
 | `RAPTOR_TMP_REAP_MAX_AGE_H` | `24` (hours) | Age floor for the best-effort sweep of orphaned RAPTOR temp artifacts (`core.run.tmp_reaper`) across its sweep roots: `$TMPDIR`, the real system `/tmp` root (under the launcher `$TMPDIR` is the per-session dir, so root-level strays from bare-shell runs were otherwise never reconsidered), and the lane-socket fallback base `/run/user/<uid>` (`.raptor-lane-*` dirs only). Covers known RAPTOR prefixes, a few anchored third-party tool names RAPTOR's own tool runs strand — e.g. `semmleTempDir*`, `scala-repl-pp*` — and the neutral de-branded scratch names (`.scr-*`, `.fp-*`) anchored to their exact random suffix; same-euid, live-process-safe). `0`/negative disables; non-numeric falls back to 24 h (sweep still runs); values below 0.5 h clamp to 30 min with a warning (a shorter floor could reap a live sandbox's scratch between its keepalive refreshes). |
 | `_RAPTOR_SERVICE_TMP_BASE` | captured by the launcher | Original operator-selected temporary base for service IPC. macOS uses compact socket directories there when nested session paths exceed Unix-socket limits. Internal bookkeeping; stripped from target environments. Choose the base with RAPTOR_WORK_DIR or TMPDIR before launch. |
 | `_RAPTOR_JOERN_TMP_BASE` | captured by the launcher | Preserves the original scratch base for service-owned Joern files before session TMPDIR is created. Internal bookkeeping, stripped from target environments; set RAPTOR_WORK_DIR or TMPDIR before launching RAPTOR to choose the base. |
 | `RAPTOR_WORK_DIR` | unset | Base for RAPTOR work directories; takes precedence over operator `TMPDIR`. The launcher creates a private `raptor-<uid>/session-<pid>-<rand>/tmp/` subdirectory beneath the chosen base. With neither variable set, Linux uses `/tmp`; macOS uses the OS-provided per-user private temporary directory and never substitutes public `/tmp`. An unusable explicit base fails startup. Parallel launches receive separate directories. Child helpers retain the launcher's recorded scratch location even when their environment is sanitized. Managed session directories are retained because background children can outlive the launcher; remove them only after their users have exited. Direct helper invocations capture and validate their initial `TMPDIR` once and preserve that directory for sanitized children; they do not require launcher metadata. Later environment changes cannot redirect it. Without an explicit value they use the platform default above. `core.run.workdir.exec_workdir()` retains its existing standalone work-directory behavior. |
-| `RAPTOR_TMP_INODE_SOFT_PCT` | `90` (percent) | Soft ceiling for the inode-usage advisory taken at every system-tmp scratch-lane creation (`core.run.scratch`): one `statvfs` of the lane's filesystem, and a loud rate-limited warning once inode usage crosses the ceiling — tmpfs `/tmp` exhausts inodes long before bytes, and byte-based warnings stay silent. Advisory only, NEVER a refusal (the pressure is usually another process's litter; failing this run would punish the wrong one). `0`/negative disables; non-numeric keeps the default; filesystems without inode accounting are skipped. |
+| `RAPTOR_TMP_INODE_SOFT_PCT` | `90` (percent) | Warn about temporary-filesystem inode pressure; advisory only. [Details](#raptor_tmp_inode_soft_pct-details). |
 | `RAPTOR_RUN_REAP_MAX_AGE_D` | `30` (days) | Age floor for reaping run directories whose status is `failed`/`cancelled` only — completed runs are never age-reaped. `0`/negative disables; non-numeric falls back to 30 d. |
 | `RAPTOR_LOG_REAP_MAX_AGE_D` | unset = disabled | **Opt-in** sweep of old JSONL audit logs. Unlike the two sweeps above, this one defaults OFF and a non-numeric value leaves it off — deleting audit data is an operator decision. |
 | `RAPTOR_REACH_VERDICT_LOG` | `$RAPTOR_DIR/out/reach_verdict_log.json` | Path override for the privacy-bounded reachability-verdict telemetry sidecar (`core.analysis.reach_verdict_log`; only language/verdict counts). |
@@ -59,14 +75,131 @@ Conventions used below:
 | `RAPTOR_BINARY_CACHE_DIR` | `<repo>/.cache/binary` | Location of the build-ID binary cache (`core.audit.build_id_cache`). Explicit `cache_dir` argument > env > default. Set to share the cache across hosts/tools. |
 | `RAPTOR_HITL_TTY_MAX_AGE_S` | `86400` (24 h) | Recency threshold for the human-attended probe (`core.security.rule_of_two`): the controlling TTY must show read activity (atime) within this many seconds for the session to count as human-attended. `<= 0` disables the recency check (pure TTY-presence, the pre-fix behaviour); non-numeric falls back to the default with a warning. |
 | `RAPTOR_SELFTEST_MODEL` | unset | Default for `raptor-self-test --model` (budget-capped LLM cases). Flag > env > RAPTOR's own model resolution. |
-| `RAPTOR_ENV_FLOOR_MIB` | unset (built-in floors) | Byte-floor override for the audit environment guard (`core.audit.environment`): the value in MiB becomes the preflight refuse floor and the watchdog pause floor; the preflight warn floor scales at 8× and the watchdog resume floor at 2× (default ratios preserved). `0` disables the byte floors entirely; inode floors are unaffected. Sanctioned way to run on a deliberately tight filesystem (container tmpfs, fault-injection rig) that the default 64 MiB refuse floor would reject at start or pause permanently. Non-numeric or negative values are ignored with a warning (a typo must never silently disable the guard). The systemic-fault circuit breaker has its own per-run flag, `raptor-audit run --no-environment-breaker`. |
-| `RAPTOR_CHECKLIST_BUILD_TIMEOUT_S` | unset (work-scaled) | Wall-clock bound override (seconds, positive integer, at most 604800 = 7 days) for every `raptor-build-checklist` child spawned with a timeout: `raptor-audit run` / `raptor-audit gaps` when a run has no inventory yet, and the orchestration pre-pass builder (`core.orchestration.skill_dispatch.build_checklist`). Unset, the bound scales with the work sized by cheap stats — target file size or bounded source-tree walk, a Ghidra project's `.rep` payload, and any cached `re-database.json` — at 30 s/MiB between a 300 s floor (the historical flat bound, kept for small targets) and a 3600 s ceiling (the Ghidra `--decompile-all` import bound). A set value in range is taken verbatim, never clamped; values above the 7-day cap are refused (an oversized integer would overflow the subprocess timeout instead of bounding anything). Malformed or oversized values refuse loudly on the audit surfaces (the run path records lifecycle `failed`, never a wedged run); the orchestration pre-pass logs a warning and keeps the work-scaled bound. The timeout message names the untimed workaround: run `libexec/raptor-build-checklist <target> <out_dir>` yourself, then relaunch — the run inherits the built checklist. |
-| `RAPTOR_REDB_MAX_BYTES` | `536870912` (512 MiB) | Read/write ceiling (bytes) for `re-database.json` and its sibling RE artifacts (`core.json.utils.RE_DATABASE_MAX_BYTES` — one constant shared by every reader and the write-side guards, resolved once at import). Allowlisted in `SAFE_ENV_ALLOWLIST`, so scrub-spawned children resolve the same effective ceiling as the parent that wrote the artifact. 512 MiB ≈ 100k functions at observed decompilation density; whole-document JSON loading amplifies 4-8× in memory, so raise this only on large-memory hosts that accept the parse peak — targets beyond it need a storage-format change, not a bigger ceiling. Positive integer; garbage, zero, or negative values warn and fall back to the default (never unlimited). |
+| `RAPTOR_ENV_FLOOR_MIB` | unset (built-in floors) | Override audit byte-pressure floors in MiB; `0` disables byte floors only. [Details](#raptor_env_floor_mib-details). |
+| `RAPTOR_CHECKLIST_BUILD_TIMEOUT_S` | unset (work-scaled) | Override checklist-build timeouts: positive seconds, at most seven days. [Details](#raptor_checklist_build_timeout_s-details). |
+| `RAPTOR_REDB_MAX_BYTES` | `536870912` (512 MiB) | Bound RE artifact reads and writes; invalid values retain the default, never unlimited. [Details](#raptor_redb_max_bytes-details). |
 | `RAPTOR_REGISTRY_ALLOW` | unset | Comma-separated registry authorities (URL-ish forms accepted; Docker Hub aliases collapse to `docker.io`) added to the manifest-probe allowlist in `core.container.registry`. By default `docker manifest inspect` probes only the candidate cascade's six public registries; refs carrying any other authority (including agent-influenced `product` strings that smuggle one) classify `denied` without network contact. Explicit ports are part of the authority: `localhost:5000` allowlists exactly that endpoint, and a port-bearing ref (`quay.io:8080/...`) never inherits the bare host's allowlisting. The `CVE_ENV_DENY_REGISTRY` denylist still applies on the cve-env cascade. |
 | `RAPTOR_NONINTERACTIVE` | unset | Explicit non-interactive override for the AskUserQuestion interactivity gate (`core.ux.interactivity`, consulted via `libexec/raptor-may-ask`). Any truthy value forces the `non-interactive` verdict, so sessions apply the documented default behaviour instead of presenting structured operator prompts. Stamped `=1` into every `claude` CLI child RAPTOR spawns (`core.llm.cc_adapter.cc_subprocess_env`) — dispatched sub-agents are unattended by definition. Falsy spellings (`0`, `false`, `no`, `off`) are ignored; without the override the gate falls through to `rule_of_two.is_ci()`, the std-fd TTY predicate, and the rule-of-two human-attendance probe, failing closed. |
 | `RAPTOR_CI` | auto-detected | CI-posture marker for the rule-of-two interactivity gate (`core.security.rule_of_two`). Normally parent-stamped: `get_safe_env()` writes `RAPTOR_CI=1` into every sanitised child env whenever the parent judged itself in CI, so the gate keeps working in children whose scrubbed env lost the vendor markers (`CI`, `GITHUB_ACTIONS`, ...). It is also the first — authoritative — entry in the recognised-marker list, so an operator may set `RAPTOR_CI=1` to force CI posture on any host. The whole marker set is unioned into `SAFE_ENV_ALLOWLIST`, so the verdict survives further spawns. |
 | `RAPTOR_NO_LAUNCHER_HARDENING` | unset | Any non-empty value skips the `bin/raptor` exec-boundary hardening block entirely: the soft core-dump cap, the umask floor (current \| `022`), the PATH scrub (empty / relative / world-writable entries), the world-writable-ancestor warning on the resolved `claude`, and the legacy stale-sibling sweep. Private per-launch scratch and its metadata are still created for functional subprocess use. Single opt-out for environments that legitimately violate one of the checks. Fail-closed: unset means hardening runs. |
 | `RAPTOR_ALLOW_UNSAFE_PATH` | unset | Any non-empty value makes the launcher PATH scrub KEEP entries it would otherwise drop (empty, relative, world-writable dirs), each with a stderr warning naming the entry and reason. Escape hatch for hosts where a required tool lives under a loose directory. Only consulted while the hardening block runs (no effect under `RAPTOR_NO_LAUNCHER_HARDENING`). |
+
+### `RAPTOR_OUT_DIR` details
+
+Output-directory root override. Validated fail-closed by `RaptorConfig.get_out_dir()`:
+refuses paths under `/etc /usr /bin /sbin /boot /dev /proc /sys` (checked on both the
+literal and symlink-resolved path, component-boundary matched) and refuses paths whose
+parent does not exist (typo guard). Propagates to children via the safe-env allowlist so
+`raptor-run-lifecycle` resolves the same directory.
+
+### `RAPTOR_CONFIG` details
+
+Path to the models config consumed by `core.llm` (`{"models": [...]}` or a bare list;
+`//` comments allowed). This variable belongs to `core.llm` alone:
+`packages/exploit_feasibility` historically read the same name for its
+*analysis-settings* JSON but cut over to `RAPTOR_EF_CONFIG`.
+
+Both readers keep schema guards for stale environments: `core.llm` logs an error (once
+per path) and loads zero models when the file is AnalysisConfig-shaped;
+`exploit_feasibility`'s `from_file` raises `ValueError` when the file is
+models-config-shaped. Both messages name the right variable.
+
+### `RAPTOR_REGISTRY_HOME` details
+
+Operator-registry relocation override, resolved at call time through one seam
+(`core.project.registry_home`) by every consumer: the projects registry becomes
+`<dir>/projects`, the `.active` bookmark `<dir>/projects/.active`, and the sessions
+registry `<dir>/sessions.d` — all three move together, so the shared-location contract
+(session binding, bookmark, ledger locking) cannot split.
+
+Must be an absolute path (no `~` expansion — the bash consumers `bin/raptor` and the
+coverage read hook apply the same rule); a relative value is refused loudly.
+
+Unset means the historical default locations, byte-identical, so existing operator state
+keeps working. Propagates to children via the safe-env allowlist; stripped from
+target-bound envs (`TARGET_ENV_STRIP_SET`).
+
+### `RAPTOR_SESSION_PID` details
+
+The launcher session's PID — one half of the session identity credential that lets deep
+children (skill dispatches, nested `claude -p` subagents, PID-namespace-blind helpers)
+resolve this session's project binding in `~/.local/share/raptor/sessions.d/`.
+
+Validated on every read: digits, the paired token must match the 0700 registry entry
+(constant-time compare), and the entry's identity stamp (starttime + boot_id + pidns)
+must match the live process — a recycled or guessed PID resolves nothing.
+
+Never set it by hand; stripped from every target-bound sandbox env
+(`TARGET_ENV_STRIP_SET`).
+
+### `RAPTOR_TMP_INODE_SOFT_PCT` details
+
+Soft ceiling for the inode-usage advisory taken at every system-tmp scratch-lane
+creation (`core.run.scratch`): one `statvfs` of the lane's filesystem, and a loud
+rate-limited warning once inode usage crosses the ceiling — tmpfs `/tmp` exhausts inodes
+long before bytes, and byte-based warnings stay silent.
+
+Advisory only, NEVER a refusal (the pressure is usually another process's litter;
+failing this run would punish the wrong one).
+
+`0`/negative disables; non-numeric keeps the default; filesystems without inode
+accounting are skipped.
+
+### `RAPTOR_ENV_FLOOR_MIB` details
+
+Byte-floor override for the audit environment guard (`core.audit.environment`): the
+value in MiB becomes the preflight refuse floor and the watchdog pause floor; the
+preflight warn floor scales at 8× and the watchdog resume floor at 2× (default ratios
+preserved).
+
+`0` disables the byte floors entirely; inode floors are unaffected. Sanctioned way to
+run on a deliberately tight filesystem (container tmpfs, fault-injection rig) that the
+default 64 MiB refuse floor would reject at start or pause permanently.
+
+Non-numeric or negative values are ignored with a warning (a typo must never silently
+disable the guard).
+
+The systemic-fault circuit breaker has its own per-run flag, `raptor-audit run
+--no-environment-breaker`.
+
+### `RAPTOR_CHECKLIST_BUILD_TIMEOUT_S` details
+
+Wall-clock bound override (seconds, positive integer, at most 604800 = 7 days) for every
+`raptor-build-checklist` child spawned with a timeout: `raptor-audit run` /
+`raptor-audit gaps` when a run has no inventory yet, and the orchestration pre-pass
+builder (`core.orchestration.skill_dispatch.build_checklist`).
+
+Unset, the bound scales with the work sized by cheap stats — target file size or bounded
+source-tree walk, a Ghidra project's `.rep` payload, and any cached `re-database.json` —
+at 30 s/MiB between a 300 s floor (the historical flat bound, kept for small targets)
+and a 3600 s ceiling (the Ghidra `--decompile-all` import bound).
+
+A set value in range is taken verbatim, never clamped; values above the 7-day cap are
+refused (an oversized integer would overflow the subprocess timeout instead of bounding
+anything).
+
+Malformed or oversized values refuse loudly on the audit surfaces (the run path records
+lifecycle `failed`, never a wedged run); the orchestration pre-pass logs a warning and
+keeps the work-scaled bound.
+
+The timeout message names the untimed workaround: run `libexec/raptor-build-checklist
+<target> <out_dir>` yourself, then relaunch — the run inherits the built checklist.
+
+### `RAPTOR_REDB_MAX_BYTES` details
+
+Read/write ceiling (bytes) for `re-database.json` and its sibling RE artifacts
+(`core.json.utils.RE_DATABASE_MAX_BYTES` — one constant shared by every reader and the
+write-side guards, resolved once at import).
+
+Allowlisted in `SAFE_ENV_ALLOWLIST`, so scrub-spawned children resolve the same
+effective ceiling as the parent that wrote the artifact.
+
+512 MiB ≈ 100k functions at observed decompilation density; whole-document JSON loading
+amplifies 4-8× in memory, so raise this only on large-memory hosts that accept the parse
+peak — targets beyond it need a storage-format change, not a bigger ceiling.
+
+Positive integer; garbage, zero, or negative values warn and fall back to the default
+(never unlimited).
 
 ### `RAPTOR_ALLOW_UNSANDBOXED_TOOLS`
 
