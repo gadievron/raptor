@@ -242,20 +242,21 @@ provenance note on the result. Languages with no buildless mode
 (Go, Swift, Kotlin) run the extractor's autobuild, disclosed with a
 loud untrusted-traced-build banner and a run-metadata record.
 
-The trade-off is accuracy: buildless extraction cannot see
-build-generated headers (`config.h`, yacc/protobuf output), so TUs
-that include them parse partially and dataflow through those regions
-is lost, and macro configurations are inferred rather than recorded
+The trade-off is accuracy: buildless extraction does not run the steps
+that generate headers (`config.h`, yacc/protobuf output). Missing headers
+can leave translation units partially analysed and lose dataflow through
+those regions. Macro configurations are inferred rather than recorded
 from real compiler invocations. After every buildless creation the
 run log carries one line summarising the damage — a WARNING with the
 count of unresolved-include extractor diagnostics when any exist, an
-INFO notice otherwise — so reduced coverage never silently reads as
-full coverage.
+INFO notice otherwise. This notice covers unresolved includes; it does
+not establish that all source constructs were extracted successfully.
 
 **Traced build (opt-in).** `--traced-build` (or an explicit
-`--build-command`) restores full-fidelity extraction by executing the
-repo's build under the sandbox. This is an explicit operator
-assertion of trust in the target — appropriate for first-party code
+`--build-command`) captures actual compiler invocations by executing the
+repo's build under the sandbox. Compiler extensions can still exceed the
+extractor's support, even when the native build succeeds. This is an explicit
+operator assertion of trust in the target — appropriate for first-party code
 and well-known upstreams you would build anyway. It is deliberately
 independent of `--trust-repo`, which gates the CodeQL pack-config
 surface (custom extractors / build hooks declared in
@@ -287,6 +288,29 @@ Databases are cached by a content hash of the tree (git HEAD when
 available), validated for integrity, and expire after 7 days.
 Multi-language targets build databases in parallel. Pass `--force` to
 bypass the cache and recreate from scratch.
+
+#### Checking C/C++ extraction coverage
+
+A successful native build and a successful `codeql database create` command
+can still leave translation units partially extracted. This matters for kernel
+code and other projects that use compiler extensions. Findings from recovered
+code remain useful; no findings from an incompletely extracted function do not
+establish that it is clean.
+
+Inspect the database's `log/extractor` directory for frontend errors. Where
+available, `diagnostic/extractors/cpp/summary.jsonl` reports
+`extractor-failures` and `extractor-successes` under `attributes`. These count
+extractor invocations, not functions or detected bugs. An absent summary is not
+proof of complete extraction.
+
+For Linux x86 kernels, GCC's `__seg_gs` and `__seg_fs` qualifiers are a
+[known extractor limitation](https://github.com/github/codeql/issues/16908).
+A traced build supplies compiler settings and generated headers, but does not
+repair unsupported language constructs. A Clang build may encounter different
+limitations; verify extraction with the actual kernel configuration and tools
+before relying on it. Removing qualifiers or replacing compiler constructs can
+change the analysis semantics, so RAPTOR does not apply those source changes
+automatically.
 
 ### Phase 4 -- Query Execution
 
