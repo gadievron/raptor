@@ -651,7 +651,7 @@ See the [C++ move specification](https://eel.is/c++draft/forward) and
 [moved-from library requirements](https://eel.is/c++draft/lib.types.movedfrom).
 
 The `suite=cpp` focused job runs narrowing, use-after-move and iterator
-regressions. The `cpp-truncation` choice remains a compatibility alias. The
+regressions. The
 `focused-codeql-cpp-regression-results` artifact includes all three suites'
 expected/actual rows and reporting-wrapper type-check output. The
 standalone move fixtures use small standard-library stand-ins; the same
@@ -681,5 +681,5 @@ unordered rehash can remain reportable even when application invariants prevent 
 prove that every modeled mutation invalidates an iterator on every execution.
 
 Use `gh workflow run nightly.yml --ref main -f suite=cpp` for the generic
-`cpp-query-regressions` job. The old `cpp-truncation` input still selects it.
+`cpp-query-regressions` job.
 Results for all three suites use `focused-codeql-cpp-regression-results`.

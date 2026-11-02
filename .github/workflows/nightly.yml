@@ -45,7 +45,6 @@ on:
           - java-log
           - scan-and-java-log
           - cpp
-          - cpp-truncation
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.suite || 'full' }}
@@ -414,7 +413,7 @@ jobs:
 
   cpp-query-regressions:
     name: C/C++ query regressions
-    if: github.event_name != 'workflow_dispatch' || inputs.suite == 'full' || inputs.suite == 'cpp' || inputs.suite == 'cpp-truncation'
+    if: github.event_name != 'workflow_dispatch' || inputs.suite == 'full' || inputs.suite == 'cpp'
     # Independent of the Java and slow/integration jobs. Reuse the pinned
     # CLI cache; keep C/C++ libraries and native tests in this job.
     runs-on: ubuntu-latest
