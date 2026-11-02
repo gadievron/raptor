@@ -292,6 +292,12 @@ _DIR_PREFIXES = (
     "sanitizer-cut-precision-",
     "semgrep-sbx-",
     "source_intel_rules_",
+    "zkpox-age-",
+    "zkpox-prove-",
+    "zkpox-private-",
+    "zkpox-opening-",
+    "zkpox-sb-",
+    "zkpox-verify-",
 )
 
 # Third-party scratch names carry no RAPTOR marker and end in a bare

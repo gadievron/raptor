@@ -1674,6 +1674,7 @@ def _mode_help_scripts() -> dict:
         'codeql': script_root / "raptor_codeql.py",
         'analyze': script_root / "packages/llm_analysis/agent.py",
         'openant': script_root / "raptor_openant.py",
+        'zkpox': script_root / "raptor_zkpox.py",
     }
 
 
@@ -1708,7 +1709,7 @@ def show_mode_help(mode: str, preamble: bool = True) -> None:
     mode_scripts = _mode_help_scripts()
 
     if mode not in mode_scripts:
-        all_modes = set(mode_scripts.keys()) | {'describe', 'doctor', 'sca', 'frida'}
+        all_modes = set(mode_scripts.keys()) | {'describe', 'doctor', 'sca', 'frida', 'zkpox'}
         if mode not in all_modes:
             print(f"✗ Unknown mode: {mode}", file=sys.stderr)
             print(f"Available modes: {', '.join(sorted(all_modes))}", file=sys.stderr)
@@ -1842,6 +1843,21 @@ For more information, visit: https://github.com/gadievron/raptor
 """
 
 
+
+def mode_zkpox(args: list) -> int:
+    """Run ZKPoX zero-knowledge proof of exploit."""
+    zkpox_script = Path(__file__).parent / "raptor_zkpox.py"
+    # Carry SDK configuration across the generic worker environment scrub.
+    if args and args[0] == "prove" and not any(
+            arg == "--circuit-cache" or arg.startswith("--circuit-cache=") for arg in args):
+        cache = os.environ.get("SP1_GROTH16_CIRCUIT_PATH") or str(
+            Path.home() / ".sp1/circuits/groth16")
+        args = [*args, "--circuit-cache", cache]
+    if args and args[0] in ("bundle", "prove"):
+        return _run_with_lifecycle("zkpox", zkpox_script, args, "Running ZKPoX...")
+    return _run_script(zkpox_script, args)
+
+
 def main():
     """Main entry point for unified RAPTOR launcher."""
     # Pre-process --trust-repo at the top level so it works in any position
@@ -1921,6 +1937,10 @@ def main():
     # lifecycle, no dispatcher). Gated to the modes show_mode_help knows
     # how to render; 'doctor' parses --help inside its own handler and
     # 'sca' has no subprocess help script, so both fall through.
+    # ZKPoX has subcommand help; preserve its arguments for argparse.
+    if mode == "zkpox" and _wants_help(remaining):
+        return mode_zkpox(remaining)
+
     if mode in _HELP_RENDER_MODES and _wants_help(remaining):
         show_mode_help(mode, preamble=False)
         return 0
@@ -1939,6 +1959,7 @@ def main():
         'describe': mode_describe,
         'frida': mode_frida,
         'openant': mode_openant,
+        'zkpox': mode_zkpox,
     }
     
     if mode not in mode_handlers:

@@ -417,6 +417,8 @@ to 120. Raise it only for unusually slow toolchains.
 | `RAPTOR_SAGE_FP_SUPPRESS` | `1` | Falsy disables SAGE cross-run false-positive suppression entirely (every finding re-tests). The force gate for consumers without a `--force` flag of their own — /agentic's analysis loop suppresses pre-LLM through this hook. |
 | `RAPTOR_SAGE_CVE_PRIOR` | `1` | Falsy disables mechanical reuse of SAGE-remembered verified CVE fix pointers in /cve-diff discovery. MAC-gated: rows without a verifying token are ignored regardless. |
 | `RAPTOR_EF_CONFIG` | unset | Path to `packages/exploit_feasibility`'s analysis-settings JSON (chain: explicit arg > `RAPTOR_EF_CONFIG` > `./.raptor.json` > `~/.config/raptor/config.json`). Not to be confused with `RAPTOR_CONFIG` (core.llm models config) — this reader historically shared that name; each side's schema guard names the right variable on mismatch. See "Exploit-feasibility analysis settings" below for the rest of the `RAPTOR_EF_*` family. |
+| `ZKPOX_REKOR_URL` | legacy read endpoint `https://rekor.sigstore.dev` | Legacy Rekor v1 helpers only. Writes require an explicit compatible endpoint. Current v2 disclosures use explicit CLI URL and pinned log key/origin; no annual shard is inferred. |
+| `SP1_GROTH16_CIRCUIT_PATH` | SP1 SDK default cache | Prepared Groth16 circuit cache for ZKPoX. Set to a large scratch disk and provision with `zkpox-prove --install-artifacts` before sandboxed proving. |
 
 ### cve-env (`CVE_ENV_*`)
 

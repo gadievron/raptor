@@ -1,29 +1,27 @@
 # ZKPoX -- Proof of Exploit
 
-ZKPoX proves the statement "I possess an input that makes binary H exhibit
-outcome O" -- ultimately without revealing the input itself. The verifier
-learns that a working, reproducing exploit exists; they do not learn the
-exploit bytes. Use cases: coordinated disclosure (prove capability before a
-patch lands), bug-bounty triage, and escrowing exploit existence.
+ZKPoX consumes recorded witnesses and supports attestation, native reproduction
+and optional zero-knowledge disclosures. The current SP1 guest proves canary
+violations for three exact curated C sources; it does not prove arbitrary
+native binaries. See the [precise scope](../packages/zkpox/docs/zkpox-scope.md)
+and [setup and CLI guide](../packages/zkpox/README.md).
 
-It is a downstream consumer of the witness substrate: any run that records
-witnesses (`/fuzz`, `/agentic`, crash analysis) produces candidates.
-
+Generic witness storage lives in `core/witness`; all ZKPoX-specific orchestration,
+Rust guest, prover and verifier live in `packages/zkpox`.
 
 ## Tiers
 
-Proving is staged so it degrades gracefully by dependency weight. Each tier
-is a strictly stronger claim than the one below.
-
 | Tier | Claim | Dependencies | Status |
 |------|-------|--------------|--------|
-| 0/1 | Attestation: "I assert witness W produced outcome O against H", carried by provenance hashes | none | implemented |
-| 1.5 | Reproduction: W re-executed against H N times in the sandbox; O reproduces | sandbox only | implemented (on request) |
-| 2 | Deterministic trace via RISC-V emulation | RISC-V toolchain | not yet implemented |
-| 3 | Full zero-knowledge STARK proof (SP1 zkVM); input stays hidden | heavy proving stack | not yet implemented |
+| 0/1 | Recorded attestation and provenance | none | implemented |
+| 1.5 | Native witness re-executed under the sandbox; observed outcome reproduced | sandbox | implemented |
+| Execute | Deterministic execution of a curated C source in SP1 | built native executor | implemented |
+| Disclosure | Positive selected canary predicate, exact curated source and hiding witness commitment, verified with SP1 6.5.0 Groth16 | built native prover/verifier and provisioned circuits | implemented |
 
-Note that Tier 1.5 demonstrates reproducibility, not zero knowledge -- the
-operator running it still holds the witness bytes.
+Core proofs are an internal diagnostic format, not zero-knowledge disclosures.
+Public verification separately labels encrypted delivery as unchecked until
+opened, and optional log inclusion must be explicitly authenticated against a
+pinned log key. Rekor v2 inclusion alone does not provide a timestamp.
 
 
 ## Free eligibility surfacing
