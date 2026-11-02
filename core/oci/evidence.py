@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import posixpath
 import re
 from collections.abc import Callable, Iterable
 from pathlib import PurePosixPath
@@ -114,6 +115,74 @@ def _verified(chunks: Iterable[bytes], layer: LayerDescriptor) -> Iterable[bytes
         raise ValueError("layer size or digest mismatch")
 
 
+def _selected_layer(reader, layer, wanted, *, diff_id, discover_path=None):
+    def select(name):
+        # Include replay-added hard-link targets in alias checks. Distinct tar
+        # spellings must not shadow a selected path after normalisation.
+        if posixpath.normpath("/" + name).lstrip("/") in wanted:
+            _path("/" + name)
+        return discover_path(name) if discover_path is not None else False
+
+    for attempt in range(5):
+        try:
+            return extract_files_from_layer(
+                _verified(reader(layer), layer), wanted,
+                media_type=layer.media_type, compressed_size=layer.size,
+                max_selected_bytes=MAX_LAYER_SELECTED_BYTES, resolve_selected_hardlinks=True,
+                expected_diff_id=diff_id, discover_path=select)
+        except UnresolvedLayerHardlinks as exc:
+            if attempt == 4:
+                raise ValueError("hard-link resolution exceeded replay bound") from exc
+            wanted.update(exc.paths)
+
+
+def read_identity_files(catalogue: dict, reader, locations: set[tuple[str, str]]) -> dict:
+    """Read indexed identity files transiently from fully verified image layers.
+
+    Returned bytes are for in-memory checks only. Callers retain the identity
+    records, not executable/archive bytes. No filesystem overlay is replayed.
+    """
+    image, layers = subject(catalogue)
+    origins = {r["blob_digest"]: r["config_diff_id"] for r in image["layers"]}
+    indexed = {(f["location"]["path"], f["location"]["layerID"]): f for f in catalogue.get("files", [])}
+    if len(indexed) != len(catalogue.get("files", [])):
+        raise ValueError("duplicate catalogue file location")
+    for path, origin in locations:
+        _path(path)
+        _digest(origin)
+        if (path, origin) not in indexed or origin not in origins.values():
+            raise ValueError("owner identity location is absent from the image catalogue")
+        if indexed[(path, origin)].get("metadata", {}).get("type") not in {None, "RegularFile"}:
+            raise ValueError("owner identity is not a catalogued regular file")
+    result = {}
+    total = 0
+    for layer in layers:
+        origin = origins[layer.digest]
+        selected = {path for path, diff in locations if diff == origin and (path, diff) not in result}
+        if not selected:
+            continue
+        contents = _selected_layer(reader, layer, {p.lstrip("/") for p in selected}, diff_id=origin)
+        for path in sorted(selected):
+            data = contents.get(path.lstrip("/"))
+            if data is None:
+                raise ValueError(f"required owner identity file {path!r} missing from layer")
+            total += len(data)
+            if total > MAX_CAPTURE_BYTES:
+                raise ValueError("owner identity verification exceeds memory budget")
+            file = indexed[(path, origin)]
+            if file.get("metadata", {}).get("size", len(data)) != len(data):
+                raise ValueError("owner identity size conflicts with catalogue")
+            sha = hashlib.sha256(data).hexdigest()
+            for digest in file.get("digests", []):
+                if digest["algorithm"].lower() == "sha256" and digest["value"].lower() != sha:
+                    raise ValueError("owner identity SHA-256 conflicts with catalogue")
+            record = {"path": path, "catalogue_layer_diff_id": origin, "layer_blob_digest": layer.digest,
+                      "sha256": sha, "size": len(data), "visibility": "catalogue_location",
+                      "method": "verified_image_layer", "content_kind": "identity"}
+            result[(path, origin)] = record, data
+    return result
+
+
 def capture(catalogue: dict, reader: Callable[[LayerDescriptor], Iterable[bytes]],
             *, identify: tuple[str, ...] = ()) -> tuple[dict, dict[str, bytes]]:
     """Return evidence and content-addressed notice bytes, only after verification.
@@ -198,18 +267,7 @@ def capture(catalogue: dict, reader: Callable[[LayerDescriptor], Iterable[bytes]
         if not selected and not any(origin == origins[layer.digest] for _, origin in package_paths.directories):
             continue
         wanted = {path.lstrip("/") for path in selected}
-        for attempt in range(5):
-            try:
-                contents = extract_files_from_layer(
-                    _verified(reader(layer), layer), wanted,
-                    media_type=layer.media_type, compressed_size=layer.size,
-                    max_selected_bytes=MAX_LAYER_SELECTED_BYTES, resolve_selected_hardlinks=True,
-                    expected_diff_id=origins[layer.digest], discover_path=discover)
-                break
-            except UnresolvedLayerHardlinks as exc:
-                if attempt == 4:
-                    raise ValueError("hard-link resolution exceeded replay bound") from exc
-                wanted.update(exc.paths)
+        contents = _selected_layer(reader, layer, wanted, diff_id=origins[layer.digest], discover_path=discover)
         for name in contents:
             path = "/" + name
             for identifier, reason in package_paths.matches(path, origins[layer.digest]):

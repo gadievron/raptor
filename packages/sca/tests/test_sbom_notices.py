@@ -304,3 +304,144 @@ def test_distro_notice_context_preserves_child_claims_status_and_input(fixture):
     assert s['packages'][2]['licenseConcluded'] == 'NOASSERTION'
     assert c['dependencies'] == cdx['dependencies'] and s['relationships'] == spdx['relationships']
     assert any('Enclosing distro' in ref.get('comment', '') for ref in c['components'][1]['externalReferences'])
+
+
+def test_optional_owner_reader_fetches_only_missing_identity_and_does_not_export_bytes(fixture, monkeypatch):
+    from core.oci import evidence
+    root, native, _, report, _, _ = fixture
+    identity = deepcopy(report['files'][-1])
+    payload = b'executable bytes'
+    identifier = 'd' * 16
+    native['artifacts'].append({'id': identifier, 'name': 'tool', 'version': '1', 'type': 'binary',
+        'locations': [{'path': identity['path'], 'layerID': identity['catalogue_layer_diff_id']}], 'licenses': []})
+    report['packages'].append({k: native['artifacts'][-1][k] for k in ('id', 'name', 'version', 'type', 'licenses')})
+    native['artifacts'][2]['metadata'] = {'files': [{'path': identity['path'], 'digest': {
+        'algorithm': 'md5', 'value': hashlib.md5(payload, usedforsecurity=False).hexdigest()}}]}
+    digest = sha(json.dumps(native).encode())
+    report['catalogue_sha256'] = digest
+    calls = []
+    reader = object()
+    def verify(catalogue, source, locations):
+        assert catalogue is native and source is reader
+        assert locations == {(identity['path'], identity['catalogue_layer_diff_id'])}
+        calls.append(locations)
+        return {next(iter(locations)): ({**identity, 'method': 'verified_image_layer'}, payload)}
+    monkeypatch.setattr(evidence, 'read_identity_files', verify)
+    before, _ = load_notices(root, native, digest, report)
+    assert calls == [] and before['distro_owner_statistics']['packages_with_unresolved_owner_leads'] == 1
+    summary, blobs = load_notices(root, native, digest, report, owner_reader=reader)
+    assert len(calls) == 1 and summary['distro_owner_statistics']['packages_with_unresolved_owner_leads'] == 0
+    assert identity['sha256'] not in blobs and payload not in blobs.values()
+    assert summary['owner_file_verification'][0]['sha256'] == identity['sha256']
+    assert summary['packages'][-1]['status'] == 'no_associated_evidence'
+    json.dumps(summary)  # No transient bytes can enter the serialised report.
+
+
+@pytest.mark.parametrize('owner_args', [['--owner-registry-ref', ''], ['--owner-oci-layout', '.']])
+def test_owner_source_requires_notice_evidence_before_reading_inputs(monkeypatch, owner_args):
+    monkeypatch.setattr(sys, 'argv', ['prepare', '--syft', 'absent', '--cyclonedx', 'absent', '--spdx', 'absent',
+                                    '--out', 'absent-output'] + owner_args)
+    with pytest.raises(SystemExit) as error:
+        tool.main()
+    assert error.value.code == 2
+
+
+def test_bad_output_is_rejected_before_owner_source_access(tmp_path, monkeypatch):
+    from core.oci import evidence_source
+    out = tmp_path / 'output'
+    out.mkdir()
+    marker = out / 'sbom.cdx.json'
+    marker.write_text('keep')
+    monkeypatch.setattr(evidence_source, 'registry_reader', lambda *a: pytest.fail('must not create network source'))
+    monkeypatch.setattr(sys, 'argv', ['prepare', '--syft', 'absent', '--cyclonedx', 'absent', '--spdx', 'absent',
+        '--notice-evidence', 'absent', '--owner-registry-ref', 'example/image@sha256:' + 'a' * 64, '--out', str(out)])
+    with pytest.raises(ValueError, match='fresh output'):
+        tool.main()
+    assert marker.read_text() == 'keep'
+
+
+def test_cli_offline_owner_verification_measures_without_persisting_binary(fixture, tmp_path, monkeypatch):
+    import gzip
+    import io
+    import tarfile
+    from core.oci import evidence_source
+    root, native, _, report, cdx, spdx = fixture
+    payload = b'executable bytes'
+    identity = report['files'][-1]
+    identifier = 'd' * 16
+    purl = 'pkg:generic/tool@1'
+    native['artifacts'].append({'id': identifier, 'name': 'tool', 'version': '1', 'type': 'binary', 'purl': purl,
+        'locations': [{'path': identity['path'], 'layerID': identity['catalogue_layer_diff_id']}], 'licenses': []})
+    native['artifacts'][2]['metadata'] = {'files': [{'path': identity['path'], 'digest': {
+        'algorithm': 'md5', 'value': hashlib.md5(payload, usedforsecurity=False).hexdigest()}}]}
+    cdx['components'].append({'bom-ref': identifier, 'type': 'application', 'name': 'tool', 'version': '1', 'purl': purl})
+    cdx['dependencies'].append({'ref': identifier, 'dependsOn': []})
+    spdx['packages'].append({'SPDXID': 'SPDXRef-Package-' + identifier, 'name': 'tool', 'versionInfo': '1',
+        'filesAnalyzed': False, 'downloadLocation': 'NOASSERTION', 'licenseDeclared': 'NOASSERTION', 'licenseConcluded': 'NOASSERTION',
+        'externalRefs': [{'referenceCategory': 'PACKAGE-MANAGER', 'referenceType': 'purl', 'referenceLocator': purl}]})
+    archive = io.BytesIO()
+    with tarfile.open(fileobj=archive, mode='w') as tar:
+        for row in report['files']:
+            raw = payload if row['content_kind'] == 'identity' else (root / row['notice_file']).read_bytes()
+            header = tarfile.TarInfo(row['path'].lstrip('/'))
+            header.size = len(raw)
+            tar.addfile(header, io.BytesIO(raw))
+    tar_bytes = archive.getvalue()
+    compressed = gzip.compress(tar_bytes)
+    origin = 'sha256:' + sha(tar_bytes)
+    blob = 'sha256:' + sha(compressed)
+    metadata = native['source']['metadata']
+    config = json.loads(base64.b64decode(metadata['config']))
+    config['rootfs']['diff_ids'] = [origin]
+    config_bytes = json.dumps(config).encode()
+    manifest = json.loads(base64.b64decode(metadata['manifest']))
+    manifest['config'].update(digest='sha256:' + sha(config_bytes), size=len(config_bytes))
+    manifest['layers'][0].update(digest=blob, size=len(compressed))
+    manifest_bytes = json.dumps(manifest).encode()
+    metadata.update(config=base64.b64encode(config_bytes).decode(), imageID='sha256:' + sha(config_bytes),
+                    manifest=base64.b64encode(manifest_bytes).decode(), manifestDigest='sha256:' + sha(manifest_bytes))
+    native['source']['version'] = metadata['manifestDigest']
+    cdx['metadata']['component']['version'] = native['source']['version']
+    spdx['packages'][0]['versionInfo'] = native['source']['version']
+    for file in native['files']:
+        file['location']['layerID'] = origin
+    for artifact in native['artifacts']:
+        for loc in artifact.get('locations', []):
+            loc['layerID'] = origin
+        for licence in artifact.get('licenses', []):
+            for loc in licence.get('locations', []):
+                loc['layerID'] = origin
+    report['subject'] = subject(native)[0]
+    report['packages'] = [{k: a[k] for k in ('id', 'name', 'version', 'type', 'purl', 'licenses') if k in a} for a in native['artifacts']]
+    for row in report['files']:
+        row.update(catalogue_layer_diff_id=origin, layer_blob_digest=blob)
+    native_bytes = json.dumps(native).encode()
+    report['catalogue_sha256'] = sha(native_bytes)
+    (tmp_path / 'native.json').write_bytes(native_bytes)
+    save_json(root / 'evidence.json', report)
+    save_json(tmp_path / 'raw.cdx.json', cdx)
+    save_json(tmp_path / 'raw.spdx.json', spdx)
+    save_json(tmp_path / 'manifest.json', {'version': 1, 'sources': []})
+    store = tmp_path / 'layout/blobs/sha256'
+    store.mkdir(parents=True)
+    (store / sha(compressed)).write_bytes(compressed)
+    out = tmp_path / 'verified'
+    args = ['prepare', '--syft', str(tmp_path / 'native.json'), '--cyclonedx', str(tmp_path / 'raw.cdx.json'),
+        '--spdx', str(tmp_path / 'raw.spdx.json'), '--provenance', str(tmp_path / 'manifest.json'),
+        '--notice-evidence', str(root), '--owner-oci-layout', str(tmp_path / 'layout'), '--out', str(out)]
+    monkeypatch.setattr(evidence_source, 'registry_reader', lambda *a: pytest.fail('offline path must not create a registry client'))
+    monkeypatch.setattr(sys, 'argv', args)
+    tool.main()
+    result = json.loads((out / 'provenance.json').read_bytes())['notice_evidence']
+    measured = result['owner_file_verification']
+    assert len(measured) == 1 and measured[0]['sha256'] == sha(payload)
+    assert result['distro_owner_statistics']['packages_with_unresolved_owner_leads'] == 0
+    assert result['packages'][-1]['status'] == 'no_associated_evidence'
+    assert not (out / 'notices/sha256' / sha(payload)).exists()
+    assert payload not in [p.read_bytes() for p in (out / 'notices/sha256').iterdir()]
+    (store / sha(compressed)).write_bytes(compressed + b'tampered')
+    failed = tmp_path / 'failed'
+    monkeypatch.setattr(sys, 'argv', args[:-1] + [str(failed)])
+    with pytest.raises(ValueError):
+        tool.main()
+    assert not failed.exists()

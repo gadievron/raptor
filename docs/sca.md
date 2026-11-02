@@ -324,8 +324,8 @@ python3 .github/scripts/prepare_sbom.py \
 
 For container exports, pass the corresponding three inputs and omit `--repo`.
 Use an image digest and explicitly choose the generation scope (runtime
-filesystem or all layers). Preparation does not pull, execute or inspect an
-image itself. Use a fresh output directory: inputs are retained unchanged.
+filesystem or all layers). Default preparation uses local inputs. Optional
+owner-file verification streams selected image layers without executing an image. Use a fresh output directory: inputs are retained unchanged.
 
 Preparation writes `sbom.cdx.json`, `sbom.spdx.json` and `provenance.json`.
 It matches package occurrences against the native inventory and refuses
@@ -353,7 +353,8 @@ accounts for all wheel contents or reproduce the installed binary. Unknown
 vendor source, unverified correspondence and missing candidate versions are
 recorded explicitly. Update the manifest after checking the new upstream tag
 and commit; a package bump never silently reuses an older version's source pin.
-The script performs no network access, installation or publication.
+Default preparation performs no network access. Installation and publication
+remain outside this script.
 
 For repository input, the manifest's `bundles` rules also inventory committed
 PSL data, retained dataflow source excerpts, calibration data and CVE-diff
@@ -491,6 +492,38 @@ Supporting locations cannot substitute for an explicitly identified primary
 location. Own-notice status and gaps stay unchanged, and enclosing licence
 expressions are not assigned to the child component. `distro_owner_statistics`
 reports the contextual links separately.
+
+When an inventory lead lacks retained primary-file bytes, explicitly enable
+transient verification during preparation:
+
+```bash
+python3 .github/scripts/prepare_sbom.py \
+  --syft /tmp/raptor-sbom/container/syft.json \
+  --cyclonedx /tmp/raptor-sbom/container/sbom.cdx.json \
+  --spdx /tmp/raptor-sbom/container/sbom.spdx.json \
+  --notice-evidence /tmp/raptor-sbom/container/evidence \
+  --owner-registry-ref 'registry.example/org/image@sha256:<platform-manifest-digest>' \
+  --out /tmp/raptor-sbom/container/verified
+```
+
+For air-gapped use, replace `--owner-registry-ref` with
+`--owner-oci-layout /path/to/layout`. These options require `--notice-evidence`
+and are mutually exclusive. The registry reference must pin the catalogue's exact
+platform manifest. Preparation remains offline unless the registry option is
+explicitly supplied; catalogue URLs never select network destinations.
+
+Only indexed primary files needed for unresolved inventory checks are read.
+Compressed-layer digests and sizes, uncompressed diff IDs, and available native
+file SHA-256/size claims must agree. Missing files, unsafe links, conflicting
+identity data, unsupported compression and unavailable layers fail before output
+creation. Archive files are measured as bytes without unpacking or executing them.
+
+Transient bytes are discarded after checksum comparison and are never added to
+the notice bundle. `owner_file_verification` records their SHA-256, size and layer
+origin; matched context uses `verified_image_bytes_match_inventory_checksum` to
+distinguish these measurements from retained capture bytes. Inventory mismatches
+or ambiguous owners stay unresolved. These checks still establish review context,
+while component-specific terms and own-notice gaps remain unreviewed.
 
 This process does not fetch corresponding source, infer unknown tool versions,
 or publish anything. A file hash identifies bytes; it does not establish a build

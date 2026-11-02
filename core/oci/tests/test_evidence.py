@@ -299,3 +299,64 @@ def test_dynamic_discovery_recovers_unindexed_npm_filename_variant():
     row = next(r for r in report['files'] if r['path'].endswith('license-MIT'))
     assert row['package_ids'] == ['package-id']
     assert blobs[row['sha256']] == b'notice'
+
+
+def test_identity_bytes_are_verified_but_not_notice_artifacts():
+    from core.oci.evidence import read_identity_files
+    catalogue, blob = fixture_image()
+    origin = catalogue['files'][1]['location']['layerID']
+    verified = read_identity_files(catalogue, lambda layer: [blob], {('/usr/bin/tool', origin)})
+    record, data = verified[('/usr/bin/tool', origin)]
+    assert data == b'executable'
+    assert record['sha256'] == hashlib.sha256(data).hexdigest()
+    assert record['method'] == 'verified_image_layer'
+    assert record['content_kind'] == 'identity' and 'notice_file' not in record
+
+
+@pytest.mark.parametrize('change', ['sha', 'size', 'absent', 'blob'])
+def test_identity_verification_refuses_bad_bindings(change):
+    from core.oci.evidence import read_identity_files
+    catalogue, blob = fixture_image()
+    path = '/usr/bin/tool'
+    if change == 'sha':
+        catalogue['files'][1]['digests'][0]['value'] = 'a' * 64
+    elif change == 'size':
+        catalogue['files'][1]['metadata']['size'] = 1
+    elif change == 'absent':
+        path = '/missing'
+    else:
+        blob += b'extra'
+    with pytest.raises(ValueError):
+        read_identity_files(catalogue, lambda layer: [blob], {(path, catalogue['files'][1]['location']['layerID'])})
+
+
+@pytest.mark.parametrize('alias', ['usr//bin/tool', 'usr/bin/./tool', 'usr/tmp/../bin/tool'])
+def test_identity_tar_alias_cannot_shadow_a_selected_file(alias):
+    from core.oci.evidence import read_identity_files
+    catalogue, blob = fixture_image({'usr/bin/tool': b'original', alias: b'shadow'})
+    origin = catalogue['files'][0]['location']['layerID']
+    with pytest.raises(ValueError):
+        read_identity_files(catalogue, lambda layer: [blob], {('/usr/bin/tool', origin)})
+
+
+def test_identity_verification_supports_offline_oci_store(tmp_path):
+    from core.oci.evidence import read_identity_files
+    from core.oci.evidence_source import layout_reader
+    catalogue, blob = fixture_image()
+    store = tmp_path / 'blobs/sha256'
+    store.mkdir(parents=True)
+    (store / hashlib.sha256(blob).hexdigest()).write_bytes(blob)
+    origin = catalogue['files'][1]['location']['layerID']
+    result = read_identity_files(catalogue, layout_reader(tmp_path), {('/usr/bin/tool', origin)})
+    assert result[('/usr/bin/tool', origin)][1] == b'executable'
+
+
+def test_identity_verification_rejects_catalogued_symlink_before_source_read():
+    from core.oci.evidence import read_identity_files
+    catalogue, _ = fixture_image()
+    file = catalogue['files'][1]
+    file['metadata']['type'] = 'SymbolicLink'
+    def unexpected_read(layer):
+        pytest.fail('nonregular catalogue entries must be rejected before I/O')
+    with pytest.raises(ValueError, match='regular file'):
+        read_identity_files(catalogue, unexpected_read, {('/usr/bin/tool', file['location']['layerID'])})
