@@ -493,6 +493,19 @@ location. Own-notice status and gaps stay unchanged, and enclosing licence
 expressions are not assigned to the child component. `distro_owner_statistics`
 reports the contextual links separately.
 
+Binary occurrences lacking their own notice candidate are also checked against
+installed Python distributions' RECORD inventories. `python_record_owner_context`
+links captured enclosing-distribution notices when a package-local path, layer,
+SHA-256 and size match; `python_record_owner_statistics` counts these links
+separately. Absolute RECORD paths, aliases and paths outside site-packages are
+excluded. Conflicting claims and ambiguous enclosing distributions remain leads.
+The verification label `catalogue_sha256_matches_python_record` means the native
+catalogue's file measurement matches the RECORD claim; it does not mean preparation
+independently read the binary. Retained or explicitly verified image bytes take
+precedence when available and retain their respective verification labels.
+Enclosing Python notices are review context, including for vendored executables;
+their licence declarations are not inherited and own-notice gaps remain unchanged.
+
 When an inventory lead lacks retained primary-file bytes, explicitly enable
 transient verification during preparation:
 

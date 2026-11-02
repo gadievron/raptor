@@ -191,12 +191,14 @@ def associate(native: dict, image: dict, rows: list[dict], blobs: dict[str, byte
         packages.append({"id": artifact["id"], "status": status, "files": evidence, "gaps": gaps})
     from packages.sca.sbom_notice_owners import add_owner_context
     owner_statistics = add_owner_context(native, rows, blobs, packages, limit=MAX_ASSOCIATIONS)
+    python_statistics = add_owner_context(native, rows, blobs, packages, limit=MAX_ASSOCIATIONS, owner_kind='python')
     measurements = []
     if owner_reader is not None:
         by_id = {p["id"]: p for p in packages}
         locations = {(loc["path"], loc["catalogue_layer_diff_id"])
                      for package in packages
-                     for loc in package.get("distro_owner_context", {}).get("unresolved_locations", [])
+                     for context_key in ("distro_owner_context", "python_record_owner_context")
+                     for loc in package.get(context_key, {}).get("unresolved_locations", [])
                      if any(c["verification"] == "captured_bytes_unavailable"
                             and any(f["content_kind"] == "notice_candidate" for f in by_id[c["owner_package_id"]]["files"])
                             for c in loc["candidates"])}
@@ -204,11 +206,15 @@ def associate(native: dict, image: dict, rows: list[dict], blobs: dict[str, byte
         verified = read_identity_files(native, owner_reader, locations)
         for package in packages:
             package.pop("distro_owner_context", None)
+            package.pop("python_record_owner_context", None)
         owner_statistics = add_owner_context(native, rows, blobs, packages, limit=MAX_ASSOCIATIONS, verified_files=verified)
+        python_statistics = add_owner_context(native, rows, blobs, packages, limit=MAX_ASSOCIATIONS,
+                                              verified_files=verified, owner_kind='python')
         measurements = [verified[key][0] for key in sorted(verified)]
     return {"version": 1, "subject": image, "packages": packages, "owner_file_verification": measurements, "distro_owner_statistics": owner_statistics,
+            "python_record_owner_statistics": python_statistics,
             "unassociated_files": [deepcopy(r) for r in rows if (r["path"], r["catalogue_layer_diff_id"]) not in associated],
-            "scope": "catalogue, directory and enclosing distro notice context; no licence conclusion, completeness or build-source certification"}
+            "scope": "catalogue, directory and enclosing package notice context; no licence conclusion, completeness or build-source certification"}
 
 
 def append_notices(cdx: dict, spdx: dict, components: dict, packages: dict, summary: dict) -> None:
@@ -216,7 +222,9 @@ def append_notices(cdx: dict, spdx: dict, components: dict, packages: dict, summ
     for record in summary["packages"]:
         component, package = components[record["id"]], packages[record["id"]]
         component.pop("signature", None)
-        for context in record.get("distro_owner_context", {}).get("checksum_matched_notices", []):
+        contexts = [context for key in ("distro_owner_context", "python_record_owner_context")
+                    for context in record.get(key, {}).get("checksum_matched_notices", [])]
+        for context in contexts:
             owner_id = context["owner_package_id"]
             context["owner_cyclonedx_ref"] = components[owner_id]["bom-ref"]
             context["owner_spdx_id"] = packages[owner_id]["SPDXID"]
@@ -230,11 +238,12 @@ def append_notices(cdx: dict, spdx: dict, components: dict, packages: dict, summ
                          "comment": "Captured " + row["content_kind"] + "; applicable terms remain unreviewed"}
             if reference not in component.setdefault("externalReferences", []):
                 component["externalReferences"].append(reference)
-        for context in record.get("distro_owner_context", {}).get("checksum_matched_notices", []):
+        for context in contexts:
             for row in context["files"]:
+                enclosing = "distro package" if context['scope'].startswith('enclosing_distro_') else "Python distribution"
                 reference = {"type": "evidence", "url": row["notice_file"],
                              "hashes": [{"alg": "SHA-256", "content": row["sha256"]}],
-                             "comment": "Enclosing distro package notice context; component coverage unreviewed"}
+                             "comment": "Enclosing " + enclosing + " notice context; component coverage unreviewed"}
                 if reference not in component.setdefault("externalReferences", []):
                     component["externalReferences"].append(reference)
         package["comment"] = package.get("comment", "") + "\nRAPTOR notice evidence: " + encoded
