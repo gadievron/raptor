@@ -42,6 +42,7 @@ if not (os.environ.get("CLAUDECODE")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
+from core.domains import domain_boundary  # noqa: E402
 
 
 def _anchor_path() -> Path:
@@ -87,6 +88,12 @@ def main() -> int:
                 or any(ord(c) < 0x21 or ord(c) == 0x7F for c in host)):
             print(f"raptor-fetch-anchor: not a bare hostname: {host!r}",
                   file=sys.stderr)
+            return 1
+        try:
+            host = domain_boundary(host).hostname
+        except (OSError, ValueError) as exc:
+            print(f"raptor-fetch-anchor: cannot validate hostname {host!r}: "
+                  f"{exc}", file=sys.stderr)
             return 1
         if not anchor.is_file():
             print(f"raptor-fetch-anchor: no anchor at {anchor} — write "
