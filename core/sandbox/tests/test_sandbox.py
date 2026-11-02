@@ -362,8 +362,9 @@ class TestSandboxContextManager(unittest.TestCase):
         from core.config import RaptorConfig
         # Set a var that's NOT in the allowlist and NOT in the blocklist —
         # under the old pure-blocklist behaviour this would pass through.
-        os.environ["RAPTOR_TEST_UNKNOWN_INJECTION"] = "should-not-leak"
-        try:
+        with patch.dict(os.environ, {
+            "RAPTOR_TEST_UNKNOWN_INJECTION": "should-not-leak",
+        }):
             env = RaptorConfig.get_safe_env()
             self.assertNotIn("RAPTOR_TEST_UNKNOWN_INJECTION", env,
                              "unknown env var flowed through — allowlist broken")
@@ -381,9 +382,6 @@ class TestSandboxContextManager(unittest.TestCase):
             env = RaptorConfig.get_safe_env()
             self.assertNotIn("SSH_ASKPASS", env,
                              "blocklist overlay failed")
-        finally:
-            for k in ("RAPTOR_TEST_UNKNOWN_INJECTION", "LC_TIME", "SSH_ASKPASS"):
-                os.environ.pop(k, None)
 
     @requires_landlock
     def test_timeout_works(self):
