@@ -3,14 +3,33 @@
 import socket
 import threading
 
+import pytest
+
 from core.sandbox.tests.socket_server import SocketServer
 
 
-def _listener():
-    listener = socket.socket()
-    listener.bind(("127.0.0.1", 0))
-    listener.listen(8)
-    return listener
+@pytest.fixture(params=["tcp", "unix"])
+def listener(request, short_sock_dir):
+    if request.param == "unix" and not hasattr(socket, "AF_UNIX"):
+        pytest.skip("Unix sockets unavailable")
+    family = socket.AF_INET if request.param == "tcp" else socket.AF_UNIX
+    address = (("127.0.0.1", 0) if request.param == "tcp"
+               else str(short_sock_dir / "backend.sock"))
+    with socket.socket(family, socket.SOCK_STREAM) as sock:
+        sock.bind(address)
+        sock.listen(8)
+        yield sock
+
+
+def _connect(listener):
+    client = socket.socket(listener.family, socket.SOCK_STREAM)
+    try:
+        client.settimeout(5)
+        client.connect(listener.getsockname())
+    except BaseException:
+        client.close()
+        raise
+    return client
 
 
 def _assert_stopped(server):
@@ -19,15 +38,15 @@ def _assert_stopped(server):
     assert not server._clients
 
 
-def test_idle_close_is_idempotent():
-    with SocketServer(_listener(), lambda conn: None) as server:
+def test_idle_close_is_idempotent(listener):
+    with SocketServer(listener, lambda conn: None) as server:
         server.close()
         _assert_stopped(server)
         server.close()
         _assert_stopped(server)
 
 
-def test_close_wakes_blocked_readers():
+def test_close_wakes_blocked_readers(listener):
     ready = [threading.Event(), threading.Event()]
     accepted = iter(ready)
     lock = threading.Lock()
@@ -38,16 +57,14 @@ def test_close_wakes_blocked_readers():
         event.set()
         conn.recv(1)
 
-    listener = _listener()
     with SocketServer(listener, read) as server:
-        with socket.create_connection(listener.getsockname(), timeout=5), \
-                socket.create_connection(listener.getsockname(), timeout=5):
+        with _connect(listener), _connect(listener):
             assert all(event.wait(5) for event in ready), "readers did not start"
             server.close()
             _assert_stopped(server)
 
 
-def test_close_wakes_blocked_writer():
+def test_close_wakes_blocked_writer(listener):
     ready = threading.Event()
 
     def write(conn):
@@ -55,9 +72,8 @@ def test_close_wakes_blocked_writer():
         ready.set()
         conn.sendall(b"x" * (8 * 1024 * 1024))
 
-    listener = _listener()
     with SocketServer(listener, write) as server:
-        with socket.create_connection(listener.getsockname(), timeout=5) as client:
+        with _connect(listener) as client:
             client.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
             assert ready.wait(5), "writer did not start"
             server.close()

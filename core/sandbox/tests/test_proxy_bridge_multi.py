@@ -15,30 +15,23 @@ import threading
 import pytest
 
 from core.sandbox._proxy_bridge import _run_bridges, _run_forwarder
+from core.sandbox.tests.socket_server import SocketServer
 
 
-def _unix_echo_server(path: str, tag: bytes) -> threading.Thread:
+def _unix_echo_server(path: str, tag: bytes) -> SocketServer:
     """Echo server on a unix socket that prefixes replies with *tag*
     so tests can prove WHICH upstream a bridge port maps to."""
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     srv.bind(path)
     srv.listen(4)
 
-    def _serve():
-        while True:
-            try:
-                conn, _ = srv.accept()
-            except OSError:
-                return
-            with conn:
-                data = conn.recv(4096)
-                if data:
-                    conn.sendall(tag + data)
+    def _serve(conn):
+        with conn:
+            data = conn.recv(4096)
+            if data:
+                conn.sendall(tag + data)
 
-    t = threading.Thread(target=_serve, daemon=True)
-    t.start()
-    t._srv = srv  # keep a handle for cleanup
-    return t
+    return SocketServer(srv, _serve)
 
 
 def _free_port() -> int:
@@ -105,8 +98,8 @@ class TestRunBridges:
             os.close(death_w)
             t.join(timeout=5)
             os.close(death_r)
-            srv_a._srv.close()
-            srv_b._srv.close()
+            srv_a.close()
+            srv_b.close()
         assert not t.is_alive()
 
     def test_single_bridge_wrapper_compatible(self, short_sock_dir):
@@ -126,7 +119,7 @@ class TestRunBridges:
             os.close(death_w)
             t.join(timeout=5)
             os.close(death_r)
-            srv._srv.close()
+            srv.close()
 
     def test_dead_upstream_closes_client_not_relay(self, short_sock_dir):
         """A bridge whose unix upstream is gone must refuse that
@@ -159,10 +152,10 @@ class TestRunBridges:
             os.close(death_w)
             t.join(timeout=5)
             os.close(death_r)
-            srv._srv.close()
+            srv.close()
 
 
-def _unix_hold_echo_server(path: str) -> threading.Thread:
+def _unix_hold_echo_server(path: str) -> SocketServer:
     """Echo server that HOLDS each connection open (echoes every
     chunk, closes only on client EOF) — for tests that need live
     long-lived pairs."""
@@ -182,22 +175,10 @@ def _unix_hold_echo_server(path: str) -> threading.Thread:
             except OSError:
                 return
 
-    def _serve():
-        while True:
-            try:
-                conn, _ = srv.accept()
-            except OSError:
-                return
-            threading.Thread(target=_serve_conn, args=(conn,),
-                             daemon=True).start()
-
-    t = threading.Thread(target=_serve, daemon=True)
-    t.start()
-    t._srv = srv
-    return t
+    return SocketServer(srv, _serve_conn)
 
 
-def _unix_flood_server(path: str, nbytes: int) -> threading.Thread:
+def _unix_flood_server(path: str, nbytes: int) -> SocketServer:
     """Server that blasts *nbytes* at every connection as soon as it
     is accepted — for tests that need a peer's write side saturated."""
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -212,19 +193,7 @@ def _unix_flood_server(path: str, nbytes: int) -> threading.Thread:
             except OSError:
                 return
 
-    def _serve():
-        while True:
-            try:
-                conn, _ = srv.accept()
-            except OSError:
-                return
-            threading.Thread(target=_blast, args=(conn,),
-                             daemon=True).start()
-
-    t = threading.Thread(target=_serve, daemon=True)
-    t.start()
-    t._srv = srv
-    return t
+    return SocketServer(srv, _blast)
 
 
 class TestForwarderBounds:
@@ -282,7 +251,7 @@ class TestForwarderBounds:
             os.close(death_w)
             t.join(timeout=5)
             os.close(death_r)
-            srv._srv.close()
+            srv.close()
 
     def test_idle_pairs_are_swept(self, short_sock_dir, monkeypatch):
         import time as _time
@@ -313,7 +282,7 @@ class TestForwarderBounds:
             os.close(death_w)
             t.join(timeout=5)
             os.close(death_r)
-            srv._srv.close()
+            srv.close()
 
     def test_stalled_peer_does_not_block_other_pairs(
         self, short_sock_dir, monkeypatch,
@@ -378,8 +347,8 @@ class TestForwarderBounds:
             os.close(death_w)
             t.join(timeout=5)
             os.close(death_r)
-            flood_srv._srv.close()
-            echo_srv._srv.close()
+            flood_srv.close()
+            echo_srv.close()
 
     def test_eof_with_pending_bytes_still_delivers_the_tail(
         self, short_sock_dir,
@@ -404,17 +373,7 @@ class TestForwarderBounds:
                 except OSError:
                     pass
 
-        def _serve():
-            while True:
-                try:
-                    conn, _ = srv.accept()
-                except OSError:
-                    return
-                threading.Thread(target=_burst, args=(conn,),
-                                 daemon=True).start()
-
-        st = threading.Thread(target=_serve, daemon=True)
-        st.start()
+        server = SocketServer(srv, _burst)
         port = _free_port()
         death_r, death_w = os.pipe()
         t = threading.Thread(
@@ -440,7 +399,7 @@ class TestForwarderBounds:
             os.close(death_w)
             t.join(timeout=5)
             os.close(death_r)
-            srv.close()  # daemon accept-thread exits with the process
+            server.close()
 
 
 class TestSandboxPolicyPlumbing:
