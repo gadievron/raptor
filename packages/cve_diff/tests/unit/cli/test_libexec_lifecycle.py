@@ -80,6 +80,7 @@ def _run_shim(argv, fake_pipeline, calls, monkeypatch):
     mod = _load_shim()
     start, complete, fail, interrupt = _lifecycle_recorder(calls)
     with (
+        patch.dict("os.environ"),
         patch("core.run.metadata.start_run", start),
         patch("core.run.metadata.complete_run", complete),
         patch("core.run.metadata.fail_run", fail),
@@ -269,6 +270,7 @@ def test_output_dir_resolution_goes_through_shared_resolver(
     mod = _load_shim()
     start, complete, fail, interrupt = _lifecycle_recorder(calls)
     with (
+        patch.dict("os.environ"),
         patch("core.run.output.get_output_dir", fake_get_output_dir),
         patch("core.run.output.resolve_default_target", lambda: None),
         patch("core.run.metadata.start_run", start),
