@@ -1293,11 +1293,8 @@ class DatabaseManager:
                 warning and provenance note (see
                 :meth:`_buildless_fallback`).
             audit_run_dir: When --audit is engaged, where the tracer
-                should drop the audit JSONL. Decoupled from output= so
-                Landlock writable_paths isn't restricted (codeql
-                database create runs build subprocesses that write to
-                ~/.codeql, the database dir, and working_dir — none
-                of which can be safely listed as writable).
+                should drop the audit JSONL. Independent of the source,
+                database and sandbox HOME write grants.
             force: Force recreation even if cached DB exists. Skips both
                 the initial cache check AND the race-absorbing re-check
                 — a sibling who promoted between our entry and our force
@@ -1504,10 +1501,25 @@ class DatabaseManager:
         # operator's trust assertion (traced_build / --build-command /
         # the project's `build` trust marker), say so loudly — the
         # repo's build scripts are attacker-controlled code.
-        if not buildless and not traced_build and (
+        executes_build = not buildless and bool(
             (build_system is not None and build_system.command)
             or language in AUTOBUILD_LANGUAGES
+        )
+        # Traced builds may write their source tree. Keeping the managed DB
+        # cache outside it also keeps the parent-created wrapper directory
+        # outside the hostile build's write authority (including on the
+        # explicitly consented mountless/Landlock and macOS paths).
+        if executes_build and any(
+            path.resolve().is_relative_to(repo_path)
+            for path in (self.db_root, self.db_root / "tmp")
         ):
+            return DatabaseResult(
+                success=False, language=language, database_path=None, metadata=None,
+                errors=["Traced CodeQL builds require a database cache outside the source tree; "
+                        "select a separate database root or analyze a separate source checkout."],
+                duration_seconds=time.time() - start_time, cached=False,
+            )
+        if executes_build and not traced_build:
             _vector = (
                 f"build command {build_system.command!r}"
                 if build_system is not None and build_system.command
@@ -1590,8 +1602,8 @@ class DatabaseManager:
         # but an explicit env= bypasses run()'s identity scrub, so the
         # operator's login name and host layout would ride into the
         # very build the persona is disguising. Align the env with the
-        # persona's neutral identity (HOME stays: codeql's pack cache
-        # and lock files legitimately live under it).
+        # persona's neutral identity. For traced builds the sandbox
+        # overrides HOME/XDG paths with its credential-free sandbox home.
         for _ident in ("USER", "LOGNAME", "HOSTNAME", "PWD", "OLDPWD"):
             env.pop(_ident, None)
         env["USER"] = env["LOGNAME"] = "sandbox"
@@ -1703,6 +1715,41 @@ class DatabaseManager:
         try:
             from core.sandbox import run as sandbox_run
             from core.sandbox.fingerprint import HOST_CPU_COUNT
+            # Trust authorizes executing the build; it does not waive containment.
+            # Buildless extraction never executes repository build logic and keeps
+            # its existing parser policy. In particular, do not pass False there:
+            # a present fresh-procfs argument itself marks an untrusted call.
+            build_policy = {}
+            if executes_build:
+                from core.sandbox.context import untrusted_fresh_procfs_required
+                from core.sandbox.python_paths import _home_roots, python_runtime_tool_paths
+                fresh_procfs = untrusted_fresh_procfs_required()
+                build_policy = dict(
+                    require_fresh_procfs=fresh_procfs,
+                    omit_proc_reads=not fresh_procfs,
+                    restrict_reads=True,
+                    fake_home=True,
+                    writable_paths=[str(repo_path)],
+                )
+                # CodeQL uses its own common-cache setting rather than HOME
+                # alone (the JVM can derive user.home from the account database).
+                cmd.append(f"--common-caches={staging_path.parent / '.home' / '.codeql'}")
+                sandbox_tool_paths = list(sandbox_tool_paths) + python_runtime_tool_paths()
+                # Only homes selected by RAPTOR's toolchain detection are runtime
+                # grants. Never grant the operator's HOME (or its ancestors), even
+                # if an incorrectly configured JAVA_HOME/GOROOT points there.
+                for name in ((build_system.env_detect or []) if build_system else []):
+                    value = env.get(name)
+                    if value:
+                        nominal = Path(value).absolute()
+                        resolved = nominal.resolve()
+                        if any(path == home or path in home.parents
+                               for path in (nominal, resolved) for home in _home_roots()):
+                            raise ValueError(f"{name} must name a dedicated toolchain directory")
+                        for path in (nominal, resolved):
+                            if path.is_dir() and str(path) not in sandbox_tool_paths:
+                                sandbox_tool_paths.append(str(path))
+
             result = sandbox_run(
                 temporary_command(cmd),  # type: ignore[arg-type]
                 block_network=True,
@@ -1714,17 +1761,17 @@ class DatabaseManager:
                 # surfaces stay host-real) and the seccomp filter keeps
                 # AF_UNIX blocked, which kills Python >= 3.14 extractors
                 # (multiprocessing forkserver needs a unix socket).
-                # target = source tree (read), output = staging DB (rw);
-                # the DB parent dir rides along so codeql's lock files
-                # next to the staging dir stay writable.
-                target=str(repo_path),
+                # target= is always a READ-ONLY mount. Traced builds
+                # instead carry the source as an out-of-view writable
+                # bind via writable_paths above; output= keeps the DB
+                # parent, lock files and sandbox HOME writable.
+                target=None if executes_build else str(repo_path),
                 output=str(staging_path.parent),
                 tool_paths=sandbox_tool_paths,
+                **build_policy,
                 # Audit JSONL home (only used when --audit is engaged).
-                # Decoupled from output= because the build subprocess
-                # writes to working_dir / db_path / ~/.codeql, none of
-                # which can safely be enumerated as Landlock writable_
-                # paths without breaking real codeql workflows.
+                # Traced builds use an isolated HOME and a DB-output
+                # CodeQL cache, without the operator's configuration.
                 audit_run_dir=str(audit_run_dir) if audit_run_dir else None,
                 capture_output=True,
                 text=True,

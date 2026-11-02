@@ -35,7 +35,7 @@ def db_manager(tmp_path):
     with patch.object(DatabaseManager, '__init__', lambda self: None):
         mgr = DatabaseManager()
         mgr.codeql_cli = "/usr/bin/codeql"
-        mgr.cache_dir = tmp_path / "cache"
+        mgr.cache_dir = tmp_path.parent / (tmp_path.name + "-cache")
         mgr.cache_dir.mkdir()
         # db_root mirrors what real __init__ sets (RaptorConfig.CODEQL_DB_DIR);
         # needed by load_metadata / get_metadata_path which don't go through
@@ -595,7 +595,7 @@ class TestStagingPromote:
     def test_staging_path_is_same_parent_as_canonical(self, db_manager, tmp_path):
         # Same-fs requirement for atomic rename — staging and canonical
         # must share a parent directory.
-        canonical = tmp_path / "cache" / "abc" / "python-db"
+        canonical = db_manager.cache_dir / "abc" / "python-db"
         with patch.object(db_manager, 'get_database_dir', return_value=canonical):
             staging = db_manager._staging_path("abc", "python")
         assert staging.parent == canonical.parent
@@ -603,7 +603,7 @@ class TestStagingPromote:
     def test_staging_path_includes_pid(self, db_manager, tmp_path):
         # Per-process staging means concurrent writers don't collide on
         # the staging dir itself.
-        canonical = tmp_path / "cache" / "abc" / "python-db"
+        canonical = db_manager.cache_dir / "abc" / "python-db"
         with patch.object(db_manager, 'get_database_dir', return_value=canonical):
             staging = db_manager._staging_path("abc", "python")
         assert f"-{os.getpid()}" in staging.name
@@ -612,7 +612,7 @@ class TestStagingPromote:
     def test_successful_build_renames_staging_to_canonical(self, db_manager, tmp_path):
         # On success, staging dir disappears (was renamed) and canonical
         # exists with the build's content.
-        canonical = tmp_path / "cache" / "abc" / "python-db"
+        canonical = db_manager.cache_dir / "abc" / "python-db"
         canonical.parent.mkdir(parents=True)
 
         bs = BuildSystem(type="pip", command="", working_dir=tmp_path,
@@ -656,7 +656,7 @@ class TestStagingPromote:
         # test exercises the "winner is valid → use their canonical"
         # path rather than the "winner looks broken → evict + retry"
         # path which has its own dedicated tests.
-        canonical = tmp_path / "cache" / "abc" / "python-db"
+        canonical = db_manager.cache_dir / "abc" / "python-db"
         canonical.parent.mkdir(parents=True)
         # Pre-populate canonical (simulating sibling who finished first)
         canonical.mkdir()
@@ -721,7 +721,7 @@ class TestStagingPromote:
         the post-build lost-race branch. The pre-build eviction logic
         has its own dedicated tests in TestEvictStaleCanonicalGracePeriod.
         """
-        canonical = tmp_path / "cache" / "abc" / "python-db"
+        canonical = db_manager.cache_dir / "abc" / "python-db"
         canonical.parent.mkdir(parents=True)
         # Pre-populate canonical with INVALID content (no codeql-database.yml).
         canonical.mkdir()
@@ -774,7 +774,7 @@ class TestStagingPromote:
     def test_build_failure_cleans_up_staging(self, db_manager, tmp_path):
         # Failed builds must not leave staging dirs lying around (would
         # confuse cache lookups and pollute the cache dir).
-        canonical = tmp_path / "cache" / "abc" / "python-db"
+        canonical = db_manager.cache_dir / "abc" / "python-db"
         canonical.parent.mkdir(parents=True)
 
         bs = BuildSystem(type="pip", command="", working_dir=tmp_path,
@@ -812,7 +812,7 @@ class TestStaleMarkerGC:
     """_gc_stale_markers reaps abandoned .staging-*/.stale.* dirs after TTL."""
 
     def test_gc_removes_old_staging_dirs(self, db_manager, tmp_path):
-        repo_dir = tmp_path / "cache" / "abc"
+        repo_dir = db_manager.cache_dir / "abc"
         repo_dir.mkdir(parents=True)
         old = repo_dir / ".staging-python-99999"
         old.mkdir()
@@ -827,7 +827,7 @@ class TestStaleMarkerGC:
     def test_gc_preserves_recent_staging(self, db_manager, tmp_path):
         # Active concurrent writer's staging dir is fresh; must not be GC'd
         # while the writer might still need it.
-        repo_dir = tmp_path / "cache" / "abc"
+        repo_dir = db_manager.cache_dir / "abc"
         repo_dir.mkdir(parents=True)
         recent = repo_dir / ".staging-python-12345"
         recent.mkdir()  # mtime = now
@@ -837,7 +837,7 @@ class TestStaleMarkerGC:
         assert recent.exists()
 
     def test_gc_removes_old_stale_markers(self, db_manager, tmp_path):
-        repo_dir = tmp_path / "cache" / "abc"
+        repo_dir = db_manager.cache_dir / "abc"
         repo_dir.mkdir(parents=True)
         # Evicted-stale marker name pattern from _evict_stale_canonical
         old_stale = repo_dir / "python-db.stale.1234567890.99999"
@@ -851,7 +851,7 @@ class TestStaleMarkerGC:
 
     def test_gc_leaves_unrelated_files(self, db_manager, tmp_path):
         # Real DBs and metadata files in the cache dir must not be touched.
-        repo_dir = tmp_path / "cache" / "abc"
+        repo_dir = db_manager.cache_dir / "abc"
         repo_dir.mkdir(parents=True)
         real_db = repo_dir / "python-db"
         real_db.mkdir()
@@ -906,7 +906,7 @@ class TestEvictStaleCanonicalGracePeriod:
             self, db_manager, tmp_path):
         # Simulate: writer just renamed staging→canonical but hasn't
         # called save_metadata yet. canonical's mtime is fresh.
-        canonical = tmp_path / "cache" / "abc" / "python-db"
+        canonical = db_manager.cache_dir / "abc" / "python-db"
         canonical.parent.mkdir(parents=True)
         canonical.mkdir()
         (canonical / "codeql-database.yml").write_text("language: python\n")
@@ -929,7 +929,7 @@ class TestEvictStaleCanonicalGracePeriod:
         # save_metadata, leaving canonical orphaned. It's been there
         # for longer than the grace period — must be evicted so the
         # next run can rebuild and save consistent metadata.
-        canonical = tmp_path / "cache" / "abc" / "python-db"
+        canonical = db_manager.cache_dir / "abc" / "python-db"
         canonical.parent.mkdir(parents=True)
         canonical.mkdir()
         (canonical / "codeql-database.yml").write_text("language: python\n")
@@ -956,8 +956,8 @@ class TestEvictedMarkerMtimeGrace:
     run's cache-miss GC could rmtree it out from under an active
     reader."""
 
-    def _aged_canonical(self, tmp_path, age_seconds):
-        canonical = tmp_path / "cache" / "abc" / "cpp-db"
+    def _aged_canonical(self, db_manager, age_seconds):
+        canonical = db_manager.cache_dir / "abc" / "cpp-db"
         canonical.parent.mkdir(parents=True)
         canonical.mkdir()
         (canonical / "codeql-database.yml").write_text("language: cpp\n")
@@ -969,7 +969,7 @@ class TestEvictedMarkerMtimeGrace:
             self, db_manager, tmp_path):
         # Aged 8 days — evicted because stale (missing-metadata leg,
         # same rename site as the stale-by-age leg).
-        canonical = self._aged_canonical(tmp_path, 8 * 24 * 3600)
+        canonical = self._aged_canonical(db_manager, 8 * 24 * 3600)
         with patch.object(db_manager, 'get_database_dir',
                           return_value=canonical):
             db_manager._evict_stale_canonical("abc", "cpp", max_age_days=7)
@@ -983,7 +983,7 @@ class TestEvictedMarkerMtimeGrace:
 
     def test_freshly_evicted_marker_survives_immediate_gc(
             self, db_manager, tmp_path):
-        canonical = self._aged_canonical(tmp_path, 8 * 24 * 3600)
+        canonical = self._aged_canonical(db_manager, 8 * 24 * 3600)
         with patch.object(db_manager, 'get_database_dir',
                           return_value=canonical):
             db_manager._evict_stale_canonical("abc", "cpp", max_age_days=7)
@@ -999,7 +999,7 @@ class TestEvictedMarkerMtimeGrace:
         repo = tmp_path / "repo"
         repo.mkdir()
         (repo / "a.py").write_text("x = 1\n")
-        canonical = self._aged_canonical(tmp_path, 8 * 24 * 3600)
+        canonical = self._aged_canonical(db_manager, 8 * 24 * 3600)
 
         def fake_run(cmd, **kwargs):
             staging = Path(cmd[3])
@@ -1294,7 +1294,7 @@ class TestKeptFallbackDbGC:
         assert (kept / "codeql-database.yml").exists()
 
     def test_gc_spares_kept_dir_past_staging_ttl(self, db_manager, tmp_path):
-        repo_dir = tmp_path / "cache" / "abc"
+        repo_dir = db_manager.cache_dir / "abc"
         repo_dir.mkdir(parents=True)
         kept = repo_dir / ".kept-cpp-1234-abcd"
         kept.mkdir()
@@ -1308,7 +1308,7 @@ class TestKeptFallbackDbGC:
 
     def test_gc_reaps_kept_dir_past_24h(self, db_manager, tmp_path):
         # Two-direction: abandoned fallbacks must not accumulate forever.
-        repo_dir = tmp_path / "cache" / "abc"
+        repo_dir = db_manager.cache_dir / "abc"
         repo_dir.mkdir(parents=True)
         kept = repo_dir / ".kept-cpp-1234-abcd"
         kept.mkdir()
@@ -1453,7 +1453,7 @@ class TestRepoHashComputedOnce:
             calls["n"] += 1
             return "abc"
 
-        canonical = tmp_path / "cache" / "abc" / "python-db"
+        canonical = db_manager.cache_dir / "abc" / "python-db"
         canonical.parent.mkdir(parents=True)
 
         def fake_sandbox_run(cmd, **kwargs):
@@ -1489,7 +1489,7 @@ class TestForceEvictionFailure:
         present) must not hand the surviving old canonical back as
         cached=True via the lost-promote-race branch — the operator
         asked for fresh."""
-        canonical = tmp_path / "cache" / "abc" / "python-db"
+        canonical = db_manager.cache_dir / "abc" / "python-db"
         canonical.parent.mkdir(parents=True)
         canonical.mkdir()
         (canonical / "codeql-database.yml").write_text("language: python\n")

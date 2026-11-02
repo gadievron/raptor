@@ -262,6 +262,17 @@ every subsequent `/codeql` and `/agentic` run on that project behave
 as if `--traced-build` was passed (per-run `--no-traced-build`
 overrides; the `config` marker for `--trust-repo` stays independent).
 
+Repository builds, including autobuilds, require `mount-ns` containment on
+Linux or `seatbelt` on macOS. Build trust authorizes execution; it does not
+waive the [sandbox containment floor](sandbox.md#containment-floor).
+The source tree and database cache must be separate directory trees.
+Traced builds may write to the selected source tree and database output.
+They use a credential-free sandbox HOME, with the CodeQL common cache
+under the database output. Operator credentials, home configuration and
+host dependency caches are not exposed. Network access remains blocked, so dependencies must already
+be available in the source tree or selected toolchain. Buildless extraction
+keeps its existing policy.
+
 Databases are cached by a content hash of the tree (git HEAD when
 available), validated for integrity, and expire after 7 days.
 Multi-language targets build databases in parallel. Pass `--force` to
