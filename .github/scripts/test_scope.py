@@ -82,6 +82,12 @@ TIERS: dict[str, dict] = {
     },
     "sca": {
         "test_dirs": ["packages/sca"],
+        # The offline preparation tool calls SCA validators. Its tests live
+        # in the dependency-equipped SCA tier, not the pytest-only CI tier.
+        "extra_triggers": [
+            ".github/scripts/prepare_sbom.py",
+            ".github/sbom-provenance.json",
+        ],
     },
     "source_intel": {
         "test_dirs": ["packages/source_intel/tests"],

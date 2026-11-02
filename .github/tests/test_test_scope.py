@@ -1102,3 +1102,13 @@ class TestPytestLaneClosure:
                 f"LANE_EXEMPT row {entry!r} matches no tracked test "
                 "file — remove the stale exemption"
             )
+
+
+@pytest.mark.parametrize("changed", [
+    ".github/scripts/prepare_sbom.py",
+    ".github/sbom-provenance.json",
+])
+def test_sbom_preparation_inputs_dispatch_dependency_equipped_sca_tier(mini_repo, changed):
+    result = compute_tier_dispatch([changed], mini_repo)
+    assert result["sca"]["run"]
+    assert Path("packages/sca/tests/test_shape.py") in result["sca"]["files"]
