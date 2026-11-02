@@ -81,6 +81,29 @@ URL allowlists and sandboxed git. (The builder agents keep Bash — rr,
 gdb, and real builds need it — so Bash-level egress remains bounded by
 the sandbox and permission layers rather than eliminated.)
 
+## Automated debugger and sanitizer replay
+
+RAPTOR's Python GDB/LLDB crash replay and direct sanitizer replay treat the
+crashing program as untrusted execution. They block network access, restrict
+filesystem reads, use an empty HOME, and apply the existing containment-floor
+policy. A host that cannot meet that policy refuses the replay unless you
+explicitly choose a supported lower floor. Installation protection does not
+waive the requirement.
+
+Automated debugger runs skip initialization files and disable automatic
+symbol-associated scripts. GDB launches the target without an intermediate
+shell. Custom commands deliberately passed to the Python debugger API still
+execute inside the same sandbox.
+
+Keep the binary in a dedicated working directory: that directory remains
+writable for debugger scripts and replay artifacts. HOME itself, its ancestors,
+and aliases to those locations are refused as target directories. Crash input
+is supplied through stdin. Existing process attachment is outside these
+spawn-only replay paths.
+
+These guarantees apply to the Python replay helpers. The separate rr skill
+and manually issued debugger commands do not acquire this policy automatically.
+
 ## Output Directory Structure
 
 ```
