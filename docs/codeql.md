@@ -625,3 +625,34 @@ gh workflow run nightly.yml --ref main -f suite=cpp-truncation
 Results, expected/actual rows and the production-wrapper type-check log are
 uploaded as `focused-codeql-cpp-truncation-results`. The query logic is
 shared with the native tests; CI type-checks the thin reporting wrapper.
+
+### Curated C/C++ use after move
+
+The move query starts tracking a local non-POD class object when its `std::move` result
+is consumed by a move constructor, move assignment, or a standard container
+`push_back`, `push_front`, or `insert` rvalue overload. Discarding the cast,
+binding a reference, passing to an observing reference parameter, copying
+from const, scalar casts, and POD copies do not establish consumption.
+
+Moved state follows local control-flow paths until an assignment or a
+recognized standard-library reset completes. A conditional reset does not
+clear the state on the other branch; resets on both branches can. Assignment
+receivers and destructors are excluded, along with recognized standard reset
+operations and selected observations such as `size`, `empty`, and bool tests.
+
+This is a medium-precision warning about possible dependence on a consumed
+value. It does not prove every use is undefined or that memory was freed:
+standard-library moved-from objects are normally valid but unspecified.
+Custom operations, aliases between variables, rvalue-reference helpers,
+exceptional paths and type-specific preconditions are not fully modeled;
+guarded or otherwise legitimate uses can remain reportable. Explicit reset
+ends move-state tracking; a separate null/bounds bug can still exist afterward.
+See the [C++ move specification](https://eel.is/c++draft/forward) and
+[moved-from library requirements](https://eel.is/c++draft/lib.types.movedfrom).
+
+The existing `suite=cpp-truncation` focused job now runs both narrowing and
+use-after-move regressions. It keeps the existing
+`focused-codeql-cpp-truncation-results` artifact name, which includes both
+suites' expected/actual rows and reporting-wrapper type-check output. The
+standalone move fixtures use small standard-library stand-ins; the same
+case bodies also compile against real system headers in CI.

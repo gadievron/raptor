@@ -36,7 +36,7 @@ on:
   workflow_dispatch:
     inputs:
       suite:
-        description: Test suites to run (java-log runs all Java query regressions; focused modes skip the full batch)
+        description: Focused suites skip the full batch; cpp-truncation includes move regressions
         type: choice
         default: full
         options:
@@ -412,7 +412,7 @@ jobs:
           if-no-files-found: ignore
 
   cpp-truncation-query:
-    name: C/C++ truncation query regression
+    name: C/C++ query regressions
     if: github.event_name != 'workflow_dispatch' || inputs.suite == 'full' || inputs.suite == 'cpp-truncation'
     # Independent of the Java and slow/integration jobs. Reuse the pinned
     # CLI cache; keep C/C++ libraries and native tests in this job.
@@ -475,8 +475,11 @@ jobs:
             -o "$RUNNER_TEMP/cpp-truncation/c.o"
           g++ -c engine/codeql/tests/cpp/truncation/TruncationCases.cpp \
             -o "$RUNNER_TEMP/cpp-truncation/cpp.o"
+          # The bare discarded-move negative deliberately ignores nodiscard.
+          g++ -std=c++17 -Wno-unused-result -c engine/codeql/tests/cpp/use-after-move/MoveCases.cpp \
+            -o "$RUNNER_TEMP/cpp-truncation/move.o"
 
-      - name: Run C/C++ truncation query regression
+      - name: Run C/C++ query regressions
         run: |
           set -euo pipefail
           cli="$RUNNER_TEMP/java-log-codeql/codeql/codeql"
@@ -487,9 +490,10 @@ jobs:
             --search-path="$GITHUB_WORKSPACE/.codeql-cpp-libraries" \
             --additional-packs="$RUNNER_TEMP/cpp-truncation/queries:$RUNNER_TEMP/cpp-truncation/tests" \
             "$RUNNER_TEMP/cpp-truncation/tests/truncation" \
+            "$RUNNER_TEMP/cpp-truncation/tests/use-after-move" \
             > "$RUNNER_TEMP/cpp-truncation/results.json"
 
-      - name: Check production truncation query wrapper
+      - name: Check production C/C++ query wrappers
         run: |
           set -euo pipefail
           # The native test executes the shared production flow. Avoid
@@ -498,6 +502,7 @@ jobs:
             --search-path="$GITHUB_WORKSPACE/.codeql-cpp-libraries" \
             --additional-packs="$RUNNER_TEMP/cpp-truncation/queries" \
             "$RUNNER_TEMP/cpp-truncation/queries/IntegerTruncationInCast.ql" \
+            "$RUNNER_TEMP/cpp-truncation/queries/UseAfterMove.ql" \
             2>&1 | tee "$RUNNER_TEMP/cpp-truncation/production-check.log"
 
       - name: Upload C/C++ query test results
@@ -509,6 +514,8 @@ jobs:
             ${{ runner.temp }}/cpp-truncation/results.json
             ${{ runner.temp }}/cpp-truncation/tests/truncation/*.actual
             ${{ runner.temp }}/cpp-truncation/tests/truncation/*.expected
+            ${{ runner.temp }}/cpp-truncation/tests/use-after-move/*.actual
+            ${{ runner.temp }}/cpp-truncation/tests/use-after-move/*.expected
             ${{ runner.temp }}/cpp-truncation/production-check.log
           retention-days: 14
           if-no-files-found: ignore
