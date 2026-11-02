@@ -178,4 +178,14 @@ def python_tool_paths(executable: str) -> list[str]:
         if version:
             for library in ('lib', 'lib64'):
                 add(prefix / library / ('python' + version))
+                # The ELF loader needs the shared runtime beside the stdlib.
+                # Without it a hosted interpreter can silently fall back to a
+                # different system libpython with the same SONAME. Keep these
+                # file grants exact; granting lib/ could expose account data.
+                for filename in (f'libpython{version}.so.1.0',
+                                 f'libpython{version}.so',
+                                 f'libpython{version}.dylib'):
+                    shared = prefix / library / filename
+                    if shared.is_file():
+                        add(shared)
     return paths
