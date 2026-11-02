@@ -84,8 +84,9 @@ sudo apt install uidmap
 ### Tool binary invisible inside sandbox (exit code 127)
 
 Tools installed outside the mount-namespace bind tree (`~/.local/bin/`,
-`/opt/homebrew/bin/`) aren't visible. Pass `tool_paths=[<bin_dir>]` to the
-sandbox call, or install the tool to a standard system path.
+`/opt/homebrew/bin/`) may be invisible. Pass `--sandbox-tool-path <bin_dir>`
+to a mode supporting the sandbox CLI flags, or install the tool to a
+standard system path.
 
 ### Landlock missing / untrusted-exec refuses under WSL2
 

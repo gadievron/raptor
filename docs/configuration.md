@@ -25,13 +25,14 @@ based on system hardware.
 | `codeql_enabled` | `true` | Master toggle for CodeQL |
 | `codeql_ram_mb` | `"auto"` | RAM for CodeQL; auto = 25% system RAM, clamped 2048–16384 |
 | `codeql_threads` | `"auto"` | CPUs for CodeQL; auto = all available |
-| `codeql_max_disk_cache_mb` | `0` | CodeQL DB cache cap; 0 = unbounded |
+| `codeql_max_disk_cache_mb` | `0` | CodeQL internal build-cache limit (`--max-disk-cache`); 0 leaves its default. Does not cap all retained database directories |
 | `joern_enabled` | `true` | Master toggle for Joern CPG |
-| `joern_heap_mb` | `"auto"` | JVM heap for Joern; auto = 25% system RAM, min 1024. A proportional value landing in the compressed-oops dead zone (32-48 GiB) clamps down to 31 GiB — more effective capacity than an uncompressed 33-48 GiB heap; above 48 GiB stays proportional |
+| `joern_heap_mb` | `"auto"` | JVM heap for Joern; auto = 25% system RAM, min 1024 MiB, subject to `joern_heap_ceiling_mb`. Derived values in the compressed-oops dead zone clamp to 31 GiB. Explicit heap values are not ceiling-capped. |
+| `joern_heap_ceiling_mb` | `"auto"` | Ceiling on the derived heap; auto = min(25% system RAM, 65536 MiB), with a 1024 MiB floor |
 | `joern_cpg_timeout_s` | `"auto"` | CPG generation timeout; auto = derived from in-scope source size at build time |
 | `joern_import_timeout_s` | `"auto"` | Timeout for importing a built CPG into the Joern server; auto = derived from the serialized CPG size at import time |
 | `joern_query_timeout_s` | `300` | Per-query timeout (the pre-sweep window additionally scales this by CPG size) |
-| `max_llm_workers` | `"auto"` | Parallel LLM API calls; an explicit number beats the RPM-derived, posture, and claudecode caps |
+| `max_llm_workers` | `"auto"` | Parallel LLM calls; an explicit number overrides RPM/posture/Claude Code auto ceilings, but remains clamped to 1–32 and to `RAPTOR_LOCAL_MAX_WORKERS` for a local primary (default 2) |
 | `llm_account_posture` | `"shared"` | Who else spends the LLM account: `shared` keeps the fair-share auto ceilings; `solo` asserts the account belongs to this host's runs and raises the account-contention (Bedrock) ceiling. Profiles own it: `max` writes `solo`, `balanced`/`default` write `shared`. Unrecognised values warn and read as `shared` |
 | `throttle_cooldown_s` | `30` | Cooldown after an LLM rate-limit response |
 | `default_max_cost_usd` | `"auto"` | Standing USD ceiling applied when a run configures **no** LLM cost cap anywhere; a CLI/programmatic cap always wins. `"auto"` (or any non-positive/non-numeric value) = no default — uncapped runs print a warning banner instead |
@@ -40,8 +41,15 @@ based on system hardware.
 | `max_fuzz_parallel` | `"auto"` | AFL++ parallel instances ceiling; auto = half CPUs |
 | `max_inventory_workers` | `"auto"` | Tree-sitter extractor pool; auto = half CPUs, cap 8 |
 | `max_json_memo_mb` | `128` | In-process JSON cache budget |
+| `sca_cache_max_mb` | `2048` | Disposable SCA disk-cache budget in MiB, including stress checkouts; 0 disables automatic cleanup |
+| `sca_stress_cache_max_mb` | `512` | Idle stress-checkout sub-budget in MiB; 0 removes all idle checkouts during maintenance |
 
-Unknown keys warn and are ignored.
+Inspect resolved values with `/tune`. `/tune max`, `/tune balanced`, and
+`/tune default` rewrite resource settings; `max` also selects the `solo`
+LLM account posture. Unknown keys warn and are ignored.
+
+SCA disk budgets are soft: periodic maintenance runs between online scans,
+while active scans can temporarily exceed them. See [SCA cache cleanup](sca.md#cache-cleanup).
 
 
 ## Environment variables

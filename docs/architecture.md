@@ -86,7 +86,7 @@ Two distinct entry points:
   `raptor frida`, `raptor sage-setup`).
 - **`raptor.py`** (python) is the non-interactive unified CLI:
   `python3 raptor.py <mode>` with modes scan, sca, binary, fuzz, web,
-  agentic, codeql, analyze, describe, doctor, frida. Slash commands
+  agentic, codeql, analyze, describe, doctor, frida, openant. Slash commands
   dispatch into it; it manages the run lifecycle for its modes. See
   [Python CLI](python-cli.md).
 

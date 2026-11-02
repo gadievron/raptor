@@ -105,13 +105,16 @@ marked *(flag)* only fire when explicitly requested:
 11. **Validation** *(`--validate`)* -- validates exploitable findings
     (merged with the gap-audit findings when both flags are set).
 
-Cost is tracked in real time with an adaptive budget cutoff (default $10;
-override with `--max-cost-usd`). An explicit cap is also forwarded to the
-`--understand` and `--validate` Claude Code helpers; otherwise those helpers
-retain their $5/$10 defaults. The helpers inherit the original cap before the
-analysis/gap-audit allocation is split. Standalone audit validation likewise
-inherits its audit cap. These are per-process ceilings; helper and analysis
-cost ledgers remain separate.
+The finding-analysis client defaults to a $10 budget. Without an explicit
+cap, `--gap-audit` can run uncapped unless `default_max_cost_usd` supplies a
+standing ceiling. An explicit `--max-cost-usd` is split between finding
+analysis and the reserved gap-audit share.
+
+The `--understand` and `--validate` Claude Code helpers inherit the original
+explicit cap before that split; without it, they retain their $5/$10 defaults.
+Standalone audit validation likewise inherits its audit cap. These are
+per-process ceilings with separate cost ledgers, not one end-to-end spend
+limit covering every helper and analysis process.
 
 
 ### Analysis stages (A--D)

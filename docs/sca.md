@@ -62,6 +62,31 @@ The default (no subcommand) is `scan` -- the full analyse pipeline.
 
 ---
 
+## Cache Cleanup
+
+Online scans attempt cleanup at completion, at most once every ten minutes
+per cache root. `tuning.json` sets `sca_cache_max_mb` (2048 MiB overall) and
+`sca_stress_cache_max_mb` (512 MiB within that budget). These are soft limits:
+active scans can exceed them. A zero overall budget disables automatic
+cleanup; a zero stress budget removes all idle stress checkouts.
+
+Cleanup removes entries older than 30 days and whole stress projects older
+than seven days, then reclaims expired/oldest-used data when over budget,
+targeting 80% of the limit. Stress projects and sharded inventories are
+removed as whole units. Active scans are pinned; fingerprint baselines and
+SQLite databases are preserved and excluded from the disposable budget.
+Offline scans do not trigger cleanup.
+
+```bash
+raptor-sca clean-cache --dry-run
+raptor-sca clean-cache --max-size-mb 1024 --stress-max-size-mb 256
+```
+
+`--max-age DAYS`, `--stress-max-age DAYS`, and `--cache-root PATH` override
+cleanup retention/location. Manual `--max-size-mb 0` disables overall size
+pruning while age/stress cleanup still applies. Exit code 1 means cleanup
+was busy, encountered deletion errors, or could not meet the requested budget.
+
 ## Scanning
 
 ### Ecosystems
@@ -70,7 +95,7 @@ The main ecosystems supported with manifest and lockfile parsing:
 
 | Ecosystem | Manifests and lockfiles |
 |-----------|------------------------|
-| Python | `requirements*.txt`, `pyproject.toml`, `Pipfile`, `Pipfile.lock`, `poetry.lock`, `uv.lock`, `setup.py`, `setup.cfg` |
+| Python | `requirements*.txt`, `pyproject.toml`, `Pipfile`, `Pipfile.lock`, `poetry.lock`, `uv.lock`, `setup.cfg`; `setup.py` detection only (see below) |
 | Node.js | `package.json`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `shrinkwrap.json` |
 | Java | `pom.xml`, `build.gradle`, `build.gradle.kts`, `settings.gradle`, `settings.gradle.kts`, `gradle.lockfile` |
 | Rust | `Cargo.toml`, `Cargo.lock` |
@@ -79,6 +104,11 @@ The main ecosystems supported with manifest and lockfile parsing:
 | .NET | `*.csproj`, `*.fsproj`, `*.vbproj`, `packages.config`, `packages.lock.json` |
 | PHP | `composer.json`, `composer.lock` |
 | C/C++ | `vcpkg.json`, `conanfile.txt`, `conanfile.py`, `conan.lock`, `CMakeLists.txt` (FetchContent) |
+
+Dependency declarations in executable `setup.py` scripts are not extracted.
+RAPTOR reports a parse failure when dependency keywords are present; it never
+runs the script to discover dependencies. Supply declarative metadata or a
+lockfile for coverage.
 
 Discovery also covers `.gitmodules`, Helm charts (`Chart.yaml` /
 `Chart.lock`), Docker Compose, GitLab CI, and
@@ -556,6 +586,11 @@ Best results come from scanning the full source tree. SBOM-only scans
 can still identify vulnerable components, but they usually do not
 contain enough source context to prove whether a vulnerable package or
 function is used.
+
+For CVE-bearing PyPI dependencies initially marked `not_reachable`, module
+resolution can retry using on-demand wheel metadata. This may fetch metadata
+on an online scan; results are cached by package/version. Offline scans use
+local/cache evidence and do not fetch missing metadata.
 
 ### Two-Tier Analysis
 

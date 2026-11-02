@@ -49,6 +49,8 @@ overview:
 | `/cve-diff` | CVE patch discovery |
 | `/cve-env` | Pre-patch CVE environment build + verify |
 | `/analyze` | LLM analysis of existing SARIF |
+| `/openant` | OpenAnt semantic source analysis |
+| `/tune` | Inspect resource limits and select a tuning profile |
 | `/ask` | Free-form prompt to any configured model |
 | `/version` | Show version |
 

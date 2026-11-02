@@ -33,6 +33,7 @@ Run `python3 raptor.py --help` for the mode list, or
 | `describe` | Pre-flight inspection: target type, tool readiness, cost estimate |
 | `doctor` | Status report for local setup (no Claude needed) |
 | `frida` | Dynamic instrumentation via Frida (alpha) |
+| `openant` | OpenAnt semantic source analysis with an LLM |
 
 
 ## Sandbox Flags
@@ -59,8 +60,10 @@ modes do not accept them and reject them with an
                                            inside the sandbox (repeatable; read-only)
 ```
 
-`--trust-repo` (mark the target repo as trusted) is mode-specific: it exists
-on `agentic`, `codeql`, and `sca`, not on every mode. `--version` is top-level only —
+The unified launcher accepts `--trust-repo` and `--no-trust-repo` before
+dispatch. Their effect depends on the mode; acceptance does not grant every
+mode a trust override. See each mode’s trust-policy guidance.
+`--version` is top-level only —
 `python3 raptor.py --version`, before any mode name.
 
 
@@ -145,10 +148,14 @@ export RAPTOR_CALLER_DIR="/original/cwd"
 
 ## Exit Codes
 
-Exit code **0** means the pipeline completed successfully — it does **not**
-mean no findings were produced. Exit code **1** indicates an error (missing
-tools, invalid arguments, subprocess failure). Exit code **130** signals
-SIGINT (Ctrl-C).
+The launcher preserves the child command's exit code. Code **0** normally
+means successful completion, not an absence of findings. Codes depend on the
+mode: **1** can mean a command failure or an SCA threshold violation; **2**
+can mean invalid arguments or a launcher-internal failure; **3** denotes a
+sandbox-engagement failure; static analysis uses **4** when every dispatched
+Semgrep pack fails. Code **130** signals SIGINT (Ctrl-C).
+
+Consult the mode's reference when interpreting a nonzero code.
 
 To gate CI on finding severity, use SCA's threshold flags:
 

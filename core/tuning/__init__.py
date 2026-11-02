@@ -47,6 +47,7 @@ _VALID_KEYS = frozenset({
     "sca_cache_max_mb",
     "sca_stress_cache_max_mb",
     "throttle_cooldown_s",
+    "default_max_cost_usd",
 })
 
 _DEPRECATED_KEYS = frozenset({
@@ -60,6 +61,7 @@ _PASSTHROUGH_KEYS = frozenset({
     "max_llm_workers",
     "llm_account_posture",
     "throttle_cooldown_s",
+    "default_max_cost_usd",
 })
 
 _BOOLEAN_KEYS = frozenset({"codeql_enabled", "joern_enabled"})
