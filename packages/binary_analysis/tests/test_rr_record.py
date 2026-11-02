@@ -312,3 +312,35 @@ def test_verification_timeout_never_returns_a_verified_recording(setup, monkeypa
     assert result.recording_verified is False
     assert result.stdout == b'target output'
     assert b'timeout budget' in result.stderr
+
+
+@pytest.mark.parametrize('binary_output', [False, True])
+def test_cli_escapes_hostile_captured_output(setup, monkeypatch, capsys, binary_output):
+    _, root, binary = setup
+    hostile = 'first\n\x1b]52;c;payload\x07\r\u202eend\n'
+    output = hostile.encode() if binary_output else hostile
+    monkeypatch.setattr(rr_cli, 'run_target', lambda *args, **kwargs:
+                        subprocess.CompletedProcess([], 0, output, output))
+    assert rr_cli.main(['run', '--workspace', str(root), '--', str(binary)]) == 0
+    captured = capsys.readouterr()
+    for rendered in (captured.out, captured.err):
+        assert rendered.startswith('first\n') and rendered.endswith('end\n')
+        assert '\x1b' not in rendered and '\x07' not in rendered
+        assert '\r' not in rendered and '\u202e' not in rendered
+        assert 'payload' in rendered
+
+
+def test_cli_bounds_captured_output():
+    rendered = rr_cli._term('x' * 100000)
+    assert len(rendered) < 5000
+    assert 'omitted' in rendered
+
+
+def test_cli_sanitises_exception_diagnostics(setup, monkeypatch, capsys):
+    _, root, binary = setup
+    def refuse(*args, **kwargs):
+        raise SandboxSetupError('bad path \x1b[2J\r')
+    monkeypatch.setattr(rr_cli, 'run_target', refuse)
+    assert rr_cli.main(['run', '--workspace', str(root), '--', str(binary)]) == 3
+    error = capsys.readouterr().err
+    assert 'bad path' in error and '\x1b' not in error and '\r' not in error
