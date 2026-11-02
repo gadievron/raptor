@@ -29,6 +29,7 @@ from pathlib import Path
 
 import pytest
 
+from core.sandbox.tests.socket_server import SocketServer
 from packages.joern import netns_forwarder
 from packages.joern.netns_forwarder import Forwarder, create_listener
 
@@ -63,17 +64,7 @@ class _EchoServer:
         self._listener.bind(("127.0.0.1", 0))
         self._listener.listen(16)
         self.port: int = self._listener.getsockname()[1]
-        threading.Thread(target=self._loop, daemon=True).start()
-
-    def _loop(self) -> None:
-        while True:
-            try:
-                conn, _ = self._listener.accept()
-            except OSError:
-                return
-            threading.Thread(
-                target=self._serve, args=(conn,), daemon=True,
-            ).start()
+        self._server = SocketServer(self._listener, self._serve)
 
     @staticmethod
     def _serve(conn: socket.socket) -> None:
@@ -88,7 +79,7 @@ class _EchoServer:
             conn.close()
 
     def close(self) -> None:
-        self._listener.close()
+        self._server.close()
 
 
 class _BlastServer:
@@ -100,24 +91,18 @@ class _BlastServer:
         self._listener.bind(("127.0.0.1", 0))
         self._listener.listen(4)
         self.port: int = self._listener.getsockname()[1]
-        threading.Thread(target=self._loop, daemon=True).start()
+        self._server = SocketServer(self._listener, self._serve)
 
-    def _loop(self) -> None:
-        payload = b"\xab" * self._size
-        while True:
-            try:
-                conn, _ = self._listener.accept()
-            except OSError:
-                return
-            try:
-                conn.sendall(payload)
-            except OSError:
-                pass
-            finally:
-                conn.close()
+    def _serve(self, conn: socket.socket) -> None:
+        try:
+            conn.sendall(b"\xab" * self._size)
+        except OSError:
+            pass
+        finally:
+            conn.close()
 
     def close(self) -> None:
-        self._listener.close()
+        self._server.close()
 
 
 @pytest.fixture

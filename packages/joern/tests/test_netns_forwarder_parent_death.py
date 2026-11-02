@@ -27,10 +27,13 @@ import socket
 import subprocess
 import sys
 import time
+from contextlib import ExitStack
+from tempfile import TemporaryDirectory
 from pathlib import Path
 
 import pytest
 
+from core.sandbox.tests.socket_server import SocketServer
 from packages.joern.netns_forwarder import Forwarder, create_listener
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -90,19 +93,7 @@ class _EchoOnce:
         self._listener.bind(("127.0.0.1", 0))
         self._listener.listen(4)
         self.port = self._listener.getsockname()[1]
-        import threading
-        threading.Thread(target=self._serve, daemon=True).start()
-
-    def _serve(self) -> None:
-        while True:
-            try:
-                conn, _ = self._listener.accept()
-            except OSError:
-                return
-            import threading
-            threading.Thread(
-                target=self._echo, args=(conn,), daemon=True,
-            ).start()
+        self._server = SocketServer(self._listener, self._echo)
 
     @staticmethod
     def _echo(conn: socket.socket) -> None:
@@ -115,30 +106,57 @@ class _EchoOnce:
             conn.close()
 
     def close(self) -> None:
-        self._listener.close()
+        self._server.close()
 
 
 @pytest.fixture
-def uds_stack(monkeypatch):
-    # Short private root: AF_UNIX paths cap at ~108 bytes and a nested
-    # pytest basetemp blows past it (same workaround as the sibling
-    # forwarder tests).
-    import shutil
-    import tempfile
-    root = tempfile.mkdtemp(prefix="rpt_", dir="/tmp")
-    upstream = _EchoOnce()
-    sock_path = os.path.join(root, "lane.sock")
-    listener = create_listener(sock_path)
-    fwd = Forwarder(
-        listener, ("127.0.0.1", upstream.port), socket_path=sock_path,
-    )
-    fwd.start()
-    try:
+def uds_stack():
+    # Own the short socket root and every resource before startup can fail.
+    with ExitStack() as cleanup:
+        root = cleanup.enter_context(TemporaryDirectory(prefix="rpt_", dir="/tmp"))
+        upstream = _EchoOnce()
+        cleanup.callback(upstream.close)
+        sock_path = os.path.join(root, "lane.sock")
+        listener = cleanup.enter_context(create_listener(sock_path))
+        fwd = Forwarder(
+            listener, ("127.0.0.1", upstream.port), socket_path=sock_path,
+        )
+        cleanup.callback(fwd.stop)
+        fwd.start()
         yield fwd, sock_path
+
+
+def test_uds_stack_cleans_up_after_partial_start_failure(monkeypatch):
+    module = sys.modules[__name__]
+    upstreams = []
+    forwarders = []
+    original_upstream = _EchoOnce
+    original_start = Forwarder.start
+
+    def upstream():
+        server = original_upstream()
+        upstreams.append(server)
+        return server
+
+    def start_then_fail(self):
+        original_start(self)
+        forwarders.append((self, self._accept_thread))
+        raise RuntimeError("forwarder startup failed")
+
+    monkeypatch.setattr(module, "_EchoOnce", upstream)
+    monkeypatch.setattr(Forwarder, "start", start_then_fail)
+    fixture = uds_stack.__wrapped__()
+    try:
+        with pytest.raises(RuntimeError, match="forwarder startup failed"):
+            next(fixture)
     finally:
-        fwd.stop()
-        upstream.close()
-        shutil.rmtree(root, ignore_errors=True)
+        fixture.close()
+
+    assert len(upstreams) == len(forwarders) == 1
+    assert upstreams[0]._listener.fileno() == -1
+    assert not upstreams[0]._server._accept_thread.is_alive()
+    assert not forwarders[0][1].is_alive()
+    assert not os.path.exists(forwarders[0][0]._socket_path)
 
 
 class TestIdleClock:
