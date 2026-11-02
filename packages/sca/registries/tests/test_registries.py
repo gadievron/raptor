@@ -779,3 +779,17 @@ def test_packagist_vendor_name_key_injective(tmp_path) -> None:
     # Original entry unaffected.
     assert client.list_versions("vendor/pkg") == ["1.2.3"]
     assert len(http.calls) == n
+
+
+def test_npm_engine_checks_do_not_reuse_metadata_cache_that_stripped_engines(tmp_path):
+    from core.json import JsonCache
+    from packages.sca.registries._url import registry_cache_key
+    cache=JsonCache(root=tmp_path)
+    http=_FakeHttp(json_payload={'versions':{'1.0.0':{'engines':{'node':'>=22'}}}})
+    client=NpmClient(http,cache=cache)
+    old_key=registry_cache_key('npm-meta','example',base_url=client._base_url)
+    cache.put(old_key,{'versions':{'1.0.0':{}}},ttl_seconds=86400)
+    assert client.get_metadata('example')['versions']['1.0.0']['engines']=={'node':'>=22'}
+    assert len(http.calls)==1
+    assert client.get_metadata('example')['versions']['1.0.0']['engines']=={'node':'>=22'}
+    assert len(http.calls)==1

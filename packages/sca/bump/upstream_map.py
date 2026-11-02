@@ -51,6 +51,8 @@ class UpstreamSource:
       * ``"pypi_meta"`` — PyPI registry. Used by
         ``inline_install_pip`` candidates (``RUN pip install
         pkg==N`` patterns). ``coordinate`` is the package name.
+      * ``"npm_meta"`` — npm registry, for exact Dockerfile npm install pins.
+        ``coordinate`` is the package name.
       * ``"helm_index"`` — Helm chart index. Used by
         ``helm_chart`` candidates. ``coordinate`` is the chart
         name (operator-supplied; index URL configured
@@ -63,7 +65,7 @@ class UpstreamSource:
 
     kind: Literal[
         "github_release", "github_tag",
-        "oci_tag", "pypi_meta", "helm_index", "git_remote",
+        "oci_tag", "pypi_meta", "npm_meta", "helm_index", "git_remote",
     ]
     coordinate: str
 

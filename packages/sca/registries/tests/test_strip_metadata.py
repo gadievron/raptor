@@ -255,3 +255,8 @@ def test_pypi_strip_handles_missing_releases_and_info() -> None:
     assert _strip_pypi_metadata({"info": {}}) == {"info": {}}
     assert _strip_pypi_metadata({"releases": {}}) == {"releases": {}}
     assert _strip_pypi_metadata({}) == {}
+
+
+def test_npm_strip_retains_runtime_engines_for_bump_compatibility():
+    raw={'versions': {'1.0.0': {'engines': {'node': '>=20'}}}}
+    assert _strip_npm_metadata(raw)['versions']['1.0.0']['engines']=={'node':'>=20'}

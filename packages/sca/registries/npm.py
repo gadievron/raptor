@@ -89,7 +89,7 @@ _NPM_VERSION_STRIP_FIELDS = frozenset((
     "devDependencies",
     "_defaultsLoaded", "_engineSupported", "_id", "_nodeVersion",
     "_npmJsonOpts", "_npmOperationalInternal", "_npmVersion",
-    "author", "bugs", "description", "directories", "engines",
+    "author", "bugs", "description", "directories",
     "keywords", "main", "repository", "taskr",
 ))
 
@@ -189,8 +189,10 @@ class NpmClient:
         # ``lodash``); the resolved base URL joins the key so a private-
         # mirror (NPM_CONFIG_REGISTRY) answer is never served as the
         # public registry's or vice versa.
+        # v2 retains engines for inline bump compatibility checks; old entries
+        # stripped them and cannot distinguish absence from discarded data.
         cache_key = registry_cache_key(
-            "npm-meta", name, base_url=self._base_url,
+            "npm-meta-v2", name, base_url=self._base_url,
         )
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)

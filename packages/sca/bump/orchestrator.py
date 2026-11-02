@@ -69,6 +69,8 @@ class BumpCandidate:
       * ``"arg"`` — Dockerfile ARG version pin.  ``locator`` is
         the ARG name (``SEMGREP_VERSION``); ``upstream`` is the
         ``UpstreamSource`` to query for the target.
+      * ``"inline_install_npm"`` — exact npm install pin in a Dockerfile
+        RUN instruction; ``locator`` is the package name.
       * ``"from_image"`` — Dockerfile FROM image ref.
         ``locator`` is ``"{registry}/{repository}"``; ``upstream``
         is None (the target comes from
@@ -220,7 +222,7 @@ def run_bump(
         policy = load_policy(target, trust_repo=trust_repo)
     candidates, skipped, excluded_by_pattern = _enumerate_candidates(
         target, http=http, cache=cache, github_token=github_token,
-        pypi_client=pypi_client,
+        pypi_client=pypi_client, npm_client=npm_client,
         exclude=exclude,
     )
     # Apply policy ``skip:`` rules — these move candidates from
@@ -453,6 +455,7 @@ def _enumerate_candidates(
     cache,
     github_token: str | None,
     pypi_client: PyPIClient | None = None,
+    npm_client: NpmClient | None = None,
     exclude: Sequence[str] | None = None,
 ) -> tuple[list[BumpCandidate], list[tuple[str, Path, str]], list[Path]]:
     """Find every (Dockerfile, ARG) pair under ``target`` with a
@@ -647,6 +650,12 @@ def _enumerate_candidates(
             )
             candidates.extend(inline_candidates)
             skipped.extend(inline_skipped)
+
+        if npm_client is not None:
+            npm_candidates, npm_skipped = _enumerate_npm_install_candidates(
+                text=text, dockerfile=dockerfile, npm_client=npm_client, inline_cache=latest_cache)
+            candidates.extend(npm_candidates)
+            skipped.extend(npm_skipped)
 
     # k8s / docker-compose / gitlab-ci ``image:`` refs — bump
     # candidates from existing OCI-eco Dependency parsers.
@@ -888,14 +897,9 @@ def _enumerate_inline_install_candidates(
     Dockerfile and emit candidates whose PyPI-latest stable
     version is higher than the pinned one.
 
-    Coverage today is PyPI exact-pinned installs only. Other
-    inline-install shapes have parsers in
-    ``packages.sca.parsers.inline_installs`` (``apt-get install
-    foo=1.0``, ``npm install -g foo@1.0``, ``gem install foo -v
-    1.0``) but no bumper walker yet — each needs a different
-    upstream-latest source. The PyPI walker arrived first because
-    raptor's own devcontainer pins semgrep / claude-code / etc.
-    inline via ``pip install``.
+    This helper covers PyPI exact pins; npm installs use the sibling
+    npm walker. Other parsed inline installs (apt, gem and similar)
+    still require their own upstream lookup and rewrite support.
 
     Skipped silently:
       * Non-exact pin styles (``>=1.0``, ``~=2.0``, etc.) — bump
@@ -975,6 +979,39 @@ def _enumerate_inline_install_candidates(
             upstream=UpstreamSource("pypi_meta", dep.name),
             extra={"kind": "inline_install_pip"},
         ))
+    return candidates, skipped
+
+
+def _enumerate_npm_install_candidates(*, text: str, dockerfile: Path, npm_client,
+                                      inline_cache: dict):
+    """Find strictly newer stable npm versions for safely rewritable RUN pins."""
+    from ..rewriters.dockerfile_inline_install import npm_install_pins
+    from core.upstream_latest._version_filter import parse_stable
+    candidates, skipped, seen = [], [], set()
+    for name, current, _, _ in npm_install_pins(text):
+        if (name, current) in seen:
+            continue
+        seen.add((name, current))
+        key = ('inline_install_npm', name)
+        if key not in inline_cache:
+            try:
+                meta = npm_client.get_metadata(name)
+                latest = (meta.get('dist-tags') or {}).get('latest') if isinstance(meta, dict) else None
+                versions = meta.get('versions', {}) if isinstance(meta, dict) else {}
+                valid = (isinstance(latest, str) and re.fullmatch(
+                    r'(?:0|[1-9][0-9]{0,15})\.(?:0|[1-9][0-9]{0,15})\.(?:0|[1-9][0-9]{0,15})', latest)
+                    and isinstance(versions, dict) and isinstance(versions.get(latest), dict))
+                inline_cache[key] = latest if valid else None
+            except Exception as e:  # noqa: BLE001
+                skipped.append((name, dockerfile, f'upstream lookup failed: {e}'))
+                continue
+        latest = inline_cache[key]
+        if latest is None:
+            skipped.append((name, dockerfile, 'npm latest tag missing, unavailable or not a stable exact version'))
+        elif parse_stable(latest) > parse_stable(current):
+            candidates.append(BumpCandidate(kind='inline_install_npm', locator=name, file=dockerfile,
+                current_version=current, target_version=latest, upstream=UpstreamSource('npm_meta', name),
+                extra={'kind': 'inline_install_npm'}))
     return candidates, skipped
 
 
@@ -1152,6 +1189,8 @@ def _evaluate_one(
             eco_map = _BUILTIN_ARG_MAP.get(cand.locator)
     elif cand.kind == "inline_install_pip":
         eco_map = ("PyPI", cand.locator)
+    elif cand.kind == "inline_install_npm":
+        eco_map = ("npm", cand.locator)
     findings: list[SupplyChainFinding] = []
     new_vulns: list = []
     vuln_delta_degraded: str | None = None
@@ -1237,6 +1276,26 @@ def _evaluate_one(
         # in the loop; a Block from other signals stands.
         verdict = max(verdict, _VERDICT_REVIEW)
         error = f"vuln-delta unavailable: {vuln_delta_degraded}"
+    if cand.kind == 'inline_install_npm':
+        try:
+            meta = npm_client.get_metadata(cand.locator) if npm_client is not None else None
+            versions = meta.get('versions', {}) if isinstance(meta, dict) else {}
+            old = versions.get(cand.current_version)
+            new = versions.get(cand.target_version)
+            if not isinstance(old, dict) or not isinstance(new, dict):
+                raise ValueError('current or target npm metadata unavailable')
+            if new.get('deprecated'):
+                raise ValueError('npm target version is deprecated')
+            for entry in (old, new):
+                engines = entry.get('engines')
+                if engines is not None and (not isinstance(engines, dict)
+                        or any(not isinstance(v, str) for v in engines.values())):
+                    raise ValueError('invalid npm engine requirements')
+            if old.get('engines') != new.get('engines'):
+                raise ValueError('npm runtime engine requirements changed; review compatibility')
+        except Exception as e:  # noqa: BLE001
+            verdict = max(verdict, _VERDICT_REVIEW)
+            error = '; '.join(filter(None, [error, f'npm compatibility check: {e}']))
     return BumpResult(
         candidate=cand,
         verdict=verdict,
