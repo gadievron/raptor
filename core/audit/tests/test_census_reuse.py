@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import textwrap
 from pathlib import Path
+from unittest.mock import patch
 from types import SimpleNamespace
 
 import pytest
@@ -182,7 +183,8 @@ class TestPrepOrderPin:
         _real = orch._run_mechanical_detectors
         orch._run_mechanical_detectors = _battery_stub
         try:
-            prep = _compute_audit_prep(config)
+            with patch.object(orch, "_resolve_joern_evidence_raw", return_value=({}, None)):
+                prep = _compute_audit_prep(config)
         finally:
             orch._run_mechanical_detectors = _real
         assert prep is not None

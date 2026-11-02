@@ -12,6 +12,7 @@ from __future__ import annotations
 import ast
 import logging
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -83,7 +84,8 @@ def test_prep_graph_boost_degrades_on_permission_error(
         propagate_constraints=False,
     )
     with caplog.at_level(logging.DEBUG, logger="core.audit.orchestrator"):
-        prep = _compute_audit_prep(config)
+        with patch.object(orch, "_resolve_joern_evidence_raw", return_value=({}, None)):
+            prep = _compute_audit_prep(config)
     assert prep is not None
     assert any("graph hypothesis_seeds skipped" in rec.message
                for rec in caplog.records)
@@ -132,7 +134,8 @@ def test_prep_graph_boost_degrades_on_bind_overflow(
         propagate_constraints=False,
     )
     with caplog.at_level(logging.DEBUG, logger="core.audit.orchestrator"):
-        prep = _compute_audit_prep(config)
+        with patch.object(orch, "_resolve_joern_evidence_raw", return_value=({}, None)):
+            prep = _compute_audit_prep(config)
     assert prep is not None
     assert any("graph hypothesis_seeds skipped" in rec.message
                for rec in caplog.records)
