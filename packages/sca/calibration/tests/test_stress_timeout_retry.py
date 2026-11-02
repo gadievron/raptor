@@ -184,38 +184,53 @@ def test_orphan_still_running_skips_retry_and_keeps_error(
     — and the timeout error stands."""
     caplog.set_level(logging.INFO)
     calls: list[str] = []
-    release = threading.Event()
-    orphan_finished = threading.Event()
+    shutdowns: list[bool] = []
+    polls: list[bool] = []
+    orphan: concurrent.futures.Future[StressResult] = concurrent.futures.Future()
+    assert orphan.set_running_or_notify_cancel()
+    started = time.monotonic() - 2.0
 
-    def _scan(
-        sample: ProjectSample, out_root: Path, *, git_clone_timeout: float,
-    ) -> StressResult:
-        calls.append(sample.name)
-        _register("PyPI/slow")
-        try:
-            release.wait(timeout=30)
-        finally:
-            _unregister("PyPI/slow")
-            orphan_finished.set()
-        return _ok_result("slow")
+    class RunningExecutor:
+        def submit(self, fn, sample, *args, **kwargs):
+            assert not calls, "no retry may start while the orphan runs"
+            calls.append(sample.name)
+            return orphan
 
-    monkeypatch.setattr(stress_mod, "_scan_one", _scan)
-    try:
-        results = stress_mod.run_stress_sweep(
-            samples=[_sample("slow")],
-            out_root=tmp_path, max_workers=2,
-            git_clone_timeout=0.1, sca_timeout=0.3,
-        )
-    finally:
-        # Let the abandoned worker finish AND wait for its registry
-        # pop before returning: a pop landing after a later test
-        # re-registers the same label would disarm that test's
-        # budget (process-global registry).
-        release.set()
-        assert orphan_finished.wait(timeout=30)
+        def shutdown(self, *, wait):
+            shutdowns.append(wait)
+
+    executor = RunningExecutor()
+    monkeypatch.setattr(
+        stress_mod.concurrent.futures, "ThreadPoolExecutor",
+        lambda **kwargs: executor,
+    )
+
+    def poll(futures, **kwargs):
+        assert not polls, "the expired scan must be abandoned on its first poll"
+        polls.append(True)
+        assert set(futures) == {orphan}
+        return set(), set(futures)
+
+    def scan_started(label):
+        assert label == "PyPI/slow"
+        return started
+
+    # Exercise the retry decision with a real RUNNING future and an
+    # expired start time. This branch test must not depend on wall-clock
+    # scheduling or the process-global scan registry; real timeout and
+    # worker cleanup behavior is covered by the sweep integration tests.
+    monkeypatch.setattr(stress_mod.concurrent.futures, "wait", poll)
+    monkeypatch.setattr(stress_mod, "_scan_started_at", scan_started)
+    results = stress_mod.run_stress_sweep(
+        samples=[_sample("slow")],
+        out_root=tmp_path, max_workers=2,
+        git_clone_timeout=0.1, sca_timeout=0.3,
+    )
 
     (r,) = results
-    assert len(calls) == 1, "no retry may start while the orphan runs"
+    assert calls == ["slow"]
+    assert orphan.running(), "the original scan must still be in flight"
+    assert shutdowns == [False], "an abandoned worker must not be joined"
     assert r.error is not None and "budget" in r.error
     assert "orphan still running, retry skipped" in caplog.text
     # The refresh gate still refuses over the kept error.
