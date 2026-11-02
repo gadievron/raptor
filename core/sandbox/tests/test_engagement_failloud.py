@@ -14,6 +14,9 @@ downgrades.
 """
 
 
+import sys
+from unittest.mock import patch
+
 import pytest
 
 from core.sandbox import SandboxSetupError, check_unshare_engages, sandbox, state
@@ -164,7 +167,8 @@ class TestSubprocessBoundaryTranslation:
         spec = iu.spec_from_file_location(
             "scanner_xlate", str(_repo / "packages/static-analysis/scanner.py"))
         scanner = iu.module_from_spec(spec)
-        spec.loader.exec_module(scanner)
+        with patch.object(sys, "path", sys.path.copy()):
+            spec.loader.exec_module(scanner)
 
         class _FakeProc:
             returncode = SANDBOX_ENGAGE_EXIT_CODE

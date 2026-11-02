@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -14,7 +16,8 @@ def _load_tool():
     spec = importlib.util.spec_from_file_location("cache_packs", _TOOL_PATH)
     mod = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
-    spec.loader.exec_module(mod)
+    with patch.object(sys, "path", sys.path.copy()):
+        spec.loader.exec_module(mod)
     return mod
 
 
@@ -493,9 +496,10 @@ def test_registry_fetch_disabled_offline(monkeypatch):
 
 
 def test_check_is_strict_local_scan_with_network_denied(tmp_path, monkeypatch):
-    from types import SimpleNamespace
-    from core import sandbox
     import shutil
+    from types import SimpleNamespace
+
+    from core import sandbox
     monkeypatch.setattr(shutil, 'which', lambda name: '/usr/bin/semgrep')
     mod = _load_tool()
     mod.CACHE_DIR = tmp_path / 'cache'
@@ -506,7 +510,8 @@ def test_check_is_strict_local_scan_with_network_denied(tmp_path, monkeypatch):
         calls.append((cmd, kwargs))
         return SimpleNamespace(returncode=0, stdout='{"errors":[]}', stderr='')
     monkeypatch.setattr(sandbox, 'run', run)
-    mod.cmd_check(argparse.Namespace(packs='secrets'))
+    with patch.object(sys, "path", sys.path.copy()):
+        mod.cmd_check(argparse.Namespace(packs='secrets'))
     cmd, policy = calls[0]
     assert '--strict' in cmd and '--validate' not in cmd
     assert 'p/secrets' not in cmd
@@ -515,9 +520,10 @@ def test_check_is_strict_local_scan_with_network_denied(tmp_path, monkeypatch):
 
 
 def test_check_refuses_rule_errors_even_with_zero_exit(tmp_path, monkeypatch):
-    from types import SimpleNamespace
-    from core import sandbox
     import shutil
+    from types import SimpleNamespace
+
+    from core import sandbox
     monkeypatch.setattr(shutil, 'which', lambda name: '/usr/bin/semgrep')
     mod = _load_tool()
     mod.CACHE_DIR = tmp_path
@@ -525,15 +531,18 @@ def test_check_refuses_rule_errors_even_with_zero_exit(tmp_path, monkeypatch):
     monkeypatch.setattr(sandbox, 'run', lambda *a, **kw: SimpleNamespace(
         returncode=0, stdout='{"errors":[{"message":"invalid rule"}]}', stderr=''))
     with pytest.raises(SystemExit, match='rule errors'):
-        mod.cmd_check(argparse.Namespace(packs='secrets'))
+        with patch.object(sys, "path", sys.path.copy()):
+            mod.cmd_check(argparse.Namespace(packs='secrets'))
 
 
 def test_check_refuses_missing_semgrep(tmp_path, monkeypatch):
     import shutil
+
     from core import sandbox
     mod = _load_tool()
     mod.CACHE_DIR = tmp_path
     monkeypatch.setattr(shutil, 'which', lambda name: None)
     monkeypatch.setattr(sandbox, 'run', lambda *a, **kw: pytest.fail('missing binary must not execute'))
     with pytest.raises(SystemExit, match='Install Semgrep'):
-        mod.cmd_check(argparse.Namespace(packs='secrets'))
+        with patch.object(sys, "path", sys.path.copy()):
+            mod.cmd_check(argparse.Namespace(packs='secrets'))

@@ -19,6 +19,7 @@ import json
 import runpy
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -82,7 +83,8 @@ def _run(script, run_dir, monkeypatch):
     monkeypatch.setenv("_RAPTOR_TRUSTED", "1")
     monkeypatch.setattr(sys, "argv", [str(script), str(run_dir)])
     try:
-        runpy.run_path(str(script), run_name="__main__")
+        with patch.object(sys, "path", sys.path.copy()):
+            runpy.run_path(str(script), run_name="__main__")
     except SystemExit as e:
         return int(e.code or 0)
     return 0

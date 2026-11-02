@@ -13,6 +13,7 @@ import json
 import runpy
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = REPO_ROOT / "libexec" / "raptor-enrich-context-map-frida"
@@ -22,7 +23,8 @@ def _run_shim(workdir: Path, monkeypatch) -> int:
     monkeypatch.setenv("_RAPTOR_TRUSTED", "1")
     monkeypatch.setattr(sys, "argv", [str(SCRIPT), str(workdir)])
     try:
-        runpy.run_path(str(SCRIPT), run_name="__main__")
+        with patch.object(sys, "path", sys.path.copy()):
+            runpy.run_path(str(SCRIPT), run_name="__main__")
     except SystemExit as e:
         return int(e.code or 0)
     return 0

@@ -16,7 +16,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
-
+from unittest.mock import patch
 
 _REPO_ROOT = str(Path(__file__).resolve().parents[3])
 if _REPO_ROOT not in sys.path:
@@ -33,7 +33,8 @@ def _load(name: str, filename: str):
     spec = importlib.util.spec_from_file_location(name, _PKG_DIR / filename)
     mod = importlib.util.module_from_spec(spec)
     sys.modules[name] = mod
-    spec.loader.exec_module(mod)
+    with patch.object(sys, "path", sys.path.copy()):
+        spec.loader.exec_module(mod)
     return mod
 
 

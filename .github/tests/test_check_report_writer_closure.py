@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -195,11 +196,14 @@ def _load_gate_module():
 
     spec = importlib.util.spec_from_file_location("gate_under_test", SCRIPT)
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    with patch.object(sys, "path", sys.path.copy()):
+        spec.loader.exec_module(mod)
     return mod
 
 
 def test_pool_failure_falls_back_serially(tmp_path, monkeypatch, capsys):
+    # Worker initialization adds the scratch repository to the import path.
+    monkeypatch.setattr(sys, "path", sys.path.copy())
     # A broken process pool (sandboxes without working semaphores)
     # must degrade to the serial scan with complete findings, not fail
     # or silently return nothing. The pool is forced to fail so this

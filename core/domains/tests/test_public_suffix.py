@@ -1,6 +1,7 @@
 """Offline boundary and snapshot refresh regression tests."""
 import io
 import runpy
+import sys
 import unittest
 from dataclasses import FrozenInstanceError
 from pathlib import Path
@@ -8,8 +9,14 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from core.domains.public_suffix import (
-    InvalidHostname, PSL_PATH, domain_boundary, host_matches_anchor, load_suffix_rules,
-    parse_suffix_list, registrable_domain, same_registrable_domain,
+    PSL_PATH,
+    InvalidHostname,
+    domain_boundary,
+    host_matches_anchor,
+    load_suffix_rules,
+    parse_suffix_list,
+    registrable_domain,
+    same_registrable_domain,
 )
 
 
@@ -158,7 +165,8 @@ class TestHostPolicy(unittest.TestCase):
 class TestRefresh(unittest.TestCase):
     def refresh(self, data, destination):
         script = Path(__file__).resolve().parents[3] / '.github/scripts/refresh_public_suffix_list.py'
-        main = runpy.run_path(str(script))['main']
+        with patch.object(sys, "path", sys.path.copy()):
+            main = runpy.run_path(str(script))['main']
         with patch.dict(main.__globals__, DEST=destination,
                         urlopen=lambda *a, **k: io.BytesIO(data)):
             main()

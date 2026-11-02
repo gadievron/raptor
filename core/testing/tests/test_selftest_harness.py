@@ -29,6 +29,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from unittest.mock import patch
 
 import pytest
 
@@ -52,7 +53,8 @@ def selftest() -> Any:
         assert spec is not None and spec.loader is not None
         mod = importlib.util.module_from_spec(spec)
         sys.modules["raptor_self_test"] = mod
-        spec.loader.exec_module(mod)
+        with patch.object(sys, "path", sys.path.copy()):
+            spec.loader.exec_module(mod)
         yield mod
     finally:
         sys.modules.pop("raptor_self_test", None)

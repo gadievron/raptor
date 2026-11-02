@@ -5,12 +5,13 @@ import hashlib
 import io
 import json
 import os
-from pathlib import Path
 import runpy
 import stat
 import subprocess
 import sys
 import tarfile
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -41,7 +42,8 @@ def archive_bytes(entries):
 
 @pytest.fixture
 def installer(tmp_path, monkeypatch):
-    namespace = runpy.run_path(str(INSTALLER))
+    with patch.object(sys, "path", sys.path.copy()):
+        namespace = runpy.run_path(str(INSTALLER))
     state = namespace['ensure_installed'].__globals__
     monkeypatch.setenv('XDG_CACHE_HOME', str(tmp_path / 'cache'))
     monkeypatch.delenv('RAPTOR_CODEQL_AUTO_INSTALL', raising=False)
@@ -295,9 +297,9 @@ def diagnostic_launcher(tmp_path, monkeypatch):
 
 
 def test_diagnostic_consumers_do_not_install_or_record_errors(diagnostic_launcher, monkeypatch):
+    import packages.codeql as codeql
     from core.recall.score import collect_toolchain
     from core.run.provenance import tool_version
-    import packages.codeql as codeql
 
     command, marker = diagnostic_launcher
     # Exercise the actual launcher, without running unrelated installed tools.
@@ -310,9 +312,9 @@ def test_diagnostic_consumers_do_not_install_or_record_errors(diagnostic_launche
 
 
 def test_failed_version_output_is_not_recorded(tmp_path, monkeypatch):
+    import packages.codeql as codeql
     from core.recall.score import collect_toolchain
     from core.run.provenance import tool_version
-    import packages.codeql as codeql
 
     command = tmp_path / 'codeql'
     command.write_text('#!/bin/sh\necho "failure banner" >&2\nexit 1\n')
@@ -328,7 +330,9 @@ def test_failed_version_output_is_not_recorded(tmp_path, monkeypatch):
 @pytest.mark.parametrize('dispatcher,keyless', [(False, False), (True, False), (True, True)])
 def test_raptor_script_dispatch_preserves_operator_opt_out(tmp_path, monkeypatch, dispatcher, keyless):
     from types import SimpleNamespace
-    import raptor
+
+    with patch.object(sys, "path", sys.path.copy()):
+        import raptor
 
     child = tmp_path / 'assert-preference.py'
     child.write_text('import os\nfrom core.config import RaptorConfig\n'
