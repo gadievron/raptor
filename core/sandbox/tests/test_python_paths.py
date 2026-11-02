@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 from core.sandbox.python_paths import python_runtime_tool_paths, _under_system_prefix
 
 
@@ -281,3 +283,53 @@ def test_home_override_does_not_expose_account_home_prefix(tmp_path, monkeypatch
     assert str(account) not in paths
     assert str(account / 'bin') in paths
     assert str(library) in paths
+
+
+@pytest.mark.parametrize("directory", ["lib", "lib64"])
+@pytest.mark.parametrize("linked", [False, True])
+def test_selected_tool_grants_exact_shared_runtime(tmp_path, monkeypatch, directory, linked):
+    from core.sandbox.python_paths import python_tool_paths
+    home = tmp_path / "home"
+    (home / "bin").mkdir(parents=True)
+    prefix = tmp_path / "base" if linked else home
+    (prefix / "bin").mkdir(parents=True, exist_ok=True)
+    library = prefix / directory
+    library.mkdir()
+    runtime = library / "libpython3.14.so.1.0"
+    runtime.write_bytes(b"selected runtime")
+    alias = library / "libpython3.14.so"
+    alias.symlink_to(runtime.name)
+    (library / "libpython3.13.so.1.0").write_bytes(b"other runtime")
+    (library / "credentials").write_bytes(b"private")
+    python = home / "bin/python3.14"
+    selected = prefix / "bin/python3.14"
+    selected.write_text("not executed")
+    if linked:
+        python.symlink_to(selected)
+    tool = home / "bin/semgrep"
+    tool.write_text("#!" + str(python) + "\n")
+    monkeypatch.setenv("HOME", str(home))
+    paths = python_tool_paths(str(tool))
+    assert str(runtime) in paths
+    assert str(alias) in paths
+    assert str(library) not in paths
+    assert str(home) not in paths
+    assert str(library / "credentials") not in paths
+    assert str(library / "libpython3.13.so.1.0") not in paths
+
+
+def test_selected_shared_runtime_alias_cannot_expose_home(tmp_path, monkeypatch):
+    from core.sandbox.python_paths import python_tool_paths
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    prefix = tmp_path / "runtime"
+    (prefix / "bin").mkdir(parents=True)
+    (prefix / "lib").mkdir()
+    python = prefix / "bin/python3.14"
+    python.write_text("not executed")
+    alias = prefix / "lib/libpython3.14.so.1.0"
+    alias.symlink_to(home, target_is_directory=True)
+    paths = python_tool_paths(str(python))
+    assert str(alias) not in paths
+    assert str(home) not in paths
