@@ -19,7 +19,7 @@ from core.oci.common_licenses import COMMON_ALIASES, COMMON_DIRECTORY, common_al
 from core.oci.manifest import LayerDescriptor, parse_image_manifest
 from core.oci.notice_paths import (
     METADATA_NAMES as _METADATA_NAMES, NOTICE_NAME as _NOTICE,
-    SOURCE_SUFFIXES as _SOURCE_SUFFIXES, image_path as _path, PackageNoticePaths,
+    SOURCE_SUFFIXES as _SOURCE_SUFFIXES, image_path as _path, PackageNoticePaths, component_notice_paths,
 )
 
 MAX_CAPTURE_BYTES = 128 * 1024 * 1024
@@ -251,6 +251,9 @@ def capture(catalogue: dict, reader: Callable[[LayerDescriptor], Iterable[bytes]
                 parent = PurePosixPath(path).parent
                 for name in ("LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING", "NOTICE", "README.md"):
                     target((str(parent / name), layer), "conventional_package_notice_probe", package_id, False)
+    for artifact in catalogue.get('artifacts', []):
+        for key in component_notice_paths(artifact):
+            target(key, 'component_specific_notice_probe', artifact['id'], False)
     for key, identifiers in package_paths.metadata.items():
         for identifier in sorted(identifiers):
             target(key, "python_distribution_metadata", identifier)

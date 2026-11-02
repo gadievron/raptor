@@ -16,7 +16,7 @@ import re
 from core.json import dumps_artifact
 from core.oci.evidence import MAX_CAPTURE_BYTES, _METADATA_NAMES, _path, subject
 from core.oci.common_licenses import COMMON_ALIASES, COMMON_DIRECTORY, common_alias_target
-from core.oci.notice_paths import PackageNoticePaths, notice_name as _notice_name
+from core.oci.notice_paths import PackageNoticePaths, component_notice_paths, notice_name as _notice_name
 from core.security.capped_read import read_capped
 
 MAX_ASSOCIATIONS = 100_000
@@ -60,6 +60,7 @@ def load_notices(root: Path, native: dict, native_sha256: str, report: dict, *, 
                 if PurePosixPath(loc["path"]).name == "package.json":
                     for name in ("LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING", "NOTICE", "README.md"):
                         probes.add((str(PurePosixPath(loc["path"]).parent / name), loc["layerID"]))
+    probes.update(key for artifact in native["artifacts"] for key in component_notice_paths(artifact))
     common_origins = {origin for path, origin in native_files if path.startswith(COMMON_DIRECTORY)}
     common_probes = {(COMMON_DIRECTORY + alias, origin) for origin in common_origins for alias in COMMON_ALIASES}
     if report["version"] >= 4:
@@ -202,6 +203,9 @@ def associate(native: dict, image: dict, rows: list[dict], blobs: dict[str, byte
         for key, identifiers in package_paths.metadata.items():
             if artifact["id"] in identifiers and key in by_key and key not in associations:
                 add(by_key[key], "python_distribution_metadata")
+        for key in component_notice_paths(artifact):
+            if key in by_key:
+                add(by_key[key], 'component_specific_notice_candidate')
         # Copyright files can refer to a separately installed Debian common text.
         # Ambiguous all-layer versions stay unresolved rather than being guessed.
         gaps = []
