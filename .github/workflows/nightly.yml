@@ -108,7 +108,7 @@ jobs:
         # an EXECUTED confirmed sweep, so without the binary those
         # tests can only skip. Installed here so the nightly keeps
         # covering the sweep → record → report → feedback chain.
-        run: uv tool install semgrep==1.177.0
+        run: uv tool install --python "$(command -v python3)" semgrep==1.177.0
 
       # The toolchain .debs are cached so the warm path installs from
       # local files instead of round-tripping apt.llvm.org every night
@@ -211,7 +211,8 @@ jobs:
           # The Semgrep engine directory is owned by semgrep-regressions;
           # core/package Semgrep consumers continue to run in this job.
           python -m pytest -m slow core packages engine .github/tests .github/scripts/tests \
-            --ignore=engine/semgrep/tests --ignore=packages/codeql/tests/test_pack_dependency_resolution.py -q --durations=25 \
+            --ignore=engine/semgrep/tests \
+            --deselect=packages/semgrep/tests/test_runner.py::TestSandboxMetadataIntegration --ignore=packages/codeql/tests/test_pack_dependency_resolution.py -q --durations=25 \
             --junitxml="$RUNNER_TEMP/slow.xml"
 
       # Full-collection lane, so --full: a count below the recorded
@@ -235,7 +236,8 @@ jobs:
           source $VENV_PATH/bin/activate
           rc=0
           python -m pytest -m integration core packages engine \
-            --ignore=engine/semgrep/tests --ignore=packages/codeql/tests/test_pack_dependency_resolution.py --durations=25 \
+            --ignore=engine/semgrep/tests \
+            --deselect=packages/semgrep/tests/test_runner.py::TestSandboxMetadataIntegration --ignore=packages/codeql/tests/test_pack_dependency_resolution.py --durations=25 \
             --tb=short --junitxml="$RUNNER_TEMP/integration-attempt-1.xml" \
             || rc=$?
           if [ "$rc" -eq 0 ]; then
@@ -246,7 +248,8 @@ jobs:
           echo ""
           sleep 60
           python -m pytest -m integration core packages engine \
-            --ignore=engine/semgrep/tests --ignore=packages/codeql/tests/test_pack_dependency_resolution.py --durations=25 \
+            --ignore=engine/semgrep/tests \
+            --deselect=packages/semgrep/tests/test_runner.py::TestSandboxMetadataIntegration --ignore=packages/codeql/tests/test_pack_dependency_resolution.py --durations=25 \
             --tb=short --junitxml="$RUNNER_TEMP/integration-attempt-2.xml"
 
       # Budget over the attempt that produced the green: attempt 2
@@ -592,7 +595,7 @@ jobs:
 
       - name: Install Semgrep
         run: |
-          uv tool install semgrep==1.177.0
+          uv tool install --python "$(command -v python3)" semgrep==1.177.0
           semgrep --version
 
       - name: Run Semgrep engine regressions
@@ -603,7 +606,9 @@ jobs:
           source "$VENV_PATH/bin/activate"
           # Own the engine's nightly cases. Directory discovery keeps newly
           # marked tests covered; the broad slow/integration steps exclude it.
-          python -m pytest engine/semgrep/tests -m 'slow or integration' -q \
+          python -m pytest engine/semgrep/tests \
+            packages/semgrep/tests/test_runner.py::TestSandboxMetadataIntegration \
+            -m 'slow or integration' -q \
             --junitxml="$RUNNER_TEMP/scan-regressions.xml"
           python - "$RUNNER_TEMP/scan-regressions.xml" <<'PY'
           import sys
