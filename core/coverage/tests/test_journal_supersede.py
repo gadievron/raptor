@@ -21,13 +21,16 @@ from __future__ import annotations
 
 import importlib.util
 import random
+import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
 import core.coverage.journal as journal_mod
+import core.coverage.journal_compact as journal_compact
 from core.audit.resume import journal_spend_usd
 from core.coverage.journal import (
     JOURNAL_FILENAME,
@@ -44,7 +47,6 @@ from core.coverage.journal import (
     require_complete_entries,
     reviewed_set,
 )
-import core.coverage.journal_compact as journal_compact
 from core.coverage.journal_compact import (
     SPEND_CARRIER_FUNCTION,
     CompactRefused,
@@ -682,7 +684,8 @@ class TestCli:
             "raptor_audit_cli_supersede_test", loader)
         assert spec is not None
         mod = importlib.util.module_from_spec(spec)
-        loader.exec_module(mod)
+        with patch.object(sys, "path", sys.path.copy()):
+            loader.exec_module(mod)
         return mod
 
     def test_journal_compact_supersede_flag(

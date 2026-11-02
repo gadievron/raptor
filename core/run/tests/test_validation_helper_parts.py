@@ -18,6 +18,7 @@ import subprocess
 import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -41,7 +42,8 @@ def helper():
         "raptor_validation_helper_parts", loader,
     )
     mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
+    with patch.object(sys, "path", sys.path.copy()):
+        loader.exec_module(mod)
     return mod
 
 

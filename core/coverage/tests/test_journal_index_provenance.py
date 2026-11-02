@@ -17,7 +17,9 @@ permanently loses verdict-reuse authority. Two rules close the class:
 
 import json
 import os
+import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -304,7 +306,8 @@ class TestReindexCli:
             "raptor_audit_cli_reindex_test", loader)
         assert spec is not None
         mod = importlib.util.module_from_spec(spec)
-        loader.exec_module(mod)
+        with patch.object(sys, "path", sys.path.copy()):
+            loader.exec_module(mod)
         return mod
 
     def test_reindex_repairs_skew_damaged_index(

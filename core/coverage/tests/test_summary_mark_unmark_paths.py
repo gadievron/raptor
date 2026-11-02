@@ -9,8 +9,11 @@ value-taking flags, and items/functions precedence in journaled marks.
 from __future__ import annotations
 
 import json
-import os
+import sys
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 from core.coverage.tests.summary_cli_support import CLI, run_cli
 
@@ -266,12 +269,13 @@ class TestMarkRowProvenance:
     def _load_module(self):
         import importlib.util
         from importlib.machinery import SourceFileLoader
-        os.environ.setdefault("_RAPTOR_TRUSTED", "1")
         loader = SourceFileLoader(
             "raptor_coverage_summary_prov", str(CLI))
         spec = importlib.util.spec_from_loader(loader.name, loader)
         mod = importlib.util.module_from_spec(spec)
-        loader.exec_module(mod)
+        with pytest.MonkeyPatch.context() as mp, patch.object(sys, "path", sys.path.copy()):
+            mp.setenv("_RAPTOR_TRUSTED", "1")
+            loader.exec_module(mod)
         return mod
 
     def test_non_tty_mark_demotes_to_map_grade(self, tmp_path):
