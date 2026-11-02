@@ -36,7 +36,7 @@ on:
   workflow_dispatch:
     inputs:
       suite:
-        description: Test suites to run (focused modes skip the full slow/integration batch)
+        description: Test suites to run (java-log includes deserialization; focused modes skip the full batch)
         type: choice
         default: full
         options:
@@ -295,11 +295,14 @@ jobs:
           if-no-files-found: ignore
 
   java-log-query:
+    name: Java query regressions
     if: github.event_name != 'workflow_dispatch' || inputs.suite != 'semgrep'
     # Separate tool-backed regression: no optional-tool skip and no added
     # time or memory contention in the existing slow/integration job.
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Native suites plus production compilation measured about 15 minutes
+    # at 4 GiB; leave room for tool setup and hosted-runner variance.
+    timeout-minutes: 25
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -352,7 +355,7 @@ jobs:
             shared
           persist-credentials: false
 
-      - name: Run Java log-injection query regression
+      - name: Run Java log-injection and deserialization query regressions
         run: |
           set -euo pipefail
           cli="$RUNNER_TEMP/java-log-codeql/codeql/codeql"
@@ -364,15 +367,17 @@ jobs:
             --search-path="$GITHUB_WORKSPACE/.codeql-java-log-libraries" \
             --additional-packs="$RUNNER_TEMP/java-log-tests/queries/java:$RUNNER_TEMP/java-log-tests/tests" \
             "$RUNNER_TEMP/java-log-tests/tests/log-injection" \
+            "$RUNNER_TEMP/java-log-tests/tests/deserialization" \
             > "$RUNNER_TEMP/java-log-tests/results.json"
 
-      - name: Compile production Java log query
+      - name: Compile production Java log and deserialization queries
         run: |
           set -euo pipefail
           "$RUNNER_TEMP/java-log-codeql/codeql/codeql" query compile --threads=2 --ram=4096 \
             --search-path="$GITHUB_WORKSPACE/.codeql-java-log-libraries" \
             --additional-packs="$RUNNER_TEMP/java-log-tests/queries/java" \
             "$RUNNER_TEMP/java-log-tests/queries/java/LogInjection.ql" \
+            "$RUNNER_TEMP/java-log-tests/queries/java/InsecureDeserialization.ql" \
             2>&1 | tee "$RUNNER_TEMP/java-log-tests/production-compile.log"
 
       - name: Upload Java query test results
@@ -384,6 +389,8 @@ jobs:
             ${{ runner.temp }}/java-log-tests/results.json
             ${{ runner.temp }}/java-log-tests/tests/log-injection/*.actual
             ${{ runner.temp }}/java-log-tests/tests/log-injection/*.expected
+            ${{ runner.temp }}/java-log-tests/tests/deserialization/*.actual
+            ${{ runner.temp }}/java-log-tests/tests/deserialization/*.expected
             ${{ runner.temp }}/java-log-tests/production-compile.log
           retention-days: 14
           if-no-files-found: ignore
