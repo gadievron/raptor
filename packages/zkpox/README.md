@@ -129,3 +129,9 @@ are staged only in private writable job scratch.
 launcher forwards the configured or standard cache through argv without widening
 the global safe-environment allowlist. Public bundle factories require a v2
 statement and omit private witness manifests, unsalted hashes and attestations.
+
+The native workspace carries a documented `object 0.37.3` dependency override
+under `native/vendor/object` to use the fixed `ruzstd >=0.9.1` decoder while
+retaining SP1 6.5.0. Upstream Rust source is unchanged. The workspace lockfile
+also uses `backtrace 0.3.77` to remove its older optional decoder dependency.
+See [the override's provenance and removal conditions](native/vendor/object/UPSTREAM.md).
