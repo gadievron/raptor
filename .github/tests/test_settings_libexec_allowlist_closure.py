@@ -46,6 +46,7 @@ _REF_RE = re.compile(r"libexec/(raptor-[a-z0-9-]+[a-z0-9])")
 # (map.md MAP-7: "expect a permission prompt — appropriate, since the
 # probe executes the target binary").
 PROMPT_INTENDED: dict[str, str] = {
+    "raptor-rr": "executes or replays the analysed target; per-run operator consent",
     "raptor-sandbox-observe": "runtime probe executes the target "
                               "binary; per-run operator consent",
     "raptor-frida": "dynamic instrumentation attaches to / spawns "

@@ -52,7 +52,7 @@ Be extremely thorough in checking your causal chain of events. Make sure that:
  root-cause-analysis into the working directory under the filename "root-cause-hypothesis-YYY.md" (where YYY is a running counter starting from 1 for each hypothesis that is generated). The analysis MUST include:
   1) A clear explanation of what is going wrong and why.
   2) MANDATORY: The actual verbatim output from running rr commands. For EVERY step in the pointer chain, you must include:
-     a) The contained replay command (e.g., `python3 -I "$RAPTOR_DIR/.claude/skills/crash-analysis/rr-debugger/scripts/crash_trace.py" <trace> --interactive`), followed by the GDB commands (break file.c:123; commands; printf ...; end). Use this launcher so replay receives filesystem and network containment plus GDB auto-load protection.
+     a) The contained replay command (e.g., `libexec/raptor-rr replay <trace>`), followed by the GDB commands (break file.c:123; commands; printf ...; end). Use this launcher so replay receives filesystem and network containment plus GDB auto-load protection.
      b) The ACTUAL OUTPUT from running those commands showing real pointer values (e.g., "pointer=0x60e000000100")
      c) You must NOT write "expected output" - you must actually RUN the commands and paste the real output
   3) The report must contain at least 3 instances of actual rr output: allocation, intermediate modifications, and crash
@@ -74,7 +74,7 @@ relevant_code_here();
 
 **RR Verification:**
 ```bash
-python3 -I "$RAPTOR_DIR/.claude/skills/crash-analysis/rr-debugger/scripts/crash_trace.py" rr-trace --interactive
+libexec/raptor-rr replay rr-trace
 break file.c:123
 commands
   printf "variable=%p\n", variable

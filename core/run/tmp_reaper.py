@@ -82,6 +82,7 @@ logger = logging.getLogger(__name__)
 # age floor means the owning process died without its exit path.
 _DIR_PREFIXES = (
     "raptor-rr-replay-",
+    "raptor-rr-verify-",
     # Native installation-namespace probe; TemporaryDirectory normally
     # removes it, but SIGKILL/OOM can strand the probe's scratch tree.
     "raptor-native-ns-probe-",

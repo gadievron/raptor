@@ -2365,8 +2365,12 @@ def run_sandboxed(
         # where AF_UNIX stays blocked. Needed for Python >= 3.14
         # multiprocessing (forkserver listener) inside sandboxed
         # tools.
+        # rr traces through its own seccomp filter. A connect NOTIFY
+        # mediator can hide calls from the recorder. Keep pathname/abstract
+        # socket creation denied; rr's anonymous stream socketpair still
+        # transfers descriptors without a host-facing connection.
         _allow_unix = bool((target or output or rootfs)
-                           and not skip_mount_ns)
+                           and not skip_mount_ns and seccomp_profile != "rr")
         # CONNECT SCOPING for the allowed AF_UNIX sockets (enforcement
         # mode). allow_unix's harmlessness rationale has one hole: the
         # OUTPUT dir is a READ-WRITE bind, so a host-side (or sibling-

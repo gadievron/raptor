@@ -1,19 +1,15 @@
-"""Crash-analysis replay instructions must use the contained shared launcher.
-
-GDB init/auto-load suppression remains in the runner, but flags alone do not
-confine replayed code. Refuse a return to bare rr replay instructions.
-"""
+"""Crash-analysis rr instructions must use contained mechanical launchers."""
 
 from __future__ import annotations
 
 import os
+import re
 import unittest
 from pathlib import Path
 
 # parents[2] = .github/tests → .github → repo root. Anchor to this
 # file, not $RAPTOR_DIR, so the test inspects its own worktree.
 REPO = Path(__file__).resolve().parents[2]
-
 
 
 def _doc_files() -> list[Path]:
@@ -39,52 +35,28 @@ def test_doc_scan_excludes_other_worktrees(tmp_path, monkeypatch):
     assert _doc_files() == [own_doc]
 
 
+_BARE_RR = re.compile(r"(?<![\w-])rr[ \t]+(?:record|pack|replay)(?![\w-])")
+
+
 class RrReplayHardeningTests(unittest.TestCase):
     def test_docs_exist(self):
         self.assertGreater(len(_doc_files()), 1)
 
-    def test_rr_replay_invocations_carry_hardening(self):
+    def test_rr_instructions_use_contained_helpers(self):
         problems = []
-        contained = set()
+        covered = set()
         for doc in _doc_files():
             text = doc.read_text(encoding="utf-8", errors="replace")
             for i, line in enumerate(text.splitlines(), 1):
-                if 'crash_trace.py' in line and '--interactive' in line:
-                    contained.add(str(doc.relative_to(REPO)))
-                if "rr replay" not in line:
-                    continue
-                # Prose mentions of the bare command name (backtick
-                # `rr replay` with nothing after, or "rr replay ..."
-                # placeholders inside example descriptions) still
-                # count when they template a runnable command line:
-                # anything showing an invocation must show the
-                # hardened one. Only lines that also name a gdb
-                # command or stand alone as the command are checked.
-                stripped = line.strip().strip("`")
-                is_invocation = (
-                    stripped.startswith("rr replay")
-                    or "rr replay <trace>" in line
-                    or "rr replay ..." in line
-                    or "rr replay rr-trace" in line
-                )
-                if not is_invocation:
-                    continue
-                # Hardened GDB flags alone no longer suffice: they do
-                # not provide filesystem or network containment.
-                if is_invocation:
-                    problems.append(
-                        f"{doc.relative_to(REPO)}:{i}: {line.strip()}")
-        self.assertTrue({'.claude/agents/crash-analyzer-agent.md',
-                         '.claude/skills/crash-analysis/rr-debugger/SKILL.md'} <= contained,
-                        'replay instructions must use the contained mechanical launcher')
-        self.assertEqual(
-            problems, [],
-            msg=(
-                "manual rr replay instructions must use crash_trace.py --interactive; "
-                "GDB auto-load flags alone do not sandbox the recording:\n"
-                + "\n".join(problems)
-            ),
-        )
+                if 'libexec/raptor-rr ' in line:
+                    covered.add(str(doc.relative_to(REPO)))
+                if _BARE_RR.search(line):
+                    problems.append(f"{doc.relative_to(REPO)}:{i}: {line.strip()}")
+        self.assertTrue({'.claude/agents/crash-analysis-agent.md',
+                         '.claude/agents/crash-analyzer-agent.md',
+                         '.claude/skills/crash-analysis/rr-debugger/SKILL.md'} <= covered)
+        self.assertEqual(problems, [],
+                         'rr workflow commands must use the contained helper:\n' + '\n'.join(problems))
 
 
 if __name__ == "__main__":
