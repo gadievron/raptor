@@ -39,7 +39,9 @@ _QUOTED = tuple(q + f for f in _FLAGS for q in ('"', "'"))
 #   - query_runner search_dir: agent-staged model packs under the
 #     run's out_dir (agent.py additional_model_packs staging)
 #   - query_runner / iris vendored roots: ~/.codeql package cache
-#     (vendored_stdlib_roots)
+#     or the selected CLI's sibling CodeQL workspace. Target metadata may
+#     gate use of these roots but never supplies any path value
+#     (_local_dependency_roots / vendored_stdlib_roots)
 #   - codeql_augmented_run extension_pack: write_extension_pack output
 #     staged under the run's out_dir, _require_data_only_pack-validated
 #   - barrier_synth / cvefix_bridge: operator dev-lane CLI arguments
@@ -48,7 +50,9 @@ _PINNED = {
     ("packages/codeql/query_runner.py",
      '"--additional-packs", str(search_dir),'),
     ("packages/codeql/query_runner.py",
-     'f"--additional-packs={root}" for root in vendored'),
+     '*(f"--additional-packs={root}" for root in'),
+    ("packages/codeql/query_runner.py",
+     'extra_analyze_args = tuple(f"--additional-packs={root}" for root in roots)'),
     # _analysis_scope only inspects the already constructed argv to derive
     # sandbox read grants; it neither adds flags nor changes their values.
     # The values come from the model-pack/vendored-root producers pinned
