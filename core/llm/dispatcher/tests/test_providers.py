@@ -43,6 +43,7 @@ def all_providers_creds():
         "orcarouter":  "sk-orca-real-NOT-LEAKED",
         "perplexity":  "pplx-perplexity-real-NOT-LEAKED",
         "replicate":   "r8-replicate-real-NOT-LEAKED",
+        "runcrate":    "rc-runcrate-real-NOT-LEAKED",
         "together":    "together-real-NOT-LEAKED",
         "yapi":        "yapi-real-NOT-LEAKED",
         # Cloud gateways
@@ -301,6 +302,7 @@ _BEARER_PROVIDERS = [
     ("opper",      "v3/compat/chat/completions", "opper-real-NOT-LEAKED"),
     ("orcarouter", "v1/chat/completions", "sk-orca-real-NOT-LEAKED"),
     ("perplexity", "chat/completions",       "pplx-perplexity-real-NOT-LEAKED"),
+    ("runcrate",   "v1/chat/completions",    "rc-runcrate-real-NOT-LEAKED"),
     ("together",   "v1/chat/completions",    "together-real-NOT-LEAKED"),
     ("yapi",       "v1/chat/completions",    "yapi-real-NOT-LEAKED"),
 ]
@@ -514,6 +516,7 @@ class TestCredentialStoreReadsAggregatorEnvs:
             "ORCAROUTER_API_KEY": "orcarouter-test",
             "PERPLEXITY_API_KEY": "perplexity-test",
             "REPLICATE_API_TOKEN": "replicate-test",
+            "RUNCRATE_API_KEY":   "runcrate-test",
             "TOGETHER_API_KEY":   "together-test",
             "YAPI_API_KEY":         "yapi-test",
             "AZURE_OPENAI_API_KEY": "azure-test",
@@ -536,6 +539,7 @@ class TestCredentialStoreReadsAggregatorEnvs:
         assert creds.get("orcarouter") == "orcarouter-test"
         assert creds.get("perplexity") == "perplexity-test"
         assert creds.get("replicate") == "replicate-test"
+        assert creds.get("runcrate") == "runcrate-test"
         assert creds.get("together") == "together-test"
         assert creds.get("yapi") == "yapi-test"
         assert creds.get("azure_openai") == "azure-test"

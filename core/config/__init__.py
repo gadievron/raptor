@@ -1344,6 +1344,7 @@ class RaptorConfig:
         "ORCAROUTER_API_KEY",
         "PERPLEXITY_API_KEY",
         "REPLICATE_API_TOKEN",  # uses _TOKEN suffix
+        "RUNCRATE_API_KEY",
         "TOGETHER_API_KEY",
         "YAPI_API_KEY",
     )

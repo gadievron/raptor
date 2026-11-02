@@ -659,6 +659,7 @@ dispatcher or aggregator route.
 | `ORCAROUTER_API_KEY` | OrcaRouter |
 | `PERPLEXITY_API_KEY` | Perplexity |
 | `REPLICATE_API_TOKEN` | Replicate (note the `_TOKEN` suffix) |
+| `RUNCRATE_API_KEY` | [Runcrate](https://runcrate.ai) |
 | `TOGETHER_API_KEY` | Together |
 | `YAPI_API_KEY` | [Y-API](https://y-api.bestvirtualgoods.com) |
 
@@ -673,6 +674,13 @@ Dispatcher requests to `/opper/v3/compat/chat/completions` are forwarded to
 `https://api.opper.ai/v3/compat/chat/completions` with Bearer authentication.
 Use a model ID from Opper's `/v3/compat/models` catalog. This route is opt-in
 and does not change the default provider or model selection.
+
+For Runcrate, set `RUNCRATE_API_KEY` to a key from https://runcrate.ai/dashboard/api-keys.
+Dispatcher requests to `/runcrate/v1/chat/completions` are forwarded to
+`https://api.runcrate.ai/v1/chat/completions` with Bearer authentication.
+Use an open-weight model ID from Runcrate's `/v1/models` catalog (for example
+`deepseek-ai/DeepSeek-V4.1-Flash`). This route is opt-in and does not change
+the default provider or model selection.
 
 For Y-API, set `YAPI_API_KEY` to your own key. Dispatcher requests to
 `/yapi/v1/chat/completions` are forwarded to

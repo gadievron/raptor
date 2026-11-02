@@ -2649,6 +2649,7 @@ _AGGREGATOR_PATH_PREFIXES = {
     "/orcarouter/":   "orcarouter",
     "/perplexity/":   "perplexity",
     "/replicate/":    "replicate",
+    "/runcrate/":     "runcrate",
     "/together/":     "together",
     "/yapi/":         "yapi",
 }
