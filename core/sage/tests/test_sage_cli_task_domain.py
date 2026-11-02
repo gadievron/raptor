@@ -17,11 +17,14 @@ is refused.
 import contextlib
 import importlib.util
 import io
-import os
+import sys
 import unittest
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -32,7 +35,6 @@ _cli = None
 
 def setUpModule():
     global _cli
-    os.environ.setdefault("_RAPTOR_TRUSTED", "1")
     loader = SourceFileLoader(
         "raptor_sage_cli_task_domain",
         str(REPO_ROOT / "libexec" / "raptor-sage"),
@@ -41,7 +43,9 @@ def setUpModule():
         "raptor_sage_cli_task_domain", loader,
     )
     _cli = importlib.util.module_from_spec(spec)
-    loader.exec_module(_cli)
+    with pytest.MonkeyPatch.context() as mp, patch.object(sys, "path", sys.path.copy()):
+        mp.setenv("_RAPTOR_TRUSTED", "1")
+        loader.exec_module(_cli)
 
 
 class _FakeClient:

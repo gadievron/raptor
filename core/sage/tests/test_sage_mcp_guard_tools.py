@@ -22,11 +22,14 @@ import textwrap
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 from core.sage.tests.test_sage_mcp_guard import (
-    _GuardHarness,
     MESSAGE_CLEAN,
     PAYLOAD_CLEAN,
+    _GuardHarness,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -57,15 +60,15 @@ INJECTED_DESCRIPTION = (
 def _load_guard():
     import importlib.machinery
     import importlib.util
-    import os
-    os.environ.setdefault("_RAPTOR_TRUSTED", "1")
     spec = importlib.util.spec_from_file_location(
         "raptor_sage_mcp_guard_tools", GUARD,
         loader=importlib.machinery.SourceFileLoader(
             "raptor_sage_mcp_guard_tools", str(GUARD)),
     )
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    with pytest.MonkeyPatch.context() as mp, patch.object(sys, "path", sys.path.copy()):
+        mp.setenv("_RAPTOR_TRUSTED", "1")
+        spec.loader.exec_module(mod)
     return mod
 
 

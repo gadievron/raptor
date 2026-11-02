@@ -16,12 +16,14 @@
 import contextlib
 import importlib.util
 import io
-import os
 import sys
 import unittest
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -33,7 +35,6 @@ _saved_sdk_modules: dict[str, object] = {}
 
 def setUpModule():
     global _cli
-    os.environ.setdefault("_RAPTOR_TRUSTED", "1")
     # sage_sdk is an optional dependency the CLI must tolerate missing
     # when a client is injected (the cmd_remember/cmd_task guard).
     # Poison it out of sys.modules so the sdk-absent path is exercised
@@ -50,7 +51,9 @@ def setUpModule():
         "raptor_sage_cli_store_redaction", loader,
     )
     _cli = importlib.util.module_from_spec(spec)
-    loader.exec_module(_cli)
+    with pytest.MonkeyPatch.context() as mp, patch.object(sys, "path", sys.path.copy()):
+        mp.setenv("_RAPTOR_TRUSTED", "1")
+        loader.exec_module(_cli)
 
 
 def tearDownModule():
