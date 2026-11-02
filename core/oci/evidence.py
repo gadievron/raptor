@@ -15,6 +15,7 @@ from collections.abc import Callable, Iterable
 from pathlib import PurePosixPath
 
 from core.oci.blob import UnresolvedLayerHardlinks, extract_files_from_layer
+from core.oci.common_licenses import COMMON_ALIASES, COMMON_DIRECTORY, common_alias_target
 from core.oci.manifest import LayerDescriptor, parse_image_manifest
 from core.oci.notice_paths import (
     METADATA_NAMES as _METADATA_NAMES, NOTICE_NAME as _NOTICE,
@@ -115,7 +116,7 @@ def _verified(chunks: Iterable[bytes], layer: LayerDescriptor) -> Iterable[bytes
         raise ValueError("layer size or digest mismatch")
 
 
-def _selected_layer(reader, layer, wanted, *, diff_id, discover_path=None):
+def _selected_layer(reader, layer, wanted, *, diff_id, discover_path=None, selected_symlinks=None):
     def select(name):
         # Include replay-added hard-link targets in alias checks. Distinct tar
         # spellings must not shadow a selected path after normalisation.
@@ -129,7 +130,7 @@ def _selected_layer(reader, layer, wanted, *, diff_id, discover_path=None):
                 _verified(reader(layer), layer), wanted,
                 media_type=layer.media_type, compressed_size=layer.size,
                 max_selected_bytes=MAX_LAYER_SELECTED_BYTES, resolve_selected_hardlinks=True,
-                expected_diff_id=diff_id, discover_path=select)
+                expected_diff_id=diff_id, discover_path=select, selected_symlinks=selected_symlinks)
         except UnresolvedLayerHardlinks as exc:
             if attempt == 4:
                 raise ValueError("hard-link resolution exceeded replay bound") from exc
@@ -225,6 +226,12 @@ def capture(catalogue: dict, reader: Callable[[LayerDescriptor], Iterable[bytes]
                         or str(path).startswith("/usr/share/common-licenses/")):
             target(key, "notice_filename")
 
+    # Probe only the three documented common-license aliases, in layers that
+    # already contain catalogued common texts. No arbitrary symlink is followed.
+    for origin in {origin for path, origin in files if path.startswith(COMMON_DIRECTORY)}:
+        for alias in COMMON_ALIASES:
+            target((COMMON_DIRECTORY + alias, origin), "common_licence_alias_probe", required=False)
+
     packages = []
     package_ids = set()
     for artifact in catalogue.get("artifacts", []):
@@ -263,6 +270,7 @@ def capture(catalogue: dict, reader: Callable[[LayerDescriptor], Iterable[bytes]
 
     blobs = {}
     records = []
+    common_aliases = []
     total = 0
     for layer in layers:
         selected = {path: entry for (path, origin), entry in targets.items() if origin == origins[layer.digest]}
@@ -270,7 +278,27 @@ def capture(catalogue: dict, reader: Callable[[LayerDescriptor], Iterable[bytes]
         if not selected and not any(origin == origins[layer.digest] for _, origin in package_paths.directories):
             continue
         wanted = {path.lstrip("/") for path in selected}
-        contents = _selected_layer(reader, layer, wanted, diff_id=origins[layer.digest], discover_path=discover)
+        alias_paths = {COMMON_DIRECTORY + alias for alias in COMMON_ALIASES}
+        symlinks = {}
+        # Only common aliases may be observed. Any other selected symlink keeps
+        # the normal refusal behavior, including package notice symlinks.
+        contents = _selected_layer(reader, layer, wanted, diff_id=origins[layer.digest],
+                                   discover_path=discover, selected_symlinks=symlinks)
+        layer_aliases = []
+        for name, link in symlinks.items():
+            path = "/" + name
+            if path not in alias_paths:
+                raise ValueError("selected package notice is a symlink")
+            destination = common_alias_target(path, link)
+            data = contents.get(destination.lstrip("/"))
+            if (data is None or (destination, origins[layer.digest]) not in files
+                    or files[(destination, origins[layer.digest])].get("metadata", {}).get("type") not in {None, "RegularFile"}):
+                raise ValueError("common-license alias lacks a catalogued regular target in the same layer")
+            layer_aliases.append({"path": path, "link_name": link, "target_path": destination,
+                                  "target_sha256": hashlib.sha256(data).hexdigest(),
+                                  "catalogue_layer_diff_id": origins[layer.digest], "layer_blob_digest": layer.digest,
+                                  "visibility": "layer_probe_runtime_visibility_unconfirmed"})
+        common_aliases.extend(layer_aliases)
         for name in contents:
             path = "/" + name
             for identifier, reason in package_paths.matches(path, origins[layer.digest]):
@@ -310,7 +338,7 @@ def capture(catalogue: dict, reader: Callable[[LayerDescriptor], Iterable[bytes]
             records.append(record)
     with_notices = {package for row in records if row["content_kind"] == "notice_candidate"
                     for package in row["package_ids"]}
-    report = {"version": 3, "gaps": {
+    report = {"version": 4, "common_license_aliases": common_aliases, "gaps": {
                   "package_ids_without_associated_notice_candidate": sorted(
                       package["id"] for package in packages if package["id"] not in with_notices),
                   "identity_targets_without_version_or_build_source_verification": list(identify)}, "subject": image, "packages": packages, "files": records,

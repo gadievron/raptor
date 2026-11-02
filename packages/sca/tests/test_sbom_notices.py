@@ -541,3 +541,73 @@ def test_verified_trove_declaration_enriches_exports_without_a_conclusion(fixtur
     assert missing['packages'][0]['status'] == 'metadata_only'
     assert missing['packages'][0]['gaps']
     assert missing['packages'][0]['recovered_distribution_license']['expression'] == 'MIT'
+
+
+@pytest.fixture
+def common_alias_fixture(fixture):
+    root, native, _, report, cdx, spdx = fixture
+    report['version'] = 4
+    row = next(row for row in report['files'] if row['path'] == '/usr/share/doc/deb/copyright')
+    data = b'Full text in /usr/share/common-licenses/GPL.'
+    row.update(sha256=sha(data), size=len(data), notice_file='notices/sha256/' + sha(data))
+    (root / row['notice_file']).write_bytes(data)
+    native_row = next(row for row in native['files'] if row['location']['path'] == '/usr/share/doc/deb/copyright')
+    native_row['metadata']['size'] = len(data)
+    native_row['digests'][0]['value'] = sha(data)
+    target = next(row for row in report['files'] if row['path'] == '/usr/share/common-licenses/GPL-2')
+    report['common_license_aliases'] = [{
+        'path': '/usr/share/common-licenses/GPL', 'link_name': 'GPL-2', 'target_path': target['path'],
+        'target_sha256': target['sha256'], 'catalogue_layer_diff_id': target['catalogue_layer_diff_id'],
+        'layer_blob_digest': target['layer_blob_digest'], 'visibility': 'layer_probe_runtime_visibility_unconfirmed'}]
+    report['catalogue_sha256'] = sha(json.dumps(native).encode())
+    return root, native, report['catalogue_sha256'], report
+
+
+def test_common_alias_association_preserves_original_reference_and_target_proof(common_alias_fixture):
+    summary, _ = load_notices(*common_alias_fixture)
+    package = next(row for row in summary['packages'] if row['id'] == 'c' * 16)
+    assert package['gaps'] == []
+    target = next(row for row in package['files'] if row['path'] == '/usr/share/common-licenses/GPL-2')
+    assert target['reasons'] == ['copyright_common_licence_alias_reference']
+    assert target['common_license_aliases'] == common_alias_fixture[3]['common_license_aliases']
+    assert summary['common_license_aliases'] == target['common_license_aliases']
+
+
+@pytest.mark.parametrize('change', ['path', 'target', 'sha', 'layer', 'blob', 'family', 'duplicate', 'visibility', 'extra', 'nonregular'])
+def test_common_alias_validation_rejects_unbound_or_unsafe_metadata(common_alias_fixture, change):
+    root, native, native_sha, report = common_alias_fixture
+    alias = report['common_license_aliases'][0]
+    if change == 'path': alias['path'] = '/elsewhere/GPL'
+    elif change == 'target': alias['target_path'] = '/usr/share/common-licenses/GPL-3'
+    elif change == 'sha': alias['target_sha256'] = 'a' * 64
+    elif change == 'layer': alias['catalogue_layer_diff_id'] = 'sha256:' + 'f' * 64
+    elif change == 'blob': alias['layer_blob_digest'] = 'sha256:' + 'f' * 64
+    elif change == 'family': alias['link_name'] = 'LGPL-2'
+    elif change == 'duplicate': report['common_license_aliases'].append(deepcopy(alias))
+    elif change == 'visibility': alias['visibility'] = 'runtime_verified'
+    elif change == 'extra': alias['unexpected'] = 'value'
+    else:
+        next(row for row in native['files'] if row['location']['path'] == alias['target_path'])['metadata']['type'] = 'SymbolicLink'
+    with pytest.raises(ValueError):
+        load_notices(root, native, native_sha, report)
+
+
+def test_old_capture_does_not_infer_alias_from_available_family_text(common_alias_fixture):
+    root, native, native_sha, report = common_alias_fixture
+    report['version'] = 3
+    report.pop('common_license_aliases')
+    summary, _ = load_notices(root, native, native_sha, report)
+    package = next(row for row in summary['packages'] if row['id'] == 'c' * 16)
+    assert package['gaps'] == ['common licence text missing or ambiguous: GPL']
+
+
+def test_alias_and_regular_reference_in_different_layers_stay_ambiguous(common_alias_fixture):
+    from packages.sca.sbom_notices import associate
+    root, native, _, report = common_alias_fixture
+    blobs = {row['sha256']: (root / row['notice_file']).read_bytes() for row in report['files'] if 'notice_file' in row}
+    target = next(row for row in report['files'] if row['path'] == '/usr/share/common-licenses/GPL-2')
+    direct = dict(target, path='/usr/share/common-licenses/GPL', catalogue_layer_diff_id='sha256:' + 'f' * 64)
+    summary = associate(native, report['subject'], report['files'] + [direct], blobs,
+                        common_license_aliases=report['common_license_aliases'])
+    package = next(row for row in summary['packages'] if row['id'] == 'c' * 16)
+    assert package['gaps'] == ['common licence text missing or ambiguous: GPL']

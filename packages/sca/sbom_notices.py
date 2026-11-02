@@ -15,6 +15,7 @@ import re
 
 from core.json import dumps_artifact
 from core.oci.evidence import MAX_CAPTURE_BYTES, _METADATA_NAMES, _path, subject
+from core.oci.common_licenses import COMMON_ALIASES, COMMON_DIRECTORY, common_alias_target
 from core.oci.notice_paths import PackageNoticePaths, notice_name as _notice_name
 from core.security.capped_read import read_capped
 
@@ -28,7 +29,7 @@ _PROJECTION = ("id", "name", "version", "type", "purl", "licenses")
 def load_notices(root: Path, native: dict, native_sha256: str, report: dict, *, owner_reader=None) -> tuple[dict, dict[str, bytes]]:
     """Validate a capture and derive associations independently of its package IDs."""
     image, _ = subject(native)
-    if type(report.get("version")) is not int or report["version"] not in {1, 2, 3}:
+    if type(report.get("version")) is not int or report["version"] not in {1, 2, 3, 4}:
         raise ValueError("unsupported notice evidence version")
     if report.get("subject") != image or report.get("catalogue_sha256") != native_sha256:
         raise ValueError("notice evidence subject, scope or catalogue hash mismatch")
@@ -59,6 +60,10 @@ def load_notices(root: Path, native: dict, native_sha256: str, report: dict, *, 
                 if PurePosixPath(loc["path"]).name == "package.json":
                     for name in ("LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING", "NOTICE", "README.md"):
                         probes.add((str(PurePosixPath(loc["path"]).parent / name), loc["layerID"]))
+    common_origins = {origin for path, origin in native_files if path.startswith(COMMON_DIRECTORY)}
+    common_probes = {(COMMON_DIRECTORY + alias, origin) for origin in common_origins for alias in COMMON_ALIASES}
+    if report["version"] >= 4:
+        probes.update(common_probes)
     rows = report.get("files")
     if not isinstance(rows, list) or len(rows) > 100_000:
         raise ValueError("invalid notice evidence file inventory")
@@ -121,17 +126,41 @@ def load_notices(root: Path, native: dict, native_sha256: str, report: dict, *, 
     finally:
         for directory in reversed(directories):
             os.close(directory)
+    aliases = report.get("common_license_aliases", []) if report["version"] >= 4 else []
+    if not isinstance(aliases, list) or len(aliases) > len(common_probes):
+        raise ValueError("invalid common-license alias inventory")
+    alias_keys = set()
+    by_key = {(row["path"], row["catalogue_layer_diff_id"]): row for row in validated}
+    for alias in aliases:
+        if set(alias) != {"path", "link_name", "target_path", "target_sha256", "catalogue_layer_diff_id", "layer_blob_digest", "visibility"}:
+            raise ValueError("invalid common-license alias metadata")
+        key = alias["path"], alias["catalogue_layer_diff_id"]
+        destination = common_alias_target(alias["path"], alias["link_name"])
+        target_key = destination, alias["catalogue_layer_diff_id"]
+        target = by_key.get(target_key)
+        native_target = native_files.get(target_key)
+        if (key not in common_probes or key in alias_keys or key in seen
+                or alias["target_path"] != destination or target is None or native_target is None
+                or native_target.get("metadata", {}).get("type") not in {None, "RegularFile"}
+                or target["content_kind"] != "notice_candidate" or target["sha256"] != alias["target_sha256"]
+                or alias["layer_blob_digest"] != target["layer_blob_digest"]
+                or alias["visibility"] != "layer_probe_runtime_visibility_unconfirmed"):
+            raise ValueError("common-license alias does not bind its same-layer regular target")
+        alias_keys.add(key)
     if required - seen:
         raise ValueError("notice evidence is missing required catalogue locations")
-    return associate(native, image, validated, blobs, owner_reader=owner_reader), blobs
+    return associate(native, image, validated, blobs, owner_reader=owner_reader, common_license_aliases=aliases), blobs
 
 
-def associate(native: dict, image: dict, rows: list[dict], blobs: dict[str, bytes], *, owner_reader=None) -> dict:
+def associate(native: dict, image: dict, rows: list[dict], blobs: dict[str, bytes], *, owner_reader=None, common_license_aliases=()) -> dict:
     """Retain exact-location claims and bounded package-directory candidates."""
     by_key = {(r["path"], r["catalogue_layer_diff_id"]): r for r in rows if r["content_kind"] != "identity"}
     by_path = defaultdict(list)
     for row in by_key.values():
         by_path[row["path"]].append(row)
+    aliases_by_path = defaultdict(list)
+    for alias in common_license_aliases:
+        aliases_by_path[alias["path"]].append(alias)
     package_paths = PackageNoticePaths(native["artifacts"])
     directory_matches = defaultdict(list)
     match_count = 0
@@ -184,8 +213,16 @@ def associate(native: dict, image: dict, rows: list[dict], blobs: dict[str, byte
                     blobs[entry["sha256"]].decode("utf-8", errors="replace")))}
                 for name in sorted(names):
                     matches = by_path["/usr/share/common-licenses/" + name]
-                    if len(matches) == 1:
+                    if len(matches) == 1 and not aliases_by_path[COMMON_DIRECTORY + name]:
                         add(matches[0], "copyright_common_licence_reference")
+                    elif not matches and len(aliases_by_path[COMMON_DIRECTORY + name]) == 1:
+                        alias = aliases_by_path[COMMON_DIRECTORY + name][0]
+                        row = by_key[(alias["target_path"], alias["catalogue_layer_diff_id"])]
+                        add(row, "copyright_common_licence_alias_reference")
+                        key = row["path"], row["catalogue_layer_diff_id"]
+                        references = associations[key].setdefault("common_license_aliases", [])
+                        if alias not in references:
+                            references.append(deepcopy(alias))
                     else:
                         gaps.append("common licence text missing or ambiguous: " + name)
         evidence = sorted(associations.values(), key=lambda r: (r["path"], r["catalogue_layer_diff_id"]))
@@ -222,7 +259,7 @@ def associate(native: dict, image: dict, rows: list[dict], blobs: dict[str, byte
         python_statistics = add_owner_context(native, rows, blobs, packages, limit=MAX_ASSOCIATIONS,
                                               verified_files=verified, owner_kind='python')
         measurements = [verified[key][0] for key in sorted(verified)]
-    return {"version": 1, "subject": image, "packages": packages, "owner_file_verification": measurements, "distro_owner_statistics": owner_statistics,
+    return {"version": 1, "subject": image, "common_license_aliases": list(common_license_aliases), "packages": packages, "owner_file_verification": measurements, "distro_owner_statistics": owner_statistics,
             "python_record_owner_statistics": python_statistics,
             "unassociated_files": [deepcopy(r) for r in rows if (r["path"], r["catalogue_layer_diff_id"]) not in associated],
             "scope": "catalogue, directory and enclosing package notice context; no licence conclusion, completeness or build-source certification"}
