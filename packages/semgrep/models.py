@@ -148,7 +148,7 @@ class SemgrepResult:
     findings: list[SemgrepFinding] = field(default_factory=list)
     files_examined: list[str] = field(default_factory=list)
     files_failed: list[dict[str, str]] = field(default_factory=list)
-    # Bounded per-reason summary of the paths semgrep did NOT scan
+    # Bounded per-reason summary of excluded or incompletely analysed paths
     # (``paths.skipped`` — only populated at --verbose). Shape:
     # ``{"total": int, "reasons": {reason: {"count": int,
     # "sample": [path, ...]}}, "reasons_truncated": int}``; empty dict
@@ -254,7 +254,7 @@ def _summarise_skipped(raw: Any) -> dict[str, Any]:
     at ``_SKIPPED_REASON_CAP``; each keeps the first
     ``_SKIPPED_SAMPLE_CAP`` paths in semgrep's own output order.
     ``total`` always counts EVERY entry, so truncation never hides the
-    magnitude of what went unscanned. Non-dict entries are ignored;
+    magnitude of the reported coverage limitations. Non-dict entries are ignored;
     a missing reason buckets as ``"unspecified"``.
 
     Path and reason strings are rendered inert at ingestion

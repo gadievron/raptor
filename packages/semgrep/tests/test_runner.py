@@ -356,9 +356,40 @@ class TestRunRuleMocked:
         assert result.to_dict()["skipped_summary"] == result.skipped_summary
         # Log line: counts per reason, no target-derived sample paths.
         log_text = "\n".join(r.getMessage() for r in caplog.records)
-        assert "3 path(s) skipped" in log_text
+        assert "3 path(s) excluded or not fully analysed" in log_text
         assert "cli_exclude_flags_match=2" in log_text
         assert "src/huge.py" not in log_text
+
+    def test_partial_parse_retains_findings_and_coverage_failure(self, tmp_path, caplog):
+        """Recovery can yield a finding without establishing full file coverage."""
+        import logging
+
+        source = "src/partial.c"
+        reason = "analysis_failed_parser_or_internal_error"
+        payload = _make_json_output(
+            scanned=[source],
+            skipped=[{"path": source, "reason": reason}],
+            errors=[{"type": "PartialParsing", "path": source,
+                     "message": "unrecognised annotation"}],
+        )
+        with patch("packages.semgrep.runner.is_available", return_value=True), \
+             patch("subprocess.run") as mock_run:
+            def side_effect(cmd, **kwargs):
+                Path(cmd[cmd.index("--json-output") + 1]).write_text(payload)
+                return MagicMock(stdout=_make_sarif(file=source), stderr="", returncode=0)
+            mock_run.side_effect = side_effect
+            with caplog.at_level(logging.INFO, logger="packages.semgrep.runner"):
+                result = run_rule(tmp_path, "p/x", unsandboxed=True)
+
+        assert len(result.findings) == 1
+        assert result.files_examined == [source]
+        assert any(row["path"] == source for row in result.files_failed)
+        assert result.skipped_summary["reasons"][reason]["count"] == 1
+        assert result.to_dict()["skipped_summary"] == result.skipped_summary
+        log_text = "\n".join(record.getMessage() for record in caplog.records)
+        assert "1 path(s) excluded or not fully analysed" in log_text
+        assert "not scanned" not in log_text
+        assert source not in log_text
 
     def test_run_no_skips_no_summary_no_log(self, tmp_path, caplog):
         import logging

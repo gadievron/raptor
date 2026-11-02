@@ -752,9 +752,10 @@ def run_rule(
             + (f": {stderr_tail}" if stderr_tail else "")
         )
 
-    # Excluded scope said out loud: every skipped path is a path the
-    # scan did NOT examine, so an empty-findings result over a heavily
-    # skipped tree must not read as a clean verdict. Counts only in
+    # Semgrep lists both excluded paths and partially analysed files in
+    # paths.skipped. Recovered findings may coexist with parser errors;
+    # neither an empty result nor recovered findings prove full coverage.
+    # Counts only in
     # the log line — the sample paths are target-derived and stay on
     # the result; reason strings come from semgrep's own enum but are
     # escaped anyway before the operator's log stream.
@@ -766,7 +767,7 @@ def run_rule(
             for reason, info in skipped_summary.get("reasons", {}).items()
         )
         logger.info(
-            "semgrep '%s': %d path(s) skipped, not scanned — %s",
+            "semgrep '%s': %d path(s) excluded or not fully analysed — %s",
             name, skipped_summary.get("total", 0), per_reason,
         )
 
