@@ -272,3 +272,35 @@ def test_unindexed_record_notice_checked_and_associated(fixture):
     row['size'] += 1
     with pytest.raises(ValueError, match='RECORD'):
         load_notices(root, native, digest, report)
+
+
+def test_distro_notice_context_preserves_child_claims_status_and_input(fixture):
+    root, native, _, report, cdx, spdx = fixture
+    # The enclosing package's copyright is GPL; the child has its own unresolved
+    # declaration. Context must not turn that into a child GPL conclusion.
+    child = native['artifacts'][1]
+    parent = native['artifacts'][2]
+    path = child['locations'][0]['path']
+    row = next(r for r in report['files'] if r['path'] == path)
+    raw = (root / row['notice_file']).read_bytes()
+    parent['metadata'] = {'files': [{'path': path, 'digest': {
+        'algorithm': 'md5', 'value': hashlib.md5(raw, usedforsecurity=False).hexdigest()}}]}
+    report['files'] = [r for r in report['files'] if not r['path'].endswith('/cli/README.md')]
+    digest = sha(json.dumps(native).encode())
+    report['catalogue_sha256'] = digest
+    summary, _ = load_notices(root, native, digest, report)
+    original = deepcopy(summary)
+    before = deepcopy((cdx, spdx))
+    c, s, provenance = tool.prepare(native, cdx, spdx, {'version': 1, 'sources': []}, notice_summary=summary)
+    assert summary == original
+    context = provenance['notice_evidence']['packages'][1]['distro_owner_context']['checksum_matched_notices'][0]
+    assert context['owner_cyclonedx_ref'] == c['components'][2]['bom-ref']
+    assert context['owner_spdx_id'] == s['packages'][3]['SPDXID']
+    assert context['owner_purl'] == c['components'][2]['purl']
+    child_record = provenance['notice_evidence']['packages'][1]
+    assert child_record['status'] == 'metadata_only' and child_record['gaps']
+    assert c['components'][1]['licenses'] == before[0]['components'][1]['licenses']
+    assert s['packages'][2]['licenseDeclared'] == before[1]['packages'][2]['licenseDeclared']
+    assert s['packages'][2]['licenseConcluded'] == 'NOASSERTION'
+    assert c['dependencies'] == cdx['dependencies'] and s['relationships'] == spdx['relationships']
+    assert any('Enclosing distro' in ref.get('comment', '') for ref in c['components'][1]['externalReferences'])

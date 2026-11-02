@@ -262,6 +262,7 @@ def prepare(native: dict, cdx: dict, spdx: dict, manifest: dict, project: dict |
         # an inferred licence conclusion. Preserve both original fields.
         package["sourceInfo"] = package.get("sourceInfo", "") + "\nRAPTOR provenance: " + json.dumps(record, ensure_ascii=True, sort_keys=True)
     if notice_summary is not None:
+        notice_summary = deepcopy(notice_summary)
         from packages.sca.sbom_notices import append_notices
         append_notices(cdx, spdx, cdx_by_id, spdx_by_id, notice_summary)
     if records or notice_summary is not None:

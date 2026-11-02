@@ -474,6 +474,24 @@ original notice bytes under `notices/sha256/`; keep them alongside the SBOMs so
 relative links resolve. `--notice-evidence` and repository `--repo` preparation
 are separate modes.
 
+For occurrences that still lack their own notice candidate, preparation also
+checks primary-location files against enclosing `deb` package inventories,
+including vendor packages. An exact captured path/layer pair and matching
+inventory checksum can link the enclosing package's captured notices as review
+context. MD5 and SHA-1 are used only as inventory checksums; the capture retains
+its SHA-256 identity. This is unsigned inventory correspondence, not an ownership
+attestation or a conclusion about component-specific licence coverage.
+
+The structured `distro_owner_context` records matched locations, checksum claims,
+enclosing-package occurrence references and notice hashes. CycloneDX additionally
+links those notices as scoped `evidence` references; SPDX retains the context in
+package comments. Missing bytes, conflicting inventories, checksum mismatches,
+ambiguous matching owners and absent parent notices remain unresolved leads.
+Supporting locations cannot substitute for an explicitly identified primary
+location. Own-notice status and gaps stay unchanged, and enclosing licence
+expressions are not assigned to the child component. `distro_owner_statistics`
+reports the contextual links separately.
+
 This process does not fetch corresponding source, infer unknown tool versions,
 or publish anything. A file hash identifies bytes; it does not establish a build
 source or permission to redistribute them.

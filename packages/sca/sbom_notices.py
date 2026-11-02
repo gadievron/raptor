@@ -189,9 +189,11 @@ def associate(native: dict, image: dict, rows: list[dict], blobs: dict[str, byte
         if status != "notice_candidate_captured":
             gaps.append("no associated notice candidate; licence text completeness is unverified")
         packages.append({"id": artifact["id"], "status": status, "files": evidence, "gaps": gaps})
-    return {"version": 1, "subject": image, "packages": packages,
+    from packages.sca.sbom_notice_owners import add_owner_context
+    owner_statistics = add_owner_context(native, rows, blobs, packages, limit=MAX_ASSOCIATIONS)
+    return {"version": 1, "subject": image, "packages": packages, "distro_owner_statistics": owner_statistics,
             "unassociated_files": [deepcopy(r) for r in rows if (r["path"], r["catalogue_layer_diff_id"]) not in associated],
-            "scope": "catalogue and directory associations only; no licence conclusion, completeness or build-source certification"}
+            "scope": "catalogue, directory and enclosing distro notice context; no licence conclusion, completeness or build-source certification"}
 
 
 def append_notices(cdx: dict, spdx: dict, components: dict, packages: dict, summary: dict) -> None:
@@ -199,6 +201,12 @@ def append_notices(cdx: dict, spdx: dict, components: dict, packages: dict, summ
     for record in summary["packages"]:
         component, package = components[record["id"]], packages[record["id"]]
         component.pop("signature", None)
+        for context in record.get("distro_owner_context", {}).get("checksum_matched_notices", []):
+            owner_id = context["owner_package_id"]
+            context["owner_cyclonedx_ref"] = components[owner_id]["bom-ref"]
+            context["owner_spdx_id"] = packages[owner_id]["SPDXID"]
+            if components[owner_id].get("purl"):
+                context["owner_purl"] = components[owner_id]["purl"]
         encoded = dumps_artifact(record)
         component.setdefault("properties", []).append({"name": "raptor:notice-evidence", "value": encoded})
         for row in record["files"]:
@@ -207,6 +215,13 @@ def append_notices(cdx: dict, spdx: dict, components: dict, packages: dict, summ
                          "comment": "Captured " + row["content_kind"] + "; applicable terms remain unreviewed"}
             if reference not in component.setdefault("externalReferences", []):
                 component["externalReferences"].append(reference)
+        for context in record.get("distro_owner_context", {}).get("checksum_matched_notices", []):
+            for row in context["files"]:
+                reference = {"type": "evidence", "url": row["notice_file"],
+                             "hashes": [{"alg": "SHA-256", "content": row["sha256"]}],
+                             "comment": "Enclosing distro package notice context; component coverage unreviewed"}
+                if reference not in component.setdefault("externalReferences", []):
+                    component["externalReferences"].append(reference)
         package["comment"] = package.get("comment", "") + "\nRAPTOR notice evidence: " + encoded
     cdx.pop("signature", None)
     cdx.setdefault("properties", []).append({"name": "raptor:notice-evidence:scope", "value": summary["scope"]})
