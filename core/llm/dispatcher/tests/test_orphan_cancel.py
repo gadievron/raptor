@@ -105,27 +105,60 @@ class _CaptiveUpstream:
         self.request_seen = threading.Event()
         self.disconnect_after_s: float | None = None
         self.stall_outcome: str | None = None
+        self._stop = threading.Event()
+        self._lock = threading.Lock()
+        self._clients: set[socket.socket] = set()
+        self._threads: list[threading.Thread] = []
 
         self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._listener.bind(("127.0.0.1", 0))
         self._listener.listen(8)
+        self._listener.settimeout(0.1)
         self.base_url = f"http://127.0.0.1:{self._listener.getsockname()[1]}"
-        threading.Thread(target=self._accept_loop, daemon=True).start()
+        self._accept_thread = threading.Thread(target=self._accept_loop, daemon=True)
+        self._accept_thread.start()
 
     def shutdown(self) -> None:
+        self._stop.set()
+        with contextlib.suppress(OSError):
+            self._listener.shutdown(socket.SHUT_RDWR)
         with contextlib.suppress(OSError):
             self._listener.close()
+        self._accept_thread.join(timeout=2)
+        with self._lock:
+            clients = list(self._clients)
+        # Wake reads/select without invalidating descriptors while handlers use them.
+        for conn in clients:
+            with contextlib.suppress(OSError):
+                conn.shutdown(socket.SHUT_RDWR)
+        for thread in self._threads:
+            thread.join(timeout=2)
+        for conn in clients:
+            with contextlib.suppress(OSError):
+                conn.close()
+        alive = [t.name for t in (self._accept_thread, *self._threads) if t.is_alive()]
+        if alive:
+            raise RuntimeError(f"Captive upstream threads did not stop: {alive}")
 
     def _accept_loop(self) -> None:
-        while True:
+        while not self._stop.is_set():
             try:
                 conn, _addr = self._listener.accept()
+            except TimeoutError:
+                continue
             except OSError:
                 return
-            threading.Thread(
+            if self._stop.is_set():
+                conn.close()
+                return
+            thread = threading.Thread(
                 target=self._handle, args=(conn,), daemon=True,
-            ).start()
+            )
+            with self._lock:
+                self._clients.add(conn)
+                self._threads.append(thread)
+            thread.start()
 
     @staticmethod
     def _read_request(conn: socket.socket) -> bytes | None:
@@ -154,8 +187,8 @@ class _CaptiveUpstream:
                 return
             self.request_seen.set()
             if self.mode in ("json_quick", "slow_head"):
-                if self.mode == "slow_head":
-                    time.sleep(self.head_delay_s)
+                if self.mode == "slow_head" and self._stop.wait(self.head_delay_s):
+                    return
                 body = json.dumps({"ok": True}).encode()
                 conn.sendall(
                     b"HTTP/1.1 200 OK\r\n"
@@ -172,12 +205,15 @@ class _CaptiveUpstream:
                 + _chunked(_SSE_CHUNK_ONE),
             )
             if self.mode == "sse_slow_complete":
-                time.sleep(self.gap_s)
+                if self._stop.wait(self.gap_s):
+                    return
                 conn.sendall(_chunked(_SSE_CHUNK_TWO) + b"0\r\n\r\n")
                 return
             # sse_stall: dwell, watching for the connection to die.
             start = time.monotonic()
             readable, _, _ = select.select([conn], [], [], self.stall_s)
+            if self._stop.is_set():
+                return
             if readable:
                 # EOF/RST from the dispatcher tearing us down.
                 self.disconnect_after_s = time.monotonic() - start
@@ -191,6 +227,66 @@ class _CaptiveUpstream:
         finally:
             with contextlib.suppress(OSError):
                 conn.close()
+            with self._lock:
+                self._clients.discard(conn)
+
+
+class TestCaptiveUpstreamShutdown:
+    @staticmethod
+    def _assert_stopped(upstream):
+        assert not upstream._accept_thread.is_alive()
+        assert all(not t.is_alive() for t in upstream._threads)
+        assert not upstream._clients
+
+    def test_idle_listener_shutdown_is_idempotent(self):
+        upstream = _CaptiveUpstream("json_quick")
+        try:
+            upstream.shutdown()
+            self._assert_stopped(upstream)
+            upstream.shutdown()
+            self._assert_stopped(upstream)
+        finally:
+            upstream.shutdown()
+
+    @pytest.mark.parametrize("payload", [
+        b"", b"POST / HTTP/1.1\r\n",
+        b"POST / HTTP/1.1\r\nContent-Length: 20\r\n\r\nx",
+    ])
+    def test_shutdown_wakes_request_reader(self, monkeypatch, payload):
+        upstream = _CaptiveUpstream("json_quick")
+        reading = threading.Event()
+        original = upstream._read_request
+
+        def read(conn):
+            reading.set()
+            return original(conn)
+
+        monkeypatch.setattr(upstream, "_read_request", read)
+        try:
+            port = upstream._listener.getsockname()[1]
+            with socket.create_connection(("127.0.0.1", port), timeout=5) as client:
+                if payload:
+                    client.sendall(payload)
+                assert reading.wait(5), "upstream did not enter request reader"
+                upstream.shutdown()
+                self._assert_stopped(upstream)
+        finally:
+            upstream.shutdown()
+
+    @pytest.mark.parametrize("mode", ["slow_head", "sse_slow_complete", "sse_stall"])
+    def test_shutdown_interrupts_response_wait(self, mode):
+        upstream = _CaptiveUpstream(mode, head_delay_s=60, gap_s=60, stall_s=60)
+        try:
+            port = upstream._listener.getsockname()[1]
+            with socket.create_connection(("127.0.0.1", port), timeout=5) as client:
+                client.sendall(b"GET / HTTP/1.1\r\n\r\n")
+                assert upstream.request_seen.wait(5), "upstream did not read request"
+                if mode.startswith("sse"):
+                    assert client.recv(4096), "upstream did not start SSE response"
+                upstream.shutdown()
+                self._assert_stopped(upstream)
+        finally:
+            upstream.shutdown()
 
 
 @pytest.fixture
