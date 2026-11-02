@@ -1302,8 +1302,22 @@ def _anchor_grants_to_bind_view(
             anchored.append(entry)
             continue
         realpath = os.path.realpath(canonical)
-        if any(_under(canonical, tree) or _under(realpath, tree)
-               for tree in view_trees):
+        in_view = any(_under(canonical, tree) or _under(realpath, tree)
+                      for tree in view_trees)
+        # /tmp itself is the private tmpfs baseline, not a host bind.
+        # An explicit writable host descendant exists there only if an
+        # actual bind already covers it. Otherwise carry that exact grant
+        # as RW below; assuming it exists in the fresh tmpfs loses the
+        # source tree (notably CodeQL builds of /tmp-resident projects).
+        # Keep read-only target/readable binds authoritative: a writable
+        # subpath of one must not turn into a new RW override mount.
+        if (kind == "writable"
+                and (canonical.startswith("/tmp/") or realpath.startswith("/tmp/"))
+                and (os.path.isdir(canonical) or os.path.isfile(canonical))
+                and not any(_under(canonical, tree) or _under(realpath, tree)
+                            for tree in anchor_map)):
+            in_view = False
+        if in_view:
             anchored.append(entry)
             continue
         if kind == "writable":

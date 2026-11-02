@@ -47,7 +47,7 @@ def db_manager(tmp_path):
     with patch.object(DatabaseManager, '__init__', lambda self: None):
         mgr = DatabaseManager()
         mgr.codeql_cli = "/usr/bin/codeql"
-        mgr.db_root = tmp_path / "cache"
+        mgr.db_root = tmp_path.parent / (tmp_path.name + "-cache")
         mgr.db_root.mkdir()
         return mgr
 

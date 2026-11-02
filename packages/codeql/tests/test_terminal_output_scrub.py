@@ -204,7 +204,7 @@ class TestDatabaseCreationStderrEcho:
         ):
             mgr = DatabaseManager()
         mgr.codeql_cli = "/usr/bin/codeql"
-        mgr.cache_dir = tmp_path / "cache"
+        mgr.cache_dir = tmp_path.parent / (tmp_path.name + "-cache")
         mgr.cache_dir.mkdir()
         mgr.db_root = mgr.cache_dir
 

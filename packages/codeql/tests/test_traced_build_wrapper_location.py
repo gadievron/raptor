@@ -3,7 +3,7 @@ be exec-visible inside the sandbox WITHOUT living in a mount the traced
 build can write.
 
 The sandbox's mount namespace exposes the mounted host trees only —
-target= (the repo, read) and output= (the staging DB parent, rw) plus
+writable_paths (the repo) and output= (the staging DB parent, rw) plus
 the tool_paths dirs (read-only, exec-capable binds). The wrapper's
 directory rides in via tool_paths: visible to CodeQL's tracer, immutable
 to the repo-controlled build, and never inside the rw output mount
@@ -119,10 +119,12 @@ class TestTracedBuildWrapperLocation:
         _result, captured = _run_traced_create(db_manager, tmp_path)
         script = _wrapper_path(captured)
         output_mount = Path(captured["kwargs"]["output"]).resolve()
-        target_mount = Path(captured["kwargs"]["target"]).resolve()
+        assert captured["kwargs"]["target"] is None
+        source_mounts = [Path(path).resolve()
+                         for path in captured["kwargs"]["writable_paths"]]
         wrapper_dir = script.parent.resolve()
         assert not wrapper_dir.is_relative_to(output_mount)
-        assert not wrapper_dir.is_relative_to(target_mount)
+        assert all(not wrapper_dir.is_relative_to(path) for path in source_mounts)
 
     def test_wrapper_lives_under_the_managed_db_root_scratch(
             self, db_manager, tmp_path):
