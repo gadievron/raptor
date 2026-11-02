@@ -11,11 +11,23 @@ import time
 
 import pytest
 
-from packages.joern import broker
+from packages.joern import broker, prereqs
 from packages.joern.models import JoernCPG
 from packages.joern.services import GraphServices
 from packages.joern.tests.test_graph_services import Worker
 from packages.joern.tunables import JoernTunables
+
+
+@pytest.fixture(autouse=True)
+def _fresh_toolchain_paths():
+    # The lease client is a fresh interpreter. Resolve the controller's
+    # paths afresh too: earlier PATH/which mocks may have populated the
+    # process-wide prerequisite cache with a different toolchain identity.
+    prereqs.reset_path_cache()
+    try:
+        yield
+    finally:
+        prereqs.reset_path_cache()
 
 
 @pytest.fixture
@@ -107,8 +119,14 @@ os._exit(0)
         process.stdin.flush()
         line = process.stdout.readline().strip()
         if line != "leased":
-            rc = process.poll()
-            stderr = process.stderr.read() if rc is not None else "(still running)"
+            # EOF on stdout can precede waitpid observing the exit.
+            # Reap the child before deciding whether stderr is available.
+            try:
+                _, stderr = process.communicate(timeout=3)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                _, stderr = process.communicate(timeout=3)
+            rc = process.returncode
             pytest.fail(
                 f"child did not acquire lease: stdout={line!r}, "
                 f"returncode={rc}, stderr:\n{stderr}"
