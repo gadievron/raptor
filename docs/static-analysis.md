@@ -225,6 +225,11 @@ To explicitly disable the stage regardless, pass `--no-cocci`.
 
 ### Semgrep
 
+A Semgrep parser error can leave a file only partially analysed. Findings
+recovered from that file remain useful, but an empty result does not establish
+that the file is clean. Check the reported exclusions and analysis errors when
+assessing scan coverage, especially for C code with compiler extensions.
+
 Semgrep is invoked with `--disable-nosem` so that all findings reach
 SARIF regardless of inline comments. After scanning, RAPTOR's own
 post-processor (`packages/semgrep/nosemgrep.py`) reads source files
