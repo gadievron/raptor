@@ -59,7 +59,7 @@ class CappedReadRefused(ValueError):
 
 
 def _read_capped_or_raise(
-    path: Path, max_bytes: int, *, follow_symlinks: bool,
+    path: Path, max_bytes: int, *, follow_symlinks: bool, dir_fd: int | None = None,
 ) -> tuple[bytes, os.stat_result]:
     """The one hardened dance; raises on every refusal.
 
@@ -87,7 +87,7 @@ def _read_capped_or_raise(
     )
     if not follow_symlinks:
         flags |= getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(str(path), flags)
+    fd = os.open(str(path), flags, dir_fd=dir_fd)
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
@@ -127,6 +127,7 @@ def read_capped(
     *,
     follow_symlinks: bool = ...,
     raise_on_refusal: Literal[True],
+    dir_fd: int | None = ...,
 ) -> bytes: ...
 
 
@@ -137,6 +138,7 @@ def read_capped(
     *,
     follow_symlinks: bool = ...,
     raise_on_refusal: Literal[False] = ...,
+    dir_fd: int | None = ...,
 ) -> bytes | None: ...
 
 
@@ -146,6 +148,7 @@ def read_capped(
     *,
     follow_symlinks: bool = False,
     raise_on_refusal: bool = False,
+    dir_fd: int | None = None,
 ) -> bytes | None:
     """Read up to ``max_bytes`` from ``path``; refuse oversized,
     non-regular, or unreadable files.
@@ -157,15 +160,17 @@ def read_capped(
     :class:`CappedReadRefused` (a ``ValueError``) for policy
     refusals. ``follow_symlinks=True`` drops ``O_NOFOLLOW`` for
     operator-named paths; the fstat regular-file check still refuses
-    a non-regular final target.
+    a non-regular final target. ``dir_fd`` anchors relative paths to an
+    already-open directory; it has the same semantics as ``os.open(dir_fd=...)``.
+    Callers requiring a single child must validate its name before passing it.
     """
     if raise_on_refusal:
         return _read_capped_or_raise(
-            path, max_bytes, follow_symlinks=follow_symlinks,
+            path, max_bytes, follow_symlinks=follow_symlinks, dir_fd=dir_fd,
         )[0]
     try:
         return _read_capped_or_raise(
-            path, max_bytes, follow_symlinks=follow_symlinks,
+            path, max_bytes, follow_symlinks=follow_symlinks, dir_fd=dir_fd,
         )[0]
     except Exception:  # noqa: BLE001 — any I/O surprise fails closed
         return None

@@ -184,7 +184,7 @@ def _properties(component: dict, record: dict) -> None:
         props.append({"name": "raptor:provenance:source-status", "value": source["status"]})
 
 
-def prepare(native: dict, cdx: dict, spdx: dict, manifest: dict, project: dict | None = None, lock: dict | None = None) -> tuple[dict, dict, dict]:
+def prepare(native: dict, cdx: dict, spdx: dict, manifest: dict, project: dict | None = None, lock: dict | None = None, notice_summary: dict | None = None) -> tuple[dict, dict, dict]:
     if native.get("schema", {}).get("version", "").split(".", 1)[0] != "16":
         raise ValueError("expected Syft JSON schema 16.x")
     if cdx.get("bomFormat") != "CycloneDX" or cdx.get("specVersion") != "1.5" or spdx.get("spdxVersion") != "SPDX-2.3":
@@ -261,12 +261,20 @@ def prepare(native: dict, cdx: dict, spdx: dict, manifest: dict, project: dict |
         # sourceInfo is evidence, not a replacement binary downloadLocation or
         # an inferred licence conclusion. Preserve both original fields.
         package["sourceInfo"] = package.get("sourceInfo", "") + "\nRAPTOR provenance: " + json.dumps(record, ensure_ascii=True, sort_keys=True)
-    if records:
+    if notice_summary is not None:
+        from packages.sca.sbom_notices import append_notices
+        append_notices(cdx, spdx, cdx_by_id, spdx_by_id, notice_summary)
+    if records or notice_summary is not None:
         cdx.pop("signature", None)
         cdx["version"] = cdx.get("version", 1) + 1
     report = {"version": 1, "packages": records,
               "scope": "identity corrections and source candidates only; not a complete licence/source inventory",
               "gaps": ["original installed licence texts and build-source correspondence remain separate evidence requirements"]}
+    if notice_summary is not None:
+        report["notice_evidence"] = deepcopy(notice_summary)
+        report["scope"] = "identity/source candidates and captured notice associations; not a complete licence/source inventory"
+        report["gaps"] = ["notice candidates need term review; text completeness remains unverified",
+                          "build-source correspondence remains a separate evidence requirement"]
     if locked is not None:
         observed = {(_python_name(a["name"]), a["version"], (a.get("metadata") or {}).get("index", ""))
                     for a in artifacts if root_lock_package(a)}
@@ -475,12 +483,20 @@ def main() -> None:
     parser.add_argument("--cyclonedx", type=Path, required=True)
     parser.add_argument("--spdx", type=Path, required=True)
     parser.add_argument("--provenance", type=Path, default=ROOT / ".github/sbom-provenance.json")
-    parser.add_argument("--repo", type=Path, help="RAPTOR checkout used to produce the directory inventory")
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument("--repo", type=Path, help="RAPTOR checkout used to produce the directory inventory")
+    scope.add_argument("--notice-evidence", type=Path, help="container capture directory containing evidence.json and notices/")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     paths = [args.syft, args.cyclonedx, args.spdx, args.provenance]
+    if args.notice_evidence:
+        paths.append(args.notice_evidence / "evidence.json")
     loaded = [read_document(p) for p in paths]
-    native, cdx, spdx, manifest = [d for d, _ in loaded]
+    native, cdx, spdx, manifest = [d for d, _ in loaded[:4]]
+    notice_summary, notice_blobs = None, {}
+    if args.notice_evidence:
+        from packages.sca.sbom_notices import load_notices
+        notice_summary, notice_blobs = load_notices(args.notice_evidence, native, loaded[0][1], loaded[4][0])
     project, lock = None, None
     repo_inputs = []
     if native.get("source", {}).get("name") == REPOSITORY and native.get("source", {}).get("type") == "directory" and not args.repo:
@@ -504,7 +520,7 @@ def main() -> None:
         project = {"name": config["name"], "version": config["version"], "revision": revision}
         repo_inputs = [{"path": str(args.repo / name), "sha256": hashlib.sha256(raw).hexdigest()}
                        for name, raw in [("pyproject.toml", config_raw), ("uv.lock", lock_raw)]]
-    prepared_cdx, prepared_spdx, report = prepare(native, cdx, spdx, manifest, project, lock)
+    prepared_cdx, prepared_spdx, report = prepare(native, cdx, spdx, manifest, project, lock, notice_summary)
     if args.repo:
         bundles, references = bundled_materials(args.repo, project["revision"], manifest)
         append_bundles(prepared_cdx, prepared_spdx, bundles)
@@ -514,10 +530,17 @@ def main() -> None:
     _read_cyclonedx(prepared_cdx, args.cyclonedx)
     _read_spdx(prepared_spdx, args.spdx)
     outputs = [args.out / name for name in ("sbom.cdx.json", "sbom.spdx.json", "provenance.json")]
+    if args.notice_evidence and any((args.out / name).exists() or (args.out / name).is_symlink() for name in ("notice-evidence.json", "notices")):
+        raise ValueError("use a fresh notice evidence output directory")
     if any(output.exists() for output in outputs) or any(args.out.resolve() == p.parent.resolve() for p in paths):
         raise ValueError("use a fresh output directory; input artifacts must remain unchanged")
     report["inputs"] = [{"path": str(p), "sha256": digest} for p, (_, digest) in zip(paths, loaded)] + repo_inputs
     args.out.mkdir(parents=True, exist_ok=True)
+    if args.notice_evidence:
+        from core.atomic_fs import write_bytes_atomically
+        for sha, data in sorted(notice_blobs.items()):
+            write_bytes_atomically(args.out / "notices" / "sha256" / sha, data)
+        save_json(args.out / "notice-evidence.json", loaded[4][0])
     for path, document in zip(outputs, (prepared_cdx, prepared_spdx, report)):
         save_json(path, document)
 
