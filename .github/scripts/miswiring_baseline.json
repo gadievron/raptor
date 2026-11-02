@@ -112,6 +112,9 @@
   "artifacts:orphan_reader::layer0-findings.json": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },
+  "artifacts:orphan_reader::license_identifications.json": {
+   "note": "deliberate read-only repository input: packages/sca/data/license_identifications.json is a maintained corpus of reviewed complete-notice fingerprints and SPDX expressions, consumed by sbom_license_evidence._reviewed_rules. Changes to reviewed license evidence require a source review; runtime code must not generate or overwrite this trust input. This finding does not exempt unknown or changed notices from identification checks."
+  },
   "artifacts:orphan_reader::lifecycle.log": {
    "note": "externally produced input: written by libexec/raptor-run-lifecycle (shell), read by run tooling"
   },
