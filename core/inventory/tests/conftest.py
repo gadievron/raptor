@@ -14,6 +14,11 @@ suite otherwise mints enough entries in the developer's real
 entries (the store keeps only ``_MAX_CACHE_ENTRIES``, oldest evicted
 first). The pin is effective because ``_reach_cache._cache_dir()``
 re-reads the env at call time.
+
+The default persistent inventory cache lives under HOME/.raptor rather than
+XDG_CACHE_HOME. Isolate HOME too, outside each test's source tree, so calls
+without an explicit output directory cannot touch the operator's checklist
+cache or make later assertions depend on it.
 """
 
 from __future__ import annotations
@@ -25,6 +30,8 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _isolated_home_stores(tmp_path: Path,
+                          tmp_path_factory: pytest.TempPathFactory,
                           monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("inventory-home")))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg-cache"))

@@ -35,6 +35,14 @@ _CURATED_POPULAR = {
 
 
 @pytest.fixture(autouse=True)
+def _isolated_sca_home(monkeypatch, tmp_path_factory):
+    # sca_cache_root() uses HOME/.raptor/cache/sca, not XDG_CACHE_HOME.
+    # Keep persistent inventories and metadata out of the operator's store.
+    # A sibling allocation also stays outside a test's walked source tree.
+    monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("sca-home")))
+
+
+@pytest.fixture(autouse=True)
 def _deterministic_typosquat_popular(monkeypatch):
     from packages.sca.supply_chain import typosquat
 

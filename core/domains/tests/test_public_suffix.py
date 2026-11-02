@@ -145,7 +145,7 @@ class TestHostPolicy(unittest.TestCase):
 
     def test_policy_errors_cannot_be_mistaken_for_allowed_or_denied(self):
         for error in (OSError('missing'), ValueError('invalid')):
-            with self.subTest(error=error), patch(
+            with self.subTest(error=type(error).__name__), patch(
                     'core.domains.public_suffix.load_suffix_rules', side_effect=error):
                 with self.assertRaises(type(error)):
                     host_matches_anchor('localhost', 'localhost')
