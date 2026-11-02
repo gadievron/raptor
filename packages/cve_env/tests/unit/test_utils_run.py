@@ -80,33 +80,56 @@ def test_run_with_timeout_returns_when_subprocess_run_itself_hangs(
 
     Modelled by a ``subprocess.run`` that blocks far longer than the grace (the
     wedged internal wait). RED on the old direct-call impl (run_with_timeout
-    blocks with it, ~60s). GREEN once the impl bounds it via the thread join.
+    waits out the fake's 10s safety bound). GREEN once the impl bounds it
+    via the thread join.
     """
+    import subprocess
     import threading
     import time as _time
+    from types import SimpleNamespace
+
+    from core.container import proc as proc_module
 
     monkeypatch.setattr("core.container.proc._REAP_GRACE_S", 1.0)
     entered = threading.Event()
+    release = threading.Event()
+    workers = []
 
-    def _hang(*_args: object, **_kwargs: object) -> None:
+    def tracked_thread(*args, **kwargs):
+        worker = threading.Thread(*args, **kwargs)
+        workers.append(worker)
+        return worker
+
+    def _hang(*_args: object, **_kwargs: object):
         entered.set()
-        _time.sleep(60.0)  # models subprocess.run's wedged internal post-kill wait()
+        release.wait(10)
+        return subprocess.CompletedProcess(_args[0], 0, stdout="", stderr="")
 
-    monkeypatch.setattr("core.container.proc.subprocess.run", _hang)
+    # Scope instrumentation to the runner's bindings, not stdlib modules.
+    monkeypatch.setattr(proc_module, "threading", SimpleNamespace(Thread=tracked_thread))
+    monkeypatch.setattr(proc_module, "subprocess", SimpleNamespace(
+        **{**vars(subprocess), "run": _hang},
+    ))
 
-    start = _time.monotonic()
-    outcome = run_with_timeout(["docker", "build", "."], timeout=1.0)
-    elapsed = _time.monotonic() - start
+    try:
+        start = _time.monotonic()
+        outcome = run_with_timeout(["docker", "build", "."], timeout=1.0)
+        elapsed = _time.monotonic() - start
 
-    assert entered.is_set(), "subprocess.run was never invoked"
-    assert isinstance(outcome, RunOutcome)
-    assert outcome.timed_out is True
-    assert outcome.returncode is None
-    assert elapsed < 6.0, (
-        f"run_with_timeout blocked {elapsed:.1f}s on a wedged subprocess.run "
-        f"(timeout=1 + grace=1 ⇒ should abandon at ~2s). This is the docker_build "
-        f"→ 1440s-wall hang; the daemon-thread join must bound it."
-    )
+        assert entered.is_set(), "subprocess.run was never invoked"
+        assert isinstance(outcome, RunOutcome)
+        assert outcome.timed_out is True
+        assert outcome.returncode is None
+        assert elapsed < 6.0, (
+            f"run_with_timeout blocked {elapsed:.1f}s on a wedged subprocess.run "
+            f"(timeout=1 + grace=1 ⇒ should abandon at ~2s). This is the docker_build "
+            f"→ 1440s-wall hang; the daemon-thread join must bound it."
+        )
+    finally:
+        release.set()
+        for worker in workers:
+            worker.join(timeout=5)
+            assert not worker.is_alive(), "runner or pipe-drain thread did not stop"
 
 
 def test_run_with_timeout_catches_oserror_during_spawn() -> None:

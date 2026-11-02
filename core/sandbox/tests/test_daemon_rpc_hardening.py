@@ -241,22 +241,33 @@ class _FakeDaemonHost:
                     pass
 
 
+@pytest.fixture
+def fake_daemon_host(request):
+    """Own the parent pipe ends as well as the fake daemon's worker."""
+    def make(reply_fn):
+        fake = _FakeDaemonHost(reply_fn)
+        request.addfinalizer(fake.host.close)
+        return fake
+
+    return make
+
+
 class TestParentRejectsUnboundReplies:
 
-    def test_mismatched_rid_rejected(self):
-        fake = _FakeDaemonHost(
+    def test_mismatched_rid_rejected(self, fake_daemon_host):
+        fake = fake_daemon_host(
             lambda req: {"ok": True, "pong": True, "rid": "forged"},
         )
         with pytest.raises(HostRPCError, match="not bound to request"):
             fake.host._rpc({"cmd": "ping"}, timeout=10.0)
 
-    def test_missing_rid_rejected(self):
-        fake = _FakeDaemonHost(lambda req: {"ok": True, "pong": True})
+    def test_missing_rid_rejected(self, fake_daemon_host):
+        fake = fake_daemon_host(lambda req: {"ok": True, "pong": True})
         with pytest.raises(HostRPCError, match="not bound to request"):
             fake.host._rpc({"cmd": "ping"}, timeout=10.0)
 
-    def test_matching_rid_accepted_and_stripped(self):
-        fake = _FakeDaemonHost(
+    def test_matching_rid_accepted_and_stripped(self, fake_daemon_host):
+        fake = fake_daemon_host(
             lambda req: {"ok": True, "pong": True, "rid": req["rid"]},
         )
         response = fake.host._rpc({"cmd": "ping"}, timeout=10.0)
