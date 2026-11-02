@@ -15,6 +15,7 @@ import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -27,7 +28,8 @@ def _load_cli():
     spec = importlib.util.spec_from_loader(
         "raptor_audit_forecast_cli_test", loader)
     mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
+    with patch.object(sys, "path", sys.path.copy()):
+        loader.exec_module(mod)
     return mod
 
 
@@ -87,7 +89,8 @@ def cli_env(tmp_path, monkeypatch):
         monkeypatch.setattr(
             trust, "apply_project_sandbox_floor", lambda *a, **k: None)
         monkeypatch.setattr(sys, "argv", ["raptor-audit", *argv])
-        return mod.main()
+        with patch.object(sys, "path", sys.path.copy()):
+            return mod.main()
 
     return SimpleNamespace(
         mod=mod, target=target, out_dir=out_dir,

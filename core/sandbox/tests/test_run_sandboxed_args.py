@@ -24,6 +24,7 @@ import sys
 import types
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -69,7 +70,8 @@ def _exec_script(monkeypatch, argv, seen, env=None):
         "raptor_run_sandboxed_args_under_test", str(SCRIPT))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
+    with patch.object(sys, "path", sys.path.copy()):
+        loader.exec_module(mod)
 
 
 def _run(monkeypatch, argv, env=None):
