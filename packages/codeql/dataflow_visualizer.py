@@ -18,7 +18,8 @@ from pathlib import Path
 # root marker — see CLAUDE.md "Python path safety"; a KeyError surfaces
 # the configuration problem at startup instead of a positional walk
 # silently breaking under relocation.
-sys.path.insert(0, os.environ["RAPTOR_DIR"])
+if __name__ == "__main__":
+    sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
 from core.atomic_fs import write_text_atomically
 from core.llm.context_window import DATAFLOW_STEP_CONTEXT_LINES

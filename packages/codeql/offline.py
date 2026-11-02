@@ -15,7 +15,8 @@ import subprocess
 import sys
 import tempfile
 
-sys.path.insert(0, os.environ['RAPTOR_DIR'])
+if __name__ == "__main__":
+    sys.path.insert(0, os.environ['RAPTOR_DIR'])
 
 from core.atomic_fs import write_text_atomically  # noqa: E402
 from core.config import RaptorConfig  # noqa: E402
