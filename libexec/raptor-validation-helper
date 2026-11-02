@@ -1700,43 +1700,17 @@ def _build_standalone_pocs(target, build_dir):
 
     build_dir.mkdir(parents=True, exist_ok=True)
 
-    # Sandbox the compile invocations. Pre-fix `_sp.run(cmd)`
-    # spawned the compiler with the operator's full env and no
-    # filesystem isolation. Two failure modes:
-    #
-    # 1. The PoC source files come from an LLM-supplied stage-D
-    #    output (`build/poc-*.c`). A hostile / errant LLM
-    #    response could embed `#include` directives pointing at
-    #    `/etc/`, attribute pragmas with code-exec side effects
-    #    (gcc's `__attribute__((constructor))` runs at -E preprocess
-    #    time on some toolchains), or `#error` directives that
-    #    leak environment via the error message.
-    # 2. Compiler env injection: `CC` / `CFLAGS` / `LDFLAGS` /
-    #    `LD_PRELOAD` from the operator's shell flowed into the
-    #    compile, potentially building with attacker-controlled
-    #    flags (e.g. `LDFLAGS="-Wl,--no-as-needed -lattackerlib"`
-    #    auto-loads attacker code into the resulting binary).
-    #
-    # Route through `_sandbox_run` (already used elsewhere in
-    # this file): seccomp + landlock confines reads to the
-    # source dir + standard system paths, writes to the build
-    # dir, blocks network. `RaptorConfig.get_safe_env()` strips
-    # the dangerous env vars before the compile sees them.
-    # Fall back to plain `_sp.run` only if `_sandbox_run` import
-    # fails — preserves pre-fix behaviour for unusual install
-    # layouts where core.sandbox isn't reachable. The env-strip
-    # is imported separately so a sandbox-only ImportError does
-    # not silently revert the compile env to the full operator
-    # environment.
+    # PoC sources are target/LLM-controlled compiler input. Missing sandbox
+    # support must not silently turn compilation into a bare host process.
+    # Keep this gate outside the per-source best-effort error suppression.
+    # Import the shared policy only on failure: it has no sandbox dependency
+    # and logs both a warning and a security event for the explicit opt-out.
     try:
         from core.sandbox import run as _sandbox_run
-    except ImportError:
+    except ImportError as exc:
+        from core.run.sandbox_policy import require_sandbox_or_optout
+        require_sandbox_or_optout("validation helper (standalone PoC compilation)", exc)
         _sandbox_run = None
-        print(
-            "WARNING: core.sandbox unavailable — PoC compiles will run "
-            "UNSANDBOXED (no filesystem/network confinement)",
-            file=sys.stderr,
-        )
     try:
         from core.config import RaptorConfig
         _safe_env = RaptorConfig.get_safe_env()

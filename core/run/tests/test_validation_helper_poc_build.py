@@ -80,3 +80,96 @@ def test_build_system_target_skips_poc_build(tmp_path, monkeypatch):
 
     mod._build_standalone_pocs(str(target), str(build_dir))
     assert not build_dir.exists()
+
+
+@pytest.mark.parametrize('optout', [None, '', '0', 'true', ' 1'])
+def test_missing_sandbox_refuses_before_any_compiler_call(tmp_path, monkeypatch, optout):
+    import builtins
+    from core.run.sandbox_policy import SandboxUnavailableError
+
+    mod = _load_helper()
+    target = tmp_path / 'target'
+    target.mkdir()
+    (target / 'poc.c').write_text('int main(void){return 0;}\n')
+    monkeypatch.delenv('RAPTOR_ALLOW_UNSANDBOXED_TOOLS', raising=False)
+    if optout is not None:
+        monkeypatch.setenv('RAPTOR_ALLOW_UNSANDBOXED_TOOLS', optout)
+    original_import = builtins.__import__
+    failure = ImportError('test-only missing sandbox dependency')
+    def unavailable(name, *args, **kwargs):
+        if name == 'core.sandbox':
+            raise failure
+        return original_import(name, *args, **kwargs)
+    monkeypatch.setattr(builtins, '__import__', unavailable)
+    calls = []
+    def forbidden(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError('compiler must not run without explicit consent')
+    import subprocess
+    monkeypatch.setattr(subprocess, 'run', forbidden)
+    with pytest.raises(SandboxUnavailableError, match='RAPTOR_ALLOW_UNSANDBOXED_TOOLS=1') as caught:
+        mod._build_standalone_pocs(str(target), str(tmp_path / 'build'))
+    assert caught.value.__cause__ is failure
+    assert not calls
+
+
+def test_missing_sandbox_explicit_optout_logs_and_keeps_filtered_env(tmp_path, monkeypatch, caplog):
+    import builtins
+    import subprocess
+    from core.run import sandbox_policy
+
+    mod = _load_helper()
+    target = tmp_path / 'target'
+    target.mkdir()
+    source = target / 'poc.c'
+    source.write_text('int main(void){return 0;}\n')
+    monkeypatch.setenv('RAPTOR_ALLOW_UNSANDBOXED_TOOLS', '1')
+    monkeypatch.setenv('LD_PRELOAD', '/test-only-hostile-library.so')
+    original_import = builtins.__import__
+    def unavailable(name, *args, **kwargs):
+        if name == 'core.sandbox':
+            raise ImportError('test-only missing sandbox dependency')
+        return original_import(name, *args, **kwargs)
+    monkeypatch.setattr(builtins, '__import__', unavailable)
+    calls, events = [], []
+    def record(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return CompletedProcess(cmd, 0, stdout='', stderr='')
+    monkeypatch.setattr(subprocess, 'run', record)
+    monkeypatch.setattr(sandbox_policy, 'log_security_event',
+                        lambda *args, **kwargs: events.append((args, kwargs)))
+    mod._build_standalone_pocs(str(target), str(tmp_path / 'build'))
+    assert len(calls) == 2  # compiler availability probe, then compilation
+    assert calls[0][0] == ['gcc', '--version']
+    assert str(source) in calls[1][0]
+    assert all('LD_PRELOAD' not in kwargs['env'] for _, kwargs in calls)
+    assert 'SANDBOX WAIVED' in caplog.text
+    assert len(events) == 1
+    assert events[0][0][0] == 'unsandboxed_tool_fallback'
+    assert 'standalone PoC compilation' in events[0][1]['tool']
+
+
+def test_sandbox_setup_failure_never_retries_as_bare_compile(tmp_path, monkeypatch):
+    import subprocess
+    import core.sandbox
+    from core.sandbox.errors import SandboxSetupError
+
+    mod = _load_helper()
+    target = tmp_path / 'target'
+    target.mkdir()
+    (target / 'poc.c').write_text('int main(void){return 0;}\n')
+    # Import succeeds: even the import-failure opt-out cannot waive a setup
+    # failure or turn it into an automatic bare-process retry.
+    monkeypatch.setenv('RAPTOR_ALLOW_UNSANDBOXED_TOOLS', '1')
+    calls = []
+    def probe(cmd, **kwargs):
+        calls.append(cmd)
+        assert cmd == ['gcc', '--version']
+        return CompletedProcess(cmd, 0, stdout='', stderr='')
+    monkeypatch.setattr(subprocess, 'run', probe)
+    def refused(*args, **kwargs):
+        raise SandboxSetupError('test-only setup failure')
+    monkeypatch.setattr(core.sandbox, 'run', refused)
+    with pytest.raises(SandboxSetupError, match='test-only setup failure'):
+        mod._build_standalone_pocs(str(target), str(tmp_path / 'build'))
+    assert len(calls) == 1
