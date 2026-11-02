@@ -38,7 +38,7 @@ from packages.codeql.temp_env import temporary_command
 from core.git.clone import safe_git_command
 from core.git.dirty import probe_worktree_dirt
 from core.hash import sha256_string
-from core.json import load_json, save_json
+from core.json import JsonBudgetExceededError, load_json, load_json_bounded, save_json
 from core.logging import get_logger
 from core.sandbox import SandboxSetupError
 from core.security.credential_env import (
@@ -217,9 +217,9 @@ _UNRESOLVED_INCLUDE_RE = re.compile(
 def buildless_degradation_summary(db_path: Path) -> tuple:
     """(hit_count, one-line summary) for a buildless C/C++ database.
 
-    Buildless extraction never sees build-generated headers
-    (config.h, yacc/protobuf output), so TUs that include them parse
-    partially and dataflow through those regions is silently lost —
+    Buildless extraction does not generate missing headers
+    (config.h, yacc/protobuf output), so affected TUs can parse
+    partially and lose dataflow through those regions —
     which reads as "covered" unless surfaced.  Count the extractor
     diagnostics in the created database that mention unresolved
     includes.  Fail-safe: any parse trouble degrades to the generic
@@ -245,13 +245,62 @@ def buildless_degradation_summary(db_path: Path) -> tuple:
     if hits:
         return hits, (
             f"buildless mode: {hits} extractor diagnostic(s) mention "
-            f"unresolved includes — build-generated headers are invisible "
-            f"without a traced build (opt in via --traced-build)"
+            f"unresolved includes; types and dataflow may be missing. "
+            f"Use --traced-build with the project build settings and inspect "
+            f"extractor logs for remaining failures"
         )
     return 0, (
         "buildless mode: database created without executing the build; "
         "TUs needing build-generated headers may be partially analysed"
     )
+
+
+def report_cpp_extraction(db_path: Path) -> dict[str, int | bool]:
+    """Report invocation outcomes, without claiming complete source coverage.
+
+    Read only the extractor's bounded summary, not arbitrary diagnostic text.
+    CLI versions without this schema leave completeness explicitly unknown.
+    """
+    summary: dict[str, int | bool] = {"available": False}
+    try:
+        record = load_json_bounded(
+            db_path / "diagnostic" / "extractors" / "cpp" / "summary.jsonl",
+            max_bytes=1024 * 1024,
+        )
+        if isinstance(record, dict):
+            source = record.get("source")
+            attributes = record.get("attributes")
+            if (isinstance(source, dict)
+                    and source.get("id") == "cpp/extractor/summary"
+                    and isinstance(attributes, dict)):
+                failures = attributes.get("extractor-failures")
+                successes = attributes.get("extractor-successes")
+                if (type(failures) is int and type(successes) is int
+                        and failures >= 0 and successes >= 0
+                        and failures + successes > 0):
+                    summary = {"available": True, "failures": failures,
+                               "successes": successes}
+    except (OSError, ValueError, JsonBudgetExceededError, RecursionError):
+        pass
+    if not summary["available"]:
+        logger.info(
+            "C/C++ extraction outcomes unavailable; database creation success "
+            "does not establish complete extraction",
+        )
+    elif summary["failures"]:
+        logger.warning(
+            "C/C++ extraction: %d failed invocation(s), %d successful; "
+            "coverage is incomplete even though database creation succeeded. "
+            "Recovered findings remain usable; inspect database extractor logs",
+            summary["failures"], summary["successes"],
+        )
+    else:
+        logger.info(
+            "C/C++ extraction: %d successful invocation(s), no failures "
+            "reported; invocation success does not establish full source coverage",
+            summary["successes"],
+        )
+    return summary
 
 
 # Hint appended to a failed traced build's stderr tail when the build
@@ -333,6 +382,8 @@ class DatabaseResult:
     errors: list[str]
     duration_seconds: float
     cached: bool = False  # Was this from cache?
+    # Invocation outcomes, not a function-coverage or bug-detection verdict.
+    extraction_summary: dict[str, int | bool] | None = None
 
 
 class DatabaseManager:
@@ -1367,6 +1418,8 @@ class DatabaseManager:
                     success=True,
                     language=language,
                     database_path=cached_db,
+                    extraction_summary=(report_cpp_extraction(cached_db)
+                                        if language == "cpp" else None),
                     metadata=metadata,
                     errors=[],
                     duration_seconds=duration,
@@ -1430,6 +1483,8 @@ class DatabaseManager:
                 return DatabaseResult(
                     success=True, language=language,
                     database_path=cached, metadata=metadata,
+                    extraction_summary=(report_cpp_extraction(cached)
+                                        if language == "cpp" else None),
                     errors=[], duration_seconds=duration, cached=True,
                 )
 
@@ -2059,6 +2114,11 @@ class DatabaseManager:
                 errors=errors,
                 duration_seconds=time.time() - start_time,
                 cached=used_cached,
+                extraction_summary=(
+                    report_cpp_extraction(final_path)
+                    if success and final_path is not None and language == "cpp"
+                    else None
+                ),
             )
 
         except subprocess.TimeoutExpired:

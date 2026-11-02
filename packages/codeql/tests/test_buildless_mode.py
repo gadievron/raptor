@@ -995,3 +995,152 @@ class TestBuildModeCacheContract:
         _plant_cached_db(db_manager, repo, "python", "no-build")
         assert db_manager._sibling_canonical_acceptable(
             repo_hash, "python", True) is True
+
+
+class TestExtractionOutcomes:
+    @staticmethod
+    def _write_summary(db, attributes, source_id="cpp/extractor/summary"):
+        import json
+
+        path = db / "diagnostic" / "extractors" / "cpp" / "summary.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"source": {"id": source_id},
+                                    "attributes": attributes}, indent=2))
+        return path
+
+    def test_partial_extraction_warns_without_logging_target_text(self, tmp_path, caplog):
+        from packages.codeql.database_manager import report_cpp_extraction
+
+        self._write_summary(tmp_path, {"extractor-failures": 2,
+                                       "extractor-successes": 3,
+                                       "target": "hostile\u202e-source"})
+        with caplog.at_level(logging.INFO, logger="raptor"):
+            summary = report_cpp_extraction(tmp_path)
+        assert summary == {"available": True, "failures": 2, "successes": 3}
+        assert "2 failed invocation(s), 3 successful" in caplog.text
+        assert "coverage is incomplete" in caplog.text
+        assert "hostile" not in caplog.text
+        assert any(r.levelno == logging.WARNING for r in caplog.records)
+
+    def test_successes_do_not_claim_complete_coverage(self, tmp_path, caplog):
+        from packages.codeql.database_manager import report_cpp_extraction
+
+        self._write_summary(tmp_path, {"extractor-failures": 0,
+                                       "extractor-successes": 2})
+        with caplog.at_level(logging.INFO, logger="raptor"):
+            summary = report_cpp_extraction(tmp_path)
+        assert summary == {"available": True, "failures": 0, "successes": 2}
+        assert "does not establish full source coverage" in caplog.text
+        assert not any(r.levelno >= logging.WARNING for r in caplog.records)
+
+    @pytest.mark.parametrize("attributes", [
+        {}, None, [], {"extractor-failures": 1},
+        {"extractor-failures": True, "extractor-successes": 1},
+        {"extractor-failures": -1, "extractor-successes": 1},
+        {"extractor-failures": "1", "extractor-successes": 1},
+        {"extractor-failures": 0, "extractor-successes": 0},
+        {"extractor-failures": 0, "extractor-successes": False},
+    ])
+    def test_invalid_counts_are_unknown(self, tmp_path, attributes):
+        from packages.codeql.database_manager import report_cpp_extraction
+
+        self._write_summary(tmp_path, attributes)
+        assert report_cpp_extraction(tmp_path) == {"available": False}
+
+    @pytest.mark.parametrize("payload", ["{", "null", "[]", "{}\n{}", "[" * 2000])
+    def test_invalid_payload_is_unknown(self, tmp_path, payload):
+        from packages.codeql.database_manager import report_cpp_extraction
+
+        path = self._write_summary(tmp_path, {})
+        path.write_text(payload)
+        assert report_cpp_extraction(tmp_path) == {"available": False}
+
+    def test_missing_or_wrong_source_is_unknown(self, tmp_path):
+        from packages.codeql.database_manager import report_cpp_extraction
+
+        assert report_cpp_extraction(tmp_path) == {"available": False}
+        self._write_summary(tmp_path, {"extractor-failures": 0,
+                                       "extractor-successes": 1}, "other/summary")
+        assert report_cpp_extraction(tmp_path) == {"available": False}
+
+    def test_oversized_summary_is_unknown(self, tmp_path):
+        from packages.codeql.database_manager import report_cpp_extraction
+
+        path = self._write_summary(tmp_path, {})
+        with path.open("wb") as stream:
+            stream.truncate(1024 * 1024 + 1)
+        assert report_cpp_extraction(tmp_path) == {"available": False}
+
+    @pytest.mark.parametrize("traced", [False, True])
+    def test_created_database_reports_selected_path(self, db_manager, tmp_path, traced):
+        summary = {"available": True, "failures": 1, "successes": 2}
+        with patch("packages.codeql.database_manager.report_cpp_extraction",
+                   return_value=summary) as report:
+            result, _ = _run_create(
+                db_manager, tmp_path, language="cpp", traced_build=traced,
+                build_system=_build_system(tmp_path) if traced else None,
+            )
+        assert result.success
+        assert result.extraction_summary == summary
+        report.assert_called_once_with(result.database_path)
+
+    @pytest.mark.parametrize("race_hit", [False, True])
+    def test_cached_database_reports_selected_path(self, db_manager, tmp_path, race_hit):
+        cached = tmp_path / "cached-db"
+        summary = {"available": True, "failures": 1, "successes": 0}
+        with patch.object(db_manager, "get_cached_database",
+                          side_effect=[None, cached] if race_hit else [cached]), \
+             patch.object(db_manager, "compute_repo_hash", return_value="abc"), \
+             patch.object(db_manager, "load_metadata", return_value=None), \
+             patch.object(db_manager, "get_codeql_version", return_value="2.26.3"), \
+             patch("packages.codeql.database_manager.report_cpp_extraction",
+                   return_value=summary) as report:
+            result = db_manager.create_database(tmp_path, "cpp")
+        assert result.success and result.cached
+        assert result.extraction_summary == summary
+        report.assert_called_once_with(cached)
+
+    def test_other_language_does_not_read_cpp_summary(self, db_manager, tmp_path):
+        with patch("packages.codeql.database_manager.report_cpp_extraction") as report:
+            result, _ = _run_create(db_manager, tmp_path, language="java")
+        assert result.success
+        assert result.extraction_summary is None
+        report.assert_not_called()
+
+    def test_unreadable_summary_is_unknown(self, tmp_path):
+        from packages.codeql.database_manager import report_cpp_extraction
+
+        with patch("packages.codeql.database_manager.load_json_bounded",
+                   side_effect=PermissionError):
+            assert report_cpp_extraction(tmp_path) == {"available": False}
+
+    def test_non_regular_summary_is_unknown(self, tmp_path):
+        import os
+
+        from packages.codeql.database_manager import report_cpp_extraction
+
+        path = self._write_summary(tmp_path, {})
+        path.unlink()
+        os.mkfifo(path)
+        assert report_cpp_extraction(tmp_path) == {"available": False}
+
+    def test_outcomes_survive_workflow_serialization(self, tmp_path):
+        import json
+
+        from packages.codeql.agent import CodeQLWorkflowResult
+        from packages.codeql.database_manager import DatabaseResult
+
+        summary = {"available": True, "failures": 1, "successes": 2}
+        database = DatabaseResult(
+            success=True, language="cpp", database_path=tmp_path, metadata=None,
+            errors=[], duration_seconds=0, extraction_summary=summary,
+        )
+        workflow = CodeQLWorkflowResult(
+            success=True, repo_path=str(tmp_path), timestamp="", duration_seconds=0,
+            languages_detected={}, databases_created={"cpp": database},
+            analyses_completed={}, total_findings=0, sarif_files=[], errors=[],
+        )
+        serialized = json.loads(json.dumps(workflow.to_dict()))
+        assert serialized["databases_created"]["cpp"]["extraction_summary"] == summary
+        assert serialized["databases_created"]["cpp"]["success"] is True
+        assert serialized["databases_created"]["cpp"]["errors"] == []

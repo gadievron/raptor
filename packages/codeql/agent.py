@@ -188,6 +188,7 @@ class CodeQLWorkflowResult:
                 'errors': result.errors,
                 'duration_seconds': result.duration_seconds,
                 'cached': result.cached,
+                'extraction_summary': result.extraction_summary,
             }
             for lang, result in self.databases_created.items()
         }
