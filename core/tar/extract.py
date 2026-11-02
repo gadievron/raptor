@@ -224,6 +224,7 @@ def extract_files_from_tar(
     max_entry_count: int | None = 50_000,
     sink: Callable[[str, bytes], None] | None = None,
     on_skipped: Callable[[tarfile.TarInfo, str], None] | None = None,
+    on_nonregular: Callable[[tarfile.TarInfo], None] | None = None,
 ) -> dict[str, bytes]:
     """Walk ``source`` (a tar archive) and return selected members
     as a ``{key: bytes}`` dict.
@@ -243,6 +244,10 @@ def extract_files_from_tar(
     absent; consumers whose selection must be loud-on-refusal (OCI
     package-state extraction) raise from the callback. Exceptions
     it raises abort the walk and propagate.
+
+    ``on_nonregular`` observes non-regular entries without reading their targets
+    or bypassing the safety filter. Memory-only consumers may use it to record
+    layer-local hard-link references; normal extraction never follows them.
 
     ``selector(member)`` returns the dict key for members to keep,
     or ``None`` to skip. Members are first checked by
@@ -330,6 +335,8 @@ def extract_files_from_tar(
                     )
                     raise TarTotalBytesExceeded(msg)
             if not member.isfile():
+                if on_nonregular is not None:
+                    on_nonregular(member)
                 continue
             reason = safe_member_reason(
                 member,

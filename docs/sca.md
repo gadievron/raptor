@@ -375,6 +375,56 @@ licence inventory. Original installed notices, reviewed mixed-data terms and
 complete build-source evidence still need their own generation inputs. The
 prepared exports can be passed to `raptor-sca --sbom` like other supported SBOMs.
 
+
+### Capturing container notice evidence
+
+The notice capture tool reads a native Syft 16.x **image** catalogue and recovers
+original files from its single-platform, digest-pinned image. It never starts
+the image. Use the same explicit Syft scope (`squashed` or `all-layers`) as the
+inventory you are investigating:
+
+```bash
+python3 .github/scripts/capture_container_evidence.py \
+  --syft /tmp/raptor-sbom/container/syft.json \
+  --registry-ref 'registry.example/org/image@sha256:<platform-manifest-digest>' \
+  --identify /usr/local/bin/uv \
+  --out /tmp/raptor-sbom/container/evidence
+```
+
+`--registry-ref` must match the catalogue's platform manifest digest; a tag or
+multi-platform index digest is refused. For offline use, replace it with
+`--oci-layout /path/to/layout`, whose `blobs/sha256/` directory contains the
+referenced compressed layers. The offline path does not import the HTTP backend.
+Omit `--identify` when that file is not present; repeat it to hash other
+catalogued files. Identity-only files are hashed without saving executable bytes.
+
+The fresh output directory contains `evidence.json` and original notice bytes
+under `notices/sha256/<hash>`. The report records the catalogue hash, image/config
+digests, platform, scope, compressed layer digest, config's layer diff ID, file
+path and SHA-256, and native package IDs. It retains package licence claims as
+claims. Required catalogue evidence must be present and any supplied SHA-256 must
+match. Compressed layers are size-checked and SHA-256 verified in full, and their
+uncompressed tar streams must match the config diff IDs, before output is created.
+Layer-local hard links resolve only against verified regular files in the same
+layer; missing target selections cause a bounded replay, and cross-layer targets
+and cycles are refused. Symlinks are never followed. Oversized selected payloads, unsafe archive entries and
+unsupported compression fail capture. A failed output write can leave an
+incomplete directory; `evidence.json` is written last as the completion record.
+
+Selection includes catalogue licence locations, conventional notice filenames,
+Debian common-licence files, and conventional npm notice probes. A licence
+location can point to package metadata rather than the licence text: the report
+distinguishes package manifests and Python `METADATA`/`PKG-INFO` records. Optional probes have unconfirmed runtime
+visibility; origin-layer evidence does not independently replay filesystem
+whiteouts or establish that a file survives in the final image. Packages without
+an associated notice candidate remain explicit gaps. Captured filenames and
+package associations do not establish the applicable terms or notice completeness.
+
+This sidecar does not modify the prepared CycloneDX or SPDX exports, fetch
+corresponding source, infer unknown tool versions, or publish anything. A file
+hash identifies bytes; it does not establish a build source or permission to
+redistribute them.
+
 ---
 
 ## Reachability Analysis

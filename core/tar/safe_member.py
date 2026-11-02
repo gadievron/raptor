@@ -156,8 +156,9 @@ def safe_member_reason(
 
     # Hard links can point inside or outside dest; PEP 706's filter
     # checks but we additionally treat any hard link as rejected
-    # because none of our consumers need them (we extract individual
-    # files, not full trees with internal cross-references).
+    # for direct extraction. Memory-only consumers can separately
+    # resolve references against verified regular entries; this filter
+    # never follows or creates links.
     if member.islnk():
         return UnsafeMemberReason.HARD_LINK
 
