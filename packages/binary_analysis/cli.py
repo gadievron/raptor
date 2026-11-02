@@ -35,7 +35,8 @@ from typing import Any, TYPE_CHECKING
 # already set). RAPTOR_DIR is the canonical project-root marker — hard
 # lookup per the CLAUDE.md path-safety rule: KeyError if unset, no
 # positional-walk fallback that silently imports a different checkout.
-sys.path.insert(0, os.environ["RAPTOR_DIR"])
+if __name__ == "__main__":
+    sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
 from core.atomic_fs import open_exclusive_artifact, open_hardened_append
 from core.hash import sha256_file

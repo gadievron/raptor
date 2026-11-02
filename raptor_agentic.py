@@ -30,7 +30,8 @@ from typing import NoReturn
 # symlink (or relatively on interpreters that don't absolutise
 # __file__), the unresolved parent points at the wrong tree and
 # core/packages imports resolve against it.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from core.config import RaptorConfig
 from core.json import load_json, save_json

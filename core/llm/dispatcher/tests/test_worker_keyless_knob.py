@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -18,9 +19,10 @@ _RAPTOR_ROOT = Path(__file__).resolve().parents[4]
 
 
 def _import_raptor():
-    if "raptor" not in sys.modules:
-        sys.path.insert(0, str(_RAPTOR_ROOT))
-    import raptor
+    with patch.object(sys, "path", sys.path.copy()):
+        if "raptor" not in sys.modules:
+            sys.path.insert(0, str(_RAPTOR_ROOT))
+        import raptor
     return raptor
 
 
@@ -49,7 +51,7 @@ class TestWorkerKeylessKnob:
     def test_keyless_env_carries_no_provider_keys(self, monkeypatch):
         """The env built on the keyless branch: safe baseline +
         routing names, no ANTHROPIC/OPENAI/AWS secret material."""
-        _import_raptor()  # ensures RAPTOR_ROOT on sys.path
+        _import_raptor()  # loads the launcher helpers
         from core.config import RaptorConfig
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-SECRET")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-oai-SECRET")

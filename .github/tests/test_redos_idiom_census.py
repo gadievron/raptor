@@ -235,6 +235,7 @@ import re
 import sys
 import unicodedata
 import unittest
+from unittest.mock import patch
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -3595,11 +3596,9 @@ class TrailingSpanCensus(unittest.TestCase):
         import sys
 
         scripts_dir = _REPO / ".github" / "scripts"
-        sys.path.insert(0, str(scripts_dir))
-        try:
+        with patch.object(sys, "path", sys.path.copy()):
+            sys.path.insert(0, str(scripts_dir))
             from test_scope import TIERS
-        finally:
-            sys.path.remove(str(scripts_dir))
         tier = TIERS["redos_census"]
         rel_self = Path(__file__).resolve().relative_to(_REPO).as_posix()
         self.assertEqual(tier["test_files"], [rel_self])

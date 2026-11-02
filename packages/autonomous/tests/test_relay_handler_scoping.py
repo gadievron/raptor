@@ -34,6 +34,7 @@ import subprocess
 import symtable
 import sys
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -218,14 +219,10 @@ class RelayHandlerLiveTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        sys.path.insert(0, str(REPO_ROOT))
-        import raptor_agentic
+        with patch.object(sys, "path", sys.path.copy()):
+            sys.path.insert(0, str(REPO_ROOT))
+            import raptor_agentic
         cls.raptor_agentic = raptor_agentic
-
-    @classmethod
-    def tearDownClass(cls):
-        with contextlib.suppress(ValueError):
-            sys.path.remove(str(REPO_ROOT))
 
     def setUp(self):
         self._env = os.environ.copy()
