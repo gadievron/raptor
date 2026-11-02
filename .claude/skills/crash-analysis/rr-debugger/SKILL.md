@@ -10,10 +10,17 @@ rr provides deterministic record-replay debugging with full reverse execution ca
 
 ## Core Workflow
 
-1. **Record**: `rr record <program> [args]`
-
-   **Sandbox exemption (documented decision):** rr needs `ptrace` and perf counters, which `libexec/raptor-run-sandboxed` denies, so recording runs the untrusted binary unsandboxed — behavior observed under earlier sandboxed runs says nothing about what the payload does with this ambient authority. Keep the recorded invocation to exactly the reproduced crash command (never a broader test suite or build), and treat any unexpected network or filesystem activity during recording as a finding in itself. Replay carries no such residual: it re-executes the recorded trace under gdb, not the binary against the host.
-2. **Replay**: `python3 -I "$RAPTOR_DIR/.claude/skills/crash-analysis/rr-debugger/scripts/crash_trace.py" --interactive` opens GDB with reverse execution inside RAPTOR's dedicated rr sandbox. It requires a packed recording, Linux mount/PID/network namespaces and seccomp. The launcher disables GDB initialization and automatic symbol scripts before loading the recording. Use it for interactive and automated replay; never retry outside containment after refusal.
+1. **Record** using the dedicated analysis workspace:
+   ```bash
+   libexec/raptor-rr record --workspace <workspace> --trace rr-trace --cwd repo -- ./program <args>
+   ```
+   Add `--stdin attachments/<input>` before `--` for a stdin-fed reproducer. Input paths are workspace-relative; program arguments are relative to `--cwd`. Recording requires the dedicated Linux rr policy. Keep targets, inputs and non-system dependencies in the analysis workspace. It remains writable by the untrusted target. The helper checks the terminal event and performs a complete confined replay before reporting a usable recording. Continue only when its replay consistency check passed; retain verification failures for diagnosis, never as confirmed evidence.
+2. **Pack** only the selected trace:
+   ```bash
+   libexec/raptor-rr pack --workspace <workspace> --trace rr-trace
+   ```
+   Packing reads the declared workspace and system/runtime files; it cannot discover extra read roots from paths embedded in a recording. Its normal untrusted policy needs no counter or ptrace exception. The record helper returns 0 for a verified capture even when the target crashed; preserve the underlying target status from its diagnostics. Do not treat a partial trace from a failed or timed-out recording as confirmed evidence.
+3. **Replay**: `libexec/raptor-rr replay <workspace>/rr-trace` opens contained GDB reverse execution. The launcher disables initialization and automatic symbol scripts before loading the recording. Never retry any stage outside containment after refusal.
 
 ## Reverse Execution Commands
 
@@ -29,10 +36,10 @@ All standard gdb commands work, plus reverse variants:
 
 ### Regular Crashes
 
-After `rr record <crashing-program>`:
+After recording and packing the crashing program:
 
 ```bash
-python3 -I "$RAPTOR_DIR/.claude/skills/crash-analysis/rr-debugger/scripts/crash_trace.py" --interactive
+libexec/raptor-rr replay <workspace>/rr-trace
 # In gdb:
 reverse-next 100    # Go back 100 steps (adjust N as needed)
 # Now step forward to see execution leading to crash:
@@ -43,10 +50,10 @@ next
 
 ### ASAN Crashes
 
-After `rr record <asan-program>`:
+After recording and packing the ASan program:
 
 ```bash
-python3 -I "$RAPTOR_DIR/.claude/skills/crash-analysis/rr-debugger/scripts/crash_trace.py" --interactive
+libexec/raptor-rr replay <workspace>/rr-trace
 # In gdb:
 bt                  # View stack trace
 up                  # Issue "up" commands until last app frame (before ASAN runtime)

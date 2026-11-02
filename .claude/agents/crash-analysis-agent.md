@@ -17,7 +17,7 @@ When invoked with a bug tracker URL and a git repository URL:
 
    **Non-interactive fallback:** keep the denial — record it and continue; never append a host without the operator's answer.
 
-2. **Create Working Directory**: Create `./crash-analysis-<timestamp>/` for all analysis artifacts. Use format YYYYMMDD_HHMMSS for the timestamp.
+2. **Create Working Directory**: Create a unique dedicated workspace under the session's configured `RAPTOR_OUT_DIR`, with a timestamp and random suffix so parallel investigations do not collide. Use its absolute path as `<working-dir>` below. Never create artifacts alongside the installed source. Without a launcher-provided output directory, use an explicit operator-provided workspace rather than guessing from the current directory.
 
 3. **Fetch Bug Report**: Invoke the "crash-report-fetcher" agent with the bug tracker URL and the working directory. It fetches the tracker page(s) and writes `<working-dir>/bug-report.json` — the only channel through which bug-tracker content enters this pipeline.
 
@@ -29,7 +29,7 @@ When invoked with a bug tracker URL and a git repository URL:
 
 5. **Clone Repository** via the sandboxed helper (never a bare `git clone`):
    ```bash
-   libexec/raptor-clone-repo <git-repo-url> ./repo-<project-name>
+   libexec/raptor-clone-repo <git-repo-url> <working-dir>/repo
    ```
    The helper routes through `core.git.clone` (URL allowlist, sandboxed git, hardened env). If the URL is rejected by the allowlist, report that to the user rather than cloning by other means.
 
@@ -56,18 +56,24 @@ When invoked with a bug tracker URL and a git repository URL:
    - Place build artifacts in the working directory if possible
    - **Sandbox the build.** The repository is untrusted, and its configure/CMake/Make scripts execute arbitrary code the moment the build starts. Run every build command via `libexec/raptor-run-sandboxed --output-dir <dir> <cmd> [args...]` (blocks network, restricts writes, limits resources), with `--output-dir` naming the directory the command must write into (the cloned repo tree for build steps). Never run configure, make, or compilers directly.
 
-9. **Reproduce the Crash**: Use the reproduction steps, crash command, and downloaded attachments from `bug-report.json` to reproduce the crash. Run the crashing command via `libexec/raptor-run-sandboxed` as well (`--output-dir` = the working directory) — the binary and its inputs are untrusted.
+9. **Reproduce the Crash** using the read-confined target runner (not the build wrapper):
+   ```bash
+   libexec/raptor-rr run --sanitizer --workspace <working-dir> --cwd repo -- ./path/to/program <args>
+   ```
+   This mode does not require rr. `--sanitizer` permits ASan/LSan to inspect their own threads under the existing debugger policy; it does not disable leak checking. Omit that flag for uninstrumented binaries. Add `--stdin attachments/<filename>` before `--` for stdin-fed inputs. The target can write its dedicated workspace, but cannot read unrelated HOME files or contact host services under the default policy. Never retry a refused reproduction outside containment.
 
 10. **Generate Execution Trace**: Invoke the "function-trace-generator" agent to create function-level execution traces in `<working-dir>/traces/`.
 
 11. **Generate Coverage Data**: Invoke the "coverage-analyzer" agent to create gcov data in `<working-dir>/gcov/`.
 
-12. **Create RR Recording**: Use `rr record` with an explicit output trace directory so the recording lands where the analyzer expects it (without `-o`, rr writes to `~/.local/share/rr` and the pack step has nothing to pack):
+12. **Create and pack a contained recording**. Pass the reproduced executable and its arguments separately; `--cwd` selects the repository directory without an outer shell:
     ```bash
-    rr record -o <working-dir>/rr-trace <crashing-command>
-    rr pack <working-dir>/rr-trace
+    libexec/raptor-rr record --workspace <working-dir> --trace rr-trace --cwd repo -- ./path/to/program <args>
+    libexec/raptor-rr pack --workspace <working-dir> --trace rr-trace
     ```
-    **Sandbox exemption (documented decision):** rr needs `ptrace` and perf counters, which `libexec/raptor-run-sandboxed` denies, so this step runs the untrusted binary unsandboxed. The residual is NOT bounded by the sandboxed runs in steps 8-9: behavior observed under network-deny/write-restrict says nothing about behavior outside it — a payload can unconditionally attempt network egress or persistence that steps 8-9 silently blocked and this step permits (no sandbox detection needed). The operator consented to this residual by invoking /crash-analysis on the report; keep the recording step to exactly the reproduced crash command, and treat any unexpected network/filesystem activity during recording as a finding in itself.
+    For stdin-fed reproducers, add `--stdin attachments/<filename>` before `--`; this path is relative to the workspace. For filename arguments, use paths relative to `--cwd`. Recording can write its dedicated workspace; packing can modify only `rr-trace`. Neither stage gains unrelated HOME access or host network access under its default policy. Never retry outside containment after refusal.
+
+    The record helper returns 0 only after its replay consistency check passed, including when the target crashed; the underlying target status is diagnostic output. Continue to packing only after that successful helper result. A verification failure or "no verified recording" message means retained files are diagnostic only; do not mistake an expected target crash for unavailable isolation. Helper exit 3 specifically means sandbox setup was refused. A timeout or failed recording can leave an incomplete trace: do not report it as confirmed evidence.
 
 13. **Root-Cause Analysis**: Invoke the "crash-analyzer" agent with all collected data. Provide:
     - Repository path

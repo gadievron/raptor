@@ -707,6 +707,10 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
     libc/libseccomp handles in parent, use os.write(2, ...) for errors
     instead of the Python logger (which is not fork-safe).
 
+    rr always denies socket(AF_UNIX) and datagram socketpairs, and rejects a
+    connect-notify supervisor. Its private anonymous stream pairs remain
+    available without hiding target syscalls from rr's recorder.
+
     `block_udp=True` additionally rejects socket(AF_INET|AF_INET6, SOCK_DGRAM)
     — enabled by the use_egress_proxy mode in context.sandbox() so that a
     sandboxed child can't do DNS (UDP/53) or any UDP protocol directly.
@@ -914,6 +918,14 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
         num = lib.seccomp_syscall_resolve_name(name.encode("ascii"))
         return num  # negative means unknown on this arch; caller checks
 
+    if profile == "rr":
+        if unix_scope_export_sock is not None:
+            raise ValueError("rr cannot use seccomp connection notification")
+        # Anonymous connected stream/seqpacket pairs remain available.
+        # Named and abstract sockets require socket(AF_UNIX), which stays
+        # denied so rr needs no record-breaking connect mediator.
+        allow_unix_sockets = False
+
     if unix_scope_export_sock is not None and audit_mode:
         # The tracer owns connect observability under audit; a NOTIFY
         # rule would fight the TRACE rule for the same syscall.
@@ -1079,6 +1091,11 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
         ctypes.c_ulong, ctypes.c_ulong,
     ]
     _PR_SET_NO_NEW_PRIVS = 38
+    if profile == "rr":
+        from ._rr_caps import make_capability_drop
+        rr_drop = make_capability_drop(_libc)
+    else:
+        rr_drop = None
 
     def _apply_seccomp():
         try:
@@ -1086,6 +1103,9 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                 _os_write(2, b"sandbox: prctl(PR_SET_NO_NEW_PRIVS) failed -- "
                              b"seccomp filter cannot be installed\n")
                 os._exit(126)
+
+            if rr_drop is not None:
+                rr_drop()
 
             ctx = lib.seccomp_init(_SCMP_ACT_ALLOW)
             if not ctx:

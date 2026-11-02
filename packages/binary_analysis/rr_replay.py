@@ -10,6 +10,33 @@ from core.sandbox import run, SandboxSetupError
 from core.sandbox.python_paths import _home_roots
 
 
+def _runtime(env, *, need_debugger=True):
+    binary = shutil.which('rr', path=env.get('PATH', os.defpath))
+    if not binary:
+        raise FileNotFoundError('rr not installed')
+    binary = Path(binary).resolve()
+    debugger = None
+    if need_debugger:
+        debugger = shutil.which('gdb', path=env.get('PATH', os.defpath))
+        if not debugger:
+            raise FileNotFoundError('GDB not installed')
+        debugger = Path(debugger).resolve()
+    tools = [binary.parent]
+    if debugger is not None:
+        tools.append(debugger.parent)
+    for executable, name in ((binary, 'rr'), (debugger, 'gdb')):
+        if executable is None:
+            continue
+        for relative in ('lib/'+name, 'lib64/'+name, 'share/'+name):
+            resource = executable.parent.parent/relative
+            if resource.is_dir():
+                tools.append(resource)
+    if any(path.resolve() == home or path.resolve() in home.parents
+           for path in tools for home in _home_roots()):
+        raise SandboxSetupError('rr runtime must use a dedicated tool directory, not HOME')
+    return binary, debugger, list(dict.fromkeys(str(path) for path in tools))
+
+
 def replay(trace_dir=None, *, commands: bytes | None = None, timeout=60):
     """Use private scratch and the dedicated rr containment policy."""
     if sys.platform != 'linux':
@@ -27,23 +54,7 @@ def replay(trace_dir=None, *, commands: bytes | None = None, timeout=60):
     if not (trace/'version').is_file():
         raise ValueError('selected directory is not an rr recording (missing version file)')
     env = RaptorConfig.get_safe_env()
-    binary = shutil.which('rr', path=env.get('PATH', os.defpath))
-    if not binary:
-        raise FileNotFoundError('rr not installed')
-    binary = Path(binary).resolve()
-    debugger = shutil.which('gdb', path=env.get('PATH', os.defpath))
-    if not debugger:
-        raise FileNotFoundError('GDB not installed')
-    debugger = Path(debugger).resolve()
-    tools = [binary.parent, debugger.parent]
-    for executable, name in ((binary, 'rr'), (debugger, 'gdb')):
-        for relative in ('lib/'+name, 'lib64/'+name, 'share/'+name):
-            resource = executable.parent.parent/relative
-            if resource.is_dir():
-                tools.append(resource)
-    if any(path.resolve() == home or path.resolve() in home.parents
-           for path in tools for home in _home_roots()):
-        raise SandboxSetupError('rr runtime must use a dedicated tool directory, not HOME')
+    binary, debugger, tools = _runtime(env)
     command = [str(binary), 'replay', '--serve-files',
                '--debugger='+str(debugger), str(trace), '--',
                '-nx', '-iex', 'set auto-load off',
@@ -55,7 +66,7 @@ def replay(trace_dir=None, *, commands: bytes | None = None, timeout=60):
     with tempfile.TemporaryDirectory(prefix='raptor-rr-replay-',
             dir=env.get('TMPDIR') or tempfile.gettempdir()) as scratch:
         kwargs = dict(profile='rr', target=str(trace), output=scratch,
-                      tool_paths=list(dict.fromkeys(str(path) for path in tools)), cwd=scratch,
+                      tool_paths=tools, cwd=scratch,
                       env=env, timeout=timeout, start_new_session=True)
         if commands is not None:
             kwargs.update(input=commands, capture_output=True)

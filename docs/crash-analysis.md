@@ -21,6 +21,8 @@ during a fuzzing campaign, see [fuzzing](fuzzing.md#crash-triage-and-replay).
 - [Prerequisites](#prerequisites)
 - [Workflow Overview](#workflow-overview)
 - [Automated debugger and sanitizer replay](#automated-debugger-and-sanitizer-replay)
+- [Contained reproduction, recording and packing](#contained-reproduction-recording-and-packing)
+- [rr replay](#rr-replay)
 - [Output Directory Structure](#output-directory-structure)
 - [Understanding the Output](#understanding-the-output)
 - [Agent Architecture](#agent-architecture)
@@ -131,35 +133,92 @@ spawn-only replay paths.
 These guarantees apply to the Python replay helpers. Manually issued debugger
 commands do not acquire this policy automatically.
 
-### rr replay
+### Contained reproduction, recording and packing
 
-Use the shared replay launcher for a packed recording:
+Use a dedicated writable analysis workspace containing the repository and
+crash inputs. Keep it under the configured RAPTOR output directory, with a
+unique name for each investigation. The helper does not move or copy projects,
+account files or configuration.
 
 ```sh
-python3 -I "$RAPTOR_DIR/.claude/skills/crash-analysis/rr-debugger/scripts/crash_trace.py" /path/to/recording --interactive
+# Reproduce an ASan/LSan build without rr:
+libexec/raptor-rr run --sanitizer --workspace /path/to/work --cwd repo --stdin attachments/crash.bin -- ./program arg1
+
+# Record, then pack the selected trace:
+libexec/raptor-rr record --workspace /path/to/work --cwd repo --trace rr-trace --stdin attachments/crash.bin -- ./program arg1
+libexec/raptor-rr pack --workspace /path/to/work --trace rr-trace
+
+# Open interactive reverse debugging:
+libexec/raptor-rr replay /path/to/work/rr-trace
 ```
 
-Omit `--interactive` for automated trace extraction. With no recording argument,
-the launcher resolves `latest-trace` under `_RR_TRACE_DIR`, or under
-`$XDG_DATA_HOME/rr` (default `~/.local/share/rr`).
+The uninstrumented `run` mode uses the normal untrusted policy. For ASan/LSan
+builds, `--sanitizer` uses the existing debugger policy so the sanitizer can
+stop its own threads with ptrace. Read/write confinement and the untrusted
+containment floor remain in force. Leak checking is preserved; the helper does
+not set `detect_leaks=0`. Neither reproduction mode requires rr to be installed.
 
-The dedicated Linux `rr` sandbox permits per-task performance counters while
-blocking system-wide and per-CPU monitoring. It requires private mount, PID and
-network namespaces and working seccomp; selecting a lower general containment
-floor does not waive these requirements. Explicit operator sandbox profile
-overrides follow the standard sandbox CLI rules. rr and GDB communicate over private
-loopback. The selected recording is read-only; replay writes only to temporary
-scratch that is removed when the session ends. GDB initialization and symbol
-script loading remain disabled.
+Recording uses the installed rr without a custom build. The rr policy denies
+named and abstract Unix socket creation and datagram socketpairs. Anonymous
+connected stream/seqpacket pairs remain available for rr's private descriptor
+transfer; TCP communication stays inside the private network namespace.
+Programs that require named Unix sockets are unsupported under this policy.
 
-rr still needs compatible hardware and host counter permissions. The launcher
-does not change host sysctls. It requires rr's `--serve-files` support and a
+Before a recording is reported as usable, the helper checks its terminal EXIT
+event and performs a complete confined replay without GDB. An inconsistent
+or incomplete recording is retained for diagnosis and reported as a failure.
+This is a replay consistency check, not proof that target-supplied evidence is
+authentic. The check adds replay work and shares the recording timeout budget.
+
+Omit `--stdin` for programs that take input paths as arguments. With no input
+file, the target receives `/dev/null`; input files must be regular files inside
+the workspace. `--cwd` and relative trace/input paths are workspace-relative.
+Program arguments remain relative to `--cwd`. Arguments are passed separately,
+without reconstructing a shell command. Shell syntax requires an explicit shell
+executable, which runs inside the same containment.
+
+Reproduction and recording can write the declared workspace. Use an analysis
+copy with no unrelated private files. A selected executable outside that
+workspace receives only a file grant, not a grant to its parent directory.
+Other target dependencies must be inside the workspace or existing system/tool
+runtime trees. Existing traces are refused by recording; choose a new name.
+
+Packing reads the declared workspace and system/runtime files and can modify
+only the selected trace. Paths embedded in trace metadata do not add read roots.
+It uses the normal untrusted policy, with no counter or ptrace exception.
+Recordings can already contain sensitive data captured earlier; containment
+does not remove that data.
+
+`--timeout` defaults to 120 seconds for run, record and pack. Timeouts and
+recording failures can leave incomplete traces for diagnosis. The record
+command returns 0 only after its replay consistency check passed, including
+when the recorded target crashed. The underlying recorder/target status is
+reported in diagnostics. An unusable recording returns 1; exit 3 is reserved
+for sandbox setup refusal. Other actions preserve their underlying status,
+with a target's own exit 3 mapped to helper exit 1. Never retry outside
+containment after a refusal.
+
+### rr replay
+
+The replay command uses the same contained implementation as
+`crash_trace.py`, which remains available for automated step extraction.
+With no recording argument, it resolves `latest-trace` under `_RR_TRACE_DIR`,
+or under `$XDG_DATA_HOME/rr` (default `~/.local/share/rr`).
+
+Recording and replay use the dedicated Linux `rr` policy. Per-task counters
+are permitted, while system-wide and per-CPU monitoring remain blocked. Private
+mount, PID and network namespaces and working seccomp are mandatory; lowering
+the general containment floor does not waive that contract. Explicit operator
+sandbox profile overrides follow the standard sandbox CLI rules. rr and GDB
+communicate over private loopback. Replay keeps the selected recording read-only
+and removes its private scratch when the session ends. GDB initialization and
+symbol script loading remain disabled.
+
+rr still needs compatible hardware and host counter permissions. The helper
+does not change host sysctls. Replay requires rr's `--serve-files` support and a
 packed recording so original executable paths do not require broad filesystem
-grants. Recordings can already contain sensitive data captured at recording
-time; confinement does not remove that data.
-
-Bare `rr record`, `rr pack` and `rr replay` commands are separate from this
-launcher and do not automatically receive its containment policy.
+grants. Bare external-tool commands do not automatically inherit these helpers'
+containment policy.
 
 ## Output Directory Structure
 
