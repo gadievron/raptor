@@ -405,10 +405,13 @@ class TestFailedRunDoesNotPromote:
         with patch.object(_loop, "_run", side_effect=fake_run), \
                 patch.object(_loop, "_store_in_sage") as sage, \
                 patch.object(_loop, "_promote_to_project") as promote, \
+                patch.object(_loop, "_synthesise_overview",
+                             return_value=("", "", "", None)) as synthesis, \
                 patch.object(sys, "argv", argv):
             rc = _loop.main()
         self._sage_called = sage.called
         self._promote_called = promote.called
+        self._synthesis_called = synthesis.called
         return rc, concepts
 
     def test_failed_run_skips_promotion_and_sage(self, tmp_path):
@@ -416,12 +419,14 @@ class TestFailedRunDoesNotPromote:
         assert rc == 7
         assert not self._promote_called
         assert not self._sage_called
+        assert not self._synthesis_called
 
     def test_successful_run_still_promotes(self, tmp_path):
         rc, _concepts = self._run_main(tmp_path, prep_rc=0)
         assert rc == 0
         assert self._promote_called
         assert self._sage_called
+        assert self._synthesis_called
 
 
 class TestPriorKnowledgeAtomicity:

@@ -3256,6 +3256,11 @@ class TestRefutationGateWirePoint:
         monkeypatch.setattr(
             _orch, "_start_joern_server_raw", lambda *a, **k: None,
         )
+        # The eager pre-sweep can build/query its own CPG even when server
+        # startup is stubbed. Gate wiring must not start that fallback lane.
+        monkeypatch.setattr(
+            _orch, "_resolve_joern_evidence_raw", lambda *a, **k: ({}, None),
+        )
         # Same boundary, prep side: the sandboxed mechanical-detector
         # prep is ~5s of real detector runs per test on fixtures whose
         # findings these gate-wiring assertions never read. Full
