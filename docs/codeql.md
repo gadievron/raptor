@@ -550,7 +550,7 @@ exact class allowlist needs review for dangerous allowed classes. See the
 [Java filter pattern documentation](https://docs.oracle.com/en/java/javase/21/core/setting-custom-filter-using-pattern.html).
 
 Native named-case regressions run in the nightly workflow's separate
-`Java query regressions` job, alongside log injection. To run just that job
+`Java query regressions` job, alongside log injection and XXE. To run just that job
 without the slow/integration batch:
 
 ```sh
@@ -558,6 +558,40 @@ gh workflow run nightly.yml --ref main -f suite=java-log
 ```
 
 The existing `java-log` and `scan-and-java-log` input names are retained;
-both now include deserialization coverage. Test artifacts retain the existing
-`nightly-java-log-query-results` name and include both suites' expected/actual
+both include deserialization and XXE coverage. Test artifacts retain the existing
+`nightly-java-log-query-results` name and include all three suites' expected/actual
 rows and production-query compilation output.
+
+### Curated Java DocumentBuilder hardening
+
+The curated XXE query checks the factory state when the particular
+`DocumentBuilder` is created. Hardening must apply to the same factory and
+succeed on every path to that creation. Later factory changes do not repair
+an existing builder. The query follows local factory/builder aliases and
+reports configurations weakened before creation, including conditional
+changes and changes through aliases.
+
+Recognized protections are a true `disallow-doctype-decl` feature, an empty
+`XMLConstants.ACCESS_EXTERNAL_DTD` attribute, or all three of
+`external-general-entities`, `external-parameter-entities`, and
+`load-external-dtd` set to false. Disabling just the two entity features can
+still allow external DTD loading. The three-feature protection also requires
+validation mode to remain disabled, since validation can force DTD loading.
+These settings must not be overwritten
+on a path from hardening to builder creation. See the
+[JAXP factory API](https://docs.oracle.com/en/java/javase/17/docs/api/java.xml/javax/xml/parsers/DocumentBuilderFactory.html)
+and [OWASP XML guidance](https://cheatsheetseries.owasp.org/cheatsheets/XML_External_Entity_Prevention_Cheat_Sheet.html).
+
+The check is local to a callable. Custom factories, helper-based hardening,
+custom entity resolvers, and ambiguous receiver assignments are not proved
+safe. Interprocedural factory mutations and combinations of different
+protections across alternative branches are not modeled. A report identifies
+missing verified protection for external resource
+resolution; it does not prove attacker control of the input or exhaustively
+cover XML denial of service, schema loading, or XInclude. The focused
+`suite=java-log` CI dispatch also runs the native XXE regression suite.
+
+The native XXE suite executes the shared production logic. CI separately
+type-checks its reporting wrapper with `codeql query compile --check-only`
+to avoid a duplicate optimizer run; `xxe-production-check.log` is included
+in the Java job's artifacts.
