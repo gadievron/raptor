@@ -119,6 +119,33 @@ A minimum requirement and a tested version mean different things. Declare a
 minimum when a required construct or API establishes it; do not assign the
 current CI version to every rule just because that version passes the tests.
 
+## Bundled rule coverage
+
+RAPTOR ships over 200 custom static analysis rules, adversarially tested against false
+positives:
+
+- **Semgrep (~150 rules)** — taint-tracking and pattern rules for Python, Go, Java, and
+  JS/TS. Covers SQLi, XSS, SSRF, SSTI, command injection, deserialisation, XXE,
+  LDAP/NoSQL injection, path traversal, open redirect, log/header injection, eval
+  injection, ReDoS, prototype pollution, JWT misconfiguration, weak crypto, insecure
+  TLS, and hardcoded secrets.
+- **Coccinelle (68 rules)** — structural matching for C/C++. Memory safety (double free,
+  use-after-free, free of non-base pointer, free of stack array, mmap'd memory,
+  use-after-close), integer bugs (overflow, sign extension, double sizeof), resource
+  leaks (popen/fclose mismatch, fdopendir double close), buffer handling (strncpy
+  without NUL, copy_user size mismatch, malloc/strlen off-by-one), signal handler
+  safety, API misuse (fcntl flag domain, SIGKILL/SIGSTOP, double byte-swap, inet_ntoa
+  static buffer), compiler dead-store elimination, kernel IS_ERR/PTR_ERR confusion,
+  format string injection, TOCTOU races, and more.
+- **CodeQL (8 queries)** — interprocedural taint tracking for C++ (format string
+  injection, integer truncation, use-after-move, iterator invalidation) and Java (XXE,
+  insecure deserialisation, log injection, Spring SSRF).
+
+Browse the rules directly: `engine/semgrep/rules/`, `engine/coccinelle/rules/`,
+`engine/codeql/queries/`. These complement the Semgrep registry packs RAPTOR pulls in
+(`p/security-audit`, `p/owasp-top-ten`, `p/secrets` always; per-policy-group packs like
+`p/command-injection`, `p/jwt`, `p/xss` on top) — overlap is minimal.
+
 ## Semgrep Rules
 
 ### Rule Categories

@@ -42,7 +42,18 @@ the suite fails at import/setup on 3.11 and earlier.
 
 ## Python Packages
 
-Install with `uv sync --locked`.
+Python dependencies are managed with [uv](https://docs.astral.sh/uv/).
+Install with `uv sync --locked` and activate with `source .venv/bin/activate`.
+
+Useful installs:
+
+```bash
+uv sync --locked                                                  # core runtime
+uv sync --locked --group dev                                      # tests + linting
+uv sync --locked --extra web                                      # /web scanner support
+uv sync --locked --extra web --extra smt --extra llm --extra sage # optional stacks
+source .venv/bin/activate                                         # use the installed environment
+```
 
 **Required (core):**
 

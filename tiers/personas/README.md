@@ -2,6 +2,23 @@
 
 Expert methodologies extracted from RAPTOR's Python analysis code.
 
+## Choosing a persona
+
+Eight expert personas are available on demand. Load one when you want a different perspective on a finding or a specific technique:
+
+```
+Exploit Developer (Mark Dowd)                  Exploit PoC generation
+Crash Analyst (Charlie Miller / Halvar Flake)  Crash analysis and exploitability assessment
+Security Researcher                            General adversarial code review
+Patch Engineer                                 Secure fix generation
+Penetration Tester                             Realistic attack scenario assessment
+Web Researcher (James Kettle)                  Web endpoint research (smuggling, cache poisoning, SSRF)
+Fuzzing Strategist                             Corpus design and triage
+Binary Exploitation Specialist                 ROP, heap, and memory corruption
+```
+
+Tell Claude which one to use, e.g. "Use the Binary Exploitation Specialist".
+
 ## Pipeline Mapping
 
 Each persona serves a distinct moment in the security analysis pipeline:

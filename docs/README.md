@@ -9,10 +9,10 @@ reference documentation for the framework.
 
 ## Getting Started
 
-Install the required tools and Python packages ([dependencies](dependencies.md)),
-then launch RAPTOR via Claude Code with `bin/raptor`, or invoke the Python CLI
-directly with `python3 raptor.py <mode>` for CI pipelines and scripting
-([Python CLI reference](python-cli.md)).
+Follow the [installation guide](installation.md) for manual or container
+setup, then launch RAPTOR with `bin/raptor`. For CI pipelines and scripting
+without Claude Code, use the [standalone Python CLI](python-cli.md#running-fully-standalone-no-claude-code).
+The [dependency reference](dependencies.md) lists tools and optional packages.
 
 
 ## Choose a workflow
@@ -37,43 +37,64 @@ guide says otherwise.
 
 ## Command Reference
 
-See the [slash-command reference](commands.md) for syntax and flags. Quick
-overview:
+The catalogue below preserves each command's maturity status. See the
+[slash-command reference](commands.md) for syntax and flags.
+
+### Source review and validation
+
+| Command | What it does | Status |
+|---------|-------------|--------|
+| `/agentic` | Full autonomous workflow: scan, validate, exploit, patch | Stable |
+| `/scan` | Static analysis with Semgrep and CodeQL | Stable |
+| `/understand` | Map attack surface, trace data flows, hunt vulnerability variants | Stable |
+| `/audit` | Hypothesis-driven, tool-grounded systematic code review | Beta |
+| `/review` | Query audit state: findings, gaps, coverage, operator notes | Stable |
+| `/annotate` | Attach free-form per-function prose annotations (operator review notes) | Stable |
+| `/validate` | Multi-stage exploitability validation pipeline (Stages 0-F) | Stable |
+| `/diagram` | Mermaid visual maps from `/understand` and `/validate` JSON outputs | Beta |
+| `/codeql` | CodeQL-only deep analysis with SMT dataflow pre-screening | Stable |
+| `/analyze` | Analyse existing SARIF findings with LLM, without re-scanning | Stable |
+| `/openant` | OpenAnt LLM source-code scan: AST analysis plus per-function LLM reasoning | Beta |
+| `/exploit` | Generate proof-of-concept exploit code | Beta |
+| `/patch` | Generate secure patches for confirmed vulnerabilities | Beta |
+| `/describe` | Describe a target: language mix, build system, tool gaps, cost estimate (read-only) | Stable |
+
+### Dependencies and CVEs
+
+| Command | What it does | Status |
+|---------|-------------|--------|
+| `/sca` | Software composition analysis: dependencies, advisories, supply-chain signals, SBOMs, and fixes | Beta |
+| `/cve-diff` | Discover and diff the fix commit for a CVE across OSV, NVD, GitHub, and GitLab | Beta |
+| `/cve-env` | Build and verify a Docker environment running a CVE's affected application at its pre-patch version | Experimental |
+
+### Binaries, fuzzing, and live targets
+
+| Command | What it does | Status |
+|---------|-------------|--------|
+| `/binary` | Black-box binary investigation, runtime evidence, graph queries and handoff | Beta |
+| `/ghidra` | Ghidra RE bridge: attach/import `.gpr` projects, cross-version diff, findings export | Beta |
+| `/fuzz` | Binary fuzzing with AFL++ and crash analysis | Stable |
+| `/crash-analysis` | Autonomous root-cause analysis for C/C++ crashes | Stable |
+| `/frida` | Dynamic instrumentation via Frida | Alpha |
+| `/web` | Web application scanning: crawl, ffuf/nuclei integration, oracle-verified injection, blind SSRF callbacks | Beta |
+
+### Projects, models, and research
+
+| Command | What it does | Status |
+|---------|-------------|--------|
+| `/project` | Named workspaces to organise runs and track findings over time | Stable |
+| `/threat-model` | Create, inspect, and maintain per-project threat models | Stable |
+| `/sage` | Persistent memory layer (store, recall, link, corroborate) | Stable |
+| `/ask` | Send a free-form prompt to any configured LLM model | Stable |
+| `/scorecard` | Inspect per-model reliability across decision classes | Stable |
+| `/oss-forensics` | Evidence-backed forensic investigation for GitHub repositories | Stable |
+
+### Additional utilities
 
 | Command | Purpose |
 |---------|---------|
-| `/scan` | Static analysis (Semgrep + Coccinelle) |
-| `/agentic` | Full autonomous workflow |
-| `/codeql` | CodeQL deep analysis |
-| `/fuzz` | Binary fuzzing |
-| `/web` | Web application testing |
-| `/audit` | Systematic hypothesis-driven code review |
-| `/validate` | Exploitability validation pipeline |
-| `/understand` | Code comprehension and attack surface mapping |
-| `/review` | Query audit state (findings, gaps, coverage, notes) |
-| `/sca` | Software composition analysis |
-| `/binary` | Black-box binary investigation |
-| `/ghidra` | Ghidra RE bridge (attach, import, cross-version diff, findings export) |
-| `/frida` | Dynamic instrumentation |
-| `/project` | Workspace management |
-| `/crash-analysis` | Crash root-cause analysis |
-| `/oss-forensics` | GitHub forensic investigation |
-| `/exploit` | Exploit PoC generation (beta) |
-| `/patch` | Security patch generation (beta) |
-| `/describe` | Target pre-flight inspection |
-| `/diagram` | Mermaid diagram generation |
-| `/annotate` | Per-function annotations |
-| `/scorecard` | Model reliability inspection |
-| `/sage` | Persistent memory (store, recall, link, corroborate) |
-| `/threat-model` | Project threat model management |
-| `/cve-diff` | CVE patch discovery |
-| `/cve-env` | Pre-patch CVE environment build + verify |
-| `/analyze` | LLM analysis of existing SARIF |
-| `/openant` | OpenAnt semantic source analysis |
 | `/tune` | Inspect resource limits and select a tuning profile |
-| `/ask` | Free-form prompt to any configured model |
 | `/version` | Show version |
-
 
 ## Feature Guides
 
@@ -104,6 +125,7 @@ overview:
 | [Threat Model](threat-model.md) | Per-project threat model feature |
 | [Configuration](configuration.md) | tuning.json, sandbox calibration |
 | [Environment Variables](environment.md) | Operator knobs, credentials, routing family, proxy behavior, internal plumbing |
+| [Installation](installation.md) | Manual and container setup, launcher behavior, VS Code |
 | [Dependencies](dependencies.md) | Tool requirements and licensing |
 | [Troubleshooting](troubleshooting.md) | Common failures and fixes by subsystem |
 | [Python CLI](python-cli.md) | Direct `raptor.py` usage for CI and scripting |
