@@ -2210,7 +2210,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         ),
         adversarial=args.adversarial,
         rank_gaps=getattr(args, "rank_gaps", False),
-        cross_entry=getattr(args, "cross_entry", "off"),
+        cross_entry=getattr(args, "cross_entry", "context"),
         cross_entry_max_calls=getattr(args, "cross_entry_max_calls", 8),
         cross_entry_max_files=getattr(args, "cross_entry_max_files", 200),
         cross_entry_root=Path(args.cross_entry_root) if getattr(args, "cross_entry_root", None) else None,
@@ -3892,7 +3892,7 @@ def _run_config_from_args(
         "include_kinds": args.include_kinds,
         "adversarial": args.adversarial,
         "rank_gaps": getattr(args, "rank_gaps", False),
-        "cross_entry": getattr(args, "cross_entry", "off"),
+        "cross_entry": getattr(args, "cross_entry", "context"),
         "cross_entry_max_calls": getattr(args, "cross_entry_max_calls", 8),
         "cross_entry_max_files": getattr(args, "cross_entry_max_files", 200),
         "cross_entry_include_dirs": [str(Path(p).resolve()) for p in getattr(args,"cross_entry_include_dir",[])],
@@ -4691,9 +4691,11 @@ def main() -> int:
                        help="LLM re-rank of the gap-queue head within "
                             "priority tiers before pins/budget "
                             "(ordering only; spend on the run ledger)")
-    p_run.add_argument("--cross-entry", choices=["off", "index", "shadow", "context", "study"], default="off",
-                       help="Experimental shared-state study: receipts only (shadow), "
-                            "structural review context (context), or semantic study (study)")
+    _ce_modes = ["off", "index", "shadow", "context", "study"]
+    p_run.add_argument(
+        "--cross-entry", choices=_ce_modes, default="context",
+        help="Shared-state analysis (default: context)",
+    )
     p_run.add_argument("--cross-entry-max-calls", type=int, default=8,
                        help="Total cross-entry study/retrieval/refutation call cap (default 8)")
     p_run.add_argument("--cross-entry-max-files", type=int, default=200,

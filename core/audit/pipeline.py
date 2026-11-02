@@ -130,7 +130,7 @@ class AuditPipelineOpts:
     # prior-run verdicts for functions whose source hash is unchanged
     # instead of silently suppressing them.
     verdict_reuse: bool = True
-    cross_entry: str = "off"
+    cross_entry: str = "context"
     cross_entry_max_calls: int = 8
     cross_entry_max_files: int = 200
     cross_entry_root: Path | None = None
