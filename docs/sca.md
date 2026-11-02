@@ -52,7 +52,7 @@ The default (no subcommand) is `scan` -- the full analyse pipeline.
 | `health` | Probe every registry client; report reachability. |
 | `purl <eco> <name> <ver>` | Build a canonical Package URL. |
 | `render <findings.json>` | Re-render `report.md` / SARIF from an existing findings file. |
-| `clean-cache` | Reclaim disk space from stale cache entries. Removes entries older than `--max-age` days from `~/.raptor/cache/sca/`. |
+| `clean-cache` | Reclaim stale entries and enforce a disposable disk budget. Supports `--dry-run`, `--max-age`, `--max-size-mb`, `--stress-max-age`, and `--stress-max-size-mb`. |
 | `dt-push` | Upload a CycloneDX SBOM to a Dependency-Track instance. Requires `--url` and `$DT_API_KEY` (or the deprecated `--api-key` flag — argv is world-readable via `/proc/*/cmdline`; the env var wins when both are set). |
 | `suppress` | Manage the suppression overlay (`.raptor-sca-suppress.yml`). Sub-actions: `list` (view current suppressions), `check` (validate against fresh findings and surface stale entries). |
 | `bump` | Dependency version bump operations, including GitHub release asset pins. |

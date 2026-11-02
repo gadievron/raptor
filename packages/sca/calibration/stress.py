@@ -828,9 +828,15 @@ def _scan_one(
     with _ACTIVE_SCANS_LOCK:
         _ACTIVE_SCANS[label] = time.monotonic()
     try:
-        return _scan_one_inner(
-            sample, out_root, git_clone_timeout=git_clone_timeout,
-        )
+        from packages.sca import sca_cache_root
+        from packages.sca.cache_budget import cache_session
+
+        # The lease belongs to the actual worker, not the sweep driver:
+        # timeout-abandoned workers keep their checkout pinned until exit.
+        with cache_session(sca_cache_root()):
+            return _scan_one_inner(
+                sample, out_root, git_clone_timeout=git_clone_timeout,
+            )
     finally:
         with _ACTIVE_SCANS_LOCK:
             _ACTIVE_SCANS.pop(label, None)

@@ -307,6 +307,32 @@ def run_sca(
     http: HttpClient | None = None,
     cache: JsonCache | None = None,
 ) -> RunResult:
+    """Run SCA while pinning the disk cache against concurrent cleanup."""
+    from contextlib import ExitStack
+    from .cache_budget import cache_session
+
+    options = options or RunOptions()
+    default_root = sca_cache_root()
+    # Persistent reachability inventories currently use the default root
+    # even when metadata is redirected with --cache-root. Pin both stores.
+    roots = {default_root, options.cache_root or default_root}
+    with ExitStack() as stack:
+        for root in sorted(roots):
+            stack.enter_context(cache_session(
+                root, maintain=cache is None and not options.offline,
+            ))
+        # Explicit injected caches remain caller-managed (no pruning).
+        return _run_sca(target, output_dir, options, http=http, cache=cache)
+
+
+def _run_sca(
+    target: Path,
+    output_dir: Path,
+    options: RunOptions | None = None,
+    *,
+    http: HttpClient | None = None,
+    cache: JsonCache | None = None,
+) -> RunResult:
     """Execute the mechanical SCA pipeline end-to-end.
 
     Parameters are explicit rather than read from ``argparse`` so the
