@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "scope": "Verbatim Apache-2.0 text from the pinned upstream repository release context. All four package source files match the release wheel; installed image payload correspondence is checked separately. This is added notice evidence, not a source-build or licence-completeness conclusion.",
+  "packages": [
+    {
+      "name": "opentelemetry-util-http",
+      "version": "0.58b0",
+      "license": "Apache-2.0",
+      "license_header": "License-Expression",
+      "license_spdx": "Apache-2.0",
+      "metadata_directory": "opentelemetry_util_http-0.58b0.dist-info",
+      "notice_file": "opentelemetry-util-http-LICENSE",
+      "installed_filename": "LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "source_kind": "pinned_upstream_repository",
+      "source_url": "https://raw.githubusercontent.com/open-telemetry/opentelemetry-python-contrib/3cb03e91be665cc472264e2e1a0cf6b5da9b5c41/LICENSE",
+      "source_commit": "3cb03e91be665cc472264e2e1a0cf6b5da9b5c41",
+      "source_tag": "v0.58b0",
+      "source_path": "LICENSE",
+      "project_url": "https://raw.githubusercontent.com/open-telemetry/opentelemetry-python-contrib/3cb03e91be665cc472264e2e1a0cf6b5da9b5c41/util/opentelemetry-util-http/pyproject.toml",
+      "project_sha256": "f5dd45aea30f0b1445c6be06ba22bfb5c6650e4acc67632d2fe8089147ea02bd",
+      "wheel_url": "https://files.pythonhosted.org/packages/a5/a3/0a1430c42c6d34d8372a16c104e7408028f0c30270d8f3eb6cccf2e82934/opentelemetry_util_http-0.58b0-py3-none-any.whl",
+      "wheel_sha256": "6c6b86762ed43025fbd593dc5f700ba0aa3e09711aedc36fd48a13b23d8cb1e7",
+      "registry_metadata_url": "https://pypi.org/pypi/opentelemetry-util-http/0.58b0/json"
+    }
+  ]
+}

@@ -73,7 +73,11 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
 # ============================================================================
 
 COPY --from=ghcr.io/astral-sh/uv:0.7 /uv /usr/local/bin/uv
-RUN uv tool install --no-cache semgrep==1.177.0
+COPY .devcontainer/install-python-notices.py /usr/local/libexec/install-python-notices.py
+COPY .devcontainer/opentelemetry-notices/ /usr/share/doc/raptor-opentelemetry-notices/
+RUN uv tool install --no-cache semgrep==1.177.0 \
+    && /root/.local/share/uv/tools/semgrep/bin/python /usr/local/libexec/install-python-notices.py \
+        --evidence /usr/share/doc/raptor-opentelemetry-notices
 
 # ============================================================================
 # RR DEBUGGER (rr-debugger skill, crash-analysis agents)
@@ -117,7 +121,6 @@ RUN chmod 0755 /usr/local/libexec/raptor-codeql-bootstrap \
 
 COPY pyproject.toml uv.lock /tmp/
 COPY .devcontainer/python-notices/ /usr/share/doc/raptor-python-notices/
-COPY .devcontainer/install-python-notices.py /usr/local/libexec/install-python-notices.py
 
 RUN bash -eo pipefail -c \
     'uv export --locked --no-hashes --project /tmp --extra web \
