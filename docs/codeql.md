@@ -554,13 +554,15 @@ Native named-case regressions run in the nightly workflow's separate
 without the slow/integration batch:
 
 ```sh
-gh workflow run nightly.yml --ref main -f suite=java-log
+gh workflow run nightly.yml --ref main -f suite=java
 ```
 
-The existing `java-log` and `scan-and-java-log` input names are retained;
-both include deserialization and XXE coverage. Test artifacts retain the existing
-`nightly-java-log-query-results` name and include all three suites' expected/actual
-rows and production-query compilation output.
+The `java` choice runs log injection, deserialization and XXE coverage.
+The `focused-codeql-java-regression-results` artifact includes all three suites'
+expected/actual rows and production-query compilation output.
+
+The available choices are `full`, `semgrep`, `java` and `cpp`. Use separate
+focused dispatches to run more than one tool family without the full batch.
 
 ### Curated Java DocumentBuilder hardening
 
@@ -589,7 +591,7 @@ protections across alternative branches are not modeled. A report identifies
 missing verified protection for external resource
 resolution; it does not prove attacker control of the input or exhaustively
 cover XML denial of service, schema loading, or XInclude. The focused
-`suite=java-log` CI dispatch also runs the native XXE regression suite.
+`suite=java` CI dispatch also runs the native XXE regression suite.
 
 The native XXE suite executes the shared production logic. CI separately
 type-checks its reporting wrapper with `codeql query compile --check-only`
