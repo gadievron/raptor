@@ -303,6 +303,18 @@ available, `diagnostic/extractors/cpp/summary.jsonl` reports
 extractor invocations, not functions or detected bugs. An absent summary is not
 proof of complete extraction.
 
+RAPTOR reports these invocation counts for newly created and cached C/C++
+databases, including traced builds. Failed invocations produce a coverage
+warning without discarding recovered findings. Missing or unreadable summaries
+are reported as unavailable. A summary with no reported failures still does
+not guarantee that every function or language construct was analysed.
+
+The workflow report includes `databases_created.cpp.extraction_summary`.
+`available: true` accompanies `failures` and `successes` counts;
+`available: false` means no usable invocation summary was available. Other
+languages and failed database creation use `null`. Database `success` continues
+to describe creation or cache reuse, independently of extraction completeness.
+
 For Linux x86 kernels, GCC's `__seg_gs` and `__seg_fs` qualifiers are a
 [known extractor limitation](https://github.com/github/codeql/issues/16908).
 A traced build supplies compiler settings and generated headers, but does not
