@@ -140,3 +140,18 @@ def test_gdb_runtime_must_not_grant_home(setup, monkeypatch):
                         str(executable) if name == 'gdb' else '/usr/bin/rr')
     with pytest.raises(SandboxSetupError, match='dedicated tool directory'):
         module.replay(trace, commands=b'quit\n')
+
+
+@pytest.mark.parametrize('status', [0, 7])
+@pytest.mark.parametrize('text', [False, True])
+def test_fatal_replay_cannot_hide_behind_gdb_zero_status(setup, monkeypatch, status, text):
+    _, trace, scratch = setup
+    diagnostics = '[FATAL ./src/ReplayTask.cc:130:validate_regs()]\nregister mismatch\n'
+    stderr = diagnostics if text else diagnostics.encode()
+    def dispatch(command, **kwargs):
+        return subprocess.CompletedProcess(command, status, b'', stderr)
+    monkeypatch.setattr(module, 'run', dispatch)
+    result = module.replay(trace, commands=b'continue\nquit\n')
+    assert result.returncode == (status or 1)
+    assert result.stderr == stderr
+    assert list(scratch.iterdir()) == []

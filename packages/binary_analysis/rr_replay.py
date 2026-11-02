@@ -61,4 +61,13 @@ def replay(trace_dir=None, *, commands: bytes | None = None, timeout=60):
             kwargs.update(input=commands, capture_output=True)
         else:
             kwargs.update(stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr)
-        return run(command, **kwargs)
+        result = run(command, **kwargs)
+        # rr can return GDB's zero status after its replay server aborts.
+        # Captured automation must not promote a fatal/divergent replay to
+        # successful evidence merely because GDB handled remote EOF cleanly.
+        if commands is not None and result.returncode == 0:
+            stderr = result.stderr or b''
+            marker = b'[FATAL ' if isinstance(stderr, bytes) else '[FATAL '
+            if any(line.startswith(marker) for line in stderr.splitlines()):
+                result.returncode = 1
+        return result
