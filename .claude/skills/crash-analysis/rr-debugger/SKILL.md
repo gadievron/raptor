@@ -13,7 +13,7 @@ rr provides deterministic record-replay debugging with full reverse execution ca
 1. **Record**: `rr record <program> [args]`
 
    **Sandbox exemption (documented decision):** rr needs `ptrace` and perf counters, which `libexec/raptor-run-sandboxed` denies, so recording runs the untrusted binary unsandboxed — behavior observed under earlier sandboxed runs says nothing about what the payload does with this ambient authority. Keep the recorded invocation to exactly the reproduced crash command (never a broader test suite or build), and treat any unexpected network or filesystem activity during recording as a finding in itself. Replay carries no such residual: it re-executes the recorded trace under gdb, not the binary against the host.
-2. **Replay**: `rr replay -- -nx -iex 'set auto-load off' -iex 'set auto-load safe-path /dev/null'` (enters gdb interface with reverse execution). The flags after `--` go to gdb and disable auto-load with no trusted directory: the recorded binary is untrusted, and a permissive gdb config (e.g. an operator `~/.gdbinit` widening `auto-load safe-path`) would otherwise execute scripts the binary or its build tree plants (.debug_gdb_scripts, *-gdb.py). Same hardening set as scripts/crash_trace.py — use it on EVERY manual replay.
+2. **Replay**: `python3 -I "$RAPTOR_DIR/.claude/skills/crash-analysis/rr-debugger/scripts/crash_trace.py" --interactive` opens GDB with reverse execution inside RAPTOR's dedicated rr sandbox. It requires a packed recording, Linux mount/PID/network namespaces and seccomp. The launcher disables GDB initialization and automatic symbol scripts before loading the recording. Use it for interactive and automated replay; never retry outside containment after refusal.
 
 ## Reverse Execution Commands
 
@@ -32,7 +32,7 @@ All standard gdb commands work, plus reverse variants:
 After `rr record <crashing-program>`:
 
 ```bash
-rr replay -- -nx -iex 'set auto-load off' -iex 'set auto-load safe-path /dev/null'
+python3 -I "$RAPTOR_DIR/.claude/skills/crash-analysis/rr-debugger/scripts/crash_trace.py" --interactive
 # In gdb:
 reverse-next 100    # Go back 100 steps (adjust N as needed)
 # Now step forward to see execution leading to crash:
@@ -46,7 +46,7 @@ next
 After `rr record <asan-program>`:
 
 ```bash
-rr replay -- -nx -iex 'set auto-load off' -iex 'set auto-load safe-path /dev/null'
+python3 -I "$RAPTOR_DIR/.claude/skills/crash-analysis/rr-debugger/scripts/crash_trace.py" --interactive
 # In gdb:
 bt                  # View stack trace
 up                  # Issue "up" commands until last app frame (before ASAN runtime)

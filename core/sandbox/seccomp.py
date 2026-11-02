@@ -48,6 +48,7 @@ and _check_blocked can suggest --sandbox debug / network-only if needed.
 import array
 import ctypes
 import ctypes.util
+import errno
 import logging
 import os
 import socket
@@ -200,7 +201,6 @@ _SECCOMP_BLOCK_ALWAYS = (
     "keyctl", "add_key", "request_key",     # kernel keyring
     "bpf",                                    # eBPF program loading
     "userfaultfd",                            # userspace page-fault handler
-    "perf_event_open",                        # perf subsystem
     # process_vm_readv / process_vm_writev: cross-process memory access.
     # Moved to _SECCOMP_BLOCK_UNLESS_DEBUG (2026-06-13) because gdb's
     # inferior-memory plumbing under runtime_inspect needs them. The
@@ -256,6 +256,10 @@ _SECCOMP_BLOCK_ALWAYS = (
 # path_beneath uses dentry chains, not the bind-mount-visible path;
 # (2) NO_NEW_PRIVS is inherited so seccomp can't be dropped;
 # (3) Landlock rules inherit across nested namespaces.
+
+# rr alone permits tightly scoped per-thread perf events. Keep the ordinary
+# profiles' blanket denial, including under audit.
+_SECCOMP_BLOCK_UNLESS_RR = ("perf_event_open",)
 
 # Syscalls blocked in full, allowed in the debug AND frida profiles
 # (both are opt-in instrumentation profiles; the constant's name
@@ -322,6 +326,7 @@ _SECCOMP_BLOCK_UNLESS_DEBUG = (
 _AUDIT_HARD_DENY_SYSCALLS = frozenset({
     "ptrace", "process_vm_readv", "process_vm_writev",
     *_SECCOMP_BLOCK_ALWAYS,
+    *_SECCOMP_BLOCK_UNLESS_RR,
 })
 
 # socket() family / type values used by the argument filters (arg 0 /
@@ -916,8 +921,13 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
         raise ValueError(msg)
 
     blocked_syscalls = list(_SECCOMP_BLOCK_ALWAYS)
-    if profile not in ("debug", "frida"):
+    if profile != "rr":
+        blocked_syscalls += list(_SECCOMP_BLOCK_UNLESS_RR)
+    if profile not in ("debug", "frida", "rr"):
         blocked_syscalls += list(_SECCOMP_BLOCK_UNLESS_DEBUG)
+    rr_perf_num = _resolve("perf_event_open") if profile == "rr" else -1
+    if profile == "rr" and rr_perf_num < 0:
+        raise RuntimeError("rr perf-event syscall cannot be resolved on this architecture")
     # Audit mode: add b3 syscalls (open/openat/connect) to the trace
     # set so the tracer logs every file path attempt and connect
     # target. Under enforcement these aren't blocked at all (Landlock
@@ -1131,12 +1141,39 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                     act = (hard_deny
                            if audit_mode and name in _AUDIT_HARD_DENY_SYSCALLS
                            else deny)
+                    # rr supports a socket-transfer fallback when this
+                    # optional kernel API is unavailable. Keep it denied;
+                    # ENOSYS selects the fallback instead of an abort.
+                    if profile == "rr" and name == "pidfd_getfd":
+                        act = _SCMP_ACT_ERRNO(errno.ENOSYS)
                     null_args = ctypes.POINTER(_ScmpArgCmp)()
                     ret = lib.seccomp_rule_add_array(ctx, act, num, 0, null_args)
                     if ret < 0:
                         _os_write(2, b"sandbox: seccomp add_rule failed -- "
                                      b"refusing to exec without filter\n")
                         os._exit(126)
+
+                if rr_perf_num >= 0:
+                    # perf_event_open(attr, pid, cpu, group_fd, flags).
+                    # Only nonnegative canonical pid values and cpu == -1
+                    # (per-task, not per-CPU) are accepted. Linux truncates
+                    # cpu to int; inspect its LOW 32 bits so both zero- and
+                    # sign-extended -1 work without high-bit bypasses.
+                    # Each zero bit denies independently: default ALLOW
+                    # plus deny rules cannot express masked inequality.
+                    checks = [_ScmpArgCmp(arg=1, op=_SCMP_CMP_GE,
+                                          datum_a=0x80000000, datum_b=0),
+                              _ScmpArgCmp(arg=4, op=_SCMP_CMP_MASKED_EQ,
+                                          datum_a=4, datum_b=4)]
+                    checks += [_ScmpArgCmp(arg=2, op=_SCMP_CMP_MASKED_EQ,
+                                           datum_a=1 << bit, datum_b=0)
+                               for bit in range(32)]
+                    for check in checks:
+                        ret = lib.seccomp_rule_add_array(
+                            ctx, hard_deny, rr_perf_num, 1, ctypes.byref(check))
+                        if ret < 0:
+                            _os_write(2, b"sandbox: rr perf rule failed -- refusing exec\n")
+                            os._exit(126)
 
                 # Audit-mode-only extras: open/openat/connect get the
                 # TRACE action so the tracer logs every file path and

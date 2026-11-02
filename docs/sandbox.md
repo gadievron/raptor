@@ -397,7 +397,8 @@ Profiles bundle layer settings into a single name for CLI use:
 | `full` | blocked | yes | full | The default. Warns and degrades if a host layer is missing (untrusted entry points excepted — see above). |
 | `strict` | blocked | yes | full | Fail-closed version of `full`. For autonomous work where weaker isolation is not acceptable. Also requires mount namespaces when target/output isolation is requested. |
 | `target_run` | **open** | yes | full | For harness-spawned target binaries that need a local listener (loopback TCP, Unix domain sockets). Paired processes (server + client) can share one isolated network namespace. |
-| `debug` | blocked | yes | debug (permits ptrace) | For [crash analysis](crash-analysis.md) with gdb/rr. Target and debugger run in the same sandbox. Composes with `--audit`. |
+| `debug` | blocked | yes | debug (permits ptrace) | For [crash analysis](crash-analysis.md) with GDB/LLDB. Target and debugger run in the same sandbox. Composes with `--audit`. |
+| `rr` | blocked; private loopback only | yes | rr (ptrace and per-task counters) | Linux replay; requires private mount/PID/network namespaces and functional seccomp. General lower-floor consent cannot relax this requirement. |
 | `frida` | **open** | yes | frida (AF_UNIX allowed) | For [Frida](frida.md) helper IPC. Netlink/packet/raw sockets stay blocked. |
 | `network-only` | blocked | off | none | Tools whose correctness needs unrestricted filesystem or syscalls. |
 | `none` | open | off | none | Emergency escape hatch. Rlimits only. |
@@ -1352,7 +1353,7 @@ forced the degrade.
 - [Fuzzing](fuzzing.md) -- fuzz target execution under sandbox
   isolation.
 - [Frida](frida.md) -- Frida instrumentation using the `frida` profile.
-- [Crash analysis](crash-analysis.md) -- gdb/rr under the `debug`
+- [Crash analysis](crash-analysis.md) -- GDB under `debug` and rr replay under `rr`
   profile.
 
 The module docstring in `core/sandbox/__init__.py` carries the current

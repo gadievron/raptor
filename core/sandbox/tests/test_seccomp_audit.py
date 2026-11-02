@@ -88,7 +88,8 @@ class TestAuditHardDenySet:
 
     def test_set_is_subset_of_blocklist(self):
         blocklist = (set(seccomp._SECCOMP_BLOCK_ALWAYS)
-                     | set(seccomp._SECCOMP_BLOCK_UNLESS_DEBUG))
+                     | set(seccomp._SECCOMP_BLOCK_UNLESS_DEBUG)
+                     | set(seccomp._SECCOMP_BLOCK_UNLESS_RR))
         stray = seccomp._AUDIT_HARD_DENY_SYSCALLS - blocklist
         assert stray == set(), (
             f"hard-deny entries not in any blocklist: {stray} — they "

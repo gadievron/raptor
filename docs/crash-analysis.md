@@ -101,8 +101,38 @@ and aliases to those locations are refused as target directories. Crash input
 is supplied through stdin. Existing process attachment is outside these
 spawn-only replay paths.
 
-These guarantees apply to the Python replay helpers. The separate rr skill
-and manually issued debugger commands do not acquire this policy automatically.
+These guarantees apply to the Python replay helpers. Manually issued debugger
+commands do not acquire this policy automatically.
+
+### rr replay
+
+Use the shared replay launcher for a packed recording:
+
+```sh
+python3 -I "$RAPTOR_DIR/.claude/skills/crash-analysis/rr-debugger/scripts/crash_trace.py" /path/to/recording --interactive
+```
+
+Omit `--interactive` for automated trace extraction. With no recording argument,
+the launcher resolves `latest-trace` under `_RR_TRACE_DIR`, or under
+`$XDG_DATA_HOME/rr` (default `~/.local/share/rr`).
+
+The dedicated Linux `rr` sandbox permits per-task performance counters while
+blocking system-wide and per-CPU monitoring. It requires private mount, PID and
+network namespaces and working seccomp; selecting a lower general containment
+floor does not waive these requirements. Explicit operator sandbox profile
+overrides follow the standard sandbox CLI rules. rr and GDB communicate over private
+loopback. The selected recording is read-only; replay writes only to temporary
+scratch that is removed when the session ends. GDB initialization and symbol
+script loading remain disabled.
+
+rr still needs compatible hardware and host counter permissions. The launcher
+does not change host sysctls. It requires rr's `--serve-files` support and a
+packed recording so original executable paths do not require broad filesystem
+grants. Recordings can already contain sensitive data captured at recording
+time; confinement does not remove that data.
+
+Bare `rr record`, `rr pack` and `rr replay` commands are separate from this
+launcher and do not automatically receive its containment policy.
 
 ## Output Directory Structure
 

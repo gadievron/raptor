@@ -439,7 +439,7 @@ def _check_blocked(stderr: str, cmd_display: str, returncode: int = 0,
             # the active profile.
             suggestion = "--sandbox network-only"
             if seccomp_profile == "full":
-                suggestion = "--sandbox debug (if gdb/rr) or " + suggestion
+                suggestion = "--sandbox debug (GDB/LLDB), --sandbox rr (rr replay), or " + suggestion
             logger.info(
                 "Sandbox: 'Operation not permitted' seen in stderr during %s (rc=%s) — this may be seccomp blocking a syscall (profile=%r). If the tool genuinely needs the syscall, try %s.", cmd_display, returncode, seccomp_profile, suggestion
             )

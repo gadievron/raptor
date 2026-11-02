@@ -1705,7 +1705,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                       toolchains (pip --user, pyenv, ~/venv) under strict
                       must pass tool_paths=[...] (see
                       python_runtime_tool_paths()).
-        debug:        full, but seccomp permits ptrace (for gdb/rr use cases
+        debug:        full, but seccomp permits ptrace (for GDB/LLDB use cases
                       under /crash-analysis). All other seccomp blocks remain.
         target_run:   full's layers with the network OPEN (block_network
                       False) — for targets that must reach the network
@@ -1833,6 +1833,12 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
     # disabled, then the caller's profile=. Unknown profile strings
     # resolve to no implications here; the authoritative block still
     # raises ValueError for them.
+    if (profile == "rr" and disabled
+            and state._cli_sandbox_profile is None
+            and not state._cli_sandbox_disabled):
+        raise _errors.SandboxSetupError(
+            "rr replay cannot waive containment through disabled=True; "
+            "sandbox opt-outs require an explicit operator profile choice")
     if state._cli_sandbox_profile is not None:
         _profile_for_defaults = state._cli_sandbox_profile
     elif disabled or state._cli_sandbox_disabled:
@@ -1843,6 +1849,25 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         PROFILES.get(_profile_for_defaults)
         if _profile_for_defaults else None
     ) or {}
+    if _profile_for_defaults == "rr":
+        if (_profile_defaults.get("seccomp") != "rr"
+                or not all(_profile_defaults.get(key) is True
+                           for key in ("block_network", "use_landlock", "restrict_reads"))):
+            raise ValueError("rr profile must retain its complete namespace/seccomp contract")
+        # rr may open per-task perf counters only inside a private PID
+        # namespace. This is a profile requirement, not a waivable floor.
+        if use_egress_proxy or loopback_unix_bridges:
+            raise _errors.SandboxSetupError("rr does not permit host-network bridges or egress proxies")
+        if sys.platform != "linux" or not output or not check_seccomp_available():
+            raise _errors.SandboxSetupError(
+                "rr requires Linux, a writable output directory and functional seccomp")
+        if not (check_mount_available() and check_net_available()):
+            raise _errors.SandboxSetupError(
+                "rr requires private mount, PID and network namespaces; "
+                "a lower sandbox floor does not relax the rr counter policy")
+        block_network = True
+        restrict_reads = True
+        fake_home = True
     if restrict_reads is _UNSET:
         restrict_reads = bool(_profile_defaults.get("restrict_reads", False))
     if fake_home is _UNSET:
@@ -3708,7 +3733,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         # blocklist is belt-and-braces on the os.environ →
         # get_safe_env path (see core/config.py); the caller path
         # is "you know what you're doing".
-        strict_env = kwargs.pop("strict_env", False)
+        strict_env = kwargs.pop("strict_env", False) or seccomp_profile == "rr"
         # allow_path_divergence: opt-out for the PATH-divergence gate
         # below. Default False — a bare command that resolves to a
         # DIFFERENT binary inside the sandbox than in the caller's
@@ -3798,6 +3823,11 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             # {None, True, False} — a literal 0 must resolve like
             # False (present-but-zeroed), not like an absent kwarg.
             _rfp_kwarg = bool(_rfp_kwarg)
+        if seccomp_profile == "rr":
+            if _skip_pid_ns or kwargs.get("inherit_netns"):
+                raise _errors.SandboxSetupError("rr requires private PID and network namespaces")
+            kwargs["start_new_session"] = True
+            _rfp_kwarg = True
         _require_fresh_procfs = bool(_rfp_kwarg)
 
         # ---- containment-floor contract, side 1: entry-time check ----
@@ -3864,6 +3894,12 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             # other floor refusal, then let it propagate.
             raise _note_floor_refusal(_resolve_exc)
 
+        if seccomp_profile == "rr":
+            # Keep the counter exception out of every reduced lane, even
+            # when the operator has consented to a lower general floor.
+            if _floor < _tiers.ContainmentTier.MOUNT_NS:
+                _floor = _tiers.ContainmentTier.MOUNT_NS
+                _floor_source = _tiers.FLOOR_SOURCE_DEFAULT
         if (_floor_source == _tiers.FLOOR_SOURCE_ENV
                 and sys.platform == "linux"
                 and state.warn_once("_floor_lowered_banner_warned")):
