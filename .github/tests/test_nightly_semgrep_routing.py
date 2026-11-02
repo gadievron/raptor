@@ -1,15 +1,42 @@
 """Semgrep nightly cases have one visible owner in scheduled and full runs."""
 
 import ast
+import importlib.util
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import sys
+import textwrap
 
 import pytest
-import yaml
 
 _WORKFLOW = Path(__file__).resolve().parents[2] / ".github/workflows/nightly.yml"
+
+
+def _jobs():
+    """Read the repo's block-style workflow using its stdlib step parser."""
+    text = _WORKFLOW.read_text()
+    script = _WORKFLOW.parents[1] / "scripts/check_workflow_pipefail.py"
+    spec = importlib.util.spec_from_file_location("nightly_workflow_steps", script)
+    assert spec is not None and spec.loader is not None
+    parser = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(parser)
+    jobs = {}
+    current = None
+    for line in text.split("\njobs:\n", 1)[1].splitlines():
+        match = re.fullmatch(r"  ([A-Za-z0-9_-]+):", line)
+        if match:
+            current = match.group(1)
+            jobs[current] = {"steps": []}
+        elif current is not None and line.startswith("    if: "):
+            jobs[current]["if"] = line.removeprefix("    if: ")
+    for step in parser.parse_steps(str(_WORKFLOW), text):
+        jobs[step.job]["steps"].append({
+            "run": textwrap.dedent("\n".join(step.run_body)),
+        })
+    assert jobs and all("if" in job for job in jobs.values())
+    return jobs
 
 
 def _condition(expression, event, suite):
@@ -55,12 +82,12 @@ def _commands(job):
     ("workflow_dispatch", "cpp", {"cpp-query-regressions"}),
 ])
 def test_job_routing(event, suite, expected):
-    jobs = yaml.safe_load(_WORKFLOW.read_text())["jobs"]
+    jobs = _jobs()
     assert {name for name, job in jobs.items() if _condition(job["if"], event, suite)} == expected
 
 
 def test_engine_cases_are_excluded_from_both_broad_lanes_and_retry():
-    jobs = yaml.safe_load(_WORKFLOW.read_text())["jobs"]
+    jobs = _jobs()
     dedicated = list(_commands(jobs["semgrep-regressions"]))
     assert len(dedicated) == 1
     assert "engine/semgrep/tests" in dedicated[0]
@@ -78,7 +105,7 @@ def test_engine_cases_are_excluded_from_both_broad_lanes_and_retry():
     ('<testsuite><testcase name="missing-tool"><skipped/></testcase></testsuite>', False),
 ])
 def test_dedicated_job_rejects_empty_or_skipped_results(tmp_path, body, success):
-    job = yaml.safe_load(_WORKFLOW.read_text())["jobs"]["semgrep-regressions"]
+    job = _jobs()["semgrep-regressions"]
     script = next(s["run"] for s in job["steps"] if "scan-regressions.xml\" <<'PY'" in s.get("run", ""))
     guard = script.split("<<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
     report = tmp_path / "results.xml"
