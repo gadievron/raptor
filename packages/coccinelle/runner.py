@@ -471,7 +471,13 @@ def version() -> str | None:
     patches stay hermetic); the ``spatch version X`` line parse is
     spatch-specific and stays here.
     """
-    info = probe(_SPATCH_BIN)
+    # Rule execution pins this resolved executable for the process. Probe
+    # that same executable: a later PATH change must not let a newer tool's
+    # version satisfy a rule that will still execute with the pinned old tool.
+    binary = _spatch_path()
+    if binary is None:
+        return None
+    info = probe(binary)
     if info is None:
         return None
     for line in info.stdout.splitlines():
