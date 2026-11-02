@@ -76,6 +76,8 @@ _REPO = Path(__file__).resolve().parents[3]
 # outcome / journal BODY or model-derived prompt text, each with the
 # reason it is not a body consumer (so it needs no registry entry).
 NON_BODY_SITES = {
+    ("packages/binary_analysis/rr_record.py", "[FATAL "):
+        "rr subprocess stderr failure diagnostic; rejects replay, never stamps model evidence",
     ("core/analysis/binary_oracle.py", "[h"):
         "regex over nm/objdump symbol output",
     ("core/audit/corpus/run_corpus.py", "[dead-code gate:"):
