@@ -155,7 +155,7 @@ class TestWorkerWatchdog:
         with pytest.raises(RuntimeError, match="unknown op"):
             handler.run({"op": "frobnicate"})
 
-    def test_single_thread_serves_every_op(self):
+    def test_single_thread_serves_every_op(self, monkeypatch):
         """One persistent handler thread (single JVM attachment),
         not a thread per op."""
         import threading as _threading
@@ -169,14 +169,14 @@ class TestWorkerWatchdog:
             seen.add(_threading.get_ident())
             return orig(session, req)
 
-        server_worker._handle = _record
-        try:
-            handler.run({"op": "ping"})
-            handler.run({"op": "ping"})
-            handler.run({"op": "ping"})
-        finally:
-            server_worker._handle = orig
-        assert len(seen) == 1
+        monkeypatch.setattr(server_worker, "_handle", _record)
+        handler.run({"op": "ping"})
+        handler.run({"op": "ping"})
+        handler.run({"op": "ping"})
+        assert len(seen) == 1, (
+            f"expected 1 handler thread, saw {len(seen)}: {seen} "
+            f"(main={_threading.get_ident()})"
+        )
         assert _threading.get_ident() not in seen
 
     def test_decompile_deadline_tracks_request_timeout(self, monkeypatch):
