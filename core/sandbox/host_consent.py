@@ -55,6 +55,11 @@ hard-refuses a non-TTY stdin so an agent or injected instruction can
 never self-grant. Revocation (:func:`remove_marker`) is deliberately
 NOT TTY-gated: removing consent only raises the floor (fail-safe
 direction), so scripts and unattended sessions may always revoke.
+
+Agent recovery instructions live beside this module in
+``instructions/wsl-recovery.md``. They govern the optional run-boundary
+offer after a refusal; they never authorize an agent to execute the
+TTY-only host grant ceremony on the operator's behalf.
 """
 
 from __future__ import annotations

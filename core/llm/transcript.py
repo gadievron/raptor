@@ -95,6 +95,13 @@ directory gets ``llm-transcript.jsonl`` appended). A garbled value
 raises: silently ignoring ``record:`` would waste a paid run, and
 silently ignoring ``replay:`` would dispatch live — the one failure
 this module exists to prevent.
+
+Evaluation harness contract
+---------------------------
+An eval harness should fail on all three signals: misses
+(``session.misses``), error-status findings, and leftovers — recorded
+entries the replay never consumed (``session.leftover_report()``),
+which mean the replay run issued fewer calls than the recorded one.
 """
 
 from __future__ import annotations

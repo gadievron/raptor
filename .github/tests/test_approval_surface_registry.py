@@ -443,7 +443,7 @@ REGISTRY: dict[str, Entry] = {
                      "Gate with `libexec/raptor-may-ask`",
                      "Non-interactive fallback",),
     ),
-    "docs/wsl.md": Entry(
+    "core/sandbox/instructions/wsl-recovery.md": Entry(
         lane="instruction", status="clean",
         members=("M18-wsl-floor-refusal-offer",),
         note="refusal-boundary offer quotes the floor refusal text "
@@ -792,6 +792,19 @@ class TestApprovalSurfaceRegistry(unittest.TestCase):
             "skipped (or vice versa) — adjudicate the divergent "
             "file(s) and keep the prescreen honest",
         )
+
+    def test_wsl_recovery_instructions_are_loaded(self):
+        """A guarded instruction file is ineffective if recovery never loads it."""
+        target = "core/sandbox/instructions/wsl-recovery.md"
+        root = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+        loading = root.split("## PROGRESSIVE LOADING", 1)[1].split("\n## ", 1)[0]
+        self.assertTrue(
+            any(target in row and "WSL" in row and "Landlock" in row
+                for row in loading.splitlines() if row.startswith("|")),
+            "WSL refusal instructions need an explicit progressive-loading trigger",
+        )
+        recovery = (REPO_ROOT / "tiers/recovery.md").read_text(encoding="utf-8")
+        self.assertIn(target, recovery)
 
     def test_registry_files_exist(self):
         gone = sorted(

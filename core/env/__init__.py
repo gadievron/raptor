@@ -27,6 +27,13 @@ works*. This package is that capability, decomposed as:
 Policy boundary: same as ``core.container`` — no operator printing, no
 LLM-facing hint text baked in (hint/sanitize hooks are caller-supplied),
 no cross-call state.
+
+Build consumers share ``core.env.build``: /validate Stage E reproduction,
+mitigation-matrix posture variants, binary-oracle debug builds, and /fuzz
+AFL-instrumented builds in the pinned AFL++ image. ``provision(spec)``
+returns a live Environment. ``SandboxHandle`` runs an exported image
+rootfs under namespace isolation, syscall observability, and fail-closed
+containment; outcomes are tier-tagged so evidence consumers can weigh them.
 """
 
 from core.env.handle import (

@@ -1,4 +1,8 @@
-"""Ingest /understand artefacts into the internal graph store."""
+"""Ingest /understand artefacts into the internal graph store.
+Truncation or ambiguous identity must be reported in the log and in
+the snapshot's ``props_json.ingest`` metadata. Partial memory must never
+be silently presented as complete.
+"""
 
 from __future__ import annotations
 
