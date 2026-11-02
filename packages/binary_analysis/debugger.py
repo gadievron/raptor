@@ -23,6 +23,7 @@ export and doing it right costs nothing.
 import os
 import tempfile
 from core.sandbox import run as _sandbox_run
+from packages.binary_analysis._execution_policy import crash_execution_policy, gdb_command
 # GDB needs ptrace(), which seccomp blocks in the `full` profile. Use
 # profile='debug' — same filesystem/network isolation as full, but ptrace
 # is permitted so gdb can trace its target. Landlock is engaged with
@@ -42,7 +43,7 @@ class GDBDebugger:
     """Wrapper around GDB for automated debugging."""
 
     def __init__(self, binary_path: Path) -> None:
-        self.binary = Path(binary_path)
+        self.binary = Path(binary_path).resolve()
         if not self.binary.exists():
             msg = f"Binary not found: {binary_path}"
             raise FileNotFoundError(msg)
@@ -126,13 +127,13 @@ class GDBDebugger:
         # Landlock needs a directory to engage — use the binary's parent
         # and the gdb-script tempdir. Both are the same /tmp in practice
         # when the binary was also placed in /tmp; we pass both for
-        # coverage. Landlock allows reads everywhere (gcc includes etc.),
-        # writes only to these.
+        # coverage. Reads are restricted to the replay workspace and system
+        # runtime files; writes remain scoped to the replay workspace.
         binary_dir_str = str(self.binary.parent.resolve())
         script_dir = str(script_file.parent.resolve())
 
         # Build GDB command
-        cmd = ["gdb", "-batch", "-x", str(script_file), str(self.binary)]
+        cmd = gdb_command(script_file, self.binary)
 
         # Run with input redirection if provided.
         # profile='debug' permits ptrace while keeping all other seccomp
@@ -142,6 +143,7 @@ class GDBDebugger:
                 with Path(input_file).open("rb") as f:
                     result = _sandbox_run(
                         cmd, profile="debug",
+                        **crash_execution_policy(self.binary.parent),
                         target=binary_dir_str, output=script_dir,
                         stdin=f,
                         capture_output=True,
@@ -152,6 +154,7 @@ class GDBDebugger:
             else:
                 result = _sandbox_run(
                     cmd, profile="debug",
+                    **crash_execution_policy(self.binary.parent),
                     target=binary_dir_str, output=script_dir,
                     capture_output=True,
                     text=True,

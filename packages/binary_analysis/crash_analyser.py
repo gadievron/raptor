@@ -36,6 +36,9 @@ from core.sandbox import run_trusted as _run_trusted
 # - ASAN binary: no ptrace needed → default full sandbox via _sandbox_run.
 # Each call site specifies target+output for Landlock engagement.
 from packages.binary_analysis._validators import is_valid_hex_address
+from packages.binary_analysis._execution_policy import (
+    crash_execution_policy, gdb_command, lldb_command, lldb_path,
+)
 
 logger = get_logger()
 
@@ -616,11 +619,12 @@ class CrashAnalyser:
 
             # Run GDB with input file via stdin (not in GDB script — avoids path injection)
             # profile='debug' permits ptrace; all other seccomp blocks remain.
-            cmd = ["gdb", "-batch", "-x", str(cmd_file), str(self.binary)]
+            cmd = gdb_command(cmd_file, self.binary)
             binary_dir = str(self.binary.parent.resolve())
             with Path(input_file).open("rb") as f:
                 result = _sandbox_run(
                     cmd, profile="debug",
+                    **crash_execution_policy(self.binary.parent),
                     target=binary_dir, output=binary_dir,
                     stdin=f,
                     capture_output=True,
@@ -769,7 +773,7 @@ class CrashAnalyser:
                 # containing spaces splits into wrong args (same class
                 # as the `-i` case documented in _run_lldb_fallback).
                 # Input via subprocess stdin (no path in script — CWE-78 safe).
-                f'process launch -o "{lldb_out}" -e "{lldb_err}"',
+                f'process launch -o {lldb_path(lldb_out)} -e {lldb_path(lldb_err)}',
                 "register read",                   # Get register state
                 "thread backtrace --extended true", # Get full backtrace
                 "disassemble --count 10 --start-address $pc",  # Examine instructions at PC
@@ -789,8 +793,9 @@ class CrashAnalyser:
                 binary_dir = str(self.binary.parent.resolve())
                 with Path(input_file).open("rb") as stdin_f:
                     result = _sandbox_run(
-                        ["lldb", "-s", str(cmd_file), str(self.binary)],
+                        lldb_command(cmd_file, self.binary),
                         profile="debug",
+                        **crash_execution_policy(self.binary.parent),
                         target=binary_dir, output=binary_dir,
                         stdin=stdin_f,
                         capture_output=True,
@@ -903,9 +908,10 @@ class CrashAnalyser:
             binary_dir = str(self.binary.parent.resolve())
             with Path(input_file).open("rb") as fh_in:
                 result = _sandbox_run(
-                    ["lldb", "-b", "-s", str(cmd_file), str(self.binary)],
+                    lldb_command(cmd_file, self.binary),
                     stdin=fh_in,
                     profile="debug",
+                    **crash_execution_policy(self.binary.parent),
                     target=binary_dir, output=binary_dir,
                     capture_output=True,
                     text=True,
@@ -1682,7 +1688,7 @@ class CrashAnalyser:
                 result = _sandbox_run(
                     [str(self.binary)],
                     stdin=fh_in,
-                    block_network=True,
+                    **crash_execution_policy(self.binary.parent),
                     target=binary_dir, output=binary_dir,
                     capture_output=True,
                     text=True,
