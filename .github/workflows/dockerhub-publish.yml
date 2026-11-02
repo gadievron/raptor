@@ -39,6 +39,7 @@ on:
       - '.devcontainer/codeql-bootstrap.py'
       - '.devcontainer/github-release-pins.json'
       - '.devcontainer/install-npm-notices.py'
+      - '.devcontainer/refresh-npm-notices.py'
       - '.devcontainer/install-python-notices.py'
       - '.devcontainer/refresh-python-notices.py'
       - '.devcontainer/python-notices/**'

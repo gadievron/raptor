@@ -163,6 +163,7 @@ RUN apt-get update \
 COPY .devcontainer/npm-notices/ /usr/share/doc/raptor-npm-notices/
 COPY .devcontainer/corepack-notices/ /usr/share/doc/raptor-corepack-notices/
 COPY .devcontainer/install-npm-notices.py /usr/local/libexec/install-npm-notices.py
+COPY .devcontainer/refresh-npm-notices.py /usr/local/libexec/refresh-npm-notices.py
 
 # Install upstream npm explicitly to retain its bundled dependency notices,
 # which are omitted from the npm tree shipped in the NodeSource package.
@@ -172,7 +173,11 @@ RUN curl -fsSL https://deb.nodesource.com/setup_24.x -o /tmp/nodesource_setup.sh
     && apt-get install -y --no-install-recommends nodejs=24.21.0-1nodesource1 \
     && apt-get clean && rm -rf /var/lib/apt/lists/* \
     && npm install -g --prefix /usr npm@11.19.0 --ignore-scripts --no-audit --no-fund \
+    && python3 /usr/local/libexec/refresh-npm-notices.py \
+        --package-root /usr/lib/node_modules/npm --evidence /usr/share/doc/raptor-npm-notices \
     && python3 /usr/local/libexec/install-npm-notices.py \
+    && python3 /usr/local/libexec/refresh-npm-notices.py \
+        --package-root /usr/lib/node_modules/corepack --evidence /usr/share/doc/raptor-corepack-notices \
     && python3 /usr/local/libexec/install-npm-notices.py \
         --package-root /usr/lib/node_modules/corepack \
         --evidence /usr/share/doc/raptor-corepack-notices \
@@ -185,6 +190,8 @@ RUN curl -fsSL https://deb.nodesource.com/setup_24.x -o /tmp/nodesource_setup.sh
 COPY .devcontainer/pnpm-notices/ /usr/share/doc/raptor-pnpm-notices/
 
 RUN npm install -g yarn@1.22.22 pnpm@11.11.0 \
+    && python3 /usr/local/libexec/refresh-npm-notices.py \
+        --package-root /usr/lib/node_modules/pnpm --evidence /usr/share/doc/raptor-pnpm-notices \
     && python3 /usr/local/libexec/install-npm-notices.py \
         --package-root /usr/lib/node_modules/pnpm \
         --evidence /usr/share/doc/raptor-pnpm-notices

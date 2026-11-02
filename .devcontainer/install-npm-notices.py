@@ -34,7 +34,7 @@ def install(root: Path, evidence: Path) -> int:
     }
     metadata = json.loads(regular_path(root, "package.json").read_text())
     if (metadata.get("name"), metadata.get("version")) != (manager["name"], manager["version"]):
-        raise ValueError("package manager version changed; review bundled notice evidence")
+        raise ValueError("package manager version changed; run refresh-npm-notices.py for this package root and evidence directory")
     pending = []
     unresolved = []
     # Validate every entry before writing any additions.
@@ -44,10 +44,14 @@ def install(root: Path, evidence: Path) -> int:
         else:
             dependencies = regular_path(root, manager["dependency_directory"])
             package = regular_path(dependencies, entry["name"])
+        if entry.get("absent") is True:
+            if package.exists():
+                raise ValueError("bundled package changed; refresh notice evidence")
+            continue
         metadata = json.loads(regular_path(package, "package.json").read_text())
         expected = (entry["name"], entry["version"], entry["license"])
         if (metadata.get("name"), metadata.get("version"), metadata.get("license")) != expected:
-            raise ValueError("bundled package changed; review notice evidence")
+            raise ValueError("bundled package changed; run refresh-npm-notices.py")
         if entry["status"] == "unresolved":
             unresolved.append(entry["name"])
             continue
