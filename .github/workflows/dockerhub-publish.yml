@@ -41,6 +41,7 @@ on:
       - '.devcontainer/install-npm-notices.py'
       - '.devcontainer/install-python-notices.py'
       - '.devcontainer/python-notices/**'
+      - '.devcontainer/pydocstyle-notices/**'
       - '.devcontainer/npm-notices/**'
       - '.devcontainer/pnpm-notices/**'
       - '.devcontainer/corepack-notices/**'

@@ -124,6 +124,14 @@ RUN bash -eo pipefail -c \
      | uv pip install --system --no-cache -r -' \
     && python3 /usr/local/libexec/install-python-notices.py
 
+# Retain the source-release notice omitted from pydocstyle's wheel.
+# Reinstall the existing version so metadata and notice share this layer.
+COPY .devcontainer/pydocstyle-notices/ /usr/share/doc/raptor-pydocstyle-notices/
+RUN uv pip install --python /usr/local/py-utils/venvs/pydocstyle/bin/python \
+        --no-cache --no-deps --reinstall --no-build pydocstyle==6.3.0 \
+    && /usr/local/py-utils/venvs/pydocstyle/bin/python /usr/local/libexec/install-python-notices.py \
+        --evidence /usr/share/doc/raptor-pydocstyle-notices
+
 # Install Playwright browser + system deps via Playwright's own dep installer.
 # Replaces a hand-rolled apt list that drifted out of sync with upstream Chromium deps.
 RUN apt-get update \

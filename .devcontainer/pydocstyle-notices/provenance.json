@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "scope": "Verbatim notice from the exact-version upstream source release, retained beside the reinstalled wheel metadata. Wheel/image byte correspondence is checked separately; source-build correspondence and complete licence coverage remain unverified. PyPI hashes are publisher claims.",
+  "packages": [
+    {
+      "name": "pydocstyle",
+      "version": "6.3.0",
+      "license": "MIT",
+      "license_spdx": "MIT",
+      "metadata_directory": "pydocstyle-6.3.0.dist-info",
+      "notice_file": "pydocstyle-LICENSE-MIT",
+      "installed_filename": "LICENSE-MIT",
+      "sha256": "2449878c93af4d10bbdb6618ac26d18877e0b893ecff597532b3867c4458aa93",
+      "source_kind": "hash_checked_source_distribution",
+      "source_url": "https://files.pythonhosted.org/packages/e9/5c/d5385ca59fd065e3c6a5fe19f9bc9d5ea7f2509fa8c9c22fb6b2031dd953/pydocstyle-6.3.0.tar.gz",
+      "source_sha256": "7ce43f0c0ac87b07494eb9c0b462c0b73e6ff276807f204d6b53edc72b7e44e1",
+      "source_path": "pydocstyle-6.3.0/LICENSE-MIT",
+      "wheel_url": "https://files.pythonhosted.org/packages/36/ea/99ddefac41971acad68f14114f38261c1f27dac0b3ec529824ebc739bdaa/pydocstyle-6.3.0-py3-none-any.whl",
+      "wheel_sha256": "118762d452a49d6b05e194ef344a55822987a462831ade91ec5c06fd2169d019",
+      "registry_metadata_url": "https://pypi.org/pypi/pydocstyle/6.3.0/json"
+    }
+  ]
+}
