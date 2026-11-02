@@ -21,6 +21,7 @@ accepts exactly start/complete/fail/cancel, and CLAUDE.md mandates
 
 from __future__ import annotations
 
+import os
 import re
 import unittest
 from pathlib import Path
@@ -40,8 +41,26 @@ _SUBCOMMAND_RE = re.compile(r"raptor-run-lifecycle[ \t]+([a-z][a-z-]*)")
 
 def _doc_files() -> list[Path]:
     docs = [REPO / "CLAUDE.md"]
-    docs += sorted((REPO / ".claude").rglob("*.md"))
-    return [p for p in docs if p.is_file()]
+    claude = REPO / ".claude"
+    for directory, children, names in os.walk(claude):
+        if Path(directory) == claude:
+            # Other checkouts and their generated output are not our docs.
+            children[:] = [name for name in children if name != "worktrees"]
+        docs.extend(Path(directory) / name for name in names if name.endswith(".md"))
+    return sorted(p for p in docs if p.is_file())
+
+
+def test_doc_scan_excludes_other_worktrees(tmp_path, monkeypatch):
+    monkeypatch.setitem(globals(), "REPO", tmp_path)
+    root_doc = tmp_path / "CLAUDE.md"
+    root_doc.write_text("checkout instructions\n")
+    own_doc = tmp_path / ".claude" / "skills" / "owned" / "SKILL.md"
+    own_doc.parent.mkdir(parents=True)
+    own_doc.write_text("libexec/raptor-run-lifecycle start --target /src\n")
+    foreign = tmp_path / ".claude" / "worktrees" / "other" / "out" / "report.md"
+    foreign.parent.mkdir(parents=True)
+    foreign.write_text("raptor-run-lifecycle invalid-subcommand\n")
+    assert set(_doc_files()) == {root_doc, own_doc}
 
 
 class LifecycleDocSyntaxTests(unittest.TestCase):
