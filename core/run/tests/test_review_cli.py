@@ -6,8 +6,10 @@ invisible to CI without a direct test.
 """
 
 import importlib.util
+import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -17,7 +19,8 @@ def _load_review_module():
     loader = SourceFileLoader("raptor_review_cli", cli_path)
     spec = importlib.util.spec_from_loader("raptor_review_cli", loader)
     mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
+    with patch.object(sys, "path", sys.path.copy()):
+        loader.exec_module(mod)
     return mod
 
 
