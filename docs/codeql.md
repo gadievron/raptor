@@ -530,3 +530,34 @@ All subprocess invocations run inside the RAPTOR [sandbox](sandbox.md)
 by default. Pass `--no-sandbox` to disable (consent-gated: an
 interactive terminal or a minted nonce — see
 [Sandbox](sandbox.md#disabling-the-sandbox)).
+
+### Curated Java deserialization filters
+
+The curated ObjectInputStream query suppresses a read only when it can verify
+that a restrictive filter was installed on the same stream before every path
+to that read. It recognizes constant `ObjectInputFilter.Config.createFilter`
+patterns containing exact class names (optionally negated), separated by
+semicolons and ending in `!*`. Single-assignment local stream and filter
+aliases are supported.
+
+An arbitrary filter call is not proof of a restrictive policy. Late or
+conditional installation, allow-all/undecided lambdas, denylist-only patterns,
+and resource-only limits remain reportable. Custom filter implementations,
+wildcard allow patterns, module-qualified patterns, and process-wide filter
+configuration are not currently verified; a finding means the query could not
+establish a restrictive filter, not that such a policy cannot exist. Even an
+exact class allowlist needs review for dangerous allowed classes. See the
+[Java filter pattern documentation](https://docs.oracle.com/en/java/javase/21/core/setting-custom-filter-using-pattern.html).
+
+Native named-case regressions run in the nightly workflow's separate
+`Java query regressions` job, alongside log injection. To run just that job
+without the slow/integration batch:
+
+```sh
+gh workflow run nightly.yml --ref main -f suite=java-log
+```
+
+The existing `java-log` and `scan-and-java-log` input names are retained;
+both now include deserialization coverage. Test artifacts retain the existing
+`nightly-java-log-query-results` name and include both suites' expected/actual
+rows and production-query compilation output.
