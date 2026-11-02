@@ -26,7 +26,8 @@ Arguments are the allowed file BASENAMES. A write is allowed only
 when the target path's final component exactly matches one of them
 and no path component is ``..``. Everything else — most importantly
 anything under ``.claude/`` (hooks, anchors, settings, agent
-definitions) — is blocked.
+definitions), including case-insensitive variants (``.CLAUDE``) and
+symbolic links pointing into ``.claude/`` — is blocked.
 
 Contract (Claude Code PreToolUse hooks):
   stdin  — JSON with ``tool_name`` and ``tool_input`` (``file_path``).
@@ -34,12 +35,40 @@ Contract (Claude Code PreToolUse hooks):
   exit 2 — block the call; stderr is fed back to the agent.
 
 Fail-closed: unparseable input, a missing path, a ``..`` component,
-or a ``.claude`` component is blocked regardless of basename.
+a backslash separator, a symlink target/ancestor, or a ``.claude``
+component is blocked regardless of basename.
 """
 
 import json
 import sys
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
+
+
+def _has_forbidden_component(parts: tuple[str, ...]) -> bool:
+    for part in parts:
+        lower = part.lower()
+        if part == ".." or lower == ".claude":
+            return True
+    return False
+
+
+def _has_symlink_or_resolved_claude(file_path: str) -> bool:
+    try:
+        candidate = Path(file_path)
+        # Walk existing path and ancestors to reject symlinks outright
+        cur = candidate
+        while True:
+            if cur.is_symlink():
+                return True
+            if cur.parent == cur:
+                break
+            cur = cur.parent
+        resolved = candidate.resolve(strict=False)
+        if _has_forbidden_component(resolved.parts):
+            return True
+    except OSError:
+        return True
+    return False
 
 
 def main(argv: list[str]) -> int:
@@ -65,10 +94,17 @@ def main(argv: list[str]) -> int:
         )
         return 2
 
-    parts = PurePosixPath(file_path).parts
-    if ".." in parts or ".claude" in parts:
+    if "\\" in file_path or "\x00" in file_path:
         sys.stderr.write(
-            "write-path-allowlist: refusing traversal or .claude/ "
+            "write-path-allowlist: refusing backslash or NUL in "
+            f"path: {file_path!r}\n"
+        )
+        return 2
+
+    parts = PurePosixPath(file_path).parts
+    if _has_forbidden_component(parts) or _has_symlink_or_resolved_claude(file_path):
+        sys.stderr.write(
+            "write-path-allowlist: refusing traversal, symlink, or .claude/ "
             f"writes: {file_path!r}\n"
         )
         return 2

@@ -27,10 +27,10 @@ passed as single (quoted) arguments.
 
 Compound-command hardening: shell metacharacters that could chain a
 second command or substitute one inside an allowed invocation
-(newline, ``;``, ``&``, ``|``, backticks, ``$(``, ``<(``, ``>(``,
-``>``, ``<``) are rejected outright — the allowed surface is plain
-single invocations. Output capture belongs in the tool's own flags
-(e.g. ``raptor-bq-query --output rows.json``), not shell redirects.
+(newline, carriage return, NUL, ``;``, ``&``, ``|``, backticks, ``$(``,
+``${``, ``<(``, ``>(``, ``>``, ``<``) are rejected outright — the allowed
+surface is plain single invocations. Output capture belongs in the tool's
+own flags (e.g. ``raptor-bq-query --output rows.json``), not shell redirects.
 
 Contract (Claude Code PreToolUse hooks):
   stdin  — JSON with ``tool_name`` and ``tool_input`` (``command`` key).
@@ -43,7 +43,21 @@ Fail-closed: unparseable input or a missing command is blocked.
 import json
 import sys
 
-_FORBIDDEN_SUBSTRINGS = ("\n", ";", "&", "|", "`", "$(", "<(", ">(", ">", "<")
+_FORBIDDEN_SUBSTRINGS = (
+    "\n",
+    "\r",
+    "\x00",
+    ";",
+    "&",
+    "|",
+    "`",
+    "$(",
+    "${",
+    "<(",
+    ">(",
+    ">",
+    "<",
+)
 
 
 def main(argv: list[str]) -> int:

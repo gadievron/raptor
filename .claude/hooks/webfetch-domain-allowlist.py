@@ -37,12 +37,13 @@ placeholder from the same inherited environment. The file's shape:
     — operator-visible additions for attachment hosts outside the
     anchor's domain.
 
-A fetch is allowed when its host shares the anchor's registrable
-domain (eTLD+1, conservative built-in heuristic — not a full public
-suffix list) or exactly matches an extra-host line. Every decision is
-appended to ``<path>.log`` (timestamp, verdict, host, URL) so hosts
-the fetched page pulled in — attachment CDNs and the like — are
-operator-auditable. Scheme must be https in every mode.
+A fetch is allowed when its host matches the anchor host, shares an
+explicit Public Suffix List (PSL) registrable domain with the anchor
+(via ``core.domains.host_matches_anchor``), or exactly matches an
+extra-host line. Every decision is appended to ``<path>.log``
+(timestamp, verdict, host, URL) so hosts the fetched page pulled in —
+attachment CDNs and the like — are operator-auditable. Scheme must be
+https in every mode.
 
 Contract (Claude Code PreToolUse hooks):
   stdin  — JSON with ``tool_name`` and ``tool_input`` (``url`` key).
@@ -50,35 +51,26 @@ Contract (Claude Code PreToolUse hooks):
   exit 2 — block the call; stderr is fed back to the agent.
 
 Fail-closed: unparseable input, a missing/relative URL, an unknown
-flag, or a missing/empty/non-https anchor file is blocked.
+flag, a missing/empty/non-https anchor file, or an invalid hostname /
+unavailable PSL is blocked.
 """
 
 import datetime
 import json
+import re
 import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
-# Common multi-label public suffixes for the registrable-domain
-# heuristic. Deliberately small: a miss here makes the check STRICTER
-# (two sibling hosts under an unlisted suffix compare as different
-# registrable domains and the fetch is denied), never looser.
-_MULTI_LABEL_SUFFIXES = frozenset({
-    "ac.jp", "ac.uk", "co.in", "co.jp", "co.kr", "co.nz", "co.uk",
-    "co.za", "com.ar", "com.au", "com.br", "com.cn", "com.mx",
-    "com.tr", "go.jp", "gov.uk", "ne.jp", "net.au", "net.uk",
-    "or.jp", "org.au", "org.uk",
-})
+_REPO_ROOT = str(Path(__file__).resolve().parents[2])
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
+from core.domains import (
+    InvalidHostname, domain_boundary, host_matches_anchor, registrable_domain,
+)
 
-def _registrable_domain(host: str) -> str:
-    """eTLD+1 approximation for a lowercased hostname."""
-    labels = host.split(".")
-    if len(labels) <= 2:
-        return host
-    if ".".join(labels[-2:]) in _MULTI_LABEL_SUFFIXES:
-        return ".".join(labels[-3:])
-    return ".".join(labels[-2:])
+_SAFE_SESSION_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 def _printable(value: str) -> str:
@@ -147,20 +139,37 @@ def _check_anchor(anchor_file: str, host: str, url: str) -> int:
         )
         return 2
 
-    extra_hosts = {e.lower().rstrip(".") for e in entries[1:]}
-    allowed = (
-        host == anchor_host
-        or host in extra_hosts
-        or _registrable_domain(host) == _registrable_domain(anchor_host)
-    )
+    try:
+        extra_hosts = set()
+        for raw_extra in entries[1:]:
+            try:
+                extra_hosts.add(domain_boundary(raw_extra).hostname)
+            except InvalidHostname:
+                continue
+        allowed = host_matches_anchor(
+            host, anchor_host, extra_hosts=extra_hosts,
+        )
+    except (OSError, ValueError):
+        _log_decision(anchor_file, "deny", host, url)
+        sys.stderr.write(
+            "webfetch-domain-allowlist: invalid hostname or unavailable "
+            "Public Suffix List; blocking the WebFetch call (fail-closed).\n"
+        )
+        return 2
+
     _log_decision(anchor_file, "allow" if allowed else "deny", host, url)
     if allowed:
         return 0
 
+    try:
+        anchor_domain = registrable_domain(anchor_host) or anchor_host
+    except (OSError, ValueError):
+        anchor_domain = anchor_host
+
     sys.stderr.write(
         f"webfetch-domain-allowlist: host {host!r} is outside the "
         f"registrable domain of the operator-supplied URL "
-        f"({_registrable_domain(anchor_host)!r}) and not an "
+        f"({anchor_domain!r}) and not an "
         "operator-listed extra host. The fetch was blocked and logged. "
         "If the bug report genuinely links an attachment on this host, "
         "report that to the orchestrator/operator instead of retrying.\n"
@@ -188,6 +197,12 @@ def main(argv: list[str]) -> int:
                 import os
                 session = (os.environ.get("RAPTOR_SESSION_PID", "").strip()
                            or "default")
+                if not _SAFE_SESSION_RE.match(session) or session in (".", ".."):
+                    sys.stderr.write(
+                        "webfetch-domain-allowlist: invalid RAPTOR_SESSION_PID; "
+                        "blocking the WebFetch call (fail-closed).\n"
+                    )
+                    return 2
                 anchor_file = anchor_file.replace("{session}", session)
         elif arg.startswith("--"):
             sys.stderr.write(
