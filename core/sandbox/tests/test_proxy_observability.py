@@ -54,6 +54,7 @@ from typing import Callable
 import pytest
 
 from core.sandbox import proxy as proxy_mod
+from core.sandbox.tests.socket_server import SocketServer
 
 # Far above a loopback round-trip, far below any proxy timeout —
 # same bound rationale as test_proxy_teardown.py.
@@ -114,17 +115,8 @@ def _serve_echo_forever() -> "tuple[int, Callable[[], None]]":
         finally:
             conn.close()
 
-    def accept_loop() -> None:
-        while True:
-            try:
-                conn, _ = lsock.accept()
-            except OSError:
-                return
-            threading.Thread(target=echo, args=(conn,),
-                             daemon=True).start()
-
-    threading.Thread(target=accept_loop, daemon=True).start()
-    return port, lsock.close
+    server = SocketServer(lsock, echo)
+    return port, server.close
 
 
 def _open_tunnel(proxy_port: int, backend_port: int,
