@@ -72,5 +72,68 @@
         "https://spdx.org/licenses/MIT.html"
       ]
     }
-  }
+  },
+  "java_components": [
+    {
+      "name": "gettext",
+      "type": "java-archive",
+      "path_pattern": "/usr/share/java/gettext\\.jar",
+      "owner_name": "gettext",
+      "expression": "GPL-3.0-or-later",
+      "classes": {
+        "gnu/gettext/DumpResource.class": "ca163190d452e480065b89dcf6409fab9b483f1e8b559b3020bec874a78e2299",
+        "gnu/gettext/GetURL$1.class": "826ff46451d53ee27d17b87ff161772a73184157cfe0497b0772d8cb92c024f9",
+        "gnu/gettext/GetURL.class": "4843db1dcb21439d4462e29ab2e9b21df091d5baafbd02f4a12728df4035c9d3"
+      },
+      "copyright_sha256": "2af485dd05ff2f402caedc35973eb8bf60a639c4877949d19ad2054c1002984c",
+      "common_licenses": {
+        "GPL-3": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+      },
+      "review": {
+        "source_archive_url": "https://deb.debian.org/debian/pool/main/g/gettext/gettext_0.21.orig.tar.xz",
+        "source_archive_sha256": "d20fcbb537e02dcf1383197ba05bd0734ef7bf5db06bdb241eb69b7d16b73192",
+        "debian_source_description": "https://deb.debian.org/debian/pool/main/g/gettext/gettext_0.21-12.dsc",
+        "source_files": [
+          {
+            "path": "gettext-tools/src/gnu/gettext/DumpResource.java",
+            "sha256": "311575e223e7b3d99d274f1114071e49d43a624d4dbc396681b57d859c4f4c17",
+            "license_header": "/* GNU gettext for Java\n * Copyright (C) 2001-2003, 2007 Free Software Foundation, Inc.\n *\n * This program is free software: you can redistribute it and/or modify\n * it under the terms of the GNU General Public License as published by\n * the Free Software Foundation; either version 3 of the License, or\n * (at your option) any later version.\n *\n * This program is distributed in the hope that it will be useful,\n * but WITHOUT ANY WARRANTY; without even the implied warranty of\n * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the\n * GNU General Public License for more details.\n *\n * You should have received a copy of the GNU General Public License\n * along with this program.  If not, see <https://www.gnu.org/licenses/>.\n */\n"
+          },
+          {
+            "path": "gettext-tools/src/gnu/gettext/GetURL.java",
+            "sha256": "a71f81dce6e028fde79e934ad2de44418b12ff1601dfd38bca6073bd6b892af8",
+            "license_header": "/* Fetch an URL's contents.\n * Copyright (C) 2001, 2008, 2020 Free Software Foundation, Inc.\n *\n * This program is free software: you can redistribute it and/or modify\n * it under the terms of the GNU General Public License as published by\n * the Free Software Foundation; either version 3 of the License, or\n * (at your option) any later version.\n *\n * This program is distributed in the hope that it will be useful,\n * but WITHOUT ANY WARRANTY; without even the implied warranty of\n * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the\n * GNU General Public License for more details.\n *\n * You should have received a copy of the GNU General Public License\n * along with this program.  If not, see <https://www.gnu.org/licenses/>.\n */\n"
+          }
+        ],
+        "verification": "All class bytes rebuilt identically from the identified source with OpenJDK 17.0.19 and matched to the image jars and Debian 0.21-12 packages. Archive timestamps and Created-By version are not executable payload."
+      }
+    },
+    {
+      "name": "libintl",
+      "type": "java-archive",
+      "path_pattern": "/usr/share/java/libintl(?:-[0-9][A-Za-z0-9.+~-]*)?\\.jar",
+      "owner_name": "gettext-base",
+      "expression": "LGPL-2.1-or-later",
+      "classes": {
+        "gnu/gettext/GettextResource.class": "4e46912c0abac7bd4f73c6bfa44ffe95892d91d791bcaf786afac6619acfa5d6"
+      },
+      "copyright_sha256": "2af485dd05ff2f402caedc35973eb8bf60a639c4877949d19ad2054c1002984c",
+      "common_licenses": {
+        "LGPL-2.1": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+      },
+      "review": {
+        "source_archive_url": "https://deb.debian.org/debian/pool/main/g/gettext/gettext_0.21.orig.tar.xz",
+        "source_archive_sha256": "d20fcbb537e02dcf1383197ba05bd0734ef7bf5db06bdb241eb69b7d16b73192",
+        "debian_source_description": "https://deb.debian.org/debian/pool/main/g/gettext/gettext_0.21-12.dsc",
+        "source_files": [
+          {
+            "path": "gettext-runtime/intl-java/gnu/gettext/GettextResource.java",
+            "sha256": "092b15d6997ea0f00e661e25d27971cb23509f3efcd88899158b64eda269bb9c",
+            "license_header": "/* GNU gettext for Java\n * Copyright (C) 2001, 2007 Free Software Foundation, Inc.\n *\n * This program is free software: you can redistribute it and/or modify\n * it under the terms of the GNU Lesser General Public License as published by\n * the Free Software Foundation; either version 2.1 of the License, or\n * (at your option) any later version.\n *\n * This program is distributed in the hope that it will be useful,\n * but WITHOUT ANY WARRANTY; without even the implied warranty of\n * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the\n * GNU Lesser General Public License for more details.\n *\n * You should have received a copy of the GNU Lesser General Public License\n * along with this program.  If not, see <https://www.gnu.org/licenses/>.\n */\n"
+          }
+        ],
+        "verification": "All class bytes rebuilt identically from the identified source with OpenJDK 17.0.19 and matched to the image jars and Debian 0.21-12 packages. Archive timestamps and Created-By version are not executable payload."
+      }
+    }
+  ]
 }
