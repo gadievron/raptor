@@ -1,3 +1,4 @@
+// raptor-min-version: 1.3.0
 // attr_warn_unused_result.cocci — emit "wur:<function>" for every
 // function declaration annotated with literal __attribute__((warn_unused_result))
 // in PREFIX position.

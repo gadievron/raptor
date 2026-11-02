@@ -154,6 +154,7 @@ class SemgrepResult:
     # "sample": [path, ...]}}, "reasons_truncated": int}``; empty dict
     # when nothing was skipped. See ``_summarise_skipped``.
     skipped_summary: dict[str, Any] = field(default_factory=dict)
+    skipped_rules: list[str] = field(default_factory=list)
     semgrep_version: str = ""
     returncode: int = 0
     stderr: str = ""
@@ -181,6 +182,7 @@ class SemgrepResult:
             "files_examined": self.files_examined,
             "files_failed": self.files_failed,
             "skipped_summary": self.skipped_summary,
+            "skipped_rules": self.skipped_rules,
             "semgrep_version": self.semgrep_version,
             "returncode": self.returncode,
             "elapsed_ms": self.elapsed_ms,
@@ -321,6 +323,7 @@ def parse_json_output(text: str) -> dict[str, Any]:
         "semgrep_version": "",
         "errors": [],
         "skipped_summary": {},
+        "skipped_rules": [],
     }
     if not text:
         return out
@@ -342,6 +345,14 @@ def parse_json_output(text: str) -> dict[str, Any]:
         {"path": str(e.get("path", "")), "reason": str(e.get("message", "error"))}
         for e in errors
         if isinstance(e, dict) and e.get("path")
+    ]
+    out["skipped_rules"] = [
+        _render_error(e) for e in errors
+        if isinstance(e, dict) and (
+            e.get("type") == "IncompatibleRule"
+            or (isinstance(e.get("type"), list) and e["type"]
+                and e["type"][0] == "IncompatibleRule")
+        )
     ]
     out["errors"] = [
         _render_error(e)

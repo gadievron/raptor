@@ -356,3 +356,73 @@ class TestCustomQueriesStderrCap:
         assert result.success is False
         assert result.errors
         assert all(len(e) <= 1000 for e in result.errors)
+
+
+@pytest.mark.parametrize("entry", ["custom", "local"])
+@pytest.mark.parametrize("tool_version", ["2.23.8", None])
+def test_per_query_version_keeps_compatible_queries(runner, tmp_path, monkeypatch, entry, tool_version):
+    from types import SimpleNamespace
+
+    pack = tmp_path / "pack"
+    pack.mkdir()
+    allowed = pack / "allowed.ql"
+    allowed.write_text("select 1\n")
+    future = pack / "future.ql"
+    future.write_text("// raptor-min-version: 999.0.0\nselect 2\n")
+    excluded = pack / "excluded-by-default-suite.ql"
+    excluded.write_text("// raptor-min-version: 999.0.0\nselect 3\n")
+    monkeypatch.setattr(runner, "_codeql_version", lambda: tool_version)
+    monkeypatch.setattr(runner, "_sandbox_tool_paths", lambda: [])
+    analyses = []
+
+    def run(cmd, **kwargs):
+        if "resolve" in cmd:
+            return SimpleNamespace(returncode=0, stdout=json.dumps([str(allowed), str(future)]), stderr="")
+        assert "analyze" in cmd
+        analyses.append(cmd)
+        output = next(arg.split("=", 1)[1] for arg in cmd if arg.startswith("--output="))
+        from pathlib import Path
+        Path(output).write_text('{"runs": [{"results": [{}]}]}')
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("core.sandbox.run", run)
+    out = tmp_path / "out"
+    out.mkdir()
+    if entry == "custom":
+        result = runner.run_custom_queries(tmp_path / "db", pack, out, "cpp")
+    else:
+        result = runner.run_local_pack("cpp", tmp_path / "db", pack, out,
+                                       suite_name="custom", sarif_name="out.sarif",
+                                       label="custom", skip_install=True)
+    assert result.success and result.findings_count == 1
+    assert len(result.skipped_rules) == 1
+    assert "future.ql" in result.skipped_rules[0]
+    assert f"path:{allowed}" in analyses[0]
+    assert str(future) not in analyses[0]
+    assert str(excluded) not in analyses[0]
+    from packages.codeql.agent import CodeQLWorkflowResult
+    workflow = CodeQLWorkflowResult(
+        success=True, repo_path=str(tmp_path), timestamp="", duration_seconds=0,
+        languages_detected={}, databases_created={}, analyses_completed={"cpp": result},
+        total_findings=1, sarif_files=[], errors=[],
+    )
+    assert workflow.to_dict()["analyses_completed"]["cpp"]["skipped_rules"] == result.skipped_rules
+
+
+def test_all_queries_incompatible_never_analyzes(runner, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    query = tmp_path / "future.ql"
+    query.write_text("// raptor-min-version: 999.0.0\nselect 1\n")
+    monkeypatch.setattr(runner, "_codeql_version", lambda: "2.23.8")
+    monkeypatch.setattr(runner, "_sandbox_tool_paths", lambda: [])
+
+    def resolve_only(cmd, **kwargs):
+        assert "resolve" in cmd and "analyze" not in cmd
+        return SimpleNamespace(returncode=0, stdout=json.dumps([str(query)]), stderr="")
+
+    monkeypatch.setattr("core.sandbox.run", resolve_only)
+    result = runner.run_custom_queries(tmp_path / "db", query, tmp_path / "out", "cpp")
+    assert not result.success
+    assert len(result.skipped_rules) == 1
+    assert result.sarif_path is None

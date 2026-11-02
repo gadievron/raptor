@@ -3347,3 +3347,48 @@ class TestDemuxResultByFile:
         out = demux_result_by_file(result, [outside], root)
         assert str(outside) in out
         assert out[str(outside)].files_examined == [str(outside)]
+
+
+class TestPerRuleVersions:
+    @pytest.mark.parametrize("batched", [False, True])
+    def test_incompatible_rule_does_not_block_legacy_rule(self, tmp_path, batched):
+        from packages.coccinelle.runner import run_rules, run_rules_batched
+
+        source = tmp_path / "source.c"
+        source.write_text("void f(void) { legacy_call(); }\n")
+        rules = tmp_path / "rules"
+        rules.mkdir()
+        future = rules / "future.cocci"
+        future.write_text("// raptor-min-version: 1.3.0\n@r@\n@@\nfuture_call()\n")
+        legacy = rules / "legacy.cocci"
+        legacy.write_text("@r@\n@@\nlegacy_call()\n")
+        executed = []
+
+        def fake_run(cmd, **kwargs):
+            text = Path(cmd[cmd.index("--sp-file") + 1]).read_text()
+            executed.append(text)
+            assert "future_call" not in text
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch("packages.coccinelle.runner.is_available", return_value=True), \
+             patch("packages.coccinelle.runner.version", return_value="1.1.1"):
+            if batched:
+                results = run_rules_batched(source, [future, legacy], subprocess_runner=fake_run)
+            else:
+                results = {r.rule: r for r in run_rules(source, rules, subprocess_runner=fake_run)}
+        assert results["legacy"].ok
+        assert not results["future"].ok
+        assert "requires tool >= 1.3.0" in results["future"].errors[0]
+        assert len(executed) == 1
+
+    def test_single_unknown_version_does_not_execute_declared_rule(self, tmp_path):
+        from packages.coccinelle.runner import run_rule
+
+        rule = tmp_path / "requires.cocci"
+        rule.write_text("// raptor-min-version: 1.3.0\n@r@\n@@\nfoo()\n")
+        execute = MagicMock(side_effect=AssertionError("must not execute"))
+        with patch("packages.coccinelle.runner.is_available", return_value=True), \
+             patch("packages.coccinelle.runner.version", return_value=None):
+            result = run_rule(tmp_path, rule, subprocess_runner=execute)
+        assert "installed version unknown" in result.errors[0]
+        execute.assert_not_called()

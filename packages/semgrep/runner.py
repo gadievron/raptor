@@ -771,6 +771,12 @@ def run_rule(
             name, skipped_summary.get("total", 0), per_reason,
         )
 
+    skipped_rules = parsed_json.get("skipped_rules", [])
+    if skipped_rules:
+        from core.security.log_sanitisation import escape_nonprintable
+        for reason in skipped_rules:
+            logger.warning("%s", escape_nonprintable(reason))
+
     return SemgrepResult(
         name=name,
         config=config,
@@ -779,6 +785,7 @@ def run_rule(
         files_examined=parsed_json["files_examined"],
         files_failed=parsed_json["files_failed"],
         skipped_summary=skipped_summary,
+        skipped_rules=skipped_rules,
         semgrep_version=parsed_json["semgrep_version"],
         returncode=proc.returncode,
         stderr=proc.stderr or "",

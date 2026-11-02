@@ -58,6 +58,7 @@ def check_tools() -> tuple[list, list, set]:
     from core.config import RaptorConfig
 
     results = []
+    version_warnings = []
     available = set()
     for name in sorted(RaptorConfig.TOOL_DEPS):
         dep = RaptorConfig.TOOL_DEPS[name]
@@ -82,9 +83,21 @@ def check_tools() -> tuple[list, list, set]:
             ver = _tool_version(name)
             if ver:
                 display = f"{name} {ver}"
+                from core.analysis.rule_versions import version_tuple
+                parsed = version_tuple(ver)
+                if name == "semgrep" and parsed is not None and parsed < (1, 38, 0):
+                    version_warnings.append(
+                        "Semgrep min-version declarations require >= 1.38.0; "
+                        "this installed version cannot reliably enforce per-rule requirements"
+                    )
+                if name == "coccinelle" and parsed is not None and parsed < (1, 3, 0):
+                    version_warnings.append(
+                        "Some Coccinelle attribute rules require spatch >= 1.3.0; "
+                        "incompatible rules will be skipped individually"
+                    )
         results.append((display, found))
 
-    warnings = []
+    warnings = list(version_warnings)
     unavailable_features = set()
 
     # Group checks (e.g., need at least one scanner)
@@ -142,6 +155,13 @@ def _tool_version(name: str) -> str | None:
             return _semgrep_version()
         if name == "joern":
             return _joern_version()
+        if name == "coccinelle":
+            return _cached_cli_version("spatch")
+        if name == "codeql":
+            binary = shutil.which("codeql")
+            if binary and Path(os.path.realpath(binary)).name == "raptor-codeql-bootstrap":
+                return None  # A banner must never trigger first-use installation.
+            return _cached_cli_version("codeql")
     except Exception:
         logging.getLogger("core.startup").debug(
             "%s version probe failed", name, exc_info=True

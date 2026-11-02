@@ -201,6 +201,7 @@ class CodeQLWorkflowResult:
                 'database_path': str(result.database_path),
                 'sarif_path': str(result.sarif_path) if result.sarif_path else None,
                 'findings_count': result.findings_count,
+                'skipped_rules': result.skipped_rules,
                 'duration_seconds': result.duration_seconds,
                 'errors': result.errors,
                 'suite_name': result.suite_name,
