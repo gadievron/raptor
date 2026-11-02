@@ -480,6 +480,8 @@ jobs:
             -o "$RUNNER_TEMP/cpp-query-tests/move.o"
           g++ -std=c++17 -c engine/codeql/tests/cpp/iterator-invalidation/IteratorCases.cpp \
             -o "$RUNNER_TEMP/cpp-query-tests/iterator.o"
+          g++ -std=c++17 -c engine/codeql/tests/cpp/format-string/FormatCases.cpp \
+            -o "$RUNNER_TEMP/cpp-query-tests/format.o"
 
       - name: Run C/C++ query regressions
         run: |
@@ -494,6 +496,7 @@ jobs:
             "$RUNNER_TEMP/cpp-query-tests/tests/truncation" \
             "$RUNNER_TEMP/cpp-query-tests/tests/use-after-move" \
             "$RUNNER_TEMP/cpp-query-tests/tests/iterator-invalidation" \
+            "$RUNNER_TEMP/cpp-query-tests/tests/format-string" \
             > "$RUNNER_TEMP/cpp-query-tests/results.json"
 
       - name: Check production C/C++ query wrappers
@@ -507,6 +510,7 @@ jobs:
             "$RUNNER_TEMP/cpp-query-tests/queries/IntegerTruncationInCast.ql" \
             "$RUNNER_TEMP/cpp-query-tests/queries/UseAfterMove.ql" \
             "$RUNNER_TEMP/cpp-query-tests/queries/IteratorInvalidation.ql" \
+            "$RUNNER_TEMP/cpp-query-tests/queries/FormatStringFromUntrusted.ql" \
             2>&1 | tee "$RUNNER_TEMP/cpp-query-tests/production-check.log"
 
       - name: Upload C/C++ query test results
@@ -522,6 +526,8 @@ jobs:
             ${{ runner.temp }}/cpp-query-tests/tests/use-after-move/*.expected
             ${{ runner.temp }}/cpp-query-tests/tests/iterator-invalidation/*.actual
             ${{ runner.temp }}/cpp-query-tests/tests/iterator-invalidation/*.expected
+            ${{ runner.temp }}/cpp-query-tests/tests/format-string/*.actual
+            ${{ runner.temp }}/cpp-query-tests/tests/format-string/*.expected
             ${{ runner.temp }}/cpp-query-tests/production-check.log
           retention-days: 14
           if-no-files-found: ignore
