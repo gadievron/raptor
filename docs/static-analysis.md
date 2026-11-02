@@ -148,6 +148,16 @@ Browse the rules directly: `engine/semgrep/rules/`, `engine/coccinelle/rules/`,
 
 ## Semgrep Rules
 
+Python JWT checks flag single-entry literal `verify_signature: False` options on both
+`jwt.decode` and `jwt.decode_complete`. An `algorithms=["none"]` allow-list
+alone does not establish that PyJWT accepts an unverified token. Legacy
+`verify=False` calls are reported separately at medium severity because they
+disable verification in PyJWT 1.x but are ignored in 2.x. Check the target
+application's dependency version when reviewing those notices. Decoded claims
+become a security issue when trusted without verification. Options stored in
+variables, merged dictionaries, duplicate keys and multi-option dictionaries
+are outside this narrow check; absence of a finding does not establish verification.
+
 ### Rule Categories
 
 RAPTOR ships custom YAML rule files under `engine/semgrep/rules/`,
