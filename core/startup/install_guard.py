@@ -325,19 +325,22 @@ def checked_write_path(path: Path, protected: list[Path], output: Path) -> Path:
     return resolved
 
 
-def writable_paths(protected: list[Path], frontend: str | None = None) -> list[Path]:
-    home = Path.home()
+def writable_locations() -> list[Path]:
+    """Declared data locations, without creating or changing anything."""
     output = installation_output()
-    paths = [output]
-    # Default grants use state subtrees; every override must exclude protected code.
-    for variable, fallback in (
+    home = Path.home()
+    return [output, *(Path(os.environ.get(variable) or fallback) for variable, fallback in (
         ("RAPTOR_OUT_DIR", output),
         ("RAPTOR_REGISTRY_HOME", home / ".raptor"),
         ("TMPDIR", home / ".cache/raptor/tmp"),
-    ):
-        paths.append(Path(os.environ.get(variable) or fallback))
+    ))]
+
+
+def writable_paths(protected: list[Path], frontend: str | None = None) -> list[Path]:
+    output = installation_output()
+    # Default grants use state subtrees; every override must exclude protected code.
     resolved_paths = []
-    for path in paths:
+    for path in writable_locations():
         if not path.is_absolute():
             raise ProtectionError(f"writable path must be absolute: {path}")
         resolved = checked_write_path(path, protected, output)

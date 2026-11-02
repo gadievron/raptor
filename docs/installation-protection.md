@@ -62,6 +62,15 @@ Keep the installation in its own directory, rather than using the home directory
 itself as the installation root. Python bytecode is prepared before protection;
 source-matching caches are reused and protected descendants do not write caches.
 
+Protected RAPTOR helper startup also narrows Python's search path to declared,
+read-only installation and dependency paths. Writable output, scratch and
+unrelated search paths are removed; writable bytecode-cache prefixes are
+cleared. Installed user-site dependencies remain available when their paths
+are protected. Ordinary launches retain their existing import behavior.
+This is startup import hygiene, not a Python sandbox: it cannot undo hooks
+that ran before RAPTOR's bootstrap or stop running code from changing import
+machinery, calling `exec()`, or loading code explicitly.
+
 ## Status and troubleshooting
 
 RAPTOR's in-session startup banner confirms when kernel protection is active.

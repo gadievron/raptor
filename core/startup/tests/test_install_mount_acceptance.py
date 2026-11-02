@@ -276,6 +276,56 @@ assert result.stdout.strip() == 'exact-file isolation works', result.stdout
     assert secret.read_text() == 'dummy acceptance secret'
 
 
+@pytest.mark.slow  # real protected interpreter startup and mount verification
+def test_protected_helper_filters_writable_imports_and_keeps_user_dependencies(tmp_path, require_install_mounts):
+    import sysconfig
+    root = Path(__file__).resolve().parents[3]
+    home = tmp_path / 'home'
+    home.mkdir()
+    output = tmp_path / 'output'
+    output.mkdir()
+    poison = output / 'poison'
+    poison.mkdir()
+    marker = output / 'poison-executed'
+    (poison / 'fractions.py').write_text(
+        'from pathlib import Path\n'
+        f'Path({str(marker)!r}).write_text("executed")\n'
+        'raise AssertionError("writable module was imported")\n')
+    (poison / 'argparse.py').write_text(
+        'raise AssertionError("writable bootstrap dependency was imported")\n')
+    userbase = tmp_path / 'user-dependencies'
+    site_packages = Path(sysconfig.get_path('purelib', scheme='posix_user',
+                                            vars={'userbase': str(userbase)}))
+    site_packages.mkdir(parents=True)
+    (site_packages / 'raptor_protected_dependency.py').write_text('VALUE = 42\n')
+    env = dict(os.environ, HOME=str(home), TMPDIR=str(output),
+               RAPTOR_OUT_DIR=str(output), RAPTOR_DIR=str(root),
+               PYTHONUSERBASE=str(userbase), PYTHONPATH=str(site_packages), _RAPTOR_DEP_CHECK='0')
+    env.pop('RAPTOR_REGISTRY_HOME', None)
+    code = r'''
+import os, pathlib, sys
+sys.path.insert(0, os.environ['RAPTOR_DIR'])
+sys.path.insert(0, sys.argv[1])
+sys.modules.pop('fractions', None)
+sys.pycache_prefix = sys.argv[2]
+import core.startup.process_init
+assert sys.argv[1] not in sys.path, sys.path
+assert '' not in sys.path, sys.path
+assert sys.pycache_prefix is None
+assert sys.dont_write_bytecode
+import fractions
+assert fractions.Fraction(1, 2).denominator == 2
+import raptor_protected_dependency
+assert raptor_protected_dependency.VALUE == 42
+assert not pathlib.Path(sys.argv[3]).exists(), 'writable code executed'
+'''
+    result = subprocess.run([sys.executable, '-I', '-S', '-B', str(root / 'core/startup/install_guard.py'),
+                             '--', sys.executable, '-c', code, str(poison), str(output / 'cache'), str(marker)],
+                            env=env, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+    assert not marker.exists()
+
+
 @pytest.mark.parametrize('alias_in_output', [False, True])
 def test_existing_bind_alias_cannot_become_writable_state(tmp_path, require_install_mounts, alias_in_output):
     root, script, env = _fixture(tmp_path)
