@@ -750,3 +750,10 @@ class TestDerivedMaxPresweepTimeout:
     def test_operator_budget_above_cap_stays_authoritative(self):
         from core.tuning import derived_max_joern_presweep_timeout_s
         assert derived_max_joern_presweep_timeout_s(90000) == 90000
+
+
+def test_standing_cost_ceiling_is_a_recognized_passthrough(tmp_path, caplog):
+    config = tmp_path / "tuning.json"
+    config.write_text(json.dumps({"default_max_cost_usd": 12.5}))
+    load_tuning(config)
+    assert 'unknown key "default_max_cost_usd"' not in caplog.text

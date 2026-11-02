@@ -83,20 +83,22 @@ results, deciding what to do next.
 
 **Analysis dispatch (per-token API calls).** When `/agentic` or `/codeql
 --analyze` dispatches findings to an external LLM, those calls are billed per
-token to the configured provider.  If you only use Claude Code as the analysis
-model (the default), there is no extra cost beyond your subscription.  If you
-configure external models (OpenAI, Gemini, etc.), those API calls are billed to
-those providers.
+token to the configured provider. Claude Code dispatch follows the billing
+arrangement configured for that CLI, which can be subscription-backed or use
+an API/cloud backend. The transport name alone does not establish billing.
+External provider calls are billed under the selected provider account.
 
-A per-run budget cap (`--max-cost-usd`, default $10) prevents runaway spend on
-the dispatch layer.  The cap is enforced atomically -- concurrent analysis
-workers cannot race past it.  Cost is tracked in real time and reported at run
-end.
+Use `--max-cost-usd` to set an explicit dispatch budget. The default $10
+finding-analysis budget does not automatically cap every workflow or
+post-pass: an audit without a configured ceiling can run uncapped.
+`default_max_cost_usd` supplies a standing ceiling for otherwise uncapped
+clients. Cost reservations are atomic across concurrent workers sharing a
+tracker; interactive orchestration spend is separate.
 
 | Scenario | Orchestration cost | Dispatch cost |
 |----------|--------------------|---------------|
 | `/scan` (no LLM) | Subscription | None |
-| `/agentic` with Claude Code as analyser | Subscription | Subscription (same) |
+| `/agentic` with Claude Code as analyser | Configured Claude Code billing | Configured Claude Code billing |
 | `/agentic --model gemini-2.5-pro` | Subscription | Gemini API |
 | `/agentic` with Ollama | Subscription | Free (local) |
 

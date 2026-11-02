@@ -6,24 +6,31 @@ learns that a working, reproducing exploit exists; they do not learn the
 exploit bytes. Use cases: coordinated disclosure (prove capability before a
 patch lands), bug-bounty triage, and escrowing exploit existence.
 
+**That is the design goal.** The implemented tiers provide attestation and
+sandboxed reproduction. Current bundles contain the witness bytes, so sharing
+one can disclose the exploit or crashing input. Zero-knowledge proof generation
+and witness-hiding verification are not implemented yet.
+
 It is a downstream consumer of the witness substrate: any run that records
 witnesses (`/fuzz`, `/agentic`, crash analysis) produces candidates.
 
 
 ## Tiers
 
-Proving is staged so it degrades gracefully by dependency weight. Each tier
-is a strictly stronger claim than the one below.
+The design stages proving by dependency weight. The implemented tiers provide
+attestation and reproduction; the planned tiers would add deterministic
+execution evidence and zero-knowledge verification.
 
 | Tier | Claim | Dependencies | Status |
 |------|-------|--------------|--------|
 | 0/1 | Attestation: "I assert witness W produced outcome O against H", carried by provenance hashes | none | implemented |
 | 1.5 | Reproduction: W re-executed against H N times in the sandbox; O reproduces | sandbox only | implemented (on request) |
-| 2 | Deterministic trace via RISC-V emulation | RISC-V toolchain | not yet implemented |
-| 3 | Full zero-knowledge STARK proof (SP1 zkVM); input stays hidden | heavy proving stack | not yet implemented |
+| 2 | Deterministic trace via RISC-V emulation | RISC-V toolchain | planned; not implemented |
+| 3 | Full zero-knowledge STARK proof (SP1 zkVM); input stays hidden | heavy proving stack | planned; not implemented |
 
-Note that Tier 1.5 demonstrates reproducibility, not zero knowledge -- the
-operator running it still holds the witness bytes.
+Attestation alone is not independent proof that the witness works. Tier 1.5
+checks reproducibility; it does not hide the witness. Both operations run
+when requested.
 
 
 ## Free eligibility surfacing
@@ -38,8 +45,8 @@ ZKPoX-eligible witnesses: 2 / 7
    no_target:            1
 ```
 
-Zero eligible witnesses means the heavier tiers are not worth setting up for
-that run. Everything beyond this summary is on request.
+Zero eligible witnesses means no candidate qualifies for bundle assembly.
+Bundle assembly and reproduction are on request.
 
 
 ## Bundle assembly (Tier 0/1)
@@ -51,9 +58,9 @@ libexec/raptor-zkpox bundle <witness_store> <witness_hash> --out <dir>
 `<witness_store>` is a run's witness store root (typically
 `<run_out_dir>/witnesses/`); `<witness_hash>` is the SHA-256 of the witness
 bytes as recorded in the store's `manifests/`. The command assembles a
-prover-ready bundle -- witness bytes plus a provenance manifest -- under
-`<dir>/zkpox/<witness_hash>/`. The bundle shape is the stable hand-off every
-higher tier consumes.
+reproduction bundle -- witness bytes plus a provenance manifest -- under
+`<dir>/zkpox/<witness_hash>/`. Reproduction consumes this bundle. The bundle is also the intended hand-off
+for the planned higher tiers; their consumers are not implemented yet.
 
 
 ## Reproduction (Tier 1.5)

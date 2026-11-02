@@ -534,8 +534,9 @@ Rust extractor get a clear skip.
 - **z3-solver** (optional) -- `uv pip install z3-solver` to enable SMT
   path feasibility checks. Without it, the SMT stage is silently
   skipped and all findings proceed to full LLM analysis.
-- **LLM API key** (for `--analyze`) -- `ANTHROPIC_API_KEY` or
-  `OPENAI_API_KEY` must be set. Not needed for `--scan-only`.
+- **Configured LLM provider** (for `--analyze`) -- uses RAPTOR’s shared
+  provider configuration, including supported API providers, Ollama, or
+  Claude Code. See [LLM providers](llm.md). Not needed for `--scan-only`.
 
 All subprocess invocations run inside the RAPTOR [sandbox](sandbox.md)
 by default. Pass `--no-sandbox` to disable (consent-gated: an

@@ -165,35 +165,6 @@ the Windows-side process channel at the source. The `/mnt` read
 denial is part of the Landlock read allowlist and still applies on
 the landlock-tier lanes.
 
-### The refusal-boundary offer (interactive sessions)
-
-When an untrusted-exec run refuses on a WSL host because the floor
-requires the Landlock layer, the refusal message itself names the
-remedies, including the grant command — that is the complete
-non-interactive behaviour. An interactive session may additionally
-put the decision in front of the operator as a structured choice,
-per the INTERACTIVE PROMPTS doctrine in the root `CLAUDE.md`: run
-`libexec/raptor-may-ask` first and ask only when it prints
-`interactive` AND AskUserQuestion is available; ask at the run
-boundary, after the refusal — never mid-pipeline. Quote the refusal
-text with non-printables escaped. Options:
-
-1. **Keep the refusal (Recommended)** — no consent; fix the kernel
-   instead (Option A) for the full contract.
-2. **Grant the standing host consent** — tell the operator to run
-   `bin/raptor wsl-consent grant` **at their own terminal**. The CLI
-   hard-refuses a non-TTY stdin, so the session cannot run it for
-   them — never offer to. Once granted, re-run the refused command.
-3. **Consent for this run / project only** — re-run with
-   `--sandbox-floor ns-only`, or set the standing project consent
-   with `/project set sandbox-floor ns-only` (Option B).
-
-Non-interactive fallback (may-ask says `non-interactive`, errors, or
-the tool is absent): do not ask — the refusal text plus the named
-grant command already printed is the complete behaviour; report it
-and stop. Never select a floor on the operator's behalf.
-
-
 ## Windows-interop mounts (`/mnt/c`)
 
 WSL2 serves Windows drives to the distro over a 9p filesystem (the
@@ -387,61 +358,3 @@ encoded checkouts is a genuine re-validate signal, not an error.
 When you have the choice, clone with `core.autocrlf=input` (LF
 worktree) inside the distro; it is the encoding the wider Linux
 toolchain expects.
-
-
-## CI verification (the live-WSL leg)
-
-The claims above that only a real WSL kernel can confirm — the 9p
-magic on the automount, Landlock availability on the stock kernel,
-flock/rename client-locality, the consent ceremony, the sandbox
-masks, the WSL1 refusal — are exercised nightly by
-[`wsl.yml`](../.github/workflows/wsl.yml) on a `windows-2022` runner
-(WSL2 via the repo-local `.github/actions/wsl-setup` composite —
-first-party, sha256-pinned rootfs; a probe job gates the leg and
-reports a detected skip when the runner image cannot host WSL2).
-
-What the leg verifies:
-
-* **verify-live** — `.github/scripts/wsl_verify_live.py --section
-  facts`: environment facts (kernel identity, LSM list, folding
-  samples, perf surface) are recorded; expected values (V9FS magic on
-  `/mnt/c`, Landlock absent on the stock kernel, flock double-acquire
-  across two distros, mkfifo failure and the TMPDIR advisory latch on
-  drvfs) are asserted — a mismatch fails the job.
-* **wsl-tests** — `pytest -m wsl` plus the CRLF fixture set on three
-  checkouts of the same tree: an ext4 LF clone, a git-materialized
-  `core.autocrlf=true` twin, and the drvfs workspace view (which also
-  runs the CRLF census on a case-insensitive mount and the
-  nosemgrep/dead-scope suites over 9p).
-* **sandbox-live** — the WSL sandbox/consent test files with the real
-  kernel underneath, then the checklist `consent` section and
-  `sandbox` section (mount-ns masks, PE-exec / interop-socket /
-  binfmt-write probes, the nested-unshare mask-strip attempt, the
-  `/run/WSL` re-grant refusal in both spellings, the `/mnt` target
-  exemption).
-
-  The consent ceremony is verified on BOTH sides of its TTY gate.
-  The non-TTY refusal (exit 3, nothing written, the message naming
-  the terminal requirement) is asserted directly — that is the
-  load-bearing, CI-assertable path. The grant path is additionally
-  driven through a pty the CI harness allocates, with the full
-  transcript recorded (escaped) into the artifact. This does not
-  undermine the gate: the gate is `sys.stdin.isatty()` by design,
-  and its purpose is blocking accidental or scripted agent
-  self-grants — an agent runs the CLI with a pipe or devnull stdin
-  and stops at the refusal. A test harness allocating a pty on our
-  own CI runner is exercising the grant path, not defeating the
-  control; driving the ceremony programmatically anywhere else is
-  exactly the behaviour the gate exists to stop.
-* **wsl1-capture** — a `wsl-version 1` job recording WSL1 identity
-  strings and `statfs` f_type words (the drvfs constant deliberately
-  unmatched in code until captured here) and asserting the sandboxed
-  execution refusal plus the `--sandbox none` escape.
-
-Artifacts: each checklist section uploads a JSON artifact
-(`wsl-verify-facts` / `wsl-verify-sandbox` / `wsl-verify-wsl1`,
-14-day retention) with per-item status, values, and — for the grant
-ceremony — the escaped pty transcript. The cross-client probes need a
-second distro; the workflow installs one and names it through the
-CI-only `RAPTOR_WSL_SECOND_DISTRO` knob (unset, those probes report
-skipped-with-reason).

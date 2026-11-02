@@ -46,7 +46,8 @@ Static analysis scan using Semgrep (and optionally CodeQL and Coccinelle).
 | `--exclude-dir <glob>` | Exclude directories matching glob (repeatable) |
 | `--extra-config <path>` | Additional Semgrep config file (repeatable) |
 | `--show-suppressed` | Include suppressed findings in output |
-| `--sandbox` / `--no-sandbox` | Enable or disable [sandbox](sandbox.md) isolation (disable is [consent-gated](sandbox.md#disabling-the-sandbox)) |
+| `--sandbox <profile>` | Select a [sandbox](sandbox.md) profile |
+| `--no-sandbox` | Disable sandbox isolation ([consent-gated](sandbox.md#disabling-the-sandbox)) |
 | `--audit` | Enable sandbox audit mode (log would-be-blocked syscalls) |
 | `--audit-verbose` | Verbose audit output (strace-style) |
 | `--audit-budget <n>` | Maximum audit event budget |
@@ -1414,6 +1415,11 @@ operator annotations.
 /review history <file> <fn>         # all reviews over time
 /review stats                       # entry counts, costs, coverage %
 /review compact                     # compact project journal index
+/review digest [run-dir]             # ranked end-of-run summary
+/review live                         # follow a running audit journal
+/review diff [run1 run2]              # compare verdicts across runs
+/review edges                        # edge obligations and blind spots
+/review verdict <id> tp|retest        # record an operator verdict
 ```
 
 | Subcommand | What it does |
@@ -1429,6 +1435,12 @@ operator annotations.
 | `stale` | Source-drifted operator notes |
 | `stats` | Entry counts, costs, coverage % |
 | `compact` | Compact project journal index |
+
+For standing false-positive suppression, run
+`raptor review verdict <id> fp --ceremony` at your own terminal. The command
+shows the finding and requires typed confirmation. `retest` revokes that
+suppression. Use annotations for an operator assertion without a standing
+suppression.
 
 Options: `--out DIR` (explicit output directory), `--project DIR`
 (explicit project directory), `--raw` (JSON output). `stale` also
@@ -1479,6 +1491,23 @@ Multiple `--file` flags concatenate in order, followed by the prompt text.
 Natural-language routing: when the user says "ask gemini...", "ask claude...", "ask gpt..." or similar, Claude routes through this tool automatically.
 
 **Implementation:** `libexec/raptor-llm-ask`
+
+---
+
+### /tune
+
+Inspect resolved resource limits and hardware information, or select a profile:
+
+```text
+/tune
+/tune max
+/tune balanced
+/tune default
+```
+
+Profiles rewrite `tuning.json`. `max` selects the `solo` LLM account posture;
+`balanced` and `default` select `shared`. Review [configuration](configuration.md)
+before changing limits on a shared machine.
 
 ---
 

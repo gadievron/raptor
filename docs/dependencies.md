@@ -9,6 +9,9 @@ dependencies; CodeQL is installed on first use. See the
 See also: [README](../README.md), [architecture](architecture.md).
 
 
+Install tools for the capabilities you use. Standalone SCA does not require
+Semgrep, CodeQL, a debugger, or a fuzzing engine.
+
 ## Python
 
 Python **3.12+** is required. The sandbox layer hard-requires
@@ -21,7 +24,7 @@ the suite fails at import/setup on 3.11 and earlier.
 
 | Tool | Required | Purpose | Install |
 |------|----------|---------|---------|
-| Semgrep | Yes | Static analysis scanning | `uv tool install semgrep` |
+| Semgrep | For `/scan` and default scanner workflows | Static analysis scanning | `uv tool install semgrep` |
 | Coccinelle (spatch) | No | Semantic patch analysis | `apt install coccinelle` (>=1.3) |
 | CodeQL | No | Deep dataflow analysis | [codeql-cli-binaries](https://github.com/github/codeql-cli-binaries) |
 | Joern | No | CPG dataflow queries (`/audit`, tiered taint sweeps) | [joern.io](https://joern.io) — **v4.0.458 or newer** (first 2026 release; needs a JVM) |

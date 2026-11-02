@@ -632,10 +632,6 @@ How it works:
   verdict). An unmatched call fails loudly with a structured miss
   report (at the /analyze surface it lands as that finding's
   error-status record); it never falls through to a live provider.
-  An eval harness should fail on all three signals: misses
-  (`session.misses`), error-status findings, and leftovers — recorded
-  entries the replay never consumed (`session.leftover_report()`),
-  which mean the replay run issued fewer calls than the recorded one.
 - Dispatch surfaces not yet transcript-adopted (the orchestrated
   multi-model path, the ranking stage) refuse under replay with a
   clear error and warn under record that the transcript will

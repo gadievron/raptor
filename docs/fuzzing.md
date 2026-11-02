@@ -79,7 +79,7 @@ targets (a directory with `pyproject.toml` or `setup.py`); force it with
 stop at the first crash (libFuzzer semantics), no Python coverage bridge yet,
 and no LLM harness synthesis — the harness is yours or a mechanical template.
 
-Atheris needs a harness.  Two routes:
+Atheris needs a harness. Explicit inputs take precedence:
 
 - **Operator harness** (`--py-harness <file>`): a `.py` file you wrote that
   defines `TestOneInput` and calls `atheris.Setup`/`atheris.Fuzz`.  This is
@@ -92,6 +92,12 @@ Atheris needs a harness.  Two routes:
   EVERY uncaught exception as a crash: if the target legitimately raises on
   malformed input (a parser's `ValueError`), edit the generated file to
   swallow the expected types before trusting the crash list.
+
+Without either explicit input, graph memory can supply a source-checked,
+unambiguous top-level function taking one `bytes` or `str` argument.
+Decorators, ambiguous/rebound definitions, stale source, and unsafe module
+shapes are excluded. If no candidate qualifies, supply a harness or entry
+point explicitly. See [graph-based selection](understand-graph.md#pipeline-evidence-and-selection).
 
 ```bash
 python3 raptor.py fuzz --binary /path/to/pypkg --py-entry mypkg.parser:parse

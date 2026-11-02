@@ -171,8 +171,6 @@ reports remain the public interface. The graph is optional: a missing,
 unreadable, corrupt, or incompatible database does not prevent the underlying
 analysis from producing its normal reports.
 
-Pipeline integrations use `core.understand_graph`; callers do not issue SQL.
-
 | Pipeline | Writes | Reads |
 |---|---|---|
 | `/understand` | Checklist, map, traces, hunt results, variants | Prior analysis context |
@@ -229,8 +227,8 @@ Report ingestion has shared budgets across all roots and children: at most
 10,000 nodes, 20,000 edges, and 50,000 normalized record visits per lane update. Input
 arrays and witness-directory enumeration are bounded too. Witness manifests
 share the run-artifact byte budget, charged against actual bytes read.
-Any truncation or ambiguous identity is reported in the log and the snapshot's
-`props_json.ingest` metadata; partial memory is not silently presented as complete.
+Truncation or ambiguous identity is reported in the log and snapshot metadata;
+partial memory is not silently presented as complete.
 
 `raptor project graph rebuild <project>` reconstructs graph memory from saved
 run artifacts, including agentic validation envelopes, nested SCA runs, web
@@ -241,12 +239,7 @@ and source snapshots are loaded before tool relationships are reconstructed.
 The rebuild uses a temporary store and preserves the previous database if
 it cannot complete.
 
-The agentic SARIF fallback decodes URI paths once, normalizes inventory-relative
-paths, and preserves logical function names when no line region is provided.
-Local `file://` URIs (including `localhost`) remain subject to source-root and
-symlink containment; remote authorities and other URI schemes are skipped.
-Malformed SARIF files are isolated so valid sibling files can still be imported.
-The fallback examines at most 64 SARIF files and accumulates at most 10,000
-findings, in addition to the shared parser's per-file byte cap. Exceeding either
-aggregate budget skips that graph update with a warning and preserves existing
-memory; the scanner's original artifacts remain available.
+SARIF imports accept local source references within the target tree and skip
+remote references. Malformed sibling reports are isolated; exceeding import
+limits skips the update with a warning and preserves existing graph memory.
+The original scanner artifacts remain available for review or a later rebuild.

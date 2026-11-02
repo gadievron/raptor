@@ -1,13 +1,14 @@
 # Sandbox
 
-RAPTOR sandboxes every subprocess that handles untrusted content --
-LLM-generated PoCs, target build scripts, CodeQL queries, Semgrep,
-[fuzz](fuzzing.md) targets, [Frida](frida.md) instrumentation helpers,
-and anything whose arguments or input came from a repository under
-analysis. The sandbox composes Linux kernel isolation primitives
-(namespaces, Landlock, seccomp-bpf) into a layered defence that
-degrades gracefully on hosts missing any single layer, while failing
-loudly when no isolation can engage at all.
+RAPTOR's default untrusted-execution entry points sandbox target code,
+LLM-generated PoCs, and repository-derived tool inputs. On Linux they compose
+namespaces, Landlock, seccomp-bpf, and resource limits. The required containment
+floor determines whether a missing layer causes refusal or an explicitly
+consented degradation.
+
+Trusted-tool entry points have a different contract, and operator-selected
+disabled/degraded profiles provide fewer protections. Consult the profile and
+containment-floor sections before treating a run as isolated.
 
 On macOS, the same machinery routes through `sandbox-exec(1)` and
 Seatbelt profiles. See [Platform support](#platform-support) for the
@@ -51,9 +52,9 @@ attacker-derived (read restriction and fake home on by default), and
 
 ## Isolation layers
 
-The sandbox composes up to six layers. Each falls back gracefully if the
-kernel does not support it -- RAPTOR logs a warning once per layer per
-process.
+The sandbox composes up to six layers. Backend selection and the requested
+containment floor determine which layers are mandatory; a missing required
+layer causes refusal unless the operator accepts an eligible degraded tier.
 
 1. **User namespace** -- unprivileged root-mapping foundation.
 2. **Network namespace** -- sandboxed process sees only an isolated
@@ -88,9 +89,9 @@ process.
 6. **Landlock + seccomp-bpf + rlimits** -- always applied when
    available, even when namespaces fall back.
 
-On kernels that lack any particular layer, the sandbox proceeds with the
-remaining ones and emits a one-time warning. Nothing silently downgrades
-to "no isolation".
+Missing layers are reported. Untrusted runs proceed with fewer protections
+only when the chosen containment floor or explicit consent permits that
+posture; otherwise they fail closed.
 
 **Landlock is fail-closed.** If installing the Landlock ruleset fails
 in the child (kernel drift, ABI mismatch), the run never continues
