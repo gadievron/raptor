@@ -1,8 +1,23 @@
 # Joern analysis
 
+[Documentation index](README.md)
+
 RAPTOR uses Joern for code-property graphs, taint analysis and reachability
 checks. Other analysis tools can continue when Joern is unavailable, but a
 failed or unavailable Joern check does not establish that the target is safe.
+
+**Related documentation:**
+[Audit](audit.md) |
+[Dependencies](dependencies.md) |
+[Configuration](configuration.md) |
+[Temporary files and cleanup](temporary-files.md)
+
+**On this page:**
+
+- [Requirements](#requirements)
+- [Running analyses](#running-analyses)
+- [Temporary storage](#temporary-storage)
+- [Troubleshooting and updates](#troubleshooting-and-updates)
 
 ## Requirements
 

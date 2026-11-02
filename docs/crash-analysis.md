@@ -10,8 +10,10 @@ Start with a bug-report URL and repository URL. Check the Linux, hardware,
 and tool requirements below before starting a run. For crashes discovered
 during a fuzzing campaign, see [fuzzing](fuzzing.md#crash-triage-and-replay).
 
-See also: [command reference](commands.md#crash-analysis),
-[agent security](agent-security.md), [sandbox](sandbox.md).
+**Related documentation:**
+[command reference](commands.md#crash-analysis) |
+[agent security](agent-security.md) |
+[sandbox](sandbox.md)
 
 **On this page:**
 

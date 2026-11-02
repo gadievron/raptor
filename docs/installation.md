@@ -1,8 +1,16 @@
 # Installation
 
+[Documentation index](README.md)
+
 Choose the manual checkout or container route below. Both launch the same interactive
 RAPTOR session. For standalone command-line use without Claude Code, see the [Python CLI
 guide](python-cli.md#running-fully-standalone-no-claude-code).
+
+**Related documentation:**
+[Dependencies](dependencies.md) |
+[Installation protection](installation-protection.md) |
+[Python CLI](python-cli.md) |
+[Troubleshooting](troubleshooting.md)
 
 **On this page:**
 

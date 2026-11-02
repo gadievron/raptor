@@ -8,7 +8,9 @@ dependencies; CodeQL is installed on first use. See the
 [third-party notices](../THIRD_PARTY_NOTICES.md) for bundled source/data and
 [CodeQL setup](codeql.md) for installation and offline provisioning.
 
-See also: [README](../README.md), [architecture](architecture.md).
+**Related documentation:**
+[README](../README.md) |
+[architecture](architecture.md)
 
 
 Install tools for the capabilities you use. Standalone SCA does not require
@@ -17,6 +19,14 @@ Semgrep, CodeQL, a debugger, or a fuzzing engine.
 After installing the tools for your workflow, run the
 [setup self-test](troubleshooting.md#self-test). For a missing-tool failure,
 return to the relevant feature guide for platform-specific requirements.
+
+**On this page:**
+
+- [Python](#python)
+- [Core Tools](#core-tools)
+- [Python Packages](#python-packages)
+- [Licensing](#licensing)
+- [Proxied hosts](#proxied-hosts)
 
 ## Python
 

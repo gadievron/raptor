@@ -7,8 +7,18 @@ infrastructure, and detection rules. For a first run, start with the
 [documentation index](README.md) and [command reference](commands.md).
 The layout below is a guide; check the checkout for current file names.
 
-See also: [core concepts](concepts.md), [security](security.md),
-[sandbox](sandbox.md).
+**Related documentation:**
+[core concepts](concepts.md) |
+[security](security.md) |
+[sandbox](sandbox.md)
+
+**On this page:**
+
+- [Overview](#overview)
+- [Layout](#layout)
+- [Entry points](#entry-points)
+- [Two layers](#two-layers)
+- [Dependencies](#dependencies)
 
 ## Overview
 

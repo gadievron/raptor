@@ -12,7 +12,10 @@ This is about RAPTOR's own security posture, not about the `/threat-model`
 feature for operator-created per-project threat models (see
 [threat-model.md](threat-model.md) for that).
 
-See also: [sandbox](sandbox.md), [slash commands](commands.md), [Python CLI](python-cli.md).
+**Related documentation:**
+[sandbox](sandbox.md) |
+[slash commands](commands.md) |
+[Python CLI](python-cli.md)
 
 ---
 

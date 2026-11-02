@@ -1,5 +1,7 @@
 # Developer Guide
 
+[Documentation index](README.md)
+
 **This page is developer-facing by design.** It is the one sanctioned
 home for developer documentation under `docs/` — everything else in
 this directory documents the operator surface (flags, outputs,
@@ -9,6 +11,22 @@ are the reference for anything this page does not cover, and if a
 section here grows past orientation size it is restoring cut material,
 not curating. Contribution *process* — setup, tests, style, review,
 security conventions — lives in [CONTRIBUTING.md](../CONTRIBUTING.md).
+
+**Related documentation:**
+[Contributing](../CONTRIBUTING.md) |
+[Architecture](architecture.md) |
+[CI controls](ci-controls.md)
+
+**On this page:**
+
+- [The two-layer split](#the-two-layer-split)
+- [Layering rules](#layering-rules)
+- [Package map](#package-map)
+- [engine/: authoring detection rules](#engine-authoring-detection-rules)
+- [CLI help-text standard](#cli-help-text-standard)
+- [Sandbox: what code may assume](#sandbox-what-code-may-assume)
+- [Writing hermetic tests](#writing-hermetic-tests)
+- [Mechanical gates you will hit](#mechanical-gates-you-will-hit)
 
 ## The two-layer split
 
