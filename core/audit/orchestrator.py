@@ -16291,12 +16291,14 @@ def _mark_concepts_studied(
 
 
 def _warn_critical_unresolvable(req: StudyRequest, reason: str) -> None:
-    """A critical assumption the verdict depended on could not be
-    verified — one operator-visible line, mirroring the loud-
-    degradation convention of the rest of the consumer."""
+    """Log when a critical-priority assumption could not be verified.
+
+    Informational — unresolvable assumptions do not affect finding
+    verdicts or scores.  The study consumer marks the reading-list
+    item and moves on."""
     if (req.priority or "") == "critical":
-        logger.warning(
-            "study-consumer: CRITICAL assumption unresolvable "
+        logger.info(
+            "study-consumer: assumption unresolvable "
             "(%s): %s [%s:%s]",
             reason, req.question, req.source_file, req.source_function,
         )
