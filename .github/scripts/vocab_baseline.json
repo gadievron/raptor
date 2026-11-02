@@ -3048,6 +3048,11 @@
     "count": 15,
     "kind": "literal"
   },
+  "packages/sca/sbom_license_evidence.py::declaration_from_metadata": {
+    "count": 10,
+    "kind": "literal",
+    "note": "serialization schema fields for the recovered distribution-license evidence record (expression, publisher declaration, metadata identity, image-layer provenance and original catalogue claims), consumed by SBOM preparation and publication checks; fixed record keys, not a learned function-name vocabulary. This entry does not approve any license or suppress unresolved evidence."
+  },
   "packages/sca/scripts/raptor-sca-compromise-check::_FIXTURE_ALLOWED_FILENAMES": {
     "count": 30,
     "kind": "literal",
