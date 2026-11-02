@@ -300,6 +300,57 @@ required `CC0-1.0` metadata licence; this does not change component licences.
 
 ---
 
+## Preparing RAPTOR inventory exports
+
+[Syft](https://github.com/anchore/syft) is an external SBOM generation tool;
+RAPTOR does not install or require it for ordinary scans. The preparation
+script supports native Syft JSON schema 16.x and paired CycloneDX 1.5/SPDX 2.3
+exports from the same scan. For a clean RAPTOR checkout:
+
+```bash
+mkdir -p /tmp/raptor-sbom/raw
+syft scan dir:. --source-name https://github.com/gadievron/raptor \
+  --source-version "$(git rev-parse HEAD)" \
+  --exclude '**/.git/**' --exclude '**/test/data/**' \
+  -o syft-json=/tmp/raptor-sbom/raw/syft.json \
+  -o cyclonedx-json@1.5=/tmp/raptor-sbom/raw/sbom.cdx.json \
+  -o spdx-json@2.3=/tmp/raptor-sbom/raw/sbom.spdx.json
+python3 .github/scripts/prepare_sbom.py \
+  --syft /tmp/raptor-sbom/raw/syft.json \
+  --cyclonedx /tmp/raptor-sbom/raw/sbom.cdx.json \
+  --spdx /tmp/raptor-sbom/raw/sbom.spdx.json \
+  --repo . --out /tmp/raptor-sbom/prepared
+```
+
+For container exports, pass the corresponding three inputs and omit `--repo`.
+Use an image digest and explicitly choose the generation scope (runtime
+filesystem or all layers). Preparation does not pull, execute or inspect an
+image itself. Use a fresh output directory: inputs are retained unchanged.
+
+Preparation writes `sbom.cdx.json`, `sbom.spdx.json` and `provenance.json`.
+It matches package occurrences against the native inventory and refuses
+conflicting identities or subjects. RAPTOR's local lockfile entry receives a
+repository/commit identity; installed nvm source metadata and NodeSource vendor
+metadata correct their registry origins where explicitly established. Existing
+occurrence references and relationships remain stable. Original lookup
+coordinates are retained as evidence; speculative CPEs are removed when the
+identity changes. MIT is declared only for RAPTOR's original project code.
+
+The reviewed pins in `.github/sbom-provenance.json` attach upstream source and
+licence-file candidates for specific versions. They do not certify that a tag
+accounts for all wheel contents or reproduce the installed binary. Unknown
+vendor source, unverified correspondence and missing candidate versions are
+recorded explicitly. Update the manifest after checking the new upstream tag
+and commit; a package bump never silently reuses an older version's source pin.
+The script performs no network access, installation or publication.
+
+This is a provenance preparation step, not a complete repository/container
+licence inventory. Bundled-data supplements, original installed notices and
+complete build-source evidence still need their own generation inputs. The
+prepared exports can be passed to `raptor-sca --sbom` like other supported SBOMs.
+
+---
+
 ## Reachability Analysis
 
 SCA reachability is mechanical. RAPTOR does not ask an LLM whether a
