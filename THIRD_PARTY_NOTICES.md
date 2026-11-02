@@ -76,53 +76,12 @@ and licence directory when redistributing the excerpt collection.
 RAPTOR's independently authored code and annotations retain the MIT licence;
 it does not replace the licences of the copied source excerpts.
 
+## ZKPoX object crate override
 
-## Container Node.js runtime
-
-The Linux container uses its system Node.js for both the CLI and Playwright;
-Playwright's duplicate bundled Node executable is removed. The installed Node
-license and third-party notices are available at `/usr/share/doc/nodejs/LICENSE`,
-with package copyright information at `/usr/share/doc/nodejs/copyright`.
-These components retain their own terms. Playwright and npm retain their
-separate package notices.
-
-Earlier image releases that included Playwright's bundled Node runtime retain
-the notices shipped with those releases.
-
-## CPython license evidence fixture
-
-The [complete upstream CPython license](packages/sca/tests/fixtures/licenses/cpython-LICENSE)
-is retained as a license-identification fixture. It comes from the official
-[Python 3.14.10 source release](https://www.python.org/ftp/python/3.14.10/Python-3.14.10.tar.xz).
-Python's project declaration is PSF-2.0; incorporated software retains its own
-terms, as the retained license explains. RAPTOR's license association does not
-replace those terms or certify that a binary was built from a particular source.
-
-## Container Chromium browser
-
-The Linux container ships Debian's unbranded Chromium package for browser
-automation. Its version-matched copyright inventory and license texts are
-installed at `/usr/share/doc/chromium/copyright`, with referenced common texts
-under `/usr/share/common-licenses`. Debian provides the corresponding source
-through its [Chromium source package](https://tracker.debian.org/pkg/chromium).
-Chromium and its incorporated third-party components retain their respective
-terms. This package replaces Google Chrome for Testing in new container builds;
-older image releases retain their original browser and associated terms.
-
-## Container package license supplements
-
-Debian Python package copyright notices are installed under
-`/usr/share/doc/python3-pip/`, `/usr/share/doc/python3-setuptools/`, and
-`/usr/share/doc/python3-wheel/`, with shared texts in `/usr/share/common-licenses/`.
-
-The [upstream manifest for @npmcli/agent 4.0.2](https://github.com/npm/agent/blob/db7852869c74ceb8985d7c36b291a2e7a866741c/package.json)
-declares ISC and names GitHub Inc. as its author. Its
-[ISC reference supplement](.devcontainer/npm-notices/agent-ISC-reference.txt)
-retains that declaration and attribution alongside the standard ISC text.
-The supplement distinguishes the standard reference text from an
-upstream-authored package notice.
-
-`spdx-exceptions` and `spdx-license-ids` retain their upstream READMEs and
-full CC-BY-3.0 and CC0-1.0 reference texts. Installed, version-specific
-supplements are available in the packages' `NOTICE` files and under
-`/usr/share/doc/raptor-npm-notices/`.
+- Path: `packages/zkpox/native/vendor/object`.
+- Upstream: [gimli-rs/object](https://github.com/gimli-rs/object), release 0.37.3.
+- License: Apache-2.0 OR MIT, at the recipient's choice.
+- Full licenses: [Apache-2.0](packages/zkpox/native/vendor/object/LICENSE-APACHE)
+  and [MIT](packages/zkpox/native/vendor/object/LICENSE-MIT).
+- Modification: the Cargo manifest selects ruzstd >=0.9.1; upstream Rust source
+  is unchanged. [Provenance and maintenance notes](packages/zkpox/native/vendor/object/UPSTREAM.md).
