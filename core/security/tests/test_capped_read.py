@@ -268,3 +268,21 @@ def test_text_default_replace_no_raise_unchanged(tmp_path):
     f.write_bytes(b"ok\xff\xfe")
     text = read_capped_text(f, 100)
     assert text == "ok��"
+
+
+def test_read_capped_anchors_child_to_directory_fd(tmp_path):
+    import os
+    from pathlib import Path
+    from core.security.capped_read import read_capped
+    (tmp_path / 'notice').write_bytes(b'notice')
+    directory = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        assert read_capped(Path('notice'), 6, dir_fd=directory, raise_on_refusal=True) == b'notice'
+        with pytest.raises(ValueError):
+            read_capped(Path('notice'), 5, dir_fd=directory, raise_on_refusal=True)
+        (tmp_path / 'link').symlink_to('notice')
+        with pytest.raises(OSError):
+            read_capped(Path('link'), 6, dir_fd=directory, raise_on_refusal=True)
+        assert read_capped(Path('absent'), 6, dir_fd=directory) is None
+    finally:
+        os.close(directory)

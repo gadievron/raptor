@@ -420,10 +420,46 @@ whiteouts or establish that a file survives in the final image. Packages without
 an associated notice candidate remain explicit gaps. Captured filenames and
 package associations do not establish the applicable terms or notice completeness.
 
-This sidecar does not modify the prepared CycloneDX or SPDX exports, fetch
-corresponding source, infer unknown tool versions, or publish anything. A file
-hash identifies bytes; it does not establish a build source or permission to
-redistribute them.
+To associate the captured files with packages and retain those links in paired
+exports, pass the capture directory during preparation:
+
+```bash
+python3 .github/scripts/prepare_sbom.py \
+  --syft /tmp/raptor-sbom/container/syft.json \
+  --cyclonedx /tmp/raptor-sbom/container/sbom.cdx.json \
+  --spdx /tmp/raptor-sbom/container/sbom.spdx.json \
+  --notice-evidence /tmp/raptor-sbom/container/evidence \
+  --out /tmp/raptor-sbom/container/prepared
+```
+
+Preparation binds the capture to the exact native catalogue hash, image, config,
+platform and scan scope. It checks notice bytes against their recorded sizes and
+SHA-256 values, including native file hashes where available. Missing required
+locations, altered files, unsafe storage paths and symlinked stores fail before
+output is created. Preparation trusts the capture's layer-origin records; it does
+not refetch layers or treat an unsigned capture as an attestation.
+
+Associations come from exact catalogue licence locations, notice candidates
+within the same layer's Python distribution metadata directory or npm package
+directory, and explicit npm licence-file pointers. Nested npm dependencies do not
+inherit their parent's association. Debian copyright references can additionally
+link to a captured common licence file; missing or ambiguous versions remain gaps.
+Conventional directory matches are candidates, not conclusions about applicable
+terms. Package metadata alone does not close a missing-notice gap.
+
+CycloneDX stores hashed relative `evidence` references and structured
+`raptor:notice-evidence` properties. SPDX retains the same structured record in
+package comments. Existing licence declarations, conclusions, file inventories,
+occurrence IDs and dependency relationships remain intact. `provenance.json`
+records per-package status, association reasons and gaps, plus unassociated files
+and identity-only records. The output also contains `notice-evidence.json` and
+original notice bytes under `notices/sha256/`; keep them alongside the SBOMs so
+relative links resolve. `--notice-evidence` and repository `--repo` preparation
+are separate modes.
+
+This process does not fetch corresponding source, infer unknown tool versions,
+or publish anything. A file hash identifies bytes; it does not establish a build
+source or permission to redistribute them.
 
 ---
 
