@@ -539,6 +539,9 @@ _REPORT_CONSTRUCTORS = frozenset({"ReportSection"})
 # writer needs an explicit add (forcing a security review at file-add
 # time).
 _REPORT_WRITER_FILES = (
+    # rr lifecycle CLI: captured target/tool diagnostics and path-bearing errors
+    # are bounded and terminal-sanitised; only LF layout is retained.
+    "packages/binary_analysis/rr_cli.py",
     # Cleanup records include operator/target-influenced paths. Terminal-only
     # output uses the canonical bounded sanitizer, loaded from this checkout.
     "core/security/scratch_lifecycle.py",

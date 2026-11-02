@@ -4,9 +4,22 @@ import math
 import subprocess
 import sys
 
+from core.security.log_sanitisation import sanitise_for_terminal
 from core.sandbox import SandboxSetupError
 from packages.binary_analysis.rr_record import record, pack, run_target
 from packages.binary_analysis.rr_replay import replay
+
+
+def _term(value):
+    """Render captured target diagnostics without terminal controls or flooding."""
+    text = value.decode(errors='replace') if isinstance(value, bytes) else str(value)
+    omitted = max(0, len(text) - 65536)
+    # LF is the only structural control retained; escape CR, ESC, bidi and tabs.
+    rendered = '\n'.join(sanitise_for_terminal(line, max_len=4096)
+                         for line in text[:65536].split('\n'))  # line-model: retain CR for visible escaping, not line matching
+    if omitted:
+        rendered += f'\n...[+{omitted} input chars omitted]\n'
+    return rendered
 
 
 def _seconds(value):
@@ -57,7 +70,7 @@ def main(argv=None):
             result = replay(args.trace, timeout=args.timeout)
         for stream, destination in ((result.stdout, sys.stdout), (result.stderr, sys.stderr)):
             if stream:
-                destination.write(stream.decode(errors='replace') if isinstance(stream, bytes) else stream)
+                destination.write(_term(stream))
         if args.action == 'record':
             if result.returncode:
                 print(f'rr: recorder/target exited with status {result.returncode}', file=sys.stderr)
@@ -75,11 +88,11 @@ def main(argv=None):
             return 1
         return 128-result.returncode if result.returncode < 0 else result.returncode
     except SandboxSetupError as error:
-        print(f'rr {args.action} refused: {error}', file=sys.stderr)
+        print(f'rr {args.action} refused: {sanitise_for_terminal(str(error), max_len=4096)}', file=sys.stderr)
         return 3
     except subprocess.TimeoutExpired:
         print(f'rr {args.action} timed out; any retained recording may be incomplete', file=sys.stderr)
         return 1
     except (OSError, ValueError, RuntimeError) as error:
-        print(f'rr {args.action}: {error}', file=sys.stderr)
+        print(f'rr {args.action}: {sanitise_for_terminal(str(error), max_len=4096)}', file=sys.stderr)
         return 1
