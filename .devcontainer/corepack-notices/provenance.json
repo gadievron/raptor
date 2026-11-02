@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "package_manager": {
+    "name": "corepack",
+    "version": "0.36.0"
+  },
+  "scope": "Verbatim licence from the integrity-checked upstream npm release, added to future container images. All 51 indexed Corepack files in the reviewed image match this release byte-for-byte. This establishes observed file correspondence, not complete build-source or licence coverage. Registry integrity is a publisher claim, not independent authentication.",
+  "packages": [
+    {
+      "name": "corepack",
+      "version": "0.36.0",
+      "license": "MIT",
+      "at_root": true,
+      "status": "upstream_evidence_retained",
+      "notice_file": "corepack-LICENSE.md",
+      "installed_filename": "LICENSE.md",
+      "sha256": "30a7b8ba5c4483d97d6123f5634da2362d578fb81f42ed6e1dfbb84fb1cd8fe4",
+      "source_kind": "integrity_checked_package_release",
+      "registry_metadata_url": "https://registry.npmjs.org/corepack/0.36.0",
+      "source_url": "https://registry.npmjs.org/corepack/-/corepack-0.36.0.tgz",
+      "source_path": "package/LICENSE.md",
+      "release_integrity": "sha512-SiiJsBhZqdBiPHTEl6OT3sASrRrKIcYTQMsVGXx6EE/gM8WFMwYjeIX8Tt8RiU4Iv2J6LbT8KpGfCOsBpRWB/w==",
+      "release_sha256": "9128cfe26aee0c99f4fc68c15c6b8b12309a68be0de2c012cdfea2a463cb722f",
+      "source_commit": "7a4c30b1aecece619a3e01db757f0eb947414b1f"
+    }
+  ]
+}

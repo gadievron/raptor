@@ -41,6 +41,7 @@ on:
       - '.devcontainer/install-npm-notices.py'
       - '.devcontainer/npm-notices/**'
       - '.devcontainer/pnpm-notices/**'
+      - '.devcontainer/corepack-notices/**'
       - '.github/workflows/dockerhub-publish.yml'
   workflow_dispatch:
     inputs:
