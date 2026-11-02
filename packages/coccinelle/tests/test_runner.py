@@ -37,6 +37,22 @@ from packages.coccinelle.runner import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolated_spatch_resolution():
+    """Each test owns its execution cache, including cached absence.
+
+    Keep pinning intact within a test so executable-identity tests continue
+    to exercise production behavior, without leaking mocks to other tests.
+    """
+    runner_mod._spatch_resolved = False
+    runner_mod._resolved_spatch = None
+    try:
+        yield
+    finally:
+        runner_mod._spatch_resolved = False
+        runner_mod._resolved_spatch = None
+
+
 def _nonced_prefix_from_cmd(cmd) -> str:
     """Extract the per-invocation ``COCCIRESULT-<nonce>:`` marker the
     runner substituted into the sp-file — emitting with it simulates
