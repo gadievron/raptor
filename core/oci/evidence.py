@@ -244,6 +244,9 @@ def capture(catalogue: dict, reader: Callable[[LayerDescriptor], Iterable[bytes]
                 parent = PurePosixPath(path).parent
                 for name in ("LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING", "NOTICE", "README.md"):
                     target((str(parent / name), layer), "conventional_package_notice_probe", package_id, False)
+    for key, identifiers in package_paths.metadata.items():
+        for identifier in sorted(identifiers):
+            target(key, "python_distribution_metadata", identifier)
     for key, record in package_paths.records.items():
         for identifier in sorted(record["package_ids"]):
             target(key, "python_record_notice", identifier)
@@ -297,7 +300,7 @@ def capture(catalogue: dict, reader: Callable[[LayerDescriptor], Iterable[bytes]
                     raise ValueError("catalogue file digest mismatch")
             record = {"path": path, "layer_blob_digest": layer.digest, "catalogue_layer_diff_id": origins[layer.digest], "sha256": sha, "size": len(data),
                       "roles": sorted(entry["roles"]), "package_ids": sorted(entry["packages"]),
-                      "visibility": "catalogue_location" if entry["required"] and (file or "catalogue_licence_location" in entry["roles"]) else "layer_probe_runtime_visibility_unconfirmed"}
+                      "visibility": "catalogue_location" if entry["required"] and (file or entry["roles"] & {"catalogue_licence_location", "python_distribution_metadata"}) else "layer_probe_runtime_visibility_unconfirmed"}
             record["content_kind"] = ("identity" if entry["roles"] == {"identity_only"}
                                       else "package_metadata" if PurePosixPath(path).name in _METADATA_NAMES
                                       else "notice_candidate")
@@ -307,7 +310,7 @@ def capture(catalogue: dict, reader: Callable[[LayerDescriptor], Iterable[bytes]
             records.append(record)
     with_notices = {package for row in records if row["content_kind"] == "notice_candidate"
                     for package in row["package_ids"]}
-    report = {"version": 2, "gaps": {
+    report = {"version": 3, "gaps": {
                   "package_ids_without_associated_notice_candidate": sorted(
                       package["id"] for package in packages if package["id"] not in with_notices),
                   "identity_targets_without_version_or_build_source_verification": list(identify)}, "subject": image, "packages": packages, "files": records,

@@ -279,7 +279,7 @@ def test_python_record_recovers_unindexed_vendor_notice(scope, notice_filename):
     package['metadata'] = {'files': [{'path': f'pkg-1.dist-info/licenses/vendor/{notice_filename}', 'size': '13',
         'digest': {'algorithm': 'sha256', 'value': base64.urlsafe_b64encode(hashlib.sha256(b'vendor notice').digest()).rstrip(b'=').decode()}}]}
     report, blobs = capture(catalogue, lambda layer: [blob])
-    assert report['version'] == 2
+    assert report['version'] == 3
     row = next(r for r in report['files'] if r['content_kind'] == 'notice_candidate')
     assert row['visibility'] == 'layer_probe_runtime_visibility_unconfirmed'
     assert 'python_record_notice' in row['roles']
@@ -360,3 +360,25 @@ def test_identity_verification_rejects_catalogued_symlink_before_source_read():
         pytest.fail('nonregular catalogue entries must be rejected before I/O')
     with pytest.raises(ValueError, match='regular file'):
         read_identity_files(catalogue, unexpected_read, {('/usr/bin/tool', file['location']['layerID'])})
+
+
+def test_version_three_captures_python_metadata_without_catalogue_licence():
+    catalogue, blob = fixture_image({'pkg-1.dist-info/METADATA': b'Name: package\nVersion: 1\nClassifier: License :: OSI Approved :: MIT License\n',
+                                     'pkg-1.dist-info/licenses/LICENSE': b'notice'})
+    package = catalogue['artifacts'][0]
+    package.update(type='python', licenses=[], locations=[catalogue['files'][0]['location']])
+    report, blobs = capture(catalogue, lambda layer: [blob])
+    metadata = next(row for row in report['files'] if row['content_kind'] == 'package_metadata')
+    assert report['version'] == 3
+    assert metadata['roles'] == ['python_distribution_metadata']
+    assert metadata['visibility'] == 'catalogue_location'
+    assert blobs[metadata['sha256']].startswith(b'Name: package\n')
+
+
+def test_version_three_refuses_missing_required_distribution_metadata():
+    catalogue, blob = fixture_image({'pkg-1.dist-info/licenses/LICENSE': b'notice'})
+    package = catalogue['artifacts'][0]
+    loc = {**catalogue['files'][0]['location'], 'path': '/pkg-1.dist-info/METADATA'}
+    package.update(type='python', licenses=[], locations=[loc])
+    with pytest.raises(ValueError, match='required evidence'):
+        capture(catalogue, lambda layer: [blob])

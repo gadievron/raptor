@@ -39,6 +39,7 @@ class PackageNoticePaths:
         self.directories: dict[tuple[str, str], dict[tuple[str, str], None]] = {}
         self.pointers: dict[tuple[str, str], set[str]] = {}
         self.records: dict[tuple[str, str], dict] = {}
+        self.metadata: dict[tuple[str, str], set[str]] = {}
         for artifact in artifacts:
             kind, identifier = artifact['type'], artifact['id']
             for location in artifact.get('locations', []):
@@ -53,6 +54,8 @@ class PackageNoticePaths:
                 if not re.fullmatch(r"sha256:[0-9a-f]{64}", layer):
                     raise ValueError("invalid package notice layer")
                 key = root, layer
+                if python:
+                    self.metadata.setdefault((str(path), layer), set()).add(identifier)
                 owner = kind, identifier
                 owners = self.directories.setdefault(key, {})
                 if owner in owners:
