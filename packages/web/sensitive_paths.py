@@ -82,9 +82,11 @@ _SQL_DUMP = (re.compile(rb"CREATE TABLE|INSERT INTO|-- (?:MySQL|MariaDB) dump"
 
 # A JSON key with a secret word as one whole word of its name. A word
 # is bounded by the name's start or end, a separator (_ - . space) or a
-# camelCase capital, so "apiKey", "DB_PASSWORD" and "client_secret"
-# match while "monkey", "tokenizer" and "keyboard" do not. A plain \b
-# would miss camelCase. Gaps are bounded so a crafted body stays linear.
+# camelCase capital (also after an acronym, as in "APIKey"), and may
+# carry a trailing number ("password1"). So "apiKey", "DB_PASSWORD"
+# and "client_secret" match while "monkey", "tokenizer" and "keyboard"
+# do not. A plain \b would miss camelCase. Gaps are bounded so a
+# crafted body stays linear.
 _SECRET_WORDS = ("secret", "key", "token", "password", "credential", "apikey")
 _SEP = rb"[_\-. ]"
 _LOWER = b"|".join(w.encode() for w in _SECRET_WORDS)
@@ -93,13 +95,13 @@ _UPPER = b"|".join(w.upper().encode() for w in _SECRET_WORDS)
 _KEY_END = rb'[^"\n]{0,200}"\s*:'
 _SECRET_JSON_KEY = re.compile(
     # first word, or after a separator: lower/Title case, ends at a boundary
-    rb'"(?:[^"\n]{0,200}' + _SEP + rb")?(?:" + _LOWER + b"|" + _TITLE + rb")s?"
+    rb'"(?:[^"\n]{0,200}' + _SEP + rb")?(?:" + _LOWER + b"|" + _TITLE + rb")s?\d*"
     rb'(?=' + _SEP + rb'|"|[A-Z])' + _KEY_END
     # the same in UPPER_SNAKE
-    + rb'|"(?:[^"\n]{0,200}' + _SEP + rb")?(?:" + _UPPER + rb")S?"
+    + rb'|"(?:[^"\n]{0,200}' + _SEP + rb")?(?:" + _UPPER + rb")S?\d*"
     rb'(?=' + _SEP + rb'|")' + _KEY_END
-    # a camelCase word: lower letter or digit, then the Title-case word
-    + rb'|"[^"\n]{0,200}[a-z0-9](?:' + _TITLE + rb")s?"
+    # a camelCase word: any letter or digit, then the Title-case word
+    + rb'|"[^"\n]{0,200}[A-Za-z0-9](?:' + _TITLE + rb")s?\d*"
     rb'(?=' + _SEP + rb'|"|[A-Z])' + _KEY_END
 )
 
@@ -126,7 +128,7 @@ FILE_SIGNATURES: dict[str, tuple[re.Pattern[bytes], str]] = {
                     "Go expvar JSON"),
     "/config.php": _PHP_SOURCE,
     "/wp-config.php": _PHP_SOURCE,
-    "/database.yml": (re.compile(rb"^\s*(?:adapter|database|username|password|host)\s*:",
+    "/database.yml": (re.compile(rb"^[ \t]*(?:adapter|database|username|password|host)[ \t]*:",
                                  re.M),
                       "database settings in YAML"),
     "/secrets.json": (_SECRET_JSON_KEY,

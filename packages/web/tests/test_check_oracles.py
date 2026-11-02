@@ -446,12 +446,21 @@ def test_secret_json_key_must_start_a_word():
 
     for body in (b'{"apiKey": "x"}', b'{"accessToken": "x"}', b'{"apikey": "x"}',
                  b'{"DB_PASSWORD": "x"}', b'{"stripe_secret_key": "x"}',
-                 b'{"privateKeyId": "x"}', b'{"credentials": {}}', b'{"Secret": "x"}'):
+                 b'{"privateKeyId": "x"}', b'{"credentials": {}}', b'{"Secret": "x"}',
+                 b'{"password1": "x"}', b'{"db_password1": "x"}',
+                 b'{"PASSWORD2": "x"}', b'{"APIKey": "x"}', b'{"IDToken": "x"}'):
         assert served_content("/secrets.json", body), body
     for body in (b'{"monkey": 1}', b'{"hockey_score": 2}', b'{"tokenizer": "bpe"}',
                  b'{"keyboard": "us"}', b'{"passwordless": true}',
                  b'{"MONKEY": 1}', b'{"name": "key"}'):
         assert served_content("/secrets.json", body) is None, body
+
+
+def test_database_yml_key_stays_on_its_line():
+    from packages.web.sensitive_paths import served_content
+
+    assert served_content("/database.yml", b"production:\n  password: x\n")
+    assert served_content("/database.yml", b"database\n: not yaml\n") is None
 
 
 def test_test_php_serving_phpinfo_is_flagged():
