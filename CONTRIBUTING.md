@@ -181,3 +181,20 @@ must follow these conventions:
 - Don't hardcode LLM model names — use the config system.
 - Don't commit API keys, server addresses, or internal infrastructure
   details.
+
+
+## Where help is welcome
+
+- Browser-engine crawling and DOM XSS coverage for the web scanner (Playwright is pinned but unused)
+- SSRF rule coverage for annotation-driven frameworks (Spring `@RequestParam`, FastAPI typed params) — semgrep cannot match these sources, so alternative approaches are welcome
+- YARA signature generation
+- Ports to other AI coding tools (Cursor, Windsurf, Copilot, Cline)
+- Better firmware analysis coverage
+- Anything you think is missing
+
+## Releases and changelog
+
+Releases are tagged as `vX.Y.Z` and built automatically by CI. Commit prefixes determine
+what goes in the changelog: `feat:` for new features, `fix:` for bug fixes, `security:`
+for security changes, `docs:` for documentation. Anything without a prefix lands in
+"Other changes". No strict convention required, but it helps.

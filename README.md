@@ -40,9 +40,14 @@
 
 ## What is RAPTOR?
 
+**Built by hackers, for hackers.**
+
 RAPTOR is an autonomous security research framework built on top of Claude Code (but not tied to it -- you can plug in your own analysis layer too). It chains together static analysis, binary analysis, LLM-powered vulnerability validation, exploit generation, and patch writing into a single workflow you can run against a codebase or binary.
 
 It is not polished software. It was built in free time, held together with enthusiasm and duct tape, and it works well enough that we can't stop using it. If you want to make it better, open a PR.
+
+RAPTOR supports security research and human review; its reports do not certify
+that a codebase is secure.
 
 RAPTOR stands for Recursive Autonomous Penetration Testing and Observation Robot. We really wanted to call it RAPTOR.
 
@@ -54,578 +59,261 @@ Mechanical verification (tests, static analysis, corpus calibration) keeps
 the quality bar where it needs to be regardless of who — or what — wrote
 the code.
 
----
+**Start here:** [Capabilities](#what-raptor-can-do) · [Quick start](#quick-start) ·
+[First run](#what-to-expect-on-a-first-run) · [Security](#security-model) ·
+[Documentation](#documentation)
+
+## What RAPTOR can do
+
+- **Take a codebase from first look to candidate fixes.** Map its attack surface,
+  investigate suspicious code, assess scanner findings, test exploitability,
+  and generate PoCs and patches for review. Start with `/agentic`; use
+  `/understand` or standalone `/audit` when you need a focused investigation.
+- **Check what your software ships with.** Inspect application dependencies,
+  container packages, and workflow components; identify advisory and supply-chain
+  risks, produce an SBOM, and plan fixes or upgrades with `/sca`.
+- **Investigate an unfamiliar binary or a crash.** Recover entry points and
+  parser boundaries, collect runtime evidence, fuzz a target, and investigate
+  the failure with `/binary`, `/fuzz`, and `/crash-analysis`.
+- **Test running applications.** Explore web endpoints with `/web` and inspect
+  selected runtime behavior with Frida instrumentation through `/frida`.
+- **Investigate an open-source project's history.** Correlate GitHub activity,
+  archived events, and local git evidence with `/oss-forensics`.
+
+Maturity varies by workflow. The [complete catalogue](docs/README.md#command-reference)
+lists commands and their status; the [workflow index](docs/README.md#choose-a-workflow)
+helps you choose a starting point.
+
+## Why RAPTOR?
+
+- **LLM-assisted false-positive filtering.** Semgrep, CodeQL, and other tools
+  produce candidate alerts mechanically. RAPTOR examines the surrounding code
+  and data flows to assess whether each alert describes a real bug.
+- **An audit engine beyond scanner output.** Hypothesis-driven investigation
+  uses analysis tools to examine gaps scanners may miss, tracking evidence and
+  coverage. `/agentic` uses audit capabilities within its workflow; standalone
+  `/audit` offers a dedicated systematic review. See the [audit engine](docs/audit.md).
+- **Eight-stage exploitability validation.** `/validate` investigates whether a
+  candidate vulnerability is reachable by an attacker, whether its preconditions
+  can be met, and what mitigations prevent exploitation. Mechanical feasibility
+  checks and self-review support the assessment; dynamic verification depends
+  on available artefacts and execution permissions. See [validation](docs/validation.md).
+- **Broad software composition analysis.** Dependencies, container packages,
+  workflow components, advisories, reachability, and supply-chain signals come
+  together with SBOMs and fix planning. See [SCA](docs/sca.md).
+- **Connected source and binary evidence.** Runtime traces, fuzz witnesses, and
+  optional [SMT checks](docs/codeql.md#smt-path-feasibility) can strengthen findings
+  from source review. [Custom detection rules](docs/static-analysis.md#bundled-rule-coverage)
+  complement upstream scanners.
+- **A custom, purpose-built sandboxing layer.** RAPTOR isolates generated PoCs,
+  target builds, and research tools with policies matched to each tool and
+  execution phase. See the security model below.
+- **Research that accumulates.** [Projects](docs/concepts.md#projects) retain
+  findings, coverage, annotations, and cross-run comparisons. Threat models,
+  persistent memory, and [specialist personas](tiers/personas/README.md#choosing-a-persona)
+  help each investigation build on earlier work.
+
+## Security model
+
+The repository being analysed can attack the analyst: through malicious code,
+repo-controlled configuration, prompt injection, or content rendered in a report.
+RAPTOR addresses those surfaces with several boundaries:
+
+- **Layered process isolation.** The custom sandbox combines Linux namespaces,
+  Landlock, seccomp, and resource limits; macOS uses Seatbelt. Policies constrain
+  filesystem access, network connections, syscalls, process creation, and resource
+  consumption according to the tool, platform, and profile.
+- **Restricted host access.** Untrusted-execution policies keep target inputs
+  read-only, limit writes to granted output/scratch paths, and use a private
+  home instead of exposing the operator's normal home directory.
+- **Controlled egress.** Tool policies block networking or route it through an
+  allowlisted proxy. Networked investigators also have agent-specific URL gates.
+- **Credential separation.** The launcher-managed LLM dispatcher holds provider
+  credentials in the parent process; workers use its socket without receiving
+  API keys. Direct Python CLI use does not provide that same dispatcher boundary.
+- **Startup and configuration checks.** Launcher preflights inspect repository
+  hooks, MCP configuration, and dangerous environment settings. Environment
+  sanitisation and isolated interpreter startup protect the launcher chain.
+- **Agent capability and consent boundaries.** Tool restrictions and attendance/
+  containment gates constrain agents handling hostile inputs. Agent messages
+  cannot grant operator authority. Untrusted execution refuses when required
+  containment is unavailable; reduced protection requires explicit consent.
+- **Adversarial input and output handling.** Source excerpts are treated as
+  untrusted data, and report sanitisation strips markup that could trigger
+  automatic external fetches.
+
+Prompt injection remains possible. Guarantees differ between untrusted execution,
+trusted-tool entry points, platforms, and operator-selected profiles; these controls
+are not a claim that all agent actions are isolated. Containers add a deployment
+boundary. See [sandbox guarantees and limitations](docs/sandbox.md),
+[agent security](docs/agent-security.md), the [threat model](docs/security.md),
+and [WSL requirements](docs/wsl.md) for the exact contracts and residual risks.
 
 ## Prerequisites
 
-- **Claude Code** with an active subscription (Max, Pro, Team, or Enterprise) or an Anthropic API key. This is the orchestration layer for the interactive `raptor` shell -- optional if you only need the standalone CLIs, see [Running fully standalone](#running-fully-standalone-no-claude-code) below.
-- **[uv](https://docs.astral.sh/uv/)** for Python dependency management, **Python 3.12+**, and **Node.js 18+**.
-- **Semgrep** (`uv tool install semgrep`) for static analysis. CodeQL is optional but recommended.
+- **Manual checkout:** Python 3.12+, [uv](https://docs.astral.sh/uv/), and the
+  tools needed by your workflow. Semgrep is needed for default source scans;
+  standalone SCA does not require it.
+- **Interactive shell:** Claude Code with an active subscription or an
+  Anthropic API key. The installation route below also uses Node.js 18+.
+- **Standalone CLI:** Claude Code is optional. LLM-assisted analysis needs a
+  configured provider; mechanical scans can run without an LLM.
 
-For the analysis dispatch layer (the LLM that analyses individual findings), Claude Code itself handles everything by default -- no extra API keys needed. If you want multi-model analysis (e.g. Claude + GPT + Gemini) or a fully local setup, you will need to configure the other provider(s). See [Using a different LLM](#using-a-different-llm) below.
+See [installation](docs/installation.md) and [dependencies](docs/dependencies.md)
+for platform requirements and optional tools.
+
+## Accounts and costs
+
+The shell's Claude Code login is independent of the credentials used for
+finding analysis, which can use Claude Code, another provider, or a local model.
+
+Subscription-backed Claude Code analysis has no separate API bill; API-backed
+Claude Code and external providers follow their backend's billing. The source-review
+examples below each set a $5 main-run ceiling (`/agentic` defaults to $10).
+Optional helpers have separate ceilings, so this is not an end-to-end cap
+across all processes.
+See [model setup and billing](docs/llm.md) for details.
+[Offline operation](docs/concepts.md#offline-and-airgapped-use) requires prepared
+tools/data and appropriate egress controls.
 
 ## Quick Start
 
 ### Option 1: Install manually
 
+Run in your terminal:
+
 ```bash
-# Clone the repo
 git clone https://github.com/gadievron/raptor.git
 cd raptor
-
-# Install Python dependencies
 uv sync --locked
 source .venv/bin/activate
-
-# Install Claude Code (if you don't already have it)
-npm install -g @anthropic-ai/claude-code
-
-# Install Semgrep (required for scanning)
+npm install -g @anthropic-ai/claude-code  # if not already installed
 uv tool install semgrep
-
-# Add the launcher to your PATH -- put this in your shell profile to make it
-# permanent. Append rather than prepend, so system directories stay ahead of
-# the repo. (Alternatively, symlink bin/raptor into a directory already on PATH.)
 export PATH="$PATH:$PWD/bin"
-
-# Launch RAPTOR
 raptor
 ```
 
-The `raptor` launcher is the recommended way to start a session, and it works from any directory -- it resolves the RAPTOR installation, remembers the directory you launched from (so commands like `/scan` default to it), runs the pre-flight trust and project checks, loads the coverage-tracking plugin, and sanitises the environment before handing off to Claude Code. It also takes an optional target path and flags like `--project`, `--continue`, and `--model` -- see `raptor --help`.
-
-Running plain `claude` from inside the repo directory also works -- Claude Code picks up RAPTOR's configuration from the checkout -- but you skip everything the launcher does above: no pre-flight checks, no coverage tracking, and commands that default to "the directory you ran this from" can't see it.
-
-Experimental Linux installation protection is available with `--protect-install`; ordinary launches are unchanged. Existing Claude configuration and ordinary user files retain their normal permissions. See [installation protection](docs/installation-protection.md) for setup, writable locations, and platform requirements.
-
-**Important:** RAPTOR loads its configuration from the repo directory. If you run `claude` from any other directory, you get plain Claude Code, not RAPTOR. The `raptor` launcher avoids this failure mode entirely.
+Use the `raptor` launcher from any directory. It loads RAPTOR's configuration,
+performs pre-flight checks, tracks coverage, and remembers your caller directory.
+For persistent PATH setup, launcher flags, and optional installation protection,
+see [manual installation](docs/installation.md#option-1-install-manually).
 
 ### Option 2: Run in a container (recommended)
 
-Using containers is a common security practice to restrict agents from accessing areas of your filesystem you don't want them to, as well as limiting the blast radius of any malicious code that may execute (e.g via supply-chain attack). The image is large. It starts from the Microsoft Python 3.14 devcontainer and adds static analysis, fuzzing, and browser automation tooling.
+The image includes analysis, fuzzing, and browser tooling. It is large and
+expects this checkout mounted at `/workspaces/raptor`. Run in your terminal:
 
-You can pull down a pre-built image:
 ```bash
+git clone https://github.com/gadievron/raptor.git
+cd raptor
 docker pull danielcuthbert/raptor:latest
-```
-
-or build it locally using the included `Dockerfile`:
-```bash
-docker build -f .devcontainer/Dockerfile -t danielcuthbert/raptor:latest .
-```
-
-The image expects the RAPTOR framework (this repo) to be mounted into `/workspaces/raptor` on startup. You can optionally mount a target folder for local analysis.
-
-To start the container:
-```bash
 docker run -it \
-  -v "$(pwd):/workspaces/raptor" \
-  danielcuthbert/raptor:latest
-```
-
-To mount a target folder as well:
-```bash
-docker run -it \
-  -v "$(pwd):/workspaces/raptor" \
+  -v "$PWD:/workspaces/raptor" \
   -v "/path/to/target-folder:/workspaces/target" \
   danielcuthbert/raptor:latest
 ```
 
-Add `--privileged` if you need the `rr` deterministic debugger.
-
-VS Code devcontainers are also supported. To mount a target folder, add it to the `mounts` section of `.devcontainer/devcontainer.json`:
-```jsonc
-"mounts": [
-  // ...existing entries...
-  "source=/path/to/target-folder,target=/workspaces/target,type=bind,consistency=cached"
-]
-```
-
-Then open the repo in VS Code — it will prompt you to reopen in the container:
-```bash
-cd /path/to/raptor
-code .
-```
-
-The container installs the pinned CodeQL bundle on first use. To install it ahead of time, run `codeql --raptor-install`; set `RAPTOR_CODEQL_AUTO_INSTALL=0` to require explicit installation. See [CodeQL setup](docs/codeql.md) for cache locations and offline provisioning.
-
-Either way, once you're inside the container, run `raptor` to get started.
-
----
+Replace the target path with your own; omit that mount if you do not need it.
+Inside the container, run `raptor`. Local image builds, VS Code devcontainers,
+CodeQL provisioning, and debugger-specific requirements are covered in
+[container installation](docs/installation.md#option-2-run-in-a-container-recommended).
 
 ## What to expect on a first run
 
-The simplest thing you can do:
+Use slash commands inside a RAPTOR session; run Python commands in your
+terminal from the checkout with its environment activated.
 
-```
-/scan /path/to/code
-```
-
-This runs Semgrep (plus Coccinelle when `spatch` is installed; add `--codeql` for CodeQL) against the target, deduplicates findings, and writes a SARIF report. No LLM analysis, no API keys beyond Claude Code. Takes a few minutes on a typical repository.
-
-To add LLM-powered validation:
-
-```
-/agentic /path/to/code
-```
-
-This runs the full pipeline: scan, deduplicate, then send each finding through the validation stages (A-F). On a medium-sized codebase with ~50 findings, expect 10-30 minutes and $2-8 in analysis-layer LLM costs (depending on the model). The default cost cap is $10 per run; adjust with `--max-cost-usd`.
-
-**Cost note:** The Claude Code orchestration layer uses your Claude subscription. The analysis dispatch layer makes separate LLM API calls that are billed per token. If you only use Claude Code as the analysis model (the default), there is no extra cost beyond your subscription. If you configure external models (OpenAI, Gemini, etc.), those API calls are billed to those providers.
-
----
-
-## Security model
-
-RAPTOR runs LLM-generated code and analyses untrusted repositories. Subprocesses that handle untrusted content are sandboxed using Linux namespaces, Landlock, and seccomp. The sandbox blocks network access or routes it through an allowlisted egress proxy according to the tool policy, restricts filesystem visibility, and limits resource consumption. See `docs/sandbox.md` for the full threat model and configuration.
-
-Environment variables that could inject code into the launcher chain are stripped at startup (`core/security/_dangerous_env_strip.sh`). File paths from scanned repositories are never interpolated into shell strings — all subprocess calls use list-based arguments.
-
----
-
-## What RAPTOR can do
-
-| Command | What it does | Status |
-|---------|-------------|--------|
-| `/agentic` | Full autonomous workflow: scan, validate, exploit, patch | Stable |
-| `/scan` | Static analysis with Semgrep and CodeQL | Stable |
-| `/understand` | Map attack surface, trace data flows, hunt vulnerability variants | Stable |
-| `/binary` | Black-box binary investigation, runtime evidence, graph queries and handoff | Beta |
-| `/ghidra` | Ghidra RE bridge: attach/import `.gpr` projects, cross-version diff, findings export | Beta |
-| `/audit` | Hypothesis-driven, tool-grounded systematic code review | Beta |
-| `/review` | Query audit state: findings, gaps, coverage, operator notes | Stable |
-| `/annotate` | Attach free-form per-function prose annotations (operator review notes) | Stable |
-| `/validate` | Multi-stage exploitability validation pipeline (Stages 0-F) | Stable |
-| `/diagram` | Mermaid visual maps from `/understand` and `/validate` JSON outputs | Beta |
-| `/codeql` | CodeQL-only deep analysis with SMT dataflow pre-screening | Stable |
-| `/analyze` | Analyse existing SARIF findings with LLM, without re-scanning | Stable |
-| `/openant` | OpenAnt LLM source-code scan: AST analysis plus per-function LLM reasoning | Beta |
-| `/sca` | Software composition analysis: dependencies, advisories, supply-chain signals, SBOMs, and fixes | Beta |
-| `/cve-diff` | Discover and diff the fix commit for a CVE across OSV, NVD, GitHub, and GitLab | Beta |
-| `/cve-env` | Build and verify a Docker environment running a CVE's affected application at its pre-patch version | Experimental |
-| `/exploit` | Generate proof-of-concept exploit code | Beta |
-| `/patch` | Generate secure patches for confirmed vulnerabilities | Beta |
-| `/fuzz` | Binary fuzzing with AFL++ and crash analysis | Stable |
-| `/crash-analysis` | Autonomous root-cause analysis for C/C++ crashes | Stable |
-| `/oss-forensics` | Evidence-backed forensic investigation for GitHub repositories | Stable |
-| `/project` | Named workspaces to organise runs and track findings over time | Stable |
-| `/describe` | Describe a target: language mix, build system, tool gaps, cost estimate (read-only) | Stable |
-| `/threat-model` | Create, inspect, and maintain per-project threat models | Stable |
-| `/sage` | Persistent memory layer (store, recall, link, corroborate) | Stable |
-| `/ask` | Send a free-form prompt to any configured LLM model | Stable |
-| `/scorecard` | Inspect per-model reliability across decision classes | Stable |
-| `/frida` | Dynamic instrumentation via Frida | Alpha |
-| `/web` | Web application scanning: crawl, ffuf/nuclei integration, oracle-verified injection, blind SSRF callbacks | Beta |
-
----
-
-## How the pipeline works
-
-Start by creating a project so all your runs land in one place:
-
-```
-/project create myapp --target /path/to/code   # create a project first
-/project use myapp                             # set it as active
-/understand --map                              # map the attack surface
-/agentic --threat-model --validate             # map, model, scan, validate
-/project findings                              # review everything in one place
-```
-
-For a compiled artefact, the equivalent starting point is:
+### Source code
 
 ```text
-/binary investigate /path/to/binary            # build the evidence-backed binary map
-/binary graph <run-dir> --edges --json         # query the persisted graph
-/binary trace-parser <run-dir>                 # collect runtime parser evidence
-/binary harness <run-dir>                      # draft a harness only when the boundary is explicit
+/agentic /path/to/code --max-cost-usd 5
 ```
 
-`/understand` builds a context map of entry points, trust boundaries, and sinks before a line of scanning happens. `/agentic` then runs Semgrep and CodeQL, deduplicates findings, and dispatches each one for validation using the exploitation-validator methodology:
+Read `agentic-report.md` and the generated PoCs and patches in the run directory.
+Patches are not applied to the target. Expect minutes to tens of minutes, depending on
+the target and model. See [workflow and outputs](docs/agentic.md).
+For a mechanical scan without LLM analysis, use `/scan /path/to/code`.
 
-With `--threat-model`, RAPTOR runs the map first, creates `threat-model.json` and `THREAT_MODEL.md` if the project does not already have them, then feeds a compact version into `/understand`, autonomous analysis, and `/validate`. Existing project threat models are preserved unless you pass `--threat-model-refresh`; stale fallback maps are refused unless you explicitly pass `--threat-model-use-stale`. It also turns mapped unchecked flows into candidate SARIF so scanner misses do not kill the run. It is operator-owned context, not magic proof: findings still need code evidence or oracle-backed confirmation. See `docs/threat-model.md`.
+### Optional: standalone audit
 
-- Stage A: is the pattern actually a vulnerability, or is the tool pattern-matching noise?
-- Stage B: what does an attacker need to reach it, and what gets in the way?
-- Stage C: does the code path actually exist? can it be reached from outside?
-- Stage D: final call -- is this test code, does it need unrealistic preconditions, is the model hedging?
-- Stage E: binary exploit feasibility (when a compiled artefact is available)
-- Stage F: self-review -- did any earlier stage hedge or contradict itself?
+```text
+/audit /path/to/code --budget 50 --max-cost 5
+```
 
-Findings that clear validation get exploit PoCs and patches generated. A cross-finding analysis runs at the end to find shared root causes and attack chains.
+For a dedicated systematic review, examine up to 50 functions, with tool
+evidence and coverage recorded alongside
+findings. See the [audit output-file reference](docs/audit.md#output) for the
+files written by a run.
 
-`/validate` runs this same pipeline as a standalone step if you already have findings from a previous scan.
-
-For a compiled artefact, `/binary <path>` now runs an evidence-first
-investigation rather than dumping a pile of raw reverse-engineering artefacts
-on the operator. Underneath it still builds the SHA-256-bound manifest,
-evidence ledger, context map, checklist and SQLite graph from file metadata,
-imports and radare2 xrefs. Mach-O apps also get slice inventory, bundle
-metadata and Objective-C / Swift class selectors; high-value pseudocode is
-persisted rather than disappearing inside the run. PE DLL exports, Windows
-driver dispatchers and Linux kernel-module ioctl handlers are handled as
-their own ingress candidates too, with PE architecture read from the COFF
-header rather than guessed. The investigation layer then queries that graph,
-ranks external ingress before generic sink leads, discovers declared
-helper/sibling binaries, and writes a compact report split into facts,
-structural inferences and unproven hypotheses. Frida observations, fuzz crash
-witnesses, explicit Z3 checks and binary diffs can then add stronger evidence
-later. RAPTOR also keeps the internal call graph needed to recover bounded
-ingress-to-parser candidates, so an app callback can be narrowed to the
-internal function that actually calls `XML_Parse`, `d2i_X509`,
-`jpeg_read_header` or another real parser surface without pretending that is
-taint proof. `/binary trace-parser <run-dir>` is the explicit dynamic follow-on:
-it runs the narrow Frida parser trace, then refreshes the same context map,
-handoff, graph and investigation report in place. `/binary investigate --active` maps first and only launches a real
-fuzz campaign when a concrete harness boundary exists; app, DLL and driver
-targets get a harness or snapshot step instead. `/binary harness` writes an
-evidence-backed harness spec for the chosen ingress and only emits candidate
-source when the ABI or IOCTL contract is explicit. It does not blag its way from “`memcpy` exists” to “this is
-exploitable”: imports, selectors and call edges stay candidates until
-something mechanical proves more. See `docs/binary-analysis.md`.
-
----
-
-## Software Composition Analysis
-
-`/sca` analyses the dependency and supply-chain side of a project. It is not just a requirements-file CVE lookup: RAPTOR discovers manifests, lockfiles, inline install commands, workflow dependencies, and container/base-image package sources, then normalises them into a single dependency view.
-
-The scan enriches dependencies with OSV advisories, CISA KEV, EPSS, CISA Vulnrichment/SSVC, reachability, exploit-evidence signals, hygiene checks, supply-chain heuristics, licence policy findings, and optional LLM review/triage. It emits RAPTOR-native findings plus SBOM and CI-friendly output:
-
-- `findings.json` - canonical RAPTOR findings
-- `report.md` - human-readable summary
-- `sbom.cdx.json` - CycloneDX SBOM with VEX data
-- `findings.sarif` - GitHub/GitLab code-scanning output
-
-Common commands:
+### Dependencies without an LLM or Claude Code
 
 ```bash
-python3 raptor.py sca --repo /path/to/project
 python3 raptor.py sca --repo /path/to/project --no-llm
-python3 raptor.py sca --repo /path/to/project --fail-on-severity high --fail-on-kev
-python3 raptor.py sca --repo /path/to/project fix
-python3 raptor.py sca check PyPI django 4.2.10
 ```
 
-Useful subcommands include `fix`, `check`, `upgrade`, `diff`, `verify`, `health`, `render`, `suppress`, and `clean-cache`. See `docs/sca.md` for the full reference.
+The [SCA scan](docs/sca.md) writes findings, a report, an SBOM, and SARIF.
 
----
+### Binary investigation
 
-## Z3 SMT integration
-
-RAPTOR has a two-layer Z3 integration (`uv pip install z3-solver`). It is optional. Everything works without it, but the results are better with it.
-
-**Dataflow pre-screening (CodeQL)**
-
-When CodeQL produces a path result, the path constraints are checked for satisfiability before any LLM call is made. Paths that are provably unreachable get dropped immediately. For paths that are reachable, Z3 produces concrete candidate inputs that go into the analysis prompt, so the LLM has something specific to reason about rather than abstract patterns.
-
-**One-gadget constraint analysis (binary feasibility)**
-
-During binary exploit feasibility assessment, Z3 checks whether a one-gadget's register and memory constraints are satisfiable against the concrete crash state. Gadgets are ranked by actual reachability rather than heuristics, so you spend time on gadgets that can actually work.
-
-Z3 is pre-installed in the devcontainer. For manual installs: `uv pip install z3-solver`.
-
----
-
-## Running offline and in air-gapped pipelines
-
-RAPTOR's custom Semgrep rules run locally. To use registry packs such as
-`p/security-audit` offline, prepare a bundle on a connected machine:
-
-```bash
-python3 engine/semgrep/tools/cache-packs.py fetch --output semgrep-cache.zip
-# Retain the printed SHA256 separately, then transfer the zip to the offline host.
+```text
+/binary investigate /path/to/binary
 ```
 
-On the offline host, with Semgrep installed:
+The default investigation maps the artefact and ranks leads without executing
+or fuzzing it. See [binary analysis](docs/binary-analysis.md) for outputs and
+the explicit steps that add runtime evidence.
 
-```bash
-python3 engine/semgrep/tools/cache-packs.py import semgrep-cache.zip --sha256 'REPLACE_WITH_RETAINED_SHA256'
-python3 engine/semgrep/tools/cache-packs.py check
-export RAPTOR_SEMGREP_OFFLINE=1
+### What a finding tells you
+
+**Corpus illustration:** a condensed walkthrough of a labelled WebGoat
+regression case:
+
+```text
+Candidate: SQL injection in SqlInjectionLesson13.java
+Evidence:  The request value is bound with PreparedStatement.setString
+           before the prepared query is executed.
+Verdict:   False positive for SQL injection on this path (corpus label).
+Limit:     This does not establish that other paths or the application are safe.
 ```
 
-Import verifies the bundle before updating the cache; `check` loads the cached
-rules with networking denied. With `RAPTOR_SEMGREP_OFFLINE=1`, missing or invalid
-packs fail the scan instead of falling back to the registry or dropping coverage.
-Repeat fetch and verified import to refresh the rules. See the
-[offline guide](docs/concepts.md#offline-and-airgapped-use) for pack selection.
-
-For CodeQL, follow the [airgapped setup](docs/codeql.md#airgapped-setup) to prepare
-and transfer the pinned CLI bundle and dependencies for your selected languages
-and query modes. Import verifies the files and checks the queries with networking
-denied, then prints the `CODEQL_CLI`, `PATH`, and `RAPTOR_CODEQL_OFFLINE=1` exports
-to apply before running RAPTOR.
-
-Run scans through the [standalone Python CLI](#running-fully-standalone-no-claude-code),
-with local model providers for LLM analysis and target build dependencies installed
-locally. Enforce host or container egress controls for the full workflow.
-
----
-
-## Custom rules
-
-RAPTOR ships over 200 custom static analysis rules, adversarially tested to eliminate false positives:
-
-- **Semgrep (~150 rules)** — taint-tracking and pattern rules for Python, Go, Java, and JS/TS. Covers SQLi, XSS, SSRF, SSTI, command injection, deserialisation, XXE, LDAP/NoSQL injection, path traversal, open redirect, log/header injection, eval injection, ReDoS, prototype pollution, JWT misconfiguration, weak crypto, insecure TLS, and hardcoded secrets.
-- **Coccinelle (68 rules)** — structural matching for C/C++. Memory safety (double free, use-after-free, free of non-base pointer, free of stack array, mmap'd memory, use-after-close), integer bugs (overflow, sign extension, double sizeof), resource leaks (popen/fclose mismatch, fdopendir double close), buffer handling (strncpy without NUL, copy_user size mismatch, malloc/strlen off-by-one), signal handler safety, API misuse (fcntl flag domain, SIGKILL/SIGSTOP, double byte-swap, inet_ntoa static buffer), compiler dead-store elimination, kernel IS_ERR/PTR_ERR confusion, format string injection, TOCTOU races, and more.
-- **CodeQL (8 queries)** — interprocedural taint tracking for C++ (format string injection, integer truncation, use-after-move, iterator invalidation) and Java (XXE, insecure deserialisation, log injection, Spring SSRF).
-
-Browse the rules directly: `engine/semgrep/rules/`, `engine/coccinelle/rules/`, `engine/codeql/queries/`. These complement the Semgrep registry packs RAPTOR pulls in (`p/security-audit`, `p/owasp-top-ten`, `p/secrets` always; per-policy-group packs like `p/command-injection`, `p/jwt`, `p/xss` on top) — overlap is minimal.
-
----
+Compare the [candidate and code evidence](core/dataflow/corpus/findings/webgoat_codeql_java-sql-injection_04eaccfec9a4.json)
+with the [label and rationale](core/dataflow/corpus/findings/webgoat_codeql_java-sql-injection_04eaccfec9a4.label.json).
 
 ## How RAPTOR checks itself
 
-RAPTOR dogfoods a fair bit of its own security tooling, but it is worth being honest about what actually blocks a PR and what just runs in the background to keep us honest. Some of this is a hard gate, some of it is a scheduled check, and some of it is just a benchmark we keep around so we can tell when we have made things worse. The fuller breakdown, including the actual parameters and how to reproduce the checks, is in `docs/ci-controls.md`.
+RAPTOR dogfoods a fair bit of its own security tooling. Some controls block
+PRs, some run on a schedule, and others measure whether results are drifting:
 
-| Control | What it checks | Trigger | Config / evidence |
-|---|---|---|---|
-| Ruff | Python correctness linting (`F401`, `F811`, `F821`, `F841`) | PR diff gate, plus weekly full-tree audit | `pyproject.toml`, `.github/workflows/lint.yml` |
-| Pytest | Fast unit/integration boundaries, subsystem-specific tiers (via import-graph dispatch), prompt-envelope audit | PRs, pushes to `main`, merge queue, scheduled full suite | `pytest.ini`, `.github/workflows/tests.yml`, `.github/workflows/nightly.yml` |
-| CodeQL Advanced | Python, C/C++, and GitHub Actions code scanning with import-graph scope narrowing | PRs, pushes to `main`, merge queue, weekly schedule | `.github/workflows/codeql.yml`, `.github/codeql/codeql-config.yml` |
-| Workflow hardening | SHA-pinned third-party Actions, least-privilege permissions, command metadata linting | Every workflow change and every lint run | `.github/workflows/`, `.github/scripts/check_command_metadata.py` |
-| Corpus label lint | Audit corpus label schema validation and upstream pin verification | PRs (changed labels), weekly full sweep | `.github/workflows/corpus-labels.yml` |
-| RAPTOR SCA PR gate | Dependency and supply-chain regressions introduced by a PR | Manifest / lockfile / workflow changes | `.github/workflows/sca-pr-gate.yml` |
-| RAPTOR SCA self-bump | Mechanical dependency hardening and safe upgrade proposals | Weekly schedule, manual run | `.github/workflows/sca-self-bump.yml` |
-| SCA compromise corpus | Whether known dependency compromises still trigger the expected signal | Weekly schedule, relevant PR changes | `test/data/sca-e2e/compromise-corpus/`, `.github/workflows/sca-compromise-check.yml` |
-| Repo-invariant detectors | Dead-code / wrong-call detection, env-var documentation drift, vocabulary-list guardrails, canonical-JSON byte forms, optional-dep import lint | PR gate (`lint.yml` `repo-invariants` job), plus daily sweep | `.github/workflows/lint.yml`, `.github/workflows/miswiring-scan.yml`, `.github/scripts/*_baseline.json` |
-| SCA calibration + stress corpus | Whether risk scoring and parser coverage drift over time | Weekly / monthly scheduled jobs | `packages/sca/data/calibration/`, `.github/workflows/refresh-sca-calibration.yml`, `.github/workflows/sca-stress-sweep.yml` |
-| Dataflow corpus | Precision / recall / FP-category tracking for validator behaviour | Developer-run benchmark and corpus tests | `core/dataflow/corpus/`, `core/dataflow/scripts/corpus-metrics` |
-| CI controls doc guard | Documented paths exist, ruff config matches, README links to the doc | PRs | `.github/tests/test_ci_controls_docs.py` |
+- **PR and merge checks:** Ruff, subsystem tests, prompt-envelope audits,
+  workflow hardening, corpus-label lint, repository invariants, documentation
+  guards, and the SCA dependency-regression gate.
+- **Code scanning:** CodeQL analyses Python, C/C++, and GitHub Actions on PRs,
+  pushes, the merge queue, and a weekly schedule.
+- **Scheduled assurance:** full-tree lint and test sweeps, corpus-pin checks,
+  dependency self-bumps, and known-compromise checks provide recurring coverage.
+- **Quality measurement:** dataflow benchmarks and SCA calibration/stress
+  corpora track precision, recall, false positives, and drift.
 
-Not currently enforced: `mypy` is pinned in `pyproject.toml` but does not block anything; Ruff formatting is not enforced; Semgrep is part of RAPTOR's scanner surface, but we do not yet have a dedicated "scan RAPTOR with RAPTOR" Semgrep workflow.
-
----
-
-## Using a different LLM
-
-RAPTOR has two separate model layers, and it is worth knowing how both work before you change anything.
-
-The **orchestration layer** is Claude Code -- but only for the interactive `raptor` shell (this conversational, slash-command layer). The CLAUDE.md, skills, and commands all run as Claude Code instructions there. To change which Claude model orchestrates that layer, use Claude Code's `--model` flag or the `/model` command inside a session. If you don't want this layer at all, see [Running fully standalone](#running-fully-standalone-no-claude-code) below.
-
-The **analysis dispatch layer** is the LLM that analyses individual vulnerability findings. This is separate from the orchestration layer and can be any supported provider. Configure it in `~/.config/raptor/models.json`:
-
-```json
-{
-  "models": [
-    {
-      "provider": "anthropic",
-      "model": "claude-opus-4-6",
-      "api_key": "sk-ant-...",
-      "role": "analysis"
-    },
-    {
-      "provider": "openai",
-      "model": "gpt-5.4",
-      "api_key": "sk-...",
-      "role": "analysis"
-    },
-    {
-      "provider": "anthropic",
-      "model": "claude-sonnet-4-6",
-      "api_key": "sk-ant-...",
-      "role": "aggregate"
-    }
-  ]
-}
-```
-
-Or skip the config file and set environment variables. RAPTOR will detect them automatically:
-
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...    # Anthropic Claude
-export OPENAI_API_KEY=sk-...           # OpenAI
-export GEMINI_API_KEY=...              # Google Gemini
-export MISTRAL_API_KEY=...             # Mistral
-export OLLAMA_HOST=http://localhost:11434  # Local Ollama
-```
-
-Model roles let you assign different models to different tasks:
-
-| Role | What it does |
-|------|-------------|
-| `analysis` | Validates and analyses each finding (Stages A-F) |
-| `code` | Writes exploit PoCs and patch code |
-| `consensus` | Second-opinion vote on true positives |
-| `aggregate` | Optional. LLM-written narrative synthesis on top of the deterministic multi-model correlation, written to `aggregation.json` and the final `agentic-report.md` |
-| `fallback` | Used if the primary model fails or hits rate limits |
-
-If no roles are set, the first model in the list handles everything. For multi-model
-source-code analysis, configure two or more `analysis` models — you'll get the
-deterministic correlation by default. The `aggregate` role is optional and adds an
-LLM-written summary on top:
-
-```bash
-python3 raptor.py agentic --repo /code \
-  --model claude-opus-4-6 \
-  --model gpt-5.4 \
-  --aggregate claude-sonnet-4-6
-```
-
-Budget control:
-
-```bash
-# Cap analysis-layer LLM spend at $5 for this run (default: $10)
-python3 raptor.py agentic --repo /code --max-cost-usd 5.00
-```
-
-Ollama works well for analysis; reliability for exploit/patch code generation tracks model scale and quantization rather than being a fixed property of local models — see [Quality Tradeoffs](docs/llm.md#quality-tradeoffs) in the LLM guide, and check `/scorecard` for what your specific model is actually measuring.
-
-### Running fully standalone (no Claude Code)
-
-`bin/raptor` -- the interactive shell with the banner and slash commands, i.e. this conversational layer -- execs straight into the Claude Code CLI and always needs its own login. The actual mechanics underneath it don't: `python3 raptor.py <mode>` is a plain Python CLI with no Claude Code dependency at all.
-
-```bash
-# No `claude` process involved at any point
-python3 raptor.py doctor                        # status check -- explicitly "no claude needed"
-python3 raptor.py agentic --repo /path/to/code   # scan -> dedup -> analysis
-python3 raptor.py scan --repo /path/to/code
-```
-
-`libexec/raptor-*` scripts (including `raptor-project-manager` -- `raptor.py` has no `project` mode, project management lives there exclusively) are also plain Python, but they refuse to run unless `CLAUDECODE` is set (true automatically inside a Claude Code session) or `_RAPTOR_TRUSTED=1` is set explicitly -- a guard against being invoked outside the launcher's environment sanitisation. Set it once for standalone use:
-
-```bash
-export _RAPTOR_TRUSTED=1
-
-libexec/raptor-project-manager create myapp --target /path/to/code
-libexec/raptor-project-manager use myapp
-python3 raptor.py agentic --repo /path/to/code   # picks up the active project automatically
-libexec/raptor-project-manager status
-libexec/raptor-project-manager findings
-```
-
-Point `models.json` / `OLLAMA_HOST` at a local Ollama instance (see above) and this whole path never talks to Anthropic -- useful for airgapped boxes or local-only hardware. You lose the conversational slash-command layer (this chat); the scan/analysis/exploit pipeline itself is unaffected.
-
-### Fast-tier short-circuit + the model scorecard
-
-When your analysis-tier model has a same-provider cheaper sibling (Anthropic Opus → Haiku, OpenAI 5.x → 4o-mini, Gemini Pro → Flash-Lite, Mistral Large → Small), RAPTOR will use it as a prefilter on consumers that wire into the substrate (codeql today; SCA and others as follow-ups land). The cheap model only ever short-circuits on **confident false positives**; ambiguous cases and confident-TPs always run the full analysis. Trust accumulates per `(model, decision_class)` cell — RAPTOR records cheap-vs-full agreement and only short-circuits once the Wilson 95% upper-bound on the cell's miss-rate falls at or below 5%.
-
-To inspect what your models are good at, use `/scorecard` (or directly: `libexec/raptor-llm-scorecard list`). The scorecard is global (lessons carry across projects) and persists at `out/llm_scorecard.json`.
-
----
-
-## Projects
-
-Without a project, each run gets its own timestamped directory under `out/`. With a project, everything goes into one place and you get merged findings, coverage tracking, and diffs between runs.
-
-```bash
-/project create myapp --target /path/to/code -d "Short description"
-/project use myapp
-
-/scan
-/understand --map
-/validate
-
-/project status                # all runs, pass/fail, timestamps
-/project findings              # merged findings across all runs
-/project findings --detailed   # per-finding detail
-/project coverage --detailed   # which files were reviewed
-/project diff myapp run1 run2  # compare two runs
-/project report                # full merged report
-/project clean --keep 3        # remove old runs, keep the last 3
-/project export myapp /tmp/myapp.zip
-/project none                  # clear active project
-```
-
----
-
-## Architecture
-
-RAPTOR is two layers.
-
-The **Python execution layer** (`raptor.py`, `packages/`, `core/`, `engine/`) handles the heavy lifting: running Semgrep and CodeQL, managing subprocesses, parsing SARIF, deduplicating findings, dispatching LLM API calls, tracking costs, writing output files. It does not make decisions. It executes.
-
-The **Claude Code decision layer** (`.claude/`, `tiers/`, `CLAUDE.md`) makes the calls: which findings to prioritise, how to interpret results, what the attack scenario is, whether the exploit is realistic. Implemented as Claude Code skills, commands, and agents that load progressively.
-
-```
-CLAUDE.md              always loaded -- bootstrap, routing, security rules
-.claude/commands/      slash commands (/agentic, /scan, /validate, etc.)
-.claude/skills/        methodology detail, loaded on demand
-tiers/                 adversarial thinking, recovery, expert personas
-.claude/agents/        specialist sub-agents (offsec, crash analysis, forensics)
-```
-
-The split means you can run the Python layer from a CI pipeline (`python3 raptor.py scan --repo ...`) and get structured SARIF output without Claude Code, or run it interactively with the full agentic workflow.
-
----
-
-## OSS forensics
-
-`/oss-forensics` investigates public GitHub repositories using evidence from multiple sources: the GitHub API, GH Archive (immutable event history via BigQuery), the Wayback Machine, and local git history. It runs a structured pipeline from evidence collection through hypothesis formation to a final forensic report.
-
-Requires `GOOGLE_APPLICATION_CREDENTIALS` for BigQuery access. See `.claude/commands/oss-forensics.md` for details.
-
----
-
-## Expert personas
-
-Eight expert personas are available on demand. Load one when you want a different perspective on a finding or a specific technique:
-
-```
-Exploit Developer (Mark Dowd)                  Exploit PoC generation
-Crash Analyst (Charlie Miller / Halvar Flake)  Crash analysis and exploitability assessment
-Security Researcher                            General adversarial code review
-Patch Engineer                                 Secure fix generation
-Penetration Tester                             Realistic attack scenario assessment
-Web Researcher (James Kettle)                  Web endpoint research (smuggling, cache poisoning, SSRF)
-Fuzzing Strategist                             Corpus design and triage
-Binary Exploitation Specialist                 ROP, heap, and memory corruption
-```
-
-Tell Claude which one to use, e.g. "Use the Binary Exploitation Specialist".
-
----
+[CI controls](docs/ci-controls.md) documents the exact triggers,
+evidence, limitations, and reproduction commands.
 
 ## Documentation
 
-See `docs/README.md` for the full index. Key guides:
-
-| File | Contents |
-|------|----------|
-| `docs/commands.md` | Complete slash-command reference with every flag |
-| `docs/architecture.md` | Codebase structure and directory tree |
-| `docs/llm.md` | LLM provider configuration, Bedrock, multi-model workflows |
-| `docs/sandbox.md` | Process isolation: profiles, Landlock, namespaces |
-| `docs/troubleshooting.md` | Self-test, sandbox setup errors (mount-ns/uidmap on Ubuntu 24.04+), EDR interaction |
-| `docs/agent-security.md` | Agent capabilities, tool boundaries, network controls, human approval |
-| `docs/audit.md` | Systematic code review: hypotheses, tools, strategies, gates |
-| `docs/validation.md` | Exploitability validation pipeline (stages 0--1) |
-| `docs/static-analysis.md` | Semgrep and Coccinelle rules |
-| `docs/codeql.md` | CodeQL integration and autonomous analysis |
-| `docs/binary-analysis.md` | Binary oracle, `/binary`, exploit feasibility |
-| `docs/fuzzing.md` | AFL++ and libFuzzer |
-| `docs/crash-analysis.md` | Autonomous crash root-cause analysis |
-| `docs/sca.md` | Software composition analysis |
-| `docs/frida.md` | Dynamic instrumentation |
-| `docs/security.md` | RAPTOR's own security model |
-| `docs/ci-controls.md` | CI controls, workflows, and benchmark evidence |
-| `docs/threat-model.md` | Per-project threat model feature |
-| `docs/python-cli.md` | Python CLI reference for scripting and CI |
-| `docs/concepts.md` | Core concepts: two-layer model, finding lifecycle, choosing a command |
-| `docs/agentic.md` | Autonomous workflow: `/agentic` pipeline, enrichment flags, multi-model |
-| `docs/sage.md` | SAGE persistent memory: setup, HMAC key, CPU/GPU, use cases |
-| `docs/dependencies.md` | External tools, versions, and licences |
-| `tiers/personas/README.md` | Expert persona reference |
-
----
+| Next step | Guide |
+|-----------|-------|
+| Install or configure tools | [Installation](docs/installation.md) |
+| Choose a workflow or look up a command | [Guides and command catalogue](docs/README.md) |
+| Diagnose a failed or stalled run | [Troubleshooting](docs/troubleshooting.md) |
+| Understand isolation and trust boundaries | [Security](docs/security.md) and [sandbox](docs/sandbox.md) |
+| Contribute to RAPTOR | [Contributing](CONTRIBUTING.md) and [developer guide](docs/developers.md) |
 
 ## Contributing
 
-RAPTOR is open source. Good places to start if you want to contribute:
-
-- Browser-engine crawling and DOM XSS coverage for the web scanner (Playwright is pinned but unused)
-- SSRF rule coverage for annotation-driven frameworks (Spring `@RequestParam`, FastAPI typed params) — semgrep cannot match these sources, so alternative approaches are welcome
-- YARA signature generation
-- Ports to other AI coding tools (Cursor, Windsurf, Copilot, Cline)
-- Better firmware analysis coverage
-- Anything you think is missing
-
-Releases are tagged as `vX.Y.Z` and built automatically by CI. Commit prefixes determine what goes in the changelog: `feat:` for new features, `fix:` for bug fixes, `security:` for security changes, `docs:` for documentation. Anything without a prefix lands in "Other changes". No strict convention required, but it helps.
+RAPTOR is open source; contributions are welcome. See
+[contributor guidance](CONTRIBUTING.md) for opportunities and development conventions.
 
 Submit pull requests. Chat with us on the **#raptor** channel in the Prompt||GTFO Slack:
 https://join.slack.com/t/promptgtfo/shared_invite/zt-3v2b4sll3-SfyzFRw2lykx_XQX7F3uNQ
-
----
 
 ## Licence
 
@@ -634,21 +322,3 @@ MIT -- Copyright (c) 2025-2026 Gadi Evron, Daniel Cuthbert, Thomas Dullien (Halv
 See [LICENSE](LICENSE) for the full text. Third-party components retain their own terms; see [third-party notices](THIRD_PARTY_NOTICES.md), [dependencies](docs/dependencies.md), and the [CodeQL licence terms](https://github.com/github/codeql-cli-binaries/blob/main/LICENSE.md).
 
 **Issues:** https://github.com/gadievron/raptor/issues
-
-
----
-
-## Python Dependencies
-
-Python dependencies are managed with [uv](https://docs.astral.sh/uv/).
-Install with `uv sync --locked` and activate with `source .venv/bin/activate`.
-
-Useful installs:
-
-```bash
-uv sync --locked                                                  # core runtime
-uv sync --locked --group dev                                      # tests + linting
-uv sync --locked --extra web                                      # /web scanner support
-uv sync --locked --extra web --extra smt --extra llm --extra sage # optional stacks
-source .venv/bin/activate                                         # use the installed environment
-```

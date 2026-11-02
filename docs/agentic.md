@@ -79,6 +79,35 @@ full multi-pass chain, so the cap is deliberately low).  Use `--prefer <glob>`
 to push attack-surface files to the front of the queue before the cap applies.
 
 
+### Runtime and spend
+
+As an illustrative first-run estimate, a medium-sized codebase with roughly
+50 findings can take 10–30 minutes and $2–8 in analysis-layer API spend,
+depending on the model and analysis selected. These are estimates rather
+than a benchmark or guarantee; finding caps and optional passes affect how
+much work runs. Subscription-backed Claude Code analysis has no separate
+API bill, while API-backed transports follow their provider billing.
+See [cost management](llm.md#cost-management) for limits and accounting.
+
+### Reading the validation stages
+
+- Stage A: is the pattern actually a vulnerability, or is the tool pattern-matching
+  noise?
+- Stage B: what does an attacker need to reach it, and what gets in the way?
+- Stage C: does the code path actually exist? can it be reached from outside?
+- Stage D: final call -- is this test code, does it need unrealistic preconditions, is
+  the model hedging?
+- Stage E: binary exploit feasibility (when a compiled artefact is available)
+- Stage F: self-review -- did any earlier stage hedge or contradict itself?
+
+Findings that clear validation get exploit PoCs and patches generated. A cross-finding
+analysis runs at the end to find shared root causes and attack chains.
+
+`/validate` runs this same pipeline as a standalone step if you already have findings
+from a previous scan.
+
+See the [validation guide](validation.md) for stage gates, evidence, and limitations.
+
 ### Post-analysis passes
 
 After per-finding analysis completes, the pipeline runs these in order.  Steps

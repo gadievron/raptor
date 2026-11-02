@@ -171,3 +171,40 @@ relying on the exit code.
 
 All results are written to `out/` (or this session's project directory). The
 structure varies by mode; see [architecture](architecture.md) for details.
+
+
+## Running fully standalone (no Claude Code)
+
+`bin/raptor` -- the interactive shell with the banner and slash commands, i.e. the
+conversational layer -- execs straight into the Claude Code CLI and always needs its own
+login. The actual mechanics underneath it don't: `python3 raptor.py <mode>` is a plain
+Python CLI with no Claude Code dependency at all.
+
+```bash
+# No `claude` process involved at any point
+python3 raptor.py doctor                        # status check -- explicitly "no claude needed"
+python3 raptor.py agentic --repo /path/to/code   # scan -> dedup -> analysis
+python3 raptor.py scan --repo /path/to/code
+```
+
+`libexec/raptor-*` scripts (including `raptor-project-manager` -- `raptor.py` has no
+`project` mode, project management lives there exclusively) are also plain Python, but
+they refuse to run unless `CLAUDECODE` is set (true automatically inside a Claude Code
+session) or `_RAPTOR_TRUSTED=1` is set explicitly -- a guard against being invoked
+outside the launcher's environment sanitisation. Set it once for standalone use:
+
+```bash
+export _RAPTOR_TRUSTED=1
+
+libexec/raptor-project-manager create myapp --target /path/to/code
+libexec/raptor-project-manager use myapp
+python3 raptor.py agentic --repo /path/to/code   # picks up the active project automatically
+libexec/raptor-project-manager status
+libexec/raptor-project-manager findings
+```
+
+Point `models.json` / `OLLAMA_HOST` at a local Ollama instance (see [local model
+setup](llm.md#ollama-offline--airgapped)) and this whole path never talks to Anthropic
+-- useful for airgapped boxes or local-only hardware. You lose the conversational
+slash-command layer (the interactive chat); the scan/analysis/exploit pipeline itself is
+unaffected.
