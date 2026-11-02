@@ -208,6 +208,8 @@ rules:
   # ---------------------------------------------------------------------------
   # Sanitizers require adjacent terminating guards or a bounded signed parse.
   # Unresolved bounds and intervening statements remain conservative leads.
+  # Expanded patterns keep --validate and ordinary scanning consistent.
+  # Avoid YAML aliases here: the native validator does not resolve them.
   - id: raptor.go.parsed-int-narrowing-cast
     message: A strconv integer result reaches a narrow integer conversion. Check the destination bounds before conversion; values outside them wrap, and negative values wrap when converted to unsigned types.
     languages:
@@ -234,8 +236,7 @@ rules:
     pattern-sanitizers:
     - pattern-either:
       - patterns:
-        - &id001
-          pattern-either:
+        - pattern-either:
           - patterns:
             - pattern-inside: |
                 if $V < $MIN || $V > $MAX { return ... }
@@ -328,34 +329,110 @@ rules:
         - pattern-not-inside: if $ERR != nil || $V < $MIN || $V > $MAX { ... }
         - pattern-not-inside: if $V < $MIN || uint64($V) > $MAX { ... }
         - pattern-not-inside: if $ERR != nil || $V < $MIN || uint64($V) > $MAX { ... }
-        - &id002
-          pattern-not-inside: |+
+        - pattern-not-inside: |+
             func $F(...) {
             ...
             uint64 := ...
             ...
             }
 
-        - &id003
-          pattern-not-inside: |+
+        - pattern-not-inside: |+
             func $F(...) {
             ...
             var uint64 = ...
             ...
             }
 
-        - &id004
-          pattern-not-inside: |+
+        - pattern-not-inside: |+
             func $F(..., uint64 $T, ...) { ... }
 
-        - &id005
-          pattern-not-inside: |+
+        - pattern-not-inside: |+
             ...
             var uint64 = ...
             ...
 
       - patterns:
-        - *id001
+        - pattern-either:
+          - patterns:
+            - pattern-inside: |
+                if $V < $MIN || $V > $MAX { return ... }
+                return $CAST($V)
+          - patterns:
+            - pattern-inside: |
+                if $V < $MIN || $V > $MAX { return ... }
+                $OUT := $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $V < $MIN || $V > $MAX { return ... }
+                $OUT = $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $ERR != nil || $V < $MIN || $V > $MAX { return ... }
+                return $CAST($V)
+          - patterns:
+            - pattern-inside: |
+                if $ERR != nil || $V < $MIN || $V > $MAX { return ... }
+                $OUT := $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $ERR != nil || $V < $MIN || $V > $MAX { return ... }
+                $OUT = $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $V < $MIN || uint64($V) > $MAX { return ... }
+                return $CAST($V)
+          - patterns:
+            - pattern-inside: |
+                if $V < $MIN || uint64($V) > $MAX { return ... }
+                $OUT := $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $V < $MIN || uint64($V) > $MAX { return ... }
+                $OUT = $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $ERR != nil || $V < $MIN || uint64($V) > $MAX { return ... }
+                return $CAST($V)
+          - patterns:
+            - pattern-inside: |
+                if $ERR != nil || $V < $MIN || uint64($V) > $MAX { return ... }
+                $OUT := $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $ERR != nil || $V < $MIN || uint64($V) > $MAX { return ... }
+                $OUT = $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - pattern-inside: |
+              $OUT := $CAST($V)
+              if $V < $MIN || $V > $MAX { return 0 }
+          - pattern-inside: |
+              $OUT := $CAST($V)
+              if $V < $MIN || uint64($V) > $MAX { return 0 }
+          - pattern-inside: if $MIN <= $V && $V <= $MAX { return $CAST($V) }
+          - pattern-inside: if $V >= $MIN && $V <= $MAX { return $CAST($V) }
         - pattern: uint16($V)
         - metavariable-comparison:
             metavariable: $MIN
@@ -368,12 +445,110 @@ rules:
         - pattern-not-inside: if $ERR != nil || $V < $MIN || $V > $MAX { ... }
         - pattern-not-inside: if $V < $MIN || uint64($V) > $MAX { ... }
         - pattern-not-inside: if $ERR != nil || $V < $MIN || uint64($V) > $MAX { ... }
-        - *id002
-        - *id003
-        - *id004
-        - *id005
+        - pattern-not-inside: |+
+            func $F(...) {
+            ...
+            uint64 := ...
+            ...
+            }
+
+        - pattern-not-inside: |+
+            func $F(...) {
+            ...
+            var uint64 = ...
+            ...
+            }
+
+        - pattern-not-inside: |+
+            func $F(..., uint64 $T, ...) { ... }
+
+        - pattern-not-inside: |+
+            ...
+            var uint64 = ...
+            ...
+
       - patterns:
-        - *id001
+        - pattern-either:
+          - patterns:
+            - pattern-inside: |
+                if $V < $MIN || $V > $MAX { return ... }
+                return $CAST($V)
+          - patterns:
+            - pattern-inside: |
+                if $V < $MIN || $V > $MAX { return ... }
+                $OUT := $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $V < $MIN || $V > $MAX { return ... }
+                $OUT = $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $ERR != nil || $V < $MIN || $V > $MAX { return ... }
+                return $CAST($V)
+          - patterns:
+            - pattern-inside: |
+                if $ERR != nil || $V < $MIN || $V > $MAX { return ... }
+                $OUT := $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $ERR != nil || $V < $MIN || $V > $MAX { return ... }
+                $OUT = $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $V < $MIN || uint64($V) > $MAX { return ... }
+                return $CAST($V)
+          - patterns:
+            - pattern-inside: |
+                if $V < $MIN || uint64($V) > $MAX { return ... }
+                $OUT := $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $V < $MIN || uint64($V) > $MAX { return ... }
+                $OUT = $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $ERR != nil || $V < $MIN || uint64($V) > $MAX { return ... }
+                return $CAST($V)
+          - patterns:
+            - pattern-inside: |
+                if $ERR != nil || $V < $MIN || uint64($V) > $MAX { return ... }
+                $OUT := $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $ERR != nil || $V < $MIN || uint64($V) > $MAX { return ... }
+                $OUT = $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - pattern-inside: |
+              $OUT := $CAST($V)
+              if $V < $MIN || $V > $MAX { return 0 }
+          - pattern-inside: |
+              $OUT := $CAST($V)
+              if $V < $MIN || uint64($V) > $MAX { return 0 }
+          - pattern-inside: if $MIN <= $V && $V <= $MAX { return $CAST($V) }
+          - pattern-inside: if $V >= $MIN && $V <= $MAX { return $CAST($V) }
         - pattern: uint32($V)
         - metavariable-comparison:
             metavariable: $MIN
@@ -386,12 +561,110 @@ rules:
         - pattern-not-inside: if $ERR != nil || $V < $MIN || $V > $MAX { ... }
         - pattern-not-inside: if $V < $MIN || uint64($V) > $MAX { ... }
         - pattern-not-inside: if $ERR != nil || $V < $MIN || uint64($V) > $MAX { ... }
-        - *id002
-        - *id003
-        - *id004
-        - *id005
+        - pattern-not-inside: |+
+            func $F(...) {
+            ...
+            uint64 := ...
+            ...
+            }
+
+        - pattern-not-inside: |+
+            func $F(...) {
+            ...
+            var uint64 = ...
+            ...
+            }
+
+        - pattern-not-inside: |+
+            func $F(..., uint64 $T, ...) { ... }
+
+        - pattern-not-inside: |+
+            ...
+            var uint64 = ...
+            ...
+
       - patterns:
-        - *id001
+        - pattern-either:
+          - patterns:
+            - pattern-inside: |
+                if $V < $MIN || $V > $MAX { return ... }
+                return $CAST($V)
+          - patterns:
+            - pattern-inside: |
+                if $V < $MIN || $V > $MAX { return ... }
+                $OUT := $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $V < $MIN || $V > $MAX { return ... }
+                $OUT = $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $ERR != nil || $V < $MIN || $V > $MAX { return ... }
+                return $CAST($V)
+          - patterns:
+            - pattern-inside: |
+                if $ERR != nil || $V < $MIN || $V > $MAX { return ... }
+                $OUT := $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $ERR != nil || $V < $MIN || $V > $MAX { return ... }
+                $OUT = $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $V < $MIN || uint64($V) > $MAX { return ... }
+                return $CAST($V)
+          - patterns:
+            - pattern-inside: |
+                if $V < $MIN || uint64($V) > $MAX { return ... }
+                $OUT := $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $V < $MIN || uint64($V) > $MAX { return ... }
+                $OUT = $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $ERR != nil || $V < $MIN || uint64($V) > $MAX { return ... }
+                return $CAST($V)
+          - patterns:
+            - pattern-inside: |
+                if $ERR != nil || $V < $MIN || uint64($V) > $MAX { return ... }
+                $OUT := $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $ERR != nil || $V < $MIN || uint64($V) > $MAX { return ... }
+                $OUT = $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - pattern-inside: |
+              $OUT := $CAST($V)
+              if $V < $MIN || $V > $MAX { return 0 }
+          - pattern-inside: |
+              $OUT := $CAST($V)
+              if $V < $MIN || uint64($V) > $MAX { return 0 }
+          - pattern-inside: if $MIN <= $V && $V <= $MAX { return $CAST($V) }
+          - pattern-inside: if $V >= $MIN && $V <= $MAX { return $CAST($V) }
         - pattern: int8($V)
         - metavariable-comparison:
             metavariable: $MIN
@@ -404,12 +677,110 @@ rules:
         - pattern-not-inside: if $ERR != nil || $V < $MIN || $V > $MAX { ... }
         - pattern-not-inside: if $V < $MIN || uint64($V) > $MAX { ... }
         - pattern-not-inside: if $ERR != nil || $V < $MIN || uint64($V) > $MAX { ... }
-        - *id002
-        - *id003
-        - *id004
-        - *id005
+        - pattern-not-inside: |+
+            func $F(...) {
+            ...
+            uint64 := ...
+            ...
+            }
+
+        - pattern-not-inside: |+
+            func $F(...) {
+            ...
+            var uint64 = ...
+            ...
+            }
+
+        - pattern-not-inside: |+
+            func $F(..., uint64 $T, ...) { ... }
+
+        - pattern-not-inside: |+
+            ...
+            var uint64 = ...
+            ...
+
       - patterns:
-        - *id001
+        - pattern-either:
+          - patterns:
+            - pattern-inside: |
+                if $V < $MIN || $V > $MAX { return ... }
+                return $CAST($V)
+          - patterns:
+            - pattern-inside: |
+                if $V < $MIN || $V > $MAX { return ... }
+                $OUT := $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $V < $MIN || $V > $MAX { return ... }
+                $OUT = $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $ERR != nil || $V < $MIN || $V > $MAX { return ... }
+                return $CAST($V)
+          - patterns:
+            - pattern-inside: |
+                if $ERR != nil || $V < $MIN || $V > $MAX { return ... }
+                $OUT := $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $ERR != nil || $V < $MIN || $V > $MAX { return ... }
+                $OUT = $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $V < $MIN || uint64($V) > $MAX { return ... }
+                return $CAST($V)
+          - patterns:
+            - pattern-inside: |
+                if $V < $MIN || uint64($V) > $MAX { return ... }
+                $OUT := $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $V < $MIN || uint64($V) > $MAX { return ... }
+                $OUT = $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $ERR != nil || $V < $MIN || uint64($V) > $MAX { return ... }
+                return $CAST($V)
+          - patterns:
+            - pattern-inside: |
+                if $ERR != nil || $V < $MIN || uint64($V) > $MAX { return ... }
+                $OUT := $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $ERR != nil || $V < $MIN || uint64($V) > $MAX { return ... }
+                $OUT = $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - pattern-inside: |
+              $OUT := $CAST($V)
+              if $V < $MIN || $V > $MAX { return 0 }
+          - pattern-inside: |
+              $OUT := $CAST($V)
+              if $V < $MIN || uint64($V) > $MAX { return 0 }
+          - pattern-inside: if $MIN <= $V && $V <= $MAX { return $CAST($V) }
+          - pattern-inside: if $V >= $MIN && $V <= $MAX { return $CAST($V) }
         - pattern: int16($V)
         - metavariable-comparison:
             metavariable: $MIN
@@ -422,12 +793,110 @@ rules:
         - pattern-not-inside: if $ERR != nil || $V < $MIN || $V > $MAX { ... }
         - pattern-not-inside: if $V < $MIN || uint64($V) > $MAX { ... }
         - pattern-not-inside: if $ERR != nil || $V < $MIN || uint64($V) > $MAX { ... }
-        - *id002
-        - *id003
-        - *id004
-        - *id005
+        - pattern-not-inside: |+
+            func $F(...) {
+            ...
+            uint64 := ...
+            ...
+            }
+
+        - pattern-not-inside: |+
+            func $F(...) {
+            ...
+            var uint64 = ...
+            ...
+            }
+
+        - pattern-not-inside: |+
+            func $F(..., uint64 $T, ...) { ... }
+
+        - pattern-not-inside: |+
+            ...
+            var uint64 = ...
+            ...
+
       - patterns:
-        - *id001
+        - pattern-either:
+          - patterns:
+            - pattern-inside: |
+                if $V < $MIN || $V > $MAX { return ... }
+                return $CAST($V)
+          - patterns:
+            - pattern-inside: |
+                if $V < $MIN || $V > $MAX { return ... }
+                $OUT := $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $V < $MIN || $V > $MAX { return ... }
+                $OUT = $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $ERR != nil || $V < $MIN || $V > $MAX { return ... }
+                return $CAST($V)
+          - patterns:
+            - pattern-inside: |
+                if $ERR != nil || $V < $MIN || $V > $MAX { return ... }
+                $OUT := $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $ERR != nil || $V < $MIN || $V > $MAX { return ... }
+                $OUT = $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $V < $MIN || uint64($V) > $MAX { return ... }
+                return $CAST($V)
+          - patterns:
+            - pattern-inside: |
+                if $V < $MIN || uint64($V) > $MAX { return ... }
+                $OUT := $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $V < $MIN || uint64($V) > $MAX { return ... }
+                $OUT = $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $ERR != nil || $V < $MIN || uint64($V) > $MAX { return ... }
+                return $CAST($V)
+          - patterns:
+            - pattern-inside: |
+                if $ERR != nil || $V < $MIN || uint64($V) > $MAX { return ... }
+                $OUT := $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - patterns:
+            - pattern-inside: |
+                if $ERR != nil || $V < $MIN || uint64($V) > $MAX { return ... }
+                $OUT = $CAST($V)
+            - metavariable-regex:
+                metavariable: $OUT
+                regex: ^[\p{L}_][\p{L}\p{Nd}_]*$
+          - pattern-inside: |
+              $OUT := $CAST($V)
+              if $V < $MIN || $V > $MAX { return 0 }
+          - pattern-inside: |
+              $OUT := $CAST($V)
+              if $V < $MIN || uint64($V) > $MAX { return 0 }
+          - pattern-inside: if $MIN <= $V && $V <= $MAX { return $CAST($V) }
+          - pattern-inside: if $V >= $MIN && $V <= $MAX { return $CAST($V) }
         - pattern: int32($V)
         - metavariable-comparison:
             metavariable: $MIN
@@ -440,14 +909,32 @@ rules:
         - pattern-not-inside: if $ERR != nil || $V < $MIN || $V > $MAX { ... }
         - pattern-not-inside: if $V < $MIN || uint64($V) > $MAX { ... }
         - pattern-not-inside: if $ERR != nil || $V < $MIN || uint64($V) > $MAX { ... }
-        - *id002
-        - *id003
-        - *id004
-        - *id005
+        - pattern-not-inside: |+
+            func $F(...) {
+            ...
+            uint64 := ...
+            ...
+            }
+
+        - pattern-not-inside: |+
+            func $F(...) {
+            ...
+            var uint64 = ...
+            ...
+            }
+
+        - pattern-not-inside: |+
+            func $F(..., uint64 $T, ...) { ... }
+
+        - pattern-not-inside: |+
+            ...
+            var uint64 = ...
+            ...
+
       exact: true
     - pattern-either:
       - patterns:
-        - pattern-either: &id006
+        - pattern-either:
           - pattern-inside: |
               $V, $ERR := strconv.ParseInt(..., ..., $BITS)
               return $CAST($V)
@@ -468,14 +955,42 @@ rules:
             comparison: $BITS > 0 and $BITS <= 8
         - focus-metavariable: $V
       - patterns:
-        - pattern-either: *id006
+        - pattern-either:
+          - pattern-inside: |
+              $V, $ERR := strconv.ParseInt(..., ..., $BITS)
+              return $CAST($V)
+          - pattern-inside: |
+              $V, $ERR := strconv.ParseInt(..., ..., $BITS)
+              if $ERR != nil { return ... }
+              return $CAST($V)
+          - pattern-inside: |
+              $V, $ERR = strconv.ParseInt(..., ..., $BITS)
+              return $CAST($V)
+          - pattern-inside: |
+              $V, $ERR = strconv.ParseInt(..., ..., $BITS)
+              if $ERR != nil { return ... }
+              return $CAST($V)
         - pattern: int16($V)
         - metavariable-comparison:
             metavariable: $BITS
             comparison: $BITS > 0 and $BITS <= 16
         - focus-metavariable: $V
       - patterns:
-        - pattern-either: *id006
+        - pattern-either:
+          - pattern-inside: |
+              $V, $ERR := strconv.ParseInt(..., ..., $BITS)
+              return $CAST($V)
+          - pattern-inside: |
+              $V, $ERR := strconv.ParseInt(..., ..., $BITS)
+              if $ERR != nil { return ... }
+              return $CAST($V)
+          - pattern-inside: |
+              $V, $ERR = strconv.ParseInt(..., ..., $BITS)
+              return $CAST($V)
+          - pattern-inside: |
+              $V, $ERR = strconv.ParseInt(..., ..., $BITS)
+              if $ERR != nil { return ... }
+              return $CAST($V)
         - pattern: int32($V)
         - metavariable-comparison:
             metavariable: $BITS

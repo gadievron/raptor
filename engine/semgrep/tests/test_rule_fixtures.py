@@ -193,6 +193,7 @@ def test_cases_are_within_the_universe():
     assert not stale, f"_CASES entries not in rules/: {stale}"
 
 
+@pytest.mark.slow  # Native whole-inventory validation exceeds the fast-tier budget.
 def test_every_rule_file_validates(tmp_path: Path):
     """Whole-universe --validate in one invocation: an unparseable or
     schema-invalid rule file anywhere under rules/ fails here instead
