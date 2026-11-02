@@ -29,6 +29,7 @@ from typing import Any, Callable
 
 import pytest
 
+from core.testing.logging_state import isolated_cli_logging
 from core.json import JsonCache
 from core.source.gated import ReadBudgetExceededError
 from packages.sca.kinds import MAX_FINDINGS_BYTES, MAX_SELF_FINDINGS_BYTES
@@ -225,6 +226,7 @@ def _write_big_findings(
     path.write_text(json.dumps(all_rows), encoding="utf-8")
 
 
+@isolated_cli_logging()
 def test_cli_threshold_gate_accepts_over_64mib_self_findings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

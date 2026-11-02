@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from core.testing.logging_state import isolated_cli_logging
 from packages.frida import cli, runner
 
 
@@ -66,6 +67,7 @@ def _fake_frida():
     )
 
 
+@isolated_cli_logging()
 def test_list_templates_exits_zero(capsys):
     rc = cli.main(["--list-templates"])
     assert rc == 0
@@ -75,6 +77,7 @@ def test_list_templates_exits_zero(capsys):
     assert "ssl-unpin" in out
 
 
+@isolated_cli_logging()
 def test_cli_requires_target_and_source():
     # Missing --target should exit non-zero (argparse 2).
     with pytest.raises(SystemExit) as exc:
@@ -82,6 +85,7 @@ def test_cli_requires_target_and_source():
     assert exc.value.code == 2
 
 
+@isolated_cli_logging()
 def test_cli_template_and_script_mutually_exclusive():
     with pytest.raises(SystemExit) as exc:
         cli.main([
@@ -93,6 +97,7 @@ def test_cli_template_and_script_mutually_exclusive():
     assert exc.value.code == 2
 
 
+@isolated_cli_logging()
 def test_cli_host_and_usb_mutually_exclusive():
     with pytest.raises(SystemExit) as exc:
         cli.main([
@@ -105,6 +110,7 @@ def test_cli_host_and_usb_mutually_exclusive():
     assert exc.value.code == 2
 
 
+@isolated_cli_logging()
 def test_cli_happy_path_runs(tmp_path: Path, monkeypatch):
     dev, fake_frida = _fake_frida()
     # Patch the runner's frida-import to return our fake.
@@ -126,6 +132,7 @@ def test_cli_happy_path_runs(tmp_path: Path, monkeypatch):
     assert meta["target"]["pid"] == 1234
 
 
+@isolated_cli_logging()
 def test_cli_invalid_template_name(tmp_path: Path):
     rc = cli.main([
         "--target", "1234",
@@ -136,6 +143,7 @@ def test_cli_invalid_template_name(tmp_path: Path):
     assert rc == 2  # parse_target succeeds; template validation fails
 
 
+@isolated_cli_logging()
 def test_cli_missing_script_file(tmp_path: Path):
     rc = cli.main([
         "--target", "1234",
@@ -146,6 +154,7 @@ def test_cli_missing_script_file(tmp_path: Path):
     assert rc == 2
 
 
+@isolated_cli_logging()
 def test_cli_spawn_with_pid_rejected(tmp_path: Path):
     # --spawn names a program to launch; a PID is already running, so the
     # combination is contradictory and must be rejected (exit 2) rather
@@ -160,6 +169,7 @@ def test_cli_spawn_with_pid_rejected(tmp_path: Path):
     assert rc == 2
 
 
+@isolated_cli_logging()
 def test_cli_frida_unavailable_exit_3(tmp_path: Path, monkeypatch):
     def boom():
         raise runner.FridaUnavailable("missing")
@@ -181,31 +191,30 @@ class TestConsoleChokepointWired:
     EscapingConsoleFormatter. Both libexec-dispatched entry mains must
     wire the chokepoint before doing any work."""
 
+    @isolated_cli_logging()
     def _with_fresh_root(self, call):
         import logging as _logging
         root = _logging.getLogger()
-        saved = root.handlers[:]
         root.handlers = []
-        try:
-            call()
-            from core.logging import EscapingConsoleFormatter
-            console = [
-                h for h in root.handlers
-                if isinstance(h, _logging.StreamHandler)
-                and not isinstance(h, _logging.FileHandler)
-            ]
-            assert console, (
-                "main() must configure a console handler — with none, "
-                "logging.lastResort relays hostile-derived warnings raw"
-            )
-            for h in console:
-                assert isinstance(h.formatter, EscapingConsoleFormatter)
-        finally:
-            root.handlers = saved
+        call()
+        from core.logging import EscapingConsoleFormatter
+        console = [
+            h for h in root.handlers
+            if isinstance(h, _logging.StreamHandler)
+            and not isinstance(h, _logging.FileHandler)
+        ]
+        assert console, (
+            "main() must configure a console handler — with none, "
+            "logging.lastResort relays hostile-derived warnings raw"
+        )
+        for h in console:
+            assert isinstance(h.formatter, EscapingConsoleFormatter)
 
+    @isolated_cli_logging()
     def test_cli_main_wires_escaping_formatter(self, capsys):
         self._with_fresh_root(lambda: cli.main(["--list-templates"]))
 
+    @isolated_cli_logging()
     def test_patch_oracle_main_wires_escaping_formatter(self, capsys):
         from packages.frida import patch_oracle
 

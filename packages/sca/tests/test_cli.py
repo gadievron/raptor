@@ -8,6 +8,7 @@ from typing import Any, Dict
 
 import pytest
 
+from core.testing.logging_state import isolated_cli_logging
 from packages.sca import cli, pipeline
 
 
@@ -21,11 +22,13 @@ def offline_target(tmp_path: Path) -> Path:
     return repo
 
 
+@isolated_cli_logging()
 def test_main_returns_2_when_target_missing(tmp_path: Path) -> None:
     rc = cli.main([str(tmp_path / "nope")])
     assert rc == 2
 
 
+@isolated_cli_logging()
 def test_main_returns_2_when_target_not_a_directory(tmp_path: Path) -> None:
     f = tmp_path / "file"
     f.write_text("x")
@@ -33,6 +36,7 @@ def test_main_returns_2_when_target_not_a_directory(tmp_path: Path) -> None:
     assert rc == 2
 
 
+@isolated_cli_logging()
 def test_main_writes_findings_and_report(
     offline_target: Path, tmp_path: Path,
 ) -> None:
@@ -45,6 +49,7 @@ def test_main_writes_findings_and_report(
     assert isinstance(rows, list)
 
 
+@isolated_cli_logging()
 def test_main_default_out_dir_is_timestamped(
     offline_target: Path, tmp_path: Path, monkeypatch,
 ) -> None:
@@ -60,6 +65,7 @@ def test_main_default_out_dir_is_timestamped(
     assert (runs[0] / "findings.json").exists()
 
 
+@isolated_cli_logging()
 def test_main_runtime_error_returns_3(
     offline_target: Path, tmp_path: Path, monkeypatch,
 ) -> None:
@@ -73,6 +79,7 @@ def test_main_runtime_error_returns_3(
     assert rc == 3
 
 
+@isolated_cli_logging()
 def test_flags_propagate_to_run_sca(
     offline_target: Path, tmp_path: Path, monkeypatch,
 ) -> None:
@@ -111,6 +118,7 @@ def test_flags_propagate_to_run_sca(
     assert options.cache_root == tmp_path / "cache"
 
 
+@isolated_cli_logging()
 def test_verbose_flag_lowers_log_level(
     offline_target: Path, tmp_path: Path,
 ) -> None:
