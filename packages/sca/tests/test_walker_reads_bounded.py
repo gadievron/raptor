@@ -174,6 +174,12 @@ def test_no_bare_reads_in_walker_subtrees() -> None:
 # run artifact whose size the run itself controls. Keyed on
 # (filename, distinctive line fragment) — line numbers churn.
 _ROOT_ALLOWLIST: dict[tuple[str, str], str] = {
+    ("cache_budget.py", "fd = os.open(unit.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK"):
+        "regular-file header probe only: fstat rejects other inode types, "
+        "O_NOFOLLOW refuses final symlinks and os.read(fd, 256) bounds the read",
+    ("cache_budget.py", "fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW"):
+        "write-only lock descriptor, no payload read; validate_lock_fd checks "
+        "the lock inode before flock and unavailable locking refuses eviction",
     ("agent.py", "with Path(p).open(encoding="):
         "capped: fh.read(_MAX_MARKER_BYTES) bounds the read to 256 KB",
     ("dependency_track.py", "bom_bytes = bom_path.read_bytes()"):
