@@ -190,6 +190,12 @@ _ROOT_ALLOWLIST: dict[tuple[str, str], str] = {
         "repo-bundled data file, operator refresh lane (not scanned tree)",
     ("refresh_typosquat_lists.py", "target.read_text(encoding=\"utf-8\"))"):
         "repo-bundled data file, operator refresh lane (not scanned tree)",
+    ("sbom_notices.py", "directories.append(os.open(root, flags | os.O_DIRECTORY))"):
+        "directory FD only: O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC; "
+        "no bytes read here; notice contents use bounded read_capped(dir_fd=...)",
+    ("sbom_notices.py", "directories.append(os.open(part, flags | os.O_DIRECTORY, dir_fd="):
+        "directory FD only, anchored to its open parent; O_DIRECTORY | O_NOFOLLOW "
+        "reject file/symlink substitutions; notice bytes use bounded read_capped",
     ("update.py", "new_text = scratch_copy.read_text("):
         "scratch copy the rewriter itself just wrote",
 }
