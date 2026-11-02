@@ -73,7 +73,7 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
 # ============================================================================
 
 COPY --from=ghcr.io/astral-sh/uv:0.7 /uv /usr/local/bin/uv
-RUN uv tool install semgrep==1.177.0
+RUN uv tool install --no-cache semgrep==1.177.0
 
 # ============================================================================
 # RR DEBUGGER (rr-debugger skill, crash-analysis agents)
