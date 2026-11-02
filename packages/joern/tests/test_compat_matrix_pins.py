@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -21,7 +23,8 @@ _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "compat_matrix.py"
 def cm():
     spec = importlib.util.spec_from_file_location("compat_matrix", _SCRIPT)
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    with patch.object(sys, "path", sys.path.copy()):
+        spec.loader.exec_module(module)
     return module
 
 

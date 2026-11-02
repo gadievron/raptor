@@ -18,6 +18,7 @@ import json
 import runpy
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -72,7 +73,8 @@ def _run(understand_dir, monkeypatch, sink_fn, iris_sinks=None):
     monkeypatch.setenv("_RAPTOR_TRUSTED", "1")
     monkeypatch.setattr(sys, "argv", [str(SCRIPT), str(understand_dir)])
     try:
-        runpy.run_path(str(SCRIPT), run_name="__main__")
+        with patch.object(sys, "path", sys.path.copy()):
+            runpy.run_path(str(SCRIPT), run_name="__main__")
     except SystemExit as e:
         return e.code or 0
     return 0
@@ -169,7 +171,8 @@ class TestStageFailureDiagnostics:
             sys, "argv", [str(SCRIPT), str(understand_dir)],
         )
         try:
-            runpy.run_path(str(SCRIPT), run_name="__main__")
+            with patch.object(sys, "path", sys.path.copy()):
+                runpy.run_path(str(SCRIPT), run_name="__main__")
         except SystemExit as e:
             assert (e.code or 0) == 0
         err = capsys.readouterr().err

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -14,7 +16,8 @@ _SCRIPT = Path(__file__).resolve().parents[1] / "preflight_scope.py"
 def ps():
     spec = importlib.util.spec_from_file_location("preflight_scope", _SCRIPT)
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    with patch.object(sys, "path", sys.path.copy()):
+        spec.loader.exec_module(mod)
     return mod
 
 

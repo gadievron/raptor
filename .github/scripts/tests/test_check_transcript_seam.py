@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -30,7 +32,8 @@ def det():
         "check_transcript_seam", _SCRIPT,
     )
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    with patch.object(sys, "path", sys.path.copy()):
+        spec.loader.exec_module(mod)
     return mod
 
 

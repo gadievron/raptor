@@ -14,6 +14,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -26,7 +27,8 @@ def mod():
                                                   _SCRIPT)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    with patch.object(sys, "path", sys.path.copy()):
+        spec.loader.exec_module(module)
     return module
 
 

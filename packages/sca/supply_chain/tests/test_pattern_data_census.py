@@ -25,9 +25,12 @@ import re
 import shutil
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 from packages.sca.supply_chain import (
     binary_in_package as _bip,
+)
+from packages.sca.supply_chain import (
     exfil_destinations as _exfil,
 )
 
@@ -46,7 +49,8 @@ def _census():
     # works; removed afterwards to keep sys.modules clean.
     sys.modules[spec.name] = mod
     try:
-        spec.loader.exec_module(mod)
+        with patch.object(sys, "path", sys.path.copy()):
+            spec.loader.exec_module(mod)
     finally:
         sys.modules.pop(spec.name, None)
     return mod
