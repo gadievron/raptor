@@ -12,6 +12,14 @@ sys.path.insert(0, str(Path(__file__).parents[3]))
 from core.build.build_detector import BuildDetector
 
 
+@pytest.fixture(autouse=True)
+def _stub_compiler_dry_run(monkeypatch):
+    # These tests inspect synthesis, flags and script quoting. Native
+    # execution/floor enforcement is covered separately; constructing a
+    # script must not require a working compiler or namespace backend here.
+    monkeypatch.setattr(BuildDetector, "_dry_run", lambda *args, **kwargs: [])
+
+
 def _find_script(tmp_path):
     """Find the generated .raptor_build_*.py script in tmp_path."""
     scripts = list(tmp_path.glob(".raptor_build_*.py"))
