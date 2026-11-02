@@ -199,6 +199,7 @@ def run_sweep_and_report(
     import traceback
 
     results: list[StressResult] = []
+    completed: list[StressResult] = []
 
     def _partial_summary(note: str) -> None:
         out(f"sweep interrupted — {note}")
@@ -212,6 +213,16 @@ def run_sweep_and_report(
         elif inflight:
             out(f"in-flight scans: {', '.join(inflight)}")
         done = [r for r in results if r is not None]
+        # Workers can finish and start another scan before the driver wakes
+        # to collect their futures. Read their published completions without
+        # taking Future locks from a signal handler. Accepted driver results
+        # (including timeout verdicts and retries) remain authoritative.
+        recorded = {(r.ecosystem, r.project) for r in done}
+        for result in completed:
+            key = (result.ecosystem, result.project)
+            if key not in recorded:
+                done.append(result)
+                recorded.add(key)
         out(f"completed scans: {len(done)}/{len(samples)}")
         try:
             diffs = compare_to_baseline(done, baseline_path)
@@ -250,16 +261,16 @@ def run_sweep_and_report(
 
     try:
         try:
-            # ``results`` doubles as the live sink: completions land
-            # in it AS THEY HAPPEN, so the SIGTERM / interrupt
-            # post-mortem reports what actually finished instead of
-            # claiming zero after forty completed scans.
+            # The driver keeps accepted results; the worker journal fills
+            # the interval between a scan returning and the driver waking
+            # to collect its future, including during SIGTERM handling.
             run_stress_sweep(
                 samples=samples,
                 git_clone_timeout=git_clone_timeout,
                 sca_timeout=sca_timeout,
                 max_workers=max_workers,
                 results_sink=results,
+                completed_sink=completed,
             )
             results = confirm_elapsed_regressions(
                 results, samples, baseline_path,
@@ -337,14 +348,16 @@ def run_stress_sweep(
     max_workers: int = 4,
     use_existing_clones: bool = False,
     results_sink: "list[StressResult] | None" = None,
+    completed_sink: "list[StressResult] | None" = None,
 ) -> list[StressResult]:
     """Walk samples, scan each, return per-sample diagnostics.
 
-    ``results_sink``: caller-owned list that receives each result AS
-    IT COMPLETES (the returned list is the same object when given).
-    Interrupt-time post-mortems need it — a signal handler cannot see
-    this function's local state, and a partial summary that claims
-    zero completions after forty finished scans is worse than none.
+    ``results_sink``: caller-owned list of driver-accepted results (the
+    returned list is the same object when given). ``completed_sink`` is
+    an optional worker-published completion journal for interrupt-time
+    summaries: a worker publishes before its executor starts another scan,
+    even if the driver has not yet collected its future. Late completions
+    never replace accepted timeout verdicts in ``results_sink``.
 
     Scans run in parallel (``max_workers`` threads). Each scan is
     bounded by its OWN budget of ``git_clone_timeout + sca_timeout``,
@@ -460,11 +473,18 @@ def run_stress_sweep(
         timeout_abandoned: list[
             tuple[concurrent.futures.Future, ProjectSample, int]
         ] = []
+        def _scan_and_publish(sample: ProjectSample) -> StressResult:
+            result = _scan_one(
+                sample, out_root, git_clone_timeout=git_clone_timeout,
+            )
+            if completed_sink is not None:
+                completed_sink.append(result)
+            return result
+
         try:
             future_to_sample = {
                 executor.submit(
-                    _scan_one, sample, out_root,
-                    git_clone_timeout=git_clone_timeout,
+                    _scan_and_publish, sample,
                 ): sample
                 for sample in samples
             }

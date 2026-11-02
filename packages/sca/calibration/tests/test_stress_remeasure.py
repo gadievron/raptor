@@ -364,6 +364,28 @@ def test_driver_phase_failure_prints_partial_summary(
     assert "summary:" in text              # partial summary rendered
 
 
+def test_partial_summary_keeps_accepted_timeout_over_late_completion(
+    tmp_path, monkeypatch,
+) -> None:
+    """A finished orphan must not replace the driver's timeout verdict."""
+    baseline = _baseline(tmp_path, {"proj": _BASE_ENTRY})
+    lines: list[str] = []
+
+    def interrupted_sweep(*, results_sink, completed_sink, **kwargs):
+        results_sink.append(_result(error="scan timed out: test budget"))
+        completed_sink.append(_result())
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(stress_mod, "run_stress_sweep", interrupted_sweep)
+    with pytest.raises(KeyboardInterrupt):
+        stress_mod.run_sweep_and_report(
+            [_sample()], baseline, out=lines.append,
+        )
+    text = "\n".join(lines)
+    assert "completed scans: 1/1" in text
+    assert "scan timed out: test budget" in text
+
+
 def test_in_flight_registry_tracks_scans(tmp_path, monkeypatch) -> None:
     seen: list[list[str]] = []
 
@@ -416,6 +438,13 @@ def scan(sample, out_root, *, git_clone_timeout):
     time.sleep(30)
 
 stress_mod._scan_one_inner = scan
+# Hold the driver before it can collect any completed future. The worker
+# still finishes fastproj and starts slowproj, so SIGTERM must recover
+# fastproj from the worker-published completion journal, not lucky timing.
+def hold_driver(*args, **kwargs):
+    while True:
+        time.sleep(0.05)
+stress_mod.concurrent.futures.wait = hold_driver
 baseline = Path({str(tmp_path)!r}) / "baseline.json"
 baseline.write_text(json.dumps({{"_source": {{}}, "projects": {{}}}}))
 def mk(name):
