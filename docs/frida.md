@@ -14,8 +14,10 @@ pipeline component that feeds runtime evidence into
 [/binary](binary-analysis.md), [/validate](validation.md)
 and [/understand](commands.md#understand).
 
-See also: [commands](commands.md), [binary analysis](binary-analysis.md),
-[sandbox](sandbox.md).
+**Related documentation:**
+[commands](commands.md) |
+[binary analysis](binary-analysis.md) |
+[sandbox](sandbox.md)
 
 **Status:** Alpha. Templates and runner are minimal starters.
 

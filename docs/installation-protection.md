@@ -1,5 +1,7 @@
 # Installation protection
 
+[Documentation index](README.md)
+
 On Linux, start RAPTOR with:
 
 ```bash
@@ -18,6 +20,18 @@ temporary files retain their normal filesystem permissions. Existing `HOME`,
 `CLAUDE_CONFIG_DIR`, `EDITOR`, and `VISUAL` settings are preserved. No account
 state is copied, moved, or redirected. Remove `--protect-install` on your next
 launch to edit or update RAPTOR normally.
+
+**Related documentation:**
+[Installation](installation.md) |
+[Sandbox](sandbox.md) |
+[Agent security](agent-security.md) |
+[Temporary files and cleanup](temporary-files.md)
+
+**On this page:**
+
+- [What stays writable](#what-stays-writable)
+- [Requirements and installation layout](#requirements-and-installation-layout)
+- [Status and troubleshooting](#status-and-troubleshooting)
 
 ## What stays writable
 

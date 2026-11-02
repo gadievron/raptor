@@ -1,5 +1,7 @@
 # CI Controls
 
+[Documentation index](README.md)
+
 This is the honest version of how RAPTOR checks its own code.
 
 Some of these things genuinely block a PR. Some just run on a timer and tell us when things are drifting. That distinction matters: having a dependency in `pyproject.toml` is not the same as having a control that stops bad code getting merged.
@@ -10,6 +12,19 @@ This page is split into:
 - scheduled assurance jobs;
 - workflow hardening;
 - tools that are installed but not currently enforced.
+
+**Related documentation:**
+[Contributing](../CONTRIBUTING.md) |
+[Developer guide](developers.md) |
+[Security model](security.md)
+
+**On this page:**
+
+- [What Actually Blocks A PR](#what-actually-blocks-a-pr)
+- [Stuff That Runs On A Timer](#stuff-that-runs-on-a-timer)
+- [Workflow Hardening Bits](#workflow-hardening-bits)
+- [Runner Sizing](#runner-sizing)
+- [Stuff We Have But Do Not Really Enforce Yet](#stuff-we-have-but-do-not-really-enforce-yet)
 
 ## What Actually Blocks A PR
 

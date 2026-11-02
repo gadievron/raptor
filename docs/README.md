@@ -6,6 +6,12 @@ instrumentation, and LLM-powered reasoning to find, validate, and exploit
 vulnerabilities with minimal human intervention. Use this index to choose a workflow, then follow its guide for setup,
 examples, output, and limitations.
 
+**On this page:**
+
+- [Getting Started](#getting-started)
+- [Choose a workflow](#choose-a-workflow)
+- [Command Reference](#command-reference)
+- [Feature Guides](#feature-guides)
 
 ## Getting Started
 

@@ -9,8 +9,10 @@ proposes hardening patches. No LLM is required for the core pipeline --
 the scanner, advisory matcher, reachability analysis and fix planner are
 all deterministic.
 
-See also: [slash-command reference](commands.md#software-composition-analysis),
-[Python CLI reference](python-cli.md), [dependencies](dependencies.md).
+**Related documentation:**
+[slash-command reference](commands.md#software-composition-analysis) |
+[Python CLI reference](python-cli.md) |
+[dependencies](dependencies.md)
 
 ---
 

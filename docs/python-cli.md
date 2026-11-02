@@ -6,8 +6,10 @@
 non-interactive use. For interactive analysis via Claude Code, launch with
 `bin/raptor` instead.
 
-See also: [commands](commands.md), [README](README.md),
-[dependencies](dependencies.md).
+**Related documentation:**
+[commands](commands.md) |
+[README](README.md) |
+[dependencies](dependencies.md)
 
 
 **On this page:**

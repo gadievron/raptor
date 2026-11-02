@@ -22,6 +22,13 @@ reproduce it if you need an execution check. Run the helper commands below
 in a terminal from the RAPTOR checkout. See [fuzzing](fuzzing.md) and
 [validation](validation.md) for the upstream evidence workflows.
 
+**On this page:**
+
+- [Tiers](#tiers)
+- [Free eligibility surfacing](#free-eligibility-surfacing)
+- [Bundle assembly (Tier 0/1)](#bundle-assembly-tier-01)
+- [Reproduction (Tier 1.5)](#reproduction-tier-15)
+
 ## Tiers
 
 The design stages proving by dependency weight. The implemented tiers provide

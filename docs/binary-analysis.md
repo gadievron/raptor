@@ -20,8 +20,12 @@ cross-version `diff --matched`, findings export) and binary
 extraction over a decomp-tree materialized from an imported RE
 database).
 
-See also: [slash commands](commands.md), [Python CLI](python-cli.md), [validation](validation.md),
-[Frida](frida.md), [sandbox](sandbox.md).
+**Related documentation:**
+[slash commands](commands.md) |
+[Python CLI](python-cli.md) |
+[validation](validation.md) |
+[Frida](frida.md) |
+[sandbox](sandbox.md)
 
 ---
 

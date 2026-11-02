@@ -11,6 +11,12 @@ the relevant section below; each setting has its own precedence rules.
 [Sandbox](sandbox.md) |
 [Dependencies](dependencies.md)
 
+**On this page:**
+
+- [LLM and model configuration](#llm-and-model-configuration)
+- [tuning.json — resource tuning](#tuningjson--resource-tuning)
+- [Environment variables](#environment-variables)
+- [Sandbox calibration cache](#sandbox-calibration-cache)
 
 ## LLM and model configuration
 

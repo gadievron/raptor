@@ -1,5 +1,7 @@
 # Temporary files and cleanup
 
+[Documentation index](README.md)
+
 RAPTOR keeps analysis results in the configured output directory. Temporary
 files have a separate lifetime and may be removed when their work finishes.
 
@@ -11,6 +13,18 @@ owned by the operator and is never recursively removed by RAPTOR.
 
 Direct helper invocations preserve their initial `TMPDIR`. They clean only
 operation directories they create, without taking ownership of that base.
+
+**Related documentation:**
+[Installation protection](installation-protection.md) |
+[Environment variables](environment.md) |
+[Joern](joern.md)
+
+**On this page:**
+
+- [Inspect and clean session scratch](#inspect-and-clean-session-scratch)
+- [Optional cgroup tracking on Linux](#optional-cgroup-tracking-on-linux)
+
+## Inspect and clean session scratch
 
 Inspect recorded launcher scratch without starting a frontend:
 
