@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "scope": "Verbatim notice from the exact Semgrep source distribution. This retains the upstream LGPL text; it does not establish complete licence coverage for bundled native libraries or vendored dependencies.",
+  "packages": [
+    {
+      "name": "semgrep",
+      "version": "1.177.0",
+      "license": "LGPL-2.1-or-later",
+      "license_header": "License-Expression",
+      "license_spdx": "LGPL-2.1-or-later",
+      "metadata_directory": "semgrep-1.177.0.dist-info",
+      "notice_file": "semgrep-LICENSE",
+      "installed_filename": "LICENSE",
+      "sha256": "20c17d8b8c48a600800dfd14f95d5cb9ff47066a9641ddeab48dc54aec96e331",
+      "source_kind": "pypi_source_distribution",
+      "source_url": "https://files.pythonhosted.org/packages/9c/b0/5c647ef32daaa4b328908ed2deccfcb97ac4d47444b425bcbbcbfaf292de/semgrep-1.177.0.tar.gz",
+      "source_sha256": "a79f212544da540b5e758da6d1979ef8eedd0b8e15a8c5019601d6da0d73538d",
+      "source_path": "semgrep-1.177.0/LICENSE",
+      "registry_metadata_url": "https://pypi.org/pypi/semgrep/1.177.0/json"
+    }
+  ]
+}
