@@ -211,7 +211,7 @@ jobs:
           # The Semgrep engine directory is owned by semgrep-regressions;
           # core/package Semgrep consumers continue to run in this job.
           python -m pytest -m slow core packages engine .github/tests .github/scripts/tests \
-            --ignore=engine/semgrep/tests -q --durations=25 \
+            --ignore=engine/semgrep/tests --ignore=packages/codeql/tests/test_pack_dependency_resolution.py -q --durations=25 \
             --junitxml="$RUNNER_TEMP/slow.xml"
 
       # Full-collection lane, so --full: a count below the recorded
@@ -235,7 +235,7 @@ jobs:
           source $VENV_PATH/bin/activate
           rc=0
           python -m pytest -m integration core packages engine \
-            --ignore=engine/semgrep/tests --durations=25 \
+            --ignore=engine/semgrep/tests --ignore=packages/codeql/tests/test_pack_dependency_resolution.py --durations=25 \
             --tb=short --junitxml="$RUNNER_TEMP/integration-attempt-1.xml" \
             || rc=$?
           if [ "$rc" -eq 0 ]; then
@@ -246,7 +246,7 @@ jobs:
           echo ""
           sleep 60
           python -m pytest -m integration core packages engine \
-            --ignore=engine/semgrep/tests --durations=25 \
+            --ignore=engine/semgrep/tests --ignore=packages/codeql/tests/test_pack_dependency_resolution.py --durations=25 \
             --tb=short --junitxml="$RUNNER_TEMP/integration-attempt-2.xml"
 
       # Budget over the attempt that produced the green: attempt 2
@@ -468,6 +468,29 @@ jobs:
             shared
           persist-credentials: false
 
+      - name: Set up Python for sandbox dependency regressions
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Restore or rebuild the project venv
+        uses: ./.github/actions/setup-venv
+
+      - name: Verify sandboxed custom-pack dependency discovery
+        run: |
+          set -euo pipefail
+          source "$VENV_PATH/bin/activate"
+          python -m pytest packages/codeql/tests/test_pack_dependency_resolution.py -m integration -q \
+            --junitxml="$RUNNER_TEMP/codeql-dependencies.xml"
+          python - "$RUNNER_TEMP/codeql-dependencies.xml" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+          cases = list(ET.parse(sys.argv[1]).getroot().iter("testcase"))
+          if not cases or any(case.find("skipped") is not None for case in cases):
+              sys.exit("CodeQL dependency regressions must execute without skips")
+          print(f"Verified {len(cases)} sandbox dependency regressions")
+          PY
+
       - name: Compile fixtures with system headers
         run: |
           set -euo pipefail
@@ -523,6 +546,7 @@ jobs:
         with:
           name: focused-codeql-cpp-regression-results
           path: |
+            ${{ runner.temp }}/codeql-dependencies.xml
             ${{ runner.temp }}/cpp-query-tests/results.json
             ${{ runner.temp }}/cpp-query-tests/tests/truncation/*.actual
             ${{ runner.temp }}/cpp-query-tests/tests/truncation/*.expected

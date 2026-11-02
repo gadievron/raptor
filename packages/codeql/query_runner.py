@@ -89,7 +89,7 @@ def _iris_pack_deps_already_resolved(pack_dir: Path) -> bool:
     return True
 
 
-def _bundled_stdlib_roots(lang: str) -> list[Path]:
+def _bundled_stdlib_roots(lang: str, *, codeql_cli: str | None = None) -> list[Path]:
     """Find the ``<lang>-all`` library pack bundled with the CodeQL CLI.
 
     Standard CodeQL installations place the CLI at ``<prefix>/codeql/``
@@ -99,20 +99,26 @@ def _bundled_stdlib_roots(lang: str) -> list[Path]:
     the package cache that ``_iris_pack_deps_already_resolved`` checks.
     """
     import shutil
-    cli = os.environ.get("CODEQL_CLI") or shutil.which("codeql")
+    cli = codeql_cli or os.environ.get("CODEQL_CLI") or shutil.which("codeql")
     if not cli:
         return []
     try:
         dist_dir = Path(cli).resolve().parent          # <prefix>/codeql/
-        lib_root = dist_dir.parent / "codeql-queries" / lang / "ql" / "lib"
+        workspace = dist_dir.parent / "codeql-queries"
+        lib_root = workspace / lang / "ql" / "lib"
         if (lib_root / "qlpack.yml").is_file():
+            # The language library imports sibling shared packs. Under
+            # scoped filesystem access CodeQL cannot discover this workspace
+            # by enumerating the CLI's parent; select it explicitly.
+            if (workspace / "codeql-workspace.yml").is_file():
+                return [workspace]
             return [lib_root]
     except (OSError, ValueError):
         pass
     return []
 
 
-def _vendored_stdlib_roots(lang: str) -> list[Path]:
+def _vendored_stdlib_roots(lang: str, *, codeql_cli: str | None = None) -> list[Path]:
     """Library-pack roots usable as ``--additional-packs`` for offline
     stdlib resolution.
 
@@ -128,8 +134,9 @@ def _vendored_stdlib_roots(lang: str) -> list[Path]:
        <lang>/ql/lib/``).  Present in every standard CodeQL installation
        but invisible to the package cache.
 
-    Returns a one-element list on the first hit, or ``[]`` when nothing
-    usable is found.
+    The bundled fallback returns the workspace root, including shared
+    dependencies, rather than only its language library. Returns a
+    one-element list on the first hit, or ``[]`` when nothing is found.
     """
     # --- path 1: cached query pack ---
     base = Path.home() / ".codeql" / "packages" / "codeql" / f"{lang}-queries"
@@ -154,7 +161,7 @@ def _vendored_stdlib_roots(lang: str) -> list[Path]:
                 return [cand]
 
     # --- path 2: bundled distribution pack ---
-    return _bundled_stdlib_roots(lang)
+    return _bundled_stdlib_roots(lang, codeql_cli=codeql_cli)
 
 
 def vendored_stdlib_roots(lang: str) -> list[Path]:
@@ -289,14 +296,15 @@ class QueryRunner:
         # fallback path.
         from packages.codeql._bootstrap import resolve_bootstrap
         _cli = resolve_bootstrap(_cli)
-        self.codeql_cli = os.path.realpath(_cli) if _cli else _cli
-        if not self.codeql_cli:
+        resolved_cli = os.path.realpath(_cli) if _cli else _cli
+        if not resolved_cli:
             msg = (
                 "CodeQL CLI not found (set the CODEQL_CLI environment "
                 "variable or add codeql to PATH)"
             )
             raise RuntimeError(msg)
 
+        self.codeql_cli: str = resolved_cli
         logger.info("Query runner initialized with CodeQL: %s", self.codeql_cli)
 
     def _sandbox_tool_paths(self) -> list:
@@ -370,6 +378,40 @@ class QueryRunner:
         # Database analysis writes logs/results beside the dataset. It is a
         # writable bind, not target= (which would make the database read-only).
         return self._filesystem_scope(out_dir, writable=[database], readonly=roots)
+
+    def _local_dependency_roots(self, language: str, query_path: Path) -> list[Path]:
+        """Resolve an unpinned stdlib-only pack without changing its dependencies.
+
+        A lockfile or any other dependency contract belongs to the package
+        manager. Additional source roots take precedence over its pins, so
+        never introduce them for those packs. No network access is added.
+        """
+        import yaml
+
+        pack = Path(query_path).absolute()
+        if not pack.is_dir():
+            pack = pack.parent
+        for _ in range(32):
+            manifest = pack / "qlpack.yml"
+            if not manifest.is_file():
+                manifest = pack / "codeql-pack.yml"
+            if manifest.is_file():
+                break
+            if pack.parent == pack:
+                return []
+            pack = pack.parent
+        else:
+            return []
+        if os.path.lexists(pack / "codeql-pack.lock.yml"):
+            return []
+        try:
+            metadata = yaml.safe_load(read_capped_text(manifest, max_bytes=64 * 1024, raise_on_refusal=True))
+        except (OSError, ValueError, RecursionError, yaml.YAMLError):
+            return []
+        if (not isinstance(metadata, dict)
+                or metadata.get("dependencies") != {f"codeql/{language}-all": "*"}):
+            return []
+        return _vendored_stdlib_roots(language, codeql_cli=self.codeql_cli)
 
     def _codeql_version(self) -> str | None:
         """CLI version string (e.g. ``"2.26.3"``), cached per instance.
@@ -986,6 +1028,8 @@ class QueryRunner:
             *query_args,
             "--format=sarif-latest",
             f"--output={sarif_path}",
+            *(f"--additional-packs={root}" for root in
+              self._local_dependency_roots(language, query_path)),
         ]
         CodeQLTunables.from_tuning().append_to(cmd, include_disk_cache=False)
 
@@ -1285,19 +1329,11 @@ class QueryRunner:
         results: dict[str, QueryResult] = {}
 
         def _run_one(lang: str, db: Path, pack_dir: Path) -> "QueryResult":
-            vendored = _vendored_stdlib_roots(lang)
-            extra: tuple[str, ...] = tuple(
-                f"--additional-packs={root}" for root in vendored
-            )
             return self._run_local_pack(
                 lang, db, pack_dir, out_dir,
                 suite_name="raptor-curated",
                 sarif_name=f"codeql_{lang}_curated.sarif",
                 label="curated queries",
-                extra_analyze_args=extra,
-                # A vendored stdlib root resolves the imports without
-                # the (network-dependent) install round-trip.
-                skip_install=bool(vendored),
             )
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -1337,6 +1373,12 @@ class QueryRunner:
         *, suite_name: str, sarif_name: str, label: str,
         extra_analyze_args: tuple[str, ...] = (), skip_install: bool = False,
     ) -> QueryResult:
+        # Share offline stdlib discovery with the custom-query entry point.
+        # Explicit caller resolution settings retain their existing contract.
+        if not extra_analyze_args and not skip_install:
+            roots = self._local_dependency_roots(lang, pack_dir)
+            extra_analyze_args = tuple(f"--additional-packs={root}" for root in roots)
+            skip_install = bool(roots)
         args, skipped = self._compatible_query_args(Path(pack_dir))
         if not args:
             self._log_rule_skips(skipped)

@@ -544,6 +544,15 @@ resolution prefers packs already on disk (no network needed); a
 failure degrades to a warning without affecting the standard-suite
 results.
 
+Custom query packs that depend only on an unpinned CodeQL language library
+can use the libraries shipped alongside the selected installation, including
+their shared dependencies. This works without network access. Packs with a
+lockfile or explicit dependency versions keep those requirements; offline
+runs need the matching versions
+installed in advance. Resolving libraries does not repair incomplete source
+extraction: check extraction warnings before treating an empty result as
+coverage of the target.
+
 
 ## Supported Languages
 
