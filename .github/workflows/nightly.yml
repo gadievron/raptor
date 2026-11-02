@@ -36,7 +36,7 @@ on:
   workflow_dispatch:
     inputs:
       suite:
-        description: Focused suites skip the full batch; cpp-truncation includes move regressions
+        description: Focused suites skip the full batch; cpp runs all C/C++ query regressions
         type: choice
         default: full
         options:
@@ -44,6 +44,7 @@ on:
           - semgrep
           - java-log
           - scan-and-java-log
+          - cpp
           - cpp-truncation
 
 concurrency:
@@ -411,9 +412,9 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
-  cpp-truncation-query:
+  cpp-query-regressions:
     name: C/C++ query regressions
-    if: github.event_name != 'workflow_dispatch' || inputs.suite == 'full' || inputs.suite == 'cpp-truncation'
+    if: github.event_name != 'workflow_dispatch' || inputs.suite == 'full' || inputs.suite == 'cpp' || inputs.suite == 'cpp-truncation'
     # Independent of the Java and slow/integration jobs. Reuse the pinned
     # CLI cache; keep C/C++ libraries and native tests in this job.
     runs-on: ubuntu-latest
@@ -469,29 +470,32 @@ jobs:
           set -euo pipefail
           gcc --version
           g++ --version
-          mkdir -p "$RUNNER_TEMP/cpp-truncation"
+          mkdir -p "$RUNNER_TEMP/cpp-query-tests"
           # Without __CODEQL_TEST__, the fixtures use system headers.
           gcc -c engine/codeql/tests/cpp/truncation/TruncationCases.c \
-            -o "$RUNNER_TEMP/cpp-truncation/c.o"
+            -o "$RUNNER_TEMP/cpp-query-tests/c.o"
           g++ -c engine/codeql/tests/cpp/truncation/TruncationCases.cpp \
-            -o "$RUNNER_TEMP/cpp-truncation/cpp.o"
+            -o "$RUNNER_TEMP/cpp-query-tests/cpp.o"
           # The bare discarded-move negative deliberately ignores nodiscard.
           g++ -std=c++17 -Wno-unused-result -c engine/codeql/tests/cpp/use-after-move/MoveCases.cpp \
-            -o "$RUNNER_TEMP/cpp-truncation/move.o"
+            -o "$RUNNER_TEMP/cpp-query-tests/move.o"
+          g++ -std=c++17 -c engine/codeql/tests/cpp/iterator-invalidation/IteratorCases.cpp \
+            -o "$RUNNER_TEMP/cpp-query-tests/iterator.o"
 
       - name: Run C/C++ query regressions
         run: |
           set -euo pipefail
           cli="$RUNNER_TEMP/java-log-codeql/codeql/codeql"
           "$cli" version
-          cp -R engine/codeql/queries/cpp "$RUNNER_TEMP/cpp-truncation/queries"
-          cp -R engine/codeql/tests/cpp "$RUNNER_TEMP/cpp-truncation/tests"
+          cp -R engine/codeql/queries/cpp "$RUNNER_TEMP/cpp-query-tests/queries"
+          cp -R engine/codeql/tests/cpp "$RUNNER_TEMP/cpp-query-tests/tests"
           "$cli" test run --threads=2 --ram=4096 --format=json \
             --search-path="$GITHUB_WORKSPACE/.codeql-cpp-libraries" \
-            --additional-packs="$RUNNER_TEMP/cpp-truncation/queries:$RUNNER_TEMP/cpp-truncation/tests" \
-            "$RUNNER_TEMP/cpp-truncation/tests/truncation" \
-            "$RUNNER_TEMP/cpp-truncation/tests/use-after-move" \
-            > "$RUNNER_TEMP/cpp-truncation/results.json"
+            --additional-packs="$RUNNER_TEMP/cpp-query-tests/queries:$RUNNER_TEMP/cpp-query-tests/tests" \
+            "$RUNNER_TEMP/cpp-query-tests/tests/truncation" \
+            "$RUNNER_TEMP/cpp-query-tests/tests/use-after-move" \
+            "$RUNNER_TEMP/cpp-query-tests/tests/iterator-invalidation" \
+            > "$RUNNER_TEMP/cpp-query-tests/results.json"
 
       - name: Check production C/C++ query wrappers
         run: |
@@ -500,23 +504,26 @@ jobs:
           # repeating optimization just for the thin reporting wrapper.
           "$RUNNER_TEMP/java-log-codeql/codeql/codeql" query compile --check-only --threads=2 --ram=4096 \
             --search-path="$GITHUB_WORKSPACE/.codeql-cpp-libraries" \
-            --additional-packs="$RUNNER_TEMP/cpp-truncation/queries" \
-            "$RUNNER_TEMP/cpp-truncation/queries/IntegerTruncationInCast.ql" \
-            "$RUNNER_TEMP/cpp-truncation/queries/UseAfterMove.ql" \
-            2>&1 | tee "$RUNNER_TEMP/cpp-truncation/production-check.log"
+            --additional-packs="$RUNNER_TEMP/cpp-query-tests/queries" \
+            "$RUNNER_TEMP/cpp-query-tests/queries/IntegerTruncationInCast.ql" \
+            "$RUNNER_TEMP/cpp-query-tests/queries/UseAfterMove.ql" \
+            "$RUNNER_TEMP/cpp-query-tests/queries/IteratorInvalidation.ql" \
+            2>&1 | tee "$RUNNER_TEMP/cpp-query-tests/production-check.log"
 
       - name: Upload C/C++ query test results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
-          name: focused-codeql-cpp-truncation-results
+          name: focused-codeql-cpp-regression-results
           path: |
-            ${{ runner.temp }}/cpp-truncation/results.json
-            ${{ runner.temp }}/cpp-truncation/tests/truncation/*.actual
-            ${{ runner.temp }}/cpp-truncation/tests/truncation/*.expected
-            ${{ runner.temp }}/cpp-truncation/tests/use-after-move/*.actual
-            ${{ runner.temp }}/cpp-truncation/tests/use-after-move/*.expected
-            ${{ runner.temp }}/cpp-truncation/production-check.log
+            ${{ runner.temp }}/cpp-query-tests/results.json
+            ${{ runner.temp }}/cpp-query-tests/tests/truncation/*.actual
+            ${{ runner.temp }}/cpp-query-tests/tests/truncation/*.expected
+            ${{ runner.temp }}/cpp-query-tests/tests/use-after-move/*.actual
+            ${{ runner.temp }}/cpp-query-tests/tests/use-after-move/*.expected
+            ${{ runner.temp }}/cpp-query-tests/tests/iterator-invalidation/*.actual
+            ${{ runner.temp }}/cpp-query-tests/tests/iterator-invalidation/*.expected
+            ${{ runner.temp }}/cpp-query-tests/production-check.log
           retention-days: 14
           if-no-files-found: ignore
 

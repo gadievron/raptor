@@ -619,11 +619,11 @@ system headers. The separate C/C++ job runs on the full nightly and can be
 selected without the Java or slow/integration jobs:
 
 ```sh
-gh workflow run nightly.yml --ref main -f suite=cpp-truncation
+gh workflow run nightly.yml --ref main -f suite=cpp
 ```
 
 Results, expected/actual rows and the production-wrapper type-check log are
-uploaded as `focused-codeql-cpp-truncation-results`. The query logic is
+uploaded as `focused-codeql-cpp-regression-results`. The query logic is
 shared with the native tests; CI type-checks the thin reporting wrapper.
 
 ### Curated C/C++ use after move
@@ -650,9 +650,36 @@ ends move-state tracking; a separate null/bounds bug can still exist afterward.
 See the [C++ move specification](https://eel.is/c++draft/forward) and
 [moved-from library requirements](https://eel.is/c++draft/lib.types.movedfrom).
 
-The existing `suite=cpp-truncation` focused job now runs both narrowing and
-use-after-move regressions. It keeps the existing
-`focused-codeql-cpp-truncation-results` artifact name, which includes both
-suites' expected/actual rows and reporting-wrapper type-check output. The
+The `suite=cpp` focused job runs narrowing, use-after-move and iterator
+regressions. The `cpp-truncation` choice remains a compatibility alias. The
+`focused-codeql-cpp-regression-results` artifact includes all three suites'
+expected/actual rows and reporting-wrapper type-check output. The
 standalone move fixtures use small standard-library stand-ins; the same
 case bodies also compile against real system headers in CI.
+
+### Curated C/C++ iterator invalidation
+
+The iterator query tracks named forward iterators and cached ends from
+`begin`/`cbegin`/`end`/`cend`, copied bindings, and compiler-generated range-for
+iterators. It requires a modeled mutation followed by a reachable iterator
+use without replacement. Iterator destruction and assignment receivers are
+excluded. Canonical `it = values.erase(it)` repairs that iterator; capturing
+the returned iterator in another variable does not repair the old one.
+
+The invalidation profile distinguishes sequence containers, node containers
+and unordered containers. List/set/map insertions preserve existing
+iterators. Current-element erasure, clear/assign, sequence mutations and
+possible unordered rehashes have different effects. Return/break paths that
+never use the invalidated iterator are not reported. Both explicit loops and
+range-for loops are covered, as are named iterators used outside loops.
+
+This is a medium-precision local analysis. Capacity and load-factor proofs,
+exact sequence erase positions, complex erased-element aliases, reference/field
+container aliases, reverse iterators, helper mutations and container ownership
+transfers are incomplete. Potential vector reallocation, sequence erasure, or
+unordered rehash can remain reportable even when application invariants prevent it. The query does not
+prove that every modeled mutation invalidates an iterator on every execution.
+
+Use `gh workflow run nightly.yml --ref main -f suite=cpp` for the generic
+`cpp-query-regressions` job. The old `cpp-truncation` input still selects it.
+Results for all three suites use `focused-codeql-cpp-regression-results`.
