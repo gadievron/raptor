@@ -42,8 +42,7 @@ on:
         options:
           - full
           - semgrep
-          - java-log
-          - scan-and-java-log
+          - java
           - cpp
 
 concurrency:
@@ -295,9 +294,9 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
-  java-log-query:
+  java-query-regressions:
     name: Java query regressions
-    if: github.event_name != 'workflow_dispatch' || inputs.suite == 'full' || inputs.suite == 'java-log' || inputs.suite == 'scan-and-java-log'
+    if: github.event_name != 'workflow_dispatch' || inputs.suite == 'full' || inputs.suite == 'java'
     # Separate tool-backed regression: no optional-tool skip and no added
     # time or memory contention in the existing slow/integration job.
     runs-on: ubuntu-latest
@@ -350,7 +349,7 @@ jobs:
         with:
           repository: github/codeql
           ref: 28b6aa8616a393ebb45186e3ba4df004a0f3ef4e  # codeql-cli/v2.23.8
-          path: .codeql-java-log-libraries
+          path: .codeql-java-libraries
           sparse-checkout: |
             java/ql/lib
             shared
@@ -361,26 +360,26 @@ jobs:
           set -euo pipefail
           cli="$RUNNER_TEMP/java-log-codeql/codeql/codeql"
           "$cli" version
-          mkdir -p "$RUNNER_TEMP/java-log-tests"
-          cp -R engine/codeql/queries "$RUNNER_TEMP/java-log-tests/queries"
-          cp -R engine/codeql/tests/java "$RUNNER_TEMP/java-log-tests/tests"
+          mkdir -p "$RUNNER_TEMP/java-query-tests"
+          cp -R engine/codeql/queries "$RUNNER_TEMP/java-query-tests/queries"
+          cp -R engine/codeql/tests/java "$RUNNER_TEMP/java-query-tests/tests"
           "$cli" test run --threads=2 --ram=4096 --format=json \
-            --search-path="$GITHUB_WORKSPACE/.codeql-java-log-libraries" \
-            --additional-packs="$RUNNER_TEMP/java-log-tests/queries/java:$RUNNER_TEMP/java-log-tests/tests" \
-            "$RUNNER_TEMP/java-log-tests/tests/log-injection" \
-            "$RUNNER_TEMP/java-log-tests/tests/deserialization" \
-            "$RUNNER_TEMP/java-log-tests/tests/xxe" \
-            > "$RUNNER_TEMP/java-log-tests/results.json"
+            --search-path="$GITHUB_WORKSPACE/.codeql-java-libraries" \
+            --additional-packs="$RUNNER_TEMP/java-query-tests/queries/java:$RUNNER_TEMP/java-query-tests/tests" \
+            "$RUNNER_TEMP/java-query-tests/tests/log-injection" \
+            "$RUNNER_TEMP/java-query-tests/tests/deserialization" \
+            "$RUNNER_TEMP/java-query-tests/tests/xxe" \
+            > "$RUNNER_TEMP/java-query-tests/results.json"
 
       - name: Compile production Java log and deserialization queries
         run: |
           set -euo pipefail
           "$RUNNER_TEMP/java-log-codeql/codeql/codeql" query compile --threads=2 --ram=4096 \
-            --search-path="$GITHUB_WORKSPACE/.codeql-java-log-libraries" \
-            --additional-packs="$RUNNER_TEMP/java-log-tests/queries/java" \
-            "$RUNNER_TEMP/java-log-tests/queries/java/LogInjection.ql" \
-            "$RUNNER_TEMP/java-log-tests/queries/java/InsecureDeserialization.ql" \
-            2>&1 | tee "$RUNNER_TEMP/java-log-tests/production-compile.log"
+            --search-path="$GITHUB_WORKSPACE/.codeql-java-libraries" \
+            --additional-packs="$RUNNER_TEMP/java-query-tests/queries/java" \
+            "$RUNNER_TEMP/java-query-tests/queries/java/LogInjection.ql" \
+            "$RUNNER_TEMP/java-query-tests/queries/java/InsecureDeserialization.ql" \
+            2>&1 | tee "$RUNNER_TEMP/java-query-tests/production-compile.log"
 
       # The native XXE suite executes the shared production logic. Check
       # the thin reporting wrapper without repeating its costly optimizer run.
@@ -388,26 +387,26 @@ jobs:
         run: |
           set -euo pipefail
           "$RUNNER_TEMP/java-log-codeql/codeql/codeql" query compile --check-only --threads=2 --ram=4096 \
-            --search-path="$GITHUB_WORKSPACE/.codeql-java-log-libraries" \
-            --additional-packs="$RUNNER_TEMP/java-log-tests/queries/java" \
-            "$RUNNER_TEMP/java-log-tests/queries/java/XXEDocumentBuilder.ql" \
-            2>&1 | tee "$RUNNER_TEMP/java-log-tests/xxe-production-check.log"
+            --search-path="$GITHUB_WORKSPACE/.codeql-java-libraries" \
+            --additional-packs="$RUNNER_TEMP/java-query-tests/queries/java" \
+            "$RUNNER_TEMP/java-query-tests/queries/java/XXEDocumentBuilder.ql" \
+            2>&1 | tee "$RUNNER_TEMP/java-query-tests/xxe-production-check.log"
 
       - name: Upload Java query test results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
-          name: nightly-java-log-query-results
+          name: focused-codeql-java-regression-results
           path: |
-            ${{ runner.temp }}/java-log-tests/results.json
-            ${{ runner.temp }}/java-log-tests/tests/log-injection/*.actual
-            ${{ runner.temp }}/java-log-tests/tests/log-injection/*.expected
-            ${{ runner.temp }}/java-log-tests/tests/deserialization/*.actual
-            ${{ runner.temp }}/java-log-tests/tests/deserialization/*.expected
-            ${{ runner.temp }}/java-log-tests/tests/xxe/*.actual
-            ${{ runner.temp }}/java-log-tests/tests/xxe/*.expected
-            ${{ runner.temp }}/java-log-tests/production-compile.log
-            ${{ runner.temp }}/java-log-tests/xxe-production-check.log
+            ${{ runner.temp }}/java-query-tests/results.json
+            ${{ runner.temp }}/java-query-tests/tests/log-injection/*.actual
+            ${{ runner.temp }}/java-query-tests/tests/log-injection/*.expected
+            ${{ runner.temp }}/java-query-tests/tests/deserialization/*.actual
+            ${{ runner.temp }}/java-query-tests/tests/deserialization/*.expected
+            ${{ runner.temp }}/java-query-tests/tests/xxe/*.actual
+            ${{ runner.temp }}/java-query-tests/tests/xxe/*.expected
+            ${{ runner.temp }}/java-query-tests/production-compile.log
+            ${{ runner.temp }}/java-query-tests/xxe-production-check.log
           retention-days: 14
           if-no-files-found: ignore
 
@@ -533,7 +532,7 @@ jobs:
           if-no-files-found: ignore
 
   semgrep-regressions:
-    if: github.event_name == 'workflow_dispatch' && (inputs.suite == 'semgrep' || inputs.suite == 'scan-and-java-log')
+    if: github.event_name == 'workflow_dispatch' && inputs.suite == 'semgrep'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
