@@ -501,13 +501,18 @@ class TestMarkBatchReadingList:
         assert "not found" in item["unresolvable_reason"]
         assert not item["resolved"]
 
-    def test_critical_failure_is_loud(self, tmp_path, monkeypatch) -> None:
+    def test_critical_failure_is_informational(self, tmp_path, monkeypatch) -> None:
         import core.audit.orchestrator as _orch
 
         lines = []
+        warnings = []
+        monkeypatch.setattr(
+            _orch.logger, "info",
+            lambda msg, *a, **kw: lines.append(msg % a if a else msg),
+        )
         monkeypatch.setattr(
             _orch.logger, "warning",
-            lambda msg, *a, **kw: lines.append(msg % a if a else msg),
+            lambda msg, *a, **kw: warnings.append(msg % a if a else msg),
         )
         q = "Does `ghost_fn` retry?"
         _seed_reading_list(tmp_path, [{
@@ -520,7 +525,11 @@ class TestMarkBatchReadingList:
             None,
             {q: "not found"},
         )
-        assert any("CRITICAL assumption unresolvable" in ln for ln in lines)
+        assert any("assumption unresolvable (not found)" in ln and "ghost_fn" in ln for ln in lines)
+        assert not warnings
+        item = _load_rl(tmp_path)["items"][0]
+        assert item["unresolvable"]
+        assert not item["resolved"]
 
     def test_actionable_invariant_counts_as_evidence(self, tmp_path) -> None:
         q = "Does MaxHeaderLen bound the buffer?"
