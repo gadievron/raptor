@@ -1,6 +1,7 @@
 """Attach lifecycle: project bindings, CLI, and finding sync."""
 
 import json
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -794,7 +795,8 @@ def _load_ghidra_cli(monkeypatch):
     )
     spec = importlib.util.spec_from_loader(loader.name, loader)
     mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
+    with patch.object(sys, "path", sys.path.copy()):
+        loader.exec_module(mod)
     return mod
 
 
