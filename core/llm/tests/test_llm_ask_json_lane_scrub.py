@@ -12,6 +12,7 @@ import os
 import sys
 import types
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -60,10 +61,12 @@ def _load_module():
         mod = types.ModuleType("raptor_llm_ask_under_test")
         mod.__file__ = str(SCRIPT)
         code = compile(SCRIPT.read_text(), str(SCRIPT), "exec")
-        exec(code, mod.__dict__)  # noqa: S102 — our own libexec script
+        with patch.object(sys, "path", sys.path.copy()):
+            exec(code, mod.__dict__)  # noqa: S102 — our own libexec script
         return mod
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    with patch.object(sys, "path", sys.path.copy()):
+        spec.loader.exec_module(mod)
     return mod
 
 

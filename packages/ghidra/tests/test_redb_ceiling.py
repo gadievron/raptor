@@ -4,8 +4,10 @@ import importlib
 import importlib.util
 import json
 import logging
+import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -32,7 +34,8 @@ class TestSharedCeilingIdentity:
         )
         spec = importlib.util.spec_from_loader(loader.name, loader)
         mod = importlib.util.module_from_spec(spec)
-        loader.exec_module(mod)
+        with patch.object(sys, "path", sys.path.copy()):
+            loader.exec_module(mod)
 
         utils = importlib.import_module("core.json.utils")
         effective = utils.RE_DATABASE_MAX_BYTES
