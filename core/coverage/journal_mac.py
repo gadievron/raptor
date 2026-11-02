@@ -209,6 +209,8 @@ _GENERATION_VOCABULARY: dict[int, frozenset[str]] = {
         "context_reduced",
         "cost_usd",
         "counter_hypothesis",
+        "cross_entry_receipt",
+        "cross_entry_rendered",
         "cwe",
         "domain_concepts_available",
         "domain_model_hash",
