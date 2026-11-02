@@ -31,14 +31,17 @@ class NoticeTests(unittest.TestCase):
             "name": "npm", "version": self.manifest["npm_version"],
             "dependency_directory": "node_modules",
         }
-        self.dependencies = self.root / self.manager["dependency_directory"]
+        self.dependencies = self.root / self.manager.get("dependency_directory", "node_modules")
         (self.root / "package.json").write_text(json.dumps({
             "name": self.manager["name"], "version": self.manager["version"],
         }))
         for entry in self.manifest["packages"]:
-            package = self.dependencies / entry["name"]
-            package.mkdir(parents=True)
+            package = self.package(entry)
+            package.mkdir(parents=True, exist_ok=True)
             (package / "package.json").write_text(json.dumps({k: entry[k] for k in ("name", "version", "license")}))
+
+    def package(self, entry):
+        return self.root if entry.get("at_root") is True else self.dependencies / entry["name"]
 
     def install(self):
         with contextlib.redirect_stderr(io.StringIO()) as output:
@@ -49,9 +52,12 @@ class NoticeTests(unittest.TestCase):
         for _ in range(2):
             count, warning = self.install()
             self.assertEqual(count, self.EXPECTED_COUNT)
-            self.assertIn(self.UNRESOLVED, warning)
+            if self.UNRESOLVED:
+                self.assertIn(self.UNRESOLVED, warning)
+            else:
+                self.assertEqual(warning, "")
             for entry in self.manifest["packages"]:
-                package = self.dependencies / entry["name"]
+                package = self.package(entry)
                 if entry["status"] == "unresolved":
                     self.assertEqual([p.name for p in package.iterdir()], ["package.json"])
                 else:
@@ -61,11 +67,11 @@ class NoticeTests(unittest.TestCase):
 
     def test_late_package_mismatch_leaves_all_packages_untouched(self):
         entry = self.manifest["packages"][-1]
-        (self.dependencies / entry["name"] / "package.json").write_text('{}')
-        with self.assertRaisesRegex(ValueError, "package changed"):
+        (self.package(entry) / "package.json").write_text('{}')
+        with self.assertRaisesRegex(ValueError, "package (?:manager version )?changed"):
             self.install()
         self.assertFalse(list(self.root.rglob("NOTICE")))
-        self.assertFalse(list(self.root.rglob("LICENSE")))
+        self.assertFalse(list(self.root.rglob("LICENSE*")))
 
     def test_manager_update_requires_evidence_review(self):
         (self.root / "package.json").write_text(json.dumps({
@@ -76,7 +82,7 @@ class NoticeTests(unittest.TestCase):
 
     def test_existing_different_notice_is_preserved(self):
         entry = self.manifest["packages"][-1]
-        target = self.dependencies / entry["name"] / entry["installed_filename"]
+        target = self.package(entry) / entry["installed_filename"]
         target.write_bytes(b"new upstream notice")
         with self.assertRaisesRegex(ValueError, "overwrite"):
             self.install()
@@ -84,7 +90,7 @@ class NoticeTests(unittest.TestCase):
 
     def test_symlink_cannot_redirect_notice_write(self):
         entry = self.manifest["packages"][-1]
-        target = self.dependencies / entry["name"] / entry["installed_filename"]
+        target = self.package(entry) / entry["installed_filename"]
         outside = Path(self.temp.name) / "outside"
         outside.write_bytes(b"keep")
         target.symlink_to(outside)
@@ -102,7 +108,13 @@ class NoticeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "checksum"):
             self.install()
         self.assertFalse(list(self.root.rglob("NOTICE")))
-        self.assertFalse(list(self.root.rglob("LICENSE")))
+        self.assertFalse(list(self.root.rglob("LICENSE*")))
+
+
+class CorepackNoticeTests(NoticeTests):
+    EVIDENCE = HERE / "corepack-notices"
+    EXPECTED_COUNT = 1
+    UNRESOLVED = None
 
 
 class PnpmNoticeTests(NoticeTests):

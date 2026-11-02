@@ -35,12 +35,15 @@ def install(root: Path, evidence: Path) -> int:
     metadata = json.loads(regular_path(root, "package.json").read_text())
     if (metadata.get("name"), metadata.get("version")) != (manager["name"], manager["version"]):
         raise ValueError("package manager version changed; review bundled notice evidence")
-    dependencies = regular_path(root, manager["dependency_directory"])
     pending = []
     unresolved = []
     # Validate every entry before writing any additions.
     for entry in manifest["packages"]:
-        package = regular_path(dependencies, entry["name"])
+        if entry.get("at_root") is True:
+            package = root
+        else:
+            dependencies = regular_path(root, manager["dependency_directory"])
+            package = regular_path(dependencies, entry["name"])
         metadata = json.loads(regular_path(package, "package.json").read_text())
         expected = (entry["name"], entry["version"], entry["license"])
         if (metadata.get("name"), metadata.get("version"), metadata.get("license")) != expected:
