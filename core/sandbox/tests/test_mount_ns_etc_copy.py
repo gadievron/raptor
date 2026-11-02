@@ -376,3 +376,53 @@ def test_wallclock_deadline_stops_copy(tmp_path, monkeypatch, phase_trace):
             f"root-level {f} lost to the deadline — BFS ordering broken")
     trace = _read_trace(phase_trace)
     assert "etc copy deadline exceeded" in trace
+
+
+@pytest.mark.parametrize('bundle', [
+    'ssl/certs/ca-certificates.crt',
+    'pki/tls/certs/ca-bundle.crt',
+    'pki/ca-trust/extracted/pem/tls-ca-bundle.pem',
+])
+@pytest.mark.parametrize('budget', ['seconds', 'entries', 'bytes'])
+def test_ca_bundle_precedes_unrelated_payload(tmp_path, monkeypatch, bundle, budget):
+    import core.sandbox.mount_ns as mns
+    src = tmp_path/'src'
+    certificate = src/bundle
+    certificate.parent.mkdir(parents=True)
+    certificate.write_text('TRUST\n')
+    (src/'hosts').write_text('HOST\n')
+    unrelated = src/'alternatives'
+    unrelated.mkdir()
+    for index in range(8):
+        (unrelated/str(index)).write_bytes(b'x'*32)
+        (certificate.parent/f'000{index}.pem').write_bytes(b'x'*32)
+    clock = [0.0]
+    monkeypatch.setattr(mns.time, 'monotonic', lambda: clock[0])
+    def copy_only(*args, **kwargs):
+        clock[0] += 1.0
+        raise OSError('cross-device')
+    monkeypatch.setattr(os, 'link', copy_only)
+    monkeypatch.setattr(mns, '_ETC_COPY_MAX_SECONDS', 3.0 if budget == 'seconds' else 1000.0)
+    monkeypatch.setattr(mns, '_ETC_COPY_MAX_ENTRIES', 8 if budget == 'entries' else 8192)
+    monkeypatch.setattr(mns, '_ETC_COPY_MAX_BYTES', 40 if budget == 'bytes' else 65536)
+    dst = tmp_path/'dst'
+    dst.mkdir()
+    _copy_etc_tree(str(src), str(dst))
+    assert (dst/'hosts').read_text() == 'HOST\n'
+    assert (dst/bundle).read_text() == 'TRUST\n'
+
+
+def test_tls_priority_does_not_follow_directory_symlink(tmp_path, monkeypatch):
+    src, dst, outside = (tmp_path/name for name in ('src', 'dst', 'outside'))
+    for path in (src, dst, outside):
+        path.mkdir()
+    (outside/'private').write_text('not a copied certificate\n')
+    (src/'ssl').symlink_to(outside, target_is_directory=True)
+    listdir = os.listdir
+    def confined(path):
+        assert Path(path) not in (src/'ssl', outside), 'priority walk followed a directory symlink'
+        return listdir(path)
+    monkeypatch.setattr(os, 'listdir', confined)
+    _copy_etc_tree(str(src), str(dst))
+    assert (dst/'ssl').is_symlink()
+    assert os.readlink(dst/'ssl') == str(outside)

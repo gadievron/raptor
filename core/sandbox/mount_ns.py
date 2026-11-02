@@ -581,18 +581,30 @@ _ETC_COPY_SKIP_TOP_DIRS = frozenset({"skel"})
 # the copy (loud marker + post-fork warning) and setup continues with
 # what was copied; a file larger than the remaining BYTE budget is
 # skipped individually (loud marker) while smaller entries keep
-# copying. Breadth-first ordering guarantees root-level files and
-# shallow config trees are copied long before either bound can trip,
-# so passwd/hosts/ssl are never the casualties.
+# copying. Root-level files copy first, then TLS bundle paths receive
+# priority before unrelated subtrees. All paths
+# remain subject to the same entry, byte and time budgets.
 _ETC_COPY_MAX_BYTES = 64 * 1024 * 1024
 _ETC_COPY_MAX_ENTRIES = 8192
-# Wall-clock deadline (seconds) for the entire copy.  BFS ordering
-# guarantees root-level config files copy before any directory descent,
-# so the deadline only trims deep service-manager trees (apparmor.d,
-# systemd, init.d, …) that no sandbox target consumes.  The skip-set
-# above handles the known-large directories; this catches the long tail
+# Wall-clock deadline (seconds) for the entire copy. Root-level config
+# files copy before any directory descent. TLS bundle ancestors receive
+# priority during descent, so a large
+# unrelated subtree cannot consume the budget before trust anchors.
+# The skip-set above handles the known-large directories; this catches the long tail
 # on CI runners whose /etc we cannot predict.
 _ETC_COPY_MAX_SECONDS = 3.0
+
+# Visit trust-store ancestors before unrelated directories, and copy the
+# aggregate bundles before hundreds of hashed certificate links. This is
+# ordering only: symlink handling and all copy limits remain unchanged.
+_ETC_TLS_DIRS = frozenset((
+    'ssl', 'ssl/certs', 'pki', 'pki/tls', 'pki/tls/certs',
+    'pki/ca-trust', 'pki/ca-trust/extracted', 'pki/ca-trust/extracted/pem',
+))
+_ETC_TLS_BUNDLES = frozenset((
+    'ca-certificates.crt', 'ca-bundle.crt', 'ca-bundle.pem',
+    'tls-ca-bundle.pem', 'cert.pem',
+))
 
 
 def _phase_trace(marker: bytes) -> None:
@@ -633,14 +645,14 @@ def _phase_trace(marker: bytes) -> None:
 
 
 def _copy_etc_tree(src: str, dst: str) -> None:
-    """Copy *src* into *dst* breadth-first, preserving directory
+    """Copy *src* into *dst* with TLS priority, preserving directory
     structure and permission MODE BITS, under a total copy budget.
 
-    Ordering is breadth-first — every file at depth k is copied before
-    any directory at depth k+1 is entered — so the root-level config
+    Ordering copies each directory's files before its children, so root config
     files the sandbox actually needs (passwd, group, hosts,
-    resolv.conf, nsswitch.conf) and shallow trees (ssl/) land first
-    and can never be starved by a deep payload subtree.
+    resolv.conf, nsswitch.conf) land first. TLS bundle ancestors and
+    aggregate bundle filenames precede unrelated entries; the remaining
+    traversal is breadth-first, within the same shared budgets.
 
     Bounds (all loud, named in the phase trace; none may wedge or fail
     the setup):
@@ -706,7 +718,8 @@ def _copy_etc_tree(src: str, dst: str) -> None:
             )
             return
         try:
-            names = sorted(os.listdir(dirpath))
+            names = sorted(os.listdir(dirpath),
+                           key=lambda name: (name not in _ETC_TLS_BUNDLES, name))
         except OSError:
             continue
         subdirs: list[str] = []
@@ -815,9 +828,11 @@ def _copy_etc_tree(src: str, dst: str) -> None:
                 os.chmod(dst_file, stat_module.S_IMODE(st.st_mode))
             except OSError:
                 pass  # skip unreadable entries (shadow, etc.)
-        # Enqueue subdirectories AFTER this directory's files so the
-        # walk stays breadth-first; the dst dir is created at enqueue
-        # time so deeper levels always have their parent.
+        # Enqueue after this directory's files. TLS ancestors go next,
+        # including deeper ancestors before unrelated shallow directories.
+        # No symlink directory is followed: only lstat-confirmed directories
+        # from the ordinary walk enter this queue.
+        priority_queued = 0
         for dn in subdirs:
             if entries >= _ETC_COPY_MAX_ENTRIES:
                 _phase_trace(
@@ -846,7 +861,12 @@ def _copy_etc_tree(src: str, dst: str) -> None:
                 os.chmod(dst_sub, mode)
             except OSError:
                 continue
-            queue.append((src_sub, dst_sub))
+            item = (src_sub, dst_sub)
+            if os.path.relpath(src_sub, src) in _ETC_TLS_DIRS:
+                queue.insert(qi + priority_queued, item)
+                priority_queued += 1
+            else:
+                queue.append(item)
 
 
 def _mount_etc_tmpfs_copy(root: str, host_dir: str, inside: str,
