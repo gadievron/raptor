@@ -349,11 +349,19 @@ class TestLiveAdjudication:
         # PYTHONPATH dropped like the runtime spawn path does: the CI
         # preflight dependency simulation hides modules via a stub
         # PYTHONPATH, which must not leak into the semgrep child.
+        env = {k: v for k, v in os.environ.items()
+               if k not in {"PYTHONPATH", "SEMGREP_APP_TOKEN"}}
+        # Direct engine pins need their own settings/log isolation too.
+        env.update({
+            "SEMGREP_SETTINGS_FILE": str(tmp_path / "semgrep-settings.yml"),
+            "SEMGREP_LOG_FILE": str(tmp_path / "semgrep.log"),
+            "SEMGREP_ENABLE_VERSION_CHECK": "0",
+        })
         proc = run_pinned_subprocess(
             ["semgrep", "scan", "--config", str(rule), "--metrics",
              "off", "--json", "--quiet", *targets],
             timeout=180,
-            env={k: v for k, v in os.environ.items() if k != "PYTHONPATH"},
+            env=env,
             context="semgrep php target-selection pin",
         )
         assert proc.returncode == 0, proc.stderr[:500]

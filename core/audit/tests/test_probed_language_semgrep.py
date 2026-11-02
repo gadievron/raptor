@@ -316,7 +316,15 @@ class TestLiveProbedTarget:
         # PYTHONPATH dropped like the runtime spawn path does: the CI
         # preflight dependency simulation hides modules via a stub
         # PYTHONPATH, which must not leak into the semgrep child.
-        env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+        env = {k: v for k, v in os.environ.items()
+               if k not in {"PYTHONPATH", "SEMGREP_APP_TOKEN"}}
+        # This direct engine pin bypasses the sandboxed runner's state setup.
+        # It must not load operator credentials or write operator settings.
+        env.update({
+            "SEMGREP_SETTINGS_FILE": str(tmp_path / "semgrep-settings.yml"),
+            "SEMGREP_LOG_FILE": str(tmp_path / "semgrep.log"),
+            "SEMGREP_ENABLE_VERSION_CHECK": "0",
+        })
         proc = run_pinned_subprocess(
             base, timeout=180, env=env,
             context="semgrep unknown-extension selection pin",
