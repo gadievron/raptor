@@ -574,9 +574,10 @@ jobs:
             engine/semgrep/tests/test_header_sanitizer_precision.py
             engine/semgrep/tests/test_log_sanitizer_precision.py
             engine/semgrep/tests/test_go_narrowing_precision.py
+            engine/semgrep/tests/test_rule_fixtures.py::test_every_rule_file_validates
           )
           for scan_test in "${scan_tests[@]}"; do
-            if [ ! -f "$scan_test" ]; then
+            if [ ! -f "${scan_test%%::*}" ]; then
               echo "::error::Missing $scan_test — apply the corresponding sanitizer patch to this ref"
               exit 1
             fi
@@ -589,11 +590,11 @@ jobs:
           import xml.etree.ElementTree as ET
           cases = list(ET.parse(sys.argv[1]).getroot().iter("testcase"))
           if not cases:
-              sys.exit("No sanitizer regression tests executed")
+              sys.exit("No Semgrep regression tests executed")
           skipped = [case.get("name") for case in cases if case.find("skipped") is not None]
           if skipped:
-              sys.exit(f"Sanitizer regression tests skipped: {skipped}")
-          print(f"Verified {len(cases)} sanitizer regressions executed without skips")
+              sys.exit(f"Semgrep regression tests skipped: {skipped}")
+          print(f"Verified {len(cases)} Semgrep regressions executed without skips")
           PY
 
       - name: Upload sanitizer test results
