@@ -23,6 +23,7 @@ is exclusion-free by design; prose mentions and ``python`` fences
 
 from __future__ import annotations
 
+import os
 import re
 import unittest
 from pathlib import Path
@@ -40,9 +41,30 @@ _PY_C_RE = re.compile(r"\bpython3?\s+-c\b")
 
 def _doc_files() -> list[Path]:
     docs = [REPO / "CLAUDE.md"]
-    docs += sorted((REPO / ".claude").rglob("*.md"))
+    claude = REPO / ".claude"
+    for directory, children, names in os.walk(claude):
+        if Path(directory) == claude:
+            # Neighboring checkouts and generated reports are not our docs.
+            children[:] = [name for name in children if name != "worktrees"]
+        docs.extend(Path(directory) / name for name in names if name.endswith(".md"))
     docs += sorted((REPO / "tiers").rglob("*.md"))
     return [p for p in docs if p.is_file()]
+
+
+def test_doc_scan_keeps_owned_instructions_and_excludes_other_worktrees(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setitem(globals(), "REPO", tmp_path)
+    root_doc = tmp_path / "CLAUDE.md"
+    root_doc.write_text("checkout instructions\n")
+    own_doc = tmp_path / ".claude" / "skills" / "owned" / "SKILL.md"
+    tier_doc = tmp_path / "tiers" / "owned.md"
+    foreign = tmp_path / ".claude" / "worktrees" / "other" / "CLAUDE.md"
+    for path in (own_doc, tier_doc, foreign):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("```sh\npython3 -c 'print(1)'\n```\n")
+    assert set(_doc_files()) == {root_doc, own_doc, tier_doc}
+    assert _shell_block_hits(own_doc.read_text()) == [(2, "python3 -c 'print(1)'")]
 
 
 def _shell_block_hits(text: str) -> list[tuple[int, str]]:
