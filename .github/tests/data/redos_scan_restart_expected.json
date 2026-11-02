@@ -683,6 +683,13 @@
    "exp": null,
    "verdict": "noattack"
   },
+  "core/audit/cross_entry/catalogue.py\u001f\\b([A-Za-z_]\\w*)\\s*\\(": {
+   "digests": [
+    "9338a1fce094"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
   "core/audit/cross_function_verify.py\u001f[`'\\\"](\\w+_(?:lock|mutex|sem|rwsem|rwloc": {
    "digests": [
     "666d5e9edc21"
@@ -2722,6 +2729,13 @@
   "packages/sca/rewriters/gradle_version_catalog.py\u001f_TOML_MULTILINE_STRING_RE": {
    "digests": [
     "d3d339ca8a83"
+   ],
+   "exp": null,
+   "verdict": "noattack"
+  },
+  "packages/sca/sbom_spdx_import.py\u001f_LICENSE_TOKEN": {
+   "digests": [
+    "f0bce62423bb"
    ],
    "exp": null,
    "verdict": "noattack"

@@ -2095,6 +2095,11 @@ _SCAN_DEGENERATE_MEMBERS: frozenset[str] = frozenset({
     "packages/sca/registries/packagist.py :: _PRERELEASE_RE",
     "packages/sca/rewriters/gradle_version_catalog.py :: "
     "_TOML_MULTILINE_STRING_RE",
+    # SPDX tokens have a total bare-token fallback: an accepted alphanumeric
+    # start consumes its maximal token run even when the optional document
+    # prefix fails. Matching pumps are degenerate, not measured failures.
+    # The only production caller additionally rejects inputs over 4096 chars.
+    "packages/sca/sbom_spdx_import.py :: _LICENSE_TOKEN",
     "packages/semgrep/nosemgrep.py :: _NOSEMGREP_RE",
 })
 
