@@ -79,7 +79,7 @@ it does not replace the licences of the copied source excerpts.
 
 ## Bundled Node.js runtime
 
-The container retains the full upstream license file, including third-party
-notices, beside Playwright's bundled Node.js runtime as `LICENSE.node`. It is
+The container retains the [full upstream license file](.devcontainer/node-notices/LICENSE),
+including third-party notices, beside Playwright's bundled Node.js runtime as `LICENSE.node`. It is
 checked against the matching official release and refreshed automatically
 when the runtime changes. These components retain their own license terms.
