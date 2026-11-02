@@ -310,6 +310,64 @@ class QueryRunner:
         from .tool_paths import codeql_tool_paths
         return codeql_tool_paths(self.codeql_cli)
 
+    def _filesystem_scope(self, out_dir: Path, *, writable=(), readonly=()) -> dict:
+        """Limit tool I/O while retaining the operator's CodeQL pack/cache layout."""
+        from core.sandbox.python_paths import _home_roots, python_runtime_tool_paths
+
+        def dedicated(path: Path) -> Path:
+            path = path.absolute()
+            resolved = path.resolve()
+            if any(candidate == home or candidate in home.parents
+                   for candidate in (path, resolved) for home in _home_roots()):
+                raise ValueError("CodeQL filesystem grants require dedicated directories, not HOME or its ancestors")
+            return path
+
+        output = dedicated(Path(out_dir))
+        cache = dedicated(Path.home() / ".codeql")
+        cache.mkdir(parents=True, exist_ok=True)
+        reads = []
+        for entry in readonly:
+            path = Path(entry)
+            if not path.exists():
+                continue
+            # A selected suite file imports helpers from its owning pack.
+            # Walk at most 32 parents, never promoting a loose file to HOME.
+            root = path if path.is_dir() else path.parent
+            if path.is_file():
+                cursor = root
+                for _ in range(32):
+                    if (cursor / "qlpack.yml").is_file() or (cursor / "codeql-pack.yml").is_file():
+                        root = cursor
+                        break
+                    if cursor.parent == cursor:
+                        break
+                    cursor = cursor.parent
+            value = str(dedicated(root))
+            if value not in reads:
+                reads.append(value)
+        return dict(output=str(output), restrict_reads=True,
+                    writable_paths=[str(cache), *(str(dedicated(Path(p))) for p in writable)],
+                    readable_paths=reads or None,
+                    tool_paths=list(dict.fromkeys(self._sandbox_tool_paths() + python_runtime_tool_paths())))
+
+    def _analysis_scope(self, command: list, database: Path, out_dir: Path, query=None) -> dict:
+        """Include selected suites and model-pack roots, without general HOME access."""
+        roots = [query] if query is not None else []
+        configured = os.environ.get("CODEQL_QUERIES")
+        if configured:
+            roots.append(configured)
+        bundled = Path(self.codeql_cli).resolve().parent.parent / "codeql-queries"
+        if bundled.is_dir():
+            roots.append(bundled)
+        for index, arg in enumerate(command):
+            if str(arg) == "--additional-packs" and index + 1 < len(command):
+                roots.extend(str(command[index + 1]).split(os.pathsep))
+            elif str(arg).startswith("--additional-packs="):
+                roots.extend(str(arg).split("=", 1)[1].split(os.pathsep))
+        # Database analysis writes logs/results beside the dataset. It is a
+        # writable bind, not target= (which would make the database read-only).
+        return self._filesystem_scope(out_dir, writable=[database], readonly=roots)
+
     def _codeql_version(self) -> str | None:
         """CLI version string (e.g. ``"2.26.3"``), cached per instance.
 
@@ -441,6 +499,8 @@ class QueryRunner:
         """
         start_time = time.time()
         errors = []
+        database_path = Path(database_path).absolute()
+        out_dir = Path(out_dir).absolute()
 
         logger.info("%s", '=' * 70)
         logger.info("Running CodeQL analysis for %s", language)
@@ -479,6 +539,10 @@ class QueryRunner:
         # If CODEQL_QUERIES is set, ALWAYS use absolute paths to avoid pack conflicts
         import os
         codeql_queries = os.environ.get("CODEQL_QUERIES")
+        if not codeql_queries:
+            sibling = Path(self.codeql_cli).resolve().parent.parent / "codeql-queries"
+            if sibling.is_dir():
+                codeql_queries = str(sibling)
         actual_suite_path = suite_name
         resolved_to_absolute = False
 
@@ -568,14 +632,9 @@ class QueryRunner:
         try:
             from core.sandbox import run as sandbox_run
             result = sandbox_run(
-                temporary_command(cmd),
+                temporary_command(cmd, scoped=True),
                 block_network=True,
-                tool_paths=self._sandbox_tool_paths(),
-                # audit_run_dir = where audit JSONL lands when --audit
-                # is set. Decoupled from output= so Landlock writable_
-                # paths isn't restricted (codeql analyze writes to
-                # ~/.codeql cache, the database dir, etc. — paths we
-                # can't safely enumerate as writable).
+                **self._analysis_scope(cmd, database_path, out_dir, actual_suite_path),
                 audit_run_dir=str(out_dir),
                 capture_output=True,
                 text=True,
@@ -616,7 +675,7 @@ class QueryRunner:
 
                     def _download():
                         return sandbox_run(
-                            temporary_command([self.codeql_cli, "pack", "download", pack_name]),
+                            temporary_command([self.codeql_cli, "pack", "download", pack_name], scoped=True),
                             use_egress_proxy=True,
                             # The pack name is parsed out of `codeql
                             # analyze` stderr over a database built
@@ -647,9 +706,7 @@ class QueryRunner:
                                 self.codeql_cli,
                             ),
                             caller_label="codeql-pack-download",
-                            target=str(codeql_cache),
-                            output=str(codeql_cache),
-                            tool_paths=self._sandbox_tool_paths(),
+                            **self._filesystem_scope(codeql_cache),
                             capture_output=True, text=True, timeout=120,
                         )
 
@@ -673,8 +730,8 @@ class QueryRunner:
                     if dl.returncode == 0:
                         logger.info("✓ Downloaded %s — retrying analysis", pack_name)
                         result = sandbox_run(
-                            temporary_command(cmd), block_network=True,
-                            tool_paths=self._sandbox_tool_paths(),
+                            temporary_command(cmd, scoped=True), block_network=True,
+                            **self._analysis_scope(cmd, database_path, out_dir, actual_suite_path),
                             audit_run_dir=str(out_dir),
                             capture_output=True, text=True,
                             timeout=RaptorConfig.CODEQL_ANALYZE_TIMEOUT,
@@ -834,6 +891,9 @@ class QueryRunner:
             QueryResult
         """
         start_time = time.time()
+        database_path = Path(database_path).absolute()
+        query_path = Path(query_path).absolute()
+        out_dir = Path(out_dir).absolute()
 
         logger.info("Running custom queries from: %s", query_path)
 
@@ -854,9 +914,9 @@ class QueryRunner:
         try:
             from core.sandbox import run as sandbox_run
             result = sandbox_run(
-                temporary_command(cmd),  # type: ignore[arg-type]
+                temporary_command(cmd, scoped=True),  # type: ignore[arg-type]
                 block_network=True,
-                tool_paths=self._sandbox_tool_paths(),
+                **self._analysis_scope(cmd, database_path, out_dir, query_path),
                 audit_run_dir=str(out_dir),
                 capture_output=True,
                 text=True,
@@ -1206,6 +1266,7 @@ class QueryRunner:
         orchestrators above are just dispatch + result aggregation."""
         from core.config import RaptorConfig
         from core.sandbox import run as sandbox_run
+        db, pack_dir, out_dir = (Path(path).absolute() for path in (db, pack_dir, out_dir))
 
         # Skip the install entirely when every dep pinned in the
         # in-repo lockfile is already present in the standard pack
@@ -1250,11 +1311,11 @@ class QueryRunner:
                 # first-run dep fetch (00015 requires the netns tier
                 # only for repo-influenced egress).
                 install_proc = sandbox_run(
-                    temporary_command([self.codeql_cli, "pack", "install", str(pack_dir)]),  # type: ignore[list-item]
+                    temporary_command([self.codeql_cli, "pack", "install", str(pack_dir)], scoped=True),  # type: ignore[list-item]
                     use_egress_proxy=True,
                     proxy_hosts=proxy_hosts_for_codeql(self.codeql_cli),
                     caller_label="codeql-pack-install",
-                    tool_paths=self._sandbox_tool_paths(),
+                    **self._filesystem_scope(Path.home() / ".codeql", writable=[pack_dir]),
                     audit_run_dir=str(out_dir),
                     capture_output=True, text=True,
                     timeout=180,
@@ -1300,8 +1361,8 @@ class QueryRunner:
         analysis_start = time.time()
         try:
             proc = sandbox_run(
-                temporary_command(cmd), block_network=True,  # type: ignore[arg-type]
-                tool_paths=self._sandbox_tool_paths(),
+                temporary_command(cmd, scoped=True), block_network=True,  # type: ignore[arg-type]
+                **self._analysis_scope(cmd, db, out_dir, pack_dir),
                 audit_run_dir=str(out_dir),
                 capture_output=True, text=True,
                 timeout=RaptorConfig.CODEQL_ANALYZE_TIMEOUT,

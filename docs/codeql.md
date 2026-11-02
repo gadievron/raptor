@@ -589,6 +589,15 @@ by default. Pass `--no-sandbox` to disable (consent-gated: an
 interactive terminal or a minted nonce — see
 [Sandbox](sandbox.md#disabling-the-sandbox)).
 
+Query evaluation scopes filesystem access to the database, result directory,
+selected query and model packs, and CodeQL's installation and runtime files.
+The database, results, and dedicated `~/.codeql` package and compilation cache
+remain writable; other files in your home directory are not granted access.
+Local pack installation also permits writes to that pack's directory. Query
+execution blocks network access; dependency downloads retain their separate
+proxy policy. Java temporary files use the sandbox's private scratch directory.
+Explicit sandbox opt-outs retain their documented behavior.
+
 ### Curated Java deserialization filters
 
 The curated ObjectInputStream query suppresses a read only when it can verify
