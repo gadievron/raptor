@@ -10,8 +10,10 @@ Colocated with the run-lifecycle CLI tests.
 import importlib.util
 import json
 import os
+import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -27,7 +29,8 @@ def _load_script():
     loader = SourceFileLoader("raptor_sca_run", script)
     spec = importlib.util.spec_from_loader("raptor_sca_run", loader)
     mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
+    with patch.object(sys, "path", sys.path.copy()):
+        loader.exec_module(mod)
     return mod
 
 

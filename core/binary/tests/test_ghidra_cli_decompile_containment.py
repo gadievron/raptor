@@ -18,6 +18,7 @@ import importlib.util
 import sys
 import types
 from pathlib import Path
+from unittest.mock import patch
 from types import SimpleNamespace
 
 import pytest
@@ -32,7 +33,8 @@ def _load_script(monkeypatch):
         "raptor_ghidra_under_test", str(SCRIPT))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
+    with patch.object(sys, "path", sys.path.copy()):
+        loader.exec_module(mod)
     return mod
 
 

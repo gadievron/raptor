@@ -18,6 +18,7 @@ import subprocess
 import sys
 import types
 from pathlib import Path
+from unittest.mock import patch
 from types import SimpleNamespace
 
 import pytest
@@ -51,7 +52,8 @@ def _exec_script(monkeypatch, tmp_path, run_fn) -> None:
         "raptor_run_sandboxed_under_test", str(SCRIPT))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
+    with patch.object(sys, "path", sys.path.copy()):
+        loader.exec_module(mod)
 
 
 def test_timeout_produces_structured_error(monkeypatch, tmp_path, capsys):
