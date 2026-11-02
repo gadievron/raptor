@@ -43,6 +43,7 @@ on:
       - '.devcontainer/python-notices/**'
       - '.devcontainer/pydocstyle-notices/**'
       - '.devcontainer/opentelemetry-notices/**'
+      - '.devcontainer/semgrep-notices/**'
       - '.devcontainer/npm-notices/**'
       - '.devcontainer/pnpm-notices/**'
       - '.devcontainer/corepack-notices/**'

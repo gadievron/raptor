@@ -138,5 +138,9 @@ class OpenTelemetryNoticeTests(PythonNoticeTests):
     EVIDENCE = HERE / "opentelemetry-notices"
 
 
+class SemgrepNoticeTests(PythonNoticeTests):
+    EVIDENCE = HERE / "semgrep-notices"
+
+
 if __name__ == "__main__":
     unittest.main()

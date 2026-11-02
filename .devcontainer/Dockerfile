@@ -75,9 +75,12 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
 COPY --from=ghcr.io/astral-sh/uv:0.7 /uv /usr/local/bin/uv
 COPY .devcontainer/install-python-notices.py /usr/local/libexec/install-python-notices.py
 COPY .devcontainer/opentelemetry-notices/ /usr/share/doc/raptor-opentelemetry-notices/
+COPY .devcontainer/semgrep-notices/ /usr/share/doc/raptor-semgrep-notices/
 RUN uv tool install --no-cache semgrep==1.177.0 \
     && /root/.local/share/uv/tools/semgrep/bin/python /usr/local/libexec/install-python-notices.py \
-        --evidence /usr/share/doc/raptor-opentelemetry-notices
+        --evidence /usr/share/doc/raptor-opentelemetry-notices \
+    && /root/.local/share/uv/tools/semgrep/bin/python /usr/local/libexec/install-python-notices.py \
+        --evidence /usr/share/doc/raptor-semgrep-notices
 
 # ============================================================================
 # RR DEBUGGER (rr-debugger skill, crash-analysis agents)
