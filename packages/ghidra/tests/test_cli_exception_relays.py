@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
-import os
+import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = REPO_ROOT / "libexec" / "raptor-ghidra"
@@ -20,12 +21,13 @@ SCRIPT = REPO_ROOT / "libexec" / "raptor-ghidra"
 _ESC_PAYLOAD = "boom\x1b]0;pwned\x07\x1b[2J"
 
 
-def _load_cli():
-    os.environ.setdefault("_RAPTOR_TRUSTED", "1")
+def _load_cli(monkeypatch):
+    monkeypatch.setenv("_RAPTOR_TRUSTED", "1")
     loader = SourceFileLoader("raptor_ghidra_cli_relays", str(SCRIPT))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
+    with patch.object(sys, "path", sys.path.copy()):
+        loader.exec_module(mod)
     return mod
 
 
@@ -39,7 +41,7 @@ def test_r2_import_failure_notice_is_inert(tmp_path, monkeypatch, capsys):
     import packages.ghidra.r2_import as r2_import
     from packages.ghidra.model import REDatabase, REFunction
 
-    mod = _load_cli()
+    mod = _load_cli(monkeypatch)
     binary = tmp_path / "app.bin"
     binary.write_bytes(b"\x7fELF")
 
@@ -76,7 +78,7 @@ def test_decompile_server_failure_notice_is_inert(
     import packages.ghidra.detect as detect
     import packages.ghidra.server as server
 
-    mod = _load_cli()
+    mod = _load_cli(monkeypatch)
 
     class _BoomServer:
         def __init__(self, *a, **kw):
@@ -101,7 +103,7 @@ def test_decompile_inprocess_failure_notice_is_inert(
     import packages.ghidra.detect as detect
     import packages.ghidra.session as session
 
-    mod = _load_cli()
+    mod = _load_cli(monkeypatch)
 
     class _BoomSession:
         def __init__(self, *a, **kw):

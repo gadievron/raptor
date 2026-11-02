@@ -10,20 +10,22 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
+import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = REPO_ROOT / "libexec" / "raptor-ghidra"
 
 
-def _load_cli():
-    os.environ.setdefault("_RAPTOR_TRUSTED", "1")
+def _load_cli(monkeypatch):
+    monkeypatch.setenv("_RAPTOR_TRUSTED", "1")
     loader = SourceFileLoader("raptor_ghidra_cli_fallback", str(SCRIPT))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
+    with patch.object(sys, "path", sys.path.copy()):
+        loader.exec_module(mod)
     return mod
 
 
@@ -34,7 +36,7 @@ def test_fallback_import_writes_via_atomic_chokepoint(
     import packages.ghidra.r2_import as r2_import
     from packages.ghidra.model import REDatabase, REFunction
 
-    mod = _load_cli()
+    mod = _load_cli(monkeypatch)
     binary = tmp_path / "app.bin"
     binary.write_bytes(b"\x7fELF")
     out_dir = tmp_path / "out"
