@@ -87,8 +87,12 @@ from packages.joern.broker import BrokerLease
 from packages.joern.models import JoernCPG
 from packages.joern.tunables import JoernTunables
 data = json.loads(sys.stdin.readline())
-lease = BrokerLease.acquire(Path(data['root']), data['token'],
-    JoernCPG(Path(data['graph']), Path(data['target'])), JoernTunables())
+try:
+    lease = BrokerLease.acquire(Path(data['root']), data['token'],
+        JoernCPG(Path(data['graph']), Path(data['target'])), JoernTunables())
+except BaseException as exc:
+    print(f'acquire failed: {exc}', file=sys.stderr, flush=True)
+    raise
 print('leased', flush=True)
 sys.stdin.readline()
 os._exit(0)
@@ -101,7 +105,14 @@ os._exit(0)
         process.stdin.write(json.dumps({"root": str(owner.root), "token": owner.token,
                                        "graph": str(graph.path), "target": str(graph.target)}) + "\n")
         process.stdin.flush()
-        assert process.stdout.readline().strip() == "leased"
+        line = process.stdout.readline().strip()
+        if line != "leased":
+            rc = process.poll()
+            stderr = process.stderr.read() if rc is not None else "(still running)"
+            pytest.fail(
+                f"child did not acquire lease: stdout={line!r}, "
+                f"returncode={rc}, stderr:\n{stderr}"
+            )
         process.kill()
         process.wait(timeout=3)
         assert remaining.query("query").ok
