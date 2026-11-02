@@ -10,13 +10,13 @@ from email.message import Message
 from email.parser import BytesParser
 from functools import lru_cache
 import hashlib
-import json
 from pathlib import Path, PurePosixPath
 import re
 
 from packaging.licenses import InvalidLicenseExpression, canonicalize_license_expression
 
-from core.security.capped_read import read_capped
+from core.json import loads
+from core.source import read_text_gated
 
 # The names themselves identify these licences; generic family classifiers do not.
 _TROVE = {
@@ -107,7 +107,9 @@ def declaration_from_metadata(artifact: dict, files: list[dict], blobs: dict[str
 @lru_cache(maxsize=1)
 def _reviewed_rules() -> dict:
     path = Path(__file__).with_name('data') / 'license_identifications.json'
-    data = json.loads(read_capped(path, 256 * 1024, raise_on_refusal=True))
+    data = loads(read_text_gated(path, 256 * 1024, follow_symlinks=False))
+    if not isinstance(data, dict):
+        raise ValueError("missing or invalid licence identification corpus")
     if type(data.get('schema_version')) is not int or data['schema_version'] != 1:
         raise ValueError('unsupported licence identification corpus')
     for name, rule in data['packages'].items():
