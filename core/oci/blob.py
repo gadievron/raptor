@@ -263,6 +263,7 @@ def extract_files_from_layer(
     max_selected_bytes: int | None = None,
     resolve_selected_hardlinks: bool = False,
     expected_diff_id: str | None = None,
+    selected_symlinks: dict[str, str] | None = None,
     discover_path: Callable[[str], bool] | None = None,
 ) -> dict[str, bytes]:
     """Pull specific files out of a streamed layer blob.
@@ -305,7 +306,9 @@ def extract_files_from_layer(
     ``resolve_selected_hardlinks`` opts into memory-only resolution against
     other selected regular files in this same layer. Missing target selections
     raise ``UnresolvedLayerHardlinks`` for a bounded replay by the caller.
-    Symlinks are always refused. No host links are followed or created.
+    Symlinks are never traversed. An explicit ``selected_symlinks`` output
+    may retain their direct same-directory target names as metadata only,
+    after complete stream verification. No host links are followed or created.
 
     ``max_selected_bytes`` optionally bounds the combined selected payload,
     in addition to the per-entry and decompression limits.
@@ -337,6 +340,7 @@ def extract_files_from_layer(
 
     selected_bytes = 0
     hardlinks: dict[str, str] = {}
+    symlinks: dict[str, str] = {}
     regular_names: set[str] = set()
 
     def _wanted(name: str) -> bool:
@@ -352,7 +356,7 @@ def extract_files_from_layer(
         name = _normalise_tar_path(member.name)
         if not _wanted(name):
             return None
-        if name in hardlinks:
+        if name in hardlinks or name in symlinks:
             raise ValueError("duplicate selected layer path")
         if member.size < 0:
             raise WantedEntryRefused("negative selected layer entry size")
@@ -380,7 +384,14 @@ def extract_files_from_layer(
         name = _normalise_tar_path(member.name)
         if member.isdir() or not _wanted(name):
             return
-        if not member.islnk():
+        if member.issym() and selected_symlinks is not None:
+            if (member.size != 0 or name in hardlinks or name in regular_names or name in symlinks
+                    or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.+_-]{0,255}", member.linkname)
+                    or member.linkname in {".", ".."}):
+                raise WantedEntryRefused("unsafe or duplicate selected symlink metadata")
+            symlinks[name] = member.linkname
+            return
+        if not member.islnk() or not resolve_selected_hardlinks:
             raise WantedEntryRefused("selected layer entry is not a regular file")
         target = _normalise_tar_path(member.linkname)
         for value in (name, target):
@@ -389,7 +400,7 @@ def extract_files_from_layer(
                     or any(ord(c) < 32 or ord(c) == 127 for c in value)
                     or any(p in {"", ".", ".."} for p in value.split("/"))):
                 raise WantedEntryRefused("unsafe selected hard-link path")
-        if name in hardlinks or name in regular_names:
+        if name in hardlinks or name in regular_names or name in symlinks:
             raise ValueError("duplicate selected layer path")
         hardlinks[name] = target
 
@@ -441,7 +452,7 @@ def extract_files_from_layer(
         max_entry_count=DEFAULT_MAX_ENTRY_COUNT,
         max_total_bytes=layer_decompression_budget(compressed_size),
         on_skipped=_refuse_wanted_skip,
-        on_nonregular=_nonregular if resolve_selected_hardlinks else None,
+        on_nonregular=_nonregular if resolve_selected_hardlinks or selected_symlinks is not None else None,
     )
     # Drain the source to EOF before returning anything. stream_blob
     # only performs its sha256 check on exhaustion; returning after
@@ -467,6 +478,8 @@ def extract_files_from_layer(
         if missing:
             raise UnresolvedLayerHardlinks(missing)
         raise WantedEntryRefused("cyclic or missing selected hard-link target")
+    if selected_symlinks is not None:
+        selected_symlinks.update(symlinks)
     return found
 
 

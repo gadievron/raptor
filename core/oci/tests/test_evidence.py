@@ -279,7 +279,7 @@ def test_python_record_recovers_unindexed_vendor_notice(scope, notice_filename):
     package['metadata'] = {'files': [{'path': f'pkg-1.dist-info/licenses/vendor/{notice_filename}', 'size': '13',
         'digest': {'algorithm': 'sha256', 'value': base64.urlsafe_b64encode(hashlib.sha256(b'vendor notice').digest()).rstrip(b'=').decode()}}]}
     report, blobs = capture(catalogue, lambda layer: [blob])
-    assert report['version'] == 3
+    assert report['version'] == 4
     row = next(r for r in report['files'] if r['content_kind'] == 'notice_candidate')
     assert row['visibility'] == 'layer_probe_runtime_visibility_unconfirmed'
     assert 'python_record_notice' in row['roles']
@@ -369,7 +369,7 @@ def test_version_three_captures_python_metadata_without_catalogue_licence():
     package.update(type='python', licenses=[], locations=[catalogue['files'][0]['location']])
     report, blobs = capture(catalogue, lambda layer: [blob])
     metadata = next(row for row in report['files'] if row['content_kind'] == 'package_metadata')
-    assert report['version'] == 3
+    assert report['version'] == 4
     assert metadata['roles'] == ['python_distribution_metadata']
     assert metadata['visibility'] == 'catalogue_location'
     assert blobs[metadata['sha256']].startswith(b'Name: package\n')
@@ -382,3 +382,89 @@ def test_version_three_refuses_missing_required_distribution_metadata():
     package.update(type='python', licenses=[], locations=[loc])
     with pytest.raises(ValueError, match='required evidence'):
         capture(catalogue, lambda layer: [blob])
+
+
+def common_alias_image(link='GPL-2', *, duplicate=False, regular_alias=False, versioned_target='GPL-2'):
+    files = {'pkg/LICENSE': b'notice', 'usr/share/common-licenses/' + versioned_target: b'GPL terms'}
+    if regular_alias:
+        files['usr/share/common-licenses/GPL'] = b'regular alias text'
+    native, blob = fixture_image(files)
+    stream = io.BytesIO(gzip.decompress(blob))
+    with tarfile.open(fileobj=stream, mode='a') as archive:
+        for _ in range(2 if duplicate else 1):
+            member = tarfile.TarInfo('usr/share/common-licenses/GPL')
+            member.type, member.linkname = tarfile.SYMTYPE, link
+            archive.addfile(member)
+    tar = stream.getvalue()
+    blob = gzip.compress(tar)
+    metadata = native['source']['metadata']
+    config = json.loads(base64.b64decode(metadata['config']))
+    config['rootfs']['diff_ids'] = [digest(tar)]
+    config_raw = json.dumps(config).encode()
+    manifest = json.loads(base64.b64decode(metadata['manifest']))
+    manifest['config'].update(digest=digest(config_raw), size=len(config_raw))
+    manifest['layers'][0].update(digest=digest(blob), size=len(blob))
+    manifest_raw = json.dumps(manifest).encode()
+    metadata.update(manifestDigest=digest(manifest_raw), imageID=digest(config_raw),
+                    config=base64.b64encode(config_raw).decode(), manifest=base64.b64encode(manifest_raw).decode())
+    for row in native['files']:
+        row['location']['layerID'] = digest(tar)
+    native['artifacts'][0]['licenses'][0]['locations'][0]['layerID'] = digest(tar)
+    return native, blob
+
+
+def test_common_alias_is_metadata_only_bound_to_regular_same_layer_target():
+    native, blob = common_alias_image()
+    report, blobs = capture(native, lambda layer: [blob])
+    alias, = report['common_license_aliases']
+    assert alias['path'] == '/usr/share/common-licenses/GPL'
+    assert alias['link_name'] == 'GPL-2'
+    assert alias['target_sha256'] == hashlib.sha256(b'GPL terms').hexdigest()
+    assert alias['layer_blob_digest'] == digest(blob)
+    assert alias['catalogue_layer_diff_id'] == native['files'][0]['location']['layerID']
+    assert not any(row['path'] == alias['path'] for row in report['files'])
+    assert blobs[alias['target_sha256']] == b'GPL terms'
+
+
+@pytest.mark.parametrize('link', ['/etc/passwd', '../GPL-2', './GPL-2', 'GPL', 'LGPL-2', 'GPL-9', 'GPL-2/child', 'GPL-2\\other'])
+def test_common_alias_rejects_unsafe_cyclic_wrong_family_or_missing_target(link):
+    native, blob = common_alias_image(link)
+    with pytest.raises(ValueError):
+        capture(native, lambda layer: [blob])
+
+
+@pytest.mark.parametrize('regular_alias', [False, True])
+def test_common_alias_duplicate_tar_paths_are_refused(regular_alias):
+    native, blob = common_alias_image(duplicate=not regular_alias, regular_alias=regular_alias)
+    with pytest.raises(ValueError):
+        capture(native, lambda layer: [blob])
+
+
+def test_symlink_observation_does_not_publish_unverified_metadata():
+    native, blob = common_alias_image()
+    aliases = {}
+    layer = subject(native)[1][0]
+    with pytest.raises(ValueError, match='diff ID'):
+        extract_files_from_layer([blob], {'usr/share/common-licenses/GPL'},
+                                 media_type=layer.media_type, compressed_size=len(blob),
+                                 expected_diff_id='sha256:' + 'a' * 64, selected_symlinks=aliases)
+    assert aliases == {}
+
+
+def test_default_reader_still_refuses_selected_symlinks():
+    native, blob = common_alias_image()
+    with pytest.raises(WantedEntryRefused):
+        extract_files_from_layer([blob], {'usr/share/common-licenses/GPL'}, resolve_selected_hardlinks=True)
+
+
+def test_common_alias_target_version_is_taken_from_verified_image_not_pinned():
+    native, blob = common_alias_image('GPL-4', versioned_target='GPL-4')
+    report, _ = capture(native, lambda layer: [blob])
+    assert report['common_license_aliases'][0]['target_path'] == '/usr/share/common-licenses/GPL-4'
+
+
+def test_common_alias_requires_catalogued_regular_target():
+    native, blob = common_alias_image()
+    native['files'][1]['metadata']['type'] = 'SymbolicLink'
+    with pytest.raises(ValueError, match='regular target'):
+        capture(native, lambda layer: [blob])
