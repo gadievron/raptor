@@ -23,6 +23,18 @@ import os
 import signal
 import sys
 
+# Run before dependency discovery: writable search paths must not satisfy
+# the protected helper's package checks. This does not cover startup hooks
+# that ran before this file; isolated entry points close that earlier route.
+if os.environ.get("RAPTOR_INSTALL_PROTECTED") == "1":
+    try:
+        from core.security.python_imports import harden_import_paths
+        harden_import_paths()
+    except (ImportError, OSError, RuntimeError, ValueError) as exc:
+        raise SystemExit("RAPTOR: protected Python import paths could not be established; "
+                         "restart through bin/raptor --protect-install") from exc
+
+
 if (
     not os.environ.get("CI")
     and not os.environ.get("RAPTOR_CI")
