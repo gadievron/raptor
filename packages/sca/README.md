@@ -223,8 +223,21 @@ under `~/.raptor/cache/sca/`. Default TTLs:
 | Registry per-package version lists | 24 h | New versions publish |
 | Failed manifest fetches (negative cache) | 1 h | Long enough to amortise across one CI sweep |
 
-Disable with `--no-cache`. Force a refresh with
-`raptor-sca clean-cache --max-age 0`.
+Force fresh client lookups with `--no-cache`. Reclaim disk space with
+`raptor-sca clean-cache`; preview with `--dry-run`. Online scans also
+perform periodic cleanup using the `tuning.json` disk budgets
+`sca_cache_max_mb` (2048 MiB) and `sca_stress_cache_max_mb` (512 MiB).
+The overall budget includes stress checkouts. Setting `sca_cache_max_mb`
+to zero disables automatic cleanup; a zero stress budget removes all idle
+stress checkouts. Cleanup removes ordinary entries older than 30 days and
+whole stress projects older than seven days, then expired/oldest-used data
+when over budget, targeting 80% of the limit. These are soft budgets checked
+at most once per ten minutes after scans; active scans can exceed them.
+Active scan data, fingerprint baselines, and SQLite databases are protected;
+the latter two are outside the disposable budget. Offline scans do not
+trigger cleanup. Manual `--max-size-mb 0` disables overall size pruning;
+age and stress retention still apply. Use `--max-age`, `--stress-max-age`,
+`--max-size-mb`, and `--stress-max-size-mb` to override cleanup defaults.
 
 ---
 

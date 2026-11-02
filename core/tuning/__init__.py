@@ -44,6 +44,8 @@ _VALID_KEYS = frozenset({
     "max_llm_workers",
     "llm_account_posture",
     "max_json_memo_mb",
+    "sca_cache_max_mb",
+    "sca_stress_cache_max_mb",
     "throttle_cooldown_s",
 })
 
@@ -78,6 +80,8 @@ _KEY_COMMENTS = {
     "max_fuzz_parallel": "ceiling for AFL++ parallel instances (auto = half available CPUs)",
     "max_inventory_workers": "per-file extractor pool for tree-sitter parse (auto = half CPUs, capped at 8)",
     "max_json_memo_mb": "MB budget for JsonCache in-process memo; oldest entries evicted past this",
+    "sca_cache_max_mb": "MiB budget for disposable SCA disk cache (0 disables automatic maintenance)",
+    "sca_stress_cache_max_mb": "MiB budget for idle SCA stress checkouts (0 removes all idle checkouts)",
     "max_llm_workers": "parallel LLM API calls (consumed by core/llm/concurrency.py)",
     "llm_account_posture": "shared = LLM account has other consumers, fair-share ceilings; solo = account belongs to this host's runs",
     "throttle_cooldown_s": "seconds to wait between LLM batches when rate-limited",
@@ -106,6 +110,8 @@ _DEFAULTS = {
     "max_fuzz_parallel": "auto",
     "max_inventory_workers": "auto",
     "max_json_memo_mb": 128,
+    "sca_cache_max_mb": 2048,
+    "sca_stress_cache_max_mb": 512,
 }
 
 
@@ -549,6 +555,7 @@ _AUTO_RESOLVERS = {
 #   - codeql_max_disk_cache_mb: 0 = use codeql's unbounded default
 _ZERO_ALLOWED = frozenset({
     "codeql_threads", "codeql_max_disk_cache_mb",
+    "sca_cache_max_mb", "sca_stress_cache_max_mb",
 })
 
 
@@ -575,6 +582,8 @@ class Tuning:
     # honor explicit numbers both directions: an explicit heap is an
     # operator assertion and is neither capped nor raised.
     joern_heap_mb_derived: bool = False
+    sca_cache_max_mb: int = 2048
+    sca_stress_cache_max_mb: int = 512
 
 
 def _validate_value(key: str, raw: Any):

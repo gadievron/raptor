@@ -31,7 +31,7 @@ def test_default_max_age_uses_module_default(capsys, tmp_path):
     # Mock evict_stale to avoid touching the real cache.
     fake_result = MagicMock(
         files_removed=0, files_scanned=0, dirs_removed=0,
-        bytes_freed=0, errors=0,
+        bytes_freed=0, errors=0, bytes_remaining=0, busy=False, budget_exceeded=False,
     )
     with patch("packages.sca.clean_cache.evict_stale",
                return_value=fake_result) as m:
@@ -60,7 +60,7 @@ def test_reports_cleaned_count(capsys, tmp_path):
     fake_result = MagicMock(
         files_removed=42, files_scanned=100, dirs_removed=3,
         bytes_freed=1024 * 1024 * 5,  # 5 MiB
-        errors=0,
+        errors=0, bytes_remaining=0, busy=False, budget_exceeded=False,
     )
     with patch("packages.sca.clean_cache.evict_stale",
                return_value=fake_result):
