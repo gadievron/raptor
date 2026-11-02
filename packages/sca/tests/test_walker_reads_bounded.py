@@ -207,17 +207,6 @@ _ROOT_ALLOWLIST: dict[tuple[str, str], str] = {
 }
 
 
-# Cache maintenance uses hardened descriptor I/O rather than target-tree readers.
-_ROOT_ALLOWLIST.update({
-    ("cache_budget.py", "fd = os.open(unit.path,"):
-        "bounded cache-envelope header: O_NOFOLLOW | O_NONBLOCK, fstat "
-        "regular-file check, and os.read(fd, 256); O_NOATIME preserves LRU",
-    ("cache_budget.py", "fd = os.open(path,"):
-        "write-only coordination lock, never a payload read; O_NOFOLLOW | "
-        "O_NONBLOCK and validate_lock_fd refuse links, special files, and foreign UIDs",
-})
-
-
 def test_no_unjustified_bare_reads_in_root_modules() -> None:
     """The subtree audit above pinned only the three walker SUBTREES,
     so root-module readers of scanned-tree files (inline manifests,
