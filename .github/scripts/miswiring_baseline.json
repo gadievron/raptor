@@ -58,9 +58,6 @@
   "artifacts:orphan_reader::checkpoint-*-groups.json": {
    "note": "glob-reader/concrete-writer false positive: run_corpus._clear_resume_state sweeps finished-run resume sidecars via glob(\"checkpoint-*-groups.json\"); the writers spell the concrete names (literal checkpoint-sec-groups.json / checkpoint-bf-groups.json paths and f\"checkpoint-{mode}-groups.json\", all written through _checkpoint_write), which the artifact indexer keys separately from the glob pattern, so the reader looks orphaned; twin of the baselined *.osv.json entry"
   },
-  "artifacts:orphan_reader::codeql-pack.lock.yml": {
-   "note": "external input: CodeQL CLI generates the lock file during pack resolution; RAPTOR reads it to check pack freshness"
-  },
   "artifacts:orphan_reader::codeql-workspace.yml": {
    "note": "external-input pattern: _codeql_workspace_root walks up from a pack root looking for the CodeQL workspace manifest; the file is part of the CodeQL installation, not written by repo python"
   },
@@ -159,6 +156,9 @@
   },
   "artifacts:orphan_reader::study-discards.json": {
    "note": "writer exists (core/concepts/study.py writes it via save_json; core/audit/orchestrator.py reads) \u2014 the artifact indexer does not resolve the substrate writer call through the path variable, so the read looks orphaned"
+  },
+  "artifacts:orphan_reader::summary.jsonl": {
+   "note": "External CodeQL C/C++ extractor output: CodeQL writes diagnostic/extractors/cpp/summary.jsonl during database creation. packages/codeql/database_manager.py::report_cpp_extraction reads its invocation counts for new and cached databases; no in-repo writer is expected. Validated against diagnostic files emitted by CodeQL 2.23.8 and 2.27.3."
   },
   "artifacts:orphan_reader::trajectory-*.json": {
    "note": "salvage-file reader: the writer emits trajectory-<hex>.json via a computed name on run_id collision (_write_atomic fallback), so the literal glob has no textual writer; reader and writer are pinned together by the store round-trip tests"
