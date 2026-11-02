@@ -46,12 +46,14 @@ FRIDA_PROFILE = "frida"
 #               so the profile's loopback setting is irrelevant on that
 #               path. Defence-in-depth still comes from Landlock (caller
 #               passes ``allowed_tcp_ports=[port]`` per call) and seccomp.
-# debug:        full, but seccomp permits ptrace so gdb/rr can trace the
+# debug:        full, but seccomp permits ptrace so gdb can trace the
 #               target. Use for /crash-analysis. Target AND debugger run
 #               in the same sandbox — debugger forks target as a descendant
 #               so ptrace_scope=1 naturally authorises the trace.
 #               Composes with --audit so operators can see what would
-#               have been blocked while still running gdb/rr.
+#               have been blocked while still running gdb.
+# rr:           debug plus per-task performance counters. Mandatory Linux
+#               mount/PID/network namespaces and seccomp; no degraded lane.
 # frida:        debug + AF_UNIX sockets allowed (frida-helper uses Unix
 #               domain sockets for its internal IPC with the target
 #               process). AF_NETLINK/AF_PACKET/SOCK_RAW stay blocked.
@@ -81,6 +83,10 @@ PROFILES = types.MappingProxyType({
                                             "restrict_reads": True}),
     "target_run":   types.MappingProxyType({"block_network": False, "use_landlock": True,  "seccomp": "full"}),
     "debug":        types.MappingProxyType({"block_network": True,  "use_landlock": True,  "seccomp": "debug"}),
+    # rr's counter exception is conditional on mandatory namespace and
+    # seccomp enforcement in context.py; it never applies to debug/full.
+    "rr":           types.MappingProxyType({"block_network": True, "use_landlock": True,
+                                            "seccomp": "rr", "restrict_reads": True}),
     FRIDA_PROFILE:  types.MappingProxyType({"block_network": False, "use_landlock": True,  "seccomp": "frida"}),
     "network-only": types.MappingProxyType({"block_network": True,  "use_landlock": False, "seccomp": ""}),
     "none":         types.MappingProxyType({"block_network": False, "use_landlock": False, "seccomp": ""}),

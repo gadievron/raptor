@@ -17,7 +17,8 @@ class TestSeccompSync:
         # module; a seccomp block-list change must update both — this
         # test is the tripwire.
         expected = (frozenset(seccomp_mod._SECCOMP_BLOCK_ALWAYS)
-                    | frozenset(seccomp_mod._SECCOMP_BLOCK_UNLESS_DEBUG))
+                    | frozenset(seccomp_mod._SECCOMP_BLOCK_UNLESS_DEBUG)
+                    | frozenset(seccomp_mod._SECCOMP_BLOCK_UNLESS_RR))
         assert sigs.ESCAPE_PRIMITIVE_SYSCALLS == expected
 
 

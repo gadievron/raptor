@@ -272,7 +272,7 @@ Threat model — what the sandbox DOES protect against:
   row) and families no kernel ships yet all get EPERM without
   enumeration.
 - `ptrace()` of any process — blocked by seccomp in `full`, allowed in
-  `debug` profile for gdb/rr use.
+  `debug` profile for GDB/LLDB; `rr` for contained Linux rr replay.
 - `process_vm_readv` / `process_vm_writev` cross-process memory access
   — blocked by seccomp.
 - `keyctl` / `add_key` / `request_key` kernel keyring manipulation —
@@ -529,7 +529,8 @@ that need a blocked capability, plus the two ratchets):
 - `strict`: full + restrict_reads defaulted True (and fake_home when
   output= is set) — the fail-closed ratchet.
 - `target_run`: full's layers with the network OPEN.
-- `debug`: full, but seccomp permits ptrace (for gdb/rr).
+- `debug`: full, but seccomp permits ptrace (for GDB/LLDB).
+- `rr`: Linux replay with mandatory private namespaces and scoped per-task counters.
 - `frida`: network open + Landlock + the frida seccomp profile
   (AF_UNIX + memfd carve-outs for consented instrumentation).
 - `network-only`: drops Landlock AND seccomp; keeps net-ns.

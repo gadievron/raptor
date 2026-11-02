@@ -8,8 +8,14 @@ import sys
 import subprocess
 import argparse
 
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
+import core.startup.process_init  # noqa: E402,F401
+from packages.binary_analysis.rr_replay import replay  # noqa: E402
+from core.sandbox import SandboxSetupError  # noqa: E402
 
-def extract_trace(trace_dir, steps: int=100, output_format: str="source", asan: bool=False) -> None:
+
+def extract_trace(trace_dir, steps: int=100, output_format: str="source", asan: bool=False) -> int:
     """
     Extract execution trace from rr recording.
     
@@ -20,33 +26,6 @@ def extract_trace(trace_dir, steps: int=100, output_format: str="source", asan: 
         asan: True if dealing with ASAN crash
     """
     
-    # Build rr replay command.  Everything after `--` is passed to
-    # the debugger: real command-line hardening flags, applied BEFORE
-    # gdb sources init files or loads any objfile.  Stdin-prepended
-    # `set auto-load no` runs too late for startup-time auto-load
-    # (gdb sources ~/.gdbinit and performs objfile auto-load —
-    # including inlined .debug_gdb_scripts Python — before the first
-    # stdin command executes). Modern gdb DOES apply the safe-path
-    # check to embedded .debug_gdb_scripts (the objfile path is what
-    # is vetted), so the default config declines them; these flags
-    # matter for older gdb and for operator configs that widened
-    # auto-load safe-path (the widening gdb's own decline warning
-    # coaches users into) — belt-and-braces either way.
-    gdb_hardening = [
-        "-nx",                                   # no HOME/cwd init files
-        "-iex", "set auto-load off",             # all auto-load kinds
-        "-iex", "set auto-load python-scripts off",
-        # Belt-and-braces: even if a later command re-enabled
-        # auto-load, no directory is trusted (/dev/null can never
-        # hold scripts).
-        "-iex", "set auto-load safe-path /dev/null",
-    ]
-    cmd = ["rr", "replay"]
-    if trace_dir:
-        cmd.append(trace_dir)
-    cmd.append("--")
-    cmd.extend(gdb_hardening)
-
     # Build gdb commands
     gdb_commands = []
     
@@ -100,74 +79,24 @@ def extract_trace(trace_dir, steps: int=100, output_format: str="source", asan: 
     # Create gdb batch commands
     gdb_batch = "\n".join(gdb_commands)
     
-    # Run rr replay with gdb commands.
-    #
-    # Hardening in effect (this step runs UNSANDBOXED — rr needs
-    # ptrace — so gdb's own auto-load surfaces are the containment):
-    #   * `-nx` + the `-iex` auto-load-off flags above ride the gdb
-    #     COMMAND LINE, so they apply before gdb sources any init
-    #     file and before objfile auto-load (including inlined
-    #     .debug_gdb_scripts Python from a hostile binary, which the
-    #     safe-path check alone would not stop).  A stdin-prepended
-    #     `set auto-load no` executes only after those startup steps
-    #     and is kept purely as an in-session backstop.
-    #   * Sanitised env: no LD_* / PYTHONPATH (gdb is a
-    #     Python-extension host), and HOME points at a fresh empty
-    #     directory, so no operator- or attacker-writable dotfiles
-    #     are reachable even outside `-nx`'s coverage.
-    #   * Neutral cwd: the same fresh directory — never a
-    #     target-repo checkout that could carry `.gdbinit` or
-    #     auto-loadable scripts.
-    # Residual (documented, not mitigated here): the replayed target
-    # code itself executes under this uid via rr; auto-load
-    # hardening narrows gdb's script surfaces, it does not sandbox
-    # the replay.
     try:
-        # `import os` is module-level in the consumers but defensive
-        # local import here keeps the script self-contained.
-        import os as _os
-        import tempfile as _tempfile
-        neutral_dir = _tempfile.mkdtemp(prefix="rr-gdb-neutral-")
-        safe_env = {
-            k: v
-            for k, v in _os.environ.items()
-            if k in ("PATH", "USER", "TERM", "LANG", "LC_ALL")
-        }
-        # rr stores traces under $HOME/.local/share/rr by default —
-        # keep the LOOKUP working when no trace_dir was given by
-        # pointing _RR_TRACE_DIR at the real location while HOME
-        # itself stays neutral.
-        real_home = _os.environ.get("HOME", "")
-        if real_home and "_RR_TRACE_DIR" not in _os.environ:
-            safe_env["_RR_TRACE_DIR"] = _os.path.join(
-                real_home, ".local", "share", "rr",
-            )
-        elif "_RR_TRACE_DIR" in _os.environ:
-            safe_env["_RR_TRACE_DIR"] = _os.environ["_RR_TRACE_DIR"]
-        safe_env["HOME"] = neutral_dir
-        # In-session backstop only — startup-time suppression comes
-        # from the command-line flags (see gdb_hardening above).
         gdb_batch_safe = (
             "set auto-load no\nset auto-load python-scripts off\n"
             + gdb_batch
         )
-        result = subprocess.run(
-            cmd,
-            input=gdb_batch_safe.encode(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=60,
-            env=safe_env,
-            cwd=neutral_dir,  # neutral, empty — never a repo checkout
-        )
-        
+        result = replay(trace_dir, commands=gdb_batch_safe.encode(), timeout=60)
+
         output = result.stdout.decode('utf-8', errors='replace')
         print(output)
         
         if result.returncode != 0:
             print(f"Warning: gdb exited with code {result.returncode}", file=sys.stderr)
             print(result.stderr.decode('utf-8', errors='replace'), file=sys.stderr)
-        
+        return result.returncode
+
+    except SandboxSetupError as error:
+        print(f"rr replay refused: {error}", file=sys.stderr)
+        raise SystemExit(3) from error
     except subprocess.TimeoutExpired:
         print("Error: Command timed out after 60 seconds", file=sys.stderr)
         sys.exit(1)
@@ -204,14 +133,23 @@ def main() -> None:
         help="Handle ASAN crash (requires manual frame navigation)"
     )
     
+    parser.add_argument('--interactive', action='store_true',
+                        help='Open interactive GDB in the same contained rr replay')
     args = parser.parse_args()
+    if args.interactive:
+        try:
+            result = replay(args.trace_dir, timeout=None)
+        except SandboxSetupError as error:
+            print(f"rr replay refused: {error}", file=sys.stderr)
+            raise SystemExit(3) from error
+        raise SystemExit(result.returncode)
     
     if args.asan:
         print("NOTE: For ASAN crashes, you must manually identify the last app frame.")
         print("This script provides a template. Consider running interactively.")
         print()
     
-    extract_trace(args.trace_dir, args.steps, args.format, args.asan)
+    raise SystemExit(extract_trace(args.trace_dir, args.steps, args.format, args.asan))
 
 
 if __name__ == "__main__":

@@ -1,25 +1,12 @@
-"""Doc-lint: manual `rr replay` instruction lanes carry gdb hardening.
+"""Crash-analysis replay instructions must use the contained shared launcher.
 
-Why this test exists
---------------------
-`rr replay` drops into gdb against a recording of an UNTRUSTED binary.
-The scripted lane (crash-analysis/rr-debugger/scripts/crash_trace.py)
-passes real command-line hardening flags (`-nx`, auto-load off, no
-trusted safe-path directory) before gdb sources init files or loads
-any objfile; the manual instruction lanes told the model to run a bare
-`rr replay`, leaving a config-conditional gap: with an operator
-`~/.gdbinit` that widened `auto-load safe-path` (the exact line gdb's
-own decline warning coaches users to add), the bare lane executes
-python the analysed binary embeds (.debug_gdb_scripts) or plants
-beside itself (*-gdb.py). The hardened spelling costs nothing, so
-every documented invocation must carry it — this pins the sibling
-lanes to the script's posture.
+GDB init/auto-load suppression remains in the runner, but flags alone do not
+confine replayed code. Refuse a return to bare rr replay instructions.
 """
 
 from __future__ import annotations
 
 import os
-import re
 import unittest
 from pathlib import Path
 
@@ -27,8 +14,6 @@ from pathlib import Path
 # file, not $RAPTOR_DIR, so the test inspects its own worktree.
 REPO = Path(__file__).resolve().parents[2]
 
-_RR_REPLAY_RE = re.compile(r"^\s*(?:\d\.\s*)?.*\brr replay\b(?!`)")
-_REQUIRED = ("-nx", "set auto-load off", "set auto-load safe-path /dev/null")
 
 
 def _doc_files() -> list[Path]:
@@ -60,10 +45,12 @@ class RrReplayHardeningTests(unittest.TestCase):
 
     def test_rr_replay_invocations_carry_hardening(self):
         problems = []
-        found_any = False
+        contained = set()
         for doc in _doc_files():
             text = doc.read_text(encoding="utf-8", errors="replace")
             for i, line in enumerate(text.splitlines(), 1):
+                if 'crash_trace.py' in line and '--interactive' in line:
+                    contained.add(str(doc.relative_to(REPO)))
                 if "rr replay" not in line:
                     continue
                 # Prose mentions of the bare command name (backtick
@@ -82,22 +69,20 @@ class RrReplayHardeningTests(unittest.TestCase):
                 )
                 if not is_invocation:
                     continue
-                found_any = True
-                if not all(tok in line for tok in _REQUIRED):
+                # Hardened GDB flags alone no longer suffice: they do
+                # not provide filesystem or network containment.
+                if is_invocation:
                     problems.append(
                         f"{doc.relative_to(REPO)}:{i}: {line.strip()}")
-        self.assertTrue(found_any,
-                        "no rr replay invocation lines found — the "
-                        "detector regressed or the lanes moved")
+        self.assertTrue({'.claude/agents/crash-analyzer-agent.md',
+                         '.claude/skills/crash-analysis/rr-debugger/SKILL.md'} <= contained,
+                        'replay instructions must use the contained mechanical launcher')
         self.assertEqual(
             problems, [],
             msg=(
-                "manual rr replay invocations must carry the gdb "
-                "auto-load hardening flags (`-- -nx -iex 'set "
-                "auto-load off' -iex 'set auto-load safe-path "
-                "/dev/null'`) — the recording is of an untrusted "
-                "binary and a widened operator gdb config executes "
-                "scripts it plants:\n" + "\n".join(problems)
+                "manual rr replay instructions must use crash_trace.py --interactive; "
+                "GDB auto-load flags alone do not sandbox the recording:\n"
+                + "\n".join(problems)
             ),
         )
 

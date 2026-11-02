@@ -1882,7 +1882,7 @@
     "note": "Linux syscall names traced under audit mode (open/connect + filesystem-mutation families) \u2014 kernel ABI vocabulary, same class as the seccomp blocklists"
   },
   "core/sandbox/seccomp.py::_SECCOMP_BLOCK_ALWAYS": {
-    "count": 13,
+    "count": 12,
     "kind": "literal"
   },
   "core/sandbox/summary.py::_ESCAPE_PRIMITIVE_KEYWORDS": {

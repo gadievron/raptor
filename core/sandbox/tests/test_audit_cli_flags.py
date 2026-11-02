@@ -244,7 +244,7 @@ class TestProfileSet:
     def test_canonical_profiles(self):
         from core.sandbox.profiles import PROFILES
         assert set(PROFILES) == {
-            "full", "strict", "target_run", "debug", "frida",
+            "full", "strict", "target_run", "debug", "frida", "rr",
             "network-only", "none",
         }
 

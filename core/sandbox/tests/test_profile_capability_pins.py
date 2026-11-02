@@ -115,7 +115,8 @@ def _resolved_enforcement(
     try:
         for p in patchers:
             p.start()
-        with context.sandbox(profile=profile, target=str(target)) as run:
+        with context.sandbox(profile=profile, target=str(target),
+                             output=str(target) if profile == "rr" else None) as run:
             try:
                 run(["/bin/true"], capture_output=True, timeout=30)
             except Exception as exc:  # noqa: BLE001 — shape recorded below
@@ -241,3 +242,12 @@ def test_profile_capability_pins_are_mutation_sensitive(
         "enforcement probe cannot distinguish these capability flips: "
         f"{blind}"
     )
+
+
+def test_rr_profile_enforcement(tmp_path: Path) -> None:
+    got = _resolved_enforcement("rr", tmp_path)
+    assert got["lane"] == "spawn"
+    assert got["block_network"] is True
+    assert got["seccomp_profile"] == "rr"
+    assert got["restrict_reads"] is True
+    assert got["target_bound"] is True
