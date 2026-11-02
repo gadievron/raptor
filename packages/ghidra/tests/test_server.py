@@ -180,9 +180,13 @@ class TestWorkerWatchdog:
         assert _threading.get_ident() not in seen
 
     def test_decompile_deadline_tracks_request_timeout(self, monkeypatch):
+        from types import SimpleNamespace
+
         from packages.ghidra import server_worker
         seen = {}
-        handler = server_worker._HandlerThread(server_worker._Session())
+        # Exercise deadline calculation without starting a persistent JVM worker.
+        handler = object.__new__(server_worker._HandlerThread)
+        handler._requests = SimpleNamespace(put=lambda request: None)
 
         class _Probe:
             def set(self):
@@ -193,18 +197,12 @@ class TestWorkerWatchdog:
                 return True  # pretend completion; box empty → KeyError
 
         monkeypatch.setattr(
-            server_worker.threading, "Event", _Probe,
+            server_worker, "threading", SimpleNamespace(Event=_Probe),
         )
-        monkeypatch.setattr(
-            server_worker, "_handle",
-            lambda session, req: __import__("time").sleep(5),
-        )
-        try:
+        with pytest.raises(KeyError, match="result"):
             handler.run(
                 {"op": "decompile", "function": "f", "timeout": 120},
             )
-        except KeyError:
-            pass
         assert seen["deadline"] == 135  # request timeout + 15
 
 
