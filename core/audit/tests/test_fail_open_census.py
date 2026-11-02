@@ -16,6 +16,7 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
+from unittest.mock import patch
 from types import SimpleNamespace
 
 import pytest
@@ -348,7 +349,8 @@ def census_prep(tmp_path_factory):
     _real_mechanical = orch._run_mechanical_detectors
     orch._run_mechanical_detectors = lambda *args, **kwargs: ({}, set())
     try:
-        prep = _compute_audit_prep(config)
+        with patch.object(orch, "_resolve_joern_evidence_raw", return_value=({}, None)):
+            prep = _compute_audit_prep(config)
     finally:
         orch._run_mechanical_detectors = _real_mechanical
     assert prep is not None

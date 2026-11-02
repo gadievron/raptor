@@ -15,6 +15,7 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -100,7 +101,8 @@ def prep_with_domain_model(tmp_path, monkeypatch):
         enable_session_context=False,
         propagate_constraints=False,
     )
-    prep = _compute_audit_prep(config)
+    with patch.object(orch, "_resolve_joern_evidence_raw", return_value=({}, None)):
+        prep = _compute_audit_prep(config)
     assert prep is not None
     return prep
 
