@@ -8,11 +8,13 @@ canonicalization, injector semantics, executor-table dispatch, hooks.
 from __future__ import annotations
 
 import re
+from contextlib import contextmanager
 from typing import Any
 
 from core.container.exec import ExecOutcome
 from core.env import verify as ev
 from core.env.handle import RuntimeHandle
+from core.sandbox.tests.socket_server import SocketServer
 
 _VERSION_RE = re.compile(r"--version|pip show|dpkg -l")
 
@@ -230,13 +232,20 @@ def test_verify_plan_requires_handle_or_executors() -> None:
 # ── bounded HTTP exchange (the peer runs hostile target code) ─────────
 
 
+@contextmanager
 def _serve(handler_cls):
     import socketserver
     import threading
 
-    srv = socketserver.TCPServer(("127.0.0.1", 0), handler_cls)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    return srv
+    with socketserver.TCPServer(("127.0.0.1", 0), handler_cls) as srv:
+        thread = threading.Thread(target=srv.serve_forever, daemon=True)
+        thread.start()
+        try:
+            yield srv
+        finally:
+            srv.shutdown()
+            thread.join(timeout=5)
+            assert not thread.is_alive(), "HTTP server thread did not stop"
 
 
 def test_http_exchange_caps_oversize_body() -> None:
@@ -256,23 +265,22 @@ def test_http_exchange_caps_oversize_body() -> None:
         def log_message(self, *args):  # noqa: A003
             pass
 
-    srv = _serve(Big)
-    try:
+    with _serve(Big) as srv:
         status, content = ev._http_exchange(
             host_ip="127.0.0.1", host_port=srv.server_address[1],
             method="GET", path="/", timeout_seconds=5.0,
             max_response_bytes=64 * 1024,
         )
-    finally:
-        srv.shutdown()
-        srv.server_close()
     assert status == 200
     assert len(content) == 64 * 1024  # capped, not the declared 256 KiB
 
 
 def test_http_exchange_deadline_stops_dripping_body() -> None:
     import http.server
+    import threading
     import time as _time
+
+    stop = threading.Event()
 
     class Drip(http.server.BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.0"  # no Content-Length: read-to-EOF body
@@ -284,23 +292,23 @@ def test_http_exchange_deadline_stops_dripping_body() -> None:
                 for _ in range(200):
                     self.wfile.write(b"y" * 512)
                     self.wfile.flush()
-                    _time.sleep(0.2)
+                    if stop.wait(0.2):
+                        break
             except (BrokenPipeError, ConnectionResetError):
                 pass
 
         def log_message(self, *args):  # noqa: A003
             pass
 
-    srv = _serve(Drip)
     start = _time.monotonic()
-    try:
-        status, content = ev._http_exchange(
-            host_ip="127.0.0.1", host_port=srv.server_address[1],
-            method="GET", path="/", timeout_seconds=1.0,
-        )
-    finally:
-        srv.shutdown()
-        srv.server_close()
+    with _serve(Drip) as srv:
+        try:
+            status, content = ev._http_exchange(
+                host_ip="127.0.0.1", host_port=srv.server_address[1],
+                method="GET", path="/", timeout_seconds=1.0,
+            )
+        finally:
+            stop.set()
     elapsed = _time.monotonic() - start
     assert status == 200
     # The drip feeds ~512 B per 0.2 s inside the socket-inactivity
@@ -325,9 +333,8 @@ def test_http_exchange_watchdog_stops_dripping_headers() -> None:
     port = srv.getsockname()[1]
     stop = _threading.Event()
 
-    def _drip() -> None:
+    def _drip(conn) -> None:
         try:
-            conn, _ = srv.accept()
             conn.sendall(b"HTTP/1.1 200 OK\r\n")
             # Drip header bytes one at a time, each inside the
             # inactivity window — never a blank line, never EOF.
@@ -338,13 +345,12 @@ def test_http_exchange_watchdog_stops_dripping_headers() -> None:
                     conn.sendall(bytes([ch]))
                 except OSError:
                     break
-                _time.sleep(0.2)
-            conn.close()
+                if stop.wait(0.2):
+                    break
         except OSError:
             pass
 
-    t = _threading.Thread(target=_drip, daemon=True)
-    t.start()
+    server = SocketServer(srv, _drip)
     start = _time.monotonic()
     try:
         try:
@@ -358,7 +364,7 @@ def test_http_exchange_watchdog_stops_dripping_headers() -> None:
             raise AssertionError("expected TimeoutError from header drip")
     finally:
         stop.set()
-        srv.close()
+        server.close()
     # Watchdog fires at 2x timeout; without it this blocks ~55 min.
     assert _time.monotonic() - start < 5.0
 # ── tcp_probe destination pinning (plans are untrusted) ───────────────

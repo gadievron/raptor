@@ -11,6 +11,7 @@ from contextlib import contextmanager
 
 import pytest
 
+from core.sandbox.tests.socket_server import SocketServer
 from packages.web.checks.information import VerboseHttpMethodsCheck
 
 
@@ -128,8 +129,7 @@ class TestRawExchangeIsBounded:
         server.bind(("127.0.0.1", 0))
         server.listen(1)
 
-        def _serve():
-            conn, _addr = server.accept()
+        def _serve(conn):
             try:
                 conn.recv(65536)
                 feeder(conn)
@@ -141,9 +141,8 @@ class TestRawExchangeIsBounded:
                 except OSError:
                     pass
 
-        thread = threading.Thread(target=_serve, daemon=True)
-        thread.start()
-        return server, server.getsockname()[1]
+        port = server.getsockname()[1]
+        return SocketServer(server, _serve), port
 
     def test_flood_response_stops_at_the_byte_cap(self, monkeypatch):
         import time
@@ -179,6 +178,7 @@ class TestRawExchangeIsBounded:
         # Compressed clock: deadline semantics are under test, not the
         # production constant's literal value.
         monkeypatch.setattr(RequestSmugglingCheck, "_RAW_DEADLINE_S", 1.5)
+        stop = threading.Event()
 
         def drip(conn):
             # One byte per 0.3s for ~4s: each recv succeeds, so the
@@ -188,7 +188,8 @@ class TestRawExchangeIsBounded:
                     conn.sendall(b"y")
                 except OSError:
                     return
-                time.sleep(0.3)
+                if stop.wait(0.3):
+                    return
 
         server, port = self._raw_server(drip)
         start = time.monotonic()
@@ -197,6 +198,7 @@ class TestRawExchangeIsBounded:
                 "127.0.0.1", port, False, "GET / HTTP/1.1\r\n\r\n",
             )
         finally:
+            stop.set()
             server.close()
         wall = time.monotonic() - start
         assert truncated is True
