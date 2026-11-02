@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -20,16 +22,15 @@ _SCRIPT = (
 
 @pytest.fixture(scope="module")
 def migrate_mod():
-    import os
-
-    os.environ.setdefault("_RAPTOR_TRUSTED", "1")
     spec = importlib.util.spec_from_loader(
         "migrate_journal_script",
         importlib.machinery.SourceFileLoader(
             "migrate_journal_script", str(_SCRIPT)),
     )
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    with pytest.MonkeyPatch.context() as mp, patch.object(sys, "path", sys.path.copy()):
+        mp.setenv("_RAPTOR_TRUSTED", "1")
+        spec.loader.exec_module(mod)
     return mod
 
 

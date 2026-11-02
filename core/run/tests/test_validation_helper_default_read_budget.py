@@ -12,20 +12,24 @@ costs kilobytes, not the real cap.
 
 import importlib.util
 import json
-import os
+import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _load_helper():
-    os.environ.setdefault("_RAPTOR_TRUSTED", "1")
     script = str(REPO_ROOT / "libexec" / "raptor-validation-helper")
     loader = SourceFileLoader("raptor_validation_helper", script)
     spec = importlib.util.spec_from_loader("raptor_validation_helper", loader)
     mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
+    with pytest.MonkeyPatch.context() as mp, patch.object(sys, "path", sys.path.copy()):
+        mp.setenv("_RAPTOR_TRUSTED", "1")
+        loader.exec_module(mod)
     return mod
 
 

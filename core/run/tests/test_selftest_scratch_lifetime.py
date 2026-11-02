@@ -9,11 +9,11 @@ harness's scratch is reclaimed by a later process's sweep.
 from __future__ import annotations
 
 import importlib.util
-import os
 import sys
 import tempfile
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -21,12 +21,13 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _load_selftest():
-    os.environ.setdefault("_RAPTOR_TRUSTED", "1")
     script = str(REPO_ROOT / "libexec" / "raptor-self-test")
     loader = SourceFileLoader("raptor_self_test_mod", script)
     spec = importlib.util.spec_from_loader(loader.name, loader)
     mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
+    with pytest.MonkeyPatch.context() as mp, patch.object(sys, "path", sys.path.copy()):
+        mp.setenv("_RAPTOR_TRUSTED", "1")
+        loader.exec_module(mod)
     return mod
 
 

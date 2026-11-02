@@ -28,6 +28,9 @@ from contextlib import redirect_stderr, redirect_stdout
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
+
+import pytest
 
 # parents[3] = core/coverage/tests -> core/coverage -> core -> repo root.
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -51,11 +54,12 @@ _cli_module = None
 def _load_cli_module():
     global _cli_module
     if _cli_module is None:
-        os.environ.setdefault("_RAPTOR_TRUSTED", "1")
         loader = SourceFileLoader("raptor_coverage_summary_harness", str(CLI))
         spec = importlib.util.spec_from_loader(loader.name, loader)
         mod = importlib.util.module_from_spec(spec)
-        loader.exec_module(mod)
+        with pytest.MonkeyPatch.context() as mp, patch.object(sys, "path", sys.path.copy()):
+            mp.setenv("_RAPTOR_TRUSTED", "1")
+            loader.exec_module(mod)
         _cli_module = mod
     return _cli_module
 
