@@ -1,5 +1,7 @@
 # Running RAPTOR under WSL
 
+[Documentation index](README.md)
+
 **Related documentation:**
 [Sandbox](sandbox.md) |
 [Dependencies](dependencies.md) |
@@ -21,6 +23,20 @@ refuses outright with the upgrade remedy (see
 The startup banner and `raptor doctor` print a WSL section on WSL
 hosts covering the points below for your specific machine.
 
+
+Start with [Setup](#setup), then check the
+[containment requirements](#landlock-and-the-untrusted-exec-floor) for your
+kernel. If the target is on a Windows drive, also read the
+[mount restrictions](#windows-interop-mounts-mntc).
+
+**On this page:**
+
+- [Setup](#setup)
+- [Landlock and the untrusted-exec floor](#landlock-and-the-untrusted-exec-floor)
+- [Windows-interop mounts (`/mnt/c`)](#windows-interop-mounts-mntc)
+- [Sandbox hardening on WSL](#sandbox-hardening-on-wsl)
+- [Tool notes](#tool-notes)
+- [Line endings (CRLF checkouts)](#line-endings-crlf-checkouts)
 
 ## Setup
 
@@ -90,7 +106,7 @@ containment tier for untrusted work: namespaces, fresh procfs, and
 seccomp stay enforced; the Landlock filesystem/TCP policy layer is
 absent.
 
-```bash
+```text
 # per run
 /agentic --repo <path> --sandbox-floor ns-only
 # standing, per project

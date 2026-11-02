@@ -1,5 +1,7 @@
 # Autonomous Workflow
 
+[Documentation index](README.md)
+
 `/agentic` is the primary command for end-to-end security analysis.  It
 chains scanning, deduplication, LLM-powered analysis, exploit generation,
 and patch writing into a single autonomous run.  Point it at a codebase and
@@ -18,6 +20,17 @@ is written to the run's output directory.
 [CodeQL](codeql.md)
 
 
+**On this page:**
+
+- [Usage](#usage)
+- [Pipeline](#pipeline)
+- [Enrichment flags](#enrichment-flags)
+- [LLM dispatch](#llm-dispatch)
+- [Multi-model analysis](#multi-model-analysis)
+- [Binary-oracle reachability](#binary-oracle-reachability)
+- [Output](#output)
+- [Flag reference](#flag-reference)
+
 ## Usage
 
 ```
@@ -27,7 +40,7 @@ is written to the run's output directory.
 Dispatches to `python3 raptor.py agentic`.  See
 [commands.md](commands.md#agentic) for the full flag table.
 
-```bash
+```text
 /agentic                          # active-project or caller target
 /agentic /path/to/code            # explicit target
 /agentic --understand --validate  # pre-map, then validate exploitable findings
@@ -169,7 +182,7 @@ flags add architectural context, a coverage audit, and a validation post-pass:
 
 Use them independently or together:
 
-```bash
+```text
 /agentic --understand --validate     # pre-map, then validate exploitable findings
 /agentic --understand --gap-audit --validate  # full-coverage review
 /agentic --understand                # enrich this run's analysis only
@@ -266,13 +279,13 @@ exploit generation.  This happens transparently -- no flags needed.
 Pass two or more `--model` values to get independent parallel analysis from
 each model, followed by automatic correlation:
 
-```bash
+```text
 /agentic --model gemini-2.5-pro --model gpt-5 --model claude-opus-4-6
 ```
 
 Optional review layers:
 
-```bash
+```text
 /agentic --model claude-opus-4-6 --model gpt-5.4 \
   --consensus claude-haiku-4-5 \
   --judge claude-opus-4-6 \

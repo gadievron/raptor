@@ -1,5 +1,7 @@
 # CodeQL
 
+[Documentation index](README.md)
+
 Deep static analysis with semantic dataflow queries. CodeQL builds a
 database from compiled (or extracted) source, then evaluates queries
 that model taint propagation, control-flow predicates, and type
@@ -15,6 +17,10 @@ and -- optionally -- LLM-powered analysis with exploit generation.
 [binary analysis](binary-analysis.md) |
 [sandbox](sandbox.md)
 
+
+For a first analysis, check [prerequisites](#prerequisites), prepare the
+CodeQL installation, then follow [Usage](#usage). For a disconnected host,
+complete the [airgapped setup](#airgapped-setup) before entering that environment.
 
 **On this page:**
 

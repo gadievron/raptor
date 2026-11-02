@@ -1,5 +1,7 @@
 # Static Analysis
 
+[Documentation index](README.md)
+
 Mechanical rule scanning with Semgrep and Coccinelle. No LLM calls --
 purely pattern-based detection. Semgrep handles multi-language taint
 and pattern rules; Coccinelle handles C/C++ semantic patches that
@@ -14,6 +16,17 @@ For LLM-powered analysis of scan results, use `/agentic` or
 [CodeQL](codeql.md) |
 [sandbox](sandbox.md)
 
+
+**On this page:**
+
+- [Usage](#usage)
+- [Rule version requirements](#rule-version-requirements)
+- [Bundled rule coverage](#bundled-rule-coverage)
+- [Semgrep Rules](#semgrep-rules)
+- [Coccinelle Rules](#coccinelle-rules)
+- [Inline Suppression](#inline-suppression)
+- [Output](#output)
+- [Error Handling](#error-handling)
 
 ## Usage
 
@@ -38,7 +51,7 @@ Semgrep pass (`--expanded-semgrep`).
 | `--repo <path>` | required | Repository path or Git URL |
 | `--policy-version <ver>` | `v1` | Policy version identifier |
 | `--policy-groups <list>` | `all` | Comma-separated rule group names (see [Policy Groups](#policy-groups)) |
-| `--codeql` | off | Run [CodeQL](codeql.md) stage after Semgrep |
+| `--codeql` | off | Run [CodeQL](codeql.md) concurrently with Semgrep (sequential with `--sequential`) |
 | `--no-codeql` | -- | Explicitly disable CodeQL |
 | `--no-cocci` | off | Disable Coccinelle stage |
 | `--languages <list>` | auto | CodeQL language list (only relevant with `--codeql`) |
@@ -223,7 +236,7 @@ The default value `all` expands to every subdirectory under
 
 To scan only specific categories:
 
-```bash
+```text
 /scan --repo /path/to/code --policy-groups secrets,injection,crypto
 ```
 

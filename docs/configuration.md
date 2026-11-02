@@ -1,5 +1,11 @@
 # Configuration
 
+[Documentation index](README.md)
+
+Use `models.json` to choose LLM providers and models, `tuning.json` to set
+resource limits, and environment variables for runtime overrides. Start with
+the relevant section below; each setting has its own precedence rules.
+
 **Related documentation:**
 [LLM Providers](llm.md) |
 [Sandbox](sandbox.md) |

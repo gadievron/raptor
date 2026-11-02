@@ -1,5 +1,7 @@
 # Binary Analysis
 
+[Documentation index](README.md)
+
 RAPTOR provides three distinct subsystems for compiled artefacts, each
 solving a different problem: black-box investigation of unknown binaries,
 reachability filtering to suppress dead-code findings in source scans,
@@ -18,10 +20,18 @@ cross-version `diff --matched`, findings export) and binary
 extraction over a decomp-tree materialized from an imported RE
 database).
 
-See also: [commands](python-cli.md), [validation](validation.md),
+See also: [slash commands](commands.md), [Python CLI](python-cli.md), [validation](validation.md),
 [Frida](frida.md), [sandbox](sandbox.md).
 
 ---
+
+Choose the subsystem that matches your input and question:
+
+| Task | Subsystem |
+|------|-----------|
+| Investigate an unknown compiled artefact | [/binary](#binary----black-box-investigation) |
+| Filter source findings using compiled reachability | [Binary oracle](#binary-oracle----reachability-filtering) |
+| Assess compiled mitigations and exploitation constraints | [Exploit feasibility](#exploit-feasibility) |
 
 **On this page:**
 
@@ -52,7 +62,7 @@ PE) and builds a structured evidence layer without requiring source code.
 
 ### Usage and Flags
 
-```bash
+```text
 # Default: investigate (static only)
 /binary /path/to/app
 
@@ -439,7 +449,7 @@ applies same-tier).
 
 Per-project binary configuration is managed with `/project binary`:
 
-```bash
+```text
 /project binary add /path/to/debug/binary
 /project binary list
 /project binary remove /path/to/debug/binary

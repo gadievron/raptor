@@ -1,15 +1,25 @@
 # Threat Models in RAPTOR
 
-RAPTOR treats the threat model as a proper project artefact, not a bit of
-vague chat that disappears once the model context rolls over. The idea is
-simple: before we ask agents to go hunting, we give them a crisp view of what
-matters, where trust changes hands, what noise to ignore, and how a finding
-must be proved before anyone gets excited.
+[Documentation index](README.md)
 
-This is very much inspired by the better bits of modern agentic security work:
-map the target, pick focus areas, verify independently, dedupe by root cause,
-and re-attack patches instead of assuming a diff magically fixed the issue.
-Less vibes, more evidence.
+A project threat model records assets, entry points, trust boundaries, review
+priorities, and the evidence required to confirm findings. RAPTOR keeps it as
+a persistent project artefact and uses it to guide analysis across runs.
+
+Use this feature to define the security assumptions of the target you are
+reviewing. For RAPTOR's own defences, see [security](security.md),
+[agent security](agent-security.md), and [sandbox](sandbox.md).
+For project commands, see the [command reference](commands.md#project).
+
+**On this page:**
+
+- [What Gets Created](#what-gets-created)
+- [Create One](#create-one)
+- [Inspect It](#inspect-it)
+- [What To Put In It](#what-to-put-in-it)
+- [How RAPTOR Uses It](#how-raptor-uses-it)
+- [Strict Sandbox Mode](#strict-sandbox-mode)
+- [Why This Helps](#why-this-helps)
 
 ## What Gets Created
 
@@ -18,8 +28,7 @@ For each project RAPTOR can keep:
 - `threat-model.json` - canonical machine-readable model used by RAPTOR
 - `THREAT_MODEL.md` - readable Markdown version for humans
 
-The JSON is the source of truth. The Markdown is there so the team can read it
-without needing to squint at a blob of JSON.
+The JSON is the source of truth; the Markdown is its human-readable view.
 
 ## Create One
 
@@ -30,7 +39,7 @@ raptor project create myapp --target /path/to/code
 raptor project use myapp
 ```
 
-The least faffy way is to let `/agentic` do the whole thing:
+To generate the model as part of an analysis run:
 
 ```bash
 python3 raptor.py agentic --repo /path/to/code --threat-model --validate
@@ -41,15 +50,14 @@ exist yet, and hands unchecked-flow candidates into the normal analysis
 pipeline. Existing project threat models are preserved by default because this
 is operator-owned context, not disposable scanner output. Use
 `--threat-model-refresh` when you deliberately want to overwrite the project
-model from the latest map. If Semgrep or CodeQL miss something the map already
-proved is interesting, RAPTOR still has a candidate to work with instead of
-just shrugging at an empty SARIF pile.
+model from the latest map. Mapped unchecked flows can become analysis candidates
+even when Semgrep or CodeQL produce no matching findings. They still require
+validation.
 
-If RAPTOR cannot produce a fresh `/understand` map, it may find an older one
-for the same target. Fresh old maps can be reused, but stale maps are refused
-by default because analysing yesterday's attack surface is a bit pants. Pass
-`--threat-model-use-stale` only when you have checked the drift and want that
-older map anyway.
+If RAPTOR cannot produce a fresh `/understand` map, it may find an older one for
+the same target. An existing map can be reused if it passes freshness checks;
+stale maps are refused by default. Pass `--threat-model-use-stale` only when you
+have checked the drift and want that older map anyway.
 
 For a quick demo or first-look run:
 
@@ -77,9 +85,9 @@ That pulls in mapped entry points, trust boundaries, sinks, unchecked flows,
 hardcoded secrets, and turns them into starter focus areas. Secret VALUES are
 redacted before they reach the threat-model artifacts — `threat-model.json`,
 `THREAT_MODEL.md`, and report output carry `[REDACTED]` markers with the
-variable name and file:line kept readable, never the literal credential. It
-is not meant to be perfect first time. It gives you a decent first pass so you can tidy it up
-without starting from a blank page.
+variable name and file:line kept readable, never the literal credential. Review
+the generated focus areas against the target before using them to guide an
+analysis.
 
 ## Inspect It
 
@@ -97,8 +105,7 @@ areas it has. Beyond `show`/`export`, the subcommand surface also covers
 
 ## What To Put In It
 
-Keep it punchy. A useful threat model does not need to read like a bank policy
-document.
+Keep entries specific to the target and actionable for a reviewer.
 
 - assets: what would hurt if it went wrong
 - entry points: where an attacker can start
@@ -106,14 +113,14 @@ document.
 - trusted inputs: what RAPTOR should not waste time treating as attacker-owned
 - untrusted inputs: requests, files, messages, metadata, dependencies, config
 - in-scope vulnerability classes: the bugs that matter for this target
-- out-of-scope classes: the stuff that is probably theoretical nonsense here
+- out-of-scope classes: vulnerability classes excluded by the engagement
 - focus areas: the places agents should look first
 - known bug shapes: patterns we have seen before and want variants of
 - verification expectations: what proof is good enough
 - patch validation expectations: how to re-test fixes properly
 
-The important bit: out-of-scope does not mean "never mention it". It means
-"do not burn half a day on this unless the code gives us real evidence".
+Out-of-scope entries lower review priority. Concrete evidence can still
+justify reporting a finding.
 
 ## How RAPTOR Uses It
 
@@ -130,12 +137,11 @@ Graph-backed risks from /understand memory:
 - EP-003 GET /search -> SINK-004 template render: no output encoding (high)
 ```
 
-That graph block is treated as target-derived signal. It is brilliant for
-priority and context, but it is not proof until `/validate` or another oracle
-confirms it.
+That graph block is treated as target-derived signal. Use it for
+priority and context; `/validate` or another oracle must confirm the claim.
 
 The agents are told to use it as operator-owned context, not as proof. So it can
-raise or lower priority, steer variant hunting, and reduce rubbish, but a
+raise or lower priority, steer variant hunting, and reduce irrelevant candidates, but a
 finding still needs code evidence or an oracle-backed validation result.
 
 Good outcomes should come from things RAPTOR can actually stand behind:
@@ -148,19 +154,16 @@ Good outcomes should come from things RAPTOR can actually stand behind:
 
 ## Strict Sandbox Mode
 
-There is also a `--sandbox strict` profile for the awkward agentic cases
-where degrading silently would be daft.
+Use `--sandbox strict` when the run requires the stricter containment contract.
 
 ```bash
-raptor agentic /path/to/code --sandbox strict
+python3 raptor.py agentic --repo /path/to/code --sandbox strict
 ```
 
-`full` is still the normal default and will warn if the host cannot provide a
-layer. `strict` fails closed if the platform isolation backend is unavailable.
-On Linux, if target/output isolation is requested, it also requires mount
-namespaces. That is deliberately less forgiving, because autonomous work on a
-hostile repo should not quietly continue with a weaker sandbox and a cheery
-shrug.
+`full` is the default profile. `strict` refuses when required isolation is
+unavailable. The containment floor also governs which degraded hosts can run
+untrusted code; see [sandbox profiles](sandbox.md#profiles) and the
+[containment floor](sandbox.md#containment-floor) for the complete contract.
 
 ## Why This Helps
 
@@ -168,11 +171,10 @@ Without a project threat model, agents are good at producing plausible queues
 of possible bugs. With one, RAPTOR can be much more deliberate:
 
 - spend more time around real trust boundaries
-- avoid re-reporting known rubbish
+- avoid re-reporting known false positives
 - group findings by root cause rather than by scanner line number
 - validate against the right attacker model
 - re-attack patches so "fixed" means something
 
-That is the direction of travel: RAPTOR should not just find more things. It
-should get better at finding the right things, proving them, and knowing when a
-patch actually killed the bug rather than just moved the furniture around.
+Use these priorities to evaluate findings and check whether a patch removes
+the underlying defect.

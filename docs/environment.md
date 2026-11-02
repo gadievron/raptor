@@ -1,5 +1,7 @@
 # Environment Variable Reference
 
+[Documentation index](README.md)
+
 **Related documentation:**
 [Configuration](configuration.md) |
 [LLM Providers](llm.md) |

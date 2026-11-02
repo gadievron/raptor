@@ -1,9 +1,11 @@
 # RAPTOR Architecture
 
-A high-level map of how RAPTOR is put together. Operators should start
-at [README](README.md) and [commands](commands.md); this page exists so
-you know what you installed and where its moving parts live. The tree
-is authoritative -- `ls` beats this page whenever they disagree.
+[Documentation index](README.md)
+
+Use this map to locate RAPTOR's entry points, analysis packages, shared
+infrastructure, and detection rules. For a first run, start with the
+[documentation index](README.md) and [command reference](commands.md).
+The layout below is a guide; check the checkout for current file names.
 
 See also: [core concepts](concepts.md), [security](security.md),
 [sandbox](sandbox.md).
@@ -23,7 +25,7 @@ bar where it needs to be regardless of who — or what — wrote the code.
 
 ### Modes
 
-The framework operates in six distinct modes:
+The main capability areas include:
 
 1. **Source Code Analysis**: Static analysis of source code using Semgrep
 2. **Deep CodeQL Analysis**: Advanced static analysis with dataflow validation
@@ -32,9 +34,10 @@ The framework operates in six distinct modes:
 5. **Exploitability Validation**: Multi-stage pipeline proving findings are real, reachable, and exploitable
 6. **Code Understanding**: Adversarial code comprehension -- attack surface mapping, data flow tracing
 
-All modes are accessible via the unified `raptor.py` launcher or via Claude
-Code slash commands (`/scan`, `/agentic`, `/codeql`, `/fuzz`, `/web`, `/sca`,
-`/validate`, `/understand`, etc.).
+The [Python CLI](python-cli.md#modes) lists capabilities available through
+`raptor.py`. The [slash-command reference](commands.md) also covers
+session-driven workflows such as `/validate` and `/understand`; these are
+not standalone `raptor.py` modes.
 
 ## Layout
 

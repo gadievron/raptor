@@ -1,5 +1,7 @@
 # Exploitability Validation
 
+[Documentation index](README.md)
+
 The `/validate` command runs a multi-stage pipeline that determines whether
 vulnerability findings are real, reachable, and exploitable.  It sits between
 scanning (which discovers candidates) and exploit development (which builds
@@ -13,6 +15,10 @@ mechanical -- Python computation with optional light enrichment.  Lettered
 stages (A--F) are LLM reasoning, where the analyst performs the substantive
 assessment work.
 
+Start with [Usage](#usage) to choose an input. Use the
+[pipeline stages](#pipeline-stages) to interpret intermediate evidence and
+[final statuses](#final-status-reference) to interpret the resulting report.
+
 **On this page:**
 
 - [Usage](#usage)
@@ -22,7 +28,7 @@ assessment work.
 
 ## Usage
 
-```bash
+```text
 /validate <target_path> [flags]
 ```
 
@@ -44,26 +50,26 @@ dispatches as a skill driven by `libexec/raptor-validation-helper`
 
 Full pipeline after a scan:
 
-```bash
+```text
 /scan ./webapp
 /validate ./webapp
 ```
 
 Validate with a binary for feasibility analysis:
 
-```bash
+```text
 /validate ./webapp --binary ./build/webapp
 ```
 
 Validate existing scanner output:
 
-```bash
+```text
 /validate ./webapp --findings scanner-results.json
 ```
 
 Chain with `/understand` for richer context:
 
-```bash
+```text
 /understand ./webapp --map
 /validate ./webapp
 ```
@@ -74,7 +80,7 @@ The `/understand` output is imported automatically by Stage 0 -- no manual
 Validate a compiled binary directly (requires an RE substrate -- a prior
 Ghidra import, project Ghidra attach, or binary `--study` run):
 
-```bash
+```text
 /validate ./firmware.elf
 ```
 
