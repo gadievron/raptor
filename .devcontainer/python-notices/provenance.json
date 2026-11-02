@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "scope": "Verbatim upstream source-release notice added to future images beside installed Python metadata. Notice presence does not establish complete licence coverage or source-build correspondence. PyPI release hashes are publisher claims.",
+  "packages": [
+    {
+      "name": "z3-solver",
+      "version": "4.15.4.0",
+      "license": "MIT License",
+      "license_spdx": "MIT",
+      "metadata_directory": "z3_solver-4.15.4.0.dist-info",
+      "notice_file": "z3-solver-LICENSE.txt",
+      "installed_filename": "LICENSE.txt",
+      "sha256": "e617cad2ab9347e3129c2b171e87909332174e17961c5c3412d0799469111337",
+      "source_kind": "hash_checked_source_distribution",
+      "source_url": "https://files.pythonhosted.org/packages/8a/8e/0c8f17309549d2e5cde9a3ccefa6365437f1e7bafe71878eaf9478e47b18/z3_solver-4.15.4.0.tar.gz",
+      "source_sha256": "928c29b58c4eb62106da51c1914f6a4a55d0441f8f48a81b9da07950434a8946",
+      "source_path": "z3_solver-4.15.4.0/core/LICENSE.txt",
+      "registry_metadata_url": "https://pypi.org/pypi/z3-solver/4.15.4.0/json",
+      "scope": "Z3 core licence text from the exact-version source distribution; installed wheel payload correspondence is checked separately."
+    }
+  ]
+}

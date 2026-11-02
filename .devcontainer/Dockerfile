@@ -116,10 +116,13 @@ RUN chmod 0755 /usr/local/libexec/raptor-codeql-bootstrap \
 # ============================================================================
 
 COPY pyproject.toml uv.lock /tmp/
+COPY .devcontainer/python-notices/ /usr/share/doc/raptor-python-notices/
+COPY .devcontainer/install-python-notices.py /usr/local/libexec/install-python-notices.py
 
 RUN bash -eo pipefail -c \
     'uv export --locked --no-hashes --project /tmp --extra web \
-     | uv pip install --system --no-cache -r -'
+     | uv pip install --system --no-cache -r -' \
+    && python3 /usr/local/libexec/install-python-notices.py
 
 # Install Playwright browser + system deps via Playwright's own dep installer.
 # Replaces a hand-rolled apt list that drifted out of sync with upstream Chromium deps.
