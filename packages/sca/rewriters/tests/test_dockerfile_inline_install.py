@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from packages.sca.rewriters import RewriteEdit, rewrite
 from packages.sca.rewriters.dockerfile_inline_install import (
     rewrite_dockerfile_inline_install,
@@ -258,3 +260,86 @@ def test_inline_install_mixed_versions_partial_reported(
     text = dockerfile.read_text()
     assert "semgrep==1.163.0" in text
     assert "semgrep==1.150.0" in text
+
+
+def test_npm_rewrite_only_literal_install_arguments(tmp_path):
+    from packages.sca.rewriters.dockerfile_inline_install import npm_install_pins
+    df = tmp_path / 'Dockerfile'
+    source = '''# npm install foo@1.0.0
+FROM node:24
+ENV EXAMPLE=foo@1.0.0
+RUN echo "npm install foo@1.0.0" && npm install -g --prefix /usr 'foo@1.0.0' "@scope/tool@2.0.0" \\
+    --ignore-scripts # foo@1.0.0
+RUN npm install foo@^1.0.0
+RUN ["npm", "install", "foo@1.0.0"]
+RUN cat <<EOF
+npm install foo@1.0.0
+EOF
+'''
+    df.write_text(source)
+    pins = npm_install_pins(source)
+    assert [(n,v) for n,v,_,_ in pins] == [('foo','1.0.0'),('@scope/tool','2.0.0')]
+    assert all(source[a:b] == v for _,v,a,b in pins)
+    edits = [RewriteEdit(locator='foo',old_value='1.0.0',new_value='1.1.0',extra={'kind':'inline_install_npm'}),
+             RewriteEdit(locator='@scope/tool',old_value='2.0.0',new_value='2.1.0',extra={'kind':'inline_install_npm'})]
+    assert all(r.applied for r in rewrite(df,edits))
+    assert df.read_text() == source.replace("'foo@1.0.0'", "'foo@1.1.0'").replace('"@scope/tool@2.0.0"','"@scope/tool@2.1.0"')
+    assert all(r.reason=='no_change' for r in rewrite(df,edits))
+
+
+@pytest.mark.parametrize('body', [
+    'echo npm install foo@1.0.0',
+    'npm install --registry https://other.example foo@1.0.0',
+    'npm install --registry=https://other.example foo@1.0.0',
+    'npm install --userconfig /tmp/npmrc foo@1.0.0',
+    'npm install --unknown foo@1.0.0',
+    'npm install foo@1.0.0 "$ARGS"',
+    'npm install foo@1.0.0 > output',
+    'npm install foo@1.0.0 | cat',
+    'npm install "foo@${VERSION}"',
+    'npm install foo@1.0.0-rc.1',
+    'npm install npm:foo@1.0.0',
+    'npm install foo@https://example.org/1.0.0',
+])
+def test_npm_unsupported_commands_are_not_discovered_or_rewritten(tmp_path, body):
+    from packages.sca.rewriters.dockerfile_inline_install import npm_install_pins
+    source = 'FROM node:24\nRUN '+body+'\n';df=tmp_path/'Dockerfile';df.write_text(source)
+    assert npm_install_pins(source)==[]
+    edit=RewriteEdit(locator='foo',old_value='1.0.0',new_value='2.0.0',extra={'kind':'inline_install_npm'})
+    assert rewrite(df,[edit])[0].reason=='not_found'
+    assert df.read_text()==source
+
+
+def test_npm_rewrite_handles_crlf_and_multistage_and_rejects_stale_plans(tmp_path):
+    df=tmp_path/'Dockerfile'
+    source='FROM node:24 AS build\r\nRUN npm install \\\r\n  foo@1.0.0\r\nFROM node:24\r\nRUN npm i foo@1.0.0\r\n'
+    df.write_bytes(source.encode())
+    edit=RewriteEdit(locator='foo',old_value='1.0.0',new_value='2.0.0',extra={'kind':'inline_install_npm'})
+    assert rewrite(df,[edit])[0].applied
+    # The shared atomic writer may normalize CRLF; verify version spans independently.
+    from packages.sca.rewriters.dockerfile_inline_install import npm_install_pins
+    assert [(n,v) for n,v,_,_ in npm_install_pins(df.read_text())]==[('foo','2.0.0'),('foo','2.0.0')]
+    df.write_text('FROM node:24\nRUN npm i foo@1.0.0\nRUN npm install foo@1.5.0\n')
+    before=df.read_bytes()
+    assert rewrite(df,[edit])[0].reason=='value_mismatch'
+    assert df.read_bytes()==before
+    bad=RewriteEdit(locator='foo',old_value='1.0.0',new_value='2.0.0; curl evil',extra={'kind':'inline_install_npm'})
+    assert rewrite(df,[bad])[0].reason.startswith('invalid_')
+
+
+@pytest.mark.parametrize('prefix', ['ENV NPM_CONFIG_REGISTRY=https://other.example\n',
+                                   'ENV npm_config_userconfig=/tmp/npmrc\n',
+                                   'COPY .npmrc /root/.npmrc\n',
+                                   'RUN npm config set @scope:registry https://other.example\n',
+                                   'SHELL ["powershell", "-Command"]\n'])
+def test_npm_dockerfile_registry_or_shell_overrides_are_not_rewrite_surfaces(prefix):
+    from packages.sca.rewriters.dockerfile_inline_install import npm_install_pins
+    assert npm_install_pins('FROM node:24\n'+prefix+'RUN npm install foo@1.0.0\n')==[]
+
+
+def test_npm_version_spans_preserve_raw_crlf_when_applied_to_source():
+    from packages.sca.rewriters.dockerfile_inline_install import _apply_npm
+    source='FROM scratch\r\nRUN npm install \\\r\n  foo@1.0.0\r\n'
+    edit=RewriteEdit(locator='foo',old_value='1.0.0',new_value='1.1.0')
+    text,result=_apply_npm(source,edit)
+    assert result.applied and text==source.replace('foo@1.0.0','foo@1.1.0')

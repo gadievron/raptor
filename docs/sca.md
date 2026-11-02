@@ -638,6 +638,24 @@ pins are test assertions. When patterns drop candidates, the report
 prints one summary line with the count; without `--exclude`, writes
 that land under test/fixture paths get an informational note.
 
+### Dockerfile npm Pins
+
+`raptor-sca bump` also updates exact `name@major.minor.patch` pins in direct
+shell-form `RUN npm install`, `npm i` and `npm add` commands, including scoped
+packages, quoted pins and continued commands. It uses the configured npm client
+and proposes only strictly newer stable versions identified by the registry's
+`latest` tag. It does not install packages or execute Dockerfile commands.
+
+The same supply-chain, vulnerability, exclusion and policy gates apply before
+`--apply` rewrites a pin. Changed runtime `engines`, deprecated targets or missing
+version metadata require review. Engine requirements are compared with the
+current version; SCA does not prove compatibility with every container runtime.
+
+Ranges, prereleases, aliases, JSON-form RUNs, heredocs, custom shells and
+unsupported shell syntax are excluded. Commands with registry or user-config
+flags, and Dockerfiles that set npm registry configuration or copy `.npmrc`, are
+also excluded so SCA does not query a different registry for those pins.
+
 ### LLM-Assisted Major Bumps
 
 When an LLM provider is configured, `fix --allow-major` automatically

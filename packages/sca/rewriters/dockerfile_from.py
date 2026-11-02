@@ -67,7 +67,7 @@ def rewrite_dockerfile_from(
             from_edits.append(edit)
         elif kind == "arg":
             arg_edits.append(edit)
-        elif kind == "inline_install_pip":
+        elif kind in {"inline_install_pip", "inline_install_npm"}:
             inline_install_edits.append(edit)
         # Back-compat shape heuristic for edits without an
         # ``extra["kind"]``: image refs always contain ``/``,
@@ -87,11 +87,14 @@ def rewrite_dockerfile_from(
         results.extend(rewrite_dockerfile_arg(path, arg_edits))
     if inline_install_edits:
         from .dockerfile_inline_install import (
-            rewrite_dockerfile_inline_install,
+            rewrite_dockerfile_inline_install, rewrite_dockerfile_npm_install,
         )
-        results.extend(rewrite_dockerfile_inline_install(
-            path, inline_install_edits,
-        ))
+        pip_edits = [e for e in inline_install_edits if (e.extra or {}).get('kind') == 'inline_install_pip']
+        npm_edits = [e for e in inline_install_edits if (e.extra or {}).get('kind') == 'inline_install_npm']
+        if pip_edits:
+            results.extend(rewrite_dockerfile_inline_install(path, pip_edits))
+        if npm_edits:
+            results.extend(rewrite_dockerfile_npm_install(path, npm_edits))
     return results
 
 
