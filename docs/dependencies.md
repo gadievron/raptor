@@ -25,7 +25,7 @@ the suite fails at import/setup on 3.11 and earlier.
 | Tool | Required | Purpose | Install |
 |------|----------|---------|---------|
 | Semgrep | For `/scan` and default scanner workflows | Static analysis scanning | `uv tool install semgrep` |
-| Coccinelle (spatch) | No | Semantic patch analysis | `apt install coccinelle` (>=1.3) |
+| Coccinelle (spatch) | No | Semantic patch analysis | `apt install coccinelle`; check `spatch --version`. Prefix-attribute rules require 1.3+, while older versions can run other compatible rules. |
 | CodeQL | No | Deep dataflow analysis | [codeql-cli-binaries](https://github.com/github/codeql-cli-binaries) |
 | Joern | No | CPG dataflow queries (`/audit`, tiered taint sweeps) | [joern.io](https://joern.io) — **v4.0.458 or newer** (first 2026 release; needs a JVM) |
 | AFL++ | No | Coverage-guided binary fuzzing | `apt install afl++` or `brew install afl++` |

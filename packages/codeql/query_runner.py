@@ -12,7 +12,7 @@ import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
 
@@ -22,6 +22,8 @@ from typing import ClassVar
 # silently breaking under relocation.
 sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
+from core.analysis.rule_versions import rule_version_refusal
+from core.security.capped_read import read_capped_text
 from core.config import RaptorConfig
 from core.logging import get_logger
 from core.sandbox import SandboxSetupError
@@ -214,6 +216,7 @@ class QueryResult:
     errors: list[str]
     suite_name: str
     queries_executed: int = 0
+    skipped_rules: list[str] = field(default_factory=list)
 
 
 # `codeql database analyze --threat-model` first shipped in CLI 2.15.3.
@@ -871,12 +874,87 @@ class QueryRunner:
                 suite_name=suite_name,
             )
 
+    def _compatible_query_args(self, query_path: Path) -> tuple[list[str], list[str]]:
+        """Filter only explicitly incompatible queries; retain native suite selection."""
+        import json
+
+        from core.sandbox import run as sandbox_run
+
+        candidates = (sorted(query_path.rglob("*.ql")) if query_path.is_dir()
+                      else [query_path] if query_path.suffix == ".ql" else [])
+
+        def refusal(path: Path) -> str | None:
+            text = read_capped_text(path, 1024 * 1024, errors="strict")
+            if text is None:
+                return "rule skipped: requirement metadata unreadable"
+            return rule_version_refusal(text, self._codeql_version)
+
+        refused = {str(path.resolve()): reason for path in candidates
+                   if (reason := refusal(path)) is not None}
+        if not refused and query_path.suffix != ".qls":
+            return [str(query_path)], []
+        try:
+            resolved = sandbox_run(
+                temporary_command([self.codeql_cli, "resolve", "queries",
+                                   str(query_path), "--format=json"]),
+                block_network=True, tool_paths=self._sandbox_tool_paths(),
+                readable_paths=[str(query_path.resolve())],
+                capture_output=True, text=True, timeout=60,
+            )
+            # Resolver output is tool output; cap it before parsing.
+            if resolved.returncode or len(resolved.stdout) > 1024 * 1024:
+                raise ValueError("query resolution failed")
+            selected = json.loads(resolved.stdout)
+            if not isinstance(selected, list) or not all(isinstance(p, str) for p in selected):
+                raise ValueError("invalid query resolution")
+            selected = list(dict.fromkeys(selected))
+        except SandboxSetupError:
+            raise
+        except (OSError, ValueError, subprocess.SubprocessError, RecursionError):
+            return [], ["custom rules skipped: compatibility query selection unavailable"]
+        eligible, skipped = [], []
+        for name in selected:
+            path = Path(name)
+            reason = refusal(path)
+            if reason:
+                skipped.append(f"{name}: {reason}")
+            else:
+                eligible.append(f"path:{name}")
+        return eligible, skipped
+
     def run_custom_queries(
+        self, database_path: Path, query_path: Path, out_dir: Path, language: str,
+    ) -> QueryResult:
+        args, skipped = self._compatible_query_args(Path(query_path))
+        if not args:
+            self._log_rule_skips(skipped)
+            return QueryResult(
+                success=False, language=language, database_path=database_path,
+                sarif_path=None, findings_count=0, duration_seconds=0,
+                errors=["No compatible custom queries selected"],
+                suite_name="custom", skipped_rules=skipped,
+            )
+        result = self._run_compatible_custom_queries(
+            database_path, query_path, out_dir, language, query_args=args,
+        )
+        result.skipped_rules = skipped
+        self._log_rule_skips(skipped)
+        return result
+
+    @staticmethod
+    def _log_rule_skips(skipped: list[str]) -> None:
+        from core.security.log_sanitisation import escape_nonprintable
+
+        for reason in skipped:
+            logger.warning("%s", escape_nonprintable(reason))
+
+    def _run_compatible_custom_queries(
         self,
         database_path: Path,
         query_path: Path,
         out_dir: Path,
-        language: str
+        language: str,
+        *, query_args: list[str],
     ) -> QueryResult:
         """
         Run custom query pack against database.
@@ -905,7 +983,7 @@ class QueryRunner:
             "database",
             "analyze",
             str(database_path),
-            str(query_path),
+            *query_args,
             "--format=sarif-latest",
             f"--output={sarif_path}",
         ]
@@ -1257,8 +1335,32 @@ class QueryRunner:
     def _run_local_pack(
         self, lang: str, db: Path, pack_dir: Path, out_dir: Path,
         *, suite_name: str, sarif_name: str, label: str,
+        extra_analyze_args: tuple[str, ...] = (), skip_install: bool = False,
+    ) -> QueryResult:
+        args, skipped = self._compatible_query_args(Path(pack_dir))
+        if not args:
+            self._log_rule_skips(skipped)
+            return QueryResult(
+                success=False, language=lang, database_path=db, sarif_path=None,
+                findings_count=0, duration_seconds=0,
+                errors=["No compatible custom queries selected"],
+                suite_name=suite_name, skipped_rules=skipped,
+            )
+        result = self._run_selected_local_pack(
+            lang, db, pack_dir, out_dir, suite_name=suite_name,
+            sarif_name=sarif_name, label=label, extra_analyze_args=extra_analyze_args,
+            skip_install=skip_install, query_args=args,
+        )
+        result.skipped_rules = skipped
+        self._log_rule_skips(skipped)
+        return result
+
+    def _run_selected_local_pack(
+        self, lang: str, db: Path, pack_dir: Path, out_dir: Path,
+        *, suite_name: str, sarif_name: str, label: str,
         extra_analyze_args: tuple[str, ...] = (),
         skip_install: bool = False,
+        query_args: list[str],
     ) -> "QueryResult":
         """Per-language worker shared by `analyze_iris_packs` and
         `analyze_curated_packs` — lazy pack install followed by a
@@ -1352,7 +1454,7 @@ class QueryRunner:
         sarif_path = out_dir / sarif_name
         cmd = [
             self.codeql_cli, "database", "analyze",
-            str(db), str(pack_dir),
+            str(db), *query_args,
             "--format=sarif-latest",
             f"--output={sarif_path}",
             *extra_analyze_args,

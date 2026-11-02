@@ -1,3 +1,4 @@
+// raptor-min-version: 1.3.0
 // attr_deprecated.cocci — fire on functions marked with the
 // deprecated attribute. Signals that the function shouldn't be
 // called by new code; existing callers may be candidates for

@@ -3,7 +3,7 @@ probes behind the TOOL_DEPS version-display convention.
 
 Convention under test (stated at ``RaptorConfig.TOOL_DEPS``): the
 banner shows a tool's version IF AND ONLY IF RAPTOR gates behaviour
-on that version — semgrep and joern here; python/z3/gcc are covered
+on that version — semgrep, joern, coccinelle and codeql here; python/z3/gcc are covered
 by ``test_check_env_session.py`` / ``test_analyzer_probe.py``.
 
 All probes are stubbed — no real subprocesses, no PATH dependence.
@@ -68,8 +68,8 @@ class TestVersionDecoration:
         assert "semgrep" in names
         assert all(" " not in n for n in names)
 
-    def test_presence_only_tool_not_decorated(self):
-        # spatch found, but coccinelle is NOT version-gated.
+    def test_unknown_version_keeps_presence_display(self):
+        # A present tool remains visible when its version is unavailable.
         results, _, _ = _run_check_tools(on_path={"spatch", "semgrep"})
         assert ("coccinelle", True) in results
 
@@ -367,3 +367,45 @@ class TestCheckToolUpdates:
             "core.startup.init._semgrep_version", return_value=None,
         ):
             assert startup_init.check_tool_updates() == set()
+
+
+class TestRuleCompatibilityDisplay:
+    def test_old_versions_warn_without_disabling_tools(self):
+        results, warnings, unavailable = _run_check_tools(
+            on_path={"spatch", "semgrep", "codeql", "afl-fuzz"},
+            versions={"coccinelle": "1.1.1", "semgrep": "1.37.0", "codeql": "2.23.8"},
+            module_present=True,
+        )
+        assert ("coccinelle 1.1.1", True) in results
+        assert ("semgrep 1.37.0", True) in results
+        assert ("codeql 2.23.8", True) in results
+        assert any("1.38.0" in warning for warning in warnings)
+        assert any("skipped individually" in warning for warning in warnings)
+        assert not unavailable
+
+    def test_compatible_versions_have_no_version_limit_warning(self):
+        _, warnings, _ = _run_check_tools(
+            on_path={"spatch", "semgrep", "codeql", "afl-fuzz"},
+            versions={"coccinelle": "1.3", "semgrep": "1.177.0", "codeql": "2.23.8"},
+            module_present=True,
+        )
+        assert not warnings
+
+    def test_codeql_bootstrap_never_probed(self, tmp_path, monkeypatch):
+        bootstrap = tmp_path / "raptor-codeql-bootstrap"
+        bootstrap.write_text("#!/bin/sh\nexit 99\n")
+        link = tmp_path / "codeql"
+        link.symlink_to(bootstrap)
+        monkeypatch.setattr(startup_init.shutil, "which", lambda name: str(link))
+        with mock.patch.object(startup_init, "_cached_cli_version") as probe:
+            assert startup_init._tool_version("codeql") is None
+        probe.assert_not_called()
+
+    def test_new_version_displays_use_existing_probe_cache(self):
+        with mock.patch.object(startup_init, "_cached_cli_version", return_value="1.3.0") as probe:
+            assert startup_init._tool_version("coccinelle") == "1.3.0"
+        probe.assert_called_once_with("spatch")
+        with mock.patch.object(startup_init.shutil, "which", return_value="/tools/codeql"), \
+             mock.patch.object(startup_init, "_cached_cli_version", return_value="2.23.8") as probe:
+            assert startup_init._tool_version("codeql") == "2.23.8"
+        probe.assert_called_once_with("codeql")

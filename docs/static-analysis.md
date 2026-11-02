@@ -67,6 +67,58 @@ Semgrep pass (`--expanded-semgrep`).
 | `--audit-budget <n>` | 10000 | Override audit-record cap |
 
 
+## Rule version requirements
+
+The startup banner shows installed Semgrep, Coccinelle and CodeQL versions.
+It warns about known compatibility limitations without disabling an entire
+backend. Tool-wide capability requirements and individual rule requirements
+are separate: a version that cannot run one rule may still run others.
+
+An older tool can still run compatible rules. Rules with a declared minimum
+are skipped individually when the tool is too old; their absence is a coverage
+limitation, not a clean result. Upgrade the affected tool to restore coverage.
+An unknown tool version also skips rules that declare a requirement. Rules
+without a declaration keep their existing behavior; this does not prove they
+are compatible with every version.
+
+Semgrep rules use the native [`min-version` field](https://docs.semgrep.dev/writing-rules/rule-syntax#min-version-and-max-version),
+which Semgrep supports from version 1.38.0:
+
+```yaml
+rules:
+  - id: example
+    min-version: "1.38.0"
+    languages: [python]
+    pattern: dangerous_call(...)
+    message: Review this call
+    severity: WARNING
+```
+
+For a custom Coccinelle rule or CodeQL query, put this declaration in its
+leading `//` comment header, before the rule or query documentation:
+
+```c
+// raptor-min-version: 1.3.0
+```
+
+Use the actual minimum required by that rule, written as `major.minor.patch`.
+The example is a spatch version; a CodeQL query must declare a CodeQL CLI
+version instead. A declaration applies to one `.cocci` or `.ql` file, not the
+whole backend. CodeQL library compatibility must also be satisfied by the
+query pack's dependencies. Imported `.qll` files do not inherit their own
+runtime gates; the executable query must declare its requirements.
+
+Skipped Coccinelle rules appear in their per-rule error records. Semgrep keeps
+native incompatibility notices in its JSON output and exposes them as
+`skipped_rules` in its package results. Custom CodeQL results include
+`skipped_rules`, also retained in the workflow report. Other compatible rules
+continue to produce findings. If every selected CodeQL query is incompatible,
+the query result is unsuccessful rather than an empty successful scan.
+
+A minimum requirement and a tested version mean different things. Declare a
+minimum when a required construct or API establishes it; do not assign the
+current CI version to every rule just because that version passes the tests.
+
 ## Semgrep Rules
 
 ### Rule Categories

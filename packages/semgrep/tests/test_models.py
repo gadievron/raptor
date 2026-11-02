@@ -623,3 +623,24 @@ def test_decoded_sarif_matches_text_parser_without_reserializing():
     assert expected[0].level == "error"
     assert parse_sarif_data(data) == expected
     assert parse_sarif_data([]) == []
+
+
+def test_incompatible_rule_info_is_preserved_without_failing_compatible_rules():
+    import json
+
+    from packages.semgrep.models import SemgrepResult, parse_json_output
+
+    notice = {
+        "type": ["IncompatibleRule", {"rule_id": "requires-new-tool"}],
+        "level": "info", "rule_id": "requires-new-tool",
+        "message": "Rule requires Semgrep >= 999.0.0",
+        "path": "rules.yml",
+    }
+    parsed = parse_json_output(json.dumps({"errors": [notice]}))
+    assert len(parsed["skipped_rules"]) == 1
+    assert "999.0.0" in parsed["skipped_rules"][0]
+    assert parsed["errors"] == []
+    assert parsed["files_failed"]
+    result = SemgrepResult(skipped_rules=parsed["skipped_rules"])
+    assert result.ok
+    assert result.to_dict()["skipped_rules"] == parsed["skipped_rules"]

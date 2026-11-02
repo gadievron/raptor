@@ -29,6 +29,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from core.analysis.rule_versions import rule_version_refusal
 from core.config import RaptorConfig
 from core.run.scratch import scratch_dir
 from core.run.toolprobe import probe
@@ -628,6 +629,12 @@ def run_rule(
             returncode=-1,
         )
 
+    refusal = rule_version_refusal(rule_text, version)
+    if refusal:
+        return SpatchResult(
+            rule=rule_name, rule_path=str(rule), errors=[refusal], returncode=-1,
+        )
+
     # Scripting gate — refuse before any tempfile write or spatch
     # invocation. See contains_script_block / allow_scripting docs.
     if not allow_scripting and contains_script_block(rule_text):
@@ -1124,6 +1131,12 @@ def run_rules_batched(
                     f"Rule file unreadable (must be UTF-8 text): {e}",
                 ],
                 returncode=-1,
+            )
+            continue
+        refusal = rule_version_refusal(text, version)
+        if refusal:
+            refused[r.stem] = SpatchResult(
+                rule=r.stem, rule_path=str(r), errors=[refusal], returncode=-1,
             )
             continue
         # Scripting + marker gates — same policy as run_rule, applied

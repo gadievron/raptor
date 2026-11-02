@@ -2408,6 +2408,11 @@
     "count": 59,
     "kind": "literal"
   },
+  "packages/codeql/agent.py::to_dict": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Serialized CodeQL query-result schema, not a learned name vocabulary; skipped_rules records per-query compatibility exclusions."
+  },
   "packages/codeql/autonomous_analyzer.py::VULNERABILITY_ANALYSIS_SCHEMA": {
     "count": 10,
     "kind": "literal"
@@ -3114,8 +3119,9 @@
     "kind": "literal"
   },
   "packages/semgrep/models.py::to_dict": {
-    "count": 11,
-    "kind": "literal"
+    "count": 12,
+    "kind": "literal",
+    "note": "Serialized result schema, not a learned name vocabulary; skipped_rules preserves native per-rule version exclusions."
   },
   "packages/source_intel/adapter.py::_DYNAMIC_ALLOCATORS_PATTERN": {
     "count": 24,
