@@ -180,3 +180,128 @@ def test_transient_verified_bytes_link_context_without_becoming_notice_files():
     context = data[3][0]['distro_owner_context']['checksum_matched_notices'][0]
     assert context['matched_locations'][0]['verification'] == 'verified_image_bytes_match_inventory_checksum'
     assert data[3][0]['files'] == [] and data[3][0]['status'] == 'metadata_only'
+
+
+def python_inputs():
+    import base64
+    data = inputs()
+    child, owner = data[0]['artifacts']
+    child['type'] = 'binary'
+    owner['type'] = 'python'
+    owner['name'] = 'enclosing-wheel'
+    owner['locations'] = [{'path': '/node_modules/enclosing.dist-info/METADATA', 'layerID': ORIGIN}]
+    owner['metadata']['sitePackagesRootPath'] = '/node_modules'
+    raw = next(iter(data[2].values()))
+    owner['metadata']['files'] = [{'path': 'child/package.json', 'size': str(len(raw)), 'digest': {
+        'algorithm': 'sha256', 'value': base64.urlsafe_b64encode(hashlib.sha256(raw).digest()).rstrip(b'=').decode()}}]
+    data[0]['files'] = [{'location': {'path': PATH, 'layerID': ORIGIN},
+                        'metadata': {'type': 'RegularFile', 'size': len(raw)},
+                        'digests': [{'algorithm': 'sha256', 'value': hashlib.sha256(raw).hexdigest()}]}]
+    return data
+
+
+def test_python_record_catalogue_match_is_explicit_and_never_closes_own_gap():
+    data = python_inputs()
+    data[1].clear()
+    original = deepcopy(data)
+    stats = apply(data, owner_kind='python')
+    assert stats['packages_with_checksum_matched_notice_context'] == 1
+    child = data[3][0]
+    context = child['python_record_owner_context']['checksum_matched_notices'][0]
+    location = context['matched_locations'][0]
+    assert location['verification'] == 'catalogue_sha256_matches_python_record'
+    assert location['catalogue_sha256'] == data[0]['files'][0]['digests'][0]['value']
+    assert 'captured_sha256' not in location and 'layer_blob_digest' not in location
+    assert context['scope'] == 'enclosing_python_distribution_notice_context; component_coverage_unreviewed'
+    assert child['status'] == original[3][0]['status']
+    assert child['files'] == original[3][0]['files'] and child['gaps'] == original[3][0]['gaps']
+    assert data[:3] == original[:3] and data[3][1] == original[3][1]
+    assert 'distro_owner_context' not in child
+
+
+def test_python_record_captured_and_verified_bytes_take_precedence_over_catalogue_claim():
+    for transient in (False, True):
+        data = python_inputs()
+        data[0]['files'][0]['digests'][0]['value'] = '0' * 64
+        kwargs = {}
+        if transient:
+            row = data[1].pop()
+            kwargs['verified_files'] = {(PATH, ORIGIN): (row, data[2][row['sha256']])}
+        assert apply(data, owner_kind='python', **kwargs)['packages_with_checksum_matched_notice_context'] == 1
+        loc = data[3][0]['python_record_owner_context']['checksum_matched_notices'][0]['matched_locations'][0]
+        assert loc['verification'] == ('verified_image_bytes_match_inventory_checksum' if transient
+                                       else 'captured_bytes_match_inventory_checksum')
+
+
+@pytest.mark.parametrize('change,expected', [
+    ('checksum', 'inventory_checksum_mismatch'), ('size', 'inventory_size_mismatch'),
+    ('invalid_size', 'invalid_inventory_size'), ('missing_size', 'invalid_inventory_size'),
+    ('digest', 'invalid_inventory_checksum'), ('noncanonical_digest', 'invalid_inventory_checksum'),
+    ('algorithm', 'unsupported_inventory_checksum'), ('missing_digest', 'inventory_checksum_unavailable'),
+    ('symlink', 'catalogue_file_not_regular'), ('no_native', 'captured_bytes_unavailable'),
+    ('native_digest', 'invalid_catalogue_checksum'), ('duplicate', 'conflicting_inventory_claims'),
+])
+def test_python_record_invalid_or_unverified_claims_remain_leads(change, expected):
+    data = python_inputs()
+    data[1].clear()
+    entry = data[0]['artifacts'][1]['metadata']['files'][0]
+    native_file = data[0]['files'][0]
+    if change == 'checksum': native_file['digests'][0]['value'] = '0' * 64
+    elif change == 'size': native_file['metadata']['size'] += 1
+    elif change == 'invalid_size': entry['size'] = '-1'
+    elif change == 'missing_size': entry.pop('size')
+    elif change == 'digest': entry['digest']['value'] = 'not a digest'
+    elif change == 'noncanonical_digest': entry['digest']['value'] = entry['digest']['value'][:-1] + '_'
+    elif change == 'algorithm': entry['digest'] = {'algorithm': 'md5', 'value': '0' * 32}
+    elif change == 'missing_digest': entry.pop('digest')
+    elif change == 'symlink': native_file['metadata']['type'] = 'SymbolicLink'
+    elif change == 'no_native': data[0]['files'] = []
+    elif change == 'native_digest': native_file['digests'][0]['value'] = 'invalid'
+    elif change == 'duplicate':
+        other = deepcopy(entry); other['size'] = '0'
+        data[0]['artifacts'][1]['metadata']['files'].append(other)
+    stats = apply(data, owner_kind='python')
+    assert stats['packages_with_checksum_matched_notice_context'] == 0
+    ctx = data[3][0]['python_record_owner_context']
+    assert ctx['unresolved_locations'][0]['candidates'][0]['verification'] == expected
+
+
+@pytest.mark.parametrize('path', ['../child/package.json', '/node_modules/child/package.json',
+                                 'child/../child/package.json', 'child//package.json',
+                                 'child/./package.json', 'child\\package.json'])
+def test_python_record_never_normalizes_unsafe_or_external_paths(path):
+    data = python_inputs()
+    data[0]['artifacts'][1]['metadata']['files'][0]['path'] = path
+    assert apply(data, owner_kind='python')['packages_with_checksum_matched_notice_context'] == 0
+    assert 'python_record_owner_context' not in data[3][0]
+
+
+def test_python_record_does_not_link_other_layer_or_nonbinary_occurrences():
+    for change in ('owner_layer', 'file_layer', 'nonbinary', 'supporting'):
+        data = python_inputs()
+        if change == 'owner_layer': data[0]['artifacts'][1]['locations'][0]['layerID'] = 'sha256:' + 'f' * 64
+        elif change == 'file_layer':
+            data[1].clear(); data[0]['files'][0]['location']['layerID'] = 'sha256:' + 'f' * 64
+        elif change == 'nonbinary': data[0]['artifacts'][0]['type'] = 'npm'
+        else: data[0]['artifacts'][0]['locations'][0]['annotations']['evidence'] = 'supporting'
+        assert apply(data, owner_kind='python')['packages_with_checksum_matched_notice_context'] == 0
+
+
+def test_python_record_matching_multiple_enclosing_distributions_is_ambiguous():
+    data = python_inputs()
+    data[1].clear()
+    other = deepcopy(data[0]['artifacts'][1]); other['id'] = 'other-owner'
+    data[0]['artifacts'].append(other)
+    data[3].append({**deepcopy(data[3][1]), 'id': 'other-owner'})
+    assert apply(data, owner_kind='python')['ambiguous_locations'] == 1
+    assert not data[3][0]['python_record_owner_context']['checksum_matched_notices']
+
+
+def test_python_record_limits_and_missing_parent_notices():
+    with pytest.raises(ValueError, match='association budget'):
+        add_owner_context(*python_inputs(), owner_kind='python', limit=1)
+    with pytest.raises(ValueError, match='text budget'):
+        apply(python_inputs(), owner_kind='python', max_chars=1)
+    data = python_inputs(); data[3][1]['files'] = []
+    apply(data, owner_kind='python')
+    assert data[3][0]['python_record_owner_context']['unresolved_locations'][0]['reason'] == 'matched_owner_has_no_notice_candidate'

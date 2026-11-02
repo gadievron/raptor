@@ -445,3 +445,44 @@ def test_cli_offline_owner_verification_measures_without_persisting_binary(fixtu
     with pytest.raises(ValueError):
         tool.main()
     assert not failed.exists()
+
+
+def test_python_record_context_exports_separately_and_preserves_claims(fixture):
+    root, native, _, report, cdx, spdx = fixture
+    payload = b'executable bytes'
+    identity = report['files'][-1]
+    identity['path'] = '/opt/python/vendor/tool'
+    native['files'][-1]['location']['path'] = identity['path']
+    identifier = 'd' * 16
+    purl = 'pkg:generic/tool@1'
+    child = {'id': identifier, 'name': 'tool', 'version': '1', 'type': 'binary', 'purl': purl,
+             'locations': [{'path': identity['path'], 'layerID': identity['catalogue_layer_diff_id']}], 'licenses': []}
+    native['artifacts'].append(child)
+    parent = native['artifacts'][0]
+    parent['metadata'] = {'sitePackagesRootPath': '/opt/python', 'files': [
+        {'path': 'vendor/tool', 'size': str(len(payload)), 'digest': {'algorithm': 'sha256',
+            'value': base64.urlsafe_b64encode(hashlib.sha256(payload).digest()).rstrip(b'=').decode()}}]}
+    report['packages'].append({k: deepcopy(child[k]) for k in ('id', 'name', 'version', 'type', 'purl', 'licenses')})
+    digest = sha(json.dumps(native).encode()); report['catalogue_sha256'] = digest
+    cdx['components'].append({'bom-ref': identifier, 'type': 'application', 'name': 'tool', 'version': '1', 'purl': purl})
+    cdx['dependencies'].append({'ref': identifier, 'dependsOn': []})
+    spdx['packages'].append({'SPDXID': 'SPDXRef-Package-' + identifier, 'name': 'tool', 'versionInfo': '1',
+        'filesAnalyzed': False, 'downloadLocation': 'NOASSERTION', 'licenseDeclared': 'NOASSERTION', 'licenseConcluded': 'NOASSERTION',
+        'externalRefs': [{'referenceCategory': 'PACKAGE-MANAGER', 'referenceType': 'purl', 'referenceLocator': purl}]})
+    summary, blobs = load_notices(root, native, digest, report)
+    original = deepcopy((native, summary, cdx, spdx))
+    c, s, provenance = tool.prepare(native, cdx, spdx, {'version': 1, 'sources': []}, notice_summary=summary)
+    assert original == (native, summary, cdx, spdx)
+    record = provenance['notice_evidence']['packages'][-1]
+    context = record['python_record_owner_context']['checksum_matched_notices'][0]
+    assert context['owner_cyclonedx_ref'] == c['components'][0]['bom-ref']
+    assert context['owner_spdx_id'] == s['packages'][1]['SPDXID']
+    assert context['owner_purl'] == c['components'][0]['purl']
+    assert record['status'] == 'no_associated_evidence' and record['files'] == [] and record['gaps']
+    assert provenance['notice_evidence']['python_record_owner_statistics']['packages_with_checksum_matched_notice_context'] == 1
+    assert payload not in blobs.values() and identity['sha256'] not in blobs
+    assert c['components'][-1].get('licenses') is None
+    assert s['packages'][-1]['licenseDeclared'] == 'NOASSERTION' and s['packages'][-1]['licenseConcluded'] == 'NOASSERTION'
+    assert c['dependencies'] == cdx['dependencies'] and s['relationships'] == spdx['relationships']
+    assert 'python_record_owner_context' in s['packages'][-1]['comment']
+    assert any('Enclosing Python distribution' in x.get('comment', '') for x in c['components'][-1]['externalReferences'])

@@ -1,4 +1,4 @@
-"""Enclosing distro-package notice context, scoped to checksum-matched files.
+"""Enclosing package notice context, scoped to checksum-matched files.
 
 Inventory checksums (including MD5) support correspondence to an unsigned file
 inventory. They do not attest ownership, establish component-specific licence
@@ -6,30 +6,81 @@ coverage, or justify inheriting the enclosing package's licence declaration.
 """
 from __future__ import annotations
 
+import base64
+import binascii
 from collections import defaultdict
 from copy import deepcopy
 import hashlib
+from pathlib import PurePosixPath
 import re
 
 from core.oci.notice_paths import image_path
 
-_MATCHED = frozenset({'captured_bytes_match_inventory_checksum', 'verified_image_bytes_match_inventory_checksum'})
+_MATCHED = frozenset({'captured_bytes_match_inventory_checksum', 'verified_image_bytes_match_inventory_checksum',
+                      'catalogue_sha256_matches_python_record'})
 
 _LENGTHS = {'md5': 32, 'sha1': 40, 'sha256': 64, 'sha512': 128}
 
 
+def _inventory_entries(artifact: dict, kind: str):
+    """Normalize package-local Python RECORD entries without following aliases."""
+    metadata = artifact.get('metadata') or {}
+    if kind == 'deb':
+        yield from metadata.get('files', [])
+        return
+    root = metadata.get('sitePackagesRootPath')
+    try:
+        image_path(root)
+    except ValueError:
+        return
+    if not any(str(PurePosixPath(loc.get('path', '')).parent.parent) == root
+               and PurePosixPath(loc.get('path', '')).parent.name.endswith(('.dist-info', '.egg-info'))
+               and PurePosixPath(loc.get('path', '')).name in {'METADATA', 'PKG-INFO'}
+               for loc in artifact.get('locations', [])):
+        return
+    for entry in metadata.get('files', []):
+        relative = entry.get('path')
+        if not isinstance(relative, str) or relative.startswith('/'):
+            continue
+        try:
+            path = image_path(root + '/' + relative)
+        except ValueError:
+            # RECORD scripts outside site-packages (../...) are out of scope.
+            continue
+        digest = entry.get('digest')
+        if isinstance(digest, dict) and digest.get('algorithm') == 'sha256':
+            value = digest.get('value')
+            try:
+                if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9_-]{43}=?', value):
+                    raise ValueError('invalid RECORD SHA-256')
+                raw = base64.b64decode(value + '=' * (-len(value) % 4), altchars=b'-_', validate=True)
+                if len(raw) != 32 or base64.urlsafe_b64encode(raw).rstrip(b'=').decode() != value.rstrip('='):
+                    raise ValueError('noncanonical RECORD SHA-256')
+                digest = {'algorithm': 'sha256', 'value': raw.hex()}
+            except (ValueError, binascii.Error):
+                digest = 'invalid RECORD SHA-256'
+        yield {'path': path, 'digest': digest, 'size': entry.get('size')}
+
+
 def add_owner_context(native: dict, rows: list[dict], blobs: dict[str, bytes],
-                      records: list[dict], *, limit: int, verified_files: dict | None = None, max_chars: int = 8 * 1024 * 1024) -> dict:
+                      records: list[dict], *, limit: int, verified_files: dict | None = None,
+                      max_chars: int = 8 * 1024 * 1024, owner_kind: str = 'deb') -> dict:
     """Add context to fresh association records, retaining their own statuses/gaps.
 
     Call after capture validation. Read no files, follow no aliases, and use only
-    the exact captured path/layer pair. Ambiguous or conflicting inventories and
-    unavailable bytes remain leads without automatic parent-notice links.
+    the exact path/layer pair. Python RECORD checks can also use native catalogue
+    SHA-256/size claims, with an explicit catalogue-only verification label.
+    Ambiguous or conflicting inventories remain leads without parent-notice links.
     """
+    if owner_kind not in {'deb', 'python'}:
+        raise ValueError('unsupported enclosing owner kind')
+    context_key = 'distro_owner_context' if owner_kind == 'deb' else 'python_record_owner_context'
+    owner_scope = 'distro_package' if owner_kind == 'deb' else 'python_distribution'
     verified_files = verified_files or {}
     artifacts = {a['id']: a for a in native['artifacts']}
     by_id = {r['id']: r for r in records}
     captured = {(r['path'], r['catalogue_layer_diff_id']): r for r in rows}
+    native_files = {(f['location']['path'], f['location']['layerID']): f for f in native.get('files', [])}
     targets = {}
     target_paths = set()
     count = 0
@@ -54,7 +105,8 @@ def add_owner_context(native: dict, rows: list[dict], blobs: dict[str, bytes],
 
     for record in records:
         artifact = artifacts[record['id']]
-        if artifact['type'] == 'deb' or record['status'] == 'notice_candidate_captured':
+        if (artifact['type'] == 'deb' or record['status'] == 'notice_candidate_captured'
+                or (owner_kind == 'python' and artifact['type'] != 'binary')):
             continue
         locations = artifact.get('locations', [])
         primary = [loc for loc in locations if (loc.get('annotations') or {}).get('evidence') == 'primary']
@@ -66,9 +118,9 @@ def add_owner_context(native: dict, rows: list[dict], blobs: dict[str, bytes],
         target_paths.update(path for path, _ in keys)
     inventories = defaultdict(dict)
     for artifact in native['artifacts']:
-        if artifact['type'] != 'deb':
+        if artifact['type'] != owner_kind:
             continue
-        for entry in (artifact.get('metadata') or {}).get('files', []):
+        for entry in _inventory_entries(artifact, owner_kind):
             path = entry.get('path')
             if not isinstance(path, str) or path not in target_paths:
                 continue
@@ -78,11 +130,12 @@ def add_owner_context(native: dict, rows: list[dict], blobs: dict[str, bytes],
             algorithm, value = digest.get('algorithm'), digest.get('value')
             claim = {'algorithm': algorithm.lower() if isinstance(algorithm, str) else '',
                      'value': value.lower() if isinstance(value, str) else ''}
+            size = entry.get('size') if owner_kind == 'python' else None
             existing = inventories[path].get(artifact['id'])
             if existing is None:
                 charge(payload=claim)
-                inventories[path][artifact['id']] = {'digest': claim, 'conflicting': False, 'malformed': malformed}
-            elif existing['digest'] != claim or existing['malformed'] != malformed:
+                inventories[path][artifact['id']] = {'digest': claim, 'conflicting': False, 'malformed': malformed, 'size': size}
+            elif existing['digest'] != claim or existing['malformed'] != malformed or existing['size'] != size:
                 existing['conflicting'] = True
     checksum_cache = {}
     statistics = {'packages_with_checksum_matched_notice_context': 0,
@@ -91,6 +144,9 @@ def add_owner_context(native: dict, rows: list[dict], blobs: dict[str, bytes],
         linked, unresolved = {}, []
         for path, origin in locations:
             owners = inventories.get(path, {})
+            if owner_kind == 'python':
+                owners = {i: inv for i, inv in owners.items() if origin in {
+                    loc.get('layerID') for loc in artifacts[i].get('locations', [])}}
             if not owners:
                 continue
             charge(0, payload=[path, origin])
@@ -118,8 +174,29 @@ def add_owner_context(native: dict, rows: list[dict], blobs: dict[str, bytes],
                     status = 'unsupported_inventory_checksum'
                 elif not re.fullmatch(r'[0-9a-f]{' + str(_LENGTHS[algorithm]) + r'}', expected):
                     status = 'invalid_inventory_checksum'
+                elif owner_kind == 'python' and algorithm != 'sha256':
+                    status = 'unsupported_inventory_checksum'
+                elif owner_kind == 'python' and (not isinstance(inventory['size'], str)
+                        or not re.fullmatch(r'[0-9]{1,12}', inventory['size'])):
+                    status = 'invalid_inventory_size'
+                elif owner_kind == 'python' and data is not None and len(data) != int(inventory['size']):
+                    status = 'inventory_size_mismatch'
                 elif data is None:
                     status = 'captured_bytes_unavailable'
+                    if owner_kind == 'python':
+                        file = native_files.get((path, origin), {})
+                        digests = {d['value'] for d in file.get('digests', []) if d.get('algorithm') == 'sha256'}
+                        if digests:
+                            metadata = file.get('metadata', {})
+                            if metadata.get('type') != 'RegularFile':
+                                status = 'catalogue_file_not_regular'
+                            elif metadata.get('size') != int(inventory['size']):
+                                status = 'inventory_size_mismatch'
+                            elif len(digests) != 1 or not re.fullmatch(r'[0-9a-f]{64}', next(iter(digests))):
+                                status = 'invalid_catalogue_checksum'
+                            else:
+                                status = ('catalogue_sha256_matches_python_record' if expected in digests
+                                          else 'inventory_checksum_mismatch')
                 else:
                     cache_key = row['sha256'], algorithm
                     if cache_key not in checksum_cache:
@@ -131,6 +208,8 @@ def add_owner_context(native: dict, rows: list[dict], blobs: dict[str, bytes],
                 candidate = {'owner_package_id': owner_id, 'owner_name': owner['name'],
                              'owner_version': owner.get('version', ''), 'inventory_digest': deepcopy(digest),
                              'verification': status}
+                if owner_kind == 'python':
+                    candidate['inventory_size'] = inventory['size']
                 charge(0, payload=candidate)
                 candidates.append(candidate)
                 if status in _MATCHED:
@@ -150,13 +229,17 @@ def add_owner_context(native: dict, rows: list[dict], blobs: dict[str, bytes],
                         context = linked[owner_id] = {k: match[k] for k in ('owner_package_id', 'owner_name', 'owner_version')}
                         context.update(files=deepcopy(notices), matched_locations=[],
                                        owner_notice_gaps=deepcopy(by_id[owner_id]['gaps']),
-                                       scope='enclosing_distro_package_notice_context; component_coverage_unreviewed')
+                                       scope='enclosing_' + owner_scope + '_notice_context; component_coverage_unreviewed')
                     charge(0, payload=candidates)
-                    context['matched_locations'].append({'path': path, 'catalogue_layer_diff_id': origin,
-                        'layer_blob_digest': row['layer_blob_digest'], 'visibility': row['visibility'],
+                    location = {'path': path, 'catalogue_layer_diff_id': origin,
                         'inventory_candidates': deepcopy(candidates),
-                        'captured_sha256': row['sha256'], 'inventory_digest': deepcopy(match['inventory_digest']),
-                        'verification': match['verification']})
+                        'inventory_digest': deepcopy(match['inventory_digest']), 'verification': match['verification']}
+                    if match['verification'] == 'catalogue_sha256_matches_python_record':
+                        location.update(catalogue_sha256=match['inventory_digest']['value'], visibility='catalogue_location')
+                    else:
+                        location.update(layer_blob_digest=row['layer_blob_digest'], visibility=row['visibility'],
+                                        captured_sha256=row['sha256'])
+                    context['matched_locations'].append(location)
                     continue
                 reason = 'matched_owner_has_no_notice_candidate'
             else:
@@ -166,7 +249,7 @@ def add_owner_context(native: dict, rows: list[dict], blobs: dict[str, bytes],
             unresolved.append({'path': path, 'catalogue_layer_diff_id': origin,
                                'reason': reason, 'candidates': candidates})
         if linked or unresolved:
-            by_id[identifier]['distro_owner_context'] = {
+            by_id[identifier][context_key] = {
                 'checksum_matched_notices': [linked[k] for k in sorted(linked)], 'unresolved_locations': unresolved,
                 'scope': 'inventory correspondence and enclosing notices; component-specific terms remain unreviewed'}
             statistics['packages_with_checksum_matched_notice_context'] += bool(linked)
