@@ -250,6 +250,8 @@ def associate(native: dict, image: dict, rows: list[dict], blobs: dict[str, byte
                      if any(c["verification"] == "captured_bytes_unavailable"
                             and any(f["content_kind"] == "notice_candidate" for f in by_id[c["owner_package_id"]]["files"])
                             for c in loc["candidates"])}
+        from packages.sca.sbom_java_license_evidence import reviewed_java_locations
+        locations.update(reviewed_java_locations(native))
         from core.oci.evidence import read_identity_files
         verified = read_identity_files(native, owner_reader, locations)
         for package in packages:
@@ -258,6 +260,32 @@ def associate(native: dict, image: dict, rows: list[dict], blobs: dict[str, byte
         owner_statistics = add_owner_context(native, rows, blobs, packages, limit=MAX_ASSOCIATIONS, verified_files=verified)
         python_statistics = add_owner_context(native, rows, blobs, packages, limit=MAX_ASSOCIATIONS,
                                               verified_files=verified, owner_kind='python')
+        from packages.sca.sbom_java_license_evidence import recover_java_license
+        for artifact in native['artifacts']:
+            package = by_id[artifact['id']]
+            recovered = recover_java_license(artifact, package, verified, native, rows, blobs)
+            if recovered is None:
+                continue
+            declaration, notices = recovered
+            package['recovered_component_license'] = declaration
+            keys = {(row['path'], row['catalogue_layer_diff_id']) for row in package['files']}
+            for notice in notices:
+                key = notice['path'], notice['catalogue_layer_diff_id']
+                if key in keys:
+                    continue
+                association_count += 1
+                if association_count > MAX_ASSOCIATIONS:
+                    raise ValueError('notice association count exceeds memory budget')
+                keys.add(key)
+                associated.add(key)
+                entry = {key: deepcopy(notice[key]) for key in (
+                    'path', 'layer_blob_digest', 'catalogue_layer_diff_id', 'sha256', 'size',
+                    'notice_file', 'content_kind', 'visibility')}
+                entry['reasons'] = ['reviewed_component_source_notice']
+                package['files'].append(entry)
+            package['files'].sort(key=lambda row: (row['path'], row['catalogue_layer_diff_id']))
+            package['status'] = 'notice_candidate_captured'
+            package['gaps'] = [gap for gap in package['gaps'] if gap != 'no associated notice candidate; licence text completeness is unverified']
         measurements = [verified[key][0] for key in sorted(verified)]
     return {"version": 1, "subject": image, "common_license_aliases": list(common_license_aliases), "packages": packages, "owner_file_verification": measurements, "distro_owner_statistics": owner_statistics,
             "python_record_owner_statistics": python_statistics,
@@ -278,7 +306,7 @@ def append_notices(cdx: dict, spdx: dict, components: dict, packages: dict, summ
             context["owner_spdx_id"] = packages[owner_id]["SPDXID"]
             if components[owner_id].get("purl"):
                 context["owner_purl"] = components[owner_id]["purl"]
-        declaration = record.get("recovered_distribution_license")
+        declaration = record.get("recovered_component_license") or record.get("recovered_distribution_license")
         if declaration:
             component["licenses"] = [{"expression": declaration["expression"]}]
             package["licenseDeclared"] = declaration["expression"]
