@@ -2776,7 +2776,12 @@ def _run_ensemble_audit(
         pass_stamp.update(checkpoint_extra)
 
     # --- Worker budget: full for each sequential pass ---
-    resolved_model = model or "default"
+    resolved_label = _resolve_model_label(model)
+    resolved_model = (
+        resolved_label.rsplit("/", 1)[-1]
+        if "/" in resolved_label
+        else (model or "default")
+    )
     full_workers = derive_max_workers(resolved_model)
     print(f"  Ensemble concurrency: {full_workers} workers per pass",
           flush=True)
