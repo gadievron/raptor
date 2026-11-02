@@ -467,11 +467,15 @@ def test_graph_and_source_budget_do_not_dispatch_without_consumer(tmp_path):
 
 
 def test_prompt_budget_shedding_receipt():
+    """Priority-0 cross_entry_analysis stays in kept (tail-truncated, not shed)."""
     from core.audit.context import format_context_for_prompt
     ctx = {"file":"a.c","function":"f","line_start":1,"source":"int f(void) { return 0; }",
            "cross_entry_analysis":"candidate "*5000}
     format_context_for_prompt(ctx,budget_limit=500)
-    assert ctx["cross_entry_rendered"] is False
+    assert ctx["cross_entry_rendered"] is True
+    event = ctx.get("prompt_budget_event")
+    assert event is not None, "over-budget elision should record a budget event"
+    assert event["overshoot_tokens"] >= 0
 
 
 def test_scalar_arguments_do_not_imply_mutable_object_effects():
