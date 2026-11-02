@@ -477,9 +477,12 @@ jobs:
         uses: ./.github/actions/setup-venv
 
       - name: Verify sandboxed custom-pack dependency discovery
+        env:
+          CODEQL_CLI: ${{ runner.temp }}/java-log-codeql/codeql/codeql
         run: |
           set -euo pipefail
           source "$VENV_PATH/bin/activate"
+          "$CODEQL_CLI" version
           python -m pytest packages/codeql/tests/test_pack_dependency_resolution.py -m integration -q \
             --junitxml="$RUNNER_TEMP/codeql-dependencies.xml"
           python - "$RUNNER_TEMP/codeql-dependencies.xml" <<'PY'

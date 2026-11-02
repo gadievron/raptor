@@ -8,6 +8,7 @@ import sys
 import pytest
 
 from core.sandbox import run
+from packages.codeql import _resolve_cli
 from packages.codeql.query_runner import QueryRunner
 from packages.codeql.temp_env import temporary_command
 from packages.codeql.tool_paths import codeql_tool_paths
@@ -16,7 +17,7 @@ from packages.codeql.tool_paths import codeql_tool_paths
 @pytest.mark.integration
 @pytest.mark.parametrize("language", ["cpp", "java"])
 def test_bundled_workspace_resolves_transitive_dependencies(tmp_path, monkeypatch, language):
-    native = shutil.which("codeql")
+    native = _resolve_cli()
     if not native:
         pytest.skip("CodeQL CLI required")
     if sys.platform != "linux":
