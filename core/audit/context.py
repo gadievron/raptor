@@ -1741,7 +1741,7 @@ def format_context_for_prompt(
                 kind="cross-entry-analysis",
                 origin="audit-cross-entry-study",
             ),
-            1,
+            0,
         ))
 
     if ctx.get("co_accessor_analysis"):

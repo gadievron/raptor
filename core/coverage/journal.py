@@ -659,6 +659,8 @@ class ReviewJournalEntry:
     # sidecar is unavailable. Additive; absent on non-stub rows.
     body_offload: dict | None = None
     from_composition: bool | None = None
+    cross_entry_rendered: bool | None = None
+    cross_entry_receipt: dict | None = None
     schema_version: int = SCHEMA_VERSION
 
     @property
@@ -2787,6 +2789,8 @@ def _entry_from_validated(
         integrity=raw.get("integrity"),
         body_offload=raw.get("body_offload"),
         from_composition=raw.get("from_composition"),
+        cross_entry_rendered=raw.get("cross_entry_rendered"),
+        cross_entry_receipt=raw.get("cross_entry_receipt"),
         clean_basis=raw.get("clean_basis"),
         schema_version=version,
     )
