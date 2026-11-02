@@ -59,7 +59,12 @@ def _write_tree(root: Path, files: dict[str, str]) -> None:
 
 
 @pytest.fixture()
-def dirs(tmp_path) -> tuple[Path, Path]:
+def dirs(tmp_path, monkeypatch) -> tuple[Path, Path]:
+    # The real inventory builder uses HOME for persistent checklists and
+    # XDG directories for caches and integrity keys. Keep them outside target.
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg-cache"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
     target = tmp_path / "target"
     out = tmp_path / "out"
     target.mkdir()

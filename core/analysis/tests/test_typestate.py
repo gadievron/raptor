@@ -57,7 +57,13 @@ class TestChecklistJoinContract:
     that masked the dead checklist leg.
     """
 
-    def test_real_inventory_checklist_discovers_pairs(self, tmp_path) -> None:
+    def test_real_inventory_checklist_discovers_pairs(
+        self, tmp_path, monkeypatch,
+    ) -> None:
+        # The real producer persists inventories and integrity keys.
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg-cache"))
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
         src = tmp_path / "src"
         src.mkdir()
         (src / "conn.c").write_text(
