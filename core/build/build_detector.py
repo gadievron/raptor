@@ -24,6 +24,7 @@ from core.logging import get_logger
 from core.sandbox import SandboxSetupError
 from core.sandbox import run as _sandbox_run
 from core.sandbox import run_trusted as _run_trusted
+from core.sandbox.context import untrusted_fresh_procfs_required
 
 logger = get_logger()
 
@@ -1767,9 +1768,12 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
             repo_path = str(self.repo_path)
             from core.sandbox.python_paths import python_runtime_tool_paths
             _tps = python_runtime_tool_paths()
+            fresh_procfs = untrusted_fresh_procfs_required()
             result = _sandbox_run(
                 [sys.executable, str(script_path)],
                 block_network=True,
+                require_fresh_procfs=fresh_procfs,
+                omit_proc_reads=not fresh_procfs,
                 # The script compiles UNTRUSTED repo content, so it
                 # gets the read restriction the other build probes
                 # use: no $HOME credentials on Landlock-only hosts.

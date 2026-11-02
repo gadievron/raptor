@@ -593,9 +593,12 @@ class CargoFuzzRunner(LibFuzzerRunner):
             ) as stdout_fp, os.fdopen(
                 open_exclusive_artifact(stderr_path, replace=True), "wb",
             ) as stderr_fp:
+                fresh_procfs = _lf.untrusted_fresh_procfs_required()
                 completed = _lf._sandbox_run(
                     cmd,
                     block_network=True,
+                    require_fresh_procfs=fresh_procfs,
+                    omit_proc_reads=not fresh_procfs,
                     target=str(self.crate_dir),
                     output=str(self.output_dir),
                     restrict_reads=True,

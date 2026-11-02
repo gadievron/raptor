@@ -680,3 +680,16 @@ out/fuzz_<binary>_<timestamp>/
                                  evidence — never counts as review)
   fuzzing_report.json         -- Campaign summary report
 ```
+
+### Sandbox requirements
+
+Fuzz campaigns, AFL coverage probes, target replay, Cargo/JVM harness builds
+and synthesized build checks use the untrusted execution floor: `mount-ns`
+on Linux and `seatbelt` on macOS. They refuse to execute when the required
+containment cannot engage. AFL reads are scoped to the declared binary,
+corpus, dictionary, support libraries and tool runtime; custom libraries
+outside those paths must be declared through the existing runner inputs.
+
+On restricted hosts, review the [containment floor and explicit consent
+options](sandbox.md#containment-floor) before accepting weaker isolation.
+Installation protection does not waive these requirements.

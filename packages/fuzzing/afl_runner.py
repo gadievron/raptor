@@ -39,6 +39,8 @@ from core.logging import get_logger
 from core.sandbox import SandboxSetupError
 from core.sandbox import run as _sandbox_run
 from core.sandbox import run_trusted as _run_trusted
+from core.sandbox.context import untrusted_fresh_procfs_required
+from core.sandbox.python_paths import python_tool_paths
 from core.security.log_sanitisation import sanitise_for_terminal
 from core.source import open_regular
 from packages.fuzzing.seed_corpus import prepare_builtin_seed_corpus
@@ -89,10 +91,11 @@ class _SandboxedAFLInstance:
 
     Containment matches the afl-showmap / libFuzzer siblings: network
     namespace deny, Landlock writes confined to the AFL output
-    directory, seccomp escape-vector blocklist, rlimits. Reads stay
-    wide (plus explicit ``readable_paths``) so targets with shared
-    libraries outside the binary's directory keep working — mirroring
-    the afl-showmap call shape.
+    directory, seccomp escape-vector blocklist, rlimits. Reads are
+    restricted to system/tool runtimes and the declared target, corpus
+    and support paths. The untrusted floor refuses a weaker backend
+    unless the operator explicitly consents — matching afl-showmap
+    and libFuzzer.
 
     Lifetime: afl-fuzz self-terminates via ``-V <duration>`` and the
     sandbox ``timeout=`` is a wedge net above that. Early stop
@@ -163,12 +166,17 @@ class _SandboxedAFLInstance:
                 extra = {}
                 if self.rootfs is not None:
                     extra["rootfs"] = str(self.rootfs)
+                fresh_procfs = untrusted_fresh_procfs_required()
                 self.result = _sandbox_run(
                     self.cmd,
                     block_network=True,
+                    require_fresh_procfs=fresh_procfs,
+                    omit_proc_reads=not fresh_procfs,
+                    restrict_reads=True,
                     target=str(self.output_dir),
                     output=str(self.output_dir),
                     readable_paths=self.readable_paths,
+                    tool_paths=python_tool_paths(self.cmd[0]) if self.rootfs is None else None,
                     cwd=str(self.output_dir),
                     env=self.env,
                     stdout=stdout_fp,
@@ -963,8 +971,7 @@ class AFLRunner:
 
         # In rootfs mode everything the campaign reads lives inside
         # the image tree (binary at /src) or under the output bind
-        # (staged corpus/dict) — readable_paths would be dropped by
-        # the sandbox API anyway (restrict_reads=False).
+        # (staged corpus/dict). No host target read grants are needed.
         if self.sandbox_rootfs is not None:
             readable_paths = []
         else:
@@ -1839,12 +1846,17 @@ class AFLRunner:
             with os.fdopen(
                 open_exclusive_artifact(console_log, replace=True), "wb",
             ) as con_fh:
+                fresh_procfs = untrusted_fresh_procfs_required()
                 _sandbox_run(
                     showmap_cmd,
                     block_network=True,
+                    require_fresh_procfs=fresh_procfs,
+                    omit_proc_reads=not fresh_procfs,
+                    restrict_reads=True,
                     target=str(self.output_dir),
                     output=str(self.output_dir),
                     readable_paths=readable_paths,
+                    tool_paths=python_tool_paths(showmap_cmd[0]) if self.sandbox_rootfs is None else None,
                     stdout=con_fh,
                     stderr=con_fh,
                     cwd=str(self.output_dir),

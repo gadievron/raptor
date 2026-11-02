@@ -28,6 +28,7 @@ from core.config import RaptorConfig
 from core.paths import confine
 from core.logging import get_logger
 from core.sandbox import run as _sandbox_run
+from core.sandbox.context import untrusted_fresh_procfs_required
 from core.security.log_sanitisation import sanitise_for_terminal
 from packages.fuzzing.output_hygiene import strip_terminal_controls
 
@@ -286,9 +287,12 @@ class LibFuzzerRunner:
             ) as stdout_fp, os.fdopen(
                 open_exclusive_artifact(stderr_path, replace=True), "wb",
             ) as stderr_fp:
+                fresh_procfs = untrusted_fresh_procfs_required()
                 completed = _sandbox_run(
                     cmd,
                     block_network=True,
+                    require_fresh_procfs=fresh_procfs,
+                    omit_proc_reads=not fresh_procfs,
                     target=str(self.harness.parent),
                     output=str(self.output_dir),
                     restrict_reads=True,
