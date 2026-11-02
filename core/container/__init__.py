@@ -20,6 +20,12 @@ here), and the ``core.env`` provisioning API.
 Policy boundary: nothing in this package prints to the operator,
 carries LLM-facing hint text, or holds cross-call state. Those belong
 to the calling planner.
+
+The remaining modules keep mechanics local: ``registry`` performs
+manifest probing with digest pinning; ``build`` and ``compose`` own
+build/compose operations; ``containers``, ``exec``, and ``lifecycle`` own
+hardened launch/exec and label-scoped cleanup; ``export`` materializes
+image rootfs trees using PEP 706 data-filtered extraction.
 """
 
 from core.container.failures import (

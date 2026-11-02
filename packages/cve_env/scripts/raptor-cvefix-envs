@@ -29,6 +29,11 @@ Usage:
 Exit codes: 0 pass completed (report written; misses are recorded, not
 fatal); 1 nothing ran; 2 usage / spec error; 3 budget ceiling hit
 (resume with a new --budget-usd tranche).
+
+Evidence semantics: the sidecar records ``verification: "env-verified"``;
+``repro-verified`` is reserved until /exploit can generate triggers. The
+read side is ``core/recall/env_overlay.py``: a missing local-only overlay
+degrades to "all unattempted". Span-level manifest review stays human.
 """
 from __future__ import annotations
 

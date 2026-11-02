@@ -1,4 +1,16 @@
-"""Adapters used by production pipelines; no SQL outside the graph package."""
+"""Adapters used by production pipelines; no SQL outside the graph package.
+Pipeline integrations use ``core.understand_graph``; callers do not issue SQL.
+
+The agentic SARIF fallback decodes URI paths once, normalizes inventory-relative
+paths, and preserves logical function names when no line region is provided.
+Local `file://` URIs (including `localhost`) remain subject to source-root and
+symlink containment; remote authorities and other URI schemes are skipped.
+Malformed SARIF files are isolated so valid sibling files can still be imported.
+The fallback examines at most 64 SARIF files and accumulates at most 10,000
+findings, in addition to the shared parser's per-file byte cap. Exceeding either
+aggregate budget skips that graph update with a warning and preserves existing
+memory; the scanner's original artifacts remain available.
+"""
 
 from __future__ import annotations
 

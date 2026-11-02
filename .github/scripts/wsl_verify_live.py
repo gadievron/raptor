@@ -34,6 +34,9 @@ This is a CI probe harness (dev tooling), not a runtime module: it
 locates the repo relative to its own path and extends ``sys.path``
 accordingly (the ``.github/scripts`` exemption; the launcher never
 runs this).
+
+For the complete CI leg procedure, checkout matrix, artifact names, and
+TTY-gate test rationale, see the adjacent ``wsl-verification.md``.
 """
 
 from __future__ import annotations

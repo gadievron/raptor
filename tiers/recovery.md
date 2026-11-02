@@ -3,6 +3,12 @@
 # Token cost: ~200 tokens
 # Purpose: Help user recover when Python execution fails
 
+## WSL containment refusal
+
+If untrusted execution refuses on WSL because the requested floor requires
+Landlock, load `core/sandbox/instructions/wsl-recovery.md` before responding.
+That file owns the run-boundary consent offer and non-interactive fallback.
+
 ## Common Failures and Solutions
 
 ### Semgrep Issues

@@ -207,6 +207,7 @@ Load the named file when its trigger fires. For every subsystem listed here, the
 | /validate stage naming + pipeline order | `.claude/skills/exploitability-validation/PIPELINE.md` |
 | Validation errors occur | `tiers/validation-recovery.md` |
 | Developing exploits (constraints, techniques) | `tiers/exploit-guidance.md` |
+| WSL untrusted execution refuses because Landlock is unavailable | `core/sandbox/instructions/wsl-recovery.md` |
 | Any other error occurs | `tiers/recovery.md` |
 | Expert persona requested | `tiers/personas/` (pick the persona's .md) |
 | Running /understand | `.claude/skills/code-understanding/SKILL.md` plus the relevant mode file (map, trace, hunt, teach, or study) |
