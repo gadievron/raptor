@@ -14,6 +14,7 @@ import io
 import json
 import sys
 import types
+from unittest.mock import patch
 
 import pytest
 
@@ -577,7 +578,8 @@ class TestEmptyOverridePolicyRefusal:
         loader = SourceFileLoader("raptor_bq_query_cli", script)
         spec = importlib.util.spec_from_loader("raptor_bq_query_cli", loader)
         mod = importlib.util.module_from_spec(spec)
-        loader.exec_module(mod)
+        with patch.object(sys, "path", sys.path.copy()):
+            loader.exec_module(mod)
 
         monkeypatch.setattr(bq, "proxy_hosts_for_bq", lambda: [])
         err = io.StringIO()

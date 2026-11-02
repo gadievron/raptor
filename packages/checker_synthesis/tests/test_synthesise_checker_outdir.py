@@ -8,9 +8,10 @@ writes anywhere, and run output must not pollute the scanned tree.
 from __future__ import annotations
 
 import importlib.util
-import os
+import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -20,11 +21,12 @@ SCRIPT = REPO_ROOT / "libexec" / "raptor-synthesise-checker"
 
 @pytest.fixture(scope="module")
 def cli():
-    os.environ.setdefault("_RAPTOR_TRUSTED", "1")
     loader = SourceFileLoader("raptor_synthesise_checker", str(SCRIPT))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
+    with pytest.MonkeyPatch.context() as mp, patch.object(sys, "path", sys.path.copy()):
+        mp.setenv("_RAPTOR_TRUSTED", "1")
+        loader.exec_module(mod)
     return mod
 
 

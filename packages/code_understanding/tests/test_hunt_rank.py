@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import importlib.util
-import os
 import re
+import sys
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -21,12 +22,13 @@ _LINE_RE = re.compile(r"location: [^:]+:(\d+)")
 
 @pytest.fixture
 def understand_module():
-    os.environ.setdefault("_RAPTOR_TRUSTED", "1")
     from importlib.machinery import SourceFileLoader
     loader = SourceFileLoader("raptor_understand", str(SCRIPT_PATH))
     spec = importlib.util.spec_from_loader("raptor_understand", loader)
     mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
+    with pytest.MonkeyPatch.context() as mp, patch.object(sys, "path", sys.path.copy()):
+        mp.setenv("_RAPTOR_TRUSTED", "1")
+        loader.exec_module(mod)
     return mod
 
 

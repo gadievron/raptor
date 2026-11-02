@@ -12,8 +12,10 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import sys
 from pathlib import Path
 from types import ModuleType
+from unittest.mock import patch
 
 import pytest
 
@@ -31,7 +33,8 @@ def script_mod() -> ModuleType:
         )
         spec = importlib.util.spec_from_loader(loader.name, loader)
         mod = importlib.util.module_from_spec(spec)
-        loader.exec_module(mod)
+        with patch.object(sys, "path", sys.path.copy()):
+            loader.exec_module(mod)
         return mod
     finally:
         if prior is None:

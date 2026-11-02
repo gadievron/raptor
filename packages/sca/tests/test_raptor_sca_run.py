@@ -2,10 +2,12 @@
 
 import os
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import pytest
 
 # parents[0] = packages/sca/tests/
 # parents[1] = packages/sca/
@@ -183,12 +185,13 @@ class OpLockContentionTests(unittest.TestCase):
         from contextlib import redirect_stderr
         from unittest.mock import patch
 
-        os.environ.setdefault("_RAPTOR_TRUSTED", "1")
         loader = importlib.machinery.SourceFileLoader(
             "raptor_sca_run_contention", str(WRAPPER))
         spec = importlib.util.spec_from_loader(loader.name, loader)
         mod = importlib.util.module_from_spec(spec)
-        loader.exec_module(mod)
+        with pytest.MonkeyPatch.context() as mp, patch.object(sys, "path", sys.path.copy()):
+            mp.setenv("_RAPTOR_TRUSTED", "1")
+            loader.exec_module(mod)
 
         from core.project.oplock import OpLockContention
 

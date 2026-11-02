@@ -11,7 +11,9 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import os
+import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -29,7 +31,8 @@ def validator():
         )
         spec = importlib.util.spec_from_loader(loader.name, loader)
         mod = importlib.util.module_from_spec(spec)
-        loader.exec_module(mod)
+        with patch.object(sys, "path", sys.path.copy()):
+            loader.exec_module(mod)
         yield mod
     finally:
         if prior is None:
@@ -115,7 +118,8 @@ class TestHelperReaderRoundTrip:
             )
             spec = importlib.util.spec_from_loader(loader.name, loader)
             mod = importlib.util.module_from_spec(spec)
-            loader.exec_module(mod)
+            with patch.object(sys, "path", sys.path.copy()):
+                loader.exec_module(mod)
             yield mod
         finally:
             if prior is None:
