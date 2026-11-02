@@ -113,3 +113,43 @@ def test_pipeline_forwards_include_search_dirs():
     opts = AuditPipelineOpts(target_path=Path("."),out_dir=Path("out"),cross_entry_include_dirs=[Path("include")])
     cfg = _build_orchestrator_config(opts,None,[],ReviewMode.SECURITY)
     assert cfg.cross_entry_include_dirs == [Path("include")]
+
+
+def test_auto_detect_ancestor_includes_when_none_supplied(tmp_path):
+    """prepare() auto-detects sibling include/ dirs via BuildDetector."""
+    root = tmp_path / "project" / "subsystem"
+    include = root.parent / "include"
+    root.mkdir(parents=True)
+    include.mkdir()
+    (include / "api.h").write_text("struct T { int x; };")
+    (root / "main.c").write_text('#include "api.h"\nvoid f(struct T *t) { t->x = 1; }')
+    out = tmp_path / "out"
+    receipts = {}
+    contexts = prepare_cross_entry(
+        root, [{"file": "main.c", "name": "f"}],
+        mode="context", out_dir=out, drain_index=True,
+        delivery_receipts=receipts,
+    )
+    assert "main.c:f" in contexts
+    assert "struct T" in contexts["main.c:f"]
+
+
+def test_explicit_include_dirs_override_auto_detect(tmp_path):
+    """Explicit --cross-entry-include-dir suppresses auto-detection."""
+    root = tmp_path / "project" / "subsystem"
+    ancestor_inc = root.parent / "include"
+    explicit_inc = tmp_path / "custom_inc"
+    root.mkdir(parents=True)
+    ancestor_inc.mkdir()
+    explicit_inc.mkdir()
+    (ancestor_inc / "api.h").write_text("struct A { int a; };")
+    (explicit_inc / "api.h").write_text("struct B { int b; };")
+    (root / "main.c").write_text('#include "api.h"\nvoid f(struct B *t) { t->b = 1; }')
+    out = tmp_path / "out"
+    contexts = prepare_cross_entry(
+        root, [{"file": "main.c", "name": "f"}],
+        mode="context", out_dir=out, drain_index=True,
+        include_dirs=[explicit_inc],
+    )
+    assert "main.c:f" in contexts
+    assert "struct B" in contexts["main.c:f"]

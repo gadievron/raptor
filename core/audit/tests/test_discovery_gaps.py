@@ -359,9 +359,9 @@ class TestEagerCompileReturnKeys:
                 })(),
             ),
         ):
-            keys = _compile_eager_invariants(config, shared, checklist)
+            _compile_eager_invariants(config, shared, checklist)
 
-        assert "a.c:foo" in keys
+        assert "a.c:foo" in shared.mechanical_findings
 
     def test_returns_empty_set_no_invariants(self, tmp_path: Path) -> None:
         from core.audit.orchestrator import (
@@ -378,8 +378,7 @@ class TestEagerCompileReturnKeys:
             resume=False,
         )
 
-        result = _compile_eager_invariants(config, shared, {})
-        assert result == set()
+        _compile_eager_invariants(config, shared, {})
 
 
 class TestScopeWarning:

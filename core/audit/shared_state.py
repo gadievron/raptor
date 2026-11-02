@@ -203,12 +203,6 @@ class SharedState:
     # are present.  Typed as Any to avoid circular import.
     study_queue: Any = None
 
-    # Keys matched by mid-loop invariant prescreening that need requeue
-    # (gap 3: already-reviewed functions with new mechanical evidence).
-    # The study consumer populates this; the main executor drains it.
-    midloop_requeue_keys: set[str] = field(default_factory=set)
-    _requeue_lock: threading.Lock = field(default_factory=threading.Lock)
-
     # Live-discovered sinks, sanitizers, and entry points accumulated
     # from LLM review outcomes during the loop.
     live_classifications: LiveClassifications | None = None  # type: ignore[type-arg]

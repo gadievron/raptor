@@ -55,6 +55,11 @@ def prepare(target,gaps,*,mode,out_dir,limits=None,client=None,entry_points=(),m
         return {}
     limits = limits or Limits()
     include_dirs = tuple(dict.fromkeys(Path(p).resolve() for p in include_dirs))
+    if not include_dirs:
+        from core.build.build_detector import BuildDetector
+        target_resolved = Path(target).resolve()
+        _base = target_resolved.parent if target_resolved.is_file() else target_resolved
+        include_dirs = tuple(Path(p) for p in BuildDetector(_base)._discover_ancestor_includes())
     target = Path(target).resolve()
     base = target.parent if target.is_file() else target
     root = Path(context_root).resolve() if context_root is not None else base
