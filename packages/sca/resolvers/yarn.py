@@ -21,6 +21,7 @@ authoritative signal that yarn is the project's tool of choice.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import subprocess
 import tempfile
@@ -148,7 +149,8 @@ def _detect_major_version() -> int | None:
         from core.security.env_sanitisation import safe_subprocess_env
         proc = subprocess.run(
             ["yarn", "--version"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, timeout=5, cwd=os.sep,
+            # Yarn honours project yarn-path even for --version.
             env=safe_subprocess_env(strip_target_markers=True),
         )
     except (FileNotFoundError, subprocess.SubprocessError, OSError):

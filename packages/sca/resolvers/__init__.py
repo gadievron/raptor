@@ -13,10 +13,11 @@ the proposed lockfile content.
 Sandbox model
 -------------
 
-Every resolver subprocess runs sandboxed via :func:`core.sandbox.run`
-with the egress proxy engaged. From the resolver's point of view it
-talks to the registry over HTTPS as normal; from the host's point of
-view:
+Every resolver subprocess uses the untrusted-execution contract. Networked
+resolution uses :func:`core.sandbox.run_untrusted_networked`; local-only
+steps use :func:`core.sandbox.run_untrusted`. During networked resolution,
+the resolver talks to the registry over HTTPS as normal; from the host's
+point of view:
 
   - Outbound TCP is locked to the in-process proxy port (Landlock).
   - The proxy's hostname allowlist is set to the resolver's own
@@ -30,9 +31,9 @@ view:
     (~/.cache/pip, ~/.npm, ~/go/pkg/mod) live in a per-run scratch
     directory, not the operator's account.
 
-Tools we wrap today, grouped by ecosystem (all use ``--dry-run`` /
-``--ignore-scripts`` / metadata-only flags so install hooks never
-execute even *inside* the sandbox — defence in depth):
+Tools we wrap today, grouped by ecosystem (metadata-only /
+``--ignore-scripts`` flags are used where supported, but Gradle build
+files, Maven plugins and Bundler Gemfiles can execute target code):
 
   - npm ecosystem: npm, yarn (classic + Berry), pnpm
   - PyPI ecosystem: pip / pip-compile, Poetry
@@ -52,14 +53,16 @@ Single-tool ecosystems Just Work because the lone candidate is
 always the fallback.
 
 Scope of this layer: validate that a proposed manifest resolves
-cleanly. We *do not* mutate the user's repo, and we never run install
-hooks. ``proposed_lockfile`` is returned as bytes so the caller can
-compare it to whatever lockfile shape the operator expects.
+cleanly. We *do not* mutate the user's repo. Hook-suppression flags
+complement containment; they do not replace it. ``proposed_lockfile`` is
+returned as bytes so the caller can compare it to whatever lockfile shape
+the operator expects.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -188,6 +191,10 @@ def _check_tool(cmd: list, *, timeout: int = 5) -> bool:
     a namespace + Landlock setup on every cascade attempt, which is
     measurable (~50ms × 3 resolvers = visible startup latency).
 
+    Probes run from the filesystem root, never the scanned project: Maven,
+    Yarn and Bundler discover executable project configuration even for
+    version queries. Root also stops upward config walks through /tmp.
+
     Result is cached per-process. Tool installation/removal during a
     single scan is not a use case we support.
     """
@@ -201,7 +208,7 @@ def _check_tool(cmd: list, *, timeout: int = 5) -> bool:
         # from the operator shell.
         from core.security.env_sanitisation import safe_subprocess_env
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout,
+            cmd, capture_output=True, text=True, timeout=timeout, cwd=os.sep,
             env=safe_subprocess_env(strip_target_markers=True),
         )
         result = proc.returncode == 0 and bool(
@@ -222,7 +229,7 @@ def _run(
 ) -> subprocess.CompletedProcess:
     """Run a resolver subprocess sandboxed.
 
-    Routes through :func:`core.sandbox.run` with:
+    Routes through the untrusted-execution helpers with:
 
       - ``target=cwd``: Landlock engages with the project dir as a
         readable surface so the resolver can read manifests +
@@ -253,12 +260,12 @@ def _run(
 
     Never raises on non-zero exit — the caller decides what's a
     failure. Does propagate :class:`subprocess.TimeoutExpired` from
-    ``core.sandbox.run`` when ``timeout`` elapses; each per-resolver
+    the sandbox when ``timeout`` elapses; each per-resolver
     ``dry_run`` catches it and translates to a ``ResolverResult`` with
     a "timed out after Xs" error.
     """
     import tempfile
-    from core.sandbox.context import run as sandbox_run
+    from core.sandbox.context import run_untrusted, run_untrusted_networked
 
     with tempfile.TemporaryDirectory(prefix="raptor-sca-resolver-") as out_dir:
         # When the call is local-only (e.g. ``python -m venv``,
@@ -278,13 +285,12 @@ def _run(
             "caller_label": "sca-resolver",
         }
         if block_network or not proxy_hosts:
-            sandbox_kwargs["block_network"] = True
-        else:
-            sandbox_kwargs["use_egress_proxy"] = True
-            sandbox_kwargs["require_proxy_netns"] = True  # 00015: untrusted egress must use the netns tier
-            sandbox_kwargs["proxy_hosts"] = list(proxy_hosts)
-
-        return sandbox_run(cmd, **sandbox_kwargs)  # type: ignore[arg-type]
+            return run_untrusted(cmd, **sandbox_kwargs)
+        # Resolver manifests and wrapper scripts can execute target code even
+        # during dependency resolution. Keep the floor, fresh procfs, terminal
+        # detachment and trust-marker stripping mandatory on both lanes.
+        return run_untrusted_networked(cmd, proxy_hosts=list(proxy_hosts),
+                                      **sandbox_kwargs)
 
 
 # ---------------------------------------------------------------------------
