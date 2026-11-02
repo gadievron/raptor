@@ -15,6 +15,8 @@ SPEC.loader.exec_module(INSTALLER)
 
 
 class PythonNoticeTests(unittest.TestCase):
+    EVIDENCE = HERE / "python-notices"
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -22,7 +24,7 @@ class PythonNoticeTests(unittest.TestCase):
         self.site = self.root / "site-packages"
         self.site.mkdir()
         self.evidence = self.root / "evidence"
-        shutil.copytree(HERE / "python-notices", self.evidence)
+        shutil.copytree(self.EVIDENCE, self.evidence)
         self.manifest = json.loads((self.evidence / "provenance.json").read_text())
         self.entry = self.manifest["packages"][0]
         self.package = self.site / self.entry["metadata_directory"]
@@ -111,6 +113,10 @@ class PythonNoticeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "distribution changed"):
             self.install()
         self.assertFalse(self.target.exists())
+
+
+class PydocstyleNoticeTests(PythonNoticeTests):
+    EVIDENCE = HERE / "pydocstyle-notices"
 
 
 if __name__ == "__main__":
