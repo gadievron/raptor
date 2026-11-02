@@ -70,10 +70,9 @@ Conventions used below:
 
 ### `RAPTOR_ALLOW_UNSANDBOXED_TOOLS`
 
-The sandbox waiver, and the only variable that weakens an isolation
-guarantee. Policy point: `core.run.sandbox_policy`; honoured by the
-Joern and hypothesis-validation tool runners at their
-sandbox-import seams.
+An explicit waiver for missing sandbox support. Honoured by the
+Joern and hypothesis-validation tool runners and standalone PoC
+compilation in `raptor-validation-helper` when the sandbox import fails.
 
 When `core.sandbox` cannot be imported, tool runners **fail closed**:
 they raise `SandboxUnavailableError` naming the remedy, and the tool
