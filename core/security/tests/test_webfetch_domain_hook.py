@@ -188,6 +188,21 @@ class TestAnchorFileMode(unittest.TestCase):
             log = Path(str(anchor) + ".log").read_text(encoding="utf-8")
             self.assertIn("allow\tcdn.attachments.example", log)
 
+    def test_malformed_extra_host_ignored_without_breaking_anchor(self):
+        with TemporaryDirectory() as tmp:
+            anchor = self._anchor(
+                tmp,
+                "https://trac.ffmpeg.org/ticket/1",
+                "not a valid host/path",
+                "cdn.attachments.example",
+            )
+            rc, err = _run_hook(["--anchor-file", str(anchor)],
+                                "https://trac.ffmpeg.org/ticket/2")
+            self.assertEqual(rc, 0, err)
+            rc, err = _run_hook(["--anchor-file", str(anchor)],
+                                "https://cdn.attachments.example/poc.bin")
+            self.assertEqual(rc, 0, err)
+
     def test_denied_fetch_is_logged(self):
         with TemporaryDirectory() as tmp:
             anchor = self._anchor(tmp, "https://trac.ffmpeg.org/ticket/1")

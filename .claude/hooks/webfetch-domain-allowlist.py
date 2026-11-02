@@ -66,7 +66,9 @@ _REPO_ROOT = str(Path(__file__).resolve().parents[2])
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from core.domains import host_matches_anchor, registrable_domain
+from core.domains import (
+    InvalidHostname, domain_boundary, host_matches_anchor, registrable_domain,
+)
 
 _SAFE_SESSION_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
@@ -137,8 +139,13 @@ def _check_anchor(anchor_file: str, host: str, url: str) -> int:
         )
         return 2
 
-    extra_hosts = {e.lower().rstrip(".") for e in entries[1:]}
     try:
+        extra_hosts = set()
+        for raw_extra in entries[1:]:
+            try:
+                extra_hosts.add(domain_boundary(raw_extra).hostname)
+            except InvalidHostname:
+                continue
         allowed = host_matches_anchor(
             host, anchor_host, extra_hosts=extra_hosts,
         )
