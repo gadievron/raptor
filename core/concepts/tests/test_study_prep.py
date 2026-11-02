@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 from types import ModuleType
 
+import pytest
+
 # Load the prep script as a module (it's a libexec, not a package).
 _PREP_PATH = Path(__file__).resolve().parents[3] / "libexec" / "raptor-study-prep"
 
@@ -450,6 +452,18 @@ class TestIncludeResolution:
 # ------------------------------------------------------------------
 
 class TestDetectSourceRoot:
+    @pytest.fixture(autouse=True)
+    def _isolate_ancestor_indicators(self, tmp_path, monkeypatch):
+        # These fixtures describe complete miniature projects. A .git or
+        # build file above tmp_path belongs to the host, not to that project.
+        ancestors = set(tmp_path.parents)
+        real_exists = Path.exists
+
+        def exists(path):
+            return path.parent not in ancestors and real_exists(path)
+
+        monkeypatch.setattr(Path, "exists", exists)
+
     def test_git_root(self, tmp_path: Path) -> None:
         (tmp_path / ".git").mkdir()
         (tmp_path / "src").mkdir()

@@ -143,13 +143,16 @@ def _hermetic_sigterm_disposition():
     protects), else fall back to the interpreter default."""
     import signal
 
+    # Resolve production imports before a test installs partial tool-module
+    # doubles. Importing during teardown can observe those still-active mocks.
+    from core.audit import orchestrator as _orch
+
     try:
         prev = signal.getsignal(signal.SIGTERM)
     except (ValueError, OSError):  # non-main thread / exotic platform
         yield
         return
     yield
-    from core.audit import orchestrator as _orch
 
     _orch.uninstall_sigterm_grace()
     try:
