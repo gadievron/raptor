@@ -1,4 +1,4 @@
-"""Associate captured image notice candidates without changing licence claims.
+"""Associate captured notices and recover explicit distribution declarations.
 
 Capture origin is recorded evidence, not a signed attestation. Preparation
 binds it to the exact catalogue and checks all retained bytes; it does not
@@ -28,7 +28,7 @@ _PROJECTION = ("id", "name", "version", "type", "purl", "licenses")
 def load_notices(root: Path, native: dict, native_sha256: str, report: dict, *, owner_reader=None) -> tuple[dict, dict[str, bytes]]:
     """Validate a capture and derive associations independently of its package IDs."""
     image, _ = subject(native)
-    if type(report.get("version")) is not int or report["version"] not in {1, 2}:
+    if type(report.get("version")) is not int or report["version"] not in {1, 2, 3}:
         raise ValueError("unsupported notice evidence version")
     if report.get("subject") != image or report.get("catalogue_sha256") != native_sha256:
         raise ValueError("notice evidence subject, scope or catalogue hash mismatch")
@@ -48,8 +48,10 @@ def load_notices(root: Path, native: dict, native_sha256: str, report: dict, *, 
                            if file.get("metadata", {}).get("type") in {None, "RegularFile"}
                            and (_notice_name(key[0]) or key[0].startswith("/usr/share/common-licenses/"))}
     package_paths = PackageNoticePaths(native["artifacts"])
-    if report["version"] == 2:
+    if report["version"] >= 2:
         required.update(package_paths.records)
+    if report["version"] >= 3:
+        required.update(package_paths.metadata)
     probes = {(directory + "/" + name, layer) for (directory, layer), names in package_paths.pointers.items() for name in names}
     for artifact in native["artifacts"]:
         if artifact["type"] == "npm":
@@ -168,6 +170,9 @@ def associate(native: dict, image: dict, rows: list[dict], blobs: dict[str, byte
                 add(row, "catalogue_licence_location")
         for row, reason in directory_matches[artifact["id"]]:
             add(row, reason)
+        for key, identifiers in package_paths.metadata.items():
+            if artifact["id"] in identifiers and key in by_key and key not in associations:
+                add(by_key[key], "python_distribution_metadata")
         # Copyright files can refer to a separately installed Debian common text.
         # Ambiguous all-layer versions stay unresolved rather than being guessed.
         gaps = []
@@ -188,7 +193,13 @@ def associate(native: dict, image: dict, rows: list[dict], blobs: dict[str, byte
                   else "metadata_only" if evidence else "no_associated_evidence")
         if status != "notice_candidate_captured":
             gaps.append("no associated notice candidate; licence text completeness is unverified")
-        packages.append({"id": artifact["id"], "status": status, "files": evidence, "gaps": gaps})
+        record = {"id": artifact["id"], "status": status, "files": evidence, "gaps": gaps}
+        from packages.sca.sbom_license_evidence import catalogue_declaration_missing, recover_distribution_license
+        if catalogue_declaration_missing(artifact):
+            declaration = recover_distribution_license(artifact, evidence, blobs)
+            if declaration is not None:
+                record["recovered_distribution_license"] = declaration
+        packages.append(record)
     from packages.sca.sbom_notice_owners import add_owner_context
     owner_statistics = add_owner_context(native, rows, blobs, packages, limit=MAX_ASSOCIATIONS)
     python_statistics = add_owner_context(native, rows, blobs, packages, limit=MAX_ASSOCIATIONS, owner_kind='python')
@@ -218,7 +229,7 @@ def associate(native: dict, image: dict, rows: list[dict], blobs: dict[str, byte
 
 
 def append_notices(cdx: dict, spdx: dict, components: dict, packages: dict, summary: dict) -> None:
-    """Use CDX evidence references/properties and SPDX comments, preserving claims."""
+    """Retain evidence and recover missing declarations; preserve conclusions."""
     for record in summary["packages"]:
         component, package = components[record["id"]], packages[record["id"]]
         component.pop("signature", None)
@@ -230,6 +241,10 @@ def append_notices(cdx: dict, spdx: dict, components: dict, packages: dict, summ
             context["owner_spdx_id"] = packages[owner_id]["SPDXID"]
             if components[owner_id].get("purl"):
                 context["owner_purl"] = components[owner_id]["purl"]
+        declaration = record.get("recovered_distribution_license")
+        if declaration:
+            component["licenses"] = [{"expression": declaration["expression"]}]
+            package["licenseDeclared"] = declaration["expression"]
         encoded = dumps_artifact(record)
         component.setdefault("properties", []).append({"name": "raptor:notice-evidence", "value": encoded})
         for row in record["files"]:

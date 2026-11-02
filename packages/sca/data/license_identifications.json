@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "scope": "Exact-text licence identifications, not permission to ignore unknown or changed notices. Version reviewed records provenance only; matching uses package identity and all notice bytes.",
+  "reviewed_image_manifest_digest": "sha256:a27f2528a339f270eee4572786a41fb540cdee7e87d8a4b8fa369db8b2f49ec1",
+  "packages": {
+    "colorama": {
+      "expression": "BSD-3-Clause",
+      "notices": {
+        "LICENSE": "cac35c02686e5d04a5a7140bfb3b36e73aed496656e891102e428886d7930318"
+      },
+      "version_reviewed": "0.4.6",
+      "basis": "Verbatim distribution-local notices reviewed against the identified licence terms; exact complete-file hashes are required.",
+      "definitions": [
+        "https://spdx.org/licenses/BSD-3-Clause.html"
+      ]
+    },
+    "face": {
+      "expression": "BSD-3-Clause",
+      "notices": {
+        "LICENSE": "c642862bf261c6d05d89766e68801bd8225d508205776a04fb1ace9866b5b66f"
+      },
+      "version_reviewed": "26.0.1",
+      "basis": "Verbatim distribution-local notices reviewed against the identified licence terms; exact complete-file hashes are required.",
+      "definitions": [
+        "https://spdx.org/licenses/BSD-3-Clause.html"
+      ]
+    },
+    "glom": {
+      "expression": "BSD-3-Clause",
+      "notices": {
+        "LICENSE": "ba81ea9a55099a9c4491141f9aace8ffd1f169701815582d7a80ed57f7b625d5"
+      },
+      "version_reviewed": "25.12.0",
+      "basis": "Verbatim distribution-local notices reviewed against the identified licence terms; exact complete-file hashes are required.",
+      "definitions": [
+        "https://spdx.org/licenses/BSD-3-Clause.html"
+      ]
+    },
+    "jinja2": {
+      "expression": "BSD-3-Clause",
+      "notices": {
+        "LICENSE": "3b49dcee4105eb37bac10faf1be260408fe85d252b8e9df2e0979fc1e094437b"
+      },
+      "version_reviewed": "3.1.6",
+      "basis": "Verbatim distribution-local notices reviewed against the identified licence terms; exact complete-file hashes are required.",
+      "definitions": [
+        "https://spdx.org/licenses/BSD-3-Clause.html"
+      ]
+    },
+    "packaging": {
+      "expression": "Apache-2.0 OR BSD-2-Clause",
+      "notices": {
+        "LICENSE": "cad1ef5bd340d73e074ba614d26f7deaca5c7940c3d8c34852e65c4909686c48",
+        "LICENSE.APACHE": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
+        "LICENSE.BSD": "b70e7e9b742f1cc6f948b34c16aa39ffece94196364bc88ff0d2180f0028fac5"
+      },
+      "version_reviewed": "25.0",
+      "basis": "Verbatim distribution-local notices reviewed against the identified licence terms; exact complete-file hashes are required.",
+      "definitions": [
+        "https://spdx.org/licenses/Apache-2.0.html",
+        "https://spdx.org/licenses/BSD-2-Clause.html"
+      ]
+    },
+    "peewee": {
+      "expression": "MIT",
+      "notices": {
+        "LICENSE": "3740096125b08735a247b8dd08cd82e0ba984d3bebd9221d378576637e5240da"
+      },
+      "version_reviewed": "3.19.0",
+      "basis": "Verbatim distribution-local notices reviewed against the identified licence terms; exact complete-file hashes are required.",
+      "definitions": [
+        "https://spdx.org/licenses/MIT.html"
+      ]
+    }
+  }
+}

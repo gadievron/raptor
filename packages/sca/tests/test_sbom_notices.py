@@ -486,3 +486,58 @@ def test_python_record_context_exports_separately_and_preserves_claims(fixture):
     assert c['dependencies'] == cdx['dependencies'] and s['relationships'] == spdx['relationships']
     assert 'python_record_owner_context' in s['packages'][-1]['comment']
     assert any('Enclosing Python distribution' in x.get('comment', '') for x in c['components'][-1]['externalReferences'])
+
+
+@pytest.mark.parametrize('version', [1, 2])
+def test_legacy_capture_without_unclaimed_metadata_remains_readable(fixture, version):
+    root, native, _, report, _, _ = fixture
+    native['artifacts'][0]['licenses'] = []
+    report['packages'][0]['licenses'] = []
+    report['files'] = [row for row in report['files'] if not row['path'].endswith('/METADATA')]
+    digest = sha(json.dumps(native).encode())
+    report.update(version=version, catalogue_sha256=digest)
+    summary, _ = load_notices(root, native, digest, report)
+    assert summary['packages'][0]['status'] == 'notice_candidate_captured'
+    assert 'recovered_distribution_license' not in summary['packages'][0]
+    report['version'] = 3
+    with pytest.raises(ValueError, match='missing required'):
+        load_notices(root, native, digest, report)
+
+
+def test_verified_trove_declaration_enriches_exports_without_a_conclusion(fixture):
+    root, native, _, report, cdx, spdx = fixture
+    native['artifacts'][0]['licenses'] = []
+    report['packages'][0]['licenses'] = []
+    cdx['components'][0]['licenses'] = []
+    path = '/opt/python/pkg-1.dist-info/METADATA'
+    raw = b'Name: pkg\nVersion: 1\nClassifier: License :: OSI Approved :: MIT License\n'
+    row = next(row for row in report['files'] if row['path'] == path)
+    row.update(sha256=sha(raw), size=len(raw))
+    (root / row['notice_file']).unlink()
+    row['notice_file'] = 'notices/sha256/' + sha(raw)
+    (root / row['notice_file']).write_bytes(raw)
+    file = next(file for file in native['files'] if file['location']['path'] == path)
+    file['metadata']['size'] = len(raw)
+    file['digests'] = [{'algorithm': 'sha256', 'value': sha(raw)}]
+    digest = sha(json.dumps(native).encode())
+    report.update(version=3, catalogue_sha256=digest)
+    summary, _ = load_notices(root, native, digest, report)
+    declaration = summary['packages'][0]['recovered_distribution_license']
+    assert declaration['expression'] == 'MIT' and declaration['metadata_field'] == 'Classifier'
+    assert declaration['metadata_sha256'] == sha(raw)
+    c, s, provenance = tool.prepare(native, cdx, spdx, {'version': 1, 'sources': []}, notice_summary=summary)
+    assert c['components'][0]['licenses'] == [{'expression': 'MIT'}]
+    assert s['packages'][1]['licenseDeclared'] == 'MIT'
+    assert s['packages'][1]['licenseConcluded'] == 'NOASSERTION'
+    assert cdx['components'][0]['licenses'] == [] and spdx['packages'][1]['licenseDeclared'] == 'NOASSERTION'
+    assert provenance['notice_evidence']['packages'][0]['recovered_distribution_license']['original_catalogue_licenses'] == []
+    # Identification does not turn absent notice text into a captured notice.
+    notice_path = '/opt/python/pkg-1.dist-info/licenses/LICENSE'
+    report['files'] = [row for row in report['files'] if row['path'] != notice_path]
+    native['files'] = [file for file in native['files'] if file['location']['path'] != notice_path]
+    digest = sha(json.dumps(native).encode())
+    report['catalogue_sha256'] = digest
+    missing, _ = load_notices(root, native, digest, report)
+    assert missing['packages'][0]['status'] == 'metadata_only'
+    assert missing['packages'][0]['gaps']
+    assert missing['packages'][0]['recovered_distribution_license']['expression'] == 'MIT'
