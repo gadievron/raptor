@@ -80,6 +80,29 @@ _SQL_DUMP = (re.compile(rb"CREATE TABLE|INSERT INTO|-- (?:MySQL|MariaDB) dump"
                         rb"|PostgreSQL database dump", re.I),
              "SQL dump statements")
 
+# A JSON key with a secret word as one whole word of its name. A word
+# is bounded by the name's start or end, a separator (_ - . space) or a
+# camelCase capital, so "apiKey", "DB_PASSWORD" and "client_secret"
+# match while "monkey", "tokenizer" and "keyboard" do not. A plain \b
+# would miss camelCase. Gaps are bounded so a crafted body stays linear.
+_SECRET_WORDS = ("secret", "key", "token", "password", "credential", "apikey")
+_SEP = rb"[_\-. ]"
+_LOWER = b"|".join(w.encode() for w in _SECRET_WORDS)
+_TITLE = b"|".join(w.capitalize().encode() for w in _SECRET_WORDS)
+_UPPER = b"|".join(w.upper().encode() for w in _SECRET_WORDS)
+_KEY_END = rb'[^"\n]{0,200}"\s*:'
+_SECRET_JSON_KEY = re.compile(
+    # first word, or after a separator: lower/Title case, ends at a boundary
+    rb'"(?:[^"\n]{0,200}' + _SEP + rb")?(?:" + _LOWER + b"|" + _TITLE + rb")s?"
+    rb'(?=' + _SEP + rb'|"|[A-Z])' + _KEY_END
+    # the same in UPPER_SNAKE
+    + rb'|"(?:[^"\n]{0,200}' + _SEP + rb")?(?:" + _UPPER + rb")S?"
+    rb'(?=' + _SEP + rb'|")' + _KEY_END
+    # a camelCase word: lower letter or digit, then the Title-case word
+    + rb'|"[^"\n]{0,200}[a-z0-9](?:' + _TITLE + rb")s?"
+    rb'(?=' + _SEP + rb'|"|[A-Z])' + _KEY_END
+)
+
 FILE_SIGNATURES: dict[str, tuple[re.Pattern[bytes], str]] = {
     "/.git/HEAD": (re.compile(rb"\A(?:ref: refs/|[0-9a-f]{40}\s*\Z)"),
                    "a git HEAD ref"),
@@ -106,8 +129,7 @@ FILE_SIGNATURES: dict[str, tuple[re.Pattern[bytes], str]] = {
     "/database.yml": (re.compile(rb"^\s*(?:adapter|database|username|password|host)\s*:",
                                  re.M),
                       "database settings in YAML"),
-    "/secrets.json": (re.compile(rb'"[^"\n]*(?:secret|key|token|password|credential)'
-                                 rb'[^"\n]*"\s*:', re.I),
+    "/secrets.json": (_SECRET_JSON_KEY,
                       "secret-named JSON keys"),
     "/id_rsa": _PRIVATE_KEY,
     "/.ssh/id_rsa": _PRIVATE_KEY,
@@ -133,7 +155,12 @@ PAGE_SIGNATURES: dict[str, tuple[re.Pattern[bytes], str]] = {
                      "the Go pprof index"),
 }
 
-_HTML = re.compile(rb"\A(?:\xef\xbb\xbf)?\s*<(?:!doctype\s+html|html|head|body)\b", re.I)
+# An XHTML page may open with an XML prolog before its doctype.
+_HTML = re.compile(rb"\A(?:\xef\xbb\xbf)?\s*(?:<\?xml[^>]*\?>\s*)?"
+                   rb"<(?:!doctype\s+html|html|head|body)\b", re.I)
+# Unsigned catalog paths whose usual content is an HTML page: that page's
+# signature is tried before the non-HTML fallback.
+_PAGE_FALLBACKS = {"/test.php": _PHPINFO}
 # Signatures sit near the top of every file they describe.
 _SNIFF_BYTES = 64 * 1024
 
@@ -150,6 +177,10 @@ def served_content(path: str, body: bytes) -> str | None:
     if key in PAGE_SIGNATURES:
         pattern, description = PAGE_SIGNATURES[key]
         return description if pattern.search(head) else None
+    if key in _PAGE_FALLBACKS:
+        pattern, description = _PAGE_FALLBACKS[key]
+        if pattern.search(head):
+            return description
     if not head.strip() or _HTML.search(head):
         return None
     if key in FILE_SIGNATURES:

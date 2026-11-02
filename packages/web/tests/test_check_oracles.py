@@ -441,6 +441,37 @@ def test_no_catalog_path_accepts_an_html_error_page():
         assert served_content(path, page) is None, path
 
 
+def test_secret_json_key_must_start_a_word():
+    from packages.web.sensitive_paths import served_content
+
+    for body in (b'{"apiKey": "x"}', b'{"accessToken": "x"}', b'{"apikey": "x"}',
+                 b'{"DB_PASSWORD": "x"}', b'{"stripe_secret_key": "x"}',
+                 b'{"privateKeyId": "x"}', b'{"credentials": {}}', b'{"Secret": "x"}'):
+        assert served_content("/secrets.json", body), body
+    for body in (b'{"monkey": 1}', b'{"hockey_score": 2}', b'{"tokenizer": "bpe"}',
+                 b'{"keyboard": "us"}', b'{"passwordless": true}',
+                 b'{"MONKEY": 1}', b'{"name": "key"}'):
+        assert served_content("/secrets.json", body) is None, body
+
+
+def test_test_php_serving_phpinfo_is_flagged():
+    from packages.web.sensitive_paths import served_content
+
+    page = b"<!DOCTYPE html><html><title>PHP 8.3.1 - phpinfo()</title></html>"
+    assert served_content("/test.php", page) == "the phpinfo() page"
+    assert served_content("/test.php", b"<html><body>Not found</body></html>") is None
+
+
+def test_xhtml_with_xml_prolog_is_html():
+    from packages.web.sensitive_paths import served_content
+
+    page = (b'<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE html>'
+            b"<html><body>Custom error</body></html>")
+    assert served_content("/old.bak", page) is None
+    assert served_content("/web.config",
+                          b'<?xml version="1.0"?>\n<configuration>\n')
+
+
 # -- OAuth missing-state scoping -------------------------------------------------
 
 
