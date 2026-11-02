@@ -42,6 +42,7 @@ on:
       - '.devcontainer/install-python-notices.py'
       - '.devcontainer/python-notices/**'
       - '.devcontainer/pydocstyle-notices/**'
+      - '.devcontainer/opentelemetry-notices/**'
       - '.devcontainer/npm-notices/**'
       - '.devcontainer/pnpm-notices/**'
       - '.devcontainer/corepack-notices/**'

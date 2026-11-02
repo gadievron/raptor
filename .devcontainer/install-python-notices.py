@@ -57,13 +57,19 @@ def install(site_packages: Path, evidence: Path) -> int:
             raise ValueError("expected a dist-info metadata directory")
         package = regular_path(site_packages, directory)
         metadata = BytesParser().parsebytes(read_regular(regular_path(package, "METADATA")))
+        license_header = entry.get("license_header", "License")
+        if license_header not in {"License", "License-Expression"}:
+            raise ValueError("unsupported licence metadata header")
+        other_header = "License" if license_header == "License-Expression" else "License-Expression"
+        if metadata.get_all(other_header, []):
+            raise ValueError("ambiguous licence metadata")
         values = {}
-        for header in ("Name", "Version", "License"):
+        for header in ("Name", "Version", license_header):
             fields = metadata.get_all(header, [])
             if len(fields) != 1:
                 raise ValueError("missing or ambiguous distribution identity")
             values[header] = fields[0].strip()
-        if (canonical_name(values["Name"]), values["Version"], values["License"]) != (
+        if (canonical_name(values["Name"]), values["Version"], values[license_header]) != (
             canonical_name(entry["name"]), entry["version"], entry["license"],
         ):
             raise ValueError("installed distribution changed; review notice evidence")
