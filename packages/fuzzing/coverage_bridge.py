@@ -91,6 +91,8 @@ def _default_runner(
     truncated at ``_MAX_CAPTURE_BYTES``.
     """
     from core.sandbox import run as _sandbox_run
+    from core.sandbox.context import untrusted_fresh_procfs_required
+    from core.sandbox.python_paths import python_tool_paths
 
     workdir = Path(cwd) if cwd else Path.cwd()
     readable = {str(Path(cmd[0]).resolve().parent)}
@@ -114,9 +116,14 @@ def _default_runner(
 
     is_gcov = Path(cmd[0]).name == "gcov"
     if not is_gcov:
+        fresh_procfs = untrusted_fresh_procfs_required()
         return _sandbox_run(
             cmd,
             block_network=True,
+            require_fresh_procfs=fresh_procfs,
+            omit_proc_reads=not fresh_procfs,
+            restrict_reads=True,
+            tool_paths=python_tool_paths(cmd[0]),
             target=str(workdir),
             output=str(workdir),
             readable_paths=sorted(readable),
