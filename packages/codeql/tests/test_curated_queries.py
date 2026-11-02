@@ -90,7 +90,7 @@ class TestAnalyzeCuratedPacksExecution:
         pack_dir = pack_root / lang
         pack_dir.mkdir(parents=True)
         (pack_dir / "qlpack.yml").write_text(
-            f"name: raptor/{lang}-custom-queries\nversion: 0.0.1\n"
+            f'name: raptor/{lang}-custom-queries\nversion: 0.0.1\ndependencies:\n  codeql/{lang}-all: "*"\n'
         )
         (pack_dir / "Example.ql").write_text("select 1\n")
         return pack_root
@@ -163,7 +163,7 @@ class TestAnalyzeCuratedPacksExecution:
         monkeypatch.setattr(RaptorConfig, "CODEQL_CURATED_ENABLED", True)
         monkeypatch.setattr(RaptorConfig, "CODEQL_QUERIES_DIR", pack_root)
         monkeypatch.setattr(
-            qr, "_vendored_stdlib_roots", lambda _lang: [vendored],
+            qr, "_vendored_stdlib_roots", lambda _lang, **_kwargs: [vendored],
         )
 
         seen_cmds = []
@@ -205,7 +205,7 @@ class TestVendoredStdlibRoots:
         from packages.codeql import query_runner as qr
 
         monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
-        monkeypatch.setattr(qr, "_bundled_stdlib_roots", lambda _lang: [])
+        monkeypatch.setattr(qr, "_bundled_stdlib_roots", lambda _lang, **_kwargs: [])
         assert qr._vendored_stdlib_roots("cpp") == []
 
     def test_falls_through_to_bundled(self, monkeypatch, tmp_path):
@@ -214,7 +214,7 @@ class TestVendoredStdlibRoots:
         bundled = tmp_path / "codeql-queries" / "cpp" / "ql" / "lib"
         bundled.mkdir(parents=True)
         monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
-        monkeypatch.setattr(qr, "_bundled_stdlib_roots", lambda _lang: [bundled])
+        monkeypatch.setattr(qr, "_bundled_stdlib_roots", lambda _lang, **_kwargs: [bundled])
         assert qr._vendored_stdlib_roots("cpp") == [bundled]
 
     def test_bundled_resolves_from_cli(self, monkeypatch, tmp_path):
@@ -227,8 +227,9 @@ class TestVendoredStdlibRoots:
         lib_root = tmp_path / "codeql-queries" / "cpp" / "ql" / "lib"
         lib_root.mkdir(parents=True)
         (lib_root / "qlpack.yml").write_text("name: codeql/cpp-all\n")
+        (tmp_path / "codeql-queries" / "codeql-workspace.yml").write_text("provide: []\n")
         monkeypatch.setenv("CODEQL_CLI", str(cli))
-        assert qr._bundled_stdlib_roots("cpp") == [lib_root]
+        assert qr._bundled_stdlib_roots("cpp") == [tmp_path / "codeql-queries"]
 
     def test_bundled_empty_when_no_cli(self, monkeypatch):
         from packages.codeql import query_runner as qr
@@ -354,3 +355,100 @@ class TestCuratedQueryStructure:
         assert "\nselect" in text.lower() or text.lower().startswith("select"), (
             f"{ql.name} has no select clause"
         )
+
+
+class TestLocalDependencyContracts:
+    @pytest.fixture
+    def dependency_pack(self, tmp_path, monkeypatch):
+        from packages.codeql import query_runner as qr
+
+        pack = tmp_path / "query"
+        pack.mkdir()
+        (pack / "qlpack.yml").write_text('dependencies:\n  codeql/cpp-all: "*"\n')
+        (pack / "query.ql").write_text("select 1\n")
+        root = tmp_path / "libraries"
+        root.mkdir()
+        runner = _bare_runner()
+        runner.codeql_cli = "/selected/distribution/codeql"
+        seen = []
+        def roots(language, *, codeql_cli=None):
+            seen.append((language, codeql_cli))
+            return [root]
+        monkeypatch.setattr(qr, "_vendored_stdlib_roots", roots)
+        return runner, pack, root, seen
+
+    @pytest.mark.parametrize("selection", [".", "query.ql"])
+    def test_uses_selected_cli_for_directory_and_single_query(self, dependency_pack, selection):
+        runner, pack, root, seen = dependency_pack
+        assert runner._local_dependency_roots("cpp", pack / selection) == [root]
+        assert seen == [("cpp", runner.codeql_cli)]
+
+    @pytest.mark.parametrize("contract", ["locked", "broken-lock", "pinned", "extra", "malformed", "oversized", "deep"])
+    def test_never_overrides_dependency_contracts(self, dependency_pack, contract):
+        runner, pack, root, seen = dependency_pack
+        manifest = pack / "qlpack.yml"
+        if contract == "locked":
+            (pack / "codeql-pack.lock.yml").write_text("dependencies: {}\n")
+        elif contract == "broken-lock":
+            (pack / "codeql-pack.lock.yml").symlink_to(pack / "absent")
+        elif contract == "pinned":
+            manifest.write_text("dependencies:\n  codeql/cpp-all: 6.1.3\n")
+        elif contract == "extra":
+            manifest.write_text('dependencies:\n  codeql/cpp-all: "*"\n  example/other: "*"\n')
+        elif contract == "malformed":
+            manifest.write_text("dependencies: [\n")
+        elif contract == "deep":
+            manifest.write_text("[" * 2000 + "]" * 2000)
+        else:
+            manifest.write_text("#" * (64 * 1024 + 1))
+        assert runner._local_dependency_roots("cpp", pack) == []
+        assert not seen
+
+    def test_custom_analysis_selects_roots_without_install_or_network(self, dependency_pack, tmp_path, monkeypatch):
+        import core.sandbox
+        from core.config import RaptorConfig
+
+        runner, pack, root, seen = dependency_pack
+        output = tmp_path / "out"
+        calls = []
+        monkeypatch.setattr(runner, "_compatible_query_args", lambda path: ([str(path)], []))
+        monkeypatch.setattr(RaptorConfig, "CODEQL_OFFLINE", True)
+        def run(command, **scope):
+            calls.append((command, scope))
+            (output / "codeql_cpp_custom.sarif").write_text(json.dumps({"runs": [{"results": []}]}))
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        monkeypatch.setattr(core.sandbox, "run", run)
+        result = runner.run_custom_queries(tmp_path / "db", pack / "query.ql", output, "cpp")
+        assert result.success, result.errors
+        assert len(calls) == 1
+        command, scope = calls[0]
+        assert f"--additional-packs={root}" in command
+        assert scope["block_network"] is True
+        assert str(root) in scope["readable_paths"]
+        assert str(root) not in scope["writable_paths"]
+
+    def test_explicit_cli_wins_over_ambient_cli(self, tmp_path, monkeypatch):
+        from packages.codeql import query_runner as qr
+        install = tmp_path / "selected" / "codeql"
+        install.mkdir(parents=True)
+        binary = install / "codeql"
+        binary.touch()
+        workspace = install.parent / "codeql-queries"
+        library = workspace / "cpp" / "ql" / "lib"
+        library.mkdir(parents=True)
+        (library / "qlpack.yml").write_text("name: codeql/cpp-all\n")
+        (workspace / "codeql-workspace.yml").write_text("provide: []\n")
+        monkeypatch.setenv("CODEQL_CLI", "/wrong/distribution/codeql")
+        assert qr._bundled_stdlib_roots("cpp", codeql_cli=str(binary)) == [workspace]
+
+
+    def test_bare_bundled_library_keeps_leaf_discovery(self, tmp_path):
+        from packages.codeql import query_runner as qr
+        install = tmp_path / "codeql"
+        install.mkdir()
+        binary = install / "codeql"
+        binary.touch()
+        library = tmp_path / "codeql-queries" / "cpp" / "ql" / "lib"
+        library.mkdir(parents=True)
+        (library / "qlpack.yml").write_text("name: codeql/cpp-all\n")
+        assert qr._bundled_stdlib_roots("cpp", codeql_cli=str(binary)) == [library]
