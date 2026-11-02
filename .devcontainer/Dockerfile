@@ -74,12 +74,16 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
 
 COPY --from=ghcr.io/astral-sh/uv:0.7 /uv /usr/local/bin/uv
 COPY .devcontainer/install-python-notices.py /usr/local/libexec/install-python-notices.py
+COPY .devcontainer/refresh-python-notices.py /usr/local/libexec/refresh-python-notices.py
 COPY .devcontainer/opentelemetry-notices/ /usr/share/doc/raptor-opentelemetry-notices/
 COPY .devcontainer/semgrep-notices/ /usr/share/doc/raptor-semgrep-notices/
 RUN uv tool install --no-cache semgrep==1.177.0 \
-    && /root/.local/share/uv/tools/semgrep/bin/python /usr/local/libexec/install-python-notices.py \
+    && /root/.local/share/uv/tools/semgrep/bin/python /usr/local/libexec/refresh-python-notices.py \
+        --evidence-root /usr/share/doc --installed-environment \
+        --if-version-changed \
+    && /root/.local/share/uv/tools/semgrep/bin/python /usr/local/libexec/install-python-notices.py --skip-absent \
         --evidence /usr/share/doc/raptor-opentelemetry-notices \
-    && /root/.local/share/uv/tools/semgrep/bin/python /usr/local/libexec/install-python-notices.py \
+    && /root/.local/share/uv/tools/semgrep/bin/python /usr/local/libexec/install-python-notices.py --skip-absent \
         --evidence /usr/share/doc/raptor-semgrep-notices
 
 # ============================================================================
@@ -128,14 +132,18 @@ COPY .devcontainer/python-notices/ /usr/share/doc/raptor-python-notices/
 RUN bash -eo pipefail -c \
     'uv export --locked --no-hashes --project /tmp --extra web \
      | uv pip install --system --no-cache -r -' \
-    && python3 /usr/local/libexec/install-python-notices.py
+    && python3 /usr/local/libexec/refresh-python-notices.py \
+        --evidence-root /usr/share/doc --installed-environment --if-version-changed \
+    && python3 /usr/local/libexec/install-python-notices.py --skip-absent
 
 # Retain the source-release notice omitted from pydocstyle's wheel.
 # Reinstall the existing version so metadata and notice share this layer.
 COPY .devcontainer/pydocstyle-notices/ /usr/share/doc/raptor-pydocstyle-notices/
 RUN uv pip install --python /usr/local/py-utils/venvs/pydocstyle/bin/python \
         --no-cache --no-deps --reinstall --no-build pydocstyle==6.3.0 \
-    && /usr/local/py-utils/venvs/pydocstyle/bin/python /usr/local/libexec/install-python-notices.py \
+    && /usr/local/py-utils/venvs/pydocstyle/bin/python /usr/local/libexec/refresh-python-notices.py \
+        --evidence-root /usr/share/doc --installed-environment --if-version-changed \
+    && /usr/local/py-utils/venvs/pydocstyle/bin/python /usr/local/libexec/install-python-notices.py --skip-absent \
         --evidence /usr/share/doc/raptor-pydocstyle-notices
 
 # Install Playwright browser + system deps via Playwright's own dep installer.
