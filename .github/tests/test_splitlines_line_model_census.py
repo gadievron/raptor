@@ -69,6 +69,8 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from runtime_universe import repo_root, runtime_file_universe  # noqa: E402
@@ -304,6 +306,7 @@ def census_offenders(rel: str, source: str) -> list[str]:
     return offenders
 
 
+@pytest.mark.wall_budget(30)  # Deliberate AST census over the full runtime tree.
 def test_no_unadjudicated_splitlines_line_pairings() -> None:
     repo = repo_root()
     offenders: list[str] = []
