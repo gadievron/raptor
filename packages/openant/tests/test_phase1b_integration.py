@@ -19,6 +19,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parents[3]))  # repo root
 
 
@@ -441,6 +443,7 @@ class TestOpenantOnlyReachesPhase1b(unittest.TestCase):
             env={**os.environ, "_RAPTOR_TRUSTED": "1"},
         )
 
+    @pytest.mark.slow  # Full agentic CLI pipeline, including scanner startup.
     def test_openant_only_invocation_reaches_openant_phase(self):
         """Real invocation shape: --repo <dir> --openant-only must get
         past the guard and print the OpenAnt phase banner (the fake
@@ -452,6 +455,7 @@ class TestOpenantOnlyReachesPhase1b(unittest.TestCase):
             self.assertNotIn("nothing to scan", combined)
             self.assertIn("OPENANT SEMANTIC SCAN", combined)
 
+    @pytest.mark.slow
     def test_sarif_also_scan_openant_only(self):
         """--sarif + --also-scan + --openant-only: skip_scan is False,
         yet OpenAnt is the enabled scanner — the run must reach BOTH
@@ -466,6 +470,7 @@ class TestOpenantOnlyReachesPhase1b(unittest.TestCase):
             self.assertIn("OPENANT SEMANTIC SCAN", combined)
             self.assertIn("SARIF IMPORT", combined)
 
+    @pytest.mark.slow
     def test_sarif_openant_only(self):
         """--sarif + --openant-only (no --also-scan): the import
         replaces the pattern-scan step and OpenAnt still runs."""
@@ -1055,6 +1060,7 @@ class TestAgenticOpenantHardFailure(unittest.TestCase):
     _run_agentic = TestOpenantOnlyReachesPhase1b._run_agentic
     _EMPTY_SARIF = TestOpenantOnlyReachesPhase1b._EMPTY_SARIF
 
+    @pytest.mark.slow
     def test_sole_scanner_hard_failure_fails_run_with_reason(self):
         with tempfile.TemporaryDirectory() as td:
             proc = self._run_agentic(td, ["--openant-only"])
@@ -1064,6 +1070,7 @@ class TestAgenticOpenantHardFailure(unittest.TestCase):
             self.assertNotIn("OpenAnt unavailable", combined)
             self.assertIn("no other scan results", combined)
 
+    @pytest.mark.slow
     def test_hard_failure_beside_imported_sarif_continues(self):
         """Another finding source exists (--sarif import): the run
         continues past Phase 1b with the failed wording — the eventual
