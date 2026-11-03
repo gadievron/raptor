@@ -1,6 +1,10 @@
 """Tests for condition_smt — constant-to-SMT bridge for guard sufficiency."""
 
 
+import pytest
+
+pytestmark = pytest.mark.usefixtures("owned_smt_subprocess")
+
 from core.audit.condition_extraction import GuardCondition, SinkGuard
 from core.audit.condition_smt import (
     _SECURITY_FIELDS,

@@ -98,10 +98,9 @@ class TestSmtChildTwoTreeLayout:
     """Child spawned from tree A with ambient RAPTOR_DIR=tree B must
     import tree A's modules."""
 
-    def test_poisoned_env_breaks_the_bare_child(self, tmp_path):
-        """Fixture validity: WITHOUT the pin, the poisoned env really
-        does route the child into the fake tree (the pre-fix failure
-        shape — child exits nonzero)."""
+    def test_named_child_ignores_poisoned_env(self, tmp_path):
+        """The named bootstrap pins code from its own file, even when
+        invoked directly with an owned request and a poisoned env."""
         import json
 
         from core.audit.subproc_json import _CHILD_SCRIPT_PATH
@@ -114,14 +113,14 @@ class TestSmtChildTwoTreeLayout:
         }).encode("utf-8")
         proc = subprocess.run(
             [
-                sys.executable, _CHILD_SCRIPT_PATH,
-                "core.audit.sweep:_run_smt_verb_inner_json",
+                sys.executable, "-I", "-B", _CHILD_SCRIPT_PATH,
+                "core.audit.sweep:_run_smt_verb_inner_json", "", "2048", "10",
             ],
             input=payload, capture_output=True, timeout=30,
             check=False, env={"RAPTOR_DIR": poisoned},
         )
-        assert proc.returncode != 0
-        assert b"TypeError" in proc.stderr
+        assert proc.returncode == 0, proc.stderr
+        assert json.loads(proc.stdout)["outcome"] == "inconclusive"
 
     def test_smt_child_env_pins_own_tree(self, tmp_path, monkeypatch):
         from core.audit.sweep import smt_child_env
@@ -138,6 +137,15 @@ class TestSmtChildTwoTreeLayout:
         poison, because RAPTOR_DIR is pinned at the spawn chokepoint."""
         from core.audit.sweep import run_smt_verb_direct
 
+        # Cross-checkout import semantics use an owned fixture. Native
+        # tests separately require delivery of the real sandbox floor.
+        from core.audit import subproc_json
+        def run_owned(command, **options):
+            assert options['restrict_reads'] and options['_untrusted_workload']
+            return subprocess.run(command, input=options['input'],
+                                  stdout=options['stdout'], stderr=options['stderr'],
+                                  env=options['env'], cwd=options['cwd'], timeout=options['timeout'])
+        monkeypatch.setattr(subproc_json, '_sandbox_run', run_owned)
         poisoned = _make_poisoned_tree(tmp_path / "tree-b")
         monkeypatch.setenv("RAPTOR_DIR", poisoned)
         result = run_smt_verb_direct(

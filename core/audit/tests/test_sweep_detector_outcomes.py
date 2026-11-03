@@ -10,6 +10,10 @@ negative → refuted; positive → confirmed.
 
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.usefixtures("owned_smt_subprocess")
+
 from core.audit.sweep import _negative_outcome, run_smt_verb_direct
 
 _EMPTYISH = "int f(void) { return 0; }"
