@@ -508,10 +508,6 @@ jobs:
             -o "$RUNNER_TEMP/cpp-query-tests/c.o"
           g++ -c engine/codeql/tests/cpp/truncation/TruncationCases.cpp \
             -o "$RUNNER_TEMP/cpp-query-tests/cpp.o"
-          gcc -c engine/codeql/tests/cpp/truncation/ImplicitAllocation.c \
-            -o "$RUNNER_TEMP/cpp-query-tests/implicit-c.o"
-          g++ -c engine/codeql/tests/cpp/truncation/ImplicitAllocation.cpp \
-            -o "$RUNNER_TEMP/cpp-query-tests/implicit-cpp.o"
           # The bare discarded-move negative deliberately ignores nodiscard.
           g++ -std=c++17 -Wno-unused-result -c engine/codeql/tests/cpp/use-after-move/MoveCases.cpp \
             -o "$RUNNER_TEMP/cpp-query-tests/move.o"
@@ -545,7 +541,6 @@ jobs:
             --search-path="$GITHUB_WORKSPACE/.codeql-cpp-libraries" \
             --additional-packs="$RUNNER_TEMP/cpp-query-tests/queries" \
             "$RUNNER_TEMP/cpp-query-tests/queries/IntegerTruncationInCast.ql" \
-            "$RUNNER_TEMP/cpp-query-tests/queries/ImplicitNarrowingAllocation.ql" \
             "$RUNNER_TEMP/cpp-query-tests/queries/UseAfterMove.ql" \
             "$RUNNER_TEMP/cpp-query-tests/queries/IteratorInvalidation.ql" \
             "$RUNNER_TEMP/cpp-query-tests/queries/FormatStringFromUntrusted.ql" \

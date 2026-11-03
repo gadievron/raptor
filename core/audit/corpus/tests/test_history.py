@@ -133,7 +133,7 @@ class TestRecordRun:
             [_row()], {"wall_s": 5.0, "cost_usd": 1.25, "model": "m"},
             output_path=out, run_tag="1700000000",
             labels=[_label()],
-            config={"mode": "ensemble", "triage": "off"},
+            config={"mode": "security", "triage": "off"},
             store=store,
         )
         assert ok is True
@@ -142,7 +142,7 @@ class TestRecordRun:
         run = runs[0]
         assert run["run_id"] == "corpus-full-v9"
         assert run["timestamp"].startswith("2023-11-14")
-        assert run["config"] == {"mode": "ensemble", "triage": "off"}
+        assert run["config"] == {"mode": "security", "triage": "off"}
         assert len(run["label_set_hash"]) == 64
         assert run["cost_usd"] == 1.25
         assert run["totals"]["labels"] == 1
@@ -467,7 +467,7 @@ class TestImport:
 
 class TestStability:
     def _store(self):
-        config = {"mode": "ensemble", "triage": "off"}
+        config = {"mode": "security", "triage": "off"}
         runs = [
             _run_rec("r1", tree="t" * 40, config=config),
             _run_rec("r2", tree="t" * 40, config=config),
@@ -501,7 +501,7 @@ class TestStability:
 
     def test_config_split_prevents_grouping(self):
         runs, labels_by_run = self._store()
-        runs[1]["config"] = {"mode": "security", "triage": "off"}
+        runs[1]["config"] = {"mode": "quality", "triage": "off"}
         assert history.stability_groups(runs, labels_by_run) == []
 
     def test_no_groups_message(self):
@@ -623,7 +623,7 @@ class TestWriterHook:
     def test_audit_run_records_history(self, tmp_path, monkeypatch):
         self._patch_common(tmp_path, monkeypatch)
         monkeypatch.setattr(
-            run_corpus, "_run_ensemble_audit",
+            run_corpus, "_run_audit",
             lambda labels, dirs, **kw: ([_row()], []),
         )
         store = tmp_path / "hook-store.jsonl"
@@ -636,7 +636,7 @@ class TestWriterHook:
         assert len(runs) == 1
         run = runs[0]
         assert run["run_id"] == "corpus-hook-run"
-        assert run["config"]["mode"] == "ensemble"
+        assert run["config"]["mode"] == "security"
         assert run["config"]["triage"] == "off"
         assert run["config"]["prefilter"] == "off"
         assert run["config"]["scope"] == "excerpt"
@@ -649,7 +649,7 @@ class TestWriterHook:
     def test_gate_fail_run_still_records(self, tmp_path, monkeypatch):
         self._patch_common(tmp_path, monkeypatch)
         monkeypatch.setattr(
-            run_corpus, "_run_ensemble_audit",
+            run_corpus, "_run_audit",
             lambda labels, dirs, **kw: (
                 [_row(expected="finding", actual="clean", match=False)],
                 [],
@@ -708,7 +708,7 @@ class TestWriterHook:
     ):
         self._patch_common(tmp_path, monkeypatch)
         monkeypatch.setattr(
-            run_corpus, "_run_ensemble_audit",
+            run_corpus, "_run_audit",
             lambda labels, dirs, **kw: ([_row()], []),
         )
         blocker = tmp_path / "blocker"
@@ -755,13 +755,13 @@ class TestProfileField:
         out.write_text("{}")
         assert history.record_run(
             [_row()], {}, output_path=out, labels=[_label()],
-            config={"mode": "ensemble"}, store=store, profile="cold",
+            config={"mode": "security"}, store=store, profile="cold",
         )
         runs, _ = history.load_store(store)
         assert runs[0]["profile"] == "cold"
 
     def test_stability_never_mixes_profiles(self):
-        config = {"mode": "ensemble"}
+        config = {"mode": "security"}
         runs = [
             _run_rec("c1", tree="t" * 40, config=config, profile="cold"),
             _run_rec("c2", tree="t" * 40, config=config, profile="cold"),
@@ -784,9 +784,9 @@ class TestProfileField:
         assert "profile deployed" in report
 
     def test_format_runs_shows_profile_column(self):
-        rec = _run_rec("r1", tree="t" * 40, config={"mode": "ensemble"},
+        rec = _run_rec("r1", tree="t" * 40, config={"mode": "security"},
                        profile="cold")
-        old = _run_rec("r0", tree="t" * 40, config={"mode": "ensemble"})
+        old = _run_rec("r0", tree="t" * 40, config={"mode": "security"})
         old.pop("profile", None)
         out = history.format_runs([rec, old])
         assert "Profile" in out

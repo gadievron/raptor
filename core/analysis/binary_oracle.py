@@ -33,8 +33,6 @@ classifier is the consumer-facing contract, not the parsing details.
 
 from __future__ import annotations
 
-import contextlib
-import io
 import logging
 import os
 import re
@@ -169,87 +167,56 @@ def _run_status(argv: list[str], timeout: int = 60,
     return proc.stdout or "", True
 
 
-# Bound one decoded record without capping legitimate multi-GB DWARF files.
-_MAX_STREAM_LINE_CHARS = 8 * 1024 * 1024
-
-
-class _StreamRefused(RuntimeError):
-    """The output cannot be treated as complete DWARF evidence."""
-
-
-class _OwnedOutputReader(io.RawIOBase):
-    """Read the retained file without trusting its child-shared seek offset.
-
-    The enclosing file context owns the descriptor. Closing this
-    reader closes only the buffering stack, not that retained descriptor.
-    """
-
-    def __init__(self, descriptor: int):
-        super().__init__()
-        self._descriptor = descriptor
-        self._offset = 0
-
-    def readable(self) -> bool:
-        return True
-
-    def readinto(self, buffer) -> int:
-        data = os.pread(self._descriptor, len(buffer), self._offset)
-        self._offset += len(data)
-        buffer[:len(data)] = data
-        return len(data)
-
-
-@contextlib.contextmanager
-def _owned_output(directory: str) -> Iterator[int]:
-    """Create once and delegate a non-inheritable descriptor above stdio."""
-    with tempfile.NamedTemporaryFile(mode="w+b", prefix="stdout-", dir=directory, delete=False) as created:
-        copies = []
-        try:
-            descriptor = os.dup(created.fileno())
-            copies.append(descriptor)
-            while descriptor < 3:
-                descriptor = os.dup(descriptor)
-                copies.append(descriptor)
-            created.close()
-            while len(copies) > 1:
-                os.close(copies.pop(0))
-            yield descriptor
-        finally:
-            for descriptor in copies:
-                os.close(descriptor)
-
-
 def _stream(argv: list[str], timeout: int,
             binary: Path | str | None = None) -> Iterator[str]:
-    """Stream a completed tool's large stdout from a parent-owned file.
+    """Stream stdout line-by-line from a system tool. Used when the
+    output may be large (e.g. ``objdump --dwarf=info`` on a multi-MB
+    binary produces 1-3 GB of text); ``_run`` would buffer it all into
+    memory and OOM. Yields each line stripped of its trailing newline.
 
-    Keep multi-GB DWARF output on disk. The child receives an explicit file
-    capability, never a filename for the parent to reopen later. stderr
-    stays on the sandbox's bounded capture path. Stream refusals propagate
-    so the DWARF collector can discard every previously parsed record.
+    Same sandbox posture as ``_run`` (the parsed bytes are untrusted).
+    The sandbox runners capture output rather than stream it, so the
+    tool runs to completion with stdout redirected to a file inside a
+    throwaway sandbox-writable directory, and the file is then streamed
+    from the parent. Trade-off vs the old unsandboxed Popen: the full
+    output transits $TMPDIR once (bounded by the sandbox's
+    ``max_file_mb`` rlimit); hosts with a small tmpfs /tmp can point
+    TMPDIR elsewhere. The redirect happens inside bash via "$@"/env so
+    attacker-influenced paths never enter a shell string.
+
+    On any failure (tool missing, non-zero rc with no output, timeout)
+    yields nothing — same swallow-and-degrade contract as ``_run``.
     """
+    from core.config import RaptorConfig
     from core.sandbox import run as _sandbox_run
-    from core.security.env_sanitisation import subprocess_tmpdir
     target = str(Path(binary).resolve().parent) if binary else None
-    with tempfile.TemporaryDirectory(prefix="raptor-bo-stream-", dir=subprocess_tmpdir()) as td, \
-            _owned_output(td) as output_fd:
-        wrapper = ["bash", "-c", 'exec 1>&"$1"; shift; exec "$@"',
-                   "bo-stream", str(output_fd), *argv]
+    with tempfile.TemporaryDirectory(prefix="raptor-bo-stream-") as td:
+        out_path = os.path.join(td, "stdout.txt")
+        env = RaptorConfig.get_safe_env()
+        env["RAPTOR_BO_OUT"] = out_path
+        wrapper = ["bash", "-c", 'exec "$@" > "$RAPTOR_BO_OUT"',
+                   "bo-stream"] + list(argv)
         try:
-            proc = _sandbox_run(
-                wrapper, block_network=True, target=target, output=td,
-                strict_env=True, stdin=subprocess.DEVNULL,
-                # The newly created file is within output= and passes the
-                # ordinary descriptor policy; no capability waiver is needed.
-                pass_fds=(output_fd,),
-                capture_output=True, text=True,
-                encoding="utf-8", errors="replace", timeout=timeout,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
+            # errors="replace" for the (small) captured stderr channel —
+            # same rationale as ``_run_status``; the big stdout stream is
+            # already read back with errors="replace" below.
+            proc = _sandbox_run(wrapper, block_network=True, target=target,
+                                output=td, env=env, strict_env=True,
+                                capture_output=True, text=True,
+                                encoding="utf-8", errors="replace",
+                                timeout=timeout)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            # Exception text quotes target-derived paths — escape.
             logger.warning("binary_oracle: %s failed/timed out: %s",
-                           argv[0], escape_nonprintable(str(exc)))
+                           argv[0], escape_nonprintable(str(e)))
             return
         if proc.returncode != 0:
+            # Same contract as ``_run_status``: a non-zero exit means
+            # the redirected output file may be truncated mid-stream —
+            # a DWARF dump cut off halfway would silently classify
+            # every function past the cut as ``absent``. Yield nothing
+            # so the caller degrades to the no-DWARF tier instead.
+            # Same escape rationale as ``_run_status``.
             logger.warning(
                 "binary_oracle: %s rc=%s on %s — discarding partial "
                 "output (stderr=%s)",
@@ -257,14 +224,10 @@ def _stream(argv: list[str], timeout: int,
                 escape_nonprintable(str(argv[-1])),
                 escape_nonprintable((proc.stderr or "")[:200]))
             return
-        raw = _OwnedOutputReader(output_fd)
-        with io.TextIOWrapper(io.BufferedReader(raw), encoding="utf-8", errors="replace") as reader:
-            while True:
-                line = reader.readline(_MAX_STREAM_LINE_CHARS + 1)
-                if not line:
-                    break
-                if len(line) > _MAX_STREAM_LINE_CHARS:
-                    raise _StreamRefused(f"tool output line exceeds {_MAX_STREAM_LINE_CHARS} characters")
+        if not Path(out_path).exists():
+            return
+        with Path(out_path).open(encoding="utf-8", errors="replace") as fh:
+            for line in fh:
                 yield line.rstrip("\n")
 
 
@@ -741,93 +704,87 @@ def _parse_dwarf(binary_path: Path) -> tuple[dict[int, _SubprogramDIE], list[int
                  if d < die_depth]
         return "::".join(parts)
 
-    try:
-        for line in _stream(
-                ["objdump", "--dwarf=info", str(binary_path)], timeout=600,
-                binary=binary_path):
-            m = die_re.match(line)
-            if m:
-                _flush()
-                die_depth = int(m.group(1))
-                # Pop stale namespace entries from sibling subtrees we've left.
-                for d in [d for d in depth_to_name if d >= die_depth]:
-                    depth_to_name.pop(d, None)
-                tag = m.group(3)
-                if tag == "DW_TAG_subprogram":
-                    cur_offset = int(m.group(2), 16)
-                    cur_die = _SubprogramDIE(
-                        namespace_path=_current_namespace_path(die_depth))
-                elif tag == "DW_TAG_inlined_subroutine":
-                    cur_is_inline_instance = True
-                elif tag in _SCOPE_TAGS:
-                    cur_scope_depth = die_depth
-                    cur_scope_name = ""
+    for line in _stream(
+            ["objdump", "--dwarf=info", str(binary_path)], timeout=600,
+            binary=binary_path):
+        m = die_re.match(line)
+        if m:
+            _flush()
+            die_depth = int(m.group(1))
+            # Pop stale namespace entries from sibling subtrees we've left.
+            for d in [d for d in depth_to_name if d >= die_depth]:
+                depth_to_name.pop(d, None)
+            tag = m.group(3)
+            if tag == "DW_TAG_subprogram":
+                cur_offset = int(m.group(2), 16)
+                cur_die = _SubprogramDIE(
+                    namespace_path=_current_namespace_path(die_depth))
+            elif tag == "DW_TAG_inlined_subroutine":
+                cur_is_inline_instance = True
+            elif tag in _SCOPE_TAGS:
+                cur_scope_depth = die_depth
+                cur_scope_name = ""
+            continue
+
+        if cur_die is not None:
+            ma = attr_re.search(line)
+            if not ma:
                 continue
+            attr, value = ma.group(1), ma.group(2)
+            if attr == "name":
+                # Either inline ``: foo`` or ``(indirect string, ...): foo``.
+                ind = name_indirect_re.search(value)
+                cur_die.name = (ind.group(1) if ind else value).strip()
+            elif attr == "linkage_name":
+                ind = name_indirect_re.search(value)
+                linkage = (ind.group(1) if ind else value).strip()
+                cur_die.linkage_name = linkage
+                # Legacy fallback: if DW_AT_name was missing, the mangled
+                # linkage name was previously used as the local name.
+                # Keep that path so existing behaviour is unchanged when
+                # no demangler is available.
+                if not cur_die.name:
+                    cur_die.name = linkage
+            elif attr == "low_pc":
+                ma2 = addr_re.search(value)
+                if ma2:
+                    cur_die.low_pc = int(ma2.group(1), 16)
+            elif attr == "inline":
+                # DW_AT_inline integer code, prefixing a human description:
+                #   0  — not inlined
+                #   1  — DW_INL_inlined (auto, actually inlined)
+                #   2  — DW_INL_declared_not_inlined (had ``inline`` keyword
+                #        but the compiler chose NOT to inline)
+                #   3  — DW_INL_declared_inlined (declared inline AND inlined)
+                # Only 1 and 3 mean "an inlined instance exists somewhere".
+                # The prior substring match ``"inlined" in value`` matched
+                # the human-readable text of code 2 too ("declared as inline
+                # but not inlined") — asymmetrically safe (elevates absent →
+                # inlined rather than dropping findings) but pollutes the
+                # inlined-vs-absent split. Parse the integer code instead.
+                v = value.lstrip()
+                if v.startswith(("1", "3")) and not v.startswith(("10", "30")):
+                    cur_die.has_inline_marker = True
+            elif attr == "specification":
+                # Definition pointing back to its declaration DIE; resolved
+                # in the post-pass to inherit name + namespace_path.
+                mo = aorig_re.search(value)
+                if mo:
+                    cur_die.specification = int(mo.group(1), 16)
 
-            if cur_die is not None:
-                ma = attr_re.search(line)
-                if not ma:
-                    continue
-                attr, value = ma.group(1), ma.group(2)
-                if attr == "name":
-                    # Either inline ``: foo`` or ``(indirect string, ...): foo``.
-                    ind = name_indirect_re.search(value)
-                    cur_die.name = (ind.group(1) if ind else value).strip()
-                elif attr == "linkage_name":
-                    ind = name_indirect_re.search(value)
-                    linkage = (ind.group(1) if ind else value).strip()
-                    cur_die.linkage_name = linkage
-                    # Legacy fallback: if DW_AT_name was missing, the mangled
-                    # linkage name was previously used as the local name.
-                    # Keep that path so existing behaviour is unchanged when
-                    # no demangler is available.
-                    if not cur_die.name:
-                        cur_die.name = linkage
-                elif attr == "low_pc":
-                    ma2 = addr_re.search(value)
-                    if ma2:
-                        cur_die.low_pc = int(ma2.group(1), 16)
-                elif attr == "inline":
-                    # DW_AT_inline integer code, prefixing a human description:
-                    #   0  — not inlined
-                    #   1  — DW_INL_inlined (auto, actually inlined)
-                    #   2  — DW_INL_declared_not_inlined (had ``inline`` keyword
-                    #        but the compiler chose NOT to inline)
-                    #   3  — DW_INL_declared_inlined (declared inline AND inlined)
-                    # Only 1 and 3 mean "an inlined instance exists somewhere".
-                    # The prior substring match ``"inlined" in value`` matched
-                    # the human-readable text of code 2 too ("declared as inline
-                    # but not inlined") — asymmetrically safe (elevates absent →
-                    # inlined rather than dropping findings) but pollutes the
-                    # inlined-vs-absent split. Parse the integer code instead.
-                    v = value.lstrip()
-                    if v.startswith(("1", "3")) and not v.startswith(("10", "30")):
-                        cur_die.has_inline_marker = True
-                elif attr == "specification":
-                    # Definition pointing back to its declaration DIE; resolved
-                    # in the post-pass to inherit name + namespace_path.
-                    mo = aorig_re.search(value)
-                    if mo:
-                        cur_die.specification = int(mo.group(1), 16)
+        elif cur_scope_depth is not None:
+            ma = attr_re.search(line)
+            if ma and ma.group(1) == "name":
+                ind = name_indirect_re.search(ma.group(2))
+                cur_scope_name = (
+                    ind.group(1) if ind else ma.group(2)).strip()
 
-            elif cur_scope_depth is not None:
-                ma = attr_re.search(line)
-                if ma and ma.group(1) == "name":
-                    ind = name_indirect_re.search(ma.group(2))
-                    cur_scope_name = (
-                        ind.group(1) if ind else ma.group(2)).strip()
-
-            elif cur_is_inline_instance:
-                ma = attr_re.search(line)
-                if ma and ma.group(1) == "abstract_origin":
-                    mo = aorig_re.search(ma.group(2))
-                    if mo:
-                        inlines.append(int(mo.group(1), 16))
-
-    except (_StreamRefused, OSError) as exc:
-        logger.warning("binary_oracle: incomplete DWARF for %s — discarding partial output (%s)",
-                       escape_nonprintable(str(binary_path)), escape_nonprintable(str(exc)))
-        return {}, []
+        elif cur_is_inline_instance:
+            ma = attr_re.search(line)
+            if ma and ma.group(1) == "abstract_origin":
+                mo = aorig_re.search(ma.group(2))
+                if mo:
+                    inlines.append(int(mo.group(1), 16))
 
     _flush()
 

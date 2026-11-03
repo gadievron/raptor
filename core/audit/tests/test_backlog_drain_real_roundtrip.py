@@ -134,10 +134,7 @@ def _fake_llm(monkeypatch, tmp_path: Path, rule_body: str) -> None:
 
 
 @needs_semgrep
-@pytest.mark.slow
 class TestRealRoundTrip:
-    # These intentionally execute sandboxed Semgrep probes and synthesis
-    # controls; keep real journal/backlog coverage in the slow tier.
     def test_semgrepable_dark_row_is_witnessed(self, tmp_path, monkeypatch):
         _probe_or_skip_semgrep(tmp_path)
         run_dir, target = _fixtures(tmp_path)

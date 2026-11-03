@@ -1,7 +1,7 @@
 """End-to-end wiring test for the pre-loop LLM summary pass.
 
 The pass (core.audit.llm_summaries) was unwired from the audit body in
-the ensemble-pipeline rework and silently produced nothing for weeks.
+a pipeline rework and silently produced nothing for weeks.
 This test pins the restored wiring at the integration level: a real
 ``run_orchestrator`` run over a tiny hermetic C target, with the LLM
 stubbed at the client boundary, must

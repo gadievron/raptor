@@ -3,8 +3,8 @@
 The contention shapes: a LIVE holder (including one draining after
 SIGTERM) refuses a second orchestrator loudly; a proven-dead holder's
 stale lock is reclaimed automatically; an unverifiable holder fails
-closed; in-process re-entry (ensemble passes, threads of one
-orchestrator) is a no-op; lifecycle stubs and read-only consumers
+closed; in-process re-entry (threads of one orchestrator) is a no-op;
+lifecycle stubs and read-only consumers
 never touch the lock.
 """
 
@@ -384,7 +384,7 @@ def test_acquired_fd_is_cloexec_and_registered(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# in-process flows (ensemble passes, threads) are unaffected
+# in-process flows (threads) are unaffected
 # ---------------------------------------------------------------------------
 
 def test_in_process_reacquisition_is_a_noop(tmp_path):

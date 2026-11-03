@@ -1046,7 +1046,7 @@ class OrchestratorConfig:
     # invoked after resolution but BEFORE the journal correction pass
     # and the graded findings export, so any status change they make
     # is reflected consistently in journal, export, and summary
-    # counters (e.g. the ensemble pipeline's file-pile-up dampener).
+    # counters (e.g. the file-pile-up dampener).
     pre_export_hooks: list | None = None
     # Monotonic deadline for the run (start + max_seconds), stamped by
     # ``run_orchestrator``. Verification tools with long per-query
@@ -2174,7 +2174,6 @@ def run_orchestrator(
     review_fn: Callable[[dict[str, Any], OrchestratorConfig], ReviewOutcome],
     *,
     on_progress: Callable[[int, int, ReviewOutcome], None] | None = None,
-    prep_cache: dict | None = None,
 ) -> OrchestratorResult:
     """Run the orchestrator loop.
 
@@ -2185,11 +2184,6 @@ def run_orchestrator(
             The orchestrator is agnostic to HOW the LLM is called — the
             consumer provides the implementation.
         on_progress: Optional callback (current_idx, total, outcome).
-        prep_cache: Shared dict for ensemble (multi-model) runs: the
-            first pass stores its prep result and coordination keys
-            (``_lock``/``_event``/``_ready``) here for later passes to
-            reuse, and ``_caches_cleared`` gates the per-run module
-            cache / shutdown-state reset to once per shared dict.
 
     Returns:
         OrchestratorResult summarizing the run.
@@ -2217,8 +2211,7 @@ def run_orchestrator(
     # Reset per-run shutdown state BEFORE installing the handler (see
     # _reset_shutdown_state): a prior in-process run's stop request or
     # first-TERM count must not poison this run.
-    if prep_cache is None or not prep_cache.get("_caches_cleared"):
-        _reset_shutdown_state()
+    _reset_shutdown_state()
 
     # Graceful SIGTERM (main thread, once): drain + salvage instead of
     # dying mid-write when an external supervisor stops the run.
@@ -2239,15 +2232,12 @@ def run_orchestrator(
 
         _sigterm_flush_hooks.append(_mark_interrupted_on_forced_exit)
 
-    if prep_cache is None or not prep_cache.get("_caches_cleared"):
-        _sink_guard_cache.clear()
-        _clear_file_lines_cache()
-        _parse_wrapper_cache.clear()
-        # line_end values come from the run's inventory — stale bounds
-        # from a previous in-process run mis-window the sweeps.
-        _line_end_cache.clear()
-        if prep_cache is not None:
-            prep_cache["_caches_cleared"] = True
+    _sink_guard_cache.clear()
+    _clear_file_lines_cache()
+    _parse_wrapper_cache.clear()
+    # line_end values come from the run's inventory — stale bounds
+    # from a previous in-process run mis-window the sweeps.
+    _line_end_cache.clear()
 
     # ── Environment preflight ──────────────────────────────────────
     # Refuse the run start when TMPDIR (every dispatch stages files
@@ -2489,7 +2479,6 @@ def run_orchestrator(
             start_time=start_time,
             joern_server=joern_server,
             joern_timeout_s=joern_timeout_s,
-            prep_cache=prep_cache,
             joern_presweep_future=joern_presweep_future,
             joern_presweep_activity=joern_presweep_activity,
             joern_presweep_abort=joern_presweep_abort,
@@ -5492,8 +5481,6 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
     """Compute all mode-independent prep for the audit loop.
 
     Returns a dict of prep results, or None if checklist is missing.
-    In ensemble mode, this is called once and the result shared across
-    both passes — all computation here is mode-independent.
 
     ``presweep_future`` / ``presweep_activity``: the Joern pre-sweep
     future run_orchestrator submitted at server start (and the
@@ -8714,7 +8701,6 @@ def _run_audit_body(
     start_time,
     joern_server,
     joern_timeout_s,
-    prep_cache=None,
     joern_presweep_future=None,
     joern_presweep_activity=None,
     joern_presweep_abort=None,
@@ -8736,88 +8722,26 @@ def _run_audit_body(
 
         set_joern_server(joern_server)
 
-    # --- Ensemble prep cache: first pass computes, second reuses ---
-    _prep = None
-    _prep_event = None
-    if prep_cache is not None:
-        _prep_lock = prep_cache.setdefault("_lock", _threading.Lock())
-        _prep_event = prep_cache.setdefault("_event", _threading.Event())
-
-        _role = "compute"
-        with _prep_lock:
-            if prep_cache.get("_ready"):
-                _role = "reuse"
-            elif prep_cache.get("_computing"):
-                _role = "wait"
-            else:
-                prep_cache["_computing"] = True
-
-        if _role == "reuse":
-            from copy import deepcopy
-            try:
-                _prep = deepcopy(prep_cache["_prep"])
-            except TypeError:
-                logger.warning(
-                    "ensemble prep: deepcopy failed (unpicklable object "
-                    "in cached prep) — will recompute",
-                )
-            else:
-                logger.info(
-                    "ensemble prep: reusing cached prep from first pass",
-                )
-        elif _role == "wait":
-            _prep_event.wait(timeout=600)
-            if prep_cache.get("_prep") is not None:
-                from copy import deepcopy
-                try:
-                    _prep = deepcopy(prep_cache["_prep"])
-                except TypeError:
-                    logger.warning(
-                        "ensemble prep: deepcopy failed (unpicklable "
-                        "object in cached prep) — will recompute",
-                    )
-                else:
-                    logger.info(
-                        "ensemble prep: reusing cached prep (waited)",
-                    )
-
+    _empty_inventory = False
+    try:
+        _prep = _compute_audit_prep(
+            config, joern_server=joern_server, on_progress=on_progress,
+            presweep_future=joern_presweep_future,
+            presweep_activity=joern_presweep_activity,
+            presweep_abort=joern_presweep_abort,
+            cost_ledger=result.cost_tracker,
+        )
+    except EmptyInventoryError as exc:
+        logger.error("%s", exc)
+        _empty_inventory = True
     if _prep is None:
-        _empty_inventory = False
-        try:
-            _prep = _compute_audit_prep(
-                config, joern_server=joern_server, on_progress=on_progress,
-                presweep_future=joern_presweep_future,
-                presweep_activity=joern_presweep_activity,
-                presweep_abort=joern_presweep_abort,
-                cost_ledger=result.cost_tracker,
-            )
-        except EmptyInventoryError as exc:
-            # Startup refusal, not a crash: mirror the missing-checklist
-            # early return (same presweep cleanup) under its own stop
-            # reason so the CLI can fail the lifecycle and exit nonzero
-            # instead of stamping a completed "0 findings" run.
-            logger.error("%s", exc)
-            _empty_inventory = True
-        finally:
-            if _prep_event is not None:
-                if _prep is not None:
-                    prep_cache["_prep"] = _prep
-                    prep_cache["_ready"] = True
-                _prep_event.set()
-        if _prep is None:
-            result.terminated_by = (
-                "empty_inventory" if _empty_inventory else "no_checklist"
-            )
-            _discard_presweep_future(
-                joern_presweep_future, abort_event=joern_presweep_abort,
-            )
-            return result
-    elif joern_presweep_future is not None:
-        # Prep reused from the ensemble cache: this pass's own
-        # server-start submission has no consumer — discard it.
+        result.terminated_by = (
+            "empty_inventory" if _empty_inventory else "no_checklist"
+        )
         _discard_presweep_future(
             joern_presweep_future, abort_event=joern_presweep_abort,
         )
+        return result
 
     checklist = _prep["checklist"]
     context_map = _prep["context_map"]
@@ -11524,9 +11448,9 @@ def _run_audit_body(
     except Exception:
         logger.debug("absent-promotion demotion failed", exc_info=True)
 
-    # --- Phase 2: security impact classification (bug_first mode) ---
-    if config.mode.has_security_phase:
-        _run_phase2(result, config)
+    # --- Weakness chaining (all security-phase modes) ---
+    if any(o.status == "weakness" for o in result.outcomes):
+        _run_weakness_chains(result, config)
 
     # --- Terminal environment-stop sweep ---
     # The passes behind the flag-stop gates (edge review during prep,
@@ -11658,10 +11582,10 @@ def _run_audit_body(
             "gadget-absence demotion pass failed", exc_info=True,
         )
 
-    # Pre-export hooks: outcome-level post-processing (e.g. the ensemble
-    # pipeline's file-pile-up dampener) runs BEFORE the journal
-    # correction pass and the graded export so stats, journal and
-    # findings-graded.json all agree on the final statuses.
+    # Pre-export hooks: outcome-level post-processing (e.g. the
+    # file-pile-up dampener) runs BEFORE the journal correction pass
+    # and the graded export so stats, journal and findings-graded.json
+    # all agree on the final statuses.
     for _hook in (config.pre_export_hooks or ()):
         try:
             _hook(result, config)
@@ -14519,7 +14443,7 @@ def _multi_pass_review(
                 # configured model gets ITS review_fn (pinned via
                 # make_review_fn(model_name=...)). Falling back to the
                 # single review_fn keeps consumers that never built the
-                # map (tests, ensemble mode) on the old behaviour.
+                # map (tests) on the old behaviour.
                 model_review_fn = review_fns.get(model_name, review_fn)
                 outcome = model_review_fn(context, config)
                 return _outcome_to_panel_result(outcome, model_name)
@@ -27707,129 +27631,6 @@ def _find_gap_in_checklist(
     }
 
 
-def _run_phase2(result, config) -> None:
-    """Phase 2 security classification + Phase 2b chaining (bug_first mode)."""
-    _p2_model = (
-        config.models[0]
-        if config.models and config.models[0] != "default"
-        else None
-    )
-    # The run's budget-governed client (see _run_llm_client): a private
-    # LLMClient here carried its own default cap, so the whole
-    # Phase-2/2b spend bypassed the --max-cost reservation gate and the
-    # run's spend ledger. Model pinning rides model_name= on each call;
-    # the no-budget-client fallback pins the run's primary model.
-    _p2_client = _run_llm_client(config)
-
-    # Environment gate for both phase loops (classification and chain
-    # evaluation dispatch one LLM call per item). This phase runs
-    # after the last full rails poll, so the gate carries the booking
-    # stop check: a conclusion here must book the environment stop —
-    # nothing downstream would re-book it.
-    _env_gate = _make_dispatch_gate(
-        config,
-        stop_check=lambda: _environment_stop_booked(config, result),
-    )
-
-    classifications = {}
-    try:
-        from .security_classifier import classify_security_impact
-        classifications = classify_security_impact(
-            result.outcomes, config.out_dir, _p2_client,
-            model_name=_p2_model,
-            should_stop=_env_gate,
-        )
-        if classifications:
-            logger.info(
-                "Phase 2: %d outcomes classified for security impact",
-                len(classifications),
-            )
-            p2_path = config.out_dir / "phase2-classifications.json"
-            save_json(p2_path, classifications)
-    except Exception:
-        logger.debug("Phase 2 classification failed", exc_info=True)
-
-    try:
-        from .chain_detector import evaluate_chains, find_chain_candidates
-        candidates = find_chain_candidates(
-            result.outcomes, config.out_dir, classifications,
-        )
-        if candidates:
-            logger.info(
-                "Phase 2b: %d chain candidates to evaluate",
-                len(candidates),
-            )
-            chains = evaluate_chains(
-                candidates, _p2_client, model_name=_p2_model,
-                should_stop=_env_gate,
-            )
-            if chains:
-                from .evidence_grade import is_tool_evidence
-                chains_path = config.out_dir / "bug-chains.json"
-                save_json(chains_path, chains)
-                outcome_index = {
-                    f"{o.file}:{o.function}": o for o in result.outcomes
-                }
-                confirmed = 0
-                for chain in chains:
-                    bug_a_func = chain["bug_a"].rsplit(":", 1)[-1]
-                    # Chain composition is an LLM judgement
-                    # (evaluate_chains is a model call), so the chain
-                    # outcome may claim ``finding`` only when it can
-                    # carry its constituents' REAL tool receipts: both
-                    # bugs receipt-backed and the joined stamp itself
-                    # passing the evidence-grade firewall. Anything
-                    # less commits as ``suspicious`` (the designed
-                    # LLM-guess bucket) with the pure-provenance
-                    # ``chain_detector`` stamp — an unconditional
-                    # ``finding`` here fired the CRITICAL
-                    # promotion-without-tool-evidence alarm (a channel
-                    # documented EMPTY on legitimate runs) and was
-                    # demoted at export while already counted.
-                    receipts = [
-                        getattr(outcome_index.get(k), "evidence_tool", "")
-                        or ""
-                        for k in (chain["bug_a"], chain["bug_b"])
-                    ]
-                    composite = "+".join(r for r in receipts if r)
-                    if (
-                        all(is_tool_evidence(r) for r in receipts)
-                        and is_tool_evidence(composite)
-                    ):
-                        status, stamp = "finding", composite
-                    else:
-                        status, stamp = "suspicious", "chain_detector"
-                    from .evidence_grade import defang_model_body
-                    chain_outcome = ReviewOutcome(
-                        file=chain["bug_a"].rsplit(":", 1)[0],
-                        function=bug_a_func,
-                        status=status,
-                        # Model-authored (chain_detector LLM): never
-                        # carries a machine marker.
-                        body=defang_model_body(
-                            chain.get("chain_description", "")),
-                        hypothesis=chain.get("chain_description", ""),
-                        evidence_tool=stamp,
-                        review_result={
-                            "chain": True,
-                            "bug_a": chain["bug_a"],
-                            "bug_b": chain["bug_b"],
-                            "primitive": chain.get("primitive", ""),
-                            "confidence": chain.get("confidence", "medium"),
-                        },
-                    )
-                    result.outcomes.append(chain_outcome)
-                    if status == "finding":
-                        result.findings += 1
-                        confirmed += 1
-                logger.info(
-                    "Phase 2b: %d chain(s) recorded (%d receipt-backed)",
-                    len(chains), confirmed,
-                )
-    except Exception:
-        logger.debug("Phase 2b chaining failed", exc_info=True)
-
-
 _KEY_FILE_PRIORITY_BOOST = 5.0
 _CHAIN_PRIORITY_BOOST = 5.0
 _MAX_CHAIN_INJECTIONS_PER_FINDING = 10
@@ -35386,6 +35187,116 @@ def _drain_dark_probes(
 
     executor.shutdown(wait=False)
     return handled
+
+
+def _run_weakness_chains(result, config) -> None:
+    """Post-loop weakness chaining: find pairs of weaknesses that
+    compose into an exploitable vulnerability."""
+    _wc_model = (
+        config.models[0]
+        if config.models and config.models[0] != "default"
+        else None
+    )
+    _wc_client = _run_llm_client(config)
+    _env_gate = _make_dispatch_gate(
+        config,
+        stop_check=lambda: _environment_stop_booked(config, result),
+    )
+
+    try:
+        from .chain_detector import (
+            evaluate_weakness_chains,
+            find_weakness_chain_candidates,
+        )
+        candidates = find_weakness_chain_candidates(
+            result.outcomes, config.out_dir,
+        )
+        if not candidates:
+            return
+        logger.info(
+            "weakness chaining: %d candidate pair(s) to evaluate",
+            len(candidates),
+        )
+        chains = evaluate_weakness_chains(
+            candidates, _wc_client, model_name=_wc_model,
+            should_stop=_env_gate,
+        )
+        if not chains:
+            return
+
+        from .evidence_grade import defang_model_body, is_tool_evidence
+        chains_path = config.out_dir / "weakness-chains.json"
+        save_json(chains_path, chains)
+        outcome_index = {
+            f"{o.file}:{o.function}": o for o in result.outcomes
+        }
+        confirmed = 0
+        for chain in chains:
+            wa_key = chain["weakness_a"]
+            wa_func = wa_key.rsplit(":", 1)[-1]
+            receipts = [
+                getattr(outcome_index.get(k), "evidence_tool", "")
+                or ""
+                for k in (chain["weakness_a"], chain["weakness_b"])
+            ]
+            composite = "+".join(r for r in receipts if r)
+            if (
+                all(is_tool_evidence(r) for r in receipts)
+                and is_tool_evidence(composite)
+            ):
+                status, stamp = "finding", composite
+            elif getattr(config, "target_path", None):
+                from .chain_detector import synthesise_chain_checker
+                oa = outcome_index.get(chain["weakness_a"])
+                ob = outcome_index.get(chain["weakness_b"])
+                if oa and ob:
+                    from .checker_synthesis import _build_llm_callable
+                    llm_pair = _build_llm_callable(config)
+                    if llm_pair is not None:
+                        llm_callable, _llm_client = llm_pair
+                        cs_result = synthesise_chain_checker(
+                            chain, oa, ob,
+                            config.target_path, config.out_dir,
+                            llm_callable,
+                            model_id=_wc_model or "",
+                        )
+                        if cs_result is not None:
+                            status, stamp = "finding", "checker_synthesis"
+                        else:
+                            status, stamp = "suspicious", "weakness_chain"
+                    else:
+                        status, stamp = "suspicious", "weakness_chain"
+                else:
+                    status, stamp = "suspicious", "weakness_chain"
+            else:
+                status, stamp = "suspicious", "weakness_chain"
+            chain_outcome = ReviewOutcome(
+                file=wa_key.rsplit(":", 1)[0],
+                function=wa_func,
+                status=status,
+                body=defang_model_body(
+                    chain.get("chain_description", "")),
+                hypothesis=chain.get("chain_description", ""),
+                evidence_tool=stamp,
+                review_result={
+                    "weakness_chain": True,
+                    "weakness_a": chain["weakness_a"],
+                    "weakness_b": chain["weakness_b"],
+                    "primitive": chain.get("primitive", ""),
+                    "confidence": chain.get("confidence", "medium"),
+                },
+            )
+            result.outcomes.append(chain_outcome)
+            if status == "finding":
+                result.findings += 1
+                confirmed += 1
+        logger.info(
+            "weakness chaining: %d chain(s) recorded "
+            "(%d receipt-backed)",
+            len(chains), confirmed,
+        )
+    except Exception:
+        logger.debug("weakness chaining failed", exc_info=True)
 
 
 def _run_dark_verification(

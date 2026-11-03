@@ -113,8 +113,7 @@ def wheel_helpers(path: Path) -> list[dict]:
             if entry.file_size > MAX_HELPER_BYTES:
                 raise ValueError(f"wheel helper exceeds size budget: {entry.filename}")
             # Reuse the regular-resource inspection without allocating a policy cap.
-            # Keep inspection scratch inside the disposable image filesystem.
-            with tempfile.TemporaryDirectory(prefix="wheel-pe-", dir=path.parent) as temporary:
+            with tempfile.TemporaryDirectory(prefix="wheel-pe-") as temporary:
                 candidate = Path(temporary) / name
                 with archive.open(entry) as source, candidate.open("xb") as target:
                     shutil.copyfileobj(source, target, 65536)
