@@ -13,6 +13,9 @@ from typing import Any
 
 import pytest
 
+# Owned source/LLM fixtures; native worker tests verify OS containment.
+pytestmark = pytest.mark.usefixtures("owned_smt_subprocess")
+
 # ── Feature 1: Wrapper auto-clean ─────────────────────────────────
 
 class TestWrapperAutoClean:

@@ -16,6 +16,10 @@ here:
 
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.usefixtures("owned_smt_subprocess")
+
 from core.audit.condition_smt import (
     _SECURITY_FIELDS,
     DomainVocabulary,

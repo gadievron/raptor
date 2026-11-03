@@ -34,6 +34,7 @@ class TestChildScript:
         assert '"-c"' not in src
 
 
+@pytest.mark.usefixtures("owned_smt_subprocess")
 class TestRunJsonChild:
     def test_round_trip_through_real_child(self) -> None:
         """Full spawn: the SMT verb adapter returns a SweepResult dict
@@ -80,6 +81,7 @@ class TestRunJsonChild:
         assert out is None
 
 
+@pytest.mark.usefixtures("owned_smt_subprocess")
 class TestZ3DispatchJson:
     def test_unknown_tag_returns_none(self) -> None:
         from core.audit.condition_smt import _z3_dispatch_json

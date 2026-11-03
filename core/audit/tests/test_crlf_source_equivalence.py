@@ -68,7 +68,7 @@ def test_bare_cr_stays_in_line_both_shapes(tmp_path: Path) -> None:
     assert span == "int a;\rint b;"
 
 
-def test_detector_sees_identical_findings(tmp_path: Path) -> None:
+def test_detector_sees_identical_findings(tmp_path: Path, owned_smt_subprocess) -> None:
     """One real detector through the chokepoint: same verdict, same
     line numbers, both checkouts."""
     from core.audit.condition_smt import check_lock_discipline

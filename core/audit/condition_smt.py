@@ -15,7 +15,6 @@ A guard `if (n < 4096)` doesn't prevent overflow into a 256-byte buffer.
 from __future__ import annotations
 
 import logging
-import os
 import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, TYPE_CHECKING
@@ -1070,20 +1069,15 @@ def _verdict_tuple_from_child(
 
 
 def _z3_child_env() -> dict:
-    """Env for the Z3 probe child with RAPTOR_DIR pinned to THIS tree.
+    """Safe non-LLM environment for the SMT worker broker.
 
-    The child bootstraps ``sys.path`` from ``RAPTOR_DIR``; an ambient
-    value from the launching shell can point at a different checkout,
-    making the child import the OTHER tree's ``core.audit.
-    condition_smt`` (cross-checkout skew: wrong dispatch signatures,
-    silent behavioural drift). Same chokepoint rule as
-    ``core.audit.sweep.smt_child_env``, including the LLM-env strip:
-    Z3 probe children make no LLM calls — no credentials, no backend
-    selection, no half-inherited dispatcher route.
+    Retain a pinned RAPTOR_DIR for caller compatibility. The broker strips
+    framework markers and the worker resolves imports from its own file.
+    User-site dependencies are admitted explicitly after confinement.
     """
     from core.config import RaptorConfig, pin_raptor_dir
     return RaptorConfig.strip_llm_env_vars(
-        pin_raptor_dir(dict(os.environ)))
+        pin_raptor_dir(RaptorConfig.get_safe_env()))
 
 
 def _z3_dispatch(

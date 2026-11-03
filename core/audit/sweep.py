@@ -2617,23 +2617,15 @@ def run_smt_verb_direct(
 
 
 def smt_child_env() -> dict:
-    """Env for SMT/Z3 probe children with RAPTOR_DIR pinned to THIS tree.
+    """Safe non-LLM environment for the SMT worker broker.
 
-    The child bootstraps ``sys.path`` from ``RAPTOR_DIR``; an ambient
-    value inherited from the launching shell can point at a different
-    checkout, making the child import the OTHER tree's modules
-    (observed: ``TypeError: _run_smt_verb_inner() got an unexpected
-    keyword argument 'target_path'`` — every SMT probe of a run exit
-    1 because a stale checkout's ``core.audit.sweep`` was imported).
-
-    Full-environ copy MINUS the LLM env (credentials, transport-
-    routing family, dispatcher route): SMT children run only RAPTOR's
-    own solver code and make no LLM calls — the interpreter
-    environment must mirror the parent, the LLM surface must not.
+    Retain a pinned RAPTOR_DIR for caller compatibility. The broker strips
+    framework markers and the worker resolves imports from its own file.
+    User-site dependencies are admitted explicitly after confinement.
     """
     from core.config import RaptorConfig, pin_raptor_dir
     return RaptorConfig.strip_llm_env_vars(
-        pin_raptor_dir(dict(os.environ)))
+        pin_raptor_dir(RaptorConfig.get_safe_env()))
 
 
 def _run_smt_verb_inner_json(request: dict) -> dict:
@@ -2643,7 +2635,29 @@ def _run_smt_verb_inner_json(request: dict) -> dict:
     only plain data across the process boundary — the parent rebuilds
     the SweepResult from the dict, so child stdout is never unpickled.
     """
-    from dataclasses import asdict
+    from dataclasses import asdict, fields
+    from core.audit.condition_smt import DomainVocabulary
+    request = dict(request)
+    raw = request.pop("vocabulary", None)
+    if raw is not None:
+        if not isinstance(raw, dict) or set(raw) != {f.name for f in fields(DomainVocabulary)}:
+            raise ValueError("invalid vocabulary record")
+        converted = {}
+        for name, values in raw.items():
+            if not isinstance(values, list):
+                raise ValueError("invalid vocabulary field")
+            entries = []
+            for value in values:
+                if isinstance(value, str):
+                    entries.append(value)
+                elif isinstance(value, list) and len(value) == 2 and all(isinstance(v, str) for v in value):
+                    entries.append(tuple(value))
+                else:
+                    raise ValueError("invalid vocabulary entry")
+            converted[name] = frozenset(entries)
+        request["vocab"] = DomainVocabulary(**converted)
+    # A request path never becomes filesystem authority inside the worker.
+    request["target_path"] = None
     return asdict(_run_smt_verb_inner(**request))
 
 
@@ -2664,6 +2678,9 @@ def _smt_verb_in_subprocess(
     keeps object deserialisation out of the parent.
     """
     from .subproc_json import run_json_child
+    from dataclasses import fields
+    vocab = _verb_vocab(target_path)
+    vocabulary = {f.name: sorted(getattr(vocab, f.name)) for f in fields(vocab)}
 
     out = run_json_child(
         "core.audit.sweep:_run_smt_verb_inner_json",
@@ -2673,7 +2690,8 @@ def _smt_verb_in_subprocess(
             "verb": verb,
             "source": source,
             "hypothesis": hypothesis,
-            "target_path": target_path,
+            "target_path": None,
+            "vocabulary": vocabulary,
         },
         env=smt_child_env(),
         timeout=timeout,
@@ -2704,9 +2722,11 @@ def _run_smt_verb_inner(
     source: str,
     hypothesis: str,
     target_path: str | None = None,
+    vocab=None,
 ) -> SweepResult:
-    """Actual SMT verb execution (runs inside forked child)."""
-    vocab = _verb_vocab(target_path)
+    """Actual SMT verb execution (runs inside the confined worker)."""
+    if vocab is None:
+        vocab = _verb_vocab(target_path)
     try:
         if verb == "check-negative-bypass":
             from packages.exploit_feasibility.smt_verbs import check_negative_bypass

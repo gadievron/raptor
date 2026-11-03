@@ -190,3 +190,20 @@ def _clear_routing_cache():
         _clear_routing_cache()
     except ImportError:
         pass
+
+
+@pytest.fixture
+def owned_smt_subprocess(monkeypatch):
+    """Formula tests keep the real JSON child but stub OS confinement.
+
+    These tests supply only owned literal requests. Native worker tests
+    verify the shared sandbox separately; no production waiver is set.
+    """
+    import subprocess
+    from core.audit import subproc_json
+    def run(command, **options):
+        assert options['restrict_reads'] and options['_untrusted_workload']
+        return subprocess.run(command, input=options['input'],
+                              stdout=options['stdout'], stderr=options['stderr'],
+                              env=options['env'], cwd=options['cwd'], timeout=options['timeout'])
+    monkeypatch.setattr(subproc_json, '_sandbox_run', run)

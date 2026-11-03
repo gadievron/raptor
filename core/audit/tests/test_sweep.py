@@ -7,6 +7,8 @@ from typing import ClassVar
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("owned_smt_subprocess")
+
 import core.audit.sweep as sweep_mod
 from core.audit.sweep import (
     SarifCache,

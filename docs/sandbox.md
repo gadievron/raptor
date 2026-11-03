@@ -533,6 +533,26 @@ An explicit `radare2home` launcher selects the wrapper even when r2pipe
 ignores `R2PIPE_R2`; its control directory is outside writable parser scratch.
 Sandbox floor refusals exit through the wrapper's existing error contract.
 
+### SMT verification workers
+
+SMT/Z3 verification helpers run under the shared untrusted sandbox floor,
+with read-only RAPTOR code and installed dependencies, private HOME/TMP/cwd
+and blocked networking. Requests carry source snippets and resolved vocabulary
+data, never filesystem grants derived from a target path. User-site Python
+hooks run only after confinement. Compound checks share the existing worker
+rather than starting nested sandboxes.
+
+Requests are capped at 4 MiB and replies at 1 MiB, with depth/node limits and
+rejection of duplicate keys and nonfinite numbers. Anonymous result files and
+bounded parent reads prevent stdout/stderr floods from filling parent memory;
+worker file size is limited to 16 MiB. Each worker has a 2 GiB
+address-space limit, a CPU budget matched to the requested timeout, and a wall
+timeout (10 seconds by default). Linux enforces the address-space cap; macOS
+provides process separation and wall/CPU limits with best-effort address-space
+enforcement. Limits are per worker, not an aggregate host memory budget.
+Worker crashes, timeouts and invalid replies return no solver result;
+isolation refusals remain explicit errors. No bare subprocess fallback exists.
+
 ### ELF library inspection
 
 Exploit-feasibility pwntools inspection runs in a disposable sandbox worker.
