@@ -373,16 +373,28 @@ def find_afl_support_file(name: str, afl_fuzz: str | None = None) -> str | None:
     return None
 
 
+def _probe_executable(binary: str) -> str:
+    """Pin the caller-selected launcher before a neutral-cwd probe."""
+    return os.path.abspath(binary if os.sep in binary else (shutil.which(binary) or binary))
+
+
 def _probe_version(binary: str, args: list[str]) -> str:
     """Best-effort version extraction. Returns first non-empty version-looking line."""
     try:
-        result = subprocess.run(
-            [binary] + args,
-            capture_output=True,
-            text=True,
-            timeout=10,
-            env=scrub_identity_env(RaptorConfig.get_safe_env()),
-        )
+        with tempfile.TemporaryDirectory(prefix="raptor-fuzz-probe-", dir=exec_workdir()) as tmp:
+            env = scrub_identity_env(RaptorConfig.get_safe_env())
+            # Identity scrubbing uses HOME=/tmp for sandboxed targets. These
+            # trusted probes run on the host: never read shared-temp dotfiles.
+            env["HOME"] = tmp
+            env["TMPDIR"] = tmp
+            result = subprocess.run(
+                [_probe_executable(binary)] + args,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=os.sep,
+                env=env,
+            )
         output = (result.stdout or "") + "\n" + (result.stderr or "")
         for line in output.splitlines():
             if any(c.isdigit() for c in line) and any(
@@ -435,11 +447,13 @@ def _probe_clang_sanitiser(clang: str, sanitizer: str) -> bool:
 
             env = scrub_identity_env(RaptorConfig.get_safe_env())
             env["TMPDIR"] = tmp
+            env["HOME"] = tmp
             result = subprocess.run(
-                [clang, flag, src_path, "-o", out_path],
+                [_probe_executable(clang), flag, src_path, "-o", out_path],
                 capture_output=True,
                 text=True,
                 timeout=30,
+                cwd=os.sep,
                 env=env,
             )
             return result.returncode == 0
@@ -467,11 +481,13 @@ def _check_macos_afl_shmem(afl_fuzz: str) -> bool:
             seeds.mkdir()
             (seeds / "seed").write_bytes(b"seed\n")
             env = scrub_identity_env(RaptorConfig.get_safe_env())
+            env["HOME"] = tmp
+            env["TMPDIR"] = tmp
             env.setdefault("AFL_SKIP_CPUFREQ", "1")
             env.setdefault("AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES", "1")
             result = subprocess.run(
                 [
-                    afl_fuzz,
+                    _probe_executable(afl_fuzz),
                     "-i", str(seeds),
                     "-o", str(out),
                     "-V", "1",
@@ -482,6 +498,7 @@ def _check_macos_afl_shmem(afl_fuzz: str) -> bool:
                 capture_output=True,
                 text=True,
                 timeout=15,
+                cwd=os.sep,
                 env=env,
             )
         output = (result.stdout or "") + "\n" + (result.stderr or "")

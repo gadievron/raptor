@@ -78,6 +78,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
 from itertools import islice
@@ -87,6 +88,7 @@ from typing import Any
 from core.atomic_fs import open_exclusive_artifact, write_new_text
 from core.config import RaptorConfig
 from core.logging import get_logger
+from core.run.workdir import exec_workdir
 from packages.fuzzing import libfuzzer_runner as _lf
 from packages.fuzzing.env_hygiene import scrub_identity_env
 from packages.fuzzing.libfuzzer_runner import (
@@ -171,7 +173,7 @@ def _probe_env() -> dict:
     env = scrub_identity_env(RaptorConfig.get_safe_env())
     rustup_home = _resolve_rustup_home()
     if rustup_home is not None:
-        env["RUSTUP_HOME"] = str(rustup_home)
+        env["RUSTUP_HOME"] = str(rustup_home.absolute())
     return env
 
 
@@ -187,29 +189,33 @@ def nightly_toolchain_arg(cargo: str | None = None) -> str | None:
     cargo = cargo or cargo_executable()
     if cargo is None:
         return None
-    env = _probe_env()
     try:
-        version = subprocess.run(
-            [cargo, "--version"], capture_output=True, text=True,
-            timeout=10, env=env,
-        )
-        if "nightly" in (version.stdout or ""):
-            return ""
+        with tempfile.TemporaryDirectory(prefix="raptor-fuzz-probe-", dir=exec_workdir()) as home:
+            env = _probe_env()
+            # Preserve RUSTUP_HOME, but never let a host probe discover config
+            # through the identity scrubber's shared HOME=/tmp fallback.
+            env["HOME"] = home
+            # rustup shims consult rust-toolchain.toml up the cwd ancestry even
+            # for cargo --version. Pin the launcher before leaving target cwd.
+            cargo = os.path.abspath(cargo if os.sep in cargo else (shutil.which(cargo) or cargo))
+            version = subprocess.run(
+                [cargo, "--version"], capture_output=True, text=True,
+                timeout=10, env=env, cwd=os.sep,
+            )
+            if "nightly" in (version.stdout or ""):
+                return ""
+            rustup = shutil.which("rustup")
+            if not rustup:
+                return None
+            listing = subprocess.run(
+                [os.path.abspath(rustup), "toolchain", "list"], capture_output=True,
+                text=True, timeout=10, env=env, cwd=os.sep,
+            )
+            for line in (listing.stdout or "").splitlines():
+                if line.strip().startswith("nightly"):
+                    return "+nightly"
     except (OSError, subprocess.SubprocessError):
         return None
-    rustup = shutil.which("rustup")
-    if not rustup:
-        return None
-    try:
-        listing = subprocess.run(
-            [rustup, "toolchain", "list"], capture_output=True,
-            text=True, timeout=10, env=env,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    for line in (listing.stdout or "").splitlines():
-        if line.strip().startswith("nightly"):
-            return "+nightly"
     return None
 
 
