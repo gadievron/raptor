@@ -208,6 +208,14 @@ Add `-m ""` to select all tiers; optional tools and service credentials are
 still required for their respective tests. Tests should gate missing
 prerequisites explicitly while keeping product failures visible.
 
+ASAN execution tests require a clean instrumented program to complete outside
+RAPTOR's sandbox, using the same compiler as the exploit validator. This probe
+is cached per compiler; an unusable runtime produces a prerequisite skip.
+Compile-only tests continue to run, and failures inside RAPTOR's sandbox remain
+test failures. This catches startup failures such as the macOS 26 deadlock
+reported in [LLVM issue 200447](https://github.com/llvm/llvm-project/issues/200447)
+without disabling ASAN tests for an entire operating-system version.
+
 `-n 4` runs four pytest-xdist worker processes; `--dist worksteal` lets
 workers share remaining tests to reduce idle time. pytest-xdist is included
 in the `dev` dependency group installed above. Start with four workers and

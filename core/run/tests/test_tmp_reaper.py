@@ -851,6 +851,11 @@ class TestSigkilledProcessStrays:
              "import core.run.tmp_reaper as t;"
              "t._SYSTEM_TMP_ROOTS = ();"
              "t._lane_fallback_bases = lambda: ();"
+             # No process retains a cwd in these owned fixtures: the
+             # creator and its whole group were killed above. A desktop
+             # lsof warning about an unrelated mount is not this test's
+             # cwd-discovery concern (covered separately).
+             "t._live_cwds = lambda: set();"
              "print(len(t.reap_stale_tmp()))"],
             env=env, capture_output=True, text=True, timeout=60,
         )
