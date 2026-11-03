@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -328,6 +329,36 @@ def current_sink() -> TelemetrySink | None:
     return _sink
 
 
+def _caller_chain() -> list[dict[str, Any]]:
+    """Bounded source call sites; no source reads, locals or prompt data.
+
+    Skip LLM transport frames and retain up to four application frames.
+    This diagnoses legacy/unclassified calls without changing call_class,
+    which also controls budget reservations. Async handoffs may truncate
+    the chain: this is a call-site hint, not an audited-function identity.
+    """
+    chain = []
+    frame = sys._getframe(1)
+    try:
+        for _ in range(32):
+            if frame is None:
+                break
+            module = frame.f_globals.get("__name__", "")
+            if (module.startswith(("core.", "packages.")) or module == "__main__") \
+                    and not module.startswith("core.llm."):
+                chain.append({
+                    "module": module,
+                    "function": frame.f_code.co_qualname,
+                    "line": frame.f_lineno,
+                })
+                if len(chain) == 4:
+                    break
+            frame = frame.f_back
+    finally:
+        del frame
+    return chain
+
+
 def emit(**fields: Any) -> None:
     """Record one telemetry event. No-op when no sink is installed.
 
@@ -336,6 +367,14 @@ def emit(**fields: Any) -> None:
     sink = _sink
     if sink is None:
         return
+    if fields.get("event") in ("call", "attempt_failed") and "caller_chain" not in fields:
+        try:
+            chain = _caller_chain()
+            if chain:
+                fields["caller_chain"] = chain
+        except Exception:
+            # Missing attribution must not drop the original event.
+            logger.debug("llm telemetry caller attribution failed", exc_info=True)
     try:
         sink.record(dict(fields))
     except Exception:
