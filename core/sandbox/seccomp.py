@@ -52,6 +52,7 @@ import errno
 import logging
 import os
 import socket
+import sys
 
 from . import state
 
@@ -848,13 +849,16 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
     connect(2) blocking forever. Mutually exclusive with audit_mode
     (audit routes connect through the ptrace tracer instead).
 
-    Returns None if libseccomp is unavailable or the profile
+    Returns None on non-Linux hosts, where native backends own containment.
+    Also returns None if libseccomp is unavailable or the profile
     indicates "no seccomp" — both falsy values (None, "") and the
     literal string "none" are accepted as disable triggers, matching
     callers that may convert via `profile_dict["seccomp"] or None`
     (context.py) and callers that pass the raw profile name.
     """
-    if not profile or profile == "none":
+    # Seccomp is a Linux layer. Seatbelt hosts do not lose protection
+    # merely because libseccomp is unavailable there.
+    if sys.platform != "linux" or not profile or profile == "none":
         return None
     if not check_seccomp_available():
         # A profile was REQUESTED but the filter cannot engage — the

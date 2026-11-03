@@ -375,11 +375,12 @@ def _make_preexec_fn(limits: dict, writable_paths: list | None = None,
             try:
                 resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
             except (ValueError, OSError) as exc:
-                _errno = getattr(exc, "errno", 0) or 0
+                detail = (b"ValueError" if isinstance(exc, ValueError) else
+                          b"errno=%d" % (getattr(exc, "errno", 0) or 0))
                 warn_post_fork(
-                    b"preexec: RLIMIT_AS setrlimit failed (errno=%d); "
+                    b"preexec: RLIMIT_AS setrlimit failed (%s); "
                     b"process may exceed requested virtual-address bound\n"
-                    % _errno
+                    % detail
                 )
         if file_mb > 0:
             try:

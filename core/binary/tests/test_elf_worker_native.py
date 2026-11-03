@@ -1,4 +1,5 @@
 """Native ELF-worker facts, transport refusal and hard resource boundaries."""
+import importlib.util
 import json
 import shutil
 import struct
@@ -50,6 +51,14 @@ def source(tmp_path, native_host):
     return directory
 
 
+@pytest.fixture
+def pwntools_available():
+    # Probe package presence without importing native parser dependencies in
+    # pytest. Broken imports and sandbox visibility remain worker failures.
+    if importlib.util.find_spec('pwnlib') is None:
+        pytest.skip('pwntools required for real ELF mitigation parsing')
+
+
 def _fixture(source, *, no_plt=False):
     binary = source / 'fixture'
     if sys.platform != 'linux':
@@ -83,18 +92,18 @@ def _payload():
 
 
 @pytest.mark.parametrize('mode', ['plt', 'no_plt'])
-def test_native_worker_preserves_mitigation_facts(source, mode):
+def test_native_worker_preserves_mitigation_facts(source, mode, pwntools_available):
     if mode == 'no_plt' and sys.platform != 'linux':
         pytest.skip('Linux ELF linking case')
     facts = worker.inspect_elf(_fixture(source, no_plt=mode == 'no_plt'))
-    assert facts is not None, 'pwntools worker unavailable or failed'
+    assert facts is not None, 'ELF worker returned no facts; see captured worker diagnostics'
     assert facts.bits in (32, 64) and facts.endian == 'little'
     if sys.platform == 'linux':
         assert facts.relro == 'Full' and facts.pie and facts.canary and facts.fortify
         assert 'FORTIFY:' in facts.checksec
 
 
-def test_native_data_import_named_chk_is_not_fortify(source):
+def test_native_data_import_named_chk_is_not_fortify(source, pwntools_available):
     if sys.platform != 'linux':
         pytest.skip('Linux ELF linking case')
     cc = shutil.which('cc')
@@ -113,7 +122,7 @@ def test_native_data_import_named_chk_is_not_fortify(source):
     assert facts is not None and facts.fortify is False
 
 
-def test_native_malformed_elf_returns_no_partial_facts(source):
+def test_native_malformed_elf_returns_no_partial_facts(source, pwntools_available):
     binary = source / 'malformed'
     binary.write_bytes(b'\x7fELF' + b'\0' * 64)
     assert worker.inspect_elf(binary) is None
