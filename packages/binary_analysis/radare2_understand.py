@@ -914,9 +914,10 @@ class BinaryUnderstand:
         scratch and restart machinery instead of growing a second
         spawn path with its own sandbox wiring.
 
-        Sandbox r2 via the libexec wrapper. r2pipe reads R2PIPE_R2
-        from env and spawns the wrapper instead of ``radare2``
-        directly; the wrapper engages mount-ns + Landlock + seccomp +
+        Sandbox r2 via the libexec wrapper. An explicit radare2home
+        launcher selects the wrapper; R2PIPE_R2 alone is ignored by
+        supported r2pipe releases. The wrapper engages the shared floor,
+        Landlock + seccomp +
         UTS-ns + fingerprint sanitisation around the r2 child, then
         exits when r2 exits. r2pipe's pipe protocol flows unchanged
         through the wrapper's inherited stdin/stdout.
@@ -952,13 +953,17 @@ class BinaryUnderstand:
         session: _R2Session | None = None
         try:
             scratch = str(stack.enter_context(scratch_dir("r2-sandbox-")))
+            # Control files must not live under the parser's writable output:
+            # a compromised r2 could replace its launcher before a restart.
+            launcher = stack.enter_context(scratch_dir("r2-sandbox-"))
+            (Path(launcher) / "radare2").symlink_to(wrapper)
             # The session wrapper owns the r2pipe handle so a
             # per-command timeout (which kills r2 to unblock the
             # pipe) can respawn the sandboxed session and the
             # analysis continues with recorded degradation instead
             # of silently hollowing out (see _cmd_deg).
             session = _R2Session(
-                lambda: self._spawn_r2(wrapper, scratch),
+                lambda: self._spawn_r2(wrapper, scratch, str(launcher)),
                 reanalyse_timeout_s=self._T_AAA,
             )
             session.open()
@@ -977,7 +982,7 @@ class BinaryUnderstand:
             # the early-raise path never entered the scratch.
             stack.close()
 
-    def _spawn_r2(self, wrapper: Path, scratch: str):
+    def _spawn_r2(self, wrapper: Path, scratch: str, launcher: str):
         """Spawn one sandboxed r2pipe handle.
 
         _ANALYSE_ENV_LOCK serialises the env-set + r2pipe.open
@@ -1010,7 +1015,8 @@ class BinaryUnderstand:
                 logger.info(
                     "radare2 analysis: opening %s (sandboxed)", self.binary
                 )
-                return r2pipe.open(str(self.binary), flags=self._r2_open_flags())  # -2: silence stderr
+                return r2pipe.open(str(self.binary), flags=self._r2_open_flags(),
+                                   radare2home=launcher)  # -2: silence stderr
             finally:
                 for k, v in saved_env.items():
                     if v is None:

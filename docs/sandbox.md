@@ -524,6 +524,15 @@ refusal is reported as a sandbox error, rather than an empty analysis result.
 For a toolchain installed outside standard locations, use `--sandbox-tool-path`
 to declare any additional runtime directories it needs.
 
+The interactive radare2 wrapper uses this policy too, preserving r2pipe's
+stdin/stdout protocol while pinning HOME, temporary files and cwd to its
+scratch directory. It resolves the selected `r2`/`radare2` before environment
+sanitisation and declares its tool paths. The optional `R2_TARGET_DIR` hint
+must match the resolved input's parent; it cannot widen the read grant.
+An explicit `radare2home` launcher selects the wrapper even when r2pipe
+ignores `R2PIPE_R2`; its control directory is outside writable parser scratch.
+Sandbox floor refusals exit through the wrapper's existing error contract.
+
 ### ELF library inspection
 
 Exploit-feasibility pwntools inspection runs in a disposable sandbox worker.

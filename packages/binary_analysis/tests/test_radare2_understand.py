@@ -352,9 +352,15 @@ class TestSandboxWiring(unittest.TestCase):
         understand = self._make_understand_with_fake_binary()
         captured_env = {}
 
-        def fake_open(path, flags=None):
-            # Snapshot the relevant env vars at the moment r2pipe.open
-            # would have spawned the wrapper.
+        def fake_open(path, flags=None, radare2home=None):
+            # The launcher argument, rather than an optional environment
+            # convention, must force r2pipe through the wrapper.
+            launch = Path(radare2home) / "radare2"
+            self.assertTrue(launch.is_symlink())
+            self.assertTrue(str(launch.resolve()).endswith("/libexec/raptor-r2-sandboxed"))
+            self.assertNotIn(Path(os.environ["OUTPUT_DIR"]), launch.parents)
+            captured_env["launcher"] = launch
+            # Snapshot wrapper environment at spawn time.
             for k in ("R2PIPE_R2", "OUTPUT_DIR", "R2_TARGET_DIR",
                       "_RAPTOR_TRUSTED"):
                 captured_env[k] = os.environ.get(k)
@@ -377,6 +383,7 @@ class TestSandboxWiring(unittest.TestCase):
                         "wrapper path must resolve to a real file")
         self.assertIsNotNone(captured_env["OUTPUT_DIR"])
         self.assertIsNotNone(captured_env["R2_TARGET_DIR"])
+        self.assertFalse(captured_env["launcher"].exists())
         # Trust marker required by the wrapper's gate.
         self.assertEqual(captured_env["_RAPTOR_TRUSTED"], "1")
 
@@ -553,7 +560,7 @@ class TestTimeoutDegradation(unittest.TestCase):
         understand = self._make_understand()
         fake_r2pipe = MagicMock()
 
-        def fake_open(path, flags=None):
+        def fake_open(path, flags=None, radare2home=None):
             if spawn_counter is not None:
                 spawn_counter.append(1)
             handle = MagicMock()
