@@ -52,6 +52,16 @@ def main():
     registry = load_registry()
     errors = registry_errors(ROOT, registry)
     if errors:
+        # Preserve the refusal even though pytest never started. CI can then
+        # upload useful preflight evidence instead of failing again because
+        # the report directory contains no files. --list stays read-only.
+        if not args.list:
+            report = args.report_dir.resolve()
+            report.mkdir(parents=True, exist_ok=True)
+            (report/'summary.json').write_text(json.dumps(dict(
+                platform=sys.platform, lane=args.lane,
+                preflight_errors=errors, results=[],
+            ), indent=2)+'\n')
         print('\n'.join(errors), file=sys.stderr)
         return 1
     if sys.platform not in ('linux', 'darwin'):

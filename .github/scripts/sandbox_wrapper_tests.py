@@ -13,10 +13,11 @@ _SKIP_PARTS = {'tests', 'scripts', 'calibration', '__pycache__', 'fixtures'}
 
 
 def policy_entrypoints(path: Path) -> list[str]:
-    """Find direct dispatch through the public sandbox API, including aliases.
+    """Find public sandbox dispatch and named injected runners, including aliases.
 
     Core backend implementations have their own enforcement suites. This
-    inventory owns callers outside core/sandbox; explicit self-confining and
+    inventory also tracks ``state.sandbox_run(...)`` in shared policy stages.
+    It owns callers outside core/sandbox; explicit self-confining and
     delegated adapters can additionally be registered without a direct call.
     """
     try:
@@ -54,7 +55,8 @@ def policy_entrypoints(path: Path) -> list[str]:
             direct = isinstance(target, ast.Name) and target.id in names
             dotted = ast.unparse(target) if isinstance(target, ast.Attribute) else ''
             qualified = any(dotted == module + '.' + executor for module in modules for executor in _EXECUTORS)
-            if direct or qualified:
+            injected = isinstance(target, ast.Attribute) and target.attr == 'sandbox_run'
+            if direct or qualified or injected:
                 found.add('.'.join(self.scope) or '<module>')
             self.generic_visit(node)
     Visitor().visit(tree)

@@ -303,22 +303,38 @@ def test_broken_catalog_leaves_native_providers_available(tmp_path):
 
 @pytest.mark.parametrize("entry", [{"model": "claude-opus-4-6"},
                                   {"provider": None}, {"provider": 1}])
-def test_broken_catalog_does_not_block_native_default_selection(monkeypatch, entry):
-    from core.llm import config
+def test_broken_catalog_does_not_block_native_default_selection(entry):
+    # Model-family prefixes and other lazy consumers snapshot the catalog at
+    # import time. Exercise the broken startup state in its own interpreter;
+    # restoring MODEL_BROKERS alone cannot restore those derived globals.
+    program = r'''
+import json
+import sys
+from unittest.mock import patch
+import core.llm.model_brokers as broker_registry
+from core.llm import config
 
-    native = config.ModelConfig(provider="anthropic", model_name="claude-opus-4-6")
-    monkeypatch.setattr(broker_registry, "BROKER_REGISTRY_ERROR", "malformed catalog")
-    monkeypatch.setattr(broker_registry, "MODEL_BROKERS", ())
-    monkeypatch.setattr(config, "_operator_primary_override", None)
-    monkeypatch.setattr(config, "_get_best_thinking_model", lambda: None)
-    monkeypatch.setattr(config, "_get_configured_models", lambda: [entry])
-    monkeypatch.setattr(config, "_config_bedrock_primary", lambda: None)
-    monkeypatch.setattr(config, "_config_ollama_primary", lambda: None)
-    monkeypatch.setattr(config, "_DEFAULT_PROVIDER_ORDER", ("anthropic",))
-    monkeypatch.setattr(config, "_PROVIDER_BUILDERS", {"anthropic": lambda: native})
+entry = json.loads(sys.argv[1])
+native = config.ModelConfig(provider="anthropic", model_name="claude-opus-4-6")
+with patch.object(broker_registry, "BROKER_REGISTRY_ERROR", "malformed catalog"), \
+     patch.object(broker_registry, "MODEL_BROKERS", ()), \
+     patch.object(config, "_operator_primary_override", None), \
+     patch.object(config, "_get_best_thinking_model", lambda: None), \
+     patch.object(config, "_get_configured_models", lambda: [entry]), \
+     patch.object(config, "_config_bedrock_primary", lambda: None), \
+     patch.object(config, "_config_ollama_primary", lambda: None), \
+     patch.object(config, "_DEFAULT_PROVIDER_ORDER", ("anthropic",)), \
+     patch.object(config, "_PROVIDER_BUILDERS", {"anthropic": lambda: native}):
     assert config._get_default_primary_model(offline=True) is native
     if entry.get("model"):
         assert config.model_config_from_entry(entry).provider == "anthropic"
+'''
+    result = subprocess.run(
+        [sys.executable, "-c", program, json.dumps(entry)],
+        cwd=Path(__file__).resolve().parents[4],
+        env=RaptorConfig.get_safe_env(), capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_python_rules_win_even_if_catalog_validation_is_bypassed(monkeypatch):

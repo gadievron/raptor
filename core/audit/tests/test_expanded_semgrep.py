@@ -359,10 +359,18 @@ def test_budget_caches_views_per_file(tmp_path, sandbox_spy, monkeypatch):
 
 
 @needs_cpp
-def test_audit_uses_shared_pipeline_and_retains_partial_findings(tmp_path, sandbox_spy, monkeypatch):
+@pytest.mark.parametrize("fortified", [False, True], ids=["system-headers", "fortified-copy-macro"])
+def test_audit_uses_shared_pipeline_and_retains_partial_findings(tmp_path, sandbox_spy, monkeypatch, fortified):
     from core.detectors import semgrep as detector
 
     target = _write_fixture(tmp_path)
+    if fortified:
+        # Exercise SDKs that rewrite strcpy without relying on their exact
+        # builtin spelling, casts or whitespace in the preprocessed text.
+        header = target / "defs.h"
+        header.write_text(header.read_text() +
+                          "\n#undef strcpy\n#define strcpy(d, s) __builtin___strcpy_chk(d, s, 0)\n")
+    budget = ExpansionBudget(1)
     executions = []
     original = detector.run_detector
 
@@ -374,8 +382,10 @@ def test_audit_uses_shared_pipeline_and_retains_partial_findings(tmp_path, sandb
     def match(path, config, **kwargs):
         assert path.exists()
         assert kwargs == {"timeout": 19}
-        line = next(i for i, text in enumerate(path.read_text().splitlines(), 1)
-                    if "strcpy(dst, src)" in text)
+        view = budget.view_for(target, "main.c")
+        assert view is not None and view.ok
+        assert path.read_text() == view.text
+        line = _line_with_origin(view, "main.c", _MACRO_CALL_LINE)
         return FakeSemgrepResult(findings=[FakeFinding(line)], errors=["partial parse elsewhere"])
 
     monkeypatch.setattr("packages.semgrep.runner.is_available", lambda: True)
@@ -383,9 +393,10 @@ def test_audit_uses_shared_pipeline_and_retains_partial_findings(tmp_path, sandb
     monkeypatch.setattr(detector, "run_detector", record)
     result = run_expanded_semgrep_rule(
         target_path=target, file_path="main.c", rule_config="rule.yml",
-        budget=ExpansionBudget(1), timeout=19,
+        budget=budget, timeout=19,
     )
     assert result.ok and result.matches[0]["line"] == _MACRO_CALL_LINE
+    assert budget.used == 1
     assert len(executions) == 1 and executions[0].status == "partial"
     assert not executions[0].value._input.target.exists()
 

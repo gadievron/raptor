@@ -80,3 +80,38 @@ def test_runner_exposes_selected_venv_console_scripts(tmp_path):
     path = runner.interpreter_tool_path(str(binary), inherited)
     assert path.split(os.pathsep)[0] == str(binary.parent)
     assert path.endswith(os.pathsep + inherited)
+
+
+@pytest.mark.parametrize("list_only", [False, True], ids=["run", "list"])
+def test_registry_refusal_preserves_evidence_without_running_pytest(tmp_path, monkeypatch, list_only):
+    import json
+    errors = ["owned.py: sandbox entrypoints changed; review test bindings"]
+    report = tmp_path / "reports"
+    monkeypatch.setattr(runner, "load_registry", lambda: {})
+    monkeypatch.setattr(runner, "registry_errors", lambda *args: errors)
+    monkeypatch.setattr(runner.subprocess, "run", lambda *a, **kw: pytest.fail("pytest started after refusal"))
+    monkeypatch.setattr(sys, "argv", ["runner", "--lane", "contracts", "--report-dir", str(report)]
+                        + (["--list"] if list_only else []))
+    assert runner.main() == 1
+    if list_only:
+        assert not report.exists()
+    else:
+        summary = json.loads((report / "summary.json").read_text())
+        assert summary["preflight_errors"] == errors
+        assert summary["results"] == []
+        assert summary["lane"] == "contracts"
+
+
+def test_injected_sandbox_runner_needs_reviewed_binding(tmp_path):
+    registry = _fixture(tmp_path)
+    source = tmp_path / "packages/stages.py"
+    source.write_text('def invoke(state):\n    return state.sandbox_run(["true"], block_network=True)\n')
+    assert inventory.policy_entrypoints(source) == ["invoke"]
+    assert any("unregistered" in error for error in inventory.registry_errors(tmp_path, registry))
+    registry["wrappers"].append({
+        "source": "packages/stages.py", "entrypoints": ["invoke"],
+        "contracts": ["tests/test_owned.py::test_dispatch"],
+    })
+    assert inventory.registry_errors(tmp_path, registry) == []
+    source.write_text(source.read_text() + '\ndef another(state):\n    state.sandbox_run(["false"])\n')
+    assert any("entrypoints changed" in error for error in inventory.registry_errors(tmp_path, registry))
