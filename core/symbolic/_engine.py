@@ -47,6 +47,7 @@ def dispatch_isolated(
     kwargs: dict[str, Any],
     *,
     timeout: float,
+    primitive: str,
 ) -> SymbolicResult:
     """Public-wrapper body: availability gate + isolation dispatch.
 
@@ -54,14 +55,14 @@ def dispatch_isolated(
     ``timeout`` plus a grace window: hostile targets can drive one
     native solver call past every cooperative bound (verified live),
     so the budget is enforced by process isolation, not cooperation.
-    When angr is unavailable the availability guard answers directly
-    (no child is spawned) — ``impl`` runs in-process and its own
-    re-gate returns the descriptive unavailable result.
+    When angr is unavailable, return a descriptive failure without
+    invoking the implementation in the parent process.
     """
     from core.symbolic._availability import angr_available
     from core.symbolic._isolate import run_isolated
     if not angr_available():
-        return impl(**kwargs)
+        from core.symbolic._availability import unavailable_result
+        return unavailable_result('angr', primitive)
     return run_isolated(
         impl.__module__, impl.__name__, kwargs, timeout=timeout,
     )

@@ -138,6 +138,7 @@ def test_probe_child_module_rides_as_argv() -> None:
     cmd = captured["cmd"]
     assert cmd == [
         sys.executable, "-E", "-c", _availability._CHILD_PROBE_SOURCE, "json",
+        _availability.site.getusersitepackages(),
     ]
     assert "json" not in _availability._CHILD_PROBE_SOURCE
 

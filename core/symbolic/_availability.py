@@ -23,6 +23,7 @@ return the cached bool without re-attempting.
 from __future__ import annotations
 
 import logging
+import site
 import subprocess
 import sys
 import tempfile
@@ -48,7 +49,9 @@ _ALLOWED_PROBE_MODULES: frozenset[str] = frozenset({
 #: (``_ALLOWED_PROBE_MODULES``) is the enforcement boundary; the
 #: child trusts that the parent already validated the module name.
 _CHILD_PROBE_SOURCE: str = (
-    "import importlib, sys; importlib.import_module(sys.argv[1])"
+    "import importlib, site, sys; "
+    "site.addsitedir(sys.argv[2]) if sys.argv[2] and sys.argv[2] not in sys.path else None; "
+    "importlib.import_module(sys.argv[1])"
 )
 
 #: Probe-child deadline, seconds. Lower risks a false "unavailable":
@@ -84,6 +87,7 @@ def _import_probe_child(name: str, module: str) -> bool:
         # read-restricted symbolic worker.
         proc = run_python_probe(
             sys.executable, _CHILD_PROBE_SOURCE, module,
+            site.getusersitepackages() if isinstance(site.getusersitepackages(), str) else "",
             timeout=_PROBE_TIMEOUT_S, tmpdir=tempfile.gettempdir(),
         )
     except subprocess.TimeoutExpired:

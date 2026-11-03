@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures('require_worker_sandbox')
+
 pytest.importorskip("angr")  # suite asserts real-angr behaviour
 
 

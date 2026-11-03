@@ -4,8 +4,7 @@ Every engine (`_reach`, `_overflow`, `_constraints`, `_fmtstr`,
 `_heap_mismatch`) exposes the same public-wrapper scaffolding:
 
   * an availability gate that answers WITHOUT spawning a child when
-    angr is absent (the impl's re-gate produces the descriptive
-    ``unavailable_result``), and
+    angr is absent (without invoking an implementation in the parent), and
   * a :func:`core.symbolic._isolate.run_isolated` dispatch — impl
     module + function BY NAME, kwargs verbatim, the caller's timeout
     — when angr is present.
@@ -144,8 +143,7 @@ def test_availability_gate_answers_without_spawning(
     kwargs_builder: Callable[[Path], dict[str, Any]],
     dummy_binary: Path,
 ):
-    """Angr absent: the wrapper must answer in-process via the impl's
-    re-gate — descriptive unavailable result, correct primitive name,
+    """Angr absent: the wrapper answers without invoking the implementation — descriptive unavailable result, correct primitive name,
     and NO child spawn (run_isolated never consulted)."""
     fn = _public_fn(public_name, impl_module)
     spawns: list[Any] = []
