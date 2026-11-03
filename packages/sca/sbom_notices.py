@@ -235,11 +235,14 @@ def associate(native: dict, image: dict, rows: list[dict], blobs: dict[str, byte
         if status != "notice_candidate_captured":
             gaps.append("no associated notice candidate; licence text completeness is unverified")
         record = {"id": artifact["id"], "status": status, "files": evidence, "gaps": gaps}
-        from packages.sca.sbom_license_evidence import catalogue_declaration_missing, recover_distribution_license
+        from packages.sca.sbom_license_evidence import catalogue_declaration_missing, recover_distribution_license, recover_cpython_license
         if catalogue_declaration_missing(artifact):
             declaration = recover_distribution_license(artifact, evidence, blobs)
             if declaration is not None:
                 record["recovered_distribution_license"] = declaration
+            declaration = recover_cpython_license(artifact, evidence, blobs)
+            if declaration is not None:
+                record["recovered_component_license"] = declaration
         packages.append(record)
     from packages.sca.sbom_notice_owners import add_owner_context
     owner_statistics = add_owner_context(native, rows, blobs, packages, limit=MAX_ASSOCIATIONS)

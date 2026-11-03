@@ -504,6 +504,14 @@ original notice bytes under `notices/sha256/`; keep them alongside the SBOMs so
 relative links resolve. `--notice-evidence` and repository `--repo` preparation
 are separate modes.
 
+For CPython executables in a standard installation layout, preparation can recover
+the project's explicit `PSF-2.0` declaration from its complete installed license.
+All reported executable and shared-library locations must agree on the Python
+version, installation prefix, ABI and layer. Unchanged reviewed notice text can
+be reused after a version update; changed text stays unresolved. This identifies
+the CPython project declaration, while incorporated third-party code retains its
+own terms. It does not certify a binary's build source or set a license conclusion.
+
 For occurrences that still lack their own notice candidate, preparation also
 checks primary-location files against enclosing `deb` package inventories,
 including vendor packages. An exact captured path/layer pair and matching

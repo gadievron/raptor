@@ -133,17 +133,45 @@ class PackageNoticePaths:
 
 
 def component_notice_paths(artifact: dict) -> set[tuple[str, str]]:
-    """Probe only explicitly named, adjacent notices for native/Java files.
+    """Probe named adjacent notices and CPython installation notices.
 
     LICENSE.<exact filename> is a notice candidate, not a declaration or an
     enclosing package's license. Its layer must match the component location.
     """
     if artifact['type'] not in {'binary', 'java-archive'}:
         return set()
-    paths = set()
+    paths = cpython_notice_paths(artifact)
     for loc in artifact.get('locations', []):
         path = PurePosixPath(image_path(loc['path']))
         if not re.fullmatch(r"sha256:[0-9a-f]{64}", loc['layerID']):
             raise ValueError('invalid component notice layer')
         paths.add((image_path(str(path.with_name('LICENSE.' + path.name))), loc['layerID']))
     return paths
+
+
+def cpython_notice_paths(artifact: dict) -> set[tuple[str, str]]:
+    """Select CPython's own installed license within a matching install prefix.
+
+    All reported locations must match the same version, prefix, ABI and layer.
+    This selects evidence; it neither licenses extensions nor certifies a build.
+    """
+    if artifact.get("type") != "binary" or artifact.get("name") != "python":
+        return set()
+    version = re.fullmatch(r"(3\.[0-9]+)\.[0-9]+(?:(?:a|b|rc)[0-9]+)?", artifact.get("version", ""))
+    if version is None or not artifact.get("locations"):
+        return set()
+    paths = set()
+    for location in artifact["locations"]:
+        path = PurePosixPath(image_path(location["path"]))
+        layer = location["layerID"]
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", layer):
+            raise ValueError("invalid CPython notice layer")
+        abi = version[1]
+        if path.name in {"python" + abi + "t", "libpython" + abi + "t.so.1.0"}:
+            abi += "t"
+        if not ((path.parent.name == "bin" and path.name == "python" + abi)
+                or (path.parent.name == "lib" and path.name == "libpython" + abi + ".so.1.0")):
+            return set()
+        notice = path.parent.parent / "lib" / ("python" + abi) / "LICENSE.txt"
+        paths.add((image_path(str(notice)), layer))
+    return paths if len(paths) == 1 else set()

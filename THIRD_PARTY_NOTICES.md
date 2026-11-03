@@ -77,9 +77,23 @@ RAPTOR's independently authored code and annotations retain the MIT licence;
 it does not replace the licences of the copied source excerpts.
 
 
-## Bundled Node.js runtime
+## Container Node.js runtime
 
-The container retains the [full upstream license file](.devcontainer/node-notices/LICENSE),
-including third-party notices, beside Playwright's bundled Node.js runtime as `LICENSE.node`. It is
-checked against the matching official release and refreshed automatically
-when the runtime changes. These components retain their own license terms.
+The Linux container uses its system Node.js for both the CLI and Playwright;
+Playwright's duplicate bundled Node executable is removed. The installed Node
+license and third-party notices are available at `/usr/share/doc/nodejs/LICENSE`,
+with package copyright information at `/usr/share/doc/nodejs/copyright`.
+These components retain their own terms. Playwright and npm retain their
+separate package notices.
+
+Earlier image releases that included Playwright's bundled Node runtime retain
+the notices shipped with those releases.
+
+## CPython license evidence fixture
+
+The [complete upstream CPython license](packages/sca/tests/fixtures/licenses/cpython-LICENSE)
+is retained as a license-identification fixture. It comes from the official
+[Python 3.14.10 source release](https://www.python.org/ftp/python/3.14.10/Python-3.14.10.tar.xz).
+Python's project declaration is PSF-2.0; incorporated software retains its own
+terms, as the retained license explains. RAPTOR's license association does not
+replace those terms or certify that a binary was built from a particular source.

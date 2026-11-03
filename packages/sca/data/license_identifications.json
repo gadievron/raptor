@@ -135,5 +135,21 @@
         "verification": "All class bytes rebuilt identically from the identified source with OpenJDK 17.0.19 and matched to the image jars and Debian 0.21-12 packages. Archive timestamps and Created-By version are not executable payload."
       }
     }
-  ]
+  ],
+  "native_runtimes": {
+    "cpython": {
+      "expression": "PSF-2.0",
+      "notice_sha256": "b0e25a78cffb43f4d92de8b61ccfa1f1f98ecbc22330b54b5251e7b6ba010231",
+      "version_reviewed": "3.14.10",
+      "basis": "The complete installed CPython project LICENSE explicitly declares Python Software Foundation License Version 2. This declaration excludes incorporated software under other licenses; all historical notice text is retained.",
+      "review": {
+        "source_archive_url": "https://www.python.org/ftp/python/3.14.10/Python-3.14.10.tar.xz",
+        "source_archive_sha256": "de414a57119abef52784d8993e341d53aed635fc2b05c2607d9f98a2c5b72032",
+        "source_license_path": "Python-3.14.10/LICENSE",
+        "source_sbom_url": "https://www.python.org/ftp/python/3.14.10/Python-3.14.10.tar.xz.spdx.json",
+        "source_sbom_package": "SPDXRef-PACKAGE-cpython",
+        "source_sbom_license_concluded": "PSF-2.0"
+      }
+    }
+  }
 }
