@@ -59,6 +59,39 @@ class PythonNoticeTests(unittest.TestCase):
         self.assertFalse(self.target.exists())
         self.assertEqual((self.package / "METADATA").read_bytes(), self.metadata)
 
+    def test_unresolved_name_cannot_emit_terminal_controls(self):
+        import contextlib
+        import io
+
+        original = self.entry["name"]
+        hostile = "project" + chr(27) + "[31m"
+        self.entry.update(name=hostile, status="unresolved")
+        self.save_manifest()
+        metadata = self.metadata.replace(("Name: " + original + "\n").encode(),
+                                         ("Name: " + hostile + "\n").encode(), 1)
+        (self.package / "METADATA").write_bytes(metadata)
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.assertEqual(self.install(), 0)
+        warning = stderr.getvalue()
+        self.assertNotIn(chr(27), warning)
+        self.assertEqual(warning.count("\n"), 1)
+        self.assertTrue(all(32 <= ord(c) < 127 for c in warning.rstrip("\n")))
+        self.assertFalse(self.target.exists())
+        self.assertEqual((self.package / "METADATA").read_bytes(), metadata)
+
+    def test_metadata_mismatch_diagnostic_escapes_version_controls(self):
+        version = "9.9" + chr(27) + "[31m"
+        metadata = self.metadata.replace(("Version: " + self.entry["version"] + "\n").encode(),
+                                         ("Version: " + version + "\n").encode(), 1)
+        (self.package / "METADATA").write_bytes(metadata)
+        with self.assertRaises(ValueError) as caught:
+            self.install()
+        diagnostic = str(caught.exception)
+        self.assertNotIn(chr(27), diagnostic)
+        self.assertTrue(all(32 <= ord(c) < 127 for c in diagnostic))
+        self.assertFalse(self.target.exists())
+
     def test_removed_distribution_can_be_skipped(self):
         shutil.rmtree(self.package)
         self.assertEqual(INSTALLER.install(self.site, self.evidence, skip_absent=True), 0)
@@ -164,6 +197,30 @@ class OpenTelemetryNoticeTests(PythonNoticeTests):
 
 class SemgrepNoticeTests(PythonNoticeTests):
     EVIDENCE = HERE / "semgrep-notices"
+
+
+class TerminalWarningTests(unittest.TestCase):
+    def test_controls_bidi_and_long_names_are_printable_and_bounded(self):
+        payloads = ["name\r\n::error::injected", "name\x1b[2J", "name\x85next",
+                    "name\u202ereversed", "x" * 10000, "\U0001f642" * 10000]
+        for payload in payloads:
+            with self.subTest(payload=repr(payload[:30])):
+                rendered = INSTALLER._term(payload)
+                self.assertLessEqual(len(rendered), 2402)
+                self.assertTrue(all(32 <= ord(c) < 127 for c in rendered))
+                self.assertIsInstance(json.loads(rendered), str)
+
+    def test_build_helper_needs_only_the_standard_library(self):
+        import os
+        import subprocess
+        import sys
+
+        env = dict(os.environ)
+        env.pop("PYTHONPATH", None)
+        with tempfile.TemporaryDirectory() as empty:
+            result = subprocess.run([sys.executable, "-S", str(HERE / "install-python-notices.py"), "--help"],
+                                    cwd=empty, env=env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":

@@ -539,6 +539,9 @@ _REPORT_CONSTRUCTORS = frozenset({"ReportSection"})
 # writer needs an explicit add (forcing a security review at file-add
 # time).
 _REPORT_WRITER_FILES = (
+    # Standalone container-build helper: _term caps metadata names and uses
+    # json.dumps(ensure_ascii=True) to escape terminal controls and Unicode.
+    ".devcontainer/install-python-notices.py",
     # rr lifecycle CLI: captured target/tool diagnostics and path-bearing errors
     # are bounded and terminal-sanitised; only LF layout is retained.
     "packages/binary_analysis/rr_cli.py",
