@@ -224,6 +224,10 @@ _APPLE_DEVELOPER_SHIMS = frozenset({
     "ranlib", "strip", "make", "git", "swift", "swiftc",
 })
 
+# Cold Xcode SDK metadata queries can exceed ten seconds on hosted runners.
+# This bounds only the fixed parent-side query, not the sandboxed workload.
+_XCRUN_QUERY_TIMEOUT_S = 30
+
 
 def _xcrun_path(*args: str) -> str | None:
     """Probe the installed system toolchain outside Seatbelt, never a target.
@@ -237,7 +241,7 @@ def _xcrun_path(*args: str) -> str | None:
         result = subprocess.run(
             ["/usr/bin/xcrun", "--sdk", "macosx", *args],
             cwd="/", env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=_XCRUN_QUERY_TIMEOUT_S,
         )
         path = result.stdout.strip()
         if result.returncode or not path.startswith("/") or "\n" in path:
@@ -285,8 +289,13 @@ def _prepare_apple_tool(cmd: list[str], child_env: dict[str, str]) -> list[str]:
             sdk = _xcrun_path("--show-sdk-path")
             if sdk is not None:
                 child_env["SDKROOT"] = sdk
-        compiler = real_tool or _xcrun_path("--find", "clang")
+        compiler = real_tool or _xcrun_path("--find", name if system_shim else "clang")
         if compiler is not None:
+            if system_shim:
+                # A cold first lookup may fail while the SDK query warms
+                # xcrun's cache. Use the successful retry, preserving argv[0]
+                # for clang++/c++ rather than falling back to the system shim.
+                command[index] = compiler
             child_env["PATH"] = os.path.dirname(compiler) + os.pathsep + child_env.get("PATH", "/usr/bin:/bin")
     return command
 

@@ -1813,6 +1813,11 @@
     "kind": "literal",
     "note": "RPC reply payload keys (wire shape of the spawn verb, not a name vocabulary)"
   },
+  "core/sandbox/_macos_spawn.py::_APPLE_DEVELOPER_SHIMS": {
+    "count": 12,
+    "kind": "literal",
+    "note": "Closed security allowlist of fixed system developer shims eligible for parent-side xcrun metadata preparation; target-derived names must never expand this list. Compilation remains sandboxed."
+  },
   "core/sandbox/context.py::_NETWORKED_ALLOWED_KWARGS": {
     "count": 19,
     "kind": "literal"

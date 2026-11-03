@@ -1462,3 +1462,28 @@ def test_trust_anchor_env_kwargs_vs_old_string_search(
         assert new_result == old_would, (
             f"kwargs vs string-search mismatch for {kw}"
         )
+
+
+@pytest.mark.parametrize("escape", [False, True], ids=["frameworks", "escaped-symlink"])
+def test_selected_xcode_framework_grants_are_contained(tmp_path, monkeypatch, escape):
+    contents = tmp_path / "Xcode_26.app" / "Contents"
+    developer = contents / "Developer"
+    developer.mkdir(parents=True)
+    frameworks = contents / "Frameworks"
+    frameworks.mkdir()
+    shared = contents / "SharedFrameworks"
+    outside = tmp_path / "unrelated"
+    outside.mkdir()
+    if escape:
+        shared.symlink_to(outside)
+    else:
+        shared.mkdir()
+    link = tmp_path / "xcode_select_link"
+    link.symlink_to(developer)
+    monkeypatch.setattr(seatbelt, "_XCODE_SELECT_LINK", str(link))
+    roots = seatbelt._developer_toolchain_read_dirs()
+    assert str(developer.resolve()) in roots
+    assert str(frameworks.resolve()) in roots
+    assert (str(shared.resolve()) in roots) is not escape
+    assert str(contents.resolve()) not in roots
+    assert str(outside.resolve()) not in roots

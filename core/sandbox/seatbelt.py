@@ -299,18 +299,34 @@ _DEFAULT_DEVELOPER_DIRS = (
 def _developer_toolchain_read_dirs() -> tuple[str, ...]:
     """Read grants that let the /usr/bin developer-tool shims run.
 
-    Returns the xcode-select link and the developer directory it
-    resolves to when a toolchain is selected; otherwise the default
-    developer directories xcrun falls back to that exist on this host.
+    Returns the selected developer tree and its Xcode framework siblings,
+    or the installed default developer trees when no selection exists.
     Toolchain trees hold compilers, SDK headers and libraries; the
     grant matches the /usr and Homebrew posture."""
     developer_dir = _realpath_or_none(_XCODE_SELECT_LINK)
     if developer_dir and developer_dir != _XCODE_SELECT_LINK \
             and os.path.isdir(developer_dir):
-        return (_XCODE_SELECT_LINK, developer_dir)
-    return tuple(
-        os.path.realpath(d) for d in _DEFAULT_DEVELOPER_DIRS
-        if os.path.isdir(d))
+        developer_dirs = (developer_dir,)
+        roots = [_XCODE_SELECT_LINK]
+    else:
+        developer_dirs = tuple(os.path.realpath(d) for d in _DEFAULT_DEVELOPER_DIRS
+                               if os.path.isdir(d))
+        roots = []
+    for developer in developer_dirs:
+        roots.append(developer)
+        contents = os.path.dirname(developer)
+        if (os.path.basename(developer) != "Developer"
+                or os.path.basename(contents) != "Contents"
+                or not os.path.basename(os.path.dirname(contents)).endswith(".app")):
+            continue
+        # xcodebuild loads these beside Developer, including in versioned
+        # Xcode bundles. Do not grant the whole bundle or escaped symlinks.
+        for name in ("Frameworks", "SharedFrameworks"):
+            path = os.path.realpath(os.path.join(contents, name))
+            if (path != contents and os.path.isdir(path)
+                    and os.path.commonpath((contents, path)) == contents):
+                roots.append(path)
+    return tuple(dict.fromkeys(roots))
 
 
 def _quote_sbpl(s: str) -> str:

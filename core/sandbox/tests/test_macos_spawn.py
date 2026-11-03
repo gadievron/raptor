@@ -1253,3 +1253,33 @@ def test_xcrun_keeps_cpp_driver_spelling(monkeypatch):
     monkeypatch.setattr(os.path, 'isdir', lambda p: True)
     monkeypatch.setattr(os.path, 'exists', lambda p: True)
     assert _macos_spawn._xcrun_path('--find', 'clang++') == cpp
+
+
+def test_cold_cpp_lookup_retry_replaces_system_shim(monkeypatch):
+    probes = []
+    cpp = "/Library/Developer/CommandLineTools/usr/bin/clang++"
+    def probe(*args):
+        probes.append(args)
+        if len(probes) == 1:
+            return None
+        return "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk" if args == ("--show-sdk-path",) else cpp
+    monkeypatch.setattr(_macos_spawn, "_xcrun_path", probe)
+    env = {"PATH": "/usr/bin:/bin"}
+    assert _macos_spawn._prepare_apple_tool(["/usr/bin/clang++", "target.cc"], env) == [cpp, "target.cc"]
+    assert probes == [("--find", "clang++"), ("--show-sdk-path",), ("--find", "clang++")]
+
+
+def test_cold_xcrun_query_has_bounded_startup_headroom(monkeypatch):
+    from types import SimpleNamespace
+    compiler = "/Library/Developer/CommandLineTools/usr/bin/clang"
+    def run(command, **kwargs):
+        assert command == ["/usr/bin/xcrun", "--sdk", "macosx", "--find", "clang"]
+        if kwargs["timeout"] <= 10:
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        assert kwargs["timeout"] <= 30
+        return SimpleNamespace(returncode=0, stdout=compiler)
+    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr(_macos_spawn.seatbelt, "_developer_toolchain_read_dirs", lambda: ("/Library/Developer/CommandLineTools",))
+    monkeypatch.setattr(os.path, "isdir", lambda p: True)
+    monkeypatch.setattr(os.path, "exists", lambda p: True)
+    assert _macos_spawn._xcrun_path("--find", "clang") == compiler
