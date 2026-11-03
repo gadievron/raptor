@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import re
 import tarfile
+from urllib.error import HTTPError
 from urllib.parse import quote, urlparse
 from urllib.request import urlopen
 
@@ -152,9 +153,39 @@ def licensing_section(data):
     raise ValueError("README licensing section missing; review required")
 
 
+def declared_reference_notice(entry, metadata, archived):
+    """Pair an upstream SPDX declaration with a separately attributed reference."""
+    raw = fetch(entry["license_reference_url"])
+    if hashlib.sha256(raw).hexdigest() != entry["license_reference_sha256"]:
+        raise ValueError("standard licence reference checksum mismatch")
+    reference = json.loads(raw)
+    if reference["licenseId"] != archived.get("license"):
+        raise ValueError("standard reference differs from upstream declaration")
+    author = (json.dumps(archived["author"], ensure_ascii=False) if archived.get("author")
+              else "Not provided in package metadata")
+    header = (
+        f'License evidence for {archived["name"]}@{archived["version"]}\n\n'
+        f'Upstream package declaration: {archived["license"]}\n'
+        f'Author recorded by upstream: {author}\n'
+        f'Release: {metadata["dist"]["tarball"]}\n'
+        f'Source commit: {metadata.get("gitHead", "not recorded")}\n'
+        f'Standard text source: {entry["license_reference_url"]}\n\n'
+        'The package metadata above is the upstream licence declaration.\n'
+        'The standard text below is an unchanged SPDX reference copy, not an\n'
+        'upstream-authored package notice. Its example copyright notices belong\n'
+        'to the reference text and do not identify this package author.\n\n'
+    )
+    return header.encode("utf-8") + reference["licenseText"].encode("utf-8")
+
+
+def missing_notice(updated, reason):
+    updated.update(status="unresolved", reason=reason,
+                   scope="Release identity retained; applicable notice evidence is unavailable.", retry_missing_notice=True)
+    updated.pop("sha256", None)
+    return updated, None
+
+
 def refresh_entry(entry, package, installed, previous_notice=None):
-    if installed.get("license") != entry["license"]:
-        raise ValueError("licence declaration changed; review required")
     version = installed["version"]
     url = "https://registry.npmjs.org/" + quote(entry["name"], safe="") + "/" + quote(version, safe="")
     metadata = json.loads(fetch(url))
@@ -166,13 +197,25 @@ def refresh_entry(entry, package, installed, previous_notice=None):
         raise ValueError("archive and installed package metadata disagree")
     updated = dict(entry)
     updated.pop("absent", None)
-    updated.update(version=version, registry_metadata_url=url, release_url=metadata["dist"]["tarball"],
+    updated.update(version=version, license=installed.get("license"), registry_metadata_url=url, release_url=metadata["dist"]["tarball"],
                    release_integrity=metadata["dist"]["integrity"], release_sha256=hashlib.sha256(raw).hexdigest())
     if metadata.get("gitHead"):
         updated["source_commit"] = metadata["gitHead"]
     else:
         updated.pop("source_commit", None)
-    if entry["status"] == "unresolved":
+    if entry.get("source_kind") == "declared_spdx_reference":
+        updated["license"] = installed.get("license")
+        if installed.get("license") != entry["reference_license_id"]:
+            updated.update(status="unresolved", reason="Declaration changed; no matching standard text retained.")
+            return updated, None
+        verified = verify_payload(package, files, entry)
+        notice = declared_reference_notice(entry, metadata, archived)
+        updated.update(status="declaration_and_standard_text_retained", sha256=hashlib.sha256(notice).hexdigest(),
+                       verified_installed_files=verified,
+                       scope="Verified release declaration and author metadata, accompanied by unchanged standard licence reference text; not an upstream-authored package notice.")
+        updated.pop("reason", None)
+        return updated, notice
+    if entry["status"] == "unresolved" and not entry.get("retry_missing_notice"):
         # Do not turn known evidence gaps into an inferred licence grant.
         for key in ("notice_file", "sha256", "source_kind", "source_url", "source_path", "installed_filename", "verified_installed_files"):
             updated.pop(key, None)
@@ -192,18 +235,28 @@ def refresh_entry(entry, package, installed, previous_notice=None):
             raise ValueError("repository fallback needs a reviewed recipe")
         parts[2] = commit
         source_url = "https://raw.githubusercontent.com/" + "/".join(parts)
-        notice = fetch(source_url)
         updated["source_url"] = source_url
+        try:
+            notice = fetch(source_url)
+        except HTTPError as exc:
+            if exc.code != 404:
+                raise
+            return missing_notice(updated, "Upstream notice file is missing.")
     else:
         if entry["source_path"] not in files:
-            raise ValueError("notice source layout changed; review required")
+            return missing_notice(updated, "Upstream notice source path is missing.")
         notice = files[entry["source_path"]]
         updated["source_url"] = metadata["dist"]["tarball"]
     if not notice or len(notice) > MAX_TEXT:
-        raise ValueError("missing or oversized notice")
+        return missing_notice(updated, "Upstream notice is missing or exceeds the text budget.")
     if Path(entry["source_path"]).name.lower().startswith("readme"):
-        if previous_notice is None or licensing_section(previous_notice) != licensing_section(notice):
-            raise ValueError("README licensing section changed; review required")
+        try:
+            licensing_section(notice)
+        except ValueError:
+            return missing_notice(updated, "README no longer contains a licensing section.")
+    updated.pop("retry_missing_notice", None)
+    updated["status"] = "upstream_evidence_retained"
+    updated.pop("reason", None)
     updated["sha256"] = hashlib.sha256(notice).hexdigest()
     updated["verified_installed_files"] = verified
     updated["scope"] = "Installed payload files match the integrity-checked release; package.json identity and licence match. Notice evidence does not establish complete licence coverage."
@@ -235,9 +288,8 @@ def refresh(root, evidence, *, force=False, check=False):
         installed = read_metadata(regular_path(package, "package.json"))
         if installed.get("name") != entry["name"]:
             raise ValueError("unexpected bundled package identity")
-        if installed.get("license") != entry["license"]:
-            raise ValueError("licence declaration changed; review required")
-        changed = manager_changed or installed.get("version") != entry["version"] or entry.get("absent")
+        changed = (manager_changed or installed.get("version") != entry["version"] or entry.get("absent")
+                   or installed.get("license") != entry["license"])
         if force or changed:
             refreshed = True
             previous_notice = None

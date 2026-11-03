@@ -99,13 +99,26 @@ class RefreshTests(unittest.TestCase):
         self.assertEqual(self.manifest_path.read_bytes(), before)
         self.assertEqual(self.notice.read_bytes(), b"old notice")
 
-    def test_changed_licence_requires_review(self):
+    def test_mismatched_installed_and_registry_licences_are_rejected(self):
         self.installed["license"] = "Apache-2.0"
         (self.package / "package.json").write_text(json.dumps(self.installed))
-        with self.assertRaisesRegex(ValueError, "licence declaration changed"):
+        with self.assertRaisesRegex(ValueError, "registry and installed"):
             self.refresh()
-        self.mock_fetch.assert_not_called()
+        self.mock_fetch.assert_called()
         self.assertEqual(self.notice.read_bytes(), b"old notice")
+
+    def test_consistent_changed_licence_refreshes_without_legal_review(self):
+        self.installed["license"] = "Apache-2.0"
+        self.metadata["license"] = "Apache-2.0"
+        (self.package / "package.json").write_text(json.dumps(self.installed))
+        self.raw = archive_bytes([("package/package.json", json.dumps(self.installed).encode()),
+                                  ("package/index.js", b"module.exports = 2;\n"),
+                                  ("package/LICENSE", b"new upstream terms")])
+        self.metadata["dist"]["integrity"] = "sha512-" + base64.b64encode(hashlib.sha512(self.raw).digest()).decode()
+        self.refresh()
+        updated = json.loads(self.manifest_path.read_text())["packages"][0]
+        self.assertEqual(updated["license"], "Apache-2.0")
+        self.assertEqual(self.notice.read_bytes(), b"new upstream terms")
 
     def test_registry_identity_mismatch_is_rejected(self):
         self.metadata["version"] = "3.0"
@@ -150,10 +163,19 @@ class RefreshTests(unittest.TestCase):
         other.mkdir()
         (other / "package.json").write_text(json.dumps({"name": "other", "version": "2.0", "license": "BSD-3-Clause"}))
         before = self.manifest_path.read_bytes()
-        with self.assertRaisesRegex(ValueError, "licence declaration changed"):
+        with self.assertRaisesRegex(ValueError, "registry and installed"):
             self.refresh()
         self.assertEqual(self.manifest_path.read_bytes(), before)
         self.assertEqual(self.notice.read_bytes(), b"old notice")
+
+    def test_missing_notice_recipe_retries_with_verified_payload(self):
+        self.entry.update(status="unresolved", retry_missing_notice=True)
+        self.save()
+        self.refresh()
+        updated = json.loads(self.manifest_path.read_text())["packages"][0]
+        self.assertEqual(updated["status"], "upstream_evidence_retained")
+        self.assertGreater(updated["verified_installed_files"], 0)
+        self.assertNotIn("retry_missing_notice", updated)
 
     def test_unresolved_entry_is_not_promoted_from_a_declaration(self):
         self.entry["status"] = "unresolved"
@@ -225,16 +247,15 @@ class RefreshTests(unittest.TestCase):
         self.refresh()
         self.assertTrue(self.notice.read_bytes().startswith(b"New usage."))
 
-    def test_readme_attribution_change_requires_review(self):
+    def test_readme_attribution_change_refreshes_without_legal_review(self):
         self.configure_readme(b"Usage.\n\n## License\nNew attribution.\n")
-        with self.assertRaisesRegex(ValueError, "licensing section changed"):
-            self.refresh()
-        self.assertTrue(self.notice.read_bytes().startswith(b"Old usage."))
+        self.refresh()
+        self.assertIn(b"New attribution.", self.notice.read_bytes())
 
-    def test_removed_readme_licensing_section_requires_review(self):
+    def test_removed_readme_licensing_section_records_a_gap(self):
         self.configure_readme(b"Usage only.\n")
-        with self.assertRaisesRegex(ValueError, "licensing section missing"):
-            self.refresh()
+        self.refresh()
+        self.assertEqual(json.loads(self.manifest_path.read_text())["packages"][0]["status"], "unresolved")
 
     def test_archive_symlink_is_rejected(self):
         stream = io.BytesIO()

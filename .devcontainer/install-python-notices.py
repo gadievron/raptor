@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import sys
 import sysconfig
 
 
@@ -84,6 +85,9 @@ def install(site_packages: Path, evidence: Path, *, skip_absent: bool = False) -
                 f"python .devcontainer/refresh-python-notices.py --package {entry['name']} "
                 f"--version {values['Version']}"
             )
+        if entry.get("status") == "unresolved":
+            print(f"Unresolved Python notice: {entry['name']}; see provenance.json", file=sys.stderr)
+            continue
         data = read_regular(regular_path(evidence, entry["notice_file"]))
         if hashlib.sha256(data).hexdigest() != entry["sha256"]:
             raise ValueError("upstream notice checksum mismatch")

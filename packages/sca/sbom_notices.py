@@ -15,7 +15,7 @@ import re
 
 from core.json import dumps_artifact
 from core.oci.evidence import MAX_CAPTURE_BYTES, _METADATA_NAMES, _path, subject
-from core.oci.common_licenses import COMMON_ALIASES, COMMON_DIRECTORY, common_alias_target
+from core.oci.common_licenses import COMMON_ALIASES, COMMON_DIRECTORY, common_alias_target, corrected_common_reference
 from core.oci.notice_paths import PackageNoticePaths, component_notice_paths, notice_name as _notice_name
 from core.security.capped_read import read_capped
 
@@ -228,7 +228,19 @@ def associate(native: dict, image: dict, rows: list[dict], blobs: dict[str, byte
                         if alias not in references:
                             references.append(deepcopy(alias))
                     else:
-                        gaps.append("common licence text missing or ambiguous: " + name)
+                        corrected = corrected_common_reference(name, blobs[entry["sha256"]].decode("utf-8", errors="replace"))
+                        replacements = by_path[COMMON_DIRECTORY + corrected] if corrected else []
+                        if not common_matches and not aliases_by_path[COMMON_DIRECTORY + name] and len(replacements) == 1:
+                            replacement = replacements[0]
+                            add(replacement, "copyright_common_licence_corrected_reference")
+                            key = replacement["path"], replacement["catalogue_layer_diff_id"]
+                            correction = {"referenced_path": COMMON_DIRECTORY + name,
+                                          "copyright_path": entry["path"], "copyright_sha256": entry["sha256"]}
+                            corrections = associations[key].setdefault("common_license_reference_corrections", [])
+                            if correction not in corrections:
+                                corrections.append(correction)
+                        else:
+                            gaps.append("common licence text missing or ambiguous: " + name)
         evidence = sorted(associations.values(), key=lambda r: (r["path"], r["catalogue_layer_diff_id"]))
         status = ("notice_candidate_captured" if any(r["content_kind"] == "notice_candidate" for r in evidence)
                   else "metadata_only" if evidence else "no_associated_evidence")
@@ -294,6 +306,8 @@ def associate(native: dict, image: dict, rows: list[dict], blobs: dict[str, byte
             package['status'] = 'notice_candidate_captured'
             package['gaps'] = [gap for gap in package['gaps'] if gap != 'no associated notice candidate; licence text completeness is unverified']
         measurements = [verified[key][0] for key in sorted(verified)]
+    from packages.sca.sbom_distro_python_notices import associate_project_notices
+    associate_project_notices(native, packages, blobs)
     return {"version": 1, "subject": image, "common_license_aliases": list(common_license_aliases), "packages": packages, "owner_file_verification": measurements, "distro_owner_statistics": owner_statistics,
             "python_record_owner_statistics": python_statistics,
             "unassociated_files": [deepcopy(r) for r in rows if (r["path"], r["catalogue_layer_diff_id"]) not in associated],

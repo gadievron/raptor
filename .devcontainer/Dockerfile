@@ -190,8 +190,11 @@ RUN curl -fsSL https://deb.nodesource.com/setup_24.x -o /tmp/nodesource_setup.sh
 # ============================================================================
 
 COPY .devcontainer/pnpm-notices/ /usr/share/doc/raptor-pnpm-notices/
+COPY .devcontainer/prune-linux-extras.py /usr/local/libexec/prune-linux-extras.py
 
 RUN npm install -g yarn@1.22.22 pnpm@11.11.0 \
+    && python3 /usr/local/libexec/prune-linux-extras.py \
+        --pnpm-root /usr/lib/node_modules/pnpm --nvm-root /usr/local/share/nvm \
     && python3 /usr/local/libexec/refresh-npm-notices.py \
         --package-root /usr/lib/node_modules/pnpm --evidence /usr/share/doc/raptor-pnpm-notices \
     && python3 /usr/local/libexec/install-npm-notices.py \

@@ -12,8 +12,17 @@
       "release_url": "https://registry.npmjs.org/@npmcli/agent/-/agent-4.0.2.tgz",
       "release_integrity": "sha512-EUEuWAxnL07Sp5/iC/1X6Xj+XThUvnbei9zfRWZdEXa7lss9RTHMhAHBeg+MZ5To9s/gGaSI+UwZTPdYMvKSeg==",
       "release_sha256": "88dcd3e47fbb0ab7b9160014531c0e99a7ab478656d465a7985c25c759701b9a",
-      "status": "unresolved",
-      "reason": "ISC declaration only; no applicable package notice recovered. Fixture licences do not cover this package."
+      "status": "declaration_and_standard_text_retained",
+      "source_kind": "declared_spdx_reference",
+      "reference_license_id": "ISC",
+      "license_reference_url": "https://raw.githubusercontent.com/spdx/license-list-data/d46e94e2c78ceede1cfc63cfa0396472d2798d4c/json/details/ISC.json",
+      "license_reference_sha256": "6ea246ab702cf7bf10ae95e3aa0306dc11ade80b2bf0aaa582f49de58417bb81",
+      "source_path": "package/package.json",
+      "notice_file": "agent-ISC-reference.txt",
+      "installed_filename": "NOTICE",
+      "sha256": "49bd46fc33012af1b7a8b31f407bc5d1468f9c808b921a20c6970b477ecae6dd",
+      "verified_installed_files": 7,
+      "scope": "Verified release declaration and author metadata, accompanied by unchanged standard licence reference text; not an upstream-authored package notice."
     },
     {
       "name": "@sigstore/verify",
@@ -42,14 +51,18 @@
       "release_url": "https://registry.npmjs.org/spdx-exceptions/-/spdx-exceptions-2.5.0.tgz",
       "release_integrity": "sha512-PiU42r+xO4UbUS1buo3LPJkjlO7430Xn5SVAhdpzzsPHsjbYVflnnFdATgabnLude+Cqu25p6N+g2lw/PFsa4w==",
       "release_sha256": "c5295dd22415e8b60a5af2560e7461954f660bcb591be7c5622e463956d33256",
-      "source_kind": "integrity_checked_package_release",
+      "source_kind": "declared_spdx_reference",
       "source_url": "https://registry.npmjs.org/spdx-exceptions/-/spdx-exceptions-2.5.0.tgz",
-      "source_path": "package/README.md",
+      "source_path": "package/package.json",
       "installed_filename": "NOTICE",
-      "scope": "Verbatim upstream README containing attribution or licence declaration; not the full Creative Commons legal text.",
-      "status": "upstream_evidence_retained",
-      "notice_file": "spdx-exceptions-README.md",
-      "sha256": "554b19eee11d2964e9f7b244e47944c08d52ca75539260a04f3227e6c0144513"
+      "scope": "Verified release declaration and author metadata, accompanied by unchanged standard licence reference text; not an upstream-authored package notice.",
+      "status": "declaration_and_standard_text_retained",
+      "notice_file": "spdx-exceptions-standard-reference.txt",
+      "sha256": "06def8e4034c876f05c1bbca714c0cfefdbaea5cd488b33bee8f66bb12867c1c",
+      "reference_license_id": "CC-BY-3.0",
+      "license_reference_url": "https://raw.githubusercontent.com/spdx/license-list-data/d46e94e2c78ceede1cfc63cfa0396472d2798d4c/json/details/CC-BY-3.0.json",
+      "license_reference_sha256": "c26c32c5cc45c4b2dfd24fe76c70545bc3cdfa6c44617d1dcc0327c614319d7a",
+      "verified_installed_files": 4
     },
     {
       "name": "spdx-license-ids",
@@ -60,14 +73,18 @@
       "release_url": "https://registry.npmjs.org/spdx-license-ids/-/spdx-license-ids-3.0.23.tgz",
       "release_integrity": "sha512-CWLcCCH7VLu13TgOH+r8p1O/Znwhqv/dbb6lqWy67G+pT1kHmeD/+V36AVb/vq8QMIQwVShJ6Ssl5FPh0fuSdw==",
       "release_sha256": "fea7d95340e83a403c73463ea683cdde960029d956a86a023af6e283fd1e82fe",
-      "source_kind": "integrity_checked_package_release",
+      "source_kind": "declared_spdx_reference",
       "source_url": "https://registry.npmjs.org/spdx-license-ids/-/spdx-license-ids-3.0.23.tgz",
-      "source_path": "package/README.md",
+      "source_path": "package/package.json",
       "installed_filename": "NOTICE",
-      "scope": "Verbatim upstream README containing attribution or licence declaration; not the full Creative Commons legal text.",
-      "status": "upstream_evidence_retained",
-      "notice_file": "spdx-license-ids-README.md",
-      "sha256": "b4807793db6058c819f76c023362b7d522b3d19c9b41563fcc01c2b2c5b1ccd3"
+      "scope": "Verified release declaration and author metadata, accompanied by unchanged standard licence reference text; not an upstream-authored package notice.",
+      "status": "declaration_and_standard_text_retained",
+      "notice_file": "spdx-license-ids-standard-reference.txt",
+      "sha256": "6cbd27690c720414f07ea8c07518e0a75e72e5727ab13607662b7a33bedb2120",
+      "reference_license_id": "CC0-1.0",
+      "license_reference_url": "https://raw.githubusercontent.com/spdx/license-list-data/d46e94e2c78ceede1cfc63cfa0396472d2798d4c/json/details/CC0-1.0.json",
+      "license_reference_sha256": "7381d51bd59c33e6d37f5d84cc685b16352ead62cc449631af0f5d0adacef91b",
+      "verified_installed_files": 4
     }
   ]
 }
