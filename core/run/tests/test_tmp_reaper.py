@@ -632,10 +632,12 @@ class TestStartRunHook:
         assert calls == ["tmp", "logs", ("runs", out.parent)]
 
 
-def _derived_production_scratch_prefixes() -> dict[str, list[str]]:
+def _derived_production_scratch_prefixes(
+    repo_root: Path | None = None,
+) -> dict[str, list[str]]:
     """Mechanically derive production scratch prefixes.
 
-    Sweeps every production source (tests / subsystem scripts /
+    Sweeps every production source (tests / core/testing / subsystem scripts /
     .github excluded) for ``tempfile.mkdtemp(prefix=...)`` and
     ``TemporaryDirectory(prefix=...)`` calls that land in the SYSTEM
     tmp (no contained ``dir=``). Both shapes are exit-path-cleaned
@@ -647,7 +649,8 @@ def _derived_production_scratch_prefixes() -> dict[str, list[str]]:
     import ast
     import subprocess
 
-    repo_root = Path(__file__).resolve().parents[3]
+    if repo_root is None:
+        repo_root = Path(__file__).resolve().parents[3]
     try:
         out = subprocess.run(
             ["git", "-C", str(repo_root), "ls-files", "*.py", "libexec/*"],
@@ -658,7 +661,8 @@ def _derived_production_scratch_prefixes() -> dict[str, list[str]]:
     found: dict[str, list[str]] = {}
     for rel in out:
         parts = rel.split("/")
-        if ("tests" in parts or "scripts" in parts
+        if (parts[:2] == ["core", "testing"]
+                or "tests" in parts or "scripts" in parts
                 or parts[0] == ".github"
                 or parts[-1].startswith("test_")
                 or parts[-1] == "conftest.py"):
@@ -722,6 +726,32 @@ class TestProductionScratchPrefixDerivation:
             return True
         return any(tr._anchored_name_match(probe_name, e)
                    for e in tr._ANCHORED_DIR_PREFIXES)
+
+    def test_shared_test_helpers_excluded_without_hiding_runtime(self, tmp_path, monkeypatch):
+        import subprocess
+        from types import SimpleNamespace
+
+        files = {
+            "core/testing/expected_crash.py": "test-helper-",
+            "core/testing/nested/helper.py": "nested-test-helper-",
+            "core/testing_helpers/worker.py": "production-adjacent-",
+            "packages/testing/worker.py": "production-other-root-",
+            "core/run/worker.py": "production-worker-",
+        }
+        for rel, prefix in files.items():
+            path = tmp_path / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(f"import tempfile\ntempfile.mkdtemp(prefix={prefix!r})\n")
+
+        def tracked_files(command, **kwargs):
+            assert command == ["git", "-C", str(tmp_path), "ls-files", "*.py", "libexec/*"]
+            return SimpleNamespace(stdout="\n".join(files))
+
+        monkeypatch.setattr(subprocess, "run", tracked_files)
+        assert _derived_production_scratch_prefixes(tmp_path) == {
+            prefix: [rel] for rel, prefix in files.items()
+            if not rel.startswith("core/testing/")
+        }
 
     def test_every_derived_prefix_is_covered(self):
         found = _derived_production_scratch_prefixes()

@@ -40,6 +40,8 @@ class TestSyntheticTree:
     def test_planted_runtime_files_appear(self, tmp_path):
         expected = {
             _plant(tmp_path, "core/newpkg/mod.py"),
+            _plant(tmp_path, "core/testing_helpers/runtime.py"),
+            _plant(tmp_path, "packages/testing/runtime.py"),
             _plant(tmp_path, "packages/newpkg/deep/mod.py"),
             _plant(tmp_path, "engine/rules/render.py"),
             _plant(tmp_path, "libexec/raptor-new-tool",
@@ -54,6 +56,8 @@ class TestSyntheticTree:
         _plant(tmp_path, "core/pkg/mod.py")  # keep the walk non-empty
         planted = [
             _plant(tmp_path, "core/pkg/tests/test_mod.py"),
+            _plant(tmp_path, "core/testing/expected_crash.py"),
+            _plant(tmp_path, "core/testing/nested/helper.py"),
             _plant(tmp_path, "core/pkg/test/probe.py"),
             _plant(tmp_path, "core/pkg/fixtures/sample.py"),
             _plant(tmp_path, "core/pkg/conftest.py"),
@@ -77,6 +81,10 @@ class TestSyntheticTree:
             runtime_file_universe(tmp_path, include_dev_scripts=True)
         )
         # The opt-in widens only the scripts/ dimension.
+        helper = _plant(tmp_path, "core/testing/expected_crash.py")
+        assert helper not in set(
+            runtime_file_universe(tmp_path, include_dev_scripts=True)
+        )
         test_file = _plant(tmp_path, "core/pkg/tests/test_mod.py")
         assert test_file not in set(
             runtime_file_universe(tmp_path, include_dev_scripts=True)
