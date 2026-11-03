@@ -1283,24 +1283,39 @@ def test_env_refusal_darwin_arm_names_seatbelt(monkeypatch):
 
 
 def test_payload_executors_derive_contract_flag_from_helper():
-    """Source pin: the three direct payload executors derive
-    require_fresh_procfs= from the env-var-honouring helper — a
-    literal True at those call sites would make the operator waiver
-    a lie (the refusal hint tells literal-True callers so)."""
+    """Pin helper-derived contract flags, including saved helper results.
+
+    Payloads that reuse the result must also withdraw host /proc reads
+    when it is false. Literal True would defeat consent; literal False
+    would bypass the default contract.
+    """
     callers = {
-        "packages/llm_analysis/exploit_verify.py":
+        "packages/llm_analysis/exploit_verify.py": (1, (
+            "fresh_procfs = untrusted_fresh_procfs_required()",
+            "require_fresh_procfs=fresh_procfs",
+            "omit_proc_reads=not fresh_procfs",
+        )),
+        "packages/autonomous/exploit_validator.py": (2, (
+            "fresh_procfs = untrusted_fresh_procfs_required()",
+            "require_fresh_procfs=fresh_procfs",
+            "omit_proc_reads=not fresh_procfs",
+        )),
+        "packages/exploit_feasibility/under_mitigations.py": (1, (
             "require_fresh_procfs=untrusted_fresh_procfs_required()",
-        "packages/exploit_feasibility/under_mitigations.py":
-            "require_fresh_procfs=untrusted_fresh_procfs_required()",
-        "core/audit/dark_verify/_execute.py":
+        )),
+        "core/audit/dark_verify/_execute.py": (1, (
             "require_fresh_procfs=_fresh_procfs_required()",
+        )),
     }
-    for rel, needle in callers.items():
+    for rel, (expected, needles) in callers.items():
         src = (_REPO_ROOT / rel).read_text(encoding="utf-8")
-        assert needle in src, f"{rel}: contract-flag derivation drifted"
-        assert "require_fresh_procfs=True" not in src, (
-            f"{rel}: literal require_fresh_procfs=True bypasses the "
-            f"operator waiver")
+        for needle in needles:
+            assert src.count(needle) == expected, (
+                f"{rel}: expected {expected} helper-derived site(s) for {needle!r}")
+        for literal in ("True", "False"):
+            assert f"require_fresh_procfs={literal}" not in src, (
+                f"{rel}: literal require_fresh_procfs={literal} bypasses "
+                "the helper-derived contract")
     # dark_verify's local helper must itself delegate to the reader.
     dv = (_REPO_ROOT / "core/audit/dark_verify/_execute.py").read_text(
         encoding="utf-8")
