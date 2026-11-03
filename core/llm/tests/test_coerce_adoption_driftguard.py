@@ -40,6 +40,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 _UNWRAP_ADOPTERS = [
     "core/concepts/study.py",
     "core/audit/corpus/run_corpus.py",
+    "core/audit/security_classifier.py",
     "packages/llm_analysis/dataflow_dispatch_client.py",
     "packages/llm_analysis/dataflow_validation.py",
 ]

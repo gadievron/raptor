@@ -7,8 +7,9 @@ answer, and sanitisation (correctly) namespaces that restatement to
 ``llm-claimed:*`` — LLM-supplied values never pass as tool evidence.
 But nothing wrote the run's OWN receipt back onto the reviewed outcome,
 so the row travelled with ``llm-claimed:`` provenance: the
-verification-evidence exemptions downstream never fired for a function
-a solver had actually confirmed.
+verification-evidence exemptions downstream (conservative ensemble
+merge, quality suppression) never fired for a function a solver had
+actually confirmed.
 
 The discriminating direction stays intact: a model that merely NAMES a
 tool, without a confirming receipt from the run's own records, must
@@ -28,7 +29,7 @@ from core.audit.orchestrator import (
     ReviewOutcome,
     run_orchestrator,
 )
-from core.audit.evidence_grade import is_verification_evidence
+from core.audit.pipeline import _is_verification_evidence, _merge_outcomes
 
 
 def _restore(outcome: ReviewOutcome, receipt: str) -> ReviewOutcome:
@@ -161,6 +162,15 @@ def _hermetic_config(target: Path, out: Path) -> OrchestratorConfig:
     )
 
 
+def _clean_bug_first_row(row: ReviewOutcome) -> ReviewOutcome:
+    return ReviewOutcome(
+        file=row.file,
+        function=row.function,
+        status="clean",
+        body="bug_first pass saw no mechanism",
+    )
+
+
 @pytest.mark.slow
 class TestScreenReceiptSurvives:
     def test_receipt_not_laundered_by_model_restatement(
@@ -191,7 +201,7 @@ class TestScreenReceiptSurvives:
 
         # The exemption that protects tool-verified rows fires.
         assert any(
-            is_verification_evidence(part.strip())
+            _is_verification_evidence(part.strip())
             for part in (row.evidence_tool or "").split("+")
         ), f"no verification-grade part in {row.evidence_tool!r}"
 
@@ -200,6 +210,15 @@ class TestScreenReceiptSurvives:
             str(t).strip().lower()
             for t in (row.tools_dispatched or set())
         }
+
+        # The conservative ensemble merge must not suppress the
+        # receipted row against a clean sibling lane.
+        merged = _merge_outcomes([row], [_clean_bug_first_row(row)])
+        assert merged[0].status == "suspicious", (
+            f"receipted row conservatively suppressed to "
+            f"{merged[0].status!r} with evidence "
+            f"{merged[0].evidence_tool!r}"
+        )
 
     def test_claim_without_receipt_stays_llm_claimed(
         self, tmp_path: Path,
@@ -226,9 +245,15 @@ class TestScreenReceiptSurvives:
             for part in ev.split("+") if part.strip()
         ), f"unreceipted claim escaped the llm-claimed namespace: {ev!r}"
         assert not any(
-            is_verification_evidence(part.strip())
+            _is_verification_evidence(part.strip())
             for part in ev.split("+") if part.strip()
         )
+
+        if row.status == "suspicious":
+            merged = _merge_outcomes([row], [_clean_bug_first_row(row)])
+            assert merged[0].status != "suspicious", (
+                "unreceipted suspicious survived the conservative merge"
+            )
 
 
 def _suspicious(evidence: str, status: str = "suspicious") -> ReviewOutcome:

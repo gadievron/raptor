@@ -198,8 +198,8 @@ def group_by_finding(
     """Group records into ``{finding_id: [PanelRecord, ...]}``.
 
     Order within each finding is the load order of the underlying file —
-    deterministic given the path order.  The EM's outer loop consumes
-    this shape.
+    deterministic given the path order. Phase 2b consumes this shape
+    for the EM's outer loop.
     """
     grouped: dict = {}
     for r in records:
