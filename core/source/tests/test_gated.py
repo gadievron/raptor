@@ -302,3 +302,102 @@ class TestOpenRegularGated:
         with open_regular_gated(p) as fh:
             assert fh.read() == b"\x00\xff"
             assert fh.mode == "rb"
+
+
+class TestReadAllocationAndGrowth:
+    def test_small_file_large_cap_reads_inode_size(self, tmp_path, monkeypatch):
+        from core.source import gated
+
+        p = tmp_path / "small.dat"
+        payload = b"payload" * 100
+        p.write_bytes(payload)
+        requests = []
+        opened = gated._open_gated
+
+        class RecordingReader:
+            def __init__(self, fh):
+                self.fh = fh
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return self.fh.__exit__(*args)
+
+            def read(self, size=-1):
+                requests.append(size)
+                return self.fh.read(size)
+
+        def recording_open(*args, **kwargs):
+            fh, st = opened(*args, **kwargs)
+            return RecordingReader(fh), st
+
+        monkeypatch.setattr(gated, "_open_gated", recording_open)
+        assert gated.read_bytes_gated(p, 128 * 1024 * 1024) == payload
+        assert requests == [len(payload) + 1]
+
+    @pytest.mark.parametrize("initial", [b"", b"ab"])
+    @pytest.mark.parametrize("budget_extra", [0, 1, 1024 * 1024])
+    def test_growth_within_budget_returns_complete_bytes(
+        self, tmp_path, monkeypatch, initial, budget_extra,
+    ):
+        p = tmp_path / "grow.dat"
+        p.write_bytes(initial)
+        grown = initial + b"Z" * (2 * 1024 * 1024 + 10)
+        real_fstat = os.fstat
+
+        def grow_after_fstat(fd):
+            st = real_fstat(fd)
+            p.write_bytes(grown)
+            return st
+
+        monkeypatch.setattr(os, "fstat", grow_after_fstat)
+        assert read_bytes_gated(p, len(grown) + budget_extra) == grown
+
+    def test_shrink_after_fstat(self, tmp_path, monkeypatch):
+        p = tmp_path / "shrink.dat"
+        p.write_bytes(b"original long contents")
+        real_fstat = os.fstat
+
+        def shrink_after_fstat(fd):
+            st = real_fstat(fd)
+            p.write_bytes(b"short")
+            return st
+
+        monkeypatch.setattr(os, "fstat", shrink_after_fstat)
+        assert read_bytes_gated(p, 1000) == b"short"
+
+    @pytest.mark.parametrize("initial", [b"", b"ab"])
+    def test_growth_past_cap_keeps_custom_error(self, tmp_path, monkeypatch, initial):
+        class CustomBudget(ValueError):
+            pass
+
+        p = tmp_path / "grow.dat"
+        p.write_bytes(initial)
+        real_fstat = os.fstat
+
+        def grow_after_fstat(fd):
+            st = real_fstat(fd)
+            p.write_bytes(initial + b"Z" * (2 * 1024 * 1024))
+            return st
+
+        monkeypatch.setattr(os, "fstat", grow_after_fstat)
+        with pytest.raises(CustomBudget, match="grew past max_bytes=1048576"):
+            read_bytes_gated(p, 1024 * 1024, budget_error=CustomBudget)
+
+    def test_empty_zero_budget(self, tmp_path):
+        p = tmp_path / "empty.dat"
+        p.write_bytes(b"")
+        assert read_bytes_gated(p, 0) == b""
+
+    def test_zero_size_regular_pseudo_file(self):
+        from pathlib import Path
+
+        p = Path("/proc/self/cmdline")
+        if not p.exists() or p.stat().st_size != 0 or not p.is_file():
+            pytest.skip("requires a zero-size regular proc file")
+        expected = p.read_bytes()
+        assert expected
+        assert read_bytes_gated(p, len(expected)) == expected
+        with pytest.raises(ReadBudgetExceededError, match="grew past"):
+            read_bytes_gated(p, len(expected) - 1)

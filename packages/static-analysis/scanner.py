@@ -33,8 +33,9 @@ sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
 from core.config import RaptorConfig
 from core.git import clone_repository
-from core.hash import sha256_bytes, sha256_tree
+from core.hash import sha256_bytes, sha256_fileobj, sha256_tree
 from core.json import load_json, save_json
+from core.source import open_regular_gated, read_bytes_gated
 from core.logging import get_logger
 from core.run.output import unique_run_suffix
 from core.run.parent_liveness import maybe_start_orphan_watchdog
@@ -73,7 +74,7 @@ def _sarif_result_uri(result: dict) -> str:
 
 
 def filter_sarif_by_exclude_globs(
-    sarif: dict, exclude_globs: list[str] | None,
+    sarif: dict, exclude_globs: list[str] | None, *, _copy_input: bool = True,
 ) -> tuple[dict, int]:
     """Return ``(filtered_sarif, dropped_count)`` — a copy of ``sarif``
     with every result whose file URI matches any of ``exclude_globs``
@@ -88,13 +89,14 @@ def filter_sarif_by_exclude_globs(
 
     Results without a usable URI (malformed location block) are kept
     defensively — operator excludes shouldn't accidentally drop
-    findings whose metadata is broken.
+    findings whose metadata is broken. The internal ownership flag is used
+    only for the CLI's fresh merged document; public calls retain a copy.
     """
     if not exclude_globs:
         return sarif, 0
     import copy
     import fnmatch as _fnmatch
-    out = copy.deepcopy(sarif)
+    out = copy.deepcopy(sarif) if _copy_input else sarif
     dropped = 0
     for run in out.get("runs", []):
         kept: list = []
@@ -2747,32 +2749,26 @@ def _pack_provenance_from_sarif(sarif_path: Path, out_dir: Path) -> dict:
         tool = "unknown"
         name = stem
 
-    # Hash + size + findings — read bytes once.
-    # Size cap (128 MiB) — a hostile rule-pack producing arbitrarily
-    # large SARIF would otherwise OOM the post-scan analysis.
+    # Hash the exact bounded source bytes, then release them before parsing
+    # its decoded representation. Invalid JSON remains uncountable, not clean.
     _SARIF_MAX_BYTES = 128 * 1024 * 1024
     try:
-        if p.stat().st_size > _SARIF_MAX_BYTES:
-            # Treat oversize SARIF as unreadable — the enclosing
-            # OSError branch handles the messaging.
-            msg = f"SARIF exceeds {_SARIF_MAX_BYTES}-byte cap"
-            raise OSError(msg)
-        raw = p.read_bytes()
+        raw = read_bytes_gated(p, _SARIF_MAX_BYTES, follow_symlinks=False)
         sarif_sha256 = sha256_bytes(raw)
+        text = None
         try:
-            data = json.loads(raw.decode("utf-8", errors="replace"))
+            text = raw.decode("utf-8", errors="replace")
+            del raw
+            data = json.loads(text)
         except Exception:  # noqa: BLE001
             data = None
+        finally:
+            del text
         if not isinstance(data, dict) or not isinstance(data.get("runs"), list):
-            # Parsed but not a SARIF document (0-byte parses to {};
-            # wrong-schema JSON has no `runs` list): uncountable —
-            # same null as the unparseable case, keep the real hash.
             data = None
         findings = count_results(data) if data is not None else None
-    except OSError:
-        # Missing (FileNotFoundError) or unreadable (EACCES, EIO, …)
-        # — best-effort provenance, leave hash empty. findings null:
-        # nothing was countable.
+    except (OSError, ValueError):
+        # Missing, unsafe, over-budget or unreadable input is uncountable.
         sarif_sha256 = ""
         findings = None
 
@@ -2818,9 +2814,9 @@ def _compose_verification_manifest(
 
     combined: dict = {"path": combined_sarif.name}
     try:
-        raw = combined_sarif.read_bytes()
-        combined["sha256"] = sha256_bytes(raw)
-        combined["size_bytes"] = len(raw)
+        with open_regular_gated(combined_sarif, follow_symlinks=False) as stream:
+            combined["sha256"] = sha256_fileobj(stream, chunk_size=64 * 1024)
+            combined["size_bytes"] = stream.tell()
     except FileNotFoundError:
         combined["sha256"] = ""
         combined["size_bytes"] = 0
@@ -3517,7 +3513,7 @@ def main() -> None:
                 # non-excluded set. Per-tool SARIFs stay unfiltered
                 # (forensic record of what each tool emitted).
                 merged_data, excluded_count = filter_sarif_by_exclude_globs(
-                    merged_data, exclude_globs,
+                    merged_data, exclude_globs, _copy_input=False,
                 )
                 if excluded_count:
                     logger.info(
@@ -3533,7 +3529,7 @@ def main() -> None:
                 nosemgrep_count = semgrep_pkg.annotate_sarif(
                     merged_data, str(repo_path),
                 )
-                save_json(merged, merged_data)
+                save_json(merged, merged_data, stream=True)
                 logger.info("Merged SARIF created: %s", merged)
             except Exception as e:  # noqa: BLE001
                 logger.warning("SARIF merge failed, using individual files: %s", e)
