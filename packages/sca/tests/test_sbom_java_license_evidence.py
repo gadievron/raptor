@@ -22,11 +22,12 @@ def archive(
     comment=b"",
     duplicate=False,
 ):
+    # ZipInfo uses a fixed timestamp, so archive bytes agree across workers.
     stream = io.BytesIO()
     with zipfile.ZipFile(stream, "w") as jar:
         jar.comment = comment
         jar.writestr(
-            "META-INF/MANIFEST.MF",
+            zipfile.ZipInfo("META-INF/MANIFEST.MF"),
             "Manifest-Version: 1.0\r\nCreated-By: "
             + creator
             + "\r\n"
@@ -36,10 +37,10 @@ def archive(
         for name, data in (
             classes or {"gnu/gettext/Example.class": b"class bytes"}
         ).items():
-            jar.writestr(name, data)
+            jar.writestr(zipfile.ZipInfo(name), data)
             if duplicate:
                 with pytest.warns(UserWarning):
-                    jar.writestr(name, data)
+                    jar.writestr(zipfile.ZipInfo(name), data)
     return stream.getvalue()
 
 
@@ -247,6 +248,11 @@ def test_review_does_not_replace_existing_or_non_grant_claims(evidence, claims):
         b"MZ" + archive(),
         archive() + b"trailing payload",
         b"not a jar",
+    ],
+    ids=[
+        "changed-class", "extra-class", "different-class", "external-classpath",
+        "duplicate-creator", "unreviewed-creator", "archive-comment",
+        "executable-prefix", "trailing-payload", "not-a-jar",
     ],
 )
 def test_changed_payload_or_unreviewed_manifest_stays_unresolved(evidence, data):
