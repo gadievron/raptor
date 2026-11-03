@@ -94,8 +94,39 @@ def _fixture(tmp_path):
     (root / 'source.py').write_text('VALUE = 1\n')
     home = tmp_path / 'home'
     home.mkdir()
-    env = {'HOME': str(home), 'PATH': os.environ['PATH'], 'TMPDIR': str(tmp_path / 'scratch')}
+    # The guard also discovers Python environments through PATH. Do not
+    # accidentally protect pytest's uv-managed venv and its cache hard links.
+    path = os.pathsep.join(dict.fromkeys([str(Path(KERNEL_PYTHON).parent), *os.defpath.split(os.pathsep)]))
+    env = {'HOME': str(home), 'PATH': path, 'TMPDIR': str(tmp_path / 'scratch')}
     return root, script, env
+
+
+def test_kernel_fixture_excludes_ambient_python_environment(tmp_path, monkeypatch):
+    environment = tmp_path / 'ambient-venv'
+    binary = environment / 'bin/python3'
+    binary.parent.mkdir(parents=True)
+    binary.write_text('not executed')
+    (environment / 'pyvenv.cfg').write_text('home = /usr/bin\n')
+    libraries = environment / 'lib/python3.14/site-packages'
+    libraries.mkdir(parents=True)
+    module = libraries / 'cached.py'
+    module.write_text('VALUE = 1\n')
+    os.link(module, tmp_path / 'cache-alias.py')
+    monkeypatch.setenv('PATH', str(binary.parent) + os.pathsep + os.environ.get('PATH', os.defpath))
+    _, script, env = _fixture(tmp_path)
+    code = """
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location('fixture_guard', sys.argv[1])
+guard = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(guard)
+print(json.dumps([str(path) for path in guard.protected_paths()]))
+"""
+    result = subprocess.run([KERNEL_PYTHON, '-I', '-S', '-c', code, str(script)],
+                            env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert str(binary.parent) not in env['PATH'].split(os.pathsep)
+    assert not any(Path(path).is_relative_to(environment) for path in json.loads(result.stdout))
+    assert module.stat().st_nlink == 2
 
 
 def test_real_kernel_descendant_cannot_change_installation(tmp_path, require_install_mounts):
@@ -123,7 +154,7 @@ with open('/dev/null', 'w') as f: f.write('ok')
 child = subprocess.run([sys.executable, '-c', "from pathlib import Path; Path('source.py').write_text('bad')"], cwd=root, capture_output=True)
 print(json.dumps({'blocked': len(blocked), 'child': child.returncode}))
 '''
-    result = subprocess.run([KERNEL_PYTHON, '-I', '-S', '-B', str(script), '--', sys.executable, '-I', '-c', code, str(root)],
+    result = subprocess.run([KERNEL_PYTHON, '-I', '-S', '-B', str(script), '--', KERNEL_PYTHON, '-I', '-c', code, str(root)],
                             env=env, capture_output=True, text=True)
     if result.returncode == 126 and ('ABI 3+ is unavailable' in result.stderr or 'requires Linux' in result.stderr):
         assert 'No frontend was started' in result.stderr
@@ -142,7 +173,7 @@ def test_inherited_writable_fd_cannot_bypass_policy(tmp_path, require_install_mo
     root, script, env = _fixture(tmp_path)
     with (root / 'source.py').open('r+') as inherited:
         result = subprocess.run(
-            [KERNEL_PYTHON, '-I', '-S', '-B', str(script), '--', sys.executable, '-I', '-c',
+            [KERNEL_PYTHON, '-I', '-S', '-B', str(script), '--', KERNEL_PYTHON, '-I', '-c',
              'import os, sys; os.write(int(sys.argv[1]), b"bad")', str(inherited.fileno())],
             pass_fds=(inherited.fileno(),), env=env, capture_output=True, text=True)
     if result.returncode == 126:
