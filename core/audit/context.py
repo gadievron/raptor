@@ -227,6 +227,27 @@ def _read_target_text(full_path: Path) -> str | None:
     return raw.decode("utf-8", errors="replace")
 
 
+def _read_target_line_window(
+    full_path: Path, start: int, end: int,
+) -> list[str] | None:
+    """Apply audit's byte cap and rejection policy to a streamed window."""
+    from core.source.windows import read_line_window_capped
+
+    got = read_line_window_capped(
+        full_path, start, end, max_bytes=_MAX_SOURCE_FILE_BYTES,
+    )
+    if got is None:
+        return None
+    lines, truncated = got
+    if truncated:
+        logger.warning(
+            "target source file over %.0f MiB cap, skipping: %s",
+            _MAX_SOURCE_FILE_BYTES / 1024 / 1024, full_path,
+        )
+        return None
+    return lines
+
+
 def _build_tool_catalog() -> str:
     """Build a dynamic tool catalog based on what's actually installed."""
     import shutil
@@ -3230,19 +3251,23 @@ def _read_source(
     if full_path is None or not full_path.exists():
         return "(file not found)"
 
-    text = _read_target_text(full_path)
-    if text is None:
-        return "(read error)"
-    lines = split_lines(text)  # \n model: line ranges come from inventory/SARIF
-
     start = max(0, line_start - 1)
-    # The shared window rule IS the read/hash coupling: the prompt
-    # and every source-hash site must cover the same lines (see
-    # fallback_span_end).
-    end = min(fallback_span_end(line_start, line_end), len(lines))
+    end = fallback_span_end(line_start, line_end)
+    if end < 0:
+        # Preserve Python's negative-end slice semantics for malformed
+        # inventory ranges; these require knowing the whole line list.
+        text = _read_target_text(full_path)
+        if text is None:
+            return "(read error)"
+        lines = split_lines(text)
+        selected = lines[start:end]
+    else:
+        selected = _read_target_line_window(full_path, start, end)
+        if selected is None:
+            return "(read error)"
     return "\n".join(
         f"{i + 1:4d}  {line}"
-        for i, line in enumerate(lines[start:end], start=start)
+        for i, line in enumerate(selected, start=start)
     )
 
 
@@ -3464,25 +3489,33 @@ def _enrich_callers_with_call_sites(
         full_path = _safe_path(target_path, caller_file)
         if full_path is None or not full_path.exists():
             continue
-        text = _read_target_text(full_path)
-        if text is None:
-            continue
-        lines = split_lines(text)  # \n model: line ranges come from inventory/SARIF
-
         caller_line = caller.get("line_start", 0)
         search_start = max(0, caller_line - 1) if caller_line else 0
-        search_end = min(
-            len(lines),
-            (caller_line + CALLER_CALL_SEARCH_SPAN_LINES)
-            if caller_line else len(lines),
-        )
+        if caller_line:
+            search_end = caller_line + CALLER_CALL_SEARCH_SPAN_LINES
+            margin = max(0, context_lines)
+            window_start = max(0, search_start - margin)
+            lines = _read_target_line_window(
+                full_path, window_start, max(window_start, search_end + margin),
+            )
+            if lines is None:
+                continue
+        else:
+            # Unknown caller locations historically search the entire file.
+            text = _read_target_text(full_path)
+            if text is None:
+                continue
+            lines = split_lines(text)
+            window_start = 0
+            search_end = len(lines)
 
-        for i in range(search_start, search_end):
-            if call_pat.search(lines[i]):
+        window_end = window_start + len(lines)
+        for i in range(search_start, min(search_end, window_end)):
+            if call_pat.search(lines[i - window_start]):
                 start = max(0, i - context_lines)
-                end = min(len(lines), i + context_lines + 1)
+                end = min(window_end, i + context_lines + 1)
                 snippet = "\n  ".join(
-                    f"{j + 1:4d}  {lines[j]}"
+                    f"{j + 1:4d}  {lines[j - window_start]}"
                     for j in range(start, end)
                 )
                 caller["call_site"] = snippet
@@ -3781,30 +3814,25 @@ def _enrich_callees_with_source(
         full_path = _safe_path(target_path, callee_file)
         if full_path is None or not full_path.exists():
             continue
-        text = _read_target_text(full_path)
-        if text is None:
-            continue
-        lines = split_lines(text)  # \n model: line ranges come from inventory/SARIF
-
         start = max(0, line_start - 1) if line_start else 0
-        end = line_end or min(start + max_lines, len(lines))
-        end = min(end, start + max_lines)
-        end = min(end, len(lines))
+        end = min(line_end or start + max_lines, start + max_lines)
+        selected = _read_target_line_window(full_path, start, max(start, end))
+        if selected is None:
+            continue
 
-        snippet_lines = end - start
-        if total_lines + snippet_lines > max_total_lines:
+        if total_lines + len(selected) > max_total_lines:
             remaining = max_total_lines - total_lines
             if remaining < 3:
                 break
-            end = start + remaining
+            selected = selected[:remaining]
 
         snippet = "\n  ".join(
-            f"{j + 1:4d}  {lines[j]}"
-            for j in range(start, end)
+            f"{j + 1:4d}  {line}"
+            for j, line in enumerate(selected, start=start)
         )
         if snippet:
             callee["source_snippet"] = snippet
-            total_lines += end - start
+            total_lines += len(selected)
 
 
 def collect_caller_call_sites(
@@ -5358,20 +5386,14 @@ def _read_flow_node_source(
                     line_end = item.get("line_end")
                     break
 
-    text = _read_target_text(full_path)
-    if text is None:
-        return ""
-    lines = split_lines(text)  # \n model: line ranges come from inventory/SARIF
-
     start = max(0, node_line - 1) if node_line else 0
-    end = line_end or min(start + max_lines, len(lines))
-    end = min(end, start + max_lines, len(lines))
-
-    if start >= len(lines):
+    end = min(line_end or start + max_lines, start + max_lines)
+    selected = _read_target_line_window(full_path, start, max(start, end))
+    if selected is None:
         return ""
-
     return "\n".join(
-        f"{j + 1:4d}  {lines[j]}" for j in range(start, end)
+        f"{j + 1:4d}  {line}"
+        for j, line in enumerate(selected, start=start)
     )
 
 

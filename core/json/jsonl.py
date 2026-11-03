@@ -84,6 +84,19 @@ def append_jsonl(
             allow_nan=False,
         ) + "\n"
     ).encode("utf-8")
+    _append_jsonl_bytes(path, line, mode=mode)
+
+
+def _append_jsonl_bytes(
+    path: str | Path, line: bytes, *, mode: int = 0o644,
+) -> None:
+    """Append an already-serialized JSON line through the hardened writer.
+
+    Internal seam for writers that must inspect the encoded line before
+    appending it. Callers own serialization (including allow_nan=False
+    and the trailing newline); file protections and short-write handling
+    remain shared with append_jsonl.
+    """
     # O_NONBLOCK: trail paths live inside run dirs a sandboxed child
     # holds (or held) write on — an O_WRONLY open of a planted
     # reader-less FIFO would otherwise wedge the appender forever.

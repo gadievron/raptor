@@ -511,7 +511,7 @@ def stamp_audit_log_row(
 def append_audit_log(out_dir: Path, entry: dict[str, Any]) -> None:
     """Append an entry to the audit event log.
 
-    Routed through ``core.json.append_jsonl`` so the trail gets the
+    Uses the shared ``core.json.jsonl`` byte writer so the trail gets the
     same O_APPEND line-atomicity and O_NOFOLLOW symlink refusal as
     every other JSONL trail writer, and stamped with the audit-log
     integrity token (see :func:`stamp_audit_log_row`) — the row
@@ -527,7 +527,7 @@ def append_audit_log(out_dir: Path, entry: dict[str, Any]) -> None:
     """
     import json
 
-    from core.json import append_jsonl
+    from core.json.jsonl import _append_jsonl_bytes
     stamped = stamp_audit_log_row(entry, out_dir)
     # Write/read parity for the per-line budget: the reader skips a
     # line over _AUDIT_LOG_MAX_LINE_BYTES as malformed, so a row that
@@ -537,9 +537,11 @@ def append_audit_log(out_dir: Path, entry: dict[str, Any]) -> None:
     # at creation time, where the offending call site is
     # identifiable, instead of leaving the loss to surface as a
     # reader-side skip long after.
-    line_bytes = len(json.dumps(
+    # Measure and write the SAME bytes instead of encoding the row twice.
+    line = (json.dumps(
         stamped, separators=(",", ":"), allow_nan=False,
-    ).encode("utf-8")) + 1
+    ) + "\n").encode("utf-8")
+    line_bytes = len(line)
     if line_bytes > _AUDIT_LOG_MAX_LINE_BYTES:
         logger.warning(
             "audit log append at %s: row is %d bytes — over the "
@@ -547,8 +549,7 @@ def append_audit_log(out_dir: Path, entry: dict[str, Any]) -> None:
             "will skip it. Trim the row's payload at the call site.",
             out_dir, line_bytes, _AUDIT_LOG_MAX_LINE_BYTES,
         )
-    append_jsonl(audit_log_append_path(out_dir), stamped,
-                 compact=True)
+    _append_jsonl_bytes(audit_log_append_path(out_dir), line)
 
 
 def _compute_hash(

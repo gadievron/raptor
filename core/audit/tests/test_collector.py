@@ -735,12 +735,12 @@ class TestFlushDurability:
     def test_failed_write_retains_entries(
         self, tmp_path: Path, monkeypatch,
     ) -> None:
-        import core.json as core_json
+        import core.json.jsonl as jsonl
 
         c = Collector(out_dir=tmp_path, target_path=tmp_path)
         c.submit(_FakeOutcome(function="kept"), _make_gap(name="kept"))
 
-        real = core_json.append_jsonl
+        real = jsonl._append_jsonl_bytes
         state = {"fail": True}
 
         def flaky(*args, **kwargs):
@@ -748,7 +748,7 @@ class TestFlushDurability:
                 raise OSError("disk full")
             return real(*args, **kwargs)
 
-        monkeypatch.setattr(core_json, "append_jsonl", flaky)
+        monkeypatch.setattr(jsonl, "_append_jsonl_bytes", flaky)
         c.flush()  # must not raise, must not mark flushed
         assert not (tmp_path / ".audit-log.jsonl").exists()
 
