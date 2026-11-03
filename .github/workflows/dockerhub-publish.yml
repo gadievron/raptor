@@ -40,6 +40,12 @@ on:
       - 'pyproject.toml'
       - 'uv.lock'
       - '.github/workflows/dockerhub-publish.yml'
+      - '.github/scripts/*sbom*.py'
+      - '.github/scripts/capture_container_evidence.py'
+      - '.github/sbom-*'
+      - 'core/oci/**'
+      - 'packages/sca/sbom*.py'
+      - 'packages/sca/data/license_identifications.json'
   workflow_dispatch:
     inputs:
       tag:
@@ -112,7 +118,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends buildah
+          sudo apt-get install -y --no-install-recommends buildah skopeo
 
       - name: Build and verify cleaned image
         run: |
@@ -136,14 +142,127 @@ jobs:
             python3 /usr/local/libexec/check-browser.py
           '
 
+      - name: Export immutable image
+        id: export_image
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/container-sbom"
+          sudo buildah push --format v2s2 --compression-format gzip \
+            localhost/raptor-publish:checked "oci:${RUNNER_TEMP}/container-oci:verified"
+          sudo chown -R "$(id -u):$(id -g)" "${RUNNER_TEMP}/container-oci"
+          sudo chmod -R a+rX "${RUNNER_TEMP}/container-oci"
+          skopeo inspect --raw "oci:${RUNNER_TEMP}/container-oci:verified" > "${RUNNER_TEMP}/container-sbom/manifest.json"
+          echo "sha256:$(sha256sum "${RUNNER_TEMP}/container-sbom/manifest.json" | cut -d ' ' -f 1)" > "${RUNNER_TEMP}/container-sbom/image-digest.txt"
+
+      - name: Generate container inventories
+        id: inventory
+        continue-on-error: true
+        env:
+          SYFT_CHECK_FOR_APP_UPDATE: "false"
+          SYFT_PARALLELISM: "4"
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/container-sbom" "${RUNNER_TEMP}/syft-scratch"
+          python3 .github/scripts/install_sbom_tools.py --out "${RUNNER_TEMP}/sbom-tools"
+          TMPDIR="${RUNNER_TEMP}/syft-scratch" \
+          SYFT_CACHE_DIR="${RUNNER_TEMP}/syft-cache" \
+            "${RUNNER_TEMP}/sbom-tools/syft" scan "oci-dir:${RUNNER_TEMP}/container-oci" \
+              --scope squashed \
+              -o "syft-json=${RUNNER_TEMP}/container-sbom/syft.json" \
+              -o "cyclonedx-json@1.5=${RUNNER_TEMP}/container-sbom/raw.cdx.json" \
+              -o "spdx-json=${RUNNER_TEMP}/container-sbom/raw.spdx.json"
+
+      - name: Prepare audit output permissions
+        if: always() && steps.export_image.outcome == 'success'
+        run: |
+          set -euo pipefail
+          # The auditor runs as root with all capabilities dropped. Give it
+          # ownership rather than relying on CAP_DAC_OVERRIDE for the mount.
+          sudo chown -R 0:0 "${RUNNER_TEMP}/container-sbom"
+
+      - name: Collect and prepare container notice evidence
+        id: notice_evidence
+        if: steps.inventory.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          audit_container=$(sudo buildah from localhost/raptor-publish:checked)
+          trap 'sudo buildah rm "$audit_container"' EXIT
+          sudo buildah run --network none --cap-drop ALL --user 0 \
+            --volume "${GITHUB_WORKSPACE}:/workspaces/raptor:ro" \
+            --volume "${RUNNER_TEMP}/container-sbom:/audit:rw" \
+            --volume "${RUNNER_TEMP}/container-oci:/image:ro" \
+            "$audit_container" -- bash -euc '
+              export PYTHONDONTWRITEBYTECODE=1
+              python3 .github/scripts/capture_container_evidence.py \
+                --syft /audit/syft.json --oci-layout /image --out /audit/capture
+              python3 .github/scripts/prepare_sbom.py \
+                --syft /audit/syft.json --cyclonedx /audit/raw.cdx.json \
+                --spdx /audit/raw.spdx.json --notice-evidence /audit/capture \
+                --owner-oci-layout /image \
+                --out /audit/prepared
+            '
+
+      - name: Report container license and notice coverage
+        id: license_report
+        env:
+          AUDIT_OUTCOME: ${{ steps.notice_evidence.outcome }}
+        if: always() && steps.export_image.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          report_container=$(sudo buildah from localhost/raptor-publish:checked)
+          trap 'sudo buildah rm "$report_container"' EXIT
+          sudo buildah run --network none --cap-drop ALL --user 0 \
+            --volume "${GITHUB_WORKSPACE}:/workspaces/raptor:ro" \
+            --volume "${RUNNER_TEMP}/container-sbom:/audit:rw" \
+            "$report_container" -- env PYTHONDONTWRITEBYTECODE=1 \
+            python3 .github/scripts/report_sbom_licenses.py --audit-dir /audit \
+              --image-digest "$(cat "${RUNNER_TEMP}/container-sbom/image-digest.txt")" --emit-annotations --audit-status "$AUDIT_OUTCOME"
+
+      - name: Make audit artifacts readable
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ -d "${RUNNER_TEMP}/container-sbom" ]]; then
+            sudo chown -R "$(id -u):$(id -g)" "${RUNNER_TEMP}/container-sbom"
+          fi
+
+      - name: Summarize container license coverage
+        env:
+          REPORT_OUTCOME: ${{ steps.license_report.outcome }}
+        if: always() && steps.export_image.outcome == 'success'
+        run: |
+          set -euo pipefail
+          report="${RUNNER_TEMP}/container-sbom/license-report.md"
+          if [[ "$REPORT_OUTCOME" == "success" && -s "$report" ]]; then
+            cat "$report" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Container license audit unavailable; coverage is unknown. Inspect the partial container-sbom artifact."
+            echo "## Container licenses and notices" >> "$GITHUB_STEP_SUMMARY"
+            echo "Audit unavailable; coverage is unknown. Inspect the partial container-sbom artifact." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Retain container SBOM and notice evidence
+        continue-on-error: true
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: container-sbom
+          path: ${{ runner.temp }}/container-sbom/
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Publish verified image
         env:
           TAGS: ${{ steps.tags.outputs.tags }}
         run: |
           set -euo pipefail
+          source="oci:${RUNNER_TEMP}/container-oci:verified"
+          exported_digest=$(cat "${RUNNER_TEMP}/container-sbom/image-digest.txt")
+          skopeo inspect --raw "$source" > "${RUNNER_TEMP}/manifest-to-push.json"
+          test "sha256:$(sha256sum "${RUNNER_TEMP}/manifest-to-push.json" | cut -d ' ' -f 1)" = "$exported_digest"
           for tag in ${TAGS//,/ }; do
-            sudo buildah tag localhost/raptor-publish:checked "${tag}"
-            sudo buildah push --authfile "${DOCKER_CONFIG:-$HOME/.docker}/config.json" \
-              "${tag}" "docker://${tag}"
+            skopeo copy --preserve-digests --authfile "${DOCKER_CONFIG:-$HOME/.docker}/config.json" \
+              "$source" "docker://${tag}"
           done
-

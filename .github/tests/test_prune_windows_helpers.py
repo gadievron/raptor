@@ -192,7 +192,7 @@ def test_publication_verifies_flattened_candidate_before_tagging_and_push():
     block = blocks[verified]
     assert "--squash" in block and "len .OCIv1.RootFS.DiffIDs" in block
     assert "prune-windows-helpers.py --check" in block
-    assert "buildah tag localhost/raptor-publish:checked" in blocks[published]
+    assert "skopeo copy --preserve-digests" in blocks[published]
     dockerfile = (ROOT / ".devcontainer/Dockerfile").read_text()
     assert dockerfile.index("RUN python3 /usr/local/libexec/prune-windows-helpers.py") < dockerfile.index("USER vscode")
 

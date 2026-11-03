@@ -16,6 +16,7 @@ import re
 from packaging.licenses import InvalidLicenseExpression, canonicalize_license_expression
 
 from core.json import loads
+from core.oci.license_declarations import UNKNOWN_DECLARATION as _UNKNOWN, catalogue_declaration_missing
 from core.source import read_text_gated
 
 # The names themselves identify these licences; generic family classifiers do not.
@@ -23,20 +24,6 @@ _TROVE = {
     "License :: OSI Approved :: MIT License": "MIT",
     "License :: OSI Approved :: Mozilla Public License 2.0 (MPL 2.0)": "MPL-2.0",
 }
-_UNKNOWN = re.compile(r"(?:^|[ (])(?:LicenseRef-)?(?:UNKNOWN|NOASSERTION|NONE|UNLICENSED)(?:$|[ )])", re.I)
-
-
-def catalogue_declaration_missing(artifact: dict) -> bool:
-    licences = artifact.get("licenses", [])
-    if not isinstance(licences, list) or not licences:
-        return True
-    for licence in licences:
-        if not isinstance(licence, dict):
-            return True
-        value = licence.get("spdxExpression") or licence.get("value")
-        if not isinstance(value, str) or not value.strip() or _UNKNOWN.search(value):
-            return True
-    return False
 
 
 def _metadata_context(artifact: dict, files: list[dict], blobs: dict[str, bytes]) -> tuple[dict, Message] | None:
