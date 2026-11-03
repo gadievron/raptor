@@ -27,6 +27,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 _REPO_ROOT = Path(__file__).parents[3]  # packages/openant/tests -> repo root
 sys.path.insert(0, str(_REPO_ROOT))
 
@@ -107,6 +109,7 @@ def _discovery_would_succeed() -> bool:
 class TestHardErrorFailsRun(unittest.TestCase):
     """Hard subprocess error → exit 1, lifecycle records status=failed."""
 
+    @pytest.mark.slow  # Full root CLI startup plus lifecycle persistence.
     def test_scanner_exit3_fails_lifecycle(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
@@ -162,6 +165,7 @@ class TestNotConfiguredFailsRun(unittest.TestCase):
     run, no findings file — the run cannot masquerade as a clean
     completed scan in cross-run findings views."""
 
+    @pytest.mark.slow
     def test_invalid_core_path_fails_honestly(self):
         """--openant-core pointing nowhere: nothing was scanned — exit
         3, status=failed, outcome=not_configured, no findings file."""
@@ -208,6 +212,7 @@ class TestNotConfiguredFailsRun(unittest.TestCase):
 class TestCleanScanUnchanged(unittest.TestCase):
     """A scan that ran and found nothing still exits 0 and completes."""
 
+    @pytest.mark.slow
     def test_zero_findings_scan_exit_zero(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
@@ -288,6 +293,7 @@ class TestMaxFindingsArtifactHonesty(unittest.TestCase):
                          f"stdout={proc.stdout}\nstderr={proc.stderr}")
         return out_dir
 
+    @pytest.mark.slow
     def test_artifact_uncapped_and_report_severity_first(self):
         with tempfile.TemporaryDirectory() as td:
             out_dir = self._scan_60(Path(td))
