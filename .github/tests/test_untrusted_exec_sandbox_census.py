@@ -21,12 +21,10 @@ Landlock and cross-binary execution is blocked; a persona telling the
 model to `system("./vulnerable_binary ...")` re-opens the bare-exec
 lane for every free-Bash session that loads it.
 
-One documented exemption: `rr record`. rr needs `ptrace` and perf
-counters, which the sandbox denies, so recording the untrusted binary
-runs bare by explicit decision. The census does not ban the idiom; it
-pins that the exemption rationale travels IN THE SAME FILE as every
-`rr record` recipe (test below) — a bare recording instruction with no
-stated residual is drift, not a decision.
+Recording uses `libexec/raptor-rr` and its dedicated rr policy, which
+allows the required ptrace/perf operations inside mandatory containment.
+There is no bare-recording exemption: this census rejects standalone
+`rr record` recipes, including ones carrying the retired exemption text.
 """
 
 from __future__ import annotations
@@ -90,10 +88,9 @@ _BARE_RUN_RE = re.compile(
     re.MULTILINE,
 )
 
-# The one sanctioned bare-execution idiom (see module docstring): the
-# exemption text that must accompany it in the same file.
-_RR_RECORD_RE = re.compile(r"\brr record\b")
-_RR_EXEMPTION_RE = re.compile(r"[Ss]andbox exemption")
+# Match standalone rr commands, including absolute executable paths, but
+# not the contained raptor-rr helper or descriptive "rr record-replay" prose.
+_BARE_RR_RECORD_RE = re.compile(r"(?<![\w-])rr[ \t]+record(?![\w-])")
 
 # Persona instructions to spawn the analysed target from the PoC.
 _SPAWN_TARGET_RES = (
@@ -164,25 +161,33 @@ class UntrustedExecSandboxCensusTests(unittest.TestCase):
             "libexec/raptor-run-sandboxed --output-dir <dir> ...:\n"
             + "\n".join(problems)))
 
-    def test_rr_record_exemption_is_documented(self):
-        """`rr record` cannot ride libexec/raptor-run-sandboxed (rr
-        needs ptrace and perf counters the sandbox denies), so
-        recording the untrusted binary is a documented unsandboxed
-        residual. Any lane showing `rr record` must carry the
-        exemption rationale in the same file — never a silent bare
-        run."""
+    def test_rr_record_recipes_use_containment(self):
+        """Recording requires the dedicated contained helper, never bare rr."""
         problems = []
         for rel in _CRASH_LANES:
-            text = _read(rel)
-            if not _RR_RECORD_RE.search(text):
-                continue
-            if not (_RR_EXEMPTION_RE.search(text) and "ptrace" in text):
-                problems.append(rel)
+            for i, line in enumerate(_read(rel).splitlines(), 1):
+                if _BARE_RR_RECORD_RE.search(line):
+                    problems.append(f"{rel}:{i}: {line.strip()}")
         self.assertEqual(problems, [], msg=(
-            "`rr record` recipe without the in-file sandbox-exemption "
-            "rationale (ptrace/perf-counter requirement, residual "
-            "scope) — document the decision next to the recipe:\n"
+            "bare rr recording recipe found — use libexec/raptor-rr record "
+            "with a dedicated workspace, never an unsandboxed exemption:\n"
             + "\n".join(problems)))
+
+    def test_rr_record_matcher_distinguishes_contained_recipes(self):
+        for text, bare in (
+            ("rr record ./target", True),
+            ("rr\t record ./target", True),
+            ("/usr/bin/rr record ./target", True),
+            ("env OPTION=value rr record ./target", True),
+            ("`rr record ./target`", True),
+            ("Sandbox exemption: ptrace required\nrr record ./target", True),
+            ("libexec/raptor-rr record --workspace work --trace trace -- ./target", False),
+            ("/opt/raptor/libexec/raptor-rr record --workspace work", False),
+            ("Deterministic debugging with rr record-replay.", False),
+            ("Inspect the rr recording.", False),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(bool(_BARE_RR_RECORD_RE.search(text)), bare)
 
     def test_personas_never_instruct_spawning_the_target(self):
         """Exploit PoCs inline the vulnerability trigger; RAPTOR runs
