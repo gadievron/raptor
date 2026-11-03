@@ -24,10 +24,11 @@ def _isolated_home(tmp_path: Path,
 
 
 @pytest.fixture(autouse=True)
-def _isolated_scope_probe_cache():
-    """Capability reuse must not leak between tests that replace tool probes."""
+def _isolated_scope_probe_cache(monkeypatch):
+    """Probe caches and once-per-process warnings must not leak between tests."""
     from packages.semgrep import runner
 
+    monkeypatch.setattr(runner, "_scope_upgrade_warned", False)
     runner._reset_scope_probe_cache()
     yield
     runner._reset_scope_probe_cache()

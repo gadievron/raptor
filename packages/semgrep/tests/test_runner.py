@@ -305,7 +305,11 @@ class TestRunRuleMocked:
                  caplog.at_level(getattr(logging, root_level)), \
                  caplog.at_level(logging.WARNING, logger=capture_logger.name):
                 result = semgrep_runner.run_rule(target, "p/x", unsandboxed=True)
+                # Warn once within a process, then reset that state between
+                # parametrized cases via the package fixture.
+                repeated = semgrep_runner.run_rule(target, "p/x", unsandboxed=True)
         assert result.ok
+        assert repeated.ok
         assert len([r for r in caplog.records
                     if r.name == capture_logger.name and "semgrepignore" in r.message]) == 1
 
