@@ -778,3 +778,73 @@ class TestOpenHardenedRead:
             pytest.skip("/dev/null unavailable")
         with pytest.raises(OSError):
             open_hardened_read("/dev/null")
+
+
+def test_byte_chunks_are_written_incrementally_even_with_short_writes(tmp_path, monkeypatch):
+    import os
+    from core.atomic_fs import write_bytes_atomically
+
+    target = tmp_path / "chunks.bin"
+    observed = []
+    real_write = os.write
+
+    def short_write(fd, data):
+        count = real_write(fd, data[:2])
+        observed.append(bytes(data[:count]))
+        return count
+
+    def chunks():
+        yield b"first"
+        assert b"".join(observed) == b"first"
+        yield memoryview(b"second")
+
+    monkeypatch.setattr(os, "write", short_write)
+    write_bytes_atomically(target, chunks(), mode=0o600)
+    assert target.read_bytes() == b"firstsecond"
+    assert target.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("error", [RuntimeError, KeyboardInterrupt])
+def test_failed_chunk_iterator_keeps_previous_file_and_cleans_temp(tmp_path, error):
+    from core.atomic_fs import write_bytes_atomically
+
+    target = tmp_path / "chunks.bin"
+    target.write_bytes(b"original")
+
+    def chunks():
+        yield b"partial replacement"
+        raise error("interrupted producer")
+
+    with pytest.raises(error):
+        write_bytes_atomically(target, chunks())
+    assert target.read_bytes() == b"original"
+    assert list(tmp_path.iterdir()) == [target]
+
+
+def test_invalid_byte_chunk_cannot_publish_partial_output(tmp_path):
+    from core.atomic_fs import write_bytes_atomically
+
+    target = tmp_path / "chunks.bin"
+    target.write_bytes(b"original")
+    with pytest.raises(TypeError):
+        write_bytes_atomically(target, iter([b"partial", "not bytes"]))
+    assert target.read_bytes() == b"original"
+    assert list(tmp_path.iterdir()) == [target]
+
+
+@pytest.mark.parametrize("chunked", [False, True])
+def test_short_writes_count_bytes_for_multibyte_buffers(tmp_path, monkeypatch, chunked):
+    from array import array
+    import os
+    from core.atomic_fs import write_bytes_atomically
+
+    content = array("I", [0x01020304, 0x05060708])
+    target = tmp_path / "buffer.bin"
+    real_write = os.write
+
+    def short_write(fd, data):
+        return real_write(fd, memoryview(data).cast("B")[:3])
+
+    monkeypatch.setattr(os, "write", short_write)
+    write_bytes_atomically(target, iter([content]) if chunked else content)
+    assert target.read_bytes() == content.tobytes()

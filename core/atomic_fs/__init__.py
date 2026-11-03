@@ -86,6 +86,8 @@ guidance lives in docs/wsl.md.
 
 from __future__ import annotations
 
+from collections.abc import Buffer, Iterable
+
 import os
 import secrets
 import shutil
@@ -185,12 +187,15 @@ def write_text_atomically(
 
 def write_bytes_atomically(
     path: str | Path,
-    content: bytes,
+    content: Buffer | Iterable[Buffer],
     *,
     tmp_prefix: str = ".atomic-",
     mode: int | None = None,
 ) -> None:
-    """Write ``content`` (bytes) to ``path`` atomically.
+    """Write bytes or an iterable of byte chunks to ``path`` atomically.
+
+    Chunks are consumed incrementally. If iteration or writing fails, the
+    previous destination remains intact and the temporary file is removed.
 
     See module docstring for full semantics. Binary variant so
     callers writing JSONL / images / archives don't have to double-
@@ -265,15 +270,21 @@ def write_bytes_atomically(
             # committed — the exact torn-write the primitive exists
             # to prevent. Loop until every byte is written; a
             # zero-progress write raises instead of spinning.
-            view = memoryview(content)
-            written = 0
-            while written < len(view):
-                n = os.write(fd, view[written:])
-                if n <= 0:
-                    raise OSError(
-                        f"short write to {tmp}: os.write returned {n}",
-                    )
-                written += n
+            views: Iterable[memoryview]
+            if isinstance(content, Buffer):
+                views = (memoryview(content),)
+            else:
+                views = (memoryview(chunk) for chunk in content)
+            for view in views:
+                view = view.cast("B")
+                written = 0
+                while written < len(view):
+                    n = os.write(fd, view[written:])
+                    if n <= 0:
+                        raise OSError(
+                            f"short write to {tmp}: os.write returned {n}",
+                        )
+                    written += n
             os.fsync(fd)
         finally:
             os.close(fd)

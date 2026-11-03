@@ -81,7 +81,7 @@ def write_sbom_json(
                     serial_number=serial_number,
                     image_fingerprints=image_fingerprints,
                     project_license=project_license, source_bom=source_bom)
-    save_json(path, bom)
+    save_json(path, bom, stream=True)
     return len(bom.get("components", []))
 
 

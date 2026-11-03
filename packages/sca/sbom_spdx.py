@@ -71,7 +71,7 @@ def write_sbom_spdx_json(
         namespace_uri=namespace_uri,
         project_license=project_license, source_bom=source_bom,
     )
-    save_json(path, doc)
+    save_json(path, doc, stream=True)
 
 
 def render_sbom_spdx(

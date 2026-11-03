@@ -455,3 +455,52 @@ def test_duplicate_notices_are_refused_before_emitting_invalid_references(materi
     manifest["bundles"][0]["notice_paths"] *= 2
     with pytest.raises(ValueError, match="duplicate bundle notice"):
         mod.bundled_materials(repo, revision, manifest)
+
+
+def test_owned_cli_preparation_matches_public_copying_result():
+    native, cdx, spdx = documents()
+    original_native = deepcopy(native)
+    summary = {"scope": "captured notice candidates", "packages": [
+        {"id": "a" * 16, "files": [], "gaps": ["retained gap"]}]}
+    expected = mod.prepare(native, cdx, spdx, MANIFEST, PROJECT, notice_summary=summary)
+    actual = mod.prepare(native, cdx, spdx, MANIFEST, PROJECT, notice_summary=summary, _copy_inputs=False)
+    assert actual == expected
+    assert actual[0] is cdx and actual[1] is spdx
+    assert native == original_native
+
+
+def test_public_preparation_keeps_graph_and_notice_results_independent():
+    native, cdx, spdx = documents()
+    summary = {"scope": "captured notice candidates", "packages": [
+        {"id": "a" * 16, "files": [], "gaps": ["retained gap"]}]}
+    originals = deepcopy((native, cdx, spdx, summary))
+    c, s, report = mod.prepare(native, cdx, spdx, MANIFEST, PROJECT, notice_summary=summary)
+    c["components"][-1]["hashes"][0]["content"] = "d" * 64
+    s["files"][0]["fileName"] = "changed"
+    report["notice_evidence"]["packages"][0]["gaps"].append("changed")
+    assert (native, cdx, spdx, summary) == originals
+
+
+def test_compact_provenance_view_preserves_enrichment_and_retained_inventory():
+    native, cdx, spdx = documents()
+    native["files"] = [{"location": {"path": "/large/file/index"}}]
+    native["artifacts"][0]["metadata"]["files"] = [{"path": "large/record/index"}]
+    before = deepcopy(native)
+    expected = mod.prepare(native, cdx, spdx, MANIFEST, PROJECT)
+    actual = mod.prepare(mod._provenance_view(native), cdx, spdx, MANIFEST, PROJECT)
+    assert actual == expected
+    assert native == before
+    assert actual[0]["components"][-1] == cdx["components"][-1]
+    assert actual[1]["files"] == spdx["files"]
+
+
+@pytest.mark.parametrize("raw", [b'{ "text": "\\u00e9" }\n', '{"text":"é"}\n'.encode()])
+def test_document_digest_keeps_exact_input_bytes(tmp_path, raw):
+    import hashlib
+
+    path = tmp_path / "input.json"
+    path.write_bytes(raw)
+    data, digest = mod.read_document(path)
+    assert data == {"text": "é"}
+    assert digest == hashlib.sha256(raw).hexdigest()
+    assert path.read_bytes() == raw
