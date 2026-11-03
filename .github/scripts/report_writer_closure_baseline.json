@@ -163,6 +163,9 @@
     "core/audit/corpus/run_corpus.py::main::unsanitised_llm_value::output": {
       "note": "dev corpus/bench harness terminal lane over self-produced corpora; sanitise + register on next functional touch"
     },
+    "core/audit/discovery.py::_render_types_block::unsanitised_llm_value::source": {
+      "note": "prompt/context construction — type-definition source from the context map assembled into an LLM lens prompt, not an operator render surface"
+    },
     "core/audit/dispatch_table.py::format_displacement_context::unsanitised_llm_value::description": {
       "note": "prompt/context construction — the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
     },
