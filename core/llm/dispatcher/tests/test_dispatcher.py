@@ -10,7 +10,6 @@ key was injected.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 import os
@@ -160,30 +159,27 @@ class TestLayer3TokenAuth:
 
     @pytest.mark.upstream_forward
     def test_request_with_valid_token_passes_token_check(
-        self, dispatcher, operator_proxy_env,
+        self, dispatcher, monkeypatch,
     ):
-        """A valid token must get past the gate. We don't assert on
-        the response body or status because the upstream is the real
-        anthropic.com here (CI may or may not have network) — only
-        that the response is NOT one of the gate's rejection shapes.
+        """A valid token reaches a captive upstream and returns its reply."""
+        from dataclasses import replace
 
-        ``operator_proxy_env``: this is the one dispatcher test whose
-        upstream is genuinely external, so it opts back into the
-        operator's proxy route that the conftest autouse scrub
-        removed (mandatory-egress-proxy hosts have no direct path)."""
-        _socket_path, fd = dispatcher.allocate_worker(label="test-l3")
-        token = os.read(fd, 64).decode().strip()
-        os.close(fd)
-        r = self._post(dispatcher, headers={_TOKEN_HEADER: token})
-        # Body must NOT contain any of our gate's rejection messages.
-        # Decode best-effort — upstream may return gzipped body.
-        body_lower = ""
-        # Best-effort decode — upstream may return a gzipped body.
-        with contextlib.suppress(Exception):
-            body_lower = r.text.lower()
-        for bad in ("missing token", "unknown token", "token expired",
-                    "token revoked", "token exhausted"):
-            assert bad not in body_lower, f"gate rejected a valid token: {body_lower!r}"
+        upstream = _CaptiveUpstream()
+        monkeypatch.setitem(
+            dispatcher._rules, "anthropic",
+            replace(dispatcher._rules["anthropic"], upstream_base_url=upstream.base_url),
+        )
+        try:
+            _socket_path, fd = dispatcher.allocate_worker(label="test-l3")
+            token = os.read(fd, 64).decode().strip()
+            os.close(fd)
+            r = self._post(dispatcher, headers={_TOKEN_HEADER: token})
+            assert r.status_code == 200
+            assert r.json()["id"] == "msg_test"
+            assert upstream.captured["path"] == "/v1/messages"
+            assert upstream.captured["body"] == b'{"x":1}'
+        finally:
+            upstream.shutdown()
 
 
 # ---------------------------------------------------------------------------
@@ -681,6 +677,8 @@ class _CaptiveUpstream:
     def shutdown(self):
         self._server.shutdown()
         self._server.server_close()
+        self._thread.join(timeout=5)
+        assert not self._thread.is_alive(), "captive upstream did not stop"
 
 
 @pytest.mark.upstream_forward

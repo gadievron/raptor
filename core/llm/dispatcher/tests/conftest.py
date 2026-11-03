@@ -46,13 +46,6 @@ _AWS_ENV_FAMILY = (
     "CLAUDE_CODE_USE_BEDROCK",
 )
 
-# Snapshot at import time (before any scrubbing) so tests that
-# genuinely need the operator's real egress route can opt back in.
-_OPERATOR_PROXY_ENV = {
-    k: v for k in _PROXY_ENV_FAMILY if (v := os.environ.get(k)) is not None
-}
-
-
 @pytest.fixture(autouse=True)
 def _scrub_ambient_env(monkeypatch):
     for var in (*_PROXY_ENV_FAMILY, *_AWS_ENV_FAMILY):
@@ -210,12 +203,3 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
     )
 
 
-@pytest.fixture
-def operator_proxy_env(monkeypatch):
-    """Opt-back-in for tests that reach REAL external upstreams
-    (e.g. the valid-token gate test that forwards to anthropic.com):
-    restores the operator's launch-time proxy route that the autouse
-    scrub removed. On unproxied hosts this is a no-op."""
-    for k, v in _OPERATOR_PROXY_ENV.items():
-        monkeypatch.setenv(k, v)
-    return dict(_OPERATOR_PROXY_ENV)

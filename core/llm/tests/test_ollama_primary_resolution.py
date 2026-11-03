@@ -39,6 +39,11 @@ def _isolated_env(monkeypatch, tmp_path):
     import core.llm.config as cfg
     import core.llm.detection as det
 
+    # Selection precedence is under test; inventory lookup is separate I/O.
+    monkeypatch.setattr(
+        "core.llm.model_resolution.resolve_anthropic",
+        lambda name, api_key: name,
+    )
     det._cached_llm_availability = None
     cfg._cached_thinking_model = None
     cfg._thinking_model_checked = False
