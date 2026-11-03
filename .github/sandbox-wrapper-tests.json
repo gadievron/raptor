@@ -69,8 +69,7 @@
     {
       "source": "core/audit/compiler_sweep.py",
       "entrypoints": [
-        "run_compiler_analyzer_sweep._run_closure_vet",
-        "run_compiler_analyzer_sweep._run_tu_analysis"
+        "run_compiler_analyzer_sweep._run_closure_vet"
       ],
       "contracts": [
         "core/audit/tests/test_compiler_sweep.py::TestSandboxInvocation::test_sandbox_used_with_network_deny"
@@ -193,6 +192,17 @@
       ],
       "contracts": [
         "core/dataflow/tests/test_cvefix_walk.py::test_autobuild_fails_closed_without_sandbox"
+      ]
+    },
+    {
+      "source": "core/detectors/compiler.py",
+      "entrypoints": [
+        "_invoke"
+      ],
+      "contracts": [
+        "core/detectors/tests/test_compiler.py::test_parser_and_analysis_share_live_scratch_then_cleanup",
+        "core/detectors/tests/test_compiler.py::test_failed_compile_is_parsed_but_never_analyzed",
+        "core/detectors/tests/test_compiler.py::test_invocation_failure_has_distinct_type_and_closes_scratch"
       ]
     },
     {
@@ -663,8 +673,7 @@
     {
       "source": "packages/static-analysis/compiler_scan.py",
       "entrypoints": [
-        "_suppression_vet",
-        "analyze_tu"
+        "_suppression_vet"
       ],
       "contracts": [
         "packages/static-analysis/tests/test_compiler_scan.py::test_scan_refuses_without_sandbox"
