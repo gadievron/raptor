@@ -117,3 +117,35 @@ def test_explicit_operator_gem_root_is_used(layout, tmp_path, monkeypatch):
     paths, environment = ruby_tool_runtime(str(launcher), str(scratch))
     assert str(root / 'gems') in paths
     assert 'GEM_PATH=' + str(root) in environment
+
+
+@pytest.mark.parametrize('symlink', [False, True], ids=['regular-file', 'canonical-target'])
+def test_resolver_startup_grant_is_one_file(layout, tmp_path, monkeypatch, symlink):
+    from core.sandbox import ruby_paths
+    _, launcher, scratch = layout
+    directory = tmp_path / 'system-config'
+    directory.mkdir()
+    resolver = directory / 'resolv.conf'
+    resolver.write_text('nameserver 127.0.0.1\n')
+    selected = tmp_path / 'resolv.conf' if symlink else resolver
+    if symlink:
+        selected.symlink_to(resolver)
+    monkeypatch.setattr(ruby_paths, '_RESOLVER_CONFIG', selected)
+    def check(command, options):
+        assert str(resolver) in options['tool_paths']
+        assert str(directory) not in options['tool_paths']
+        assert options['block_network'] is True
+    _query(monkeypatch, [], check)
+    paths, _ = ruby_tool_runtime(str(launcher), str(scratch))
+    assert str(resolver) in paths
+    assert str(directory) not in paths
+
+
+def test_missing_resolver_config_adds_no_directory_grant(layout, tmp_path, monkeypatch):
+    from core.sandbox import ruby_paths
+    _, launcher, scratch = layout
+    resolver = tmp_path / 'missing-config' / 'resolv.conf'
+    monkeypatch.setattr(ruby_paths, '_RESOLVER_CONFIG', resolver)
+    _query(monkeypatch, [])
+    paths, _ = ruby_tool_runtime(str(launcher), str(scratch))
+    assert str(resolver) not in paths and str(resolver.parent) not in paths

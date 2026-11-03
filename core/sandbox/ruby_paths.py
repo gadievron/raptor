@@ -12,6 +12,8 @@ import subprocess
 from core.sandbox.python_paths import _home_roots, _under_system_prefix
 from core.source.contained import read_text_capped
 
+_RESOLVER_CONFIG = Path("/etc/resolv.conf")
+
 _METADATA = """
 require 'rubygems'
 require 'json'
@@ -20,7 +22,7 @@ puts JSON.generate({paths: Gem.path, version: RbConfig::CONFIG['ruby_version'], 
 
 
 def ruby_tool_runtime(executable: str, scratch: str) -> tuple[list[str], list[str]]:
-    """Return code-only read grants and explicit RubyGems environment values.
+    """Return Ruby runtime read grants and explicit RubyGems environment values.
 
     Inspect only the installed launcher's shebang. A fixed, bounded Ruby query
     runs without the target directory, ambient Ruby options or account HOME.
@@ -69,6 +71,12 @@ def ruby_tool_runtime(executable: str, scratch: str) -> tuple[list[str], list[st
                 break
             if shared.is_file():
                 add(shared, beneath=prefix)
+    # Ruby resolv initializes DNS configuration while net/http is imported,
+    # even for offline tools such as one_gadget --version. Admit only this
+    # exact file (including its canonical macOS spelling), not /etc or the
+    # enclosing runtime directory. Network policy remains unchanged.
+    if _RESOLVER_CONFIG.is_file():
+        add(_RESOLVER_CONFIG)
     from core.binary._inspection_policy import inspection_command, inspection_options
     from core.sandbox import SandboxSetupError, run
     options = inspection_options(None, str(interpreter), scratch)

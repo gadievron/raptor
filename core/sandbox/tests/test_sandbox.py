@@ -2898,3 +2898,17 @@ class TestSeccompProbeCompleteness:
             "ctypes.CDLL", lambda *a, **k: _LibWithoutAttrSet())
         monkeypatch.setattr(state, "_libseccomp_cache", None)
         assert sc.check_seccomp_available() is False
+
+
+@pytest.mark.parametrize('platform,should_report', [('linux', True), ('darwin', False)],
+                         ids=['linux-seccomp', 'darwin-seatbelt'])
+def test_eperm_is_not_misattributed_to_seccomp_on_darwin(monkeypatch, caplog, platform, should_report):
+    from core.sandbox import observe
+    monkeypatch.setattr(observe.sys, 'platform', platform)
+    info = {}
+    with caplog.at_level('INFO', logger='core.sandbox.observe'):
+        observe._check_blocked('Operation not permitted @ rb_sysopen - /etc/resolv.conf',
+                               'one_gadget --version', returncode=1, sandbox_info=info,
+                               seccomp_engaged=True, seccomp_profile='full')
+    assert bool(info.get('blocked')) == should_report
+    assert ('may be seccomp' in caplog.text) == should_report

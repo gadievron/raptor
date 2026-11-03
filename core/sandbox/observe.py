@@ -17,6 +17,7 @@ import logging
 import re
 import signal
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -369,7 +370,8 @@ def _check_blocked(stderr: str, cmd_display: str, returncode: int = 0,
         # process actually failed (rc != 0) AND the text looks like a
         # syscall-level message (not a higher-level "Not permitted" from
         # a CLI tool's own error).
-        if category == "seccomp" and (not seccomp_engaged or returncode == 0):
+        if category == "seccomp" and (sys.platform != "linux"
+                                      or not seccomp_engaged or returncode == 0):
             continue
 
         # For write blocks, try to isolate the offending path. If it falls
