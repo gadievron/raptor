@@ -210,3 +210,46 @@ def test_stage_reports_suppressed_tus_on_stderr(tmp_path, monkeypatch, capsys):
     run = sarif["runs"][0]
     assert run["results"] == []
     assert run["invocations"][0]["toolExecutionNotifications"]
+
+
+def test_stage_runs_shared_detector_and_exports_its_findings(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from core.detectors import compiler as detector
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source = repo / "main.c"
+    source.write_text("void f(char *p) { *p = 1; }\n")
+    cs = _load_cs()
+    monkeypatch.setattr(cs, "_gcc_analyzer", lambda: ("/trusted/gcc", "json"))
+    monkeypatch.setattr(cs, "_clang_path", lambda: None)
+    monkeypatch.setattr(cs, "_suppression_vet", lambda *a: ("", ""))
+    calls = []
+    executions = []
+    original = detector.run_detector
+
+    def observe(*args):
+        result = original(*args)
+        executions.append(result)
+        return result
+
+    monkeypatch.setattr(detector, "run_detector", observe)
+
+    def run(cmd, **kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(returncode=0, stderr=json.dumps([{
+            "kind": "warning", "option": "-Wanalyzer-null-dereference",
+            "message": "dereference of NULL p",
+            "locations": [{"caret": {"file": str(source), "line": 1}}],
+        }]))
+
+    monkeypatch.setattr(cs, "_sandbox_runner", lambda: run)
+    paths = _scanner.run_compiler_scan_stage(repo, tmp_path / "out")
+    assert len(calls) == len(executions) == len(paths) == 1
+    assert executions[0].identifier == "compiler-diagnostics"
+    assert calls[0]["block_network"] is True
+    sarif = json.loads(Path(paths[0]).read_text())
+    finding = sarif["runs"][0]["results"][0]
+    assert finding["ruleId"] == "-Wanalyzer-null-dereference"
+    assert finding["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] == "main.c"
+    assert not Path(calls[0]["output"]).exists()

@@ -365,3 +365,25 @@ class TestIncludeDirDerivation:
         _sweep(target)
         cmd = sandbox_stub["calls"][0]
         assert f"-I{target / 'include'}" in cmd
+
+
+def test_detector_runs_once_for_reused_hypotheses(tmp_path, sandbox_stub, monkeypatch):
+    from core.detectors import compiler as detector
+
+    target = _target(tmp_path, _UAF_SOURCE)
+    sandbox_stub["diags"] = [
+        _gcc_json_diag("-Wanalyzer-use-after-free", 5, "tu.c", "use after 'free' of 'p'"),
+    ]
+    executions = []
+    original = detector.run_detector
+
+    def observe(*args):
+        result = original(*args)
+        executions.append(result)
+        return result
+
+    monkeypatch.setattr(detector, "run_detector", observe)
+    assert _sweep(target).outcome == "confirmed"
+    assert _sweep(target).outcome == "confirmed"
+    assert len(_analysis_calls(sandbox_stub)) == len(executions) == 1
+    assert executions[0].identifier == "compiler-diagnostics"

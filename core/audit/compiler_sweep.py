@@ -50,6 +50,9 @@ from core.source import open_regular, read_text_capped
 from core.source.lines import split_lines
 from typing import Any
 
+from core.detectors.compiler import (
+    CompilerInvocationError, CompilerRequest, run_compiler_analysis,
+)
 from core.json import load_json
 from core.run.scratch import scratch_dir
 
@@ -1934,6 +1937,17 @@ def _parse_clang_text(stderr: str) -> list[dict[str, Any]]:
     return diags
 
 
+def _parse_analyzer_output(
+    workdir: Path, stderr: str, *, compiler_name: str, mode: str, full_path: Path,
+) -> list[dict[str, Any]]:
+    """Shared output-format dispatch for scan and hypothesis sweeps."""
+    if compiler_name == "gcc" and mode == "sarif-file":
+        return _parse_gcc_sarif(workdir / f"{full_path.name}.sarif")
+    if compiler_name == "gcc":
+        return _parse_gcc_json(stderr)
+    return _parse_clang_text(stderr)
+
+
 def _id_matches(diag_id: str, family_ids: tuple[str, ...]) -> bool:
     """Match a diagnostic id against the family's id list.
 
@@ -2135,39 +2149,33 @@ def run_compiler_analyzer_sweep(
         diagnostics afterwards, so the same record serves every
         hypothesis sharing the cache key.
         """
-        scratch_root = str(out_dir) if out_dir else None
-        with scratch_dir("compiler_sweep_", dir=scratch_root) as workdir:
-            proc = sandbox_run(
-                cmd,
-                block_network=True,
-                target=str(target_path),
-                output=str(workdir),
-                cwd=str(workdir),
-                capture_output=True,
-                text=True,
-                timeout=_COMPILE_TIMEOUT_S,
-                caller_label="audit-compiler-sweep",
+        try:
+            execution = run_compiler_analysis(
+                CompilerRequest(
+                    command=tuple(cmd), target=target_path,
+                    timeout=_COMPILE_TIMEOUT_S, caller_label="audit-compiler-sweep",
+                    scratch_prefix="compiler_sweep_",
+                    scratch_root=str(out_dir) if out_dir else None,
+                    raw_limit=_MAX_RAW_OUTPUT,
+                    parse=lambda workdir, stderr: _parse_analyzer_output(
+                        workdir, stderr, compiler_name=compiler_name,
+                        mode=mode, full_path=full_path,
+                    ),
+                ),
+                sandbox_run,
             )
-            if compiler_name == "gcc" and mode == "sarif-file":
-                diags = _parse_gcc_sarif(workdir / f"{full_path.name}.sarif")
-            elif compiler_name == "gcc":
-                diags = _parse_gcc_json(proc.stderr or "")
-            else:
-                diags = _parse_clang_text(proc.stderr or "")
-            if proc.returncode < 0:
-                # Signal-killed compile (OOM killer, sandbox kill):
-                # transient environment pressure, not a property of
-                # the TU — caching it would kill the compiler channel
-                # for this TU for the cache's whole lifetime, exactly
-                # while parallel passes raise memory pressure. Raise
-                # so the memo caches nothing (same contract as
-                # TimeoutExpired) and the caller reports an error.
-                raise _AnalyzerSignalKilled(-proc.returncode)
-            return {
-                "returncode": proc.returncode,
-                "diags": diags,
-                "raw": (proc.stderr or "")[:_MAX_RAW_OUTPUT],
-            }
+        except CompilerInvocationError as exc:
+            # Keep the existing timeout/error adapter and uncached exception
+            # behavior, without treating parser errors as invocation failures.
+            raise exc.error from exc
+
+        record = execution.value.record
+        assert record is not None
+        if record["returncode"] < 0:
+            # Transient signal kills must not enter the TU memo. The shared
+            # pipeline has already parsed and closed its scratch resources.
+            raise _AnalyzerSignalKilled(-record["returncode"])
+        return record
 
     try:
         # Completed runs are cached whatever the ORDINARY exit code (a
