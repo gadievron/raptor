@@ -573,7 +573,12 @@ def test_sysprompt_tempfile_readable_inside_restrict_reads_sandbox(tmp_path):
     from core.sandbox import check_landlock_available
     from core.sandbox import run as sandbox_run
 
-    if not check_landlock_available():
+    import sys
+    if sys.platform == "darwin":
+        from core.sandbox.probes import check_seatbelt_available
+        if not check_seatbelt_available():
+            pytest.skip("Seatbelt not available")
+    elif not check_landlock_available():
         pytest.skip("Landlock not available")
 
     sentinel = "SYSPROMPT-SANDBOX-READ-PROOF-4c1b"
@@ -586,7 +591,7 @@ def test_sysprompt_tempfile_readable_inside_restrict_reads_sandbox(tmp_path):
         r = sandbox_run(
             ["cat", str(spf)],
             target=str(out), output=str(out),
-            restrict_reads=True,
+            restrict_reads=True, exclude_tmp_baseline=True,
             readable_paths=[str(spf)],
             capture_output=True, text=True, timeout=60,
         )
@@ -602,7 +607,7 @@ def test_sysprompt_tempfile_readable_inside_restrict_reads_sandbox(tmp_path):
         r = sandbox_run(
             ["cat", str(spf)],
             target=str(out), output=str(out),
-            restrict_reads=True,
+            restrict_reads=True, exclude_tmp_baseline=True,
             capture_output=True, text=True, timeout=60,
         )
     assert sentinel not in (r.stdout or "")

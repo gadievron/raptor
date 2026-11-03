@@ -69,3 +69,14 @@ def test_native_report_rejects_count_drift_and_missing_file(tmp_path):
     xml.write_text('<testsuite><testcase/></testsuite>')
     assert not runner.check_report(xml, expected=1)
     assert runner.check_report(xml, expected=2)
+
+
+def test_runner_exposes_selected_venv_console_scripts(tmp_path):
+    import os
+    binary = tmp_path / 'venv/bin/python'
+    binary.parent.mkdir(parents=True)
+    binary.symlink_to(sys.executable)
+    inherited = '/usr/bin:/bin'
+    path = runner.interpreter_tool_path(str(binary), inherited)
+    assert path.split(os.pathsep)[0] == str(binary.parent)
+    assert path.endswith(os.pathsep + inherited)

@@ -66,6 +66,8 @@ jobs:
         run: |
           set -euo pipefail
           uv pip install --python "$VENV_PATH/bin/python" pwntools==4.15.0 ROPgadget==7.7 capstone==5.0.6
+          test -x "$VENV_PATH/bin/ROPgadget"
+          echo "$GITHUB_WORKSPACE/$VENV_PATH/bin" >> "$GITHUB_PATH"
           gem install --no-document --install-dir "$RUNNER_TEMP/wrapper-gems" one_gadget -v 1.10.0
           echo "$RUNNER_TEMP/wrapper-gems/bin" >> "$GITHUB_PATH"
       - name: Exercise registered dispatch contracts
