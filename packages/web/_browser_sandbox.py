@@ -10,6 +10,8 @@ import tempfile
 import threading
 from urllib.parse import urlsplit
 
+from core.atomic_fs import write_new_text
+
 _ENV_LOCK = threading.RLock()
 
 
@@ -101,13 +103,11 @@ def confined_driver(base_url, executable=None, proxy=None):
         else:
             config['browsers'] = cache_paths[0] if cache_paths else ''
         control = root / 'driver.json'
-        control.write_text(json.dumps(config), encoding='utf-8')
-        control.chmod(0o600)
+        write_new_text(control, json.dumps(config), mode=0o600)
         launcher = root / 'node'
         helper = Path(__file__).with_name('_browser_driver.py')
-        launcher.write_text('#!/bin/sh\nexec ' + shlex.join([
-            sys.executable, '-I', '-B', str(helper), str(root)]) + ' "$@"\n')
-        launcher.chmod(0o700)
+        write_new_text(launcher, '#!/bin/sh\nexec ' + shlex.join([
+            sys.executable, '-I', '-B', str(helper), str(root)]) + ' "$@"\n', mode=0o700)
         def start(factory):
             with _ENV_LOCK:
                 previous = os.environ.get('PLAYWRIGHT_NODEJS_PATH')
