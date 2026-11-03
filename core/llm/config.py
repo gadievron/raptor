@@ -37,6 +37,8 @@ from .model_data import (
     PROVIDER_FAST_MODELS,
 )
 
+from core.llm.model_brokers import model_broker, read_broker_key
+
 logger = get_logger()
 
 
@@ -920,6 +922,21 @@ def _get_default_primary_model(
             _get_default_primary_model._logged = True  # type: ignore[attr-defined]
         return thinking_model
 
+    # Brokers are opt-in: an explicit configured model can become primary,
+    # but adding a catalog row or exporting a key never changes defaults.
+    for entry in _get_configured_models():
+        if not isinstance(entry, dict) or entry.get("role"):
+            continue
+        provider_name = entry.get("provider")
+        if not isinstance(provider_name, str) or not provider_name:
+            continue  # native inference handles provider-less entries below
+        broker = model_broker(provider_name)
+        if (broker and broker.protocol == "openai" and entry.get("model")
+                and (prefer_set is None or broker.name in prefer_set)):
+            configured = _model_config_from_entry(entry)
+            if _entry_auth_resolvable(configured):
+                return configured
+
     # Step 2b: a config-file Bedrock entry with no auxiliary role is
     # the operator's declared default for API work — the thinking-model
     # scorer above can never match it (see ``_config_bedrock_primary``).
@@ -1052,11 +1069,14 @@ def _model_config_from_entry(entry: dict) -> 'ModelConfig':
     else:
         bedrock_api = "mantle"
 
+    broker = model_broker(provider)
     api_key = entry.get("api_key")
     if not api_key:
         env_key = PROVIDER_ENV_KEYS.get(provider)
         if env_key:
             api_key = os.getenv(env_key)
+    if not api_key and broker:
+        api_key = read_broker_key(broker)
     # Bedrock-routed entries pick up the bearer (when present) the
     # same way other providers pick up their env-var key — gives
     # operators a single way to express "use this Bedrock model"
@@ -1096,7 +1116,7 @@ def _model_config_from_entry(entry: dict) -> 'ModelConfig':
         ollama_base = _validate_ollama_url(RaptorConfig.OLLAMA_HOST)
         api_base = f"{ollama_base.rstrip('/')}/v1"
     else:
-        api_base = PROVIDER_ENDPOINTS.get(provider)
+        api_base = PROVIDER_ENDPOINTS.get(provider) or (broker.api_base if broker else None)
     # Bedrock-only: per-model signing profile and region (both
     # non-secret names — the signer resolves the actual credential).
     # Region ladder: entry field → RAPTOR_BEDROCK_REGION env; ``None``
@@ -1163,7 +1183,7 @@ def _model_config_from_entry(entry: dict) -> 'ModelConfig':
     return ModelConfig(
         provider=provider,
         model_name=model_name,
-        api_key=api_key,
+        api_key=None if broker and os.getenv("RAPTOR_LLM_SOCKET") else api_key,
         api_base=api_base,
         max_tokens=entry.get("max_output", default_max_output),
         max_context=entry.get("max_context", default_max_context),
@@ -1239,6 +1259,8 @@ def _entry_auth_resolvable(mc: 'ModelConfig') -> bool:
     when the environment carries either the bearer token or any SigV4
     credential signal.
     """
+    if model_broker(mc.provider) and os.getenv("RAPTOR_LLM_SOCKET"):
+        return True  # parent owns the broker credential
     if mc.api_key:
         return True
     if mc.provider == "bedrock":

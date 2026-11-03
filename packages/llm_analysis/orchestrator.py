@@ -474,7 +474,7 @@ def build_llm_config_from_flags(
     def _resolve_model(name: str, role: str):
         # Operators may write any of ``--model claude-haiku-4-5``,
         # ``--model anthropic/claude-haiku-4-5``, or an aggregator
-        # form like ``--model together/anthropic/claude-haiku-4-5``;
+        # form like ``--model openrouter/anthropic/claude-haiku-4-5``;
         # ``models.json`` always stores the bare model under a
         # separate ``provider`` key. Compute provider via
         # ``provider_of`` (which peels aggregators) and bare model
@@ -524,7 +524,7 @@ def build_llm_config_from_flags(
             # ``claude-haiku-4-5-20251001`` would miss ``--model
             # claude-haiku-4-5``. Gate by provider too so two
             # same-named entries under different providers don't
-            # collide (e.g. ``ollama/llama-3`` vs ``together/llama-3``).
+            # collide (e.g. ``ollama/llama-3`` vs ``openrouter/llama-3``).
             if provider and cfg_entry.get("provider") != provider:
                 continue
             cfg_name = cfg_entry.get("model")

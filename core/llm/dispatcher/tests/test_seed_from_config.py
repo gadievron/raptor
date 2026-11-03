@@ -13,6 +13,8 @@ import sys
 
 import pytest
 
+from core.llm.model_brokers import MODEL_BROKERS
+
 from core.llm.dispatcher.auth import (
     CredentialStore,
     WorldReadableModelsConfigError,
@@ -46,23 +48,8 @@ def _make_empty_store() -> CredentialStore:
         "gemini": None,
         "mistral": None,
         "openai": None,
-        # Aggregators
-        "apiroute": None,
-        "atlascloud": None,
-        "cheapaimodel": None,
-        "cheaperinference": None,
         "cohere": None,
-        "deepinfra": None,
-        "fireworks": None,
-        "groq": None,
-        "openrouter": None,
-        "opper": None,
-        "orcarouter": None,
-        "perplexity": None,
-        "replicate": None,
-        "runcrate": None,
-        "together": None,
-        "yapi": None,
+        **{broker.name: None for broker in MODEL_BROKERS},
         # Cloud gateways
         "azure_openai": None,
         "azure_openai_endpoint": None,

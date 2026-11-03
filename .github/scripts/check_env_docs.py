@@ -1,6 +1,6 @@
 """Environment-variable documentation drift guard (daily CI scan).
 
-Self-contained, stdlib-only. Extracts every environment variable the
+Extracts every environment variable the
 tree reads or writes and compares the result against the documented
 set in ``docs/environment.md`` — the regression class where a new
 operator knob ships without documentation, or documentation describes
@@ -755,6 +755,32 @@ def scan_tree(root: Path) -> Inventory:
                                 Occurrence(rel, node.lineno, "read"))
                         break
     _parse_config_tables(root, inv)
+    # Broker credentials moved out of Python policy tables. Keep them in the
+    # inventory without importing application modules or executing the catalog.
+    broker_rel = "core/llm/model_brokers/registry.json"
+    broker_path = root / broker_rel
+    if broker_path.is_file():
+        # Reuse RAPTOR's config dialect, including // and # comments. Pin
+        # the import to the checker installation, never the scanned root.
+        checker_root = str(Path(__file__).resolve().parents[2])
+        if checker_root not in sys.path:
+            sys.path.insert(0, checker_root)
+        from core.json import load_json_with_comments
+
+        # Python-owned environment variables outrank broker credentials.
+        # Reject catalog collisions before adding broker inventory entries.
+        catalog = load_json_with_comments(broker_path)
+        if catalog is None:
+            raise ValueError(f"Invalid broker catalog: {broker_path}")
+        for broker in catalog["brokers"]:
+            suffix = broker.get("credential_suffix", "API_KEY")
+            name = f"{broker['name'].upper()}_{suffix}"
+            if any(o.file.endswith(".py") and not _is_test_path(o.file)
+                   and o.file != "core/llm/model_brokers/__init__.py"
+                   for o in inv.vars.get(name, ())):
+                raise ValueError(f"Broker credential conflicts with Python-owned environment variable: {name}")
+            inv.add(name, Occurrence(broker_rel, 1, "read"))
+            inv.add(name, Occurrence(broker_rel, 1, "declared:LLM_API_KEY_VARS"))
     return inv
 
 

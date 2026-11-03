@@ -210,7 +210,7 @@ class TestEnsureRouteForModelConfigs:
     """Shared self-serve gate for standalone entry points
     (raptor-llm-ask, the audit pipeline): starts an in-process
     dispatcher only when a resolved model is dispatcher-only
-    (Bedrock) and no route exists."""
+    (Bedrock or a registered broker) and no route exists."""
 
     def test_noop_when_route_exists(self, monkeypatch):
         from types import SimpleNamespace
@@ -261,6 +261,35 @@ class TestEnsureRouteForModelConfigs:
             if d is not None:
                 d.shutdown()
             import os
+            os.environ.pop("RAPTOR_LLM_SOCKET", None)
+            os.environ.pop("RAPTOR_LLM_TOKEN_FD", None)
+
+    def test_standalone_broker_starts_dispatcher_and_constructs_keyless_sdk(self, monkeypatch, tmp_path):
+        import os
+        from core.llm.config import ModelConfig
+        from core.llm.dispatcher import client as dispatcher_client
+        from core.llm.dispatcher.lifecycle import ensure_route_for_model_configs
+        from core.llm.providers import create_provider
+
+        monkeypatch.delenv("RAPTOR_LLM_SOCKET", raising=False)
+        monkeypatch.delenv("RAPTOR_LLM_TOKEN_FD", raising=False)
+        monkeypatch.setenv("RAPTOR_CONFIG", str(tmp_path / "missing-models.json"))
+        monkeypatch.setenv("OPENROUTER_API_KEY", "parent-only-test-key")
+        monkeypatch.setattr(dispatcher_client, "_cached_token", None)
+        config = ModelConfig(provider="openrouter", model_name="vendor/example")
+        d = ensure_route_for_model_configs([config], label="standalone-broker")
+        try:
+            assert d is not None
+            assert "OPENROUTER_API_KEY" not in os.environ
+            provider = create_provider(config)
+            try:
+                assert provider.client.api_key == "dummy-not-used"
+                assert str(provider.client.base_url) == "http://_/openrouter/api/v1/"
+            finally:
+                provider.client.close()
+        finally:
+            if d is not None:
+                d.shutdown()
             os.environ.pop("RAPTOR_LLM_SOCKET", None)
             os.environ.pop("RAPTOR_LLM_TOKEN_FD", None)
 

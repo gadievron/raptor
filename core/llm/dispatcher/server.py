@@ -2629,30 +2629,18 @@ def _short(token: str) -> str:
 # worker's placeholders.
 _CALLER_WINS_INJECT_HEADERS = frozenset({"anthropic-version"})
 
+from core.llm.model_brokers import MODEL_BROKERS  # noqa: E402
+
 _DIRECT_PATH_PREFIXES = {
     "/anthropic/":    "anthropic",
     "/gemini/":       "gemini",
     "/openai/":       "openai",
+    "/mistral/":      "mistral",
+    "/cohere/":       "cohere",
 }
 
 _AGGREGATOR_PATH_PREFIXES = {
-    "/apiroute/": "apiroute",
-    "/atlascloud/":   "atlascloud",
-    "/cheapaimodel/": "cheapaimodel",
-    "/cheaperinference/": "cheaperinference",
-    "/cohere/":       "cohere",
-    "/deepinfra/":    "deepinfra",
-    "/fireworks/":    "fireworks",
-    "/groq/":         "groq",
-    "/mistral/":      "mistral",
-    "/openrouter/":   "openrouter",
-    "/opper/":        "opper",
-    "/orcarouter/":   "orcarouter",
-    "/perplexity/":   "perplexity",
-    "/replicate/":    "replicate",
-    "/runcrate/":     "runcrate",
-    "/together/":     "together",
-    "/yapi/":         "yapi",
+    f"/{broker.name}/": broker.name for broker in MODEL_BROKERS
 }
 
 _CLOUD_PATH_PREFIXES = {
@@ -2661,8 +2649,8 @@ _CLOUD_PATH_PREFIXES = {
 }
 
 _PROVIDER_FROM_PATH_PREFIX = {
-    **_DIRECT_PATH_PREFIXES,
     **_AGGREGATOR_PATH_PREFIXES,
+    **_DIRECT_PATH_PREFIXES,
     **_CLOUD_PATH_PREFIXES,
 }
 

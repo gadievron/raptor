@@ -26,25 +26,12 @@ def test_bare_model_id_peels_provider_prefix():
 
 
 def test_bare_model_id_peels_aggregator_then_provider():
-    # ``together/anthropic/claude-haiku-4-5`` — aggregator + provider
-    # both peel; the lookup in models.json sees just ``claude-haiku-4-5``.
-    assert bare_model_id("apiroute/deepseek-v4.1-flash") == "deepseek-v4.1-flash"
-    assert bare_model_id("apiroute/anthropic/claude-haiku-4-5") == "claude-haiku-4-5"
-    assert bare_model_id("atlascloud/anthropic/claude-haiku-4-5") == "claude-haiku-4-5"
-    assert bare_model_id("cheapaimodel/deepseek-v4-1-flash") == "deepseek-v4-1-flash"
-    assert bare_model_id("cheaperinference/gpt-5.4-mini") == "gpt-5.4-mini"
+    assert bare_model_id("openrouter/deepseek-v4.1-flash") == "deepseek-v4.1-flash"
+    assert bare_model_id("openrouter/anthropic/claude-haiku-4-5") == "claude-haiku-4-5"
+    assert bare_model_id("openrouter/gpt-5.4-mini") == "gpt-5.4-mini"
     assert bare_model_id("openrouter/openai/gpt-5") == "gpt-5"
-    assert bare_model_id("opper/gpt-5.4-mini") == "gpt-5.4-mini"
-    assert bare_model_id("opper/anthropic/claude-sonnet-4-6") == "claude-sonnet-4-6"
-    assert bare_model_id("orcarouter/openai/gpt-5") == "gpt-5"
-    assert bare_model_id("runcrate/openai/gpt-oss-120b") == "gpt-oss-120b"
-    assert bare_model_id("runcrate/deepseek-ai/DeepSeek-V4.1-Flash") == "deepseek-ai/DeepSeek-V4.1-Flash"
-    assert bare_model_id("together/anthropic/claude-haiku-4-5") == "claude-haiku-4-5"
-    assert bare_model_id("yapi/anthropic/claude-haiku-4-5") == "claude-haiku-4-5"
-    # ``yapi/deepseek/deepseek-v4-flash`` — the relay is addressed by the
-    # vendor-qualified id, so only the route prefix peels and the inner
-    # ``deepseek/`` segment has to survive.
-    assert bare_model_id("yapi/deepseek/deepseek-v4-flash") == "deepseek/deepseek-v4-flash"
+    assert bare_model_id("openrouter/deepseek/deepseek-v4-flash") == "deepseek/deepseek-v4-flash"
+    assert bare_model_id("openrouter/deepseek-ai/DeepSeek-V4.1-Flash") == "deepseek-ai/DeepSeek-V4.1-Flash"
 
 
 def test_bare_model_id_leaves_unknown_prefixes_alone():
@@ -61,7 +48,7 @@ def test_bare_model_id_peels_every_family_of_provider_stem():
     assert bare_model_id("google/gemini-2.5-pro") == "gemini-2.5-pro"
     assert bare_model_id("meta-llama/Llama-3-8B") == "Llama-3-8B"
     assert bare_model_id("mistralai/Mistral-7B") == "Mistral-7B"
-    assert bare_model_id("together/meta-llama/Llama-3-8B") == "Llama-3-8B"
+    assert bare_model_id("openrouter/meta-llama/Llama-3-8B") == "Llama-3-8B"
 
 
 # --- family_of ---
@@ -119,10 +106,10 @@ def test_open_weight_lineages_resolve_distinctly():
 
 
 def test_aggregator_plus_provider_double_prefix():
-    """Aggregator strip + provider peel compose: together/ollama/qwen3
+    """Aggregator strip + provider peel compose: openrouter/ollama/qwen3
     peels both layers and resolves the underlying lineage."""
-    assert family_of("together/ollama/qwen3-27b") == "qwen"
-    assert family_of("groq/ollama/deepseek-r1") == "deepseek"
+    assert family_of("openrouter/ollama/qwen3-27b") == "qwen"
+    assert family_of("openrouter/ollama/deepseek-r1") == "deepseek"
     assert family_of("openrouter/ollama/llama-3.1-8b") == "meta"
 
 
@@ -495,17 +482,17 @@ def test_family_and_provider_diverge_for_bedrock():
 # ---------------------------------------------------------------------------
 # Aggregator + Bedrock combination (Issue A from the adversarial review).
 # Iterated peel handles chained shapes like
-# ``together/us.anthropic.claude-opus-4-7``.  Co-authored with owen10380.
+# ``openrouter/us.anthropic.claude-opus-4-7``.  Co-authored with owen10380.
 # ---------------------------------------------------------------------------
 
 def test_aggregator_plus_bedrock_resolves_to_anthropic():
-    """``together/us.anthropic.claude-...`` must resolve to anthropic
+    """``openrouter/us.anthropic.claude-...`` must resolve to anthropic
     family.  Pre-fix the family_of returned "unknown" because the
     aggregator peel ran after the Bedrock peel and the second pass
     of Bedrock peel never happened."""
     from core.security.llm_family import family_of
-    assert family_of("together/us.anthropic.claude-opus-4-7") == "anthropic"
-    assert family_of("groq/eu.anthropic.claude-sonnet-4-6") == "anthropic"
+    assert family_of("openrouter/us.anthropic.claude-opus-4-7") == "anthropic"
+    assert family_of("openrouter/eu.anthropic.claude-sonnet-4-6") == "anthropic"
     assert family_of(
         "openrouter/global.anthropic.claude-haiku-4-5",
     ) == "anthropic"
@@ -516,7 +503,7 @@ def test_aggregator_plus_bedrock_routes_via_bedrock():
     nominally present — the Bedrock-shape signal dominates."""
     from core.security.llm_family import provider_of
     assert provider_of(
-        "together/us.anthropic.claude-opus-4-7",
+        "openrouter/us.anthropic.claude-opus-4-7",
     ) == "bedrock"
 
 
@@ -524,7 +511,7 @@ def test_aggregator_chain_plus_bedrock():
     """Chained aggregators + Bedrock — peel converges within bound."""
     from core.security.llm_family import family_of
     assert family_of(
-        "openrouter/together/us.anthropic.claude-opus-4-7",
+        "openrouter/openrouter/us.anthropic.claude-opus-4-7",
     ) == "anthropic"
 
 
@@ -705,7 +692,7 @@ def test_provider_of_resolves_bedrock_under_four_aggregators():
     # Deep-but-bounded chains resolve: four aggregator peels plus the
     # regional/provider peel fit inside the loop bound.
     assert provider_of(
-        "together/groq/openrouter/fireworks/us.anthropic.claude-opus-4-6"
+        "openrouter/openrouter/openrouter/openrouter/us.anthropic.claude-opus-4-6"
     ) == "bedrock"
 
 
@@ -715,7 +702,7 @@ def test_provider_of_bounds_pathological_nesting_at_five_peels():
     # provider) rather than looping further. Both directions with the
     # test above.
     assert provider_of(
-        "together/groq/openrouter/fireworks/deepinfra/"
+        "openrouter/openrouter/openrouter/openrouter/openrouter/"
         "us.anthropic.claude-opus-4-6"
     ) == ""
 
@@ -725,7 +712,7 @@ def test_provider_of_bounds_pathological_nesting_at_five_peels():
 
 def test_routing_model_id_peels_chained_aggregators():
     assert routing_model_id(
-        "together/openrouter/anthropic.claude-opus-4-6"
+        "openrouter/openrouter/anthropic.claude-opus-4-6"
     ) == "anthropic.claude-opus-4-6"
 
 

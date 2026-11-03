@@ -581,6 +581,39 @@ def make_openai_client(
     )
 
 
+def make_broker_client(
+    name: str,
+    *,
+    socket_path: str | None = None,
+    token: str | None = None,
+    timeout: float | None = None,
+):
+    """Build a keyless OpenAI SDK client for a registered broker only.
+
+    No direct-network fallback or operator URL override: the parent registry
+    selects the upstream and the parent credential store supplies the secret.
+    Raw HTTP gateways remain available through the dispatcher route.
+    """
+    import openai
+    from core.llm.model_brokers import model_broker
+
+    broker = model_broker(name)
+    if broker is None:
+        raise ValueError(f"Unknown model broker {name!r}")
+    if broker.protocol != "openai":
+        raise ValueError(f"Broker {name!r} requires its native HTTP API, not the OpenAI SDK")
+    if not (socket_path or os.environ.get("RAPTOR_LLM_SOCKET")):
+        raise RuntimeError(f"Broker {name!r} requires the RAPTOR LLM dispatcher")
+    socket_path, token = _resolve_socket_and_token(socket_path, token)
+    http = _make_httpx_client(socket_path, token, timeout=timeout)
+    return openai.OpenAI(
+        api_key="dummy-not-used",
+        base_url=f"http://_/{broker.name}{broker.api_path}",
+        max_retries=0,
+        http_client=http,
+    )
+
+
 def relay_for_grandchild() -> tuple[str, int]:
     """Return ``(socket_path, token_fd)`` for a grandchild ``Popen``.
 

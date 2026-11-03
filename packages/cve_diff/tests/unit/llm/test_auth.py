@@ -95,15 +95,7 @@ def test_other_providers_resolve_with_their_env_var(
     use that provider for matching models — no Anthropic key
     required, no Claude Code fallback. Operator with only Gemini
     can run cve-diff.
-
-    Aggregator-prefixed models (``groq/...``, ``openrouter/...``)
-    are deliberately not tested here — ``provider_of`` peels the
-    aggregator prefix to find the underlying *family* (e.g.
-    ``groq/llama-3.3-70b`` → ``ollama``/meta, not ``groq``), which
-    is correct for cross-family safety but means routing to the
-    aggregator API requires a separate aggregator-aware resolver.
-    Pre-existing issue independent of this refactor; tracked
-    separately."""
+    """
     monkeypatch.setenv(env_var, "real-key")
     decision = resolve_auth(model_id)
     assert decision.provider == expected_provider
@@ -186,38 +178,34 @@ def test_unknown_model_id_defaults_to_anthropic():
 
 
 # ---------------------------------------------------------------------
-# Module-shape pin
+# Auth handoff contract
 # ---------------------------------------------------------------------
 
 
-def test_auth_module_does_not_enumerate_provider_env_vars():
-    """cve-diff's auth resolver must not maintain its own list of
-    LLM-provider env vars — that list belongs in
-    ``core.config.RaptorConfig.LLM_API_KEY_VARS`` (single source of
-    truth). The resolver looks at exactly two env vars:
-    ``ANTHROPIC_API_KEY`` (for the CC fallback decision) and
-    ``RAPTOR_LLM_SOCKET`` (for dispatcher routing). Pin this so a
-    future change that adds a new provider doesn't accidentally
-    grow a parallel list here."""
-    import inspect
+def test_auth_reads_only_dispatcher_and_anthropic_fallback_env(monkeypatch):
+    """Provider credentials belong to core; cve-diff only chooses its auth path."""
+    from types import SimpleNamespace
+    from unittest.mock import Mock
     from cve_diff.llm import auth
-    src = inspect.getsource(auth)
-    # The only API-key env var name allowed in the source: Anthropic
-    # (for the CC fallback). Other provider env vars must NOT appear.
-    forbidden = [
-        "OPENAI_API_KEY", "GEMINI_API_KEY", "MISTRAL_API_KEY",
-        "GROQ_API_KEY", "TOGETHER_API_KEY", "OPENROUTER_API_KEY",
-        "FIREWORKS_API_KEY", "DEEPINFRA_API_KEY",
-        "PERPLEXITY_API_KEY", "COHERE_API_KEY",
-        "REPLICATE_API_TOKEN", "AZURE_OPENAI_API_KEY",
-    ]
-    leaked = [v for v in forbidden if v in src]
-    assert not leaked, (
-        f"cve_diff/llm/auth.py enumerates provider env vars: "
-        f"{leaked}. The central LLM config "
-        f"(RaptorConfig.LLM_API_KEY_VARS) should be the only place "
-        f"that lists them."
-    )
+
+    env = Mock()
+    env.get.return_value = None
+    monkeypatch.setattr(auth, "os", SimpleNamespace(environ=env))
+    decision = resolve_auth("claude-opus-4-7")
+    assert decision.provider == "claudecode"
+    assert {call.args[0] for call in env.get.call_args_list} == {
+        "RAPTOR_LLM_SOCKET", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+    }
+
+
+def test_provider_resolution_is_delegated_to_core(monkeypatch):
+    """A provider returned by core needs no cve-diff-specific registration."""
+    monkeypatch.setattr("core.security.llm_family.provider_of", lambda model: "example-provider")
+    monkeypatch.setenv("RAPTOR_LLM_SOCKET", "./fake.sock")
+    decision = resolve_auth("example-model")
+    assert decision.provider == "example-provider"
+    assert decision.api_key is None
+    assert decision.via_dispatcher is True
 
 
 # ---------- default_model_id ----------
