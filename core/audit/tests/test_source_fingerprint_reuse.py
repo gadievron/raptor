@@ -52,7 +52,8 @@ def test_no_second_source_encoding():
     assert source.encodings == 1
 
 
-@pytest.mark.parametrize("digest", ["", "00" * 31, "00" * 33, "not-hex"])
+@pytest.mark.parametrize("digest", ["", "00" * 31, "00" * 33, "not-hex"],
+                         ids=['empty', 'too-short', 'too-long', 'non-hex'])
 def test_invalid_digests_fail_explicitly(digest):
     with pytest.raises(ValueError):
         source_fingerprint_from_hashes({"a.c": digest})

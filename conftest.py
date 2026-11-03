@@ -138,6 +138,11 @@ os.environ.setdefault("SEMGREP_SEND_METRICS", "off")
 if _conftest_dir not in sys.path:
     sys.path.insert(0, _conftest_dir)
 
+# Pytest consults this hook only when a case has no explicit ID.
+from core.testing.param_ids import (  # noqa: E402
+    pytest_make_parametrize_id as pytest_make_parametrize_id,
+)
+
 
 # ---------------------------------------------------------------------------
 # Darwin-emulation standing gate

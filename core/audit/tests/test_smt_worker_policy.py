@@ -12,7 +12,9 @@ ENTRY = 'core.audit.condition_smt:_z3_dispatch_json'
 
 
 @pytest.mark.parametrize('payload', [b'[]' * 2, b'\xff', b'{"x":1,"x":2}',
-                                     b'NaN', b'1e999', b'[' * 10000 + b']' * 10000])
+                                     b'NaN', b'1e999', b'[' * 10000 + b']' * 10000],
+                         ids=['multiple-json-values', 'invalid-utf8', 'duplicate-keys',
+                              'nan', 'numeric-overflow', 'excessive-nesting'])
 def test_hostile_json_refused(payload):
     with pytest.raises((ValueError, RecursionError, UnicodeError)):
         decode(payload, MAX_REPLY_BYTES)
