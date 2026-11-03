@@ -2,7 +2,8 @@
 
 Reviews return a hypotheses array; only the primary drove dispatch.
 The secondary lane dispatches non-primary medium/high entries through
-tool chains. No real tools or LLM calls — the chain is stubbed."""
+tool chains. No real tools or LLM calls — both the chain and its
+synthesis fallback are stubbed."""
 
 from __future__ import annotations
 
@@ -38,7 +39,7 @@ def _result(outcomes):
     return r
 
 
-def _patch_chain(monkeypatch, confirmations, chain_calls=None):
+def _patch_chain(monkeypatch, confirmations, chain_calls=None, synthesis_calls=None):
     def fake_chain(hypothesis, file_path, cwe="", language=None, **kwargs):
         if chain_calls is not None:
             chain_calls.append(hypothesis)
@@ -54,6 +55,18 @@ def _patch_chain(monkeypatch, confirmations, chain_calls=None):
     monkeypatch.setattr(
         "core.audit.orchestrator._read_raw_source",
         lambda *a, **kw: "void multi_fn(void) { }",
+    )
+
+    def fake_synthesis(result, config, i, outcome, hypothesis, cwe,
+                       source, **kwargs):
+        if synthesis_calls is not None:
+            synthesis_calls.append(hypothesis)
+
+    # An exhausted tool chain can route to LLM synthesis. Keep that
+    # boundary owned too, regardless of the host's available providers.
+    monkeypatch.setattr(
+        "core.audit.orchestrator._synthesize_unmapped_suspicious",
+        fake_synthesis,
     )
 
 
@@ -188,11 +201,14 @@ class TestDispatchSecondaryHypotheses:
         outcome = _outcome(hypotheses=hyps)
         result = _result([outcome])
         chain_calls: list = []
-        _patch_chain(monkeypatch, [], chain_calls=chain_calls)
+        synthesis_calls: list = []
+        _patch_chain(monkeypatch, [], chain_calls=chain_calls,
+                     synthesis_calls=synthesis_calls)
 
         orch._dispatch_secondary_hypotheses(result, _config(tmp_path))
 
         assert len(chain_calls) == orch._MAX_REFUTED_DISPATCHES_PER_FN
+        assert synthesis_calls == chain_calls
 
     def test_detection_only_confirmation_does_not_promote(
         self, tmp_path, monkeypatch,
