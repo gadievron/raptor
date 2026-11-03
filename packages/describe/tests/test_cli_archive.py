@@ -20,6 +20,7 @@ import tarfile
 import zipfile
 from pathlib import Path
 
+import pytest
 
 from packages.describe.cli import describe_main
 
@@ -297,6 +298,9 @@ class TestRaptorDescribeArchiveE2E:
     real subprocess + argparse path, to confirm the
     mode_describe → describe_main wiring works."""
 
+    # This deliberately includes cold launcher startup and real archive
+    # detection; the direct describe_main cases cover the fast tier.
+    @pytest.mark.slow
     def test_subprocess_invocation_on_archive(self, tmp_path):
         import os
         import sys as _sys
