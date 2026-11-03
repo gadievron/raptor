@@ -2191,6 +2191,192 @@ def run_workflow_discovery(
     return results
 
 
+# ── multi-perspective sweep ──────────────────────────────────────────
+
+_PERSPECTIVE_JSON_SUFFIX = (
+    "\n\nguard_type must be one of: bounds, null_safety, validation, "
+    "sanitisation, lifetime, ordering, concurrency, other."
+    "\n\nRate confidence: high (specific code paths prove the issue), "
+    "medium (plausible but needs runtime context), low (speculative)."
+    "\n\nRespond in JSON:\n"
+    '{ "findings": [ { "guard_type": "...", "assumed_property": "...", '
+    '"mechanism": "...", "cwe_class": "...", '
+    '"standalone": true/false, "confidence": "high|medium|low" } ] }'
+    '\n\nIf no issues found: { "findings": [] }'
+)
+
+_PERSPECTIVE_QUESTIONS: list[tuple[str, str, str]] = [
+    (
+        "attacker",
+        "You are performing an authorised security assessment of this "
+        "code. Focus on attack surfaces automated tools miss.",
+        "Analyse this code from an attacker's perspective:\n\n"
+        "1. What would you exploit? Consider injection points, trust "
+        "boundaries, and unsafe data flows.\n"
+        "2. Are there authentication or authorisation bypasses?\n"
+        "3. Can you reach sensitive operations through unexpected paths?\n"
+        "4. Are there information leaks (timing, error messages, side "
+        "channels)?",
+    ),
+    (
+        "reliability",
+        "You are a reliability engineer reviewing this code for "
+        "production failures. Respond only with the JSON object.",
+        "Analyse this code for reliability and resource-safety issues:\n\n"
+        "1. Resource exhaustion: unbounded allocations, uncapped loops, "
+        "missing limits on user-controlled sizes.\n"
+        "2. Error handling: what happens when callees fail? Are errors "
+        "propagated or silently swallowed?\n"
+        "3. Concurrency: races between readers and writers, missing "
+        "synchronisation, lock ordering.\n"
+        "4. State corruption: partial writes on failure, missing rollback, "
+        "broken invariants after exceptions.",
+    ),
+    (
+        "reviewer",
+        "You are an experienced code reviewer looking for correctness "
+        "bugs. Respond only with the JSON object.",
+        "Review this code for correctness:\n\n"
+        "1. Off-by-one errors in bounds, loop conditions, or size "
+        "calculations.\n"
+        "2. Type confusion or implicit narrowing conversions.\n"
+        "3. Contract violations: does this function uphold what callers "
+        "expect?\n"
+        "4. Unhandled edge cases: empty input, maximum values, NULL/nil, "
+        "negative numbers, zero-length buffers.",
+    ),
+    (
+        "adversarial_tester",
+        "You are a security tester crafting adversarial inputs. "
+        "Respond only with the JSON object.",
+        "What inputs would make this code behave unexpectedly?\n\n"
+        "1. Boundary values: INT_MAX, 0, -1, empty strings, "
+        "maximum-length inputs.\n"
+        "2. Encoding mismatches: UTF-8 overlong sequences, mixed "
+        "encodings, null bytes in strings.\n"
+        "3. Type confusion: values that pass one check but fail another "
+        '(e.g. "0" vs 0 vs NULL).\n'
+        "4. Parser differentials: inputs parsed differently by different "
+        "consumers (path traversal, header injection, protocol smuggling).",
+    ),
+]
+
+
+def _build_perspective_prompt(
+    annotation: str,
+    callers_source: str,
+    question: str,
+) -> str:
+    """Assemble the user prompt from parts, avoiding str.format on source."""
+    parts = [annotation]
+    if callers_source:
+        parts.append("\n\n### Callers\n\n" + callers_source)
+    parts.append("\n\n" + question)
+    parts.append(_PERSPECTIVE_JSON_SUFFIX)
+    return "".join(parts)
+
+
+def run_multi_perspective_sweep(
+    targets: list[SweepTarget],
+    *,
+    review_fn: Callable[[str, str], tuple[str, float]],
+    max_cost_usd: float = 5.0,
+    perspectives: list[str] | None = None,
+) -> list[DiscoveryResult]:
+    """Run multiple prompt perspectives on the same targets.
+
+    Each perspective asks a different question about the same code,
+    surfacing different bug classes.  The grounding filter (identifier
+    overlap) applies to all perspectives equally.
+    """
+    active = _PERSPECTIVE_QUESTIONS
+    if perspectives:
+        names = set(perspectives)
+        active = [p for p in _PERSPECTIVE_QUESTIONS if p[0] in names]
+        if not active:
+            logger.warning(
+                "discovery: no matching perspectives for %s",
+                perspectives,
+            )
+            return []
+
+    results: list[DiscoveryResult] = []
+    total_cost = 0.0
+
+    for target in targets:
+        if total_cost >= max_cost_usd:
+            logger.info(
+                "discovery: multi-perspective cost cap reached "
+                "($%.2f >= $%.2f)",
+                total_cost, max_cost_usd,
+            )
+            break
+
+        all_source = (target.source or "") + "\n" + (
+            target.callers_source or ""
+        )
+        idents = _source_identifiers(all_source)
+
+        seen_keys: set[tuple[str, str, str]] = set()
+
+        for name, system_prompt, question in active:
+            if total_cost >= max_cost_usd:
+                break
+
+            prompt = _build_perspective_prompt(
+                target.annotation,
+                target.callers_source or "",
+                question,
+            )
+            source_tag = f"perspective_{name}"
+
+            try:
+                response, cost = review_fn(system_prompt, prompt)
+            except Exception as exc:
+                from core.llm.client import is_budget_exceeded_error
+                if is_budget_exceeded_error(exc):
+                    total_cost = max_cost_usd
+                    break
+                logger.exception(
+                    "discovery: perspective %s failed for %s",
+                    name, target.fid,
+                )
+                continue
+            total_cost += cost
+
+            result = _parse_discovery_findings(
+                response, target, source_tag,
+            )
+
+            if result.weaknesses:
+                result.weaknesses = _filter_grounded_findings(
+                    result.weaknesses, idents,
+                )
+
+            deduped = []
+            for w in result.weaknesses:
+                key = (
+                    w.get("guard_type", ""),
+                    w.get("property", ""),
+                    w.get("mechanism", ""),
+                )
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    deduped.append(w)
+            result.weaknesses = deduped
+
+            result.cost_usd = cost
+            results.append(result)
+
+    total_findings = sum(len(r.weaknesses) for r in results)
+    logger.info(
+        "discovery: multi-perspective sweep %d targets × %d perspectives, "
+        "%d findings, $%.2f total",
+        len(targets), len(active), total_findings, total_cost,
+    )
+    return results
+
+
 # ── journal integration ─────────────────────────────────────────────
 
 def write_discovery_weaknesses(
