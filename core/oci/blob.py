@@ -41,9 +41,26 @@ logger = logging.getLogger(__name__)
 # 64 MB is generous; anything larger is malicious or pointless.
 DEFAULT_MAX_ENTRY_BYTES = 64 * 1024 * 1024
 
-# Aggregate caps for untrusted registry layers.  The entry-count
-# cap mirrors the tar extractor's own default.
+# The entry-count floor matches the shared tar reader. Larger OCI layers
+# receive a bounded allowance proportional to their descriptor size.
 DEFAULT_MAX_ENTRY_COUNT = 50_000
+ENTRY_COUNT_BUDGET_CEILING = 250_000
+COMPRESSED_BYTES_PER_ENTRY = 8 * 1024
+
+
+def layer_entry_count_budget(compressed_size: int | None) -> int:
+    """Admit large merged filesystems while bounding dense header floods.
+
+    A merged RAPTOR filesystem has about 80,000 entries. Keep the old
+    50,000-entry floor for small/unknown inputs; large layers get one
+    entry per 8 KiB of source bytes, capped at 250,000. Decompression and
+    selection byte limits remain independent. The descriptor's size/digest
+    still require verification.
+    """
+    if not compressed_size or compressed_size <= 0:
+        return DEFAULT_MAX_ENTRY_COUNT
+    return min(ENTRY_COUNT_BUDGET_CEILING,
+               max(DEFAULT_MAX_ENTRY_COUNT, compressed_size // COMPRESSED_BYTES_PER_ENTRY))
 
 # ---------------------------------------------------------------------------
 # Decompression budget — READ THIS BEFORE CHANGING ANY OF THE THREE
@@ -449,7 +466,7 @@ def extract_files_from_layer(
         # size (ratio-shaped bomb test — see the rationale block on
         # the constants above); the fetched-bytes guard above is the
         # tighter live bound for gzip layers.
-        max_entry_count=DEFAULT_MAX_ENTRY_COUNT,
+        max_entry_count=layer_entry_count_budget(compressed_size),
         max_total_bytes=layer_decompression_budget(compressed_size),
         on_skipped=_refuse_wanted_skip,
         on_nonregular=_nonregular if resolve_selected_hardlinks or selected_symlinks is not None else None,
