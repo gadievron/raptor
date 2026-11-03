@@ -15,7 +15,7 @@ def entry_paths(index: AccessIndex, target: str, depth: int, parents=None) -> li
             if r.kind == "call":
                 parents[r.target].add(r.source)
     queue = deque([[target]])
-    paths = []
+    paths: list[list[str]] = []
     while queue and len(paths) < 16:
         trail = queue.popleft()
         if trail[0] in index.entries:
@@ -97,7 +97,7 @@ def build_slices(index: AccessIndex, report_functions: Iterable[str] | None = No
         types = {a.type_id for a in seed_accesses if a.resolution != "unresolved"}
         resources = {a.type_id+":"+a.member_path for a in seed_accesses}
         # Follow syntax-backed cross-type resource transfers in either direction.
-        linked = set()
+        linked: set[str] = set()
         for r in index.relations:
             if r.kind == "resource_assignment" and (r.source in resources or r.target in resources):
                 linked.update((r.source, r.target))
@@ -163,7 +163,7 @@ def build_slices(index: AccessIndex, report_functions: Iterable[str] | None = No
         if effects & {"direct_write","read_modify_write","indirect_write"}:
             reasons.append("state_transition")
         keep = ordered[:limits.functions_per_slice]
-        truncated = []
+        truncated: list[str] = []
         truncated.extend(f"{d['reason']}:{d['target']}" for d in dispatch_deferred)
         if graph_truncated:
             truncated.append("graph_expansion")

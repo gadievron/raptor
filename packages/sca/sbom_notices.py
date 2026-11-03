@@ -177,7 +177,7 @@ def associate(native: dict, image: dict, rows: list[dict], blobs: dict[str, byte
     packages, associated = [], set()
     association_count = 0
     for artifact in native["artifacts"]:
-        associations = {}
+        associations: dict[tuple[str, str], dict] = {}
 
         def add(row: dict, reason: str):
             nonlocal association_count
@@ -194,10 +194,10 @@ def associate(native: dict, image: dict, rows: list[dict], blobs: dict[str, byte
 
         for licence in artifact.get("licenses", []):
             for loc in licence.get("locations", []):
-                row = by_key.get((loc["path"], loc["layerID"]))
-                if row is None:
+                declared_row = by_key.get((loc["path"], loc["layerID"]))
+                if declared_row is None:
                     raise ValueError("captured evidence is missing a declared licence location")
-                add(row, "catalogue_licence_location")
+                add(declared_row, "catalogue_licence_location")
         for row, reason in directory_matches[artifact["id"]]:
             add(row, reason)
         for key, identifiers in package_paths.metadata.items():
@@ -216,10 +216,10 @@ def associate(native: dict, image: dict, rows: list[dict], blobs: dict[str, byte
                 names = {name.rstrip(".") for name in (match[1] for match in _COMMON.finditer(
                     blobs[entry["sha256"]].decode("utf-8", errors="replace")))}
                 for name in sorted(names):
-                    matches = by_path["/usr/share/common-licenses/" + name]
-                    if len(matches) == 1 and not aliases_by_path[COMMON_DIRECTORY + name]:
-                        add(matches[0], "copyright_common_licence_reference")
-                    elif not matches and len(aliases_by_path[COMMON_DIRECTORY + name]) == 1:
+                    common_matches = by_path["/usr/share/common-licenses/" + name]
+                    if len(common_matches) == 1 and not aliases_by_path[COMMON_DIRECTORY + name]:
+                        add(common_matches[0], "copyright_common_licence_reference")
+                    elif not common_matches and len(aliases_by_path[COMMON_DIRECTORY + name]) == 1:
                         alias = aliases_by_path[COMMON_DIRECTORY + name][0]
                         row = by_key[(alias["target_path"], alias["catalogue_layer_diff_id"])]
                         add(row, "copyright_common_licence_alias_reference")

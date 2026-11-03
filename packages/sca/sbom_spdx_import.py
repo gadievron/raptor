@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections import deque
 from datetime import datetime
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, overload
 
 from .distro import has_source_coordinates
 from .ecosystems import distro_base
@@ -37,6 +37,14 @@ def _objects(data: dict, field: str) -> list[dict]:
     if not isinstance(value, list) or any(not isinstance(v, dict) for v in value):
         raise ValueError(f"SPDX {field} must be an array of objects")
     return value
+
+
+@overload
+def _string_field(data: dict, field: str, *, required: Literal[True] = True) -> str: ...
+
+
+@overload
+def _string_field(data: dict, field: str, *, required: Literal[False]) -> str | None: ...
 
 
 def _string_field(data: dict, field: str, *, required: bool = True) -> str | None:
@@ -235,7 +243,9 @@ def _read_spdx(data: dict, path: Path) -> ImportedBom:
         gaps.append("custom SPDX licence definitions are retained; policy matches LicenseRef identifiers without interpreting their text")
     if files or snippets:
         gaps.append("SPDX files and snippets are retained; vulnerability matching and licence policy cover package declarations only")
-    deps, inventory, refs = [], [], {}
+    deps: list[Dependency] = []
+    inventory: list[Dependency] = []
+    refs: dict[str, list[str]] = {}
     for package in packages:
         name = _string_field(package, "name")
         version = _string_field(package, "versionInfo", required=False)
@@ -248,18 +258,18 @@ def _read_spdx(data: dict, path: Path) -> ImportedBom:
         if conclusion not in {None, "NONE", "NOASSERTION", declared}:
             gaps.append(f"package {name}: distinct concluded licence retained; policy evaluates the declared licence only")
         purls = set()
-        for ref in _objects(package, "externalRefs"):
-            _string_field(ref, "referenceCategory")
-            kind = _string_field(ref, "referenceType")
-            locator = _string_field(ref, "referenceLocator")
+        for external_ref in _objects(package, "externalRefs"):
+            _string_field(external_ref, "referenceCategory")
+            kind = _string_field(external_ref, "referenceType")
+            locator = _string_field(external_ref, "referenceLocator")
             if kind in {"purl", "http://spdx.org/rdf/references/purl", "https://spdx.org/rdf/references/purl"}:
-                if ref["referenceCategory"] != "PACKAGE-MANAGER":
+                if external_ref["referenceCategory"] != "PACKAGE-MANAGER":
                     raise ValueError("SPDX purl must use PACKAGE-MANAGER referenceCategory")
                 purls.add(locator)
         if len(purls) > 1:
             raise ValueError("ambiguous SPDX package: multiple distinct purls")
         purl = next(iter(purls), "")
-        comp = {"name": name, "purl": purl}
+        comp: dict[str, object] = {"name": name, "purl": purl}
         if version is not None:
             comp["version"] = version
         if declaration:

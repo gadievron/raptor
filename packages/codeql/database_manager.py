@@ -20,6 +20,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import TypedDict
 
 # Path setup for direct CLI invocation. `os.environ["RAPTOR_DIR"]`
 # (no fallback) is the canonical project root marker — see CLAUDE.md
@@ -32,6 +33,14 @@ from core.build.build_detector import BuildSystem
 from core.config import RaptorConfig
 from core.git import get_safe_git_env
 from packages.codeql.temp_env import temporary_command
+
+
+class _BuildPolicy(TypedDict, total=False):
+    require_fresh_procfs: bool
+    omit_proc_reads: bool
+    restrict_reads: bool
+    fake_home: bool
+    writable_paths: list[str]
 
 # Per-invocation git overrides for target-repo invocations.
 # See `core.git.clone.safe_git_command` for the threat model
@@ -1775,7 +1784,7 @@ class DatabaseManager:
             # Buildless extraction never executes repository build logic and keeps
             # its existing parser policy. In particular, do not pass False there:
             # a present fresh-procfs argument itself marks an untrusted call.
-            build_policy = {}
+            build_policy: _BuildPolicy = {}
             if executes_build:
                 from core.sandbox.context import untrusted_fresh_procfs_required
                 from core.sandbox.python_paths import _home_roots, python_runtime_tool_paths

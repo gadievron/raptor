@@ -775,10 +775,10 @@ class CodeQLAgent:
             # "is IRIS subsumed by --threat-model=local?" question.
             if RaptorConfig.CODEQL_OFFLINE:
                 for label, results in (('IRIS', iris_results), ('curated', curated_results)):
-                    for language, result in results.items():
-                        if not result.success:
+                    for language, query_result in results.items():
+                        if not query_result.success:
                             errors.append(f'Offline {label} analysis failed for {language}')
-                            errors.extend(result.errors)
+                            errors.extend(query_result.errors)
 
             threat_model_overlap = None
             if self.query_runner.active_threat_models():

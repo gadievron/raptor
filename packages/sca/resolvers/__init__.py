@@ -66,7 +66,7 @@ import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, TypedDict
 from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
@@ -219,6 +219,19 @@ def _check_tool(cmd: list, *, timeout: int = 5) -> bool:
     return result
 
 
+class _ResolverRunOptions(TypedDict):
+    cwd: str
+    capture_output: bool
+    text: bool
+    timeout: int
+    env: dict | None
+    caller_label: str
+    target: str
+    output: str
+    restrict_reads: bool
+    fake_home: bool
+
+
 def _run(
     cmd: list,
     cwd: Path,
@@ -272,7 +285,7 @@ def _run(
         # ``ensurepip``), pass ``block_network=True`` and skip the proxy
         # entirely — the sandbox refuses ``use_egress_proxy=True`` with an
         # empty allowlist, and we don't want network anyway.
-        sandbox_kwargs = {
+        sandbox_kwargs: _ResolverRunOptions = {
             "cwd": str(cwd),
             "capture_output": True,
             "text": True,

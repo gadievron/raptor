@@ -1240,7 +1240,7 @@ def _describe_vuln(f: VulnFinding) -> str:
     ]
     query = f.advisory_package
     if query and (query["name"], query["version"]) != (f.dependency.name, f.dependency.version):
-        parts.append(f"[source package {sanitise_string(query['name'])}@{sanitise_string(query['version'] or '*')}; fix versions refer to the source package]")
+        parts.append(f"[source package {sanitise_string(query['name'] or '')}@{sanitise_string(query['version'] or '*')}; fix versions refer to the source package]")
     if primary.aliases:
         parts.append(f"({', '.join(primary.aliases[:3])})")
     if f.in_kev:

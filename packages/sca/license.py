@@ -612,7 +612,7 @@ def _unknown_finding(
     reason = ("SPDX package has no usable declared licence" if spdx_input
               else "declared_license is None after enrichment")
     detail = (f"SPDX licenseDeclared is {dep.source_extra['spdx_license_declared']!r}"
-              if spdx_input else "registry returned no SPDX field")
+              if dep.source_extra is not None and spdx_input else "registry returned no SPDX field")
     return LicenseFinding(
         finding_id=_finding_id(dep, "license_unknown"),
         kind="license_unknown",

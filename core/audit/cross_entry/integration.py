@@ -43,7 +43,7 @@ def collect_sources(target: Path, report_files: Iterable[str], limits: Limits, *
             priority.append(path)
     if target.is_file():
         priority.insert(0,target)
-    sources = {}
+    sources: dict[str, str] = {}
     seen = set()
     used = 0
     start = time.monotonic()
@@ -142,13 +142,13 @@ def collect_sources(target: Path, report_files: Iterable[str], limits: Limits, *
         except OSError:
             coverage["skipped"].append({"file":str(folder),"reason":"unreadable_directory"})
     headers(list(sources),recursive=True,cap=limits.max_files)
-    for folder, dirs, files in os.walk(root,followlinks=False):
-        dirs[:] = sorted(d for d in dirs if not d.startswith(".") and not (Path(folder)/d).is_symlink())
+    for walk_folder, dirs, files in os.walk(root,followlinks=False):
+        dirs[:] = sorted(d for d in dirs if not d.startswith(".") and not (Path(walk_folder)/d).is_symlink())
         if len(sources) >= limits.max_files or time.monotonic()-start >= limits.scan_seconds:
             coverage["truncated"].append("unscanned_subtrees")
             break
         for name in sorted(files):
-            if not add(Path(folder)/name):
+            if not add(Path(walk_folder)/name):
                 break
     coverage["truncated"] = sorted(set(coverage["truncated"]))
     coverage["complete"] = not coverage["skipped"] and not coverage["truncated"]

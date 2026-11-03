@@ -45,6 +45,8 @@ def _term(value) -> str:
     import importlib.util
     path = Path(__file__).resolve().parents[1] / 'security/log_sanitisation.py'
     spec = importlib.util.spec_from_file_location('raptor_install_terminal', path)
+    if spec is None or spec.loader is None:
+        raise ImportError('cannot load installation terminal sanitizer')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.sanitise_for_terminal(str(value))
@@ -172,7 +174,7 @@ def setup_mounts(grants: list[tuple[Path, int]], nodes: list[tuple[str, int]],
         return not max(parents, key=lambda item: len(item[0].parts))[1]
     # Never rebind an original writable descriptor beneath sealed code: that
     # would reopen a hole in the read-only subtree merely to pin a name.
-    operations = [(path, node, None) for path, node in bindings if needs_binding(path)]
+    operations: list[tuple[Path, int | None, bool | None]] = [(path, node, None) for path, node in bindings if needs_binding(path)]
     # Private shm parent names must also be pinned, but cannot use host /dev.
     for path, _ in readonly:
         if Path('/dev/shm') in path.parents:

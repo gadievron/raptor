@@ -312,8 +312,8 @@ def _vuln_card(f: VulnFinding) -> str:
     ]
     query = f.advisory_package
     source_fix = bool(query and (query["name"], query["version"]) != (dep.name, dep.version))
-    if source_fix:
-        parts.append(f" [source {sanitise_string(escape(query['name']))} {sanitise_string(escape(query['version'] or '*'))}]")
+    if query is not None and source_fix:
+        parts.append(f" [source {sanitise_string(escape(query['name'] or ''))} {sanitise_string(escape(query['version'] or '*'))}]")
     if f.fixed_version:
         fix_label = "source fix" if source_fix else "fix"
         parts.append(
