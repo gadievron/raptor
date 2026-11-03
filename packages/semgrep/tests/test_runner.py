@@ -272,15 +272,23 @@ class TestRunRuleMocked:
         assert not result.ok
 
     @pytest.mark.parametrize("root_level", ["WARNING", "ERROR", "CRITICAL"])
-    def test_below_floor_warns_and_omits_scope_flag(self, tmp_path, caplog, root_level):
+    @pytest.mark.parametrize("root_capture", [True, False])
+    def test_below_floor_warns_and_omits_scope_flag(self, tmp_path, caplog, root_level,
+                                                  root_capture):
         import logging
+        from packages.semgrep import runner as semgrep_runner
+
+        # CLI tests can replace root handlers or change propagation. Capture
+        # this unit's real records directly through a fresh, unregistered logger.
+        capture_logger = logging.Logger(semgrep_runner.logger.name, logging.WARNING)
+        capture_logger.addHandler(caplog.handler)
         target = tmp_path / "src"
         target.mkdir()
         json_output = _make_json_output(scanned=["src/a.py"])
-        with patch("packages.semgrep.runner.is_available", return_value=True), \
-             patch("packages.semgrep.runner.scope_isolation_available",
-                   return_value=False), \
-             patch("packages.semgrep.runner.version", return_value="1.79.0"), \
+        with patch.object(semgrep_runner, "is_available", return_value=True), \
+             patch.object(semgrep_runner, "scope_isolation_available", return_value=False), \
+             patch.object(semgrep_runner, "version", return_value="1.79.0"), \
+             patch.object(semgrep_runner, "logger", capture_logger), \
              patch("subprocess.run") as mock_run:
             def side_effect(cmd, **kwargs):
                 assert "--x-ignore-semgrepignore-files" not in cmd
@@ -290,12 +298,16 @@ class TestRunRuleMocked:
                 return MagicMock(stdout=_make_sarif(count=0), stderr="",
                                 returncode=0)
             mock_run.side_effect = side_effect
-            with caplog.at_level(getattr(logging, root_level)), \
-                 caplog.at_level(logging.WARNING, logger="packages.semgrep.runner"):
-                result = run_rule(target, "p/x", unsandboxed=True)
+            root = logging.getLogger()
+            handlers = [handler for handler in root.handlers
+                        if root_capture or handler is not caplog.handler]
+            with patch.object(root, "handlers", handlers), \
+                 caplog.at_level(getattr(logging, root_level)), \
+                 caplog.at_level(logging.WARNING, logger=capture_logger.name):
+                result = semgrep_runner.run_rule(target, "p/x", unsandboxed=True)
         assert result.ok
-        assert any(r.name == "packages.semgrep.runner" and "semgrepignore" in r.message
-                   for r in caplog.records)
+        assert len([r for r in caplog.records
+                    if r.name == capture_logger.name and "semgrepignore" in r.message]) == 1
 
     def test_run_basic(self, tmp_path):
         target = tmp_path / "src"
