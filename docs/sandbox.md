@@ -524,6 +524,22 @@ refusal is reported as a sandbox error, rather than an empty analysis result.
 For a toolchain installed outside standard locations, use `--sandbox-tool-path`
 to declare any additional runtime directories it needs.
 
+### Gadget parser runtimes
+
+ROPgadget and one_gadget use the same restricted inspection workspace and
+untrusted sandbox floor as binutils. Python launcher dependencies are declared
+without running the launcher. Ruby queries its own runtime inside the sandbox,
+without the target directory or account configuration, before one_gadget runs.
+
+User-installed gems remain usable through read-only grants for gem code,
+specifications and extensions. A gem root can be anywhere: standard RubyGems
+locations, conventional user directories and roots adjacent to the launcher are
+discovered automatically. For a custom `GEM_HOME`, RVM installation or trusted
+Bundler gem directory, declare the gem root with `--sandbox-tool-path /path/to/gems`.
+Ambient `GEM_HOME`/`GEM_PATH`, `.gemrc` and target Bundler files do not widen the
+sandbox. Unsupported launcher shims may also need explicit interpreter/runtime
+paths; failures do not fall back to unrestricted execution.
+
 ### Request-line parser jail
 
 The proxy never interprets a client's raw request-line bytes in its

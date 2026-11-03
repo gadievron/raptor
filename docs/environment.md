@@ -958,6 +958,8 @@ the JVM-installer caveat.
 | `GOPATH`, `GOCACHE`, `TMPDIR` | Redirected by RAPTOR into per-run scratch space when spawning build/tool children (Go builds in cvefix/dark-verify, the run-scoped `TMPDIR` in `core.run.scratch`) so untrusted builds cannot write into the operator's real caches. |
 | `CARGO_HOME` | Honoured (with the standard `~/.cargo` default) when locating the Rust toolchain for corpus builds; also on the dangerous-env scan list for target-repo settings. |
 | `DOCKER_CONFIG` | Honoured when locating registry credentials for OCI auth (`core.oci.auth`), standard `~/.docker` default. |
+| `GEM_HOME` | Sandboxed Ruby inspection uses a private directory under its disposable HOME. Ambient overrides are not inherited. |
+| `GEM_PATH` | Sandboxed Ruby inspection supplies discovered tool-library roots. Declare a custom gem root with `--sandbox-tool-path`; target settings and ambient overrides cannot widen these reads. |
 | `JAVA_HOME` | JDK home used when resolving Java tools. RAPTOR passes the selected JDK home explicitly to JVM children such as Jazzer and Joern; target-repository settings cannot supply this executable-search override. |
 | `GRADLE_USER_HOME` | Gradle configuration and cache home, including init scripts and repository settings. Jazzer uses a per-run Gradle home; SCA resolution consults Gradle configuration/cache metadata. |
 | `RUSTUP_HOME` | Rust toolchain home (normally `~/.rustup`). Toolchain discovery resolves it and passes the selected home explicitly to Rust build children. |
