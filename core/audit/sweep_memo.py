@@ -55,6 +55,7 @@ import hashlib
 import logging
 import threading
 from collections import OrderedDict
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable
 
@@ -108,8 +109,49 @@ class SweepMemo:
         self._lock = threading.Lock()
         self._entries: OrderedDict[tuple, Any] = OrderedDict()
         self._max_entries = max_entries
+        # Completion events live only while the leading operation runs;
+        # waiters retain their own references, independent of LRU eviction.
+        self._flights: dict[tuple, threading.Event] = {}
+        self._active = threading.local()
         self.hits = 0
         self.misses = 0
+        # Waits, not saved executions: an uncacheable leader wakes callers
+        # to retry independently. This counter includes those waits too.
+        self.waits = 0
+
+    @contextmanager
+    def key_guard(self, key: tuple | None):
+        """Join top-level work for one key, never unrelated keys.
+
+        Followers recheck the memo after completion. If the result was
+        uncacheable, they retry independently in parallel rather than
+        queuing a whole wave of tool timeouts serially. Nested memo
+        operations bypass the guard to avoid A→B/B→A dependency cycles.
+        """
+        if key is None or getattr(self._active, "running", False):
+            yield
+            return
+        with self._lock:
+            completed = self._flights.get(key)
+            leader = completed is None
+            if leader:
+                completed = threading.Event()
+                self._flights[key] = completed
+            else:
+                self.waits += 1
+        try:
+            if not leader:
+                completed.wait()
+            self._active.running = True
+            try:
+                yield
+            finally:
+                self._active.running = False
+        finally:
+            if leader:
+                with self._lock:
+                    del self._flights[key]
+                    completed.set()
 
     @staticmethod
     def make_key(
@@ -174,19 +216,20 @@ class SweepMemo:
     ) -> Any:
         """The cached result for *key*, else ``runner()`` (cached).
 
-        A ``None`` key always runs unmemoized.  The runner executes
-        outside the lock, so concurrent first dispatches of the same
-        key may both run — a benign duplication; last store wins.
+        A ``None`` key always runs unmemoized. Concurrent first dispatches
+        for the same key share a cacheable result. Uncacheable results
+        and raised exceptions retain the independent retry behaviour.
         """
         if key is None:
             return runner()
-        cached = self.get(key)
-        if cached is not None:
-            logger.debug(
-                "sweep_memo hit: %s (%d hits / %d misses)",
-                key[0], self.hits, self.misses,
-            )
-            return cached
-        result = runner()
-        self.put(key, result)
-        return result
+        with self.key_guard(key):
+            cached = self.get(key)
+            if cached is not None:
+                logger.debug(
+                    "sweep_memo hit: %s (%d hits / %d misses)",
+                    key[0], self.hits, self.misses,
+                )
+                return cached
+            result = runner()
+            self.put(key, result)
+            return result
