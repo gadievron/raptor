@@ -244,10 +244,19 @@ class TestExecuteWiring(unittest.TestCase):
                     stats=LibFuzzerStats(total_executions=42),
                 )
 
+        def generate_corpus(directory, *, max_seeds):
+            # Seed inspection belongs to corpus-generator tests; this wiring
+            # test must not invoke host binutils over the dummy package.
+            directory.mkdir(parents=True)
+            (directory / "owned-seed").write_bytes(b"fixture")
+            return 1
+
         with patch("packages.fuzzing.atheris_runner.AtherisRunner",
                    FakeRunner), \
              patch("packages.fuzzing.orchestrator.probe_capabilities",
-                   return_value=_caps()):
+                   return_value=_caps()), \
+             patch("packages.autonomous.corpus_generator.CorpusGenerator.generate_autonomous_corpus",
+                   side_effect=generate_corpus) as generate:
             orch = FuzzingOrchestrator()
             result = orch.execute(
                 plan,
@@ -256,6 +265,10 @@ class TestExecuteWiring(unittest.TestCase):
                 corpus_dir=None,
             )
 
+        generated = out_dir / "generated-corpus"
+        generate.assert_called_once_with(generated, max_seeds=64)
+        self.assertEqual(seen["kwargs"]["corpus_dir"], generated)
+        self.assertEqual((generated / "owned-seed").read_bytes(), b"fixture")
         self.assertEqual(result["fuzzer"], "atheris")
         self.assertFalse(result["campaign_failed"])
         self.assertEqual(result["crashes"], 0)
