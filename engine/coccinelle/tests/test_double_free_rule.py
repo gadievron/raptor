@@ -35,6 +35,7 @@ def _run_rule(tmp_path: Path, source: str) -> list[dict]:
         ["spatch", "--sp-file", str(_RULE), str(src), "--no-show-diff"],
         capture_output=True, text=True, timeout=120,
     )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
     results = []
     for stream in (proc.stdout, proc.stderr):
         for line in stream.splitlines():
@@ -163,3 +164,32 @@ class TestNegatives:
             }
         """)
         assert results == []
+
+
+@pytest.mark.parametrize(("body", "fires"), [
+    ("if (flag) { kfree(p); p = kmalloc(16, 0); } kfree(p);", False),
+    ("if (flag) { kfree(p); p = q; } kfree(p);", False),
+    ("if (flag) { kfree(p); p = 0; } kfree(p);", False),
+    ("if (flag) { if (other) { kfree(p); p = q; } } kfree(p);", False),
+    ("if (flag) { kfree(p); goto out; } kfree(p); out: return;", False),
+    ("if (flag) { kfree(p); } else { kfree(p); }", False),
+    ("while (flag--) { if (other) { kfree(p); p = q; } kfree(p); p = 0; }", False),
+    ("while (flag--) { if (other) { kfree(p); p = kmalloc(16, 0); if (!p) goto fail; } if (flag) { kfree(p); p = 0; } } kfree(p); return; fail: kfree(p);", False),
+    ("if (flag) { if (other) { kfree(p); } } kfree(p);", True),
+    ("if (flag) { kfree(p); log_it(); } kfree(p);", True),
+    ("if (flag) { kfree(p); if (other) p = q; } kfree(p);", True),
+    ("while (flag--) { kfree(p); if (other) kfree(p); }", True),
+    ("kfree(p); while (flag--) { kfree(p); }", True),
+    ("if (flag) { kfree(p); goto fail; } return; fail: kfree(p);", True),
+    ("if (flag) { kvfree(p); } kvfree(p);", True),
+    ("if (flag) { free(p); } free(p);", True),
+])
+def test_branch_and_loop_paths(tmp_path, body, fires):
+    results = _run_rule(tmp_path, "void sample(char *p, char *q, int flag, int other) { " + body + " }\n")
+    assert bool(results) is fires
+
+
+def test_single_free_site_loop_remains_a_documented_miss(tmp_path):
+    # A repeated execution of one free site is not distinguished from a
+    # reflexive position pairing. Do not turn every single free into an alert.
+    assert _run_rule(tmp_path, "void sample(char *p, int count) { while (count--) { kfree(p); } }\n") == []
