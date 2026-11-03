@@ -797,6 +797,11 @@ class TestOrchestratedRunBinding:
         from core.audit import orchestrator as orch
         monkeypatch.setattr(orch, "_run_mechanical_detectors",
                             lambda *a, **k: ({}, set()))
+        from core.llm.client import LLMClient
+        monkeypatch.setattr(
+            LLMClient, "generate",
+            lambda *a, **k: pytest.fail("scorecard binding must remain LLM-free"),
+        )
 
     @staticmethod
     def _setup_target(tmp_path: Path):
@@ -852,6 +857,9 @@ class TestOrchestratedRunBinding:
             "batch_sloc_threshold": 0,
             "prefilter": False,
             "validate": False,
+            # Discovery performs independent model reviews, outside the
+            # injected review callback exercised by these binding checks.
+            "open_discovery": False,
             "joern_overrides": {"enabled": False},
         }
         defaults.update(kw)
