@@ -648,7 +648,7 @@
     "reviewed": "2026-10-31"
   },
   "core/audit/evidence_grade.py::PIPELINE_OWNED_REVIEW_KEYS": {
-    "count": 65,
+    "count": 70,
     "kind": "literal",
     "note": "closed schema-key manifest: the review_result keys only pipeline code may set (machine flags, receipts, stage records, panel identity/accounting); the review and edge-review parse boundaries drop them from model output so a model cannot mint a machine signal by emitting the key; kept in lockstep with the code by the same closure test \u2014 persistence/schema keys, not a learned name vocabulary",
     "reviewed": "2026-10-31"
@@ -864,7 +864,7 @@
     "note": "framework-internal channel-name registry for the refuted-hypothesis cheap re-verification lane (not target API names); grew to 10 when the five-channel programme's resource_bounds/release_order/protocol_state joined"
   },
   "core/audit/orchestrator.py::_compute_audit_prep": {
-    "count": 61,
+    "count": 63,
     "kind": "literal",
     "note": "prep-result dict keys (channel artifacts join here as they land; not a function-name vocabulary)"
   },
@@ -1057,7 +1057,7 @@
     "note": "framework-internal enum/namespace vocabulary (not target API names)"
   },
   "core/audit/sandbox_policy.py::_LLM_PHASES": {
-    "count": 66,
+    "count": 67,
     "kind": "literal",
     "note": "Closed cost-ledger phase identifiers for the advisory sandbox-policy validator. Includes prep_edge_pass, an orchestrator-owned ledger phase, alongside iris_refinement_skipped; these are framework LLM spend classes, not learned target API names.",
     "reviewed": "2026-11-01"
@@ -1282,7 +1282,7 @@
     "note": "subprocess env allowlist (infrastructure env-var names, not a learned name vocabulary); grew by the RAPTOR_SANITIZER_CUT* transport family"
   },
   "core/config/__init__.py::TARGET_ENV_STRIP_SET": {
-    "count": 20,
+    "count": 21,
     "kind": "literal",
     "note": "Closed target-environment security policy: trust/session markers, framework identity and sanitizer-cut transport names. Includes RAPTOR_REGISTRY_HOME, _RAPTOR_LAUNCH_METADATA and RAPTOR_LLM_TRANSCRIPT, which must not leak operator paths or framework identity to targets; these are infrastructure variables, not learned target vocabulary.",
     "reviewed": "2026-11-01"
@@ -1291,11 +1291,6 @@
     "count": 11,
     "kind": "literal",
     "note": "tool-dependency registry keys (doctor/banner); crossed the seed threshold when the perl entry (perlasm generated-asm inventory) was added - not a name vocabulary"
-  },
-  "core/config/__init__.py::_LLM_AGGREGATOR_KEYS": {
-    "count": 14,
-    "kind": "literal",
-    "note": "aggregator/routing provider API-key env vars splatted into LLM_API_KEY_VARS (infrastructure constants, not a learnable name vocabulary)"
   },
   "core/container/compose.py::_BUILD_ALLOWED_KEYS": {
     "count": 10,
@@ -1323,7 +1318,7 @@
     "note": "closed record schema, not a name vocabulary: the checkpoint hysteresis state record written to the run dir (the exact fields _load_state validates on read; the two sides must stay in lockstep)"
   },
   "core/coverage/journal_mac.py::_GENERATION_VOCABULARY": {
-    "count": 53,
+    "count": 55,
     "kind": "literal",
     "note": "shipped-generation schema manifest for the journal-row MAC verifier: the enumerated extra-key vocabulary each provenance generation is allowed to carry (covered-additive-field invariant - a row with keys outside its generation's set never verifies via the raw form); persistence schema keys in lockstep with the row writers, not a learned name vocabulary"
   },
@@ -1574,6 +1569,12 @@
     "count": 10,
     "kind": "literal"
   },
+  "core/llm/__init__.py::_LAZY_EXPORTS": {
+    "count": 25,
+    "kind": "literal",
+    "note": "Python-owned public export dispatch map for lazy package imports; module and attribute names are package infrastructure, not learned target API vocabulary.",
+    "reviewed": "2026-11-03"
+  },
   "core/llm/cc_proxy_hosts.py::_PROVIDER_ENV_KEYS": {
     "count": 10,
     "kind": "literal",
@@ -1594,12 +1595,14 @@
     "note": "allowlist of RAPTOR's own run-lifecycle command names that hold LLM quota mid-run (the sibling-observation classifier; includes forward-compat members that cannot occur on the ledger yet \u2014 rationale inline), not a learned name vocabulary; same class as core/run/provenance.py::_DETERMINISTIC_COMMANDS"
   },
   "core/llm/dispatcher/auth.py::__init__": {
-    "count": 24,
+    "count": 11,
     "kind": "literal"
   },
-  "core/llm/dispatcher/auth.py::build_rules": {
-    "count": 20,
-    "kind": "literal"
+  "core/llm/model_brokers/__init__.py::NATIVE_PROVIDER_NAMES": {
+    "count": 24,
+    "kind": "literal",
+    "note": "Python-owned reserved native-provider namespace and aliases; prevents broker registry data from overriding native providers or borrowing their credentials. Security boundary constants, not learned target vocabulary; must remain independent of registry data.",
+    "reviewed": "2026-11-03"
   },
   "core/llm/providers.py::_TRANSPORT_EXC_MODULE_ROOTS": {
     "count": 10,
@@ -2109,15 +2112,15 @@
     "note": "closed tuning-key registry: maps the /tune config keys that accept \"auto\" to their host-detection resolvers \u2014 RAPTOR's own operator-facing configuration surface, the same closed taxonomy as the sibling _DEFAULTS/_KEY_COMMENTS/_VALID_KEYS entries, not a learned name vocabulary"
   },
   "core/tuning/__init__.py::_DEFAULTS": {
-    "count": 15,
+    "count": 17,
     "kind": "literal"
   },
   "core/tuning/__init__.py::_KEY_COMMENTS": {
-    "count": 18,
+    "count": 20,
     "kind": "literal"
   },
   "core/tuning/__init__.py::_VALID_KEYS": {
-    "count": 18,
+    "count": 21,
     "kind": "literal"
   },
   "core/understand_graph/queries.py::_DANGEROUS": {
@@ -2142,7 +2145,7 @@
     "reviewed": "2026-11-01"
   },
   "libexec/raptor-audit::_run_config_from_args": {
-    "count": 47,
+    "count": 57,
     "kind": "literal",
     "note": "serialised run-option field names for audit-run-config.json (same-run resume contract) - CLI flag surface, not a name vocabulary"
   },
@@ -2167,7 +2170,7 @@
     "kind": "literal"
   },
   "libexec/raptor-seatbelt-shim::_strip": {
-    "count": 22,
+    "count": 23,
     "kind": "literal",
     "note": "Closed macOS target-environment security policy mirroring core.config.TARGET_ENV_STRIP_SET, plus the private status/death FD variables. Includes the registry, launch-metadata and LLM-transcript names; infrastructure/security identifiers, not learned target vocabulary.",
     "reviewed": "2026-11-01"
@@ -2423,8 +2426,8 @@
     "kind": "literal"
   },
   "packages/codeql/finding_selection.py::_duplicate_key": {
-    "kind": "literal",
     "count": 12,
+    "kind": "literal",
     "note": "SARIF run schema fields whose tables and source provenance give meaning to result references during cross-pass deduplication (URI bases, artifacts, logical locations, addresses, special locations, taxonomies, graphs, thread-flow locations, web requests/responses, external-property references, and version-control provenance). These fixed interchange-format keys preserve distinct evidence contexts; they are not target function names or a learned API vocabulary. Shared context is hashed once per run.",
     "reviewed": "2026-10-31"
   },
@@ -3030,7 +3033,7 @@
     "kind": "literal"
   },
   "packages/sca/registries/npm.py::_NPM_VERSION_STRIP_FIELDS": {
-    "count": 17,
+    "count": 16,
     "kind": "literal"
   },
   "packages/sca/registries/pypi.py::_PYPI_INFO_STRIP_FIELDS": {
