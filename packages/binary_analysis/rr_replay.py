@@ -78,7 +78,10 @@ def replay(trace_dir=None, *, commands: bytes | None = None, timeout=60):
         # successful evidence merely because GDB handled remote EOF cleanly.
         if commands is not None and result.returncode == 0:
             stderr = result.stderr or b''
-            marker = b'[FATAL ' if isinstance(stderr, bytes) else '[FATAL '
-            if any(line.startswith(marker) for line in stderr.splitlines()):
+            if isinstance(stderr, bytes):
+                fatal = any(line.startswith(b'[FATAL ') for line in stderr.splitlines())
+            else:
+                fatal = any(line.startswith('[FATAL ') for line in stderr.splitlines())
+            if fatal:
                 result.returncode = 1
         return result

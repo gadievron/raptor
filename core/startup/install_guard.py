@@ -57,6 +57,8 @@ def _term(value) -> str:
     import importlib.util
     path = Path(__file__).resolve().parents[1] / 'security/log_sanitisation.py'
     spec = importlib.util.spec_from_file_location('raptor_install_terminal', path)
+    if spec is None or spec.loader is None:
+        raise ProtectionError('cannot load installation security module')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.sanitise_for_terminal(str(value))
@@ -145,7 +147,7 @@ def audit_protected_paths(paths: list[Path], *, exclude_output: bool = True, fol
     pending = []
     seen_directories = set()
     output = str(installation_output()) if exclude_output else ""
-    stdio = {}
+    stdio: dict[tuple[int, int], list[int]] = {}
     for descriptor in (0, 1, 2):
         try:
             info = os.fstat(descriptor)
@@ -634,6 +636,8 @@ def native_namespace():
     # helpers from cwd, target paths or PATH, and never invoke an external runner.
     path = Path(__file__).with_name("_install_namespace.py")
     spec = importlib.util.spec_from_file_location("raptor_install_namespace", path)
+    if spec is None or spec.loader is None:
+        raise ProtectionError('cannot load installation security module')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -642,6 +646,8 @@ def native_namespace():
 def scratch_metadata():
     path = ROOT / 'core/security/launch_scratch.py'
     spec = importlib.util.spec_from_file_location('raptor_launch_scratch', path)
+    if spec is None or spec.loader is None:
+        raise ProtectionError('cannot load installation security module')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -659,6 +665,8 @@ def enter_frontend(command: list[str]) -> None:
 def _security_module(name: str):
     path = ROOT / 'core/security' / (name + '.py')
     spec = importlib.util.spec_from_file_location('raptor_guard_' + name, path)
+    if spec is None or spec.loader is None:
+        raise ProtectionError('cannot load installation security module')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -764,9 +772,9 @@ def main() -> int:
             for path in sorted(code_seals, key=str):
                 readonly.append((path, open_grant(path, [])))
             context = None
-            metadata = os.environ.get('_RAPTOR_LAUNCH_METADATA')
-            if metadata:
-                metadata = Path(metadata)
+            metadata_value = os.environ.get('_RAPTOR_LAUNCH_METADATA')
+            if metadata_value:
+                metadata = Path(metadata_value)
                 expected = scratch_metadata().read(metadata, require_sealed=False, require_protected=True)
                 if expected != os.environ.get('TMPDIR'):
                     raise ProtectionError('scratch grant differs from launcher metadata')

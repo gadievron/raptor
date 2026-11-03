@@ -82,7 +82,7 @@ def declaration_from_metadata(artifact: dict, files: list[dict], blobs: dict[str
     value = (expressions or legacy or [""])[0].strip()
     if expressions or value and value.upper() not in {"UNKNOWN", "NOASSERTION"}:
         try:
-            expression = canonicalize_license_expression(value)
+            expression: str = canonicalize_license_expression(value)
         except InvalidLicenseExpression:
             return None
         if "LicenseRef-" in expression:
@@ -173,6 +173,8 @@ def recover_distribution_license(artifact: dict, files: list[dict], blobs: dict[
     if reviewed is None:
         return None
     context = _metadata_context(artifact, files, blobs)
+    if context is None:
+        return None
     _, headers = context
     values = headers.get_all('License-Expression', []) + headers.get_all('License', [])
     if len(headers.get_all('License-Expression', [])) > 1 or len(headers.get_all('License', [])) > 1:

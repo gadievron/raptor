@@ -47,7 +47,7 @@ class Catalogue:
             CREATE INDEX IF NOT EXISTS terms_path ON terms(path);
             CREATE TABLE IF NOT EXISTS exclusions(path TEXT PRIMARY KEY,reason TEXT);
         """)
-        self.changed = set()
+        self.changed: set[str] = set()
 
     def close(self):
         self.db.close()

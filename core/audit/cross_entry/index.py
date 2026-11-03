@@ -277,12 +277,12 @@ def build_access_index(source_texts: dict[str, str], *, limits: Limits | None = 
                 continue
             fid = f"{fp}:{name}@{fn.start_byte}"
             visible_globals = []
-            for header,b in header_globals:
+            for header,header_binding in header_globals:
                 if header not in types.visible[fp] or header == fp:
                     continue
-                bid = b.id if b.id.startswith("global:external:") else f"{b.id}:tu:{fp}"
-                visible_globals.append(Binding(b.name,bid,b.type_id,b.resolution,0,0,len(src),bid,b.indirect))
-                result.declarations[bid] = result.declarations[b.id]
+                bid = header_binding.id if header_binding.id.startswith("global:external:") else f"{header_binding.id}:tu:{fp}"
+                visible_globals.append(Binding(header_binding.name,bid,header_binding.type_id,header_binding.resolution,0,0,len(src),bid,header_binding.indirect))
+                result.declarations[bid] = result.declarations[header_binding.id]
             bindings = visible_globals + globals_by_file[fp] + _bindings(fn, fid, fp, src, types)
             body = text(fn, src)
             params = [b.name for b in bindings if b.origin.startswith("parameter:")]
@@ -372,9 +372,9 @@ def build_access_index(source_texts: dict[str, str], *, limits: Limits | None = 
     for a in result.accesses:
         if not a.rhs:
             continue
-        for b in expressions.get((a.function, a.rhs), []):
-            if b.id != a.id:
-                result.relations.append(Relation(a.type_id+":"+a.member_path,b.type_id+":"+b.member_path,
+        for rhs_access in expressions.get((a.function, a.rhs), []):
+            if rhs_access.id != a.id:
+                result.relations.append(Relation(a.type_id+":"+a.member_path,rhs_access.type_id+":"+rhs_access.member_path,
                                                  "resource_assignment",a.id))
     result.coverage["truncated"] = sorted(set(result.coverage["truncated"]))
     for typ in sorted({a.type_id for a in result.accesses if a.resolution != "resolved"}):

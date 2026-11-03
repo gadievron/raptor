@@ -13,6 +13,7 @@ from copy import deepcopy
 import hashlib
 from pathlib import PurePosixPath
 import re
+from typing import Any
 
 from core.oci.notice_paths import image_path
 
@@ -29,6 +30,8 @@ def _inventory_entries(artifact: dict, kind: str):
         yield from metadata.get('files', [])
         return
     root = metadata.get('sitePackagesRootPath')
+    if not isinstance(root, str):
+        return
     try:
         image_path(root)
     except ValueError:
@@ -82,7 +85,7 @@ def add_owner_context(native: dict, rows: list[dict], blobs: dict[str, bytes],
     captured = {(r['path'], r['catalogue_layer_diff_id']): r for r in rows}
     native_files = {(f['location']['path'], f['location']['layerID']): f for f in native.get('files', [])}
     targets = {}
-    target_paths = set()
+    target_paths: set[str] = set()
     count = 0
     text_count = 0
 
@@ -116,7 +119,7 @@ def add_owner_context(native: dict, rows: list[dict], blobs: dict[str, bytes],
         charge(len(keys))
         targets[record['id']] = sorted(keys, key=lambda k: (k[0], k[1] or ''))
         target_paths.update(path for path, _ in keys)
-    inventories = defaultdict(dict)
+    inventories: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
     for artifact in native['artifacts']:
         if artifact['type'] != owner_kind:
             continue
@@ -141,7 +144,8 @@ def add_owner_context(native: dict, rows: list[dict], blobs: dict[str, bytes],
     statistics = {'packages_with_checksum_matched_notice_context': 0,
                   'packages_with_unresolved_owner_leads': 0, 'ambiguous_locations': 0}
     for identifier, locations in targets.items():
-        linked, unresolved = {}, []
+        linked: dict[str, dict[str, Any]] = {}
+        unresolved: list[dict[str, Any]] = []
         for path, origin in locations:
             owners = inventories.get(path, {})
             if owner_kind == 'python':
@@ -157,6 +161,7 @@ def add_owner_context(native: dict, rows: list[dict], blobs: dict[str, bytes],
                 row, data = verified_files[(path, origin)]
                 match_status = 'verified_image_bytes_match_inventory_checksum'
             if data is not None:
+                assert row is not None
                 charge(0, payload=row['sha256'])
             candidates, matched = [], []
             for owner_id, inventory in sorted(owners.items()):
@@ -198,6 +203,7 @@ def add_owner_context(native: dict, rows: list[dict], blobs: dict[str, bytes],
                                 status = ('catalogue_sha256_matches_python_record' if expected in digests
                                           else 'inventory_checksum_mismatch')
                 else:
+                    assert row is not None
                     cache_key = row['sha256'], algorithm
                     if cache_key not in checksum_cache:
                         # Dpkg MD5/SHA1 values are inventory diagnostics, never
@@ -237,6 +243,7 @@ def add_owner_context(native: dict, rows: list[dict], blobs: dict[str, bytes],
                     if match['verification'] == 'catalogue_sha256_matches_python_record':
                         location.update(catalogue_sha256=match['inventory_digest']['value'], visibility='catalogue_location')
                     else:
+                        assert row is not None
                         location.update(layer_blob_digest=row['layer_blob_digest'], visibility=row['visibility'],
                                         captured_sha256=row['sha256'])
                     context['matched_locations'].append(location)

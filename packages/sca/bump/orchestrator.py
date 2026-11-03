@@ -1008,7 +1008,9 @@ def _enumerate_npm_install_candidates(*, text: str, dockerfile: Path, npm_client
         latest = inline_cache[key]
         if latest is None:
             skipped.append((name, dockerfile, 'npm latest tag missing, unavailable or not a stable exact version'))
-        elif parse_stable(latest) > parse_stable(current):
+        elif ((latest_version := parse_stable(latest)) is not None
+              and (current_version := parse_stable(current)) is not None
+              and latest_version > current_version):
             candidates.append(BumpCandidate(kind='inline_install_npm', locator=name, file=dockerfile,
                 current_version=current, target_version=latest, upstream=UpstreamSource('npm_meta', name),
                 extra={'kind': 'inline_install_npm'}))

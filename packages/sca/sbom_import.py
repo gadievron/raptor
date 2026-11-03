@@ -330,7 +330,7 @@ def _components(data: dict) -> list[dict]:
     if not isinstance(root_children, list):
         raise ValueError("CycloneDX nested components must be arrays")
     stack = list(reversed(values + root_children))
-    result = []
+    result: list[dict] = []
     while stack:
         comp = stack.pop()
         if not isinstance(comp, dict):
@@ -544,8 +544,8 @@ def _parse_purl(purl: str) -> tuple[str, str, str | None] | None:
     elif type_lc == "rpm" and namespace not in {"", "redhat", "rhel", "centos", "rocky", "almalinux"}:
         return None
     if type_lc == "deb" and distro:
-        release = distro.removeprefix(ecosystem.lower() + "-")
-        ecosystem = release_ecosystem(ecosystem, release) or ecosystem
+        distro_release = distro.removeprefix(ecosystem.lower() + "-")
+        ecosystem = release_ecosystem(ecosystem, distro_release) or ecosystem
     last_at = path_and_version.rfind("@")
     if last_at > 0:
         path = path_and_version[:last_at]

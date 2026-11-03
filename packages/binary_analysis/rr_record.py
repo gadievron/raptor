@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+from typing import IO
 
 from core.config import RaptorConfig
 from core.sandbox import run, run_untrusted, SandboxSetupError
@@ -125,7 +126,7 @@ def _execute_target(workspace, command: list[str], *, input_file=None, cwd=None,
             reads.append(str(path))
     env.pop('RR_TMPDIR', None)
     with ExitStack() as stack:
-        stdin = subprocess.DEVNULL
+        stdin: int | IO[bytes] = subprocess.DEVNULL
         if input_file is not None:
             source = Path(input_file)
             if not source.is_absolute():
@@ -145,7 +146,7 @@ def _execute_target(workspace, command: list[str], *, input_file=None, cwd=None,
             deadline = time.monotonic()+timeout if timeout is not None else None
             result = run([str(binary), 'record', '-o', str(trace), *arguments],
                          profile='rr', **options)
-            result.recording_verified = False
+            setattr(result, "recording_verified", False)
             marker = open_regular_beneath(root, trace.relative_to(root)/'version', 'rb')
             if marker is None:
                 if result.returncode == 0:
@@ -164,7 +165,7 @@ def _execute_target(workspace, command: list[str], *, input_file=None, cwd=None,
                                  else (stderr or b'')+message.encode())
                 result.returncode = 1
             else:
-                result.recording_verified = True
+                setattr(result, "recording_verified", True)
             return result
         if sanitizer:
             # LSan stops its own threads with ptrace. Use the established

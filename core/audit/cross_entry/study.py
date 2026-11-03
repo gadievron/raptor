@@ -179,7 +179,7 @@ def _payload(index: AccessIndex, unit: StudySlice, functions: list[str], limits:
                 "invocation_evidence","parameter_bindings","argument_count_matches","dispatch_path") if k in row})
             if len(dispatch_metadata) >= 32:
                 break
-    metadata = {"consumer":unit.consumer,"entry_paths":unit.entry_paths[:12],
+    metadata: dict[str, Any] = {"consumer":unit.consumer,"entry_paths":unit.entry_paths[:12],
         "omitted_entry_paths":max(0,len(unit.entry_paths)-12),
         "reasons":unit.reasons,"unresolved":unit.unresolved[:16],"truncated":unit.truncated[:16],
         "omitted_truncation_details":max(0,len(unit.truncated)-16),

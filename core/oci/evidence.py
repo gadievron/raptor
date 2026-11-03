@@ -13,6 +13,7 @@ import posixpath
 import re
 from collections.abc import Callable, Iterable
 from pathlib import PurePosixPath
+from typing import TypedDict
 
 from core.oci.blob import UnresolvedLayerHardlinks, extract_files_from_layer
 from core.oci.common_licenses import COMMON_ALIASES, COMMON_DIRECTORY, common_alias_target
@@ -184,6 +185,12 @@ def read_identity_files(catalogue: dict, reader, locations: set[tuple[str, str]]
     return result
 
 
+class _CaptureTarget(TypedDict):
+    roles: set[str]
+    packages: set[str]
+    required: bool
+
+
 def capture(catalogue: dict, reader: Callable[[LayerDescriptor], Iterable[bytes]],
             *, identify: tuple[str, ...] = ()) -> tuple[dict, dict[str, bytes]]:
     """Return evidence and content-addressed notice bytes, only after verification.
@@ -197,7 +204,7 @@ def capture(catalogue: dict, reader: Callable[[LayerDescriptor], Iterable[bytes]
     origins = {row["blob_digest"]: row["config_diff_id"] for row in image["layers"]}
     layer_ids = set(origins.values())
     files = {}
-    targets = {}
+    targets: dict[tuple[str, str], _CaptureTarget] = {}
     package_paths = PackageNoticePaths(catalogue.get("artifacts", []))
     if any(origin not in layer_ids for _, origin in package_paths.directories):
         raise ValueError("package notice directory references an unrelated layer")
@@ -220,10 +227,10 @@ def capture(catalogue: dict, reader: Callable[[LayerDescriptor], Iterable[bytes]
         if key in files:
             raise ValueError("duplicate catalogue file location")
         files[key] = file
-        path = PurePosixPath(key[0])
+        file_path = PurePosixPath(key[0])
         regular = file.get("metadata", {}).get("type") in {None, "RegularFile"}
-        if regular and ((bool(_NOTICE.fullmatch(path.name)) and path.suffix.lower() not in _SOURCE_SUFFIXES)
-                        or str(path).startswith("/usr/share/common-licenses/")):
+        if regular and ((bool(_NOTICE.fullmatch(file_path.name)) and file_path.suffix.lower() not in _SOURCE_SUFFIXES)
+                        or str(file_path).startswith("/usr/share/common-licenses/")):
             target(key, "notice_filename")
 
     # Probe only the three documented common-license aliases, in layers that
@@ -247,10 +254,10 @@ def capture(catalogue: dict, reader: Callable[[LayerDescriptor], Iterable[bytes]
             for loc in artifact.get("locations", []):
                 if PurePosixPath(loc["path"]).name != "package.json":
                     continue
-                path, layer = location(loc)
+                path, layer_id = location(loc)
                 parent = PurePosixPath(path).parent
                 for name in ("LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING", "NOTICE", "README.md"):
-                    target((str(parent / name), layer), "conventional_package_notice_probe", package_id, False)
+                    target((str(parent / name), layer_id), "conventional_package_notice_probe", package_id, False)
     for artifact in catalogue.get('artifacts', []):
         for key in component_notice_paths(artifact):
             target(key, 'component_specific_notice_probe', artifact['id'], False)
@@ -260,9 +267,9 @@ def capture(catalogue: dict, reader: Callable[[LayerDescriptor], Iterable[bytes]
     for key, record in package_paths.records.items():
         for identifier in sorted(record["package_ids"]):
             target(key, "python_record_notice", identifier)
-    for (directory, layer), names in package_paths.pointers.items():
+    for (directory, layer_id), names in package_paths.pointers.items():
         for name in names:
-            target((directory + "/" + name, layer), "declared_notice_pointer", required=False)
+            target((directory + "/" + name, layer_id), "declared_notice_pointer", required=False)
     for path in identify:
         path = _path(path)
         matches = [key for key in files if key[0] == path]
@@ -282,7 +289,7 @@ def capture(catalogue: dict, reader: Callable[[LayerDescriptor], Iterable[bytes]
             continue
         wanted = {path.lstrip("/") for path in selected}
         alias_paths = {COMMON_DIRECTORY + alias for alias in COMMON_ALIASES}
-        symlinks = {}
+        symlinks: dict[str, str] = {}
         # Only common aliases may be observed. Any other selected symlink keeps
         # the normal refusal behavior, including package notice symlinks.
         contents = _selected_layer(reader, layer, wanted, diff_id=origins[layer.digest],

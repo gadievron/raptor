@@ -136,7 +136,8 @@ def _npm_commands(raw: str):
     # Docker comment-only continuation lines are transparent. Keep offsets.
     raw = re.sub(r'(?m)^[ \t]*#[^\n]*', lambda m: ' ' * len(m[0]), raw)
     raw = re.sub(r'\\\r?\n', lambda m: ' ' * len(m[0]), raw)
-    commands, words = [], []
+    commands: list[list[tuple[str | None, int]]] = []
+    words: list[tuple[str | None, int]] = []
     i = 0
     while i < len(raw):
         if raw[i].isspace():
@@ -171,9 +172,8 @@ def _npm_commands(raw: str):
         offset = start
         if len(word) >= 2 and word[0] in "'\"" and word[-1] == word[0]:
             word = word[1:-1]; offset += 1
-        if any(c in word for c in "'\"\\$`"):
-            word = None
-        words.append((word, offset))
+        literal_word = None if any(c in word for c in "'\"\\$`") else word
+        words.append((literal_word, offset))
     commands.append(words)
     return commands
 

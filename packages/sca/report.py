@@ -616,8 +616,8 @@ def _render_one_vuln(
     ]
     query = f.advisory_package
     source_fix = bool(query and (query["name"], query["version"]) != (dep.name, dep.version))
-    if source_fix:
-        head_parts.append(f" [source {neutralize_inline(query['name'])} {neutralize_inline(query['version'] or '*')}]")
+    if query is not None and source_fix:
+        head_parts.append(f" [source {neutralize_inline(query['name'] or '')} {neutralize_inline(query['version'] or '*')}]")
     if f.fixed_version:
         fix_label = "source fix" if source_fix else "fix"
         head_parts.append(f" → {fix_label}: {neutralize_inline(f.fixed_version)}")
