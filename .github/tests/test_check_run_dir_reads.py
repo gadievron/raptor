@@ -37,6 +37,17 @@ def _raw(tmp_path: Path, files: dict[str, str]) -> list[dict]:
 
 
 class TestDetector:
+    def test_shared_test_helpers_are_not_runtime_readers(self, tmp_path):
+        source = "import json\nfrom pathlib import Path\nx = json.loads(Path('trace.json').read_text())\n"
+        raw = _raw(tmp_path, {
+            "core/testing/expected_crash.py": source,
+            "core/testing_helpers/reader.py": source,
+            "core/runtime_reader.py": source,
+        })
+        assert {finding["file"] for finding in raw} == {
+            "core/testing_helpers/reader.py", "core/runtime_reader.py",
+        }
+
     def test_raw_read_of_run_artifact_fires(self, tmp_path):
         raw = _raw(tmp_path, {"core/reader.py": (
             "import json\n"

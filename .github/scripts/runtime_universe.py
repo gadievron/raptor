@@ -28,7 +28,8 @@ Universe definition (the documented contract):
 * **Excluded, always:** test-side dirs (``tests``, ``test``,
   ``fixtures``), interpreter/tooling artifacts (``__pycache__``,
   ``node_modules``), any dot-named dir (vendored venvs, caches), and
-  ``conftest.py`` (pytest infrastructure, not runtime source).
+  ``conftest.py`` and the exact ``core/testing/`` subtree (shared
+  test infrastructure, not runtime source).
   Repo-root junk dirs (``out/``, ``dist/``, a root ``build/``) never
   enter — the walk starts inside the runtime roots, so no name-based
   blanket skip (the ``core/build`` failure mode) is needed.
@@ -92,6 +93,8 @@ def is_runtime_python_file(path: Path) -> bool:
 
 
 def _is_excluded(rel_parts: tuple[str, ...], excluded: frozenset[str]) -> bool:
+    if rel_parts[:2] == ("core", "testing"):
+        return True
     for part in rel_parts[:-1]:
         if part in excluded or part.startswith("."):
             return True
