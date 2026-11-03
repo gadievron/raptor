@@ -74,3 +74,35 @@ def test_hanging_fixture_times_out_and_is_reaped(tmp_path, expected_crash_runner
 def test_failed_exec_is_not_an_expected_crash(tmp_path, expected_crash_runner):
     with pytest.raises(ExpectedCrashError, match='exec'):
         expected_crash_runner([str(tmp_path / 'missing-executable')])
+
+
+@pytest.mark.parametrize('stop_signal', [signal.SIGKILL, signal.SIGTRAP],
+                         ids=['kill-stop', 'trap-stop'])
+def test_cleanup_consumes_traced_stops_before_final_status(monkeypatch, stop_signal):
+    from core.testing import expected_crash as helper
+
+    pid = 12345
+    waits = iter([(pid, (int(stop_signal) << 8) | 0x7f), (0, 0),
+                  (pid, int(signal.SIGKILL))])
+    calls = []
+    monkeypatch.setattr(helper.os, 'kill', lambda child, sig: calls.append(('kill', child, sig)))
+    monkeypatch.setattr(helper.os, 'waitpid', lambda child, flags: next(waits))
+    monkeypatch.setattr(helper.time, 'sleep', lambda seconds: None)
+    result = helper._terminate_and_reap(
+        pid, lambda request, child: calls.append(('ptrace', request, child)),
+    )
+    assert result == -signal.SIGKILL
+    assert calls == [('kill', pid, signal.SIGKILL), ('ptrace', 8, pid)]
+    with pytest.raises(StopIteration):
+        next(waits)
+
+
+def test_cleanup_wait_has_a_deadline(monkeypatch):
+    from core.testing import expected_crash as helper
+
+    clock = iter([0, 3])
+    monkeypatch.setattr(helper.os, 'kill', lambda child, sig: None)
+    monkeypatch.setattr(helper.os, 'waitpid', lambda child, flags: (0, 0))
+    monkeypatch.setattr(helper.time, 'monotonic', lambda: next(clock))
+    with pytest.raises(TimeoutError, match='did not terminate during cleanup'):
+        helper._terminate_and_reap(12345, lambda request, child: None)
