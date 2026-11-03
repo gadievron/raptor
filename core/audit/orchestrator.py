@@ -8754,14 +8754,32 @@ def _run_audit_body(
 
         if _role == "reuse":
             from copy import deepcopy
-            _prep = deepcopy(prep_cache["_prep"])
-            logger.info("ensemble prep: reusing cached prep from first pass")
+            try:
+                _prep = deepcopy(prep_cache["_prep"])
+            except TypeError:
+                logger.warning(
+                    "ensemble prep: deepcopy failed (unpicklable object "
+                    "in cached prep) — will recompute",
+                )
+            else:
+                logger.info(
+                    "ensemble prep: reusing cached prep from first pass",
+                )
         elif _role == "wait":
             _prep_event.wait(timeout=600)
             if prep_cache.get("_prep") is not None:
                 from copy import deepcopy
-                _prep = deepcopy(prep_cache["_prep"])
-                logger.info("ensemble prep: reusing cached prep (waited)")
+                try:
+                    _prep = deepcopy(prep_cache["_prep"])
+                except TypeError:
+                    logger.warning(
+                        "ensemble prep: deepcopy failed (unpicklable "
+                        "object in cached prep) — will recompute",
+                    )
+                else:
+                    logger.info(
+                        "ensemble prep: reusing cached prep (waited)",
+                    )
 
     if _prep is None:
         _empty_inventory = False
