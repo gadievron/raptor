@@ -34,11 +34,14 @@ import pytest
 # not be importable without the root conftest's sys.path setup): drop
 # every ambient GIT_* wholesale — a fixture-building unit suite has no
 # legitimate use for any of them — then pin the two config files.
-# Under a root-conftest run this is a no-op (already pinned/stripped).
-for _key in [k for k in os.environ if k.startswith("GIT_")]:
-    del os.environ[_key]
-os.environ["GIT_CONFIG_GLOBAL"] = "/dev/null"
-os.environ["GIT_CONFIG_SYSTEM"] = "/dev/null"
+# Keep this scoped to execution: collection must not erase the ambient
+# environment before sibling suites can capture or deliberately test it.
+@pytest.fixture(autouse=True)
+def _isolated_git_environment(monkeypatch):
+    for key in [k for k in os.environ if k.startswith("GIT_")]:
+        monkeypatch.delenv(key)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
 
 
 # Keep these stubs' signatures in lockstep with

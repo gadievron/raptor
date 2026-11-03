@@ -3,16 +3,12 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
 
 import pytest
 
 RAPTOR_DIR = Path(__file__).resolve().parents[3]
-# Hard-SET (never setdefault): the code under test derives paths from
-# RAPTOR_DIR; an ambient value for another checkout must not win.
-os.environ["RAPTOR_DIR"] = str(RAPTOR_DIR)
 if str(RAPTOR_DIR) not in sys.path:
     sys.path.insert(0, str(RAPTOR_DIR))
 
@@ -34,6 +30,13 @@ from packages.checker_synthesis.models import (  # noqa: E402  (import after sys
     SeedBug,
     SynthesisedRule,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_install_dir(monkeypatch):
+    # An ambient checkout must not win, but collection must not overwrite
+    # the caller's environment or the baseline captured by sibling tests.
+    monkeypatch.setenv("RAPTOR_DIR", str(RAPTOR_DIR))
 
 
 def _seed(cwe: str = "CWE-89") -> SeedBug:
