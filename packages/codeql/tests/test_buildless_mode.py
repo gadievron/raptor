@@ -1047,7 +1047,13 @@ class TestExtractionOutcomes:
         self._write_summary(tmp_path, attributes)
         assert report_cpp_extraction(tmp_path) == {"available": False}
 
-    @pytest.mark.parametrize("payload", ["{", "null", "[]", "{}\n{}", "[" * 2000])
+    @pytest.mark.parametrize("payload", [
+        pytest.param("{", id="truncated-object"),
+        pytest.param("null", id="null"),
+        pytest.param("[]", id="array"),
+        pytest.param("{}\n{}", id="multiple-documents"),
+        pytest.param("[" * 2000, id="excessive-nesting"),
+    ])
     def test_invalid_payload_is_unknown(self, tmp_path, payload):
         from packages.codeql.database_manager import report_cpp_extraction
 
