@@ -254,18 +254,13 @@ def test_redirects_and_downloads_are_confined_to_official_distribution_host(url)
         MODULE.NodeRedirect().redirect_request(None, None, 302, "", {}, url)
 
 
-def test_docker_notice_installation_shares_runtime_install_layer():
+def test_docker_replaces_bundled_node_instead_of_restoring_its_notice():
     dockerfile = (ROOT / ".devcontainer/Dockerfile").read_text()
-    block = next(
-        block for block in dockerfile.split("\nRUN ") if "uv export --locked" in block
-    )
-    assert "/usr/local/libexec/refresh-node-notices.py" in block
-    assert "--evidence /usr/share/doc/raptor-node-notices" in block
-    assert "COPY .devcontainer/node-notices/" in dockerfile.split("\nRUN ")[
-        0
-    ] or dockerfile.index("COPY .devcontainer/node-notices/") < dockerfile.index(
-        "uv export --locked"
-    )
+    assert "refresh-node-notices.py" not in dockerfile
+    assert "COPY .devcontainer/node-notices/" not in dockerfile
+    selected = dockerfile.index("ENV PLAYWRIGHT_NODEJS_PATH=/usr/bin/node")
+    cleanup = dockerfile.index("RUN python3 /usr/local/libexec/use-system-node.py")
+    assert dockerfile.index("nodejs=") < selected < cleanup
 
 
 def test_release_version_is_read_from_embedded_metadata_without_execution(tmp_path):

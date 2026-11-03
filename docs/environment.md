@@ -897,6 +897,13 @@ fd is a broken route.
 Variables defined by other ecosystems that RAPTOR consumes or forwards
 with specific behavior.
 
+### `PLAYWRIGHT_NODEJS_PATH`
+
+Selects the Node.js executable used by Playwright. The Linux container sets it
+to `/usr/bin/node` and removes Playwright's duplicate bundled runtime. Keep this
+value in the environment when running browser automation in the container.
+Manual installations use Playwright's own default unless configured otherwise.
+
 ### Proxy family (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `ALL_PROXY`)
 
 Both cases of all four are the declared `PROXY_ENV_VARS` family.

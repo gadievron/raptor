@@ -173,3 +173,15 @@ Either way, once you're inside the container, run `raptor` to get started.
 For optional Python dependency groups, see [Python
 packages](dependencies.md#python-packages). After setup, return to [your first
 run](../README.md#what-to-expect-on-a-first-run).
+
+### Browser automation runtime
+
+The Linux container runs Playwright with its installed system Node.js, selected
+through `PLAYWRIGHT_NODEJS_PATH=/usr/bin/node`. This avoids shipping a second
+Node runtime. Keep that environment variable when launching browser automation
+inside the container. Manual installations continue to use Playwright's default
+runtime unless you configure your own.
+
+If you reinstall or upgrade Playwright inside a running container, its wheel can
+restore the bundled Node executable. Rebuild the image to apply the cleanup and
+validate the updated driver against system Node.

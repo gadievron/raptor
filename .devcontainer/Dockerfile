@@ -128,17 +128,13 @@ RUN chmod 0755 /usr/local/libexec/raptor-codeql-bootstrap \
 
 COPY pyproject.toml uv.lock /tmp/
 COPY .devcontainer/python-notices/ /usr/share/doc/raptor-python-notices/
-COPY .devcontainer/node-notices/ /usr/share/doc/raptor-node-notices/
-COPY .devcontainer/refresh-node-notices.py /usr/local/libexec/refresh-node-notices.py
 
 RUN bash -eo pipefail -c \
     'uv export --locked --no-hashes --project /tmp --extra web \
      | uv pip install --system --no-cache -r -' \
     && python3 /usr/local/libexec/refresh-python-notices.py \
         --evidence-root /usr/share/doc --installed-environment --if-version-changed \
-    && python3 /usr/local/libexec/install-python-notices.py --skip-absent \
-    && python3 /usr/local/libexec/refresh-node-notices.py \
-        --evidence /usr/share/doc/raptor-node-notices
+    && python3 /usr/local/libexec/install-python-notices.py --skip-absent
 
 # Retain the source-release notice omitted from pydocstyle's wheel.
 # Reinstall the existing version so metadata and notice share this layer.
@@ -199,6 +195,11 @@ RUN npm install -g yarn@1.22.22 pnpm@11.11.0 \
     && python3 /usr/local/libexec/install-npm-notices.py \
         --package-root /usr/lib/node_modules/pnpm \
         --evidence /usr/share/doc/raptor-pnpm-notices
+
+# Playwright supports a preinstalled Node. Share the runtime maintained for the CLI.
+ENV PLAYWRIGHT_NODEJS_PATH=/usr/bin/node
+COPY .devcontainer/use-system-node.py /usr/local/libexec/use-system-node.py
+RUN python3 /usr/local/libexec/use-system-node.py
 
 # Remove packaging helpers that can only run on Windows. Publication squashes
 # all layers, including the base, so deleted executables are not distributed.
