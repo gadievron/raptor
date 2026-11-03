@@ -208,6 +208,14 @@ Add `-m ""` to select all tiers; optional tools and service credentials are
 still required for their respective tests. Tests should gate missing
 prerequisites explicitly while keeping product failures visible.
 
+Give payload-heavy parametrizations explicit, short scenario IDs with
+`ids=[...]` or `pytest.param(..., id="...")`. The root pytest configuration
+also gives unsafe automatic IDs compact labels with stable suffixes: source
+text, binary/control characters and oversized values stay out of progress
+lines and JUnit names. Ordinary short values and explicit IDs retain their
+names. The hook changes display names only; parameter values and test coverage
+are preserved.
+
 ASAN execution tests require a clean instrumented program to complete outside
 RAPTOR's sandbox, using the same compiler as the exploit validator. This probe
 is cached per compiler; an unusable runtime produces a prerequisite skip.
