@@ -2638,6 +2638,7 @@ _DIRECT_PATH_PREFIXES = {
 _AGGREGATOR_PATH_PREFIXES = {
     "/apiroute/": "apiroute",
     "/atlascloud/":   "atlascloud",
+    "/cheapaimodel/": "cheapaimodel",
     "/cheaperinference/": "cheaperinference",
     "/cohere/":       "cohere",
     "/deepinfra/":    "deepinfra",
