@@ -21,7 +21,7 @@ import pytest
 _KEY = pytest.StashKey()
 _CREDENTIALS = (
     "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY",
-    "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY", "MISTRAL_API_KEY", "XAI_API_KEY",
+    "MISTRAL_API_KEY",
     "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
     "AWS_PROFILE", "GOOGLE_APPLICATION_CREDENTIALS",
 )
@@ -170,6 +170,10 @@ def pytest_configure(config):
                "OPENAI_BASE_URL": listener.url,
                "RAPTOR_CC_TRANSPORT_DISABLED": "1"}
     changes.update(dict.fromkeys(_CREDENTIALS))
+    # Broker credentials belong to the catalog, not Python declarations.
+    # Literal broker keys here would disable the registry's ownership check.
+    from core.llm.model_brokers import MODEL_BROKERS
+    changes.update(dict.fromkeys(broker.api_key_env for broker in MODEL_BROKERS))
     previous.update({name: os.environ.get(name) for name in changes})
     for name, value in changes.items():
         if value is None:

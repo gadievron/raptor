@@ -46,7 +46,10 @@ def _capture_infos(monkeypatch):
     return lines
 
 
-def test_transport_banner_prints_once_across_clients(monkeypatch):
+def test_transport_banner_prints_once_across_clients(monkeypatch, tmp_path):
+    # This case exercises the absent-config CLI banner, independently of
+    # the CI tripwire's deliberately configured external model.
+    monkeypatch.setenv("RAPTOR_CONFIG", str(tmp_path / "missing-models.json"))
     monkeypatch.setattr(client_mod, "_TRANSPORT_BANNER_SHOWN", False)
     monkeypatch.setattr(
         "core.llm.detection.detect_llm_availability",
