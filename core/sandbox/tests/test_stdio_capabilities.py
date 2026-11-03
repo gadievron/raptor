@@ -54,18 +54,24 @@ class TestStdinFdPolicy(unittest.TestCase):
         return sandbox(target=self.tgt, output=self.tgt,
                        restrict_reads=True)
 
+    def _outside_stdin(self, contents):
+        parent = Path("/var/tmp").resolve()
+        if parent.is_relative_to(Path(tempfile.gettempdir()).resolve()):
+            self.skipTest("/var/tmp is inside this host's temp allowlist")
+        scratch = tempfile.TemporaryDirectory(prefix="raptor-stdin-", dir=parent)
+        self.addCleanup(scratch.cleanup)
+        path = Path(scratch.name) / "input"
+        path.write_bytes(contents)
+        fd = os.open(path, os.O_RDONLY)
+        # LIFO cleanup closes the descriptor before removing its directory.
+        self.addCleanup(os.close, fd)
+        return fd
+
     def test_out_of_policy_stdin_fd_refused(self):
-        """A $HOME file fd as stdin= is a read capability outside the
+        """A file fd as stdin= is a read capability outside the
         restrict_reads allowlist — same class the pass_fds gate
         refuses."""
-        with tempfile.NamedTemporaryFile(
-                dir=os.path.expanduser("~"), prefix=".raptor-stdin-",
-                delete=False) as f:
-            f.write(b"SECRET")
-            secret = f.name
-        self.addCleanup(os.unlink, secret)
-        fd = os.open(secret, os.O_RDONLY)
-        self.addCleanup(os.close, fd)
+        fd = self._outside_stdin(b"SECRET")
         with self._sandbox() as run:
             with self.assertRaises(TypeError):
                 run(["cat"], stdin=fd, capture_output=True,
@@ -82,14 +88,7 @@ class TestStdinFdPolicy(unittest.TestCase):
                     text=True, timeout=30)
 
     def test_declared_out_of_policy_stdin_allowed_with_warning(self):
-        with tempfile.NamedTemporaryFile(
-                dir=os.path.expanduser("~"), prefix=".raptor-stdin-",
-                delete=False) as f:
-            f.write(b"DECLARED\n")
-            declared = f.name
-        self.addCleanup(os.unlink, declared)
-        fd = os.open(declared, os.O_RDONLY)
-        self.addCleanup(os.close, fd)
+        fd = self._outside_stdin(b"DECLARED\n")
         with self._sandbox() as run:
             r = run(["cat"], stdin=fd, pass_fds_declared=True,
                     capture_output=True, text=True, timeout=30)
