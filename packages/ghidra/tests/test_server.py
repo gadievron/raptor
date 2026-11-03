@@ -380,6 +380,22 @@ class TestServerTransportSelection:
     sockets. Uses the REAL worker in a plain subprocess (the sandbox
     call is replaced by a pass_fds-honouring spawn) — no JVM."""
 
+    @pytest.fixture(autouse=True)
+    def _short_socket_workdirs(self, short_sock_dir, monkeypatch):
+        """Keep transport choice independent of the runner's TMPDIR length."""
+        from types import SimpleNamespace
+
+        import packages.ghidra.server as server_mod
+
+        fixture_root = short_sock_dir.resolve()
+        # Patch the consumer binding, leaving shared tempfile users alone.
+        tempfiles = SimpleNamespace(
+            mkdtemp=lambda **kw: tempfile.mkdtemp(**{**kw, "dir": str(fixture_root)}),
+        )
+        with monkeypatch.context() as scoped:
+            scoped.setattr(server_mod, "tempfile", tempfiles)
+            yield
+
     @staticmethod
     def _fake_sandbox_run(cmd, **kwargs):
         import subprocess
@@ -417,16 +433,8 @@ class TestServerTransportSelection:
         return server_mod.GhidraServer(gpr, lifetime_s=60)
 
     def test_pathname_transport_when_capable(self, tmp_path, monkeypatch):
-        import tempfile
-        with tempfile.TemporaryDirectory(prefix="raptor-pytest-ghidra-", dir="/tmp") as raw:
-            fixture_root = Path(raw).resolve()
-            real_mkdtemp = tempfile.mkdtemp
-            monkeypatch.setattr(
-                tempfile, "mkdtemp",
-                lambda **kw: real_mkdtemp(**{**kw, "dir": str(fixture_root)}),
-            )
-            srv = self._server(fixture_root, monkeypatch, capable=True)
-            self._check_pathname_transport(srv)
+        srv = self._server(tmp_path, monkeypatch, capable=True)
+        self._check_pathname_transport(srv)
 
     def test_long_socket_path_uses_socketpair(self, tmp_path, monkeypatch):
         srv = self._server(tmp_path, monkeypatch, capable=True)
@@ -444,7 +452,9 @@ class TestServerTransportSelection:
         srv.start()
         try:
             assert srv._child_sock is None  # never created
-            assert list(srv._work_dir.glob("worker-*.sock"))
+            sockets = list(srv._work_dir.glob("worker-*.sock"))
+            assert sockets
+            assert all(len(os.fsencode(path)) <= 103 for path in sockets)
             assert srv._request({"op": "ping"}).get("pong") is True
         finally:
             srv.stop()
