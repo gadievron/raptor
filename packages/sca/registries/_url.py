@@ -132,10 +132,24 @@ def registry_cache_key(
     short digest: the same package fetched via two different bases
     gets two distinct cache entries, so a private-mirror answer is
     never served as the public registry's or vice versa. Old keys
-    without the digest simply re-fetch once.
+    without the digest simply re-fetch once. The k2 namespace also retires
+    keys that could previously alias through filesystem case folding.
     """
-    encoded = [urllib.parse.quote(c, safe="") for c in components]
-    key = ":".join([prefix, *encoded])
+    # quote() leaves ASCII letters unescaped, which aliases case-sensitive
+    # package names on APFS. A reserved marker plus a full digest preserves
+    # those identities without expanding long legacy names past NAME_MAX.
+    # Normal quote() output cannot start with "%~", so a literal package
+    # name shaped like this marker cannot shadow the digest namespace.
+    encoded = ["%~case-" + hashlib.sha256(c.encode("utf-8")).hexdigest()
+               if any("A" <= ch <= "Z" for ch in c)
+               else urllib.parse.quote(c, safe="") for c in components]
+    # Do not reuse pre-fix entries: an old uppercase filename may already
+    # answer a lowercase lookup on a case-insensitive filesystem.
+    key = ":".join([prefix + "-k2", *encoded])
+    # Atomic cache writes add a pid/thread/random suffix to the filename.
+    # Keep headroom for that suffix as well as the final .json extension.
+    if len(key.encode("utf-8")) > 128:
+        key = "%~key-k2-" + hashlib.sha256(key.encode("utf-8")).hexdigest()
     if base_url:
         digest = hashlib.sha256(base_url.encode("utf-8")).hexdigest()[:12]
         key = f"{key}:base-{digest}"

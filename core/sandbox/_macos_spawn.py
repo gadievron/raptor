@@ -1004,6 +1004,9 @@ def run_sandboxed(cmd: list[str], *,
         except OSError:
             pass
         child_env["TMPDIR"] = _scratch_tmp
+        # Apple compiler shims otherwise access their per-user lookup cache
+        # outside this call's write grant, even when TMPDIR is redirected.
+        child_env["xcrun_nocache"] = "1"
     elif exclude_tmp_baseline:
         logger.warning(
             "exclude_tmp_baseline without output=: tmp writes are "

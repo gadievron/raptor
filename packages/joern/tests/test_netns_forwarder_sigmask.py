@@ -29,6 +29,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.linux_native
+
 from packages.joern import netns_forwarder
 from packages.joern.netns_forwarder import Forwarder, create_listener
 

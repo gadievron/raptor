@@ -1751,3 +1751,29 @@ class TestPidNamespaceRefusal:
         finally:
             owner.terminate()
             owner.wait(timeout=10)
+
+
+@pytest.mark.parametrize("outcome", ["busy", "unavailable"], ids=["live-cwd", "unknown-liveness"])
+def test_darwin_cwd_probe_keeps_live_or_unverifiable_scratch(tmp_path, monkeypatch, outcome):
+    import subprocess
+    from types import SimpleNamespace
+    from core.run import tmp_reaper as reaper
+
+    monkeypatch.setattr(reaper, "sys", SimpleNamespace(platform="darwin"))
+    def lsof(command, **kwargs):
+        assert command[:2] == ["/usr/sbin/lsof", "-a"]
+        return SimpleNamespace(returncode=0 if outcome == "busy" else 1,
+                               stdout="p123\nn" + str(tmp_path) + "\n", stderr="")
+    monkeypatch.setattr(subprocess, "run", lsof)
+    assert reaper._dir_in_use(tmp_path, reaper._live_cwds()) is True
+
+
+def test_unavailable_cwd_probe_is_cached_for_the_whole_sweep(tmp_root, monkeypatch):
+    from core.run import tmp_reaper as reaper
+    dirs = [_make_old_dir(tmp_root, 'raptor-cc-cwd-first'),
+            _make_old_dir(tmp_root, 'raptor-cc-cwd-second')]
+    probes = []
+    monkeypatch.setattr(reaper, '_live_cwds', lambda: probes.append('probe'))
+    assert reaper.reap_stale_tmp() == []
+    assert probes == ['probe']
+    assert all(path.is_dir() for path in dirs)

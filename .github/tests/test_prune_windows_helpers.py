@@ -19,6 +19,12 @@ PRUNE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PRUNE)
 
 
+@pytest.fixture(autouse=True)
+def linux_image_policy(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(PRUNE, "sys", SimpleNamespace(platform="linux"))
+
+
 def pe(machine=0x8664):
     data = bytearray(128)
     data[:2] = b"MZ"

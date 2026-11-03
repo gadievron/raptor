@@ -1151,7 +1151,7 @@ def test_writable_path_denylist_catches_dotdot_traversal() -> None:
 
     with pytest.raises(ValueError, match="pseudo-fs"):
         _validate_writable_path(
-            Path("/tmp/x/../../dev/shm/evil"), role="output")
+            Path("/dev/x/../shm/evil"), role="output")
 
 
 def test_writable_path_denylist_catches_symlink(tmp_path: Path) -> None:

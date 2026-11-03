@@ -62,11 +62,11 @@ def _expired(unit: _Unit, now: float) -> bool:
     Unknown formats remain eligible for age/LRU eviction, without claiming
     to know their validity. Content-addressed TTL_FOREVER entries never expire.
     """
-    if unit.directory or unit.path.suffix != '.json' or not hasattr(os, 'O_NOATIME'):
+    if unit.directory or unit.path.suffix != '.json':
         return False
     try:
         fd = os.open(unit.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
-                     | os.O_NOATIME)
+                     | getattr(os, 'O_NOATIME', 0))
         try:
             if not stat.S_ISREG(os.fstat(fd).st_mode):
                 return False

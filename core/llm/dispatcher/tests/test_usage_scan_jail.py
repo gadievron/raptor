@@ -933,7 +933,7 @@ class TestReadyBudget:
         # derater: the reproduced starvation shape, sampled live.
         monkeypatch.setattr(
             usage_scan_jail.os, "sched_getaffinity",
-            lambda pid: {0, 1, 2, 3})
+            lambda pid: {0, 1, 2, 3}, raising=False)
         monkeypatch.setattr(
             usage_scan_jail.os, "getloadavg",
             lambda: (64.0, 0.0, 0.0))
@@ -977,7 +977,7 @@ class TestReadyBudget:
             raise OSError("forced by test")
 
         monkeypatch.setattr(
-            usage_scan_jail.os, "sched_getaffinity", _no_affinity)
+            usage_scan_jail.os, "sched_getaffinity", _no_affinity, raising=False)
         monkeypatch.setattr(usage_scan_jail.os, "cpu_count", lambda: None)
         monkeypatch.setattr(
             usage_scan_jail.os, "getloadavg", lambda: (4096.0, 0.0, 0.0))
@@ -995,7 +995,7 @@ class TestReadyBudget:
             raise OSError("forced by test")
 
         monkeypatch.setattr(
-            usage_scan_jail.os, "sched_getaffinity", _no_affinity)
+            usage_scan_jail.os, "sched_getaffinity", _no_affinity, raising=False)
         monkeypatch.setattr(usage_scan_jail.os, "cpu_count", lambda: 4)
         monkeypatch.setattr(
             usage_scan_jail.os, "getloadavg", lambda: (12.0, 0.0, 0.0))

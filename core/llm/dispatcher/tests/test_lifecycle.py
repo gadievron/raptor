@@ -469,6 +469,7 @@ class TestSocketPathBudget:
         finally:
             _tempfile.tempdir = None
 
+    @pytest.mark.usefixtures("raw_byte_filenames")
     def test_surrogate_tmpdir_falls_back_instead_of_crashing(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
     ) -> None:
@@ -516,6 +517,7 @@ class TestSocketPathBudget:
         finally:
             d.shutdown()
 
+    @pytest.mark.usefixtures("raw_byte_filenames")
     def test_surrogate_tmpdir_within_budget_stays(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
     ) -> None:

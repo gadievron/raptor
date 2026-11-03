@@ -16,6 +16,11 @@ NODE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(NODE)
 
 
+@pytest.fixture(autouse=True)
+def linux_image_policy(monkeypatch):
+    monkeypatch.setattr(NODE, "sys", SimpleNamespace(platform="linux"))
+
+
 @pytest.fixture
 def installation(tmp_path, monkeypatch):
     executable = tmp_path / "playwright/driver/node"

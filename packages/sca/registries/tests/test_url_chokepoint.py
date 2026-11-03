@@ -97,8 +97,8 @@ def test_registry_cache_key_base_url_digest_distinct() -> None:
     mirror = registry_cache_key("p", "name",
                                 base_url="https://mirror.internal")
     assert public != mirror
-    # No base → legacy-compatible key shape.
-    assert registry_cache_key("p", "a/b") == "p:a%2Fb"
+    # No base still preserves encoded components in the revised namespace.
+    assert registry_cache_key("p", "a/b") == "p-k2:a%2Fb"
 
 
 # ---------------------------------------------------------------------------
@@ -363,3 +363,29 @@ def test_maven_cache_key_distinct_per_base_url(
     assert len(http_mirror.calls) == 1, (
         "mirror lookup must not be served from the public entry"
     )
+
+
+def test_registry_cache_keys_survive_case_insensitive_filesystems():
+    upper = registry_cache_key('npm-meta', 'JSONStream')
+    lower = registry_cache_key('npm-meta', 'jsonstream')
+    assert upper.casefold() != lower.casefold()
+    assert registry_cache_key('p', 'A').casefold() != registry_cache_key('p', '%41').casefold()
+
+
+@pytest.mark.parametrize('name', ['A' * 214, 'a' * 214], ids=['uppercase', 'lowercase'])
+def test_case_sensitive_cache_key_is_bounded_for_max_length_legacy_name(tmp_path, name):
+    from core.json import JsonCache
+    key = registry_cache_key('npm-meta-v2', name, base_url='https://registry.npmjs.org')
+    cache = JsonCache(root=tmp_path)
+    cache.put(key, {'name': name}, ttl_seconds=60)
+    assert cache.get(key, ttl_seconds=60)['name'] == name
+    assert key.casefold() != registry_cache_key('npm-meta-v2', key.split(':')[1],
+                                               base_url='https://registry.npmjs.org').casefold()
+
+
+def test_registry_key_invalidates_legacy_case_colliding_entries():
+    import hashlib
+    base = 'https://registry.npmjs.org'
+    old = 'npm-meta-v2:JSONStream:base-' + hashlib.sha256(base.encode()).hexdigest()[:12]
+    new = registry_cache_key('npm-meta-v2', 'jsonstream', base_url=base)
+    assert new.casefold() != old.casefold()

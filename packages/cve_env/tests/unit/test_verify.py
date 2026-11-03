@@ -176,6 +176,8 @@ def test_stability_wait_passes_when_still_running(
 
 
 @patch("cve_env.tools.verify.check_container_status")
+@patch("cve_env.tools.verify._endpoint_run_ports",
+       new=lambda container_id: frozenset({8080}))
 def test_verify_stops_at_first_failure(mock_status: Any) -> None:
     # container_status fails -> plan aborts
     mock_status.return_value = {"passed": False, "details": {}, "reason": "exited"}
@@ -194,6 +196,8 @@ def test_verify_stops_at_first_failure(mock_status: Any) -> None:
 
 @patch("cve_env.tools.verify.check_container_status")
 @patch("core.env.verify._http_exchange")
+@patch("cve_env.tools.verify._endpoint_run_ports",
+       new=lambda container_id: frozenset({8080}))
 def test_verify_runs_whole_plan_when_all_pass(mock_req: Any, mock_status: Any) -> None:
     mock_status.return_value = {
         "passed": True,
@@ -1554,6 +1558,8 @@ def test_BUG004b_http_check_ignores_proxy_env(monkeypatch: Any) -> None:
 
 @patch("cve_env.tools.verify.check_http")
 @patch("cve_env.tools.verify.check_container_status")
+@patch("cve_env.tools.verify._endpoint_run_ports",
+       new=lambda container_id: frozenset({8080}))
 def test_injected_smoke_failure_does_not_fail_passing_verify(
     mock_status: Any, mock_http: Any
 ) -> None:
@@ -1815,6 +1821,8 @@ def test_verify_exec_only_plan_ignores_stale_endpoint(mock_status: Any) -> None:
 
 @patch("core.env.verify._http_exchange")
 @patch("cve_env.tools.verify.check_container_status")
+@patch("cve_env.tools.verify._endpoint_run_ports",
+       new=lambda container_id: frozenset({8080}))
 def test_verify_accepts_loopback_endpoint_host(
     mock_status: Any, mock_req: Any
 ) -> None:

@@ -331,7 +331,9 @@ _WAITER_BATTERY_DRIVERS = {
 }
 
 
-@pytest.fixture(params=sorted(_WAITER_BATTERY_DRIVERS))
+@pytest.fixture(params=[pytest.param(name, marks=pytest.mark.linux_native)
+                       if name == "forwarder-ns-init" else name
+                       for name in sorted(_WAITER_BATTERY_DRIVERS)])
 def waiter_driver(request) -> str:
     return _WAITER_BATTERY_DRIVERS[request.param]
 

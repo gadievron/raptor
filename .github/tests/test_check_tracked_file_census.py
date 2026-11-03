@@ -268,6 +268,7 @@ class TestScratchRepoEndToEnd:
         rc, out = self._gate(scratch_repo, capsys)
         assert rc == 1 and "gitlink" in out
 
+    @pytest.mark.usefixtures("raw_byte_filenames")
     def test_non_utf8_name_fails_closed_without_traceback(
         self, scratch_repo, capsys,
     ):

@@ -46,7 +46,8 @@ def test_project_python_starts_with_restricted_home_metadata(tmp_path):
 
 @pytest.mark.darwin_native
 @pytest.mark.slow
-def test_apple_compiler_can_load_sdk_under_read_restrictions(tmp_path):
+@pytest.mark.parametrize("private_tmp", [False, True], ids=["ordinary-tmp", "private-tmp"])
+def test_apple_compiler_can_load_sdk_under_read_restrictions(tmp_path, private_tmp):
     from core.sandbox import run
 
     probe = subprocess.run(
@@ -62,6 +63,7 @@ def test_apple_compiler_can_load_sdk_under_read_restrictions(tmp_path):
     result = run(
         ["/usr/bin/clang", str(source), "-o", str(output / "demo")],
         target=str(tmp_path), output=str(output),
+        restrict_reads=True, fake_home=True, exclude_tmp_baseline=private_tmp,
         block_network=True, capture_output=True, text=True, timeout=60,
     )
     assert result.returncode == 0, result.stderr
@@ -384,7 +386,7 @@ def test_tmpdir_steered_into_output_scratch_under_write_isolation(
     out_dir.mkdir()
 
     r = _macos_spawn.run_sandboxed(
-        ["/bin/sh", "-c", 'printf %s "$TMPDIR"'],
+        ["/bin/sh", "-c", 'test "$xcrun_nocache" = 1 && printf %s "$TMPDIR"'],
         output=str(out_dir),
         # A host-default-style TMPDIR rides the safe-env allowlist
         # into every child env — the steer must override it, not

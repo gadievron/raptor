@@ -359,3 +359,19 @@ def test_private_file_with_keys_loads_silently(tmp_path, monkeypatch,
     assert creds.get("gemini") == "AIza-exposed"
     assert not [r for r in caplog.records
                 if "chmod" in r.getMessage()]
+
+
+def test_route_refusal_keeps_remedy_after_long_path_excerpt(monkeypatch, capsys):
+    from types import SimpleNamespace
+    from core.llm.dispatcher import lifecycle
+
+    def refused(*args, **kwargs):
+        raise WorldReadableModelsConfigError('path: ' + 'x' * 1200 + '\x1b[31m')
+    monkeypatch.setattr(lifecycle, 'ensure_route_for_model_configs', refused)
+    client = SimpleNamespace(config=SimpleNamespace(primary_model=None, fallback_models=[]))
+    lifecycle.ensure_route_for_client(client, label='fixture')
+    text = capsys.readouterr().err
+    assert 'RAPTOR_ALLOW_WORLD_READABLE_MODELS_JSON=1' in text
+    assert 'chmod 600' in text
+    assert '\x1b' not in text
+    assert len(text) < 800

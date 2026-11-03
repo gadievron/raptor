@@ -482,6 +482,7 @@ class GuardProbeTests(unittest.TestCase):
         except ImportError:  # pragma: no cover — POSIX-only CI
             self.skipTest("pty unavailable")
         import tempfile
+        import select
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             probe = self._probe(tmp)
@@ -493,10 +494,8 @@ class GuardProbeTests(unittest.TestCase):
                     env=_base_env(tmp), cwd=str(REPO),
                 )
                 proc.wait(timeout=120)
-                os.close(slave)
-                slave = -1
                 chunks = []
-                while True:
+                while select.select([master], [], [], 0.2)[0]:
                     try:
                         chunk = os.read(master, 4096)
                     except OSError:  # EIO once the slave side closes

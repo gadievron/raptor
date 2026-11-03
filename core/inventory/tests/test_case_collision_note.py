@@ -139,6 +139,8 @@ class TestBuildInventoryIntegration:
         repo.mkdir()
         (repo / "Foo.c").write_text("int a(void) { return 1; }\n")
         (repo / "foo.c").write_text("int b(void) { return 2; }\n")
+        if (repo / "Foo.c").samefile(repo / "foo.c"):
+            pytest.skip("fixture requires two distinct case-variant files")
         out = tmp_path / "out"
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
              mock.patch.object(wsl, "fs_is_drvfs_or_9p",

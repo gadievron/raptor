@@ -25,6 +25,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.linux_native
+
 from packages.joern import netns_forwarder as nf
 from packages.joern import server as server_mod
 

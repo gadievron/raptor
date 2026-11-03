@@ -412,6 +412,7 @@ class TestOutputShape:
     def test_install_hint_attached_to_missing_tool_warning(
         self, capsys, monkeypatch,
     ):
+        monkeypatch.setattr("packages.describe.package_manager._platform.system", lambda: "Linux")
         # Missing rr → warning carries the PM-aware install hint
         # on a continuation line. Shared substrate with /describe.
         from packages.describe.package_manager import (

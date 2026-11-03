@@ -193,6 +193,11 @@ class TestJoernToolPaths:
 
 
 class TestRunnerDeclaresToolPaths:
+    @pytest.fixture(autouse=True)
+    def _pinned_mock_java(self, monkeypatch):
+        monkeypatch.setattr("packages.joern.prereqs._java_path", lambda: "/usr/bin/java")
+        monkeypatch.setattr("packages.joern.prereqs._jdk_home", lambda java: None)
+
     def _recording_runner(self, seen, stdout: str = ""):
         def _runner(cmd, **kwargs):
             seen.update(kwargs)

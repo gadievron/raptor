@@ -110,6 +110,7 @@ class TestRefusals:
         (tree / "swapped").symlink_to(tmp_path / "outside")
         assert open_regular_beneath(tree, "swapped/secret.txt") is None
 
+    @pytest.mark.usefixtures("raw_byte_filenames")
     def test_non_utf8_filename_reads_on_both_routes(self, tree, route):
         """Surrogate-escaped (non-UTF-8) filenames from hostile trees
         must open identically on both routes — os.fsencode, never a

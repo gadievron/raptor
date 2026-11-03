@@ -109,7 +109,7 @@ _OOB_SPEC = FamilySpec(
     gcc_flags=(),
     clang_engine="warning",
     clang_ids=("-Warray-bounds", "-Wfortify-source"),
-    clang_flags=("-Warray-bounds",),
+    clang_flags=("-Warray-bounds", "-Wfortify-source"),
     clang_message_re="",
     # Constant/locally-provable cases only — silence proves nothing
     # about runtime-sized accesses, so no refutation from this family.

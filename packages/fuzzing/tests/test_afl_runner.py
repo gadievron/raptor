@@ -8,6 +8,12 @@ from pathlib import Path
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _fake_campaign_afl_binary(monkeypatch):
+    # These tests stub campaign execution; discovery must not depend on AFL++.
+    monkeypatch.setattr(AFLRunner, "_check_afl_compatibility", lambda self: None)
+
 from packages.fuzzing.afl_runner import AFLRunner
 
 

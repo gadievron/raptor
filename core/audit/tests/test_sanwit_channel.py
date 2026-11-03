@@ -1281,6 +1281,7 @@ class TestOrphanContainment:
         # attended parent deadline must keep winning the race.
         assert bound > sanwit_execute.DOCKER_TIMEOUT_S
 
+    @pytest.mark.linux_native
     def test_self_starttime_is_verifiable(self):
         # The starttime read is the shared PID-reuse discriminator
         # (core.project.sessions.proc_starttime), not a local copy.

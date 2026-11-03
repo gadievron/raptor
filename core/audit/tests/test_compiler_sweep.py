@@ -3496,3 +3496,14 @@ class TestBoundedResolutionEndToEnd:
         expect = {"hops": "symbolic links", "budget": "resolution budget",
                   "deadline": "deadline"}[kind]
         assert expect in text, text
+
+
+@needs_clang
+def test_constant_oob_remains_confirmed_with_clang(tmp_path, sandbox_spy, monkeypatch):
+    monkeypatch.setattr(compiler_sweep, '_gcc_analyzer', lambda: None)
+    result = _sweep(tmp_path, 'oob.c', 'CWE-787',
+                    'memcpy writes 32 bytes into 8-byte `dst`',
+                    function_name='copy_fixed', line_start=3, line_end=7,
+                    gcc_probed=False)
+    assert result.outcome == 'confirmed', vars(result)
+    assert any('-Wfortify-source' in call['cmd'] for call in sandbox_spy)

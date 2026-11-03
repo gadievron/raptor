@@ -67,9 +67,10 @@ def test_cache_hit_skips_http(tmp_path):
     """A pre-populated cache short-circuits the HTTP call."""
     from core.json import JsonCache
     cache = JsonCache(root=tmp_path / "cache")
-    # Key uses the percent-encoded slug (injective cache identity).
+    from packages.sca.registries._url import registry_cache_key
+    # Use the current cache namespace, not a pre-migration literal.
     cache.put(
-        "ghactions-latest:actions%2Fcheckout",
+        registry_cache_key("ghactions-latest", "actions/checkout"),
         {"tag_name": "v5.2.1"},
         ttl_seconds=24 * 3600,
     )

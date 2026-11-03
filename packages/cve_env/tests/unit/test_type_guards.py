@@ -512,6 +512,8 @@ def test_check_exec_rejects_string_timeout_seconds() -> None:
     assert "timeout_seconds" in result["reason"]
     assert "float" in result["reason"] or "int" in result["reason"]
 
+@patch("cve_env.tools.verify._endpoint_run_ports",
+       new=lambda container_id: frozenset({8080}))
 def test_tcp_probe_check_step_rejects_null_host_port() -> None:
     """tcp_probe_check step with host_port=null → clear error, not int(None) crash.
 

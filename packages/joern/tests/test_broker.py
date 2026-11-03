@@ -18,6 +18,15 @@ from packages.joern.tests.test_graph_services import Worker
 from packages.joern.tunables import JoernTunables
 
 
+@pytest.fixture
+def tmp_path():
+    # Exercise the pathname transport on macOS rather than its path-length
+    # refusal. Deliberate overlong-path tests construct their own paths.
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="raptor-pytest-joern-", dir="/tmp") as raw:
+        yield Path(raw).resolve()
+
+
 @pytest.fixture(autouse=True)
 def _fresh_toolchain_paths():
     # The lease client is a fresh interpreter. Resolve the controller's
@@ -31,8 +40,15 @@ def _fresh_toolchain_paths():
 
 
 @pytest.fixture
-def controller(tmp_path):
-    root = tmp_path / "runtime"
+def controller(tmp_path, request):
+    import os
+    import tempfile
+    # This fixture is imported by test_lifecycle too, where this module's
+    # tmp_path override is not in scope. Own the short socket root here.
+    directory = tempfile.TemporaryDirectory(prefix="raptor-pytest-broker-", dir="/tmp")
+    request.addfinalizer(directory.cleanup)
+    root = Path(directory.name).resolve() / "runtime"
+    assert len(os.fsencode(root / "rpc.sock")) <= 100
     root.mkdir(mode=0o700)
     workers = []
 

@@ -24,6 +24,8 @@ def _compile(source: str, tmp_path: Path, extra_flags: tuple = ()) -> Path:
     )
     if result.returncode != 0:
         pytest.skip(f"gcc: {result.stderr[:120]}")
+    if binary.read_bytes()[:4] != b"\x7fELF":
+        pytest.skip("fixture requires an ELF-producing compiler")
     return binary
 
 

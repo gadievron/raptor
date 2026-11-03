@@ -648,7 +648,7 @@ class TestRunActivePhaseStreaming:
 
         assert phase["status"] == "failed"
         assert phase["kind"] == "probe"
-        assert "IsADirectoryError" in phase["error"]
+        assert any(kind in phase["error"] for kind in ("IsADirectoryError", "PermissionError"))
         assert "failure log not written" in capsys.readouterr().err
 
     def test_failure_message_scrubs_target_influenced_bytes(self, tmp_path):

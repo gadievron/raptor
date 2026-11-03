@@ -11,7 +11,15 @@ def _limit(resource_id, value):
     _, hard = resource.getrlimit(resource_id)
     if hard != resource.RLIM_INFINITY:
         value = min(value, hard)
-    resource.setrlimit(resource_id, (value, value))
+    try:
+        resource.setrlimit(resource_id, (value, value))
+    except (OSError, ValueError):
+        if sys.platform != 'darwin' or resource_id != resource.RLIMIT_AS:
+            raise
+        # Darwin can reject RLIMIT_AS altogether. The shared sandbox already
+        # treats that virtual-memory bound as best-effort there; keep CPU,
+        # wall-time, protocol-size, and file-size bounds in force.
+        sys.stderr.write('SMT worker: RLIMIT_AS unavailable on macOS; virtual-memory bound not enforced\n')
 
 
 def _local_z3(tag, args, **options):
@@ -22,7 +30,7 @@ def _local_z3(tag, args, **options):
 
 
 def main():
-    # Linux enforces AS. macOS accepts it without a hard memory guarantee.
+    # Linux enforces AS. Darwin may reject it; _limit reports that explicitly.
     _limit(resource.RLIMIT_AS, int(sys.argv[3]) * 1024 * 1024)
     _limit(resource.RLIMIT_CPU, int(sys.argv[4]))
     _limit(resource.RLIMIT_FSIZE, 16 * 1024 * 1024)
