@@ -236,29 +236,59 @@ keeping those outputs out of the checkout.
 preserves a failing pipeline status. The text log remains useful if the
 process crashes; JUnit XML may be incomplete if pytest cannot finish.
 
-### Intentional native crashes
+### Containing deliberate desktop crashes
 
-Ordinary runs exclude tests marked `intentional_crash`, even with `-m ""`.
-Default tests still exercise subprocess isolation, unexpected child exits,
-real signal delivery with SIGTERM, and output capture. Tests that must prove
-recovery from a real fatal native signal require `--run-crash-tests`.
+Some fixtures deliberately abort an interpreter outside RAPTOR's normal
+containment. Use the shared test-only helper in
+`core/testing/expected_crash.py` for those fixtures. On Linux and macOS it
+traces a direct, owned child, records the attempted signal, then kills and
+reaps the stopped child before forwarding that signal to the OS crash
+handler. This avoids deliberate-crash reports on desktop machines without
+changing production execution or system crash-reporting settings.
 
-The dedicated nightly job runs these tests on Linux and macOS. To reproduce
-that coverage explicitly (this may generate OS crash reports or dialogs):
+Use the `expected_crash_runner` fixture when a test needs an attempted
+fatal signal but does not need the child's final fatal exit status:
 
-```bash
-results_dir=$(mktemp -d /tmp/raptor-crash-tests.XXXXXX)
-echo "Results: $results_dir"
-set -o pipefail
-PYTHONFAULTHANDLER=1 env -u VIRTUAL_ENV uv run --extra grammars python -m pytest \
-  core/symbolic/tests -m intentional_crash --run-crash-tests -v --tb=short -ra \
-  --junitxml="$results_dir/results.xml" 2>&1 | tee "$results_dir/tests.log"
+```python
+def test_owned_abort(tmp_path, expected_crash_runner):
+    import signal
+    import sys
+
+    ready = tmp_path / "ready"
+    result = expected_crash_runner(
+        [sys.executable, "-c",
+         f"from pathlib import Path; import os; Path({str(ready)!r}).touch(); os.abort()"],
+        ready_file=ready,
+        expected_signal=signal.SIGABRT,
+    )
+    assert result.observed_signal == signal.SIGABRT
+    assert result.process.returncode == -signal.SIGKILL
 ```
 
-Disabling core dumps does not prevent macOS diagnostic reports. Keep crash
-reporting enabled for unexpected product failures. Mark tests that really
-need fatal signals; test parsing/classification with ordinary child exits
-and supplied result data when kernel signal delivery is not the assertion.
+Use a fresh readiness marker written immediately before the intentional
+operation so an interpreter startup failure cannot satisfy the assertion.
+The helper preserves stdout/stderr and supports stdin, timeouts, cwd, and
+environment overrides. Unexpected signals, failed exec, missing readiness,
+and timeouts fail the test. Unsupported hosts or denied tracing skip at the
+fixture's non-crashing capability probe; nightly CI requires execution
+without skips on Linux and macOS. A fresh interpreter forks the tracee,
+which also supports threaded pytest plugins and xdist workers.
+
+Prefer SIGTERM for tests that need only unexpected worker loss, and supplied
+result data for parsing or classification tests. Apply suppression to the
+fixture that would notify the desktop crash handler, rather than gating
+all tests with fatal-signal assertions. Sandbox signal and evidence tests
+keep their real execution, existing tier markers, and prerequisites on
+every supported host. They do not require an additional crash opt-in or
+CI-only permission. Never replace their actual wait status with an invented
+SIGABRT/SIGSEGV status from the wrapper.
+
+Use the wrapper only for direct test-owned children, not arbitrary process
+trees or processes already controlled by a debugger. Do not loosen sandbox
+policy to permit tracing. Keep prerequisite probes inside test execution;
+a fatal probe at module import runs before pytest can select tests.
+Disabling core dumps alone does not prevent desktop crash notifications.
+Unexpected product crashes retain their normal reporting behavior.
 
 ## Writing hermetic tests
 

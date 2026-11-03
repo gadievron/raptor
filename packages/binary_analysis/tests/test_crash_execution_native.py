@@ -71,12 +71,16 @@ int main(void) {
     if (f) { fputs("shadow", f); fclose(f); }
     puts("RAPTOR_INFERIOR_PROBE_OK");
     fflush(stdout);
-    raise(SIGSEGV);
+    raise(TEST_SIGNAL);
     return 0;
 }
 ''')
     binary = work/'fixture'
-    build = subprocess.run([compiler, '-g', '-O0',
+    # Debuggers own the SIGSEGV stop. The direct replay branch only tests
+    # containment boundaries and output, so a quiet signal suffices there.
+    replay_signal = ('SIGTERM' if request.node.callspec.params['consumer'] == 'asan'
+                     else 'SIGSEGV')
+    build = subprocess.run([compiler, '-g', '-O0', '-DTEST_SIGNAL=' + replay_signal,
         '-DPORT='+str(listener.getsockname()[1]),
         '-DSECRET='+json.dumps(str(secret)), '-DFORBIDDEN='+json.dumps(str(forbidden)),
         str(source), '-o', str(binary)], capture_output=True, text=True, timeout=30)

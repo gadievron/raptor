@@ -178,22 +178,23 @@ def test_child_exit_without_result_is_not_a_budget_kill(require_worker_sandbox):
     assert "crash, not a budget kill" in result.reason
 
 
-def _abort_child() -> None:
-    """Child payload for the opt-in native-crash direction test."""
+def _signal_child() -> None:
+    """Unexpected signal death without a core dump or crash dialog."""
     import os
-    import resource
-    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-    os.abort()
+    import signal
+    os.kill(os.getpid(), signal.SIGTERM)
 
 
-@pytest.mark.intentional_crash
 def test_child_crash_reported_as_crash_not_budget_kill(require_worker_sandbox):
-    """A child that dies hard (SIGABRT here; segfault in the wild)
-    closes the pipe long before the budget elapses — the report must
-    say crash, not blame a budget overrun the wall clock contradicts."""
+    """Signal death closes the pipe before the budget expires.
+
+    SIGTERM exercises the real worker-loss path quietly. Exact native
+    SIGABRT/SIGSEGV wait status is covered by the sandbox tests;
+    allowing ptrace inside the worker sandbox would weaken that policy.
+    """
     from core.symbolic._isolate import run_isolated
     r = run_isolated(
-        "core.symbolic.tests.test_isolate", "_abort_child", {},
+        "core.symbolic.tests.test_isolate", "_signal_child", {},
         timeout=60.0,
     )
     assert r.succeeded is False

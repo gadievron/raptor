@@ -6,12 +6,14 @@ host uncatchably (SIGABRT) — Python cannot catch a signal raised
 inside a C extension's init, so an in-process probe kills the whole
 run (observed as full xdist worker node-down). These tests make the
 process boundary visible with a scratch module that exits nonzero.
-The opt-in intentional_crash test additionally imports a module that calls
-``os.abort()``: the isolated child dies and the caller gets a clean False.
+The contained-crash test additionally imports a module that attempts
+``os.abort()``: the tracer records the signal and terminates that owned
+child quietly; the caller gets a clean False.
 """
 from __future__ import annotations
 
 import os
+import signal
 import sys
 import time
 from pathlib import Path
@@ -81,20 +83,48 @@ def test_probe_child_nonzero_exit_is_unavailable(scratch_import_path: Path) -> N
     assert _probe("scratch-json-after-exit", "json") is True
 
 
-@pytest.mark.intentional_crash
 def test_probe_survives_import_that_aborts_the_process(
-    scratch_import_path: Path,
+    scratch_import_path: Path, monkeypatch, expected_crash_runner,
 ) -> None:
     """The registered hazard, made deterministic: a module whose
-    import calls ``os.abort()``. An in-process probe dies with
-    SIGABRT here (killing the pytest worker); the isolated probe
-    maps the child's signal death to False and the caller survives.
+    import calls ``os.abort()``. The tracer observes SIGABRT and
+    terminates the child quietly; the isolated probe maps that loss
+    to False. Regression guards fail before an in-process abort.
     """
     mod = scratch_import_path / "raptor_scratch_abort_on_import.py"
-    mod.write_text("import os, resource\nresource.setrlimit(resource.RLIMIT_CORE, (0, 0))\n"
-                   "open(__file__ + 'entered', 'w').close()\nos.abort()\n")
+    from types import SimpleNamespace
+    from core.security import python_probe
+
+    marker = Path(str(mod) + "entered")
+    caller_pid = os.getpid()
+    mod.write_text(
+        "import os\n"
+        # A regression to in-process or unwrapped import must fail quietly,
+        # before the fixture deliberately aborts.
+        f"assert os.getpid() != {caller_pid}, 'probe ran in caller'\n"
+        f"assert os.getppid() != {caller_pid}, 'probe was not traced'\n"
+        "open(__file__ + 'entered', 'w').close()\nos.abort()\n"
+    )
+    real_subprocess = python_probe.subprocess
+    traces = []
+
+    def contained_run(command, **options):
+        if "raptor_scratch_abort_on_import" not in command:
+            return real_subprocess.run(command, **options)
+        assert options.pop("stdout") == real_subprocess.PIPE
+        assert options.pop("stderr") == real_subprocess.PIPE
+        result = expected_crash_runner(command, ready_file=marker, **options)
+        traces.append(result)
+        return result.process  # actual SIGKILL status, never a forged SIGABRT
+
+    monkeypatch.setattr(python_probe, "subprocess", SimpleNamespace(
+        run=contained_run, PIPE=real_subprocess.PIPE,
+    ))
     assert _probe("scratch-abort", "raptor_scratch_abort_on_import") is False
-    assert Path(str(mod)+"entered").exists(), "probe did not enter aborting module"
+    assert marker.exists(), "probe did not enter aborting module"
+    assert len(traces) == 1
+    assert traces[0].observed_signal == signal.SIGABRT
+    assert traces[0].process.returncode == -signal.SIGKILL
     # Still alive to assert anything at all — that IS the fix.
     assert _probe("scratch-json2", "json") is True
 

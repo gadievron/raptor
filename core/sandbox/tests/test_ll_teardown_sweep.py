@@ -233,8 +233,8 @@ class TestLandlockOnlyTeardownSweep(unittest.TestCase):
 
     def test_signal_death_mirrored(self):
         r = self._ll_run(
-            "import os, signal; os.kill(os.getpid(), signal.SIGSEGV)")
-        self.assertIn(r.returncode, (-11, 128 + 11),
+            "import os, signal; os.kill(os.getpid(), signal.SIGTERM)")
+        self.assertIn(r.returncode, (-15, 128 + 15),
                       f"signal death must stay observable "
                       f"(got rc={r.returncode})")
 

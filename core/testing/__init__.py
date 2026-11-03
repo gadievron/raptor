@@ -4,6 +4,9 @@ test suites across the tree had copy-pasted (and drifted).
 NOT collected as tests (no ``test_*.py`` modules except under
 ``tests/``); import from suites as ``from core.testing import ...``.
 
+The expected-crash subprocess helper lives in ``core.testing.expected_crash``;
+use the root ``expected_crash_runner`` fixture for capability-gated tests.
+
 Patterns provided (each replaces a family of per-suite copies):
 
 * :class:`FakeStructuredProvider` — provider-level stub for

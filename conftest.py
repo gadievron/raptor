@@ -1308,3 +1308,14 @@ def _tree_drift_summary(terminalreporter):
         f"dirty {_tree_state_at_start[1]}"
     )
     tr.write_line(f"  end:   HEAD {now[0][:12]} dirty {now[1]}")
+
+
+@pytest.fixture
+def expected_crash_runner():
+    """Contain a direct test-owned fatal signal without desktop crash reports."""
+    from core.testing.expected_crash import run_expected_crash, trace_unavailable_reason
+
+    reason = trace_unavailable_reason()
+    if reason:
+        pytest.skip(reason)
+    return run_expected_crash
