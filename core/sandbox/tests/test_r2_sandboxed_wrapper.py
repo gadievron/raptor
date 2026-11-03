@@ -189,19 +189,21 @@ class TestSandboxEngageFailureContract:
 
     def test_sandbox_setup_error_maps_to_101(self, tmp_path):
         # Pre-seed sys.modules with a fake core.sandbox whose
-        # sandbox() raises a REAL SandboxSetupError, then execute the
+        # run() raises a REAL SandboxSetupError, then execute the
         # wrapper in-process via runpy. The wrapper's own
-        # `from core.sandbox import sandbox` resolves to the seeded
+        # `from core.sandbox import run` resolves to the seeded
         # module, so the engage failure is deterministic and hermetic
         # (no namespace/userns support needed).
         code = (
             "import sys, types, runpy\n"
             f"sys.path.insert(0, {str(REPO_ROOT)!r})\n"
             "from core.sandbox.errors import SandboxSetupError\n"
+            "import core.sandbox.context, shutil\n"
+            "shutil.which = lambda name: '/usr/bin/radare2'\n"
             "fake = types.ModuleType('core.sandbox')\n"
-            "def _sandbox(**kw):\n"
+            "def _sandbox(*args, **kw):\n"
             "    raise SandboxSetupError('engage refused (test)')\n"
-            "fake.sandbox = _sandbox\n"
+            "fake.run = _sandbox\n"
             "fake.SandboxSetupError = SandboxSetupError\n"
             "sys.modules['core.sandbox'] = fake\n"
             f"sys.argv = ['raptor-r2-sandboxed', '-2', '-q0', "
