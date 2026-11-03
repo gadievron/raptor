@@ -20,9 +20,14 @@ import contextlib
 import os
 import signal
 import socket
+import subprocess
+import sys
 import tempfile
 import threading
 import time
+from pathlib import Path
+
+import pytest
 
 from packages.joern import netns_forwarder
 from packages.joern.netns_forwarder import Forwarder, create_listener
@@ -131,7 +136,9 @@ def test_forwarder_threads_block_handled_terminal_signals() -> None:
             os.rmdir(d)
 
 
-def test_orphan_watchdog_blocks_handled_terminal_signals() -> None:
+def _watchdog_signal_mask_case() -> None:
+    # This watchdog has no stop API. Its thread and unreadable pipe are
+    # process-owned; run this assertion only in the private child below.
     d = tempfile.mkdtemp(prefix="sigmaskw-")
     sock_path = os.path.join(d, "w.sock")
     listener = create_listener(sock_path)
@@ -157,6 +164,36 @@ def test_orphan_watchdog_blocks_handled_terminal_signals() -> None:
         fwd.stop()
         with contextlib.suppress(OSError):
             os.rmdir(d)
+
+
+@pytest.mark.wall_budget(20)
+def test_orphan_watchdog_blocks_handled_terminal_signals(tmp_path) -> None:
+    root = Path(__file__).resolve().parents[3]
+    code = (
+        "import sys; sys.path.insert(0, sys.argv[1]); "
+        "from packages.joern.tests.test_netns_forwarder_sigmask "
+        "import _watchdog_signal_mask_case; _watchdog_signal_mask_case()"
+    )
+    env = {
+        "PATH": os.defpath,
+        "HOME": str(tmp_path / "home"),
+        "TMPDIR": str(tmp_path),
+        "XDG_CACHE_HOME": str(tmp_path / "cache"),
+        "XDG_CONFIG_HOME": str(tmp_path / "config"),
+        "XDG_DATA_HOME": str(tmp_path / "data"),
+        "RAPTOR_REGISTRY_HOME": str(tmp_path / "registry"),
+        "RAPTOR_OUT_DIR": str(tmp_path / "out"),
+        "_RAPTOR_TRUSTED": "1",
+    }
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", code, str(root)],
+        env=env, cwd=root, stdin=subprocess.DEVNULL,
+        capture_output=True, text=True, timeout=10,
+        # Contain the watchdog's process-group escalation even if its
+        # parent-gone gate unexpectedly opens in this regression test.
+        start_new_session=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_shield_masks_creator_around_start_and_restores_exactly() -> None:
