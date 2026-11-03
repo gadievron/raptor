@@ -1,0 +1,7 @@
+schema_version = 1
+
+[syft]
+version = "1.55.0"
+url = "https://github.com/anchore/syft/releases/download/v1.55.0/syft_1.55.0_linux_amd64.tar.gz"
+sha256 = "bb65249542db5fedeeb4d3f9b018b75e7264dbfbbb10486f044581a92f90490d"
+member = "syft"
