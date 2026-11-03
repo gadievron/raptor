@@ -53,6 +53,7 @@ from core.logging import get_logger
 from core.paths import confine, strip_file_uri
 from core.run.finding_status import read_verdict
 from core.source import read_text_capped, split_lines
+from core.source.windows import read_text_line_window_capped
 from core.progress import HackerProgress
 from core.run.output import unique_run_suffix
 from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
@@ -498,29 +499,53 @@ class VulnerabilityContext:
             logger.warning("Cannot read file: %s", file_path)
             return False
 
-        # Capped read (shared core.source helper, 10 MB default):
+        # Character-capped read (the shared core.source limit):
         # a generated source file (single-line concatenated bundle,
         # vendored data file misclassified as code, hostile target
         # repo with a giant binary mislabeled as `.c`) would
         # otherwise OOM-kill the analyser. Truncated reads still
         # return True so the agent can analyse the visible portion.
         try:
-            got = read_text_capped(file_path, newline="")
+            window = None
+            if not self.start_line:
+                window = (0, NO_LINE_INFO_HEAD_LINES)
+            elif (type(self.start_line) is int and self.start_line > 0
+                  and type(self.end_line or self.start_line) is int
+                  and (self.end_line or self.start_line) >= 0
+                  and type(context_lines) is int and context_lines >= 0):
+                start_idx = self.start_line - 1
+                end_line = self.end_line or self.start_line
+                context_start = max(0, start_idx - context_lines)
+                window = (context_start, max(context_start, end_line + context_lines))
+            # Keep legacy Python slice/error semantics for malformed spans
+            # and unusual context arguments; the normal path streams once.
+            got = (read_text_line_window_capped(file_path, *window) if window is not None
+                   else read_text_capped(file_path, newline=""))
             if got is None:
                 logger.warning("Cannot read file: %s", file_path)
                 return False
-            content, truncated = got
+            payload, truncated = got
             if truncated:
                 logger.warning(
                     "Source file %s exceeded the capped read; analysis sees truncated content", file_path
                 )
+            if window is not None:
+                if not self.start_line:
+                    self.full_code = "\n".join(payload)
+                    self.surrounding_context = self.full_code
+                else:
+                    lo = max(0, start_idx - window[0])
+                    hi = max(0, end_line - window[0])
+                    self.full_code = "\n".join(payload[lo:hi])
+                    self.surrounding_context = "\n".join(payload)
+                return True
             # \n-model split (core.source.lines contract): the
             # slice indices are the finding's SARIF startLine/endLine,
             # which count \n only. A splitlines() view let form feeds
             # in a string literal above the finding shift the slice,
             # so the "vulnerable code" the LLM verdicts on was an
             # attacker-chosen substitute line.
-            lines = split_lines(content)
+            lines = split_lines(payload)
 
             # Get the specific vulnerable lines. endLine is optional
             # in SARIF (the parser coerces a missing value to None) —
@@ -583,22 +608,30 @@ class VulnerabilityContext:
             # Same capped read as read_vulnerable_code above. Same
             # rationale: bound the in-flight memory regardless of
             # source-file size.
-            got = read_text_capped(file_path, newline="")
-            if got is None:
-                return f"[Error reading code: {file_uri}]"
+            if (type(line) is int and line >= 0
+                    and type(context_lines) is int and context_lines >= 0):
+                start = max(0, line - context_lines - 1)
+                got = read_text_line_window_capped(
+                    file_path, start, max(start, line + context_lines),
+                )
+                if got is None:
+                    return f"[Error reading code: {file_uri}]"
+                numbered = enumerate(got[0], start=start)
+            else:
+                got = read_text_capped(file_path, newline="")
+                if got is None:
+                    return f"[Error reading code: {file_uri}]"
+                lines = split_lines(got[0])
+                start = max(0, line - context_lines - 1)
+                end = min(len(lines), line + context_lines)
+                numbered = ((i, lines[i]) for i in range(start, end))
             # Same \n-model contract as read_vulnerable_code: *line*
             # comes from SARIF, so the >>> marker must land on the
             # \n-counted line, not a splitlines()-shifted one.
-            lines = split_lines(got[0])
-
-            # Get context around the line
-            start = max(0, line - context_lines - 1)
-            end = min(len(lines), line + context_lines)
-
             context = []
-            for i in range(start, end):
+            for i, source_line in numbered:
                 marker = ">>>" if i == line - 1 else "   "
-                context.append(f"{marker} {i + 1:4d} | {lines[i].rstrip()}")
+                context.append(f"{marker} {i + 1:4d} | {source_line.rstrip()}")
 
             return "\n".join(context)
 
