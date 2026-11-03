@@ -71,6 +71,8 @@ from .constraints import (
 )
 from .context import assemble_context
 from .cost_tracker import PhaseCostLedger
+from .gap_index import select_peer_gaps
+from .prep_profile import PrepProfile, profile_call as _profile_call
 from .diagnostics import (
     format_tier_diagnostics,
     write_tier_diagnostics,
@@ -1228,6 +1230,11 @@ class OrchestratorConfig:
     # would otherwise downgrade registry-grade receipts to
     # majority-only.
     consistency_wur_functions: frozenset[str] | None = None
+
+    # Diagnostic-only; never feeds spend reservations or scheduling.
+    prep_profile: PrepProfile = field(
+        default_factory=PrepProfile, repr=False, compare=False, kw_only=True,
+    )
 
 
 @dataclass
@@ -6694,8 +6701,12 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
             _load_domain_model(config),
             target_path=config.target_path,
         )
-    conventions = discover_conventions(
-        detector_gaps, domain_vocab=conv_vocab,
+    conventions = _profile_call(
+        config,
+        "peer_groups.conventions",
+        discover_conventions,
+        detector_gaps,
+        domain_vocab=conv_vocab,
     )
     if conventions:
         logger.info(
@@ -6750,7 +6761,10 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
             ),
             None,
         )
-        prep_binary_edge_index = binary_edge_index_from_inventory(
+        prep_binary_edge_index = _profile_call(
+            config,
+            "peer_groups.binary_edges",
+            binary_edge_index_from_inventory,
             _pg_inventory,
             no_binary_oracle=config.no_binary_oracle,
         )
@@ -6767,7 +6781,9 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
     try:
         from core.analysis.peer_groups import type_ref_index_from_inventory
 
-        prep_type_ref_index = type_ref_index_from_inventory(checklist)
+        prep_type_ref_index = _profile_call(
+            config, "peer_groups.type_index", type_ref_index_from_inventory, checklist
+        )
     except Exception:
         logger.debug(
             "type-cohort index build for peer groups failed",
@@ -6782,7 +6798,10 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
     try:
         from core.analysis.peer_groups import route_models_for_prep
 
-        prep_route_models = route_models_for_prep(
+        prep_route_models = _profile_call(
+            config,
+            "peer_groups.routes",
+            route_models_for_prep,
             checklist,
             config.inventory,
             out_dir=config.out_dir,
@@ -6803,8 +6822,12 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
             interface_slot_families,
         )
 
-        prep_interface_slots = interface_slot_families(
-            _gap_source_texts(), checklist,
+        prep_interface_slots = _profile_call(
+            config,
+            "peer_groups.interfaces",
+            interface_slot_families,
+            _gap_source_texts(),
+            checklist,
         )
     except Exception:
         logger.debug(
@@ -6818,7 +6841,9 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
     try:
         from .enum_switch import enum_switch_cohorts
 
-        prep_enum_cohorts = enum_switch_cohorts(_gap_source_texts())
+        prep_enum_cohorts = _profile_call(
+            config, "peer_groups.enum_cohorts", enum_switch_cohorts, _gap_source_texts()
+        )
     except Exception:
         logger.debug(
             "enum-switch cohorts for peer groups failed",
@@ -6833,8 +6858,12 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
     try:
         from core.analysis.clone_index import load_or_build_clone_index
 
-        prep_clone_index = load_or_build_clone_index(
-            _gap_source_texts(), out_dir=config.out_dir,
+        prep_clone_index = _profile_call(
+            config,
+            "peer_groups.clones",
+            load_or_build_clone_index,
+            _gap_source_texts(),
+            out_dir=config.out_dir,
         )
     except Exception:
         logger.debug(
@@ -6846,7 +6875,10 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
     # LLM-enrichable), and peer groups are an enrichment layer — one
     # malformed input must cost the layer, never the prep phase.
     try:
-        peer_groups = resolve_peer_groups(
+        peer_groups = _profile_call(
+            config,
+            "peer_groups.resolve",
+            resolve_peer_groups,
             gap_func_dicts,
             joern_server=joern_server,
             binary_edge_index=prep_binary_edge_index,
@@ -6864,8 +6896,13 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
         logger.debug("peer-group resolution failed", exc_info=True)
 
     sibling_ns_findings = (
-        check_sibling_negative_space(
-            detector_gaps, conventions, peer_groups=peer_groups,
+        _profile_call(
+            config,
+            "peer_groups.negative_space",
+            check_sibling_negative_space,
+            detector_gaps,
+            conventions,
+            peer_groups=peer_groups,
         ) if conventions else []
     )
     if sibling_ns_findings:
@@ -6876,7 +6913,9 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
 
     try:
         from .dispatch_table import check_capability_displacement
-        capability_displacements = check_capability_displacement(detector_gaps)
+        capability_displacements = _profile_call(
+            config, "peer_groups.capabilities", check_capability_displacement, detector_gaps
+        )
         if capability_displacements:
             logger.info(
                 "dispatch-table analysis: %d capability displacement(s)",
@@ -6888,7 +6927,9 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
 
     try:
         from .struct_accessor_index import build_index_from_source
-        struct_accessor_index = build_index_from_source(detector_gaps)
+        struct_accessor_index = _profile_call(
+            config, "peer_groups.struct_accessors", build_index_from_source, detector_gaps
+        )
         if struct_accessor_index:
             logger.info(
                 "struct-accessor index: %d fields tracked across functions",
@@ -6904,17 +6945,19 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
     )
 
     sibling_postcond_violations = []
+    # Index each small sibling population; retain gap order and duplicates.
     for pg in peer_groups:
-        pg_gaps = [
-            g
-            for g in gaps
-            if any(
-                s.function == g.get("name") and s.file == g.get("file")
-                for s in pg.siblings
-            )
-        ]
-        sibling_postcond_violations.extend(check_sibling_ordering(pg_gaps))
-        sibling_postcond_violations.extend(check_sibling_sanitizer_strength(pg_gaps))
+        pg_gaps = _profile_call(
+            config,
+            "peer_groups.select_gaps",
+            select_peer_gaps,
+            gaps,
+            pg.siblings,
+        )
+        sibling_postcond_violations.extend(_profile_call(config, "peer_groups.ordering", check_sibling_ordering, pg_gaps))
+        sibling_postcond_violations.extend(_profile_call(
+            config, "peer_groups.sanitizer_strength", check_sibling_sanitizer_strength, pg_gaps
+        ))
 
     if sibling_postcond_violations:
         logger.info(
@@ -6934,7 +6977,13 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
             for g in detector_gaps
             if g.get("source")
         }
-        semantic_findings = check_semantic_consistency(peer_groups, source_map)
+        semantic_findings = _profile_call(
+            config,
+            "peer_groups.semantic_consistency",
+            check_semantic_consistency,
+            peer_groups,
+            source_map,
+        )
         if semantic_findings:
             logger.info(
                 "semantic consistency: %d outliers across peer groups",
@@ -12086,6 +12135,9 @@ def _reconcile_cost_ledgers(config, result) -> None:
     result.llm_spend_usd = result.cost_tracker.total_spend_usd
     if config.out_dir:
         result.cost_tracker.write(config.out_dir)
+        profile = getattr(config, "prep_profile", None)
+        if isinstance(profile, PrepProfile):
+            profile.write(config.out_dir)
     logger.info(result.cost_tracker.summary())
     if sink is not None:
         tel_total = sink.total_cost_usd()
@@ -12765,7 +12817,9 @@ def _run_mechanical_detectors(
     for gap in gaps:
         fp = gap.get("file", "")
         if fp and fp not in source_texts:
-            _md_text = _contained_source_text(config.target_path, fp)
+            _md_text = _profile_call(
+                config, "mechanical.source_reads", _contained_source_text, config.target_path, fp
+            )
             if _md_text is not None:
                 source_texts[fp] = _md_text
 
@@ -13063,8 +13117,13 @@ def _run_mechanical_detectors(
         to_compute: list[tuple[str, str]] = []
         for fp, src in file_items:
             cached_entry = (
-                det_cache.cached_condition(
-                    condition_key, fp, content_shas[fp],
+                _profile_call(
+                    config,
+                    "mechanical.condition_cache_lookup",
+                    det_cache.cached_condition,
+                    condition_key,
+                    fp,
+                    content_shas[fp],
                 ) if condition_cacheable else None
             )
             if cached_entry is not None:
@@ -13076,7 +13135,8 @@ def _run_mechanical_detectors(
                 max_workers=min(8, len(to_compute)),
             ) as pool:
                 futures = {
-                    submit_with_joern(pool, _process_file_conditions, fp, src): fp
+                    submit_with_joern(pool, _profile_call, config, "mechanical.conditions",
+                                      _process_file_conditions, fp, src): fp
                     for fp, src in to_compute
                 }
                 for fut, fut_fp in futures.items():
@@ -13117,8 +13177,12 @@ def _run_mechanical_detectors(
         if "graphs" not in _cg_state:
             graphs = None
             with contextlib.suppress(OSError, ValueError, RecursionError):
-                graphs = _load_call_graphs_cached(
-                    config.target_path, checklist,
+                graphs = _profile_call(
+                    config,
+                    "mechanical.call_graphs",
+                    _load_call_graphs_cached,
+                    config.target_path,
+                    checklist,
                 )
             _cg_state["graphs"] = graphs
         return _cg_state["graphs"]
@@ -13454,12 +13518,22 @@ def _run_mechanical_detectors(
     for det_name, cache_ok, det_block in battery:
         cache_key = structural_key if cache_ok else None
         records = (
-            det_cache.cached_structural(cache_key, det_name)
+            _profile_call(
+                config,
+                f"mechanical.{det_name}.cache_lookup",
+                det_cache.cached_structural,
+                cache_key,
+                det_name,
+            )
             if cache_key is not None else None
         )
         if records is None:
             try:
-                records = det_block()
+                records = _profile_call(
+                    config,
+                    f"mechanical.{det_name}.compute",
+                    det_block,
+                )
             except Exception:
                 # A raised block stores nothing: freezing a transient
                 # failure's empty result into the cache would turn it
@@ -13532,9 +13606,14 @@ def _run_mechanical_detectors(
                         g for g in gaps if g.get("file") == src_fp
                     )
                     if cocci_key is not None:
-                        cached_recs = det_cache.cached_cocci(
-                            cocci_key, src_fp,
-                            content_shas[src_fp], file_gaps_sha,
+                        cached_recs = _profile_call(
+                            config,
+                            "mechanical.coccinelle_cache_lookup",
+                            det_cache.cached_cocci,
+                            cocci_key,
+                            src_fp,
+                            content_shas[src_fp],
+                            file_gaps_sha,
                         )
                         if cached_recs is not None:
                             for rec in cached_recs:
@@ -13548,9 +13627,14 @@ def _run_mechanical_detectors(
                     file_records: list[Any] = []
                     file_complete = True
                     for rule_path_str in sorted(standing_rules):
-                        sr = _run_cocci_rule(
-                            c_file, Path(rule_path_str),
-                            no_includes=True, timeout=60,
+                        sr = _profile_call(
+                            config,
+                            "mechanical.coccinelle",
+                            _run_cocci_rule,
+                            c_file,
+                            Path(rule_path_str),
+                            no_includes=True,
+                            timeout=60,
                             # In-repo standing engine/coccinelle rules
                             # (code trust) — @script:python trusted.
                             allow_scripting=True,
@@ -13597,7 +13681,11 @@ def _run_mechanical_detectors(
     except Exception:
         logger.debug("mechanical: standing_cocci failed", exc_info=True)
 
-    det_cache.save()
+    _profile_call(
+        config,
+        "mechanical.cache_save",
+        det_cache.save,
+    )
 
     # inject-mode detectors moved to lazy evaluation — see _InjectModeResolver
 

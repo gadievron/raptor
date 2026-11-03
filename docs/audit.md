@@ -796,7 +796,8 @@ Query audit state across all four layers:
 | `decomp-tree/decomp-tree-conformance.json` | Binary targets: per-tool parse conformance of the decomp-tree (sandboxed tree-sitter + semgrep probe legs, conservative `parsed_rate`, quarantine list) — the sweep-coverage denominator |
 | `fuzz-dict.json` / `fuzz.dict` | Fuzz handoff: dictionary tokens mined from constants, parse-shape literals, and dispatch keys; `fuzz.dict` is AFL format and is auto-discovered by [/fuzz](fuzzing.md#dictionary-auto-discovery) |
 | `cost-breakdown.json` | Per-phase cost ledger reconciliation (completed + failed-attempt + unattributed spend always sum to the authoritative total; the pre-loop summary pass books as the `summary` phase) |
-| `llm-telemetry.jsonl` | Per-call LLM telemetry |
+| `llm-telemetry.jsonl` | Per-call LLM telemetry, including a bounded application `caller_chain` when available; attribution never changes budget call classes |
+| `prep-profile.json` | Diagnostic sub-step timings, errors and cache hit/miss counts for peer-group and mechanical-detector preparation; written at finalisation, replaced on resume. Inclusive/nested/parallel timings must not be summed as elapsed run time |
 | `forecast.json` | Pre-spend cost forecast band (`pre_run` for uncapped runs, `forecast_only` for `--forecast` exits) — see [Cost forecasting](#cost-forecasting) |
 | `forecast-calibration.jsonl` | Forecast-vs-actual record appended at run completion (also appended at the project level for project runs) |
 | `promotion-alarms.jsonl` | Promotion-without-tool-evidence alarms — a `finding` that reached the journal or export without qualifying tool evidence. Empty on every legitimate run; any record means the mechanical-verdict gate was bypassed (possible injection or policy bug). The gate also enforces: a violating `finding` is demoted to `suspicious` before it ships, and the record is the alarm trail |
