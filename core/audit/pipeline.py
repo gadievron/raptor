@@ -22,11 +22,17 @@ logger = logging.getLogger(__name__)
 
 class ReviewMode(str, enum.Enum):
     SECURITY = "security"
+    BUG_FIRST = "bug_first"
     QUALITY = "quality"
+    ENSEMBLE = "ensemble"
 
     @property
     def is_defect_oriented(self) -> bool:
-        return self == ReviewMode.QUALITY
+        return self in (ReviewMode.BUG_FIRST, ReviewMode.QUALITY)
+
+    @property
+    def has_security_phase(self) -> bool:
+        return self == ReviewMode.BUG_FIRST
 
 
 class VerificationTier(str, enum.Enum):
@@ -107,7 +113,7 @@ class AuditPipelineOpts:
     study_root: Path | None = None
     study_libraries: tuple[tuple[str, str], ...] = ()
     no_study_libraries: bool = False
-    mode: ReviewMode = ReviewMode.SECURITY
+    mode: ReviewMode = ReviewMode.ENSEMBLE
     max_workers: int = 0
     # Tri-state: True/False = explicit per-run choice (--dynamic /
     # --no-dynamic); None = defer to the active project's 'dynamic'
@@ -413,7 +419,8 @@ def _build_orchestrator_config(
     """Thread AuditPipelineOpts into an OrchestratorConfig.
 
     Single source of truth for the opts → config mapping — a new
-    OrchestratorConfig field only needs wiring here.
+    OrchestratorConfig field only needs wiring here for both
+    ``run_audit_pipeline`` and ``run_ensemble_pipeline`` to pick it up.
     """
     from core.audit.orchestrator import OrchestratorConfig
 
@@ -508,7 +515,7 @@ def _build_orchestrator_config(
     )
 
 
-def run_audit_pipeline(opts: AuditPipelineOpts):
+def run_audit_pipeline(opts: AuditPipelineOpts, *, prep_cache=None):
     """Run the audit orchestrator and return its result.
 
     Sets up the LLM client, builds the OrchestratorConfig, and calls
@@ -530,7 +537,6 @@ def run_audit_pipeline(opts: AuditPipelineOpts):
         mode=opts.mode, out_dir=opts.out_dir,
     )
     config = _build_orchestrator_config(opts, client, models, opts.mode)
-    config.pre_export_hooks = [dampen_pileup_pre_export]
 
     if len(models) > 1:
         # Cross-model panel: one review_fn per configured model so the
@@ -546,7 +552,9 @@ def run_audit_pipeline(opts: AuditPipelineOpts):
             for m in models
         }
 
-    return run_orchestrator(config, review_fn, on_progress=opts.on_progress)
+    return run_orchestrator(
+        config, review_fn, on_progress=opts.on_progress, prep_cache=prep_cache,
+    )
 
 
 def _maybe_auto_siblings(opts: AuditPipelineOpts) -> None:
@@ -587,25 +595,41 @@ STATUS_RANK = {
     "suspicious": 4, "finding": 5,
 }
 _STATUS_RANK = STATUS_RANK
+# Rank floor for the evidence gate in _merge_outcomes ("both sides
+# already at suspicious-or-worse" short-circuit).
+_SUSPICIOUS_RANK = STATUS_RANK["suspicious"]
 NON_MECHANICAL = ("prefilter:", "llm-claimed:")
 _NON_MECHANICAL = NON_MECHANICAL
 
 
-# ---------------------------------------------------------------------------
-# Dual-mode accessor — works on ReviewOutcome objects and plain dicts
-# ---------------------------------------------------------------------------
-
-
 def _is_verification_evidence(ev: str) -> bool:
-    """True when evidence is strong enough to prevent a suspicious→clean demotion.
+    """True when evidence is strong enough to break a merge tie.
 
     Thin delegate: verification-grade admission lives in ONE place —
-    :func:`core.audit.evidence_grade.is_verification_evidence`.
+    :func:`core.audit.evidence_grade.is_verification_evidence` (the
+    exact-spelling registry, the fail-closed allowlist, the composite
+    parse, and the >=2-distinct-detection-namespaces
+    aggregation-promotion rule are all documented there). This name
+    stays for the merge tie-break below and the orchestrator's
+    demotion-gate wrapper import.
     """
     from core.audit.evidence_grade import is_verification_evidence
     return is_verification_evidence(ev)
 
 
+def _has_any_mechanical_evidence(ev: str) -> bool:
+    """True when evidence comes from any mechanical tool (including detection-role).
+
+    Weaker than ``_is_verification_evidence`` — accepts detection-role
+    SMT/Coccinelle evidence.  Used by the ensemble merge to prevent
+    discarding findings that have real tool support even if the tool's
+    role is detection rather than verification.
+    """
+    return bool(ev) and not ev.startswith(_NON_MECHANICAL)
+
+
+# ---------------------------------------------------------------------------
+# Dual-mode accessor — works on ReviewOutcome objects and plain dicts
 # ---------------------------------------------------------------------------
 
 def _get(item, attr, dict_key=None, default: str=""):
@@ -664,6 +688,174 @@ def _get_bug_class_rr(item):
     rr = getattr(item, "review_result", None) or {}
     return rr.get("bug_class", "") or ""
 
+
+
+def _needs_second_pass(outcome) -> bool:
+    """True when pass 1 result is uncertain enough to warrant pass 2."""
+    if outcome.status != "clean":
+        return True
+    ev = outcome.evidence_tool or ""
+    return bool(ev) and not ev.startswith(NON_MECHANICAL)
+
+
+def _merge_outcomes(sec_outcomes, bf_outcomes):
+    """Merge ReviewOutcome lists: max-alarm with evidence preservation."""
+    from copy import copy
+
+    sec_by_key = {(o.file, o.function): o for o in sec_outcomes}
+    bf_by_key = {(o.file, o.function): o for o in bf_outcomes}
+    all_keys = set(sec_by_key) | set(bf_by_key)
+    merged = []
+
+    for key in sorted(all_keys):
+        sec = sec_by_key.get(key)
+        bf = bf_by_key.get(key)
+        if sec and bf:
+            sr = _STATUS_RANK.get(sec.status, 0)
+            br = _STATUS_RANK.get(bf.status, 0)
+            higher = sec.status if sr >= br else bf.status
+
+            use_max = True
+            if higher in ("suspicious", "finding") and not (
+                sr >= _SUSPICIOUS_RANK and br >= _SUSPICIOUS_RANK
+            ):
+                sec_ev = sec.evidence_tool or ""
+                bf_ev = bf.evidence_tool or ""
+                has_evidence = (
+                    _is_verification_evidence(sec_ev)
+                    or _is_verification_evidence(bf_ev)
+                )
+                if not has_evidence:
+                    use_max = False
+
+            if use_max:
+                winner_src = bf if br > sr else sec
+            else:
+                # Conservative merge: the lower-ranked outcome wins.
+                # It can never be a finding here — use_max is only
+                # False when exactly one side is >= suspicious, so the
+                # lower side is at most dormant.
+                winner_src = sec if sr <= br else bf
+            loser_src = bf if winner_src is sec else sec
+            winner = copy(winner_src)
+
+            # Evidence-combine: the SURVIVING outcome's provenance must
+            # lead — startswith-based classification (NON_MECHANICAL,
+            # _is_verification_evidence) reads the first stamp, and the
+            # old rank-keyed branches prefixed the DISCARDED side on
+            # the conservative path (winner = lower rank), so a clean
+            # outcome's mechanical receipt could be read as llm-claimed
+            # (or gain a malformed leading "+" when the loser had no
+            # evidence at all).
+            if (
+                sr != br
+                and winner_src.evidence_tool
+                and loser_src.evidence_tool
+            ):
+                winner.evidence_tool = (
+                    winner_src.evidence_tool
+                    + "+" + loser_src.evidence_tool
+                )
+
+            winner.cost_usd = sec.cost_usd + bf.cost_usd
+            merged.append(winner)
+        else:
+            merged.append(copy(sec or bf))
+    return merged
+
+
+def run_ensemble_pipeline(opts: AuditPipelineOpts):
+    """Per-function pipelined ensemble: pass 1 → conditional pass 2 → merge.
+
+    Each function is reviewed in security mode first.  If the result is not
+    a confident clean (non-clean status or has evidence), a bug_first
+    review runs immediately and the two outcomes are merged.  The executor parallelises across functions, so
+    pass-2 reviews for early functions overlap with pass-1 reviews for
+    later ones — wall-clock ≈ max(per-function chains), not sum-of-passes.
+    """
+    import threading
+    import time
+
+    from core.llm.log_quiet import quiet_noisy_loggers
+
+    quiet_noisy_loggers()
+
+    from core.audit.llm_review import make_review_fn
+    from core.audit.orchestrator import run_orchestrator
+
+    t0 = time.monotonic()
+
+    client, models, primary_model = _make_llm_client(opts)
+
+    _counters = {"pass2_skipped": 0, "pass2_run": 0}
+    _lock = threading.Lock()
+
+    def _make_ensemble_fn(model_name):
+        sec_review = make_review_fn(
+            client, task_type="audit", model_name=model_name,
+            mode=ReviewMode.SECURITY, out_dir=opts.out_dir,
+        )
+        bf_review = make_review_fn(
+            client, task_type="audit", model_name=model_name,
+            mode=ReviewMode.BUG_FIRST, out_dir=opts.out_dir,
+        )
+
+        def ensemble_review_fn(ctx, config):
+            outcome1 = sec_review(ctx, config)
+
+            if not _needs_second_pass(outcome1):
+                with _lock:
+                    _counters["pass2_skipped"] += 1
+                return outcome1
+
+            with _lock:
+                _counters["pass2_run"] += 1
+
+            outcome2 = bf_review(ctx, config)
+            merged = _merge_outcomes([outcome1], [outcome2])
+            if not merged:
+                return outcome1
+            result = merged[0]
+            result.cost_usd = outcome1.cost_usd + outcome2.cost_usd
+            result.duration_s = outcome1.duration_s + outcome2.duration_s
+            return result
+
+        return ensemble_review_fn
+
+    ensemble_review_fn = _make_ensemble_fn(primary_model)
+
+    config = _build_orchestrator_config(
+        opts, client, models, ReviewMode.SECURITY,
+    )
+    if len(models) > 1:
+        # Cross-model panel: one ensemble chain per configured model so
+        # the multi-model dispatch invokes each model's own sec+bf
+        # pipeline. Without this map every panel member fell back to
+        # the primary-pinned chain — the other configured models were
+        # never called (same latent pin run_audit_pipeline fixed for
+        # the plain review fn).
+        config.review_fns_by_model = {
+            m: _make_ensemble_fn(m if m != "default" else None)
+            for m in models
+        }
+    # File-level pile-up dampening runs as a pre-export hook INSIDE the
+    # orchestrator so the journal correction pass, findings-graded.json
+    # and the summary counters all see the same (dampened) statuses.
+    # Running it post-hoc here left the export disagreeing with stats.
+    config.pre_export_hooks = [dampen_pileup_pre_export]
+
+    result = run_orchestrator(
+        config, ensemble_review_fn, on_progress=opts.on_progress,
+    )
+
+    logger.info(
+        "Pipelined ensemble: %d pass2 skipped, %d pass2 run",
+        _counters["pass2_skipped"], _counters["pass2_run"],
+    )
+
+    result.total_duration_s = time.monotonic() - t0
+
+    return result
 
 
 # -- #4: file-level over-alert dampening ----------------------------------

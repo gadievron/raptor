@@ -34,8 +34,20 @@ from typing import Any
 from core.security.log_sanitisation import sanitise_for_terminal
 from core.json import load_json, loads, save_json
 
+# Ensemble constants and algorithms imported from pipeline.py (single source
+# of truth — W8 unification).
 from core.audit.pipeline import (
     STATUS_RANK as _STATUS_RANK,
+)
+from core.audit.pipeline import (
+    _SUSPICIOUS_RANK,
+)
+from core.audit.pipeline import (
+    _has_any_mechanical_evidence,
+    _is_verification_evidence,
+)
+from core.audit.pipeline import (
+    dampen_file_pileup as _dampen_file_pileup_generic,
 )
 from core.llm.coerce import structured_result
 from core.run.scratch import keepalive_register, keepalive_unregister
@@ -898,6 +910,7 @@ def _run_audit(
     checkpoint_stamp: dict[str, Any] | None = None,
     heartbeat: Callable[[], None] | None = None,
     attributed_start: float = 0.0,
+    prep_caches: dict[str, dict] | None = None,
 ) -> tuple[list[dict[str, Any]], list[Path]]:
     """Run /audit's orchestrator against labeled functions.
 
@@ -930,7 +943,8 @@ def _run_audit(
 
     *attributed_start* seeds the printed label-attributed running
     total with spend already attributed by earlier passes of the same
-    run, so a mid-run ceiling decision always sees the RUN-level
+    run (the ensemble's bug_first pass passes in the security pass's
+    total), so a mid-run ceiling decision always sees the RUN-level
     attributed figure, never a per-pass fragment.
 
     *triage* False disables the triage-classifier SKIP shortcut in the
@@ -1079,6 +1093,10 @@ def _run_audit(
             )
             study_root = full_src if full_src and full_src != src_dir else None
             repo_out = out_dir / repo_key if out_dir else None
+            group_cache = (
+                prep_caches.setdefault(repo_key, {})
+                if prep_caches is not None else None
+            )
             outcomes, bare_key_entries, audit_dir = _run_audit_on_target(
                 src_dir, repo_labels, model=model, out_dir=repo_out,
                 joern_server=joern_srv, study_root=study_root,
@@ -1086,6 +1104,7 @@ def _run_audit(
                 prefilter=prefilter, profile=profile,
                 open_discovery=open_discovery,
                 immediate_verify=immediate_verify,
+                prep_cache=group_cache,
             )
             if audit_dir:
                 run_dirs.append(audit_dir)
@@ -1387,6 +1406,17 @@ def _status_matches(
     return status_matches(expected, actual)
 
 
+def _dampen_file_pileup_dicts(results: list) -> int:
+    """Dampen + recompute match flags on dicts."""
+    before = [r.get("actual") for r in results]
+    dampened = _dampen_file_pileup_generic(results)
+    for i, r in enumerate(results):
+        if r.get("actual") != before[i]:
+            r["file_dampened"] = True
+            r["match"] = _status_matches(r["expected"], r["actual"])
+    return dampened
+
+
 def _run_audit_on_target(
     target_dir: Path,
     labels: list[Any],
@@ -1402,6 +1432,7 @@ def _run_audit_on_target(
     profile: str = "deployed",
     open_discovery: bool = False,
     immediate_verify: bool = True,
+    prep_cache: dict | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], Path | None]:
     """Run /audit orchestrator on a target (in-process).
 
@@ -1432,8 +1463,12 @@ def _run_audit_on_target(
         name = parts[-1] if len(parts) >= 2 else parts[0]
         file = ":".join(parts[:-1]) if len(parts) >= 2 else ""
         fn_specs.append(f"{file}:{name}:{label.source.line_start}")
-        # Guaranteed review slot: pins hoist the labeled function
-        # ahead of the budget cut and bypass triage skips.
+        # Guaranteed review slot in THIS pass: pins hoist the labeled
+        # function ahead of the budget cut and bypass triage skips.
+        # Without this, a pass whose triage skipped every labeled
+        # function returned no outcome and the label scored ``error``
+        # for that mode (observed on a label-filtered ensemble rerun:
+        # bug_first reviewed the 5 labels, security reviewed 0).
         pin_specs.append(f"{file}:{name}")
 
     labeled_ids = {label.function_id for label in labels}
@@ -1528,7 +1563,7 @@ def _run_audit_on_target(
             # as they do on a trusted project target.
             repo_trusted=True,
         )
-        run_audit_pipeline(pipeline_opts)
+        run_audit_pipeline(pipeline_opts, prep_cache=prep_cache)
         rc = 0
     except Exception:
         logger.exception("Audit pipeline failed")
@@ -2634,7 +2669,9 @@ def _pass_checkpoint_valid(
     """Whether a pass-level checkpoint may stand in for this run's pass.
 
     Every row must have been produced under the same requested model,
-    and the rows must cover exactly the selected label set.
+    and the rows must cover exactly the selected label set (security /
+    merged passes, ``require_all``) or a subset of it (bug_first,
+    whose eligible set is recomputed from the security rows).
     Anything else — a different ``--label`` selection, another model's
     rows — re-runs the pass rather than silently adopting foreign
     rows that would only surface later as conservation violations
@@ -2691,6 +2728,735 @@ def _read_pass_checkpoint(
         flush=True,
     )
     return None
+
+
+def _run_ensemble_audit(
+    labels: list[Any],
+    source_dirs: dict[str, Path],
+    *,
+    model: str = "",
+    out_dir: Path | None = None,
+    full_source_dirs: dict[str, Path] | None = None,
+    triage: bool = True,
+    prefilter: bool = True,
+    profile: str = "deployed",
+    open_discovery: bool = False,
+    immediate_verify: bool = True,
+    heartbeat: Callable[[], None] | None = None,
+    checkpoint_extra: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], list[Path]]:
+    """Run dual-mode ensemble: security + bug_first, merge, Phase 2 + 2b.
+
+    Improvements over naive sequential:
+    - Conditional pass-2 skip: confident-clean security-pass rows
+      (no evidence, no substantive counter-hypothesis) skip bug_first
+    - Shared Joern server across both passes
+    - Checkpoints after each stage AND after each group within a pass
+      (``checkpoint-*-groups.json``), so a mid-pass stop loses at most
+      the in-flight group
+    - max_workers halved per pass to avoid overwhelming the LLM
+
+    Returns (scored_results, run_dirs) — same shape as _run_audit.
+    """
+    from core.llm.concurrency import derive_max_workers
+
+    base_out = out_dir or Path(f"out/audit-corpus-{int(time.time())}")
+    base_out.mkdir(parents=True, exist_ok=True)
+
+    sec_out = Path(str(base_out) + "-sec")
+    bf_out = Path(str(base_out) + "-bf")
+    sec_ckpt = base_out / "checkpoint-sec.json"
+    bf_ckpt = base_out / "checkpoint-bf.json"
+    merged_ckpt = base_out / "checkpoint-merged.json"
+    sec_groups_ckpt = base_out / "checkpoint-sec-groups.json"
+    bf_groups_ckpt = base_out / "checkpoint-bf-groups.json"
+
+    # Config stamp shared by the three pass-level checkpoints (mode
+    # is implied by the file).  Same axes the per-group stamps carry.
+    pass_stamp: dict[str, Any] = {
+        "model": model or "",
+        "profile": profile,
+        "triage": triage,
+        "prefilter": prefilter,
+    }
+    if checkpoint_extra:
+        pass_stamp.update(checkpoint_extra)
+
+    # --- Worker budget: full for each sequential pass ---
+    resolved_label = _resolve_model_label(model)
+    resolved_model = (
+        resolved_label.rsplit("/", 1)[-1]
+        if "/" in resolved_label
+        else (model or "default")
+    )
+    full_workers = derive_max_workers(resolved_model)
+    print(f"  Ensemble concurrency: {full_workers} workers per pass",
+          flush=True)
+
+    run_dirs: list[Path] = []
+
+    try:
+        # --- Pass 1: security mode, full workers ---
+        sec_results = _read_pass_checkpoint(
+            sec_ckpt, labels, model, pass_stamp,
+            require_all=True, name="Security pass",
+        )
+        bf_results = _read_pass_checkpoint(
+            bf_ckpt, labels, model, pass_stamp,
+            require_all=False, name="Bug-first pass",
+        )
+
+        prep_caches: dict[str, dict] = {}
+
+        if sec_results is not None and bf_results is not None:
+            print("  Resuming from checkpoints (both passes cached)",
+                  flush=True)
+            sec_dirs = [sec_out] if sec_out.is_dir() else []
+            bf_dirs = [bf_out] if bf_out.is_dir() else []
+        else:
+            if sec_results is None:
+                print(f"\n[{_ts()}] --- Ensemble pass 1: security mode ---",
+                      flush=True)
+                sec_results, sec_dirs = _run_audit(
+                    labels, source_dirs,
+                    model=model, out_dir=sec_out,
+                    full_source_dirs=full_source_dirs,
+                    mode="security",
+                    joern_server=None,
+                    max_workers=full_workers,
+                    triage=triage,
+                    prefilter=prefilter,
+                    profile=profile,
+                    open_discovery=open_discovery,
+                    immediate_verify=immediate_verify,
+                    checkpoint=sec_groups_ckpt,
+                    checkpoint_stamp=checkpoint_extra,
+                    heartbeat=heartbeat,
+                    prep_caches=prep_caches,
+                )
+                _checkpoint_write(
+                    sec_ckpt,
+                    {"stamp": pass_stamp, "rows": sec_results},
+                )
+                print(f"  Security pass complete "
+                      f"({len(sec_results)} results, checkpointed)",
+                      flush=True)
+            else:
+                print("  Security pass: resuming from checkpoint",
+                      flush=True)
+                sec_dirs = [sec_out] if sec_out.is_dir() else []
+
+            # --- Conditional skip: identify functions for pass 2 ---
+            _counter_vuln_kw = (
+                "overflow", "underflow", "null", "free",
+                "race", "inject", "bypass", "truncat", "wrap",
+                "leak", "uninitiali", "bounds", "sign", "cast",
+                "format", "use-after", "double", "integer",
+                "buffer", "stack", "heap", "oob",
+                "out-of-bound", "attacker", "controlled",
+                "tainted", "deadlock", "toctou",
+            )
+
+            def _needs_pass2(r):
+                if r.get("actual", "clean") != "clean":
+                    return True
+                if r.get("evidence_tool", ""):
+                    return True
+                counter = (r.get("counter_hypothesis") or "").lower()
+                return len(counter) >= 30 and any(
+                    kw in counter for kw in _counter_vuln_kw
+                )
+
+            pass2_ids = {r["function_id"] for r in sec_results
+                         if _needs_pass2(r)}
+            skip_count = len(sec_results) - len(pass2_ids)
+            print(f"\n  Conditional skip: {skip_count} confident clean, "
+                  f"{len(pass2_ids)} to pass 2", flush=True)
+
+            if bf_results is None:
+                if pass2_ids:
+                    pass2_labels = [
+                        lb for lb in labels
+                        if lb.function_id in pass2_ids
+                    ]
+                    print(f"\n[{_ts()}] --- Ensemble pass 2: bug_first mode "
+                          f"({len(pass2_labels)}/{len(labels)} functions) ---",
+                          flush=True)
+                    bf_results, bf_dirs = _run_audit(
+                        pass2_labels, source_dirs,
+                        model=model, out_dir=bf_out,
+                        full_source_dirs=full_source_dirs,
+                        mode="bug_first",
+                        joern_server=None,
+                        max_workers=full_workers,
+                        triage=triage,
+                        prefilter=prefilter,
+                        profile=profile,
+                        open_discovery=open_discovery,
+                        immediate_verify=immediate_verify,
+                        checkpoint=bf_groups_ckpt,
+                        checkpoint_stamp=checkpoint_extra,
+                        heartbeat=heartbeat,
+                        attributed_start=sum(
+                            r.get("cost_usd", 0.0) for r in sec_results
+                        ),
+                        prep_caches=prep_caches,
+                    )
+                else:
+                    print("  All functions confident clean — skipping pass 2",
+                          flush=True)
+                    bf_results = []
+                    bf_dirs = []
+                _checkpoint_write(
+                    bf_ckpt,
+                    {"stamp": pass_stamp, "rows": bf_results},
+                )
+                print(f"  Bug-first pass complete "
+                      f"({len(bf_results)} results, checkpointed)",
+                      flush=True)
+            else:
+                print("  Bug-first pass: resuming from checkpoint",
+                      flush=True)
+                bf_dirs = [bf_out] if bf_out.is_dir() else []
+
+        run_dirs = sec_dirs + bf_dirs
+    finally:
+        pass
+
+    # --- Merge at the result level ---
+    merged_cached = _read_pass_checkpoint(
+        merged_ckpt, labels, model, pass_stamp,
+        require_all=True, name="Merge",
+    )
+    if merged_cached is not None:
+        print("  Resuming from merge checkpoint", flush=True)
+        merged_results = merged_cached
+    else:
+        sec_by_id = {r["function_id"]: r for r in sec_results}
+        bf_by_id = {r["function_id"]: r for r in bf_results}
+        all_ids = set(sec_by_id) | set(bf_by_id)
+
+        merged_results: list[dict[str, Any]] = []  # type: ignore[no-redef]
+        sec_only_wins = 0
+        bf_only_wins = 0
+        agree_count = 0
+        demoted_count = 0
+
+        for fid in sorted(all_ids):
+            sec_r = sec_by_id.get(fid)
+            bf_r = bf_by_id.get(fid)
+
+            if sec_r and bf_r:
+                sec_rank = _STATUS_RANK.get(sec_r["actual"], 0)
+                bf_rank = _STATUS_RANK.get(bf_r["actual"], 0)
+                higher_status = (
+                    sec_r["actual"] if sec_rank >= bf_rank
+                    else bf_r["actual"]
+                )
+
+                use_max = True
+                # Named rank floor, not a literal: the pipeline's
+                # STATUS_RANK renumbering (dark inserted below
+                # suspicious) left a hardcoded 3 here meaning "dark",
+                # so this replica skipped the evidence gate for
+                # (dark, suspicious) pairs the pipeline gates.
+                if (
+                    higher_status in ("suspicious", "finding")
+                    and not (
+                        sec_rank >= _SUSPICIOUS_RANK
+                        and bf_rank >= _SUSPICIOUS_RANK
+                    )
+                ):
+                    sec_ev = sec_r.get("evidence_tool", "")
+                    bf_ev = bf_r.get("evidence_tool", "")
+                    has_evidence = (
+                        _has_any_mechanical_evidence(sec_ev)
+                        or _has_any_mechanical_evidence(bf_ev)
+                    )
+                    if not has_evidence:
+                        use_max = False
+
+                if not use_max:
+                    higher = sec_r if sec_rank >= bf_rank else bf_r
+                    lower = bf_r if sec_rank >= bf_rank else sec_r
+                    winner = dict(higher)
+                    if winner["actual"] == "finding":
+                        winner["actual"] = "suspicious"
+                    elif winner["actual"] == "suspicious":
+                        winner["actual"] = lower["actual"]
+                    winner["ensemble_source"] = "disagree_demoted"
+                    winner["security_actual"] = sec_r["actual"]
+                    winner["bug_first_actual"] = bf_r["actual"]
+                    demoted_count += 1
+                elif bf_rank > sec_rank:
+                    winner = dict(bf_r)
+                    winner["ensemble_source"] = "bug_first"
+                    winner["security_actual"] = sec_r["actual"]
+                    bf_only_wins += 1
+                elif sec_rank > bf_rank:
+                    winner = dict(sec_r)
+                    winner["ensemble_source"] = "security"
+                    winner["bug_first_actual"] = bf_r["actual"]
+                    sec_only_wins += 1
+                else:
+                    winner = dict(sec_r)
+                    winner["ensemble_source"] = "both_agree"
+                    agree_count += 1
+
+                # Per-mode actuals for expected_mode_results scoring —
+                # recorded on every merged row, not just disagreements.
+                winner["security_actual"] = sec_r["actual"]
+                winner["bug_first_actual"] = bf_r["actual"]
+                winner["mode"] = "ensemble"
+
+                # A lane floor that fired is mechanical evidence and
+                # must survive the merge regardless of which lane's
+                # row wins — the Phase-2 quality suppression exempts
+                # on this flag, and a winner copied from the other
+                # lane silently dropped it (clean minted over a FIRED
+                # structural floor).
+                winner["receipt_floored"] = bool(
+                    sec_r.get("receipt_floored")
+                    or bf_r.get("receipt_floored"),
+                )
+
+                # Attributed spend/time for a label is what BOTH
+                # passes spent reviewing it — the losing pass's cost
+                # is real attributed money, not infra.  Keeping only
+                # the winner's figure under-recorded ensemble spend
+                # by up to 2x and made the final meta figure disagree
+                # with the mid-run running total (which accumulates
+                # per pass) — the exact number a cost ceiling is
+                # enforced against.
+                winner["cost_usd"] = (
+                    sec_r.get("cost_usd", 0.0)
+                    + bf_r.get("cost_usd", 0.0)
+                )
+                winner["duration_s"] = (
+                    sec_r.get("duration_s", 0.0)
+                    + bf_r.get("duration_s", 0.0)
+                )
+
+                winner["match"] = _status_matches(
+                    winner["expected"], winner["actual"],
+                )
+                merged_results.append(winner)
+            elif sec_r:
+                merged_results.append(dict(sec_r))
+            else:
+                merged_results.append(dict(bf_r))  # type: ignore[arg-type]
+
+        sec_cost = sum(r.get("cost_usd", 0) for r in sec_results)
+        bf_cost = sum(r.get("cost_usd", 0) for r in bf_results)
+
+        print(f"\n[{_ts()}] --- Ensemble merge ---", flush=True)
+        print(f"  Security wins: {sec_only_wins}", flush=True)
+        print(f"  Bug-first wins: {bf_only_wins}", flush=True)
+        print(f"  Agree: {agree_count}", flush=True)
+        print(f"  Demoted: {demoted_count}", flush=True)
+        print(f"  Security cost: ${sec_cost:.4f}", flush=True)
+        print(f"  Bug-first cost: ${bf_cost:.4f}", flush=True)
+
+        _checkpoint_write(
+            merged_ckpt,
+            {"stamp": pass_stamp, "rows": merged_results},
+        )
+
+    # --- Phase 2: classify security impact ---
+    findings = [r for r in merged_results
+                if r["actual"] in ("finding", "suspicious")]
+    if findings:
+        print(f"\n[{_ts()}] --- Phase 2: classifying {len(findings)} finding(s) ---",
+              flush=True)
+        try:
+            phase2_cost = _run_phase2_classify(findings, model=model)
+            print(f"  Phase 2 cost: ${phase2_cost:.4f}", flush=True)
+        except Exception:
+            logger.exception("Phase 2 classification failed")
+            print("  Phase 2 classification failed (continuing)", flush=True)
+
+        from core.audit.merge_fence import load_standing_receipts
+
+        # Fence dirs are the lane ROOTS (base_out + "-sec"/"-bf"),
+        # NEVER run_dirs: a fresh pass appends the PER-GROUP audit
+        # dirs (<lane>/<repo_key>) to run_dirs, under which the
+        # artifact's group resolves to "" while every fresh row
+        # carries repo=<repo_key> — the scoped lookup could never
+        # match and the fence silently unarmed on the primary path.
+        # The resume path already passed exactly these lane roots,
+        # so both shapes feed the index one identical layout
+        # (<lane_root>/<repo_group>/mechanical-findings.json) with
+        # no second plumbing contract to drift.
+        fence_dirs = [d for d in (sec_out, bf_out) if d.is_dir()]
+        if not fence_dirs:
+            # Lane out-dirs gone (resume after deletion): no receipt
+            # artifact to read — the fence is unarmed for this
+            # segment.  Say so; silent unarming is invisible to the
+            # operator.
+            print("  Merge fence: no lane run dirs — fence unarmed "
+                  "for this segment", flush=True)
+        suppressed = _suppress_quality_findings(
+            merged_results,
+            receipt_index=load_standing_receipts(fence_dirs),
+            record_dir=base_out,
+        )
+        if suppressed:
+            print(f"  Phase 2 suppressed: {suppressed} quality finding(s) "
+                  f"demoted to clean", flush=True)
+        fence_held = sum(
+            1 for r in merged_results if r.get("merge_fence")
+        )
+        if fence_held:
+            print(f"  Merge fence: {fence_held} Phase-2 clean "
+                  f"demotion(s) blocked by standing receipt(s)",
+                  flush=True)
+
+    # --- File-level over-alert dampening (#4) ---
+    _dampened = _dampen_file_pileup_dicts(merged_results)
+    if _dampened:
+        print(f"  File-level dampening: {_dampened} pile-up finding(s) "
+              f"demoted", flush=True)
+
+    # --- Phase 2b: chain detection ---
+    quality_findings = [
+        r for r in merged_results
+        if r["actual"] in ("finding", "suspicious")
+        and r.get("phase2_classification") == "quality_finding"
+    ]
+    if len(quality_findings) >= 2:
+        print(f"\n[{_ts()}] --- Phase 2b: chain detection on {len(quality_findings)} "
+              f"quality finding(s) ---", flush=True)
+        try:
+            chains = _run_phase2b_chains(
+                quality_findings, merged_results,
+                out_dir=base_out, model=model,
+            )
+            if chains:
+                print(f"  Chains found: {len(chains)}", flush=True)
+                for c in chains:
+                    print(f"    {c['bug_a']} + {c['bug_b']} "
+                          f"-> {c.get('primitive', '?')}", flush=True)
+            else:
+                print("  No chains confirmed", flush=True)
+        except Exception:
+            logger.exception("Phase 2b chain detection failed")
+            print("  Phase 2b failed (continuing)", flush=True)
+
+    return merged_results, run_dirs
+
+
+# Consecutive Phase-2 call failures after which the remaining
+# classifications are marked "error" without further LLM calls —
+# the route is dead (expired token / revoked creds / partition),
+# not the individual findings.
+_PHASE2_FAILURE_ABORT = 3
+
+
+def _suppress_quality_findings(
+    merged_results: list[dict[str, Any]],
+    *,
+    receipt_index: dict[str, dict[str, list[dict[str, Any]]]] | None = None,
+    record_dir: Path | None = None,
+) -> int:
+    """Phase 2 quality-finding suppression: demote non-security quality
+    findings to clean — they are real defects but not exploitable.
+
+    Exception: findings backed by mechanical evidence (SMT, sarif,
+    prefilter) are not suppressed — the tool confirmed the defect.
+    Errored classifications (``phase2_classification == "error"``) are
+    never suppression inputs: only a POSITIVE quality_finding ruling
+    from a live call may demote. Returns the number demoted.
+
+    *receipt_index* (from
+    :func:`core.audit.merge_fence.load_standing_receipts` over the
+    lanes' run dirs) arms the merge-lane receipt fence: a row whose
+    function carries a standing floor-class detector receipt with no
+    mechanical refutation is held at its merged grade instead of
+    demoted — an LLM quality opinion must not mint clean over a
+    standing receipt (rxkad merge-level wrong-clean class).  Each hold
+    writes a ``merge_fence_receipt_stands`` row (``dropped: false``)
+    to *record_dir*'s suppressions.jsonl.
+    """
+    from core.audit.merge_fence import (
+        bare_key,
+        hold_clean_mint,
+        standing_receipts_for,
+    )
+
+    # Reduced key forms (line-suffix stripped, receiver stripped)
+    # shared by more than one function under review: the receipt
+    # artifact keys by bare name, so a receipt on such a key cannot
+    # be attributed to one of the twins — the fence's reduced-form
+    # fallbacks must not hold a receipt-free twin (same ambiguity
+    # guard the outcome parser applies to stripped keys).
+    ambiguous_bare: set[str] = set()
+    if receipt_index:
+        form_owner: dict[str, str] = {}
+        for r in merged_results:
+            fid = str(r.get("function_id", "") or "")
+            head, _, tail = fid.rpartition(":")
+            stripped = head if (head and tail.isdigit()) else fid
+            for form in {stripped, bare_key(fid)}:
+                if form_owner.setdefault(form, fid) != fid:
+                    ambiguous_bare.add(form)
+
+    suppressed = 0
+    for r in merged_results:
+        if (
+            r.get("phase2_classification") == "quality_finding"
+            and not r.get("phase2_error")
+            and not r.get("phase2_is_security")
+            and r["actual"] in ("finding", "suspicious")
+            # `or` not a dict default: a model that returns primitive
+            # null (instead of the string "none") must not exempt the
+            # row from suppression.
+            and (r.get("phase2_primitive") or "none") == "none"
+        ):
+            ev = r.get("evidence_tool", "")
+            if _is_verification_evidence(ev):
+                continue
+            if r.get("receipt_floored"):
+                # A deterministic gate floor (structural/detector
+                # receipt corroborating the reviewer's own hypothesis)
+                # is mechanical evidence — an LLM quality opinion must
+                # not un-do it (moby CVE-2024-36623/36621 class).
+                continue
+            fence_receipts = standing_receipts_for(
+                receipt_index, source_function_id(r.get("function_id", "")),
+                repo=r.get("repo"),
+                ambiguous_bare_keys=ambiguous_bare,
+            )
+            if fence_receipts:
+                # Merge-lane receipt fence: the receipt is STANDING
+                # (present in a lane's mechanical findings, no
+                # recorded proof-grade refutation) even though no
+                # lane floor fired on it — the merge may not lower
+                # the grade below suspicious on prose alone.
+                hold_clean_mint(r, fence_receipts, record_dir)
+                continue
+            r["actual"] = "clean"
+            r["phase2_suppressed"] = True
+            r["match"] = _status_matches(r["expected"], r["actual"])
+            suppressed += 1
+    return suppressed
+
+
+def _run_phase2_classify(
+    findings: list[dict[str, Any]],
+    *,
+    model: str = "",
+) -> float:
+    """Run Phase 2 security classification on merged findings.
+
+    Fail-closed contract: a finding whose classification call fails
+    gets ``phase2_classification="error"`` (+ ``phase2_error=True``)
+    and is thereby ineligible for the quality-finding suppression —
+    an auth/transport failure must never become a demotion input.
+    """
+    from core.audit.security_classifier import (
+        CALIBRATION_RULES,
+        CLASSIFICATION_SCHEMA,
+    )
+    from core.llm.transcript import build_llm_client, transcript_subject
+
+    # Transcript seam: identical to LLMClient() with no session active.
+    client = build_llm_client()
+    kwargs: dict[str, Any] = {"task_type": "audit"}
+    if model:
+        try:
+            mc = client.config.config_for_model(model)
+            kwargs = {"model_config": mc}
+        except (ValueError, AttributeError):
+            pass
+
+    total_cost = 0.0
+    consecutive_failures = 0
+    for r in findings:
+        fid = r["function_id"]
+        hyp = r.get("hypothesis", "")
+        counter = r.get("counter_hypothesis", "")
+        evidence = r.get("evidence_tool", "")
+        prompt = (
+            f"Given this verified defect:\n"
+            f"  Function: {fid}\n"
+            f"  Bug: {hyp}\n"
+            f"  Status: {r['actual']}\n"
+        )
+        if counter:
+            prompt += f"  Strongest counter-argument: {counter}\n"
+        if evidence:
+            prompt += f"  Tool evidence: {evidence}\n"
+        prompt += (
+            "\nIs this defect security-impacting? Consider trust boundaries, "
+            "attacker reachability, and CIA impact."
+        )
+        if consecutive_failures >= _PHASE2_FAILURE_ABORT:
+            # Circuit breaker: a run of consecutive transport-level
+            # failures means the LLM route itself is dead (expired
+            # token, revoked credentials, network partition) — every
+            # further call would fail identically. Stop calling and
+            # mark the remainder as errored instead of hammering a
+            # dead route.
+            r["phase2_classification"] = "error"
+            r["phase2_is_security"] = False
+            r["phase2_primitive"] = "none"
+            r["phase2_error"] = True
+            continue
+        try:
+            # transcript_subject keys the record/replay entry to this
+            # finding; no-op-cheap when no transcript is active.
+            with transcript_subject(fid):
+                response = client.generate_structured(
+                    prompt,
+                    CLASSIFICATION_SCHEMA,
+                    # Same calibrated ruleset as the in-run classifier
+                    # (security_classifier._CLASSIFICATION_SYSTEM): the
+                    # suppression decision this pass feeds must not be
+                    # made by an uncalibrated twin of that prompt.
+                    system_prompt=(
+                        "You are a security impact classifier. Given a "
+                        "verified code defect, decide whether it has "
+                        "security implications or is purely a quality "
+                        "issue.\n\n"
+                        + CALIBRATION_RULES
+                    ),
+                    **kwargs,
+                )
+            result = structured_result(response, default={})
+            cost = response.cost if hasattr(response, "cost") else 0.0
+            total_cost += cost
+            consecutive_failures = 0
+        except Exception:
+            logger.warning("Phase 2 failed for %s", fid, exc_info=True)
+            # FAIL CLOSED: an errored classification is an "error"
+            # cell, never a verdict input. Defaulting to
+            # quality_finding here fed the suppression loop and
+            # demoted true positives to clean whenever the LLM route
+            # died mid-run (expired auth ≠ "not a security bug").
+            consecutive_failures += 1
+            r["phase2_classification"] = "error"
+            r["phase2_is_security"] = False
+            r["phase2_primitive"] = "none"
+            r["phase2_error"] = True
+            continue
+
+        r["phase2_classification"] = result.get("classification", "quality_finding")
+        r["phase2_is_security"] = result.get("is_security", False)
+        r["phase2_primitive"] = result.get("primitive") or "none"
+        cls_tag = sanitise_for_terminal(
+            str(result.get("classification", "?")), max_len=64)
+        print(f"  {fid} -> {cls_tag}", flush=True)
+
+    errored = sum(1 for r in findings if r.get("phase2_error"))
+    if errored:
+        print(f"  Phase 2 errors: {errored} classification(s) failed — "
+              f"kept out of suppression", flush=True)
+    return total_cost
+
+
+def _run_phase2b_chains(
+    quality_findings: list[dict[str, Any]],
+    all_results: list[dict[str, Any]],
+    *,
+    out_dir: Path | None = None,
+    model: str = "",
+) -> list[dict[str, Any]]:
+    """Run Phase 2b chain detection on quality findings.
+
+    Builds a call graph from the audit log entries and looks for
+    connected quality-bug pairs.
+    """
+    from core.audit.chain_detector import CHAIN_SCHEMA
+    from core.llm.transcript import build_llm_client, transcript_subject
+
+    # Transcript seam: identical to LLMClient() with no session active.
+    client = build_llm_client()
+    kwargs: dict[str, Any] = {"task_type": "audit"}
+    if model:
+        try:
+            mc = client.config.config_for_model(model)
+            kwargs = {"model_config": mc}
+        except (ValueError, AttributeError):
+            pass
+
+    # Build adjacency from audit log caller/callee data
+    graph: dict[str, set] = {}
+    for r in all_results:
+        fid = r["function_id"]
+        neighbours = graph.setdefault(fid, set())
+        # The audit log entries may carry callers/callees
+        for c in r.get("callers", []):
+            if isinstance(c, dict) and c.get("file") and c.get("name"):
+                n = f"{c['file']}:{c['name']}"
+                neighbours.add(n)
+                graph.setdefault(n, set()).add(fid)
+        for c in r.get("callees", []):
+            if isinstance(c, dict) and c.get("file") and c.get("name"):
+                n = f"{c['file']}:{c['name']}"
+                neighbours.add(n)
+                graph.setdefault(n, set()).add(fid)
+
+    # Find connected quality-bug pairs
+    candidates = []
+    seen = set()
+    for i, a in enumerate(quality_findings):
+        a_id = a["function_id"]
+        for b in quality_findings[i + 1:]:
+            b_id = b["function_id"]
+            pair = tuple(sorted([a_id, b_id]))
+            if pair in seen:
+                continue
+            if b_id in graph.get(a_id, set()):
+                candidates.append((a, b))
+                seen.add(pair)
+
+    if not candidates:
+        return []
+
+    chains = []
+    for a, b in candidates:
+        prompt = (
+            f"These bugs were found on the same call path:\n\n"
+            f"Bug A: {a['function_id']}\n"
+            f"  Hypothesis: {a.get('hypothesis', '')}\n\n"
+            f"Bug B: {b['function_id']}\n"
+            f"  Hypothesis: {b.get('hypothesis', '')}\n\n"
+            f"Do these bugs compose into a security issue that "
+            f"neither bug represents alone?"
+        )
+        try:
+            # transcript_subject keys the record/replay entry to this
+            # candidate pair; no-op-cheap when no transcript is active.
+            pair_id = "+".join(sorted([a["function_id"], b["function_id"]]))
+            with transcript_subject(pair_id):
+                response = client.generate_structured(
+                    prompt,
+                    CHAIN_SCHEMA,
+                    system_prompt=(
+                        "You are a security analyst. Given two verified "
+                        "code defects on the same call path, decide "
+                        "whether they compose into a security "
+                        "vulnerability."
+                    ),
+                    **kwargs,
+                )
+            result = structured_result(response, default={})
+        except Exception:
+            logger.warning("Chain eval failed for %s + %s",
+                           a["function_id"], b["function_id"],
+                           exc_info=True)
+            continue
+
+        if result.get("is_chain"):
+            chains.append({
+                "bug_a": a["function_id"],
+                "bug_b": b["function_id"],
+                "chain_description": result.get("chain_description", ""),
+                "primitive": result.get("primitive", ""),
+                "confidence": result.get("confidence", "medium"),
+            })
+
+    return chains
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -2811,8 +3577,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--mode",
         choices=sorted(VALID_REVIEW_MODES),
-        default="security",
-        help="Review mode: security (default) or quality",
+        default="ensemble",
+        help="Review mode: security, bug_first, quality, or ensemble "
+             "(run security + bug_first, merge, Phase 2 + 2b; default)",
     )
     parser.add_argument(
         "--triage",
@@ -3249,23 +4016,37 @@ def main(argv: list[str] | None = None) -> int:
 
             t0 = time.monotonic()
             try:
-                results, run_dirs = _run_audit(
-                    labels, audit_dirs,
-                    model=model, out_dir=args.out,
-                    full_source_dirs=source_dirs if excerpt_dirs else None,
-                    mode=mode,
-                    triage=args.triage == "on",
-                    prefilter=args.prefilter == "on",
-                    profile=args.profile,
-                    open_discovery=args.open_discovery,
-                    immediate_verify=not args.no_immediate_verify,
-                    checkpoint=(
-                        args.out / f"checkpoint-{mode}-groups.json"
-                        if args.out else None
-                    ),
-                    checkpoint_stamp=ckpt_stamp_extra,
-                    heartbeat=_heartbeat,
-                )
+                if mode == "ensemble":
+                    results, run_dirs = _run_ensemble_audit(
+                        labels, audit_dirs,
+                        model=model, out_dir=args.out,
+                        full_source_dirs=source_dirs if excerpt_dirs else None,
+                        triage=args.triage == "on",
+                        prefilter=args.prefilter == "on",
+                        profile=args.profile,
+                        open_discovery=args.open_discovery,
+                        immediate_verify=not args.no_immediate_verify,
+                        heartbeat=_heartbeat,
+                        checkpoint_extra=ckpt_stamp_extra,
+                    )
+                else:
+                    results, run_dirs = _run_audit(
+                        labels, audit_dirs,
+                        model=model, out_dir=args.out,
+                        full_source_dirs=source_dirs if excerpt_dirs else None,
+                        mode=mode,
+                        triage=args.triage == "on",
+                        prefilter=args.prefilter == "on",
+                        profile=args.profile,
+                        open_discovery=args.open_discovery,
+                        immediate_verify=not args.no_immediate_verify,
+                        checkpoint=(
+                            args.out / f"checkpoint-{mode}-groups.json"
+                            if args.out else None
+                        ),
+                        checkpoint_stamp=ckpt_stamp_extra,
+                        heartbeat=_heartbeat,
+                    )
             finally:
                 if excerpt_dirs:
                     _release_excerpt_trees(excerpt_dirs)

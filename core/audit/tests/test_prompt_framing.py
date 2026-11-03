@@ -83,6 +83,37 @@ class TestRuleRefinementClass:
         assert SECURITY_AUDIT_FRAMING in captured["system"]
 
 
+class TestSecurityClassifierClass:
+    def test_classification_system_prompt_carries_framing(self):
+        from core.audit.security_classifier import (
+            _build_classification_prompt,
+        )
+
+        outcome = SimpleNamespace(
+            file="a.c", function="f", status="suspicious",
+            hypothesis="h", body="b",
+            review_result={"bug_class": "bounds", "cwe": "CWE-120"},
+        )
+        _user, system = _build_classification_prompt(outcome, "")
+        assert SECURITY_AUDIT_FRAMING in system
+
+
+class TestChainDetectorClass:
+    def test_chain_system_prompt_carries_framing(self):
+        from core.audit.chain_detector import _build_chain_prompt
+
+        a = SimpleNamespace(
+            file="a.c", function="f", hypothesis="h1", body="b1",
+            review_result={"bug_class": "bounds"},
+        )
+        b = SimpleNamespace(
+            file="b.c", function="g", hypothesis="h2", body="b2",
+            review_result={"bug_class": "bounds"},
+        )
+        _user, system = _build_chain_prompt(a, b)
+        assert SECURITY_AUDIT_FRAMING in system
+
+
 class TestAdversarialRefuteClass:
     def test_refutation_system_prompt_carries_framing(self):
         from core.audit.adversarial_refute import build_refutation_prompt

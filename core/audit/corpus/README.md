@@ -160,7 +160,7 @@ with `corpus_metrics`:
    receipt-less mechanisms and results predating attribution).
 3. **Mode expectations** — `expected_mode_results` per label, checked
    wherever a mode actually ran (single-mode runs via the row's
-   `mode`).
+   `mode`; ensemble runs via `security_actual` / `bug_first_actual`).
    Unexercised modes are never guessed.
 
 ## Iterating on a detector (--label refires)

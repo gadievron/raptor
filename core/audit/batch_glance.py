@@ -79,7 +79,7 @@ def format_batch_prompt(
     mode = contexts[0].get("review_mode", "security") if contexts else "security"
     question = (
         _GLANCE_QUESTION_QUALITY
-        if mode == "quality"
+        if mode in ("bug_first", "quality")
         else _GLANCE_QUESTION_SECURITY
     )
     system = (

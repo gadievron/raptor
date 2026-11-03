@@ -41,7 +41,7 @@ the genuine label while keeping the forged one. Three rules:
      artifact keeps the writer-authored line 1 plus an explicit
      elision marker — never a bare ``[-N:]`` over the whole document.
   3. In-band markers must be forgery-evident: either nonce-stamped
-     (the dark_verify harness sentinel / joern_verify record-nonce
+     (the dark_verify harness sentinel / merge_fence record-nonce
      precedents) or with untrusted body lines quoted/indented so
      marker-shaped lines cannot sit at column 0.
 
