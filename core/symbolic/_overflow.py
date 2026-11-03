@@ -62,6 +62,7 @@ def find_overflow_reaching_input(
          "timeout": timeout, "max_input_bytes": max_input_bytes,
          "register_constraints": register_constraints},
         timeout=timeout,
+        primitive="find_overflow_reaching_input",
     )
 
 

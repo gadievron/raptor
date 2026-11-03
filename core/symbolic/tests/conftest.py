@@ -170,3 +170,26 @@ int read_frames(FILE *in) {
 
 int main(void) { return read_frames(stdin); }
 """
+
+
+@pytest.fixture(scope='module')
+def require_worker_sandbox():
+    """Real-engine tests need the delivered policy, not a silent fallback.
+
+    An explicit operator waiver permits testing owned fixtures on a reduced
+    developer host; native acceptance removes that waiver and asserts tier.
+    """
+    import sys
+    from core.sandbox.context import _degraded_untrusted_waiver
+    if _degraded_untrusted_waiver():
+        return
+    if sys.platform == 'linux':
+        from core.sandbox.probes import check_mount_available, check_net_available
+        if not check_mount_available() or not check_net_available():
+            pytest.skip('native symbolic worker requires mount and PID/network namespaces')
+    elif sys.platform == 'darwin':
+        from core.sandbox.probes import check_seatbelt_available
+        if not check_seatbelt_available():
+            pytest.skip('native symbolic worker requires Seatbelt')
+    else:
+        pytest.skip('symbolic worker sandbox requires Linux or macOS')

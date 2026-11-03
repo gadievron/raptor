@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures('require_worker_sandbox')
+
 from core.symbolic._heap_mismatch import _ALLOC_KEY, _append_alloc
 
 

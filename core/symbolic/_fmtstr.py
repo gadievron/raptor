@@ -124,6 +124,7 @@ def discover_fmtstr_slots(
          "fmt_arg_index": fmt_arg_index, "num_slots": num_slots,
          "timeout": timeout, "max_input_bytes": max_input_bytes},
         timeout=timeout,
+        primitive="discover_fmtstr_slots",
     )
 
 

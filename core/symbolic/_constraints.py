@@ -74,6 +74,7 @@ def extract_path_constraints(
          "max_paths": max_paths, "timeout": timeout,
          "max_input_bytes": max_input_bytes},
         timeout=timeout,
+        primitive="extract_path_constraints",
     )
 
 

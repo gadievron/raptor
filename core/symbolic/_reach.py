@@ -48,6 +48,7 @@ def find_reaching_input(
          "timeout": timeout, "max_input_bytes": max_input_bytes,
          "avoid_addresses": avoid_addresses},
         timeout=timeout,
+        primitive="find_reaching_input",
     )
 
 

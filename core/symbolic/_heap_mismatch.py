@@ -31,11 +31,11 @@ Security
 ~~~~~~~~
 
 - Runs in a spawned child with hard-kill timeout (``_isolate``).
-- Child installs Landlock (writes denied outside a private
-  per-child temp directory; no outbound TCP) before importing angr,
-  confining the VEX lifter and z3 solver against hostile binaries.
-  The temp-dir carve-out is what lets angr import at all — see
-  :func:`core.symbolic._isolate._apply_symex_sandbox`.
+- The shared sandbox confines the executor before importing angr:
+  restricted reads, private scratch/HOME, blocked networking and the
+  untrusted containment floor. Refused setup never parses the target.
+  Private scratch keeps pyvex's import-time cache usable — see
+  :func:`core.symbolic._isolate.run_isolated`.
 - Pointer comparison is SYMBOLIC (``solver.satisfiable``), not
   concretised — a crafted binary cannot evade by making the pointer
   multi-valued.
@@ -86,6 +86,7 @@ def find_heap_mismatch_witness(
         {"binary_path": binary_path, "target_address": target_address,
          "timeout": timeout, "max_input_bytes": max_input_bytes},
         timeout=timeout,
+        primitive="find_heap_mismatch_witness",
     )
 
 

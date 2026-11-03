@@ -20,10 +20,13 @@ unkillable analysis thread. The in-child z3 budget (``_budget``)
 still applies as the soft layer so well-behaved solves end early
 with precise diagnostics; isolation is the backstop.
 
-The child receives (module, function, kwargs) by name and returns
+The broker launches a fresh interpreter through the shared sandbox,
+with restricted reads, private scratch/HOME, blocked networking and the
+normal untrusted containment floor. It never parses the target itself.
+The executor receives (module, function, kwargs) by name and returns
 the primitive's result via a pipe. Spawn (not fork): angr's native
 state does not survive forks reliably, and spawn gives the child a
-clean interpreter. The parent decodes the returned bytes with a
+clean broker interpreter. The parent decodes the returned bytes with a
 restricted unpickler (:class:`_RestrictedResultUnpickler`): the child
 is sandboxed precisely because its inputs are hostile, so its OUTPUT
 channel must not be a plain ``pickle.loads`` in the unsandboxed
@@ -36,10 +39,14 @@ from __future__ import annotations
 import importlib
 import io
 import multiprocessing as mp
+from multiprocessing.connection import Connection
 import os
 import pickle
 import selectors
 import struct
+import subprocess
+import sys
+from pathlib import Path
 import tempfile
 import time
 from typing import Any
@@ -175,178 +182,88 @@ def _recv_frame_deadline(
     return payload
 
 
-def _apply_symex_sandbox(private_tmp: str | None = None) -> None:
-    """Install Landlock: deny filesystem writes outside a private
-    per-child temp directory + deny TCP connect.
+# The request is authored by this trusted parent. Only the confined worker
+# unpickles it; the parent still uses the restricted result decoder below.
+_WORKER_SOURCE = r"""
+import os, sys, tempfile
+os.environ["TMPDIR"] = sys.argv[3]
+tempfile.tempdir = sys.argv[3]
+sys.path.insert(0, sys.argv[1])
+from core.symbolic._isolate import _execute_request
+_execute_request(int(sys.argv[2]))
+"""
 
-    Best-effort — if Landlock is unavailable (old kernel, container),
-    logs a warning and returns. The process isolation (timeout +
-    SIGKILL) is the primary defence; Landlock adds defence-in-depth
-    against hostile binaries that try to write to disk or phone home.
+_POLICY_STATE = ('_cli_sandbox_profile', '_cli_sandbox_disabled',
+                 '_cli_sandbox_disable_consent', '_cli_sandbox_floor',
+                 '_project_sandbox_floor', '_cli_sandbox_readable_paths',
+                 '_cli_sandbox_tool_paths', '_cli_sandbox_audit',
+                 '_cli_sandbox_audit_verbose', '_cli_sandbox_audit_budget')
 
-    The temp-directory write grant is load-bearing, not a
-    convenience: ``import angr`` needs it. pyvex resolves
-    ``tempfile.gettempdir()`` at import time (which PROBES candidate
-    directories by creating a file) and unconditionally writes its
-    ffi-parser cache there when absent. Under a blanket write deny
-    that import raises, the availability guard reports angr as
-    uninstalled, and every isolated primitive — this sandbox's own
-    beneficiaries — degrades to an 'unavailable' result.
 
-    The grant covers only ``private_tmp`` — the empty directory
-    :func:`run_isolated` creates for this child and removes after it
-    exits — never the shared system temp directory: a lifter/solver
-    compromise must not be able to tamper with other same-user temp
-    content. ``tempfile.tempdir`` is pinned to it here, pre-restrict,
-    so pyvex's cache write and any later scratch use land inside the
-    grant (cost: a per-child ffi-cache regeneration, ~0.1s). Writes
-    everywhere else (home, the repo, the analysed binary's tree, the
-    shared temp dir) stay denied, as does outbound TCP.
-
-    If the grant cannot be installed (``private_tmp`` is None or
-    unusable), the restrict is SKIPPED rather than engaged as a
-    blanket deny — a blanket deny disables the very primitives this
-    sandbox protects; hard-kill process isolation remains in force.
-
-    Must be called BEFORE importing angr / the target module.
-    """
-    import ctypes
-    import ctypes.util
-    import os
-    import platform
-
-    # Pin the process's temp directory to the private grant target
-    # while writes are still allowed, so no later caller (pyvex's
-    # import-time cache write included) probes or writes the shared
-    # system temp dir. Deliberately ABOVE the Landlock gates: the
-    # parent creates and cleans the directory on every host, so the
-    # scratch-goes-to-the-managed-dir behaviour must not depend on
-    # whether Landlock can engage.
-    tmpdir: str | None = None
-    if private_tmp is not None:
-        try:
-            resolved = os.path.realpath(private_tmp)
-            if os.path.isdir(resolved):
-                tmpdir = resolved
-                tempfile.tempdir = resolved
-        except OSError:
-            tmpdir = None
-
-    if platform.machine() not in (
-        "x86_64", "aarch64", "riscv64", "loongarch64", "s390x",
-    ):
-        return
-
-    SYS_CREATE = 444
-    SYS_ADD_RULE = 445
-    SYS_RESTRICT = 446
-    PR_SET_NO_NEW_PRIVS = 38
-    RULE_PATH_BENEATH = 1
-
-    WRITE_FILE = 1 << 1
-    REMOVE_DIR = 1 << 4
-    REMOVE_FILE = 1 << 5
-    MAKE_CHAR = 1 << 6
-    MAKE_DIR = 1 << 7
-    MAKE_REG = 1 << 8
-    MAKE_SOCK = 1 << 9
-    MAKE_FIFO = 1 << 10
-    MAKE_BLOCK = 1 << 11
-    MAKE_SYM = 1 << 12
-    NET_CONNECT_TCP = 1 << 1
-
-    class RulesetAttr(ctypes.Structure):
-        _fields_ = [
-            ("handled_access_fs", ctypes.c_uint64),
-            ("handled_access_net", ctypes.c_uint64),
-            ("scoped", ctypes.c_uint64),
-        ]
-
-    class PathBeneathAttr(ctypes.Structure):
-        _fields_ = [
-            ("allowed_access", ctypes.c_uint64),
-            ("parent_fd", ctypes.c_int),
-        ]
-
-    lib_path = ctypes.util.find_library("c")
-    if not lib_path:
-        return
+def _execute_request(result_fd: int) -> None:
+    """Runs only after the shared sandbox has confined the interpreter."""
+    import logging
+    import site
+    request = pickle.loads(sys.stdin.buffer.read())
+    module_name, func_name, kwargs, private_tmp, user_site = request
+    conn = Connection(result_fd, readable=False, writable=True)
     try:
-        libc = ctypes.CDLL(lib_path, use_errno=True)
-    except OSError:
-        return
+        if not module_name.startswith(_SYMBOLIC_MODULE_PREFIX):
+            raise ValueError('symbolic worker module outside allowed prefix')
+        # -I removes implicit cwd/user imports. Explicit installed user packages
+        # remain supported, with their site hooks running AFTER confinement.
+        tempfile.tempdir = private_tmp
+        if user_site:
+            site.USER_SITE = user_site
+            site.addsitedir(user_site)
+        for name in ('angr', 'claripy', 'cle', 'pyvex'):
+            logging.getLogger(name).setLevel(logging.CRITICAL)
+        module = importlib.import_module(module_name)
+        result = getattr(module, func_name)(**kwargs)
+        conn.send_bytes(pickle.dumps(result))
+    except BaseException as exc:  # noqa: BLE001 — one bounded channel out
+        conn.send_bytes(pickle.dumps(SymbolicResult(
+            succeeded=False, reason=f'primitive raised: {type(exc).__name__}: {exc}',
+            wall_seconds=0.0, states_explored=0, metadata={})))
+    finally:
+        conn.close()
 
-    abi = libc.syscall(SYS_CREATE, None, 0, 1)
-    if abi < 1:
-        return
 
-    write_mask = (WRITE_FILE | REMOVE_DIR | REMOVE_FILE | MAKE_CHAR |
-                  MAKE_DIR | MAKE_REG | MAKE_SOCK | MAKE_FIFO |
-                  MAKE_BLOCK | MAKE_SYM)
-    if abi >= 2:
-        write_mask |= 1 << 13   # REFER
-    if abi >= 3:
-        write_mask |= 1 << 14   # TRUNCATE
-    if abi >= 5:
-        write_mask |= 1 << 15   # IOCTL_DEV
-    net_access = NET_CONNECT_TCP if abi >= 4 else 0
-
-    attr = RulesetAttr(
-        handled_access_fs=write_mask,
-        handled_access_net=net_access,
-        scoped=0,
+def _run_confined(conn, module_name, func_name, kwargs, private_tmp, timeout):
+    """Trusted broker; hostile parsing occurs only in the sandboxed exec."""
+    import site
+    from core.sandbox import run
+    from core.sandbox.context import untrusted_fresh_procfs_required
+    from core.sandbox.python_paths import python_runtime_tool_paths, _home_roots
+    from core.sandbox.errors import SandboxSetupError
+    root = Path(__file__).resolve().parents[2]
+    paths = [str(root), *python_runtime_tool_paths()]
+    user_site = site.getusersitepackages()
+    if not isinstance(user_site, str) or not Path(user_site).is_dir():
+        user_site = None
+    if user_site:
+        paths.append(user_site)
+    if any(Path(path).resolve() == home or Path(path).resolve() in home.parents
+           for path in paths for home in _home_roots()):
+        raise SandboxSetupError('Symbolic runtime requires dedicated code directories, not HOME or its ancestors')
+    target = kwargs.get('binary_path')
+    if target is not None:
+        selected = Path(target).resolve()
+        if not selected.is_file():
+            raise SandboxSetupError(f'binary not found or not a regular file: {target}')
+        paths.extend(dict.fromkeys([str(Path(target).absolute()), str(selected)]))
+    fresh = untrusted_fresh_procfs_required()
+    return run(
+        [sys.executable, '-I', '-c', _WORKER_SOURCE, str(root), str(conn.fileno()), private_tmp],
+        target=private_tmp, output=private_tmp, tool_paths=paths,
+        block_network=True, restrict_reads=True, fake_home=True,
+        strict_env=True, strip_trust_markers=True, start_new_session=True,
+        require_fresh_procfs=fresh, omit_proc_reads=not fresh,
+        _untrusted_workload=True, exclude_tmp_baseline=True,
+        caller_label='symbolic-worker', pass_fds=(conn.fileno(),),
+        input=pickle.dumps((module_name, func_name, kwargs, private_tmp, user_site)),
+        capture_output=True, max_capture_bytes=16384, timeout=timeout,
     )
-    fd = libc.syscall(
-        SYS_CREATE, ctypes.byref(attr), ctypes.sizeof(attr), 0,
-    )
-    if fd < 0:
-        return
-
-    # One allow rule: write access beneath the private per-child temp
-    # directory (see the docstring — angr's import chain requires
-    # it). If the grant cannot be installed, skip the restrict rather
-    # than engage a ruleset that breaks the primitive this sandbox
-    # protects; hard-kill process isolation remains in force either
-    # way.
-    def _grant_tmpdir_write() -> bool:
-        if tmpdir is None:
-            return False
-        try:
-            dfd = os.open(
-                tmpdir, os.O_PATH | os.O_DIRECTORY | os.O_CLOEXEC,
-            )
-        except OSError:
-            return False
-        try:
-            rule = PathBeneathAttr(
-                allowed_access=write_mask, parent_fd=dfd,
-            )
-            ret = libc.syscall(
-                SYS_ADD_RULE, fd, RULE_PATH_BENEATH,
-                ctypes.byref(rule), 0,
-            )
-            return ret == 0
-        finally:
-            os.close(dfd)
-
-    if not _grant_tmpdir_write():
-        os.close(fd)
-        import logging
-        logging.getLogger(__name__).warning(
-            "symex sandbox: temp-dir write grant failed — skipping "
-            "Landlock (process isolation still enforced)",
-        )
-        return
-
-    # Every other handled access is denied.
-    libc.prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)
-    ret = libc.syscall(SYS_RESTRICT, fd, 0)
-    os.close(fd)
-    if ret < 0:
-        import logging
-        logging.getLogger(__name__).warning(
-            "symex sandbox: Landlock restrict_self failed (ret=%d)", ret,
-        )
 
 
 def _remove_private_tmp(path: str) -> None:
@@ -364,47 +281,36 @@ def _remove_private_tmp(path: str) -> None:
 _SYMBOLIC_MODULE_PREFIX: str = "core.symbolic."
 
 
-def _child_entry(
-    conn: mp.connection.Connection,
-    module_name: str,
-    func_name: str,
-    kwargs: dict[str, Any],
-    private_tmp: str | None = None,
-) -> None:
-    """Child-side runner. Everything heavyweight imports here."""
-    if not module_name.startswith(_SYMBOLIC_MODULE_PREFIX):
-        raise SystemExit(
-            f"_child_entry: module {module_name!r} outside "
-            f"allowed prefix {_SYMBOLIC_MODULE_PREFIX!r}"
-        )
-
-    import logging
-
-    _apply_symex_sandbox(private_tmp)
-
-    # angr logs an ERROR at import when optional acceleration is
-    # missing; that is operator noise, not a result channel.
-    for name in ("angr", "claripy", "cle", "pyvex"):
-        logging.getLogger(name).setLevel(logging.CRITICAL)
-    # send_bytes (not send): the parent decodes with the restricted
-    # unpickler, so the pickling happens HERE, visibly, on the honest
-    # path — the parent side never calls Connection.recv's implicit
-    # pickle.loads on child-controlled bytes.
+def _child_entry(conn, module_name, func_name, kwargs, private_tmp,
+                 timeout, policy_state) -> None:
+    """Disposable trusted broker; preserve the parent's approved floor state."""
+    from core.sandbox import state
+    from core.sandbox.errors import SandboxSetupError
+    for name, value in policy_state.items():
+        setattr(state, name, value)
+    started = time.monotonic()
     try:
-        module = importlib.import_module(module_name)
-        result = getattr(module, func_name)(**kwargs)
-        conn.send_bytes(pickle.dumps(result))
-    except BaseException as exc:  # noqa: BLE001 — one channel out
-        try:
+        result = _run_confined(conn, module_name, func_name, kwargs, private_tmp, timeout)
+        if result.returncode:
+            # Report executor crashes separately from a hard wall timeout.
+            # If it already sent a result, that first frame remains authoritative.
+            detail = (result.stderr or b'')[-2000:]
+            if isinstance(detail, bytes):
+                detail = detail.decode('utf-8', errors='replace')
             conn.send_bytes(pickle.dumps(SymbolicResult(
                 succeeded=False,
-                reason=f"primitive raised: {type(exc).__name__}: {exc}",
-                wall_seconds=0.0,
-                states_explored=0,
-                metadata={},
-            )))
-        except Exception:  # noqa: BLE001 — pipe gone; parent times out
-            pass
+                reason=f'child exited without returning a result (exit code {result.returncode}) — crash, not a budget kill: {detail}',
+                wall_seconds=time.monotonic() - started, metadata={'isolated': True, 'crashed': True,
+                                          'killed': False, 'exitcode': result.returncode})))
+    except SandboxSetupError as exc:
+        conn.send_bytes(pickle.dumps(SymbolicResult(
+            succeeded=False, reason=f'symbolic sandbox refused: {exc}',
+            wall_seconds=time.monotonic() - started, metadata={'isolated': False, 'sandbox_refused': True})))
+    except subprocess.TimeoutExpired:
+        # Keep EOF from laundering the executor's wall timeout into a crash.
+        conn.send_bytes(pickle.dumps(SymbolicResult(
+            succeeded=False, reason='symbolic sandbox exceeded the hard wall budget',
+            wall_seconds=timeout, metadata={'isolated': True, 'killed': True})))
     finally:
         conn.close()
 
@@ -424,21 +330,32 @@ def run_isolated(
             f"allowed prefix {_SYMBOLIC_MODULE_PREFIX!r}"
         )
     t0 = time.monotonic()
-    # The child's entire writable world (see _apply_symex_sandbox).
+    if 'binary_path' in kwargs:
+        kwargs = dict(kwargs)
+        # Lexical only: target-controlled filesystem I/O belongs in the
+        # disposable broker/executor, under the parent's hard deadline.
+        kwargs['binary_path'] = Path(kwargs['binary_path']).absolute()
+    # Scratch is required; never parse a target after its creation fails.
     # Created here so the parent can remove it after the child exits
     # — the sandboxed child cannot unlink a directory that sits in
     # the shared temp dir, outside its own write grant.
     private_tmp: str | None
     try:
         private_tmp = tempfile.mkdtemp(prefix="raptor-symex-")
-    except OSError:
-        private_tmp = None
+    except OSError as exc:
+        return SymbolicResult(
+            succeeded=False, reason=f'symbolic scratch unavailable: {exc}',
+            wall_seconds=time.monotonic() - t0,
+            metadata={'isolated': False, 'sandbox_refused': True})
+    from core.sandbox import state
+    policy_state = {name: getattr(state, name) for name in _POLICY_STATE}
     try:
         ctx = mp.get_context("spawn")
         parent_conn, child_conn = ctx.Pipe(duplex=False)
         proc = ctx.Process(
             target=_child_entry,
-            args=(child_conn, module_name, func_name, kwargs, private_tmp),
+            args=(child_conn, module_name, func_name, kwargs, private_tmp,
+                  timeout + GRACE_SECONDS, policy_state),
             daemon=True,
         )
         proc.start()
