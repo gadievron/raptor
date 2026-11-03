@@ -1949,9 +1949,14 @@ class LLMConfig:
         # surface the standard error; multi-match raises inside
         # resolve_model_shorthand with the candidate list so the operator
         # can pick.
-        resolved = resolve_model_shorthand(
-            model_id, [mc.model_name for mc in candidates],
-        )
+        seen_bare: set[str] = set()
+        deduped_names: list[str] = []
+        for mc in candidates:
+            key = _strip_dated_alias(mc.model_name)
+            if key not in seen_bare:
+                seen_bare.add(key)
+                deduped_names.append(mc.model_name)
+        resolved = resolve_model_shorthand(model_id, deduped_names)
         if resolved is not None:
             for mc in candidates:
                 if mc.model_name == resolved:
