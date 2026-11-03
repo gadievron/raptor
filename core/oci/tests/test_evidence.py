@@ -468,3 +468,31 @@ def test_common_alias_requires_catalogued_regular_target():
     native['files'][1]['metadata']['type'] = 'SymbolicLink'
     with pytest.raises(ValueError, match='regular target'):
         capture(native, lambda layer: [blob])
+
+
+@pytest.mark.parametrize("filename", [
+    r"usr/lib/systemd/system/system-systemd\x2dcryptsetup.slice",
+    r"usr/share/literal\filename.data",
+])
+def test_unselected_posix_backslashes_are_retained_without_decoding(filename):
+    native, blob = fixture_image({"pkg/LICENSE": b"original licence\n", filename: b"data"})
+    before = deepcopy(native)
+    report, notices = capture(native, lambda layer: [blob])
+    assert list(notices.values()) == [b"original licence\n"]
+    assert [row["path"] for row in report["files"]] == ["/pkg/LICENSE"]
+    assert native == before
+    with pytest.raises(ValueError, match="unsafe or ambiguous"):
+        capture(native, lambda layer: [blob], identify=("/" + filename,))
+
+
+def test_selected_notice_with_literal_backslash_is_still_refused():
+    native, blob = fixture_image({"pkg/LICENSE": b"original licence\n", r"escaped\directory/LICENSE": b"notice"})
+    with pytest.raises(ValueError, match="unsafe or ambiguous"):
+        capture(native, lambda layer: [blob])
+
+
+@pytest.mark.parametrize("filename", ["usr/../bad.data", "usr//bad.data", "usr/\u212b.data"])
+def test_inventory_path_mode_still_refuses_traversal_and_normalization(filename):
+    native, blob = fixture_image({"pkg/LICENSE": b"original licence\n", filename: b"data"})
+    with pytest.raises(ValueError, match="unsafe or ambiguous"):
+        capture(native, lambda layer: [blob])

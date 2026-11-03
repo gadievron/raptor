@@ -12,11 +12,16 @@ METADATA_NAMES = frozenset({"package.json", "METADATA", "PKG-INFO", "pyproject.t
 SOURCE_SUFFIXES = frozenset({".py", ".pyc", ".js", ".ts", ".c", ".h", ".go", ".java", ".class", ".so", ".a", ".o", ".exe", ".dll", ".bin"})
 
 
-def image_path(value: str) -> str:
+def image_path(value: str, *, inventory_only: bool = False) -> str:
+    """Validate image paths; inventory-only keys retain literal POSIX backslashes.
+
+    Such keys are never decoded or extracted to host paths. Selected evidence
+    always uses the strict default, including explicit identity requests.
+    """
     if not isinstance(value, str) or not value.startswith("/"):
         raise ValueError("image path must be absolute")
     normal = unicodedata.normalize("NFKC", value)
-    if (normal != value or "\\" in value or any(ord(c) < 32 or ord(c) == 127 for c in value)
+    if (normal != value or ("\\" in value and not inventory_only) or any(ord(c) < 32 or ord(c) == 127 for c in value)
             or any(p in {"", ".", ".."} for p in value[1:].split("/"))):
         raise ValueError("unsafe or ambiguous image path")
     return value

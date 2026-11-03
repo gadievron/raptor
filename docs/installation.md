@@ -185,3 +185,14 @@ runtime unless you configure your own.
 If you reinstall or upgrade Playwright inside a running container, its wheel can
 restore the bundled Node executable. Rebuild the image to apply the cleanup and
 validate the updated driver against system Node.
+
+The Linux container uses Debian's unbranded Chromium for web scanning, selected
+by `RAPTOR_WEB_BROWSER_EXECUTABLE=/usr/bin/chromium`. It does not download or ship
+Google Chrome for Testing. The browser's complete package copyright inventory is
+available at `/usr/share/doc/chromium/copyright`; the main project license does
+not replace the terms of its third-party components.
+
+Browser updates come through Debian packages when the image is rebuilt. Before
+publication, an offline check exercises the installed browser with the installed
+Playwright version. Manual installations keep Playwright's default browser unless
+you set `RAPTOR_WEB_BROWSER_EXECUTABLE` to a different trusted Chromium executable.
