@@ -980,6 +980,8 @@ def _classify_arg_shape(
     arg_text: str,
     func_node,
     src: bytes,
+    *,
+    _declaration_cache: dict[tuple[int | None, str], tuple[str, str]] | None = None,
 ) -> tuple[str, str]:
     """(shape class, detail) for one argument expression."""
     text = arg_text.strip()
@@ -989,7 +991,18 @@ def _classify_arg_shape(
         if stars or subscript:
             # sizeof(*p) / sizeof(p[0]) size the pointed-to element.
             return "sizeof_deref", ident
-        kind, decl = _declared_kind(func_node, ident, src)
+        if _declaration_cache is None:
+            kind, decl = _declared_kind(func_node, ident, src)
+        else:
+            # Tree node IDs distinguish same-named/nested functions. This
+            # memo belongs to one file/tree and keeps only short results.
+            key = (func_node.id if func_node is not None else None, ident)
+            if key in _declaration_cache:
+                kind, decl = _declaration_cache[key]
+            else:
+                kind, decl = _declared_kind(func_node, ident, src)
+                if len(_declaration_cache) < 256:
+                    _declaration_cache[key] = (kind, decl)
         if kind == "pointer":
             return "sizeof_pointer", decl or ident
         if kind == "array":
@@ -1120,6 +1133,9 @@ def _shape_sites_for_file(
     if call_types:
         src = source.encode("utf-8", errors="replace")
         lines = split_lines(source)
+        # Repeated sizeof(name) arguments share the same declaration
+        # search. Admission is bounded; overflow still searches normally.
+        declaration_cache: dict[tuple[int | None, str], tuple[str, str]] = {}
         for node in _walk_descendants(tree.root_node):
             if node.type not in call_types:
                 continue
@@ -1148,6 +1164,7 @@ def _shape_sites_for_file(
                 arg_text = _node_text(child, src).strip()
                 shape, detail = _classify_arg_shape(
                     arg_text, enclosing, src,
+                    _declaration_cache=declaration_cache,
                 )
                 by_key.setdefault((callee, pos), []).append(_ShapeSite(
                     file=file_path,
