@@ -42,6 +42,28 @@ def _run_loop(args: list[str], env_extra: dict | None = None) -> subprocess.Comp
     )
 
 
+def _run_empty_prepared_loop(monkeypatch, target, output_dir):
+    """Exercise loop control flow without launching the real prep pipeline."""
+    calls = []
+
+    def prep(cmd, *, verbose=False):
+        assert Path(cmd[1]).name == "raptor-study-prep", cmd
+        assert cmd[2:4] == [str(target.resolve()), str(output_dir.resolve())]
+        # main(), rather than the double, must create the output directory.
+        assert output_dir.is_dir()
+        (output_dir / "study-list.json").write_text('{"items": []}')
+        calls.append(cmd)
+        return 0
+
+    monkeypatch.setattr(_loop, "_run", prep)
+    monkeypatch.setattr(sys, "argv", [
+        STUDY_LOOP, str(target), str(output_dir), "--identifier", "some_func",
+    ])
+    rc = _loop.main()
+    assert len(calls) == 1, "empty prep must not launch further study helpers"
+    return rc
+
+
 class TestStudyLoopCLI:
     def test_help(self):
         result = _run_loop(["--help"])
@@ -60,25 +82,23 @@ class TestStudyLoopCLI:
         result = _run_loop(["/nonexistent/target", str(tmp_path)])
         assert "running overview" in result.stderr.lower()
 
-    def test_creates_output_dir(self, tmp_path):
+    def test_creates_output_dir(self, tmp_path, monkeypatch):
         out = tmp_path / "loop-out"
         target = tmp_path / "src"
         target.mkdir()
-        _run_loop([str(target), str(out), "--identifier", "some_func"])
+        assert _run_empty_prepared_loop(monkeypatch, target, out) == 0
         assert out.is_dir()
 
 
 class TestStudyLoopConvergence:
     """Test that the loop terminates correctly."""
 
-    def test_empty_target_terminates(self, tmp_path):
+    def test_empty_target_terminates(self, tmp_path, monkeypatch, capsys):
         target = tmp_path / "src"
         target.mkdir()
         out = tmp_path / "out"
-        result = _run_loop([
-            str(target), str(out), "--identifier", "some_func",
-        ])
-        assert "no study items" in result.stderr.lower() or result.returncode == 0
+        assert _run_empty_prepared_loop(monkeypatch, target, out) == 0
+        assert "no study items" in capsys.readouterr().err.lower()
 
 
 class TestDetectConceptsDir:
