@@ -2063,9 +2063,11 @@ def run_expanded_semgrep_stage(
     if _skip_stage_without_c_cpp_source("expanded-semgrep", repo_path):
         return []
 
+    from contextlib import nullcontext
+
     from core.audit import expanded_semgrep as es
+    from core.detectors.semgrep import PreparedInput, run_semgrep_analysis
     from packages.semgrep.runner import is_available as semgrep_available
-    from packages.semgrep.runner import run_rule as semgrep_run_rule
 
     if not semgrep_available():
         print(
@@ -2114,25 +2116,25 @@ def run_expanded_semgrep_stage(
         total_dropped = 0
         failed_packs = 0
         for name, config in configs:
-            try:
-                res = semgrep_run_rule(
-                    corpus.root, config, name=name,
-                    timeout=RaptorConfig.SEMGREP_PACK_TIMEOUT,
-                    env=RaptorConfig.get_safe_env(preserve_proxy=True),
-                )
-            except Exception as exc:  # noqa: BLE001 — one pack must not kill the stage
-                logger.warning("expanded-semgrep: pack %s failed: %s", name, exc)
-                failed_packs += 1
-                continue
-            if res.errors and not res.findings:
-                logger.debug(
-                    "expanded-semgrep: pack %s errors: %s", name, res.errors[:3],
-                )
-                failed_packs += 1
-                continue
-            translated, dropped = es.translate_corpus_findings(
-                corpus, res.findings,
+            execution = run_semgrep_analysis(
+                detector=es.DETECTOR,
+                prepare=lambda: nullcontext(PreparedInput(
+                    corpus.root,
+                    lambda findings: es.translate_corpus_findings(corpus, findings),
+                )),
+                rule_config=config, name=name,
+                timeout=RaptorConfig.SEMGREP_PACK_TIMEOUT,
+                env_factory=lambda: RaptorConfig.get_safe_env(preserve_proxy=True),
             )
+            state = execution.value
+            if execution.status in ("skipped", "error"):
+                if state.invocation_error is not None:
+                    logger.warning("expanded-semgrep: pack %s failed: %s", name, state.invocation_error)
+                else:
+                    logger.debug("expanded-semgrep: pack %s errors: %s", name, state.errors[:3])
+                failed_packs += 1
+                continue
+            translated, dropped = state.matches, state.dropped
             total_dropped += dropped
             for f in translated:
                 key = (f["rule_id"], f["file"], f["line"])

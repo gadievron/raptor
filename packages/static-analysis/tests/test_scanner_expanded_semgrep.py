@@ -281,3 +281,75 @@ def test_agentic_forwards_expanded_semgrep():
     src = (Path(_REPO_ROOT) / "raptor_agentic.py").read_text(encoding="utf-8")
     assert '"--expanded-semgrep"' in src
     assert 'semgrep_cmd.append("--expanded-semgrep")' in src
+
+
+def test_shared_pipeline_keeps_one_corpus_and_one_call_per_pack(tmp_path, monkeypatch):
+    from core.detectors import semgrep as detector
+
+    repo = _c_repo(tmp_path)
+    out = tmp_path / "out"
+    out.mkdir()
+    events, executions = [], []
+    scratch_paths = []
+
+    def build(target, scratch, **kwargs):
+        events.append("build")
+        scratch_paths.append(Path(scratch))
+        return FakeCorpus(root=Path(scratch), candidates_total=10, expanded=10)
+
+    def match(target, config, **kwargs):
+        assert target == scratch_paths[0]
+        assert kwargs["timeout"] == _scanner.RaptorConfig.SEMGREP_PACK_TIMEOUT
+        assert "env" in kwargs
+        events.append("match")
+        return FakeSemgrepResult()
+
+    def analyze(corpus, findings):
+        assert corpus.root.exists()
+        events.append("analyze")
+        return [], 0
+
+    original = detector.run_detector
+
+    def record(definition, state):
+        result = original(definition, state)
+        executions.append(result)
+        return result
+
+    monkeypatch.setattr(es, "build_expanded_corpus", build)
+    monkeypatch.setattr(es, "translate_corpus_findings", analyze)
+    monkeypatch.setattr("packages.semgrep.runner.is_available", lambda: True)
+    monkeypatch.setattr("packages.semgrep.runner.run_rule", match)
+    monkeypatch.setattr(detector, "run_detector", record)
+    rules = []
+    for name in ("one", "two"):
+        path = tmp_path / name
+        path.mkdir()
+        rules.append(str(path))
+
+    assert _scanner.run_expanded_semgrep_stage(repo, out, rules, [])
+    assert events == ["build", "match", "analyze", "match", "analyze"]
+    assert len(executions) == 2
+    assert all(result.identifier == "expanded-semgrep" for result in executions)
+    assert all([stage.name for stage in result.stages] == ["prepare", "match", "analyze"]
+               for result in executions)
+    assert not scratch_paths[0].exists()
+
+
+def test_stage_partial_findings_keep_existing_output(tmp_path, monkeypatch, capsys):
+    repo = _c_repo(tmp_path)
+    out = tmp_path / "out"
+    out.mkdir()
+    rule = tmp_path / "rules"
+    rule.mkdir()
+    finding = {"file": "main.c", "line": 1, "expanded_line": 2,
+               "rule_id": "copy", "message": "candidate", "expanded_view": True}
+    monkeypatch.setattr(es, "build_expanded_corpus", lambda target, scratch, **kw:
+                        FakeCorpus(root=Path(scratch), expanded=1))
+    monkeypatch.setattr(es, "translate_corpus_findings", lambda corpus, raw: ([finding], 0))
+    monkeypatch.setattr("packages.semgrep.runner.is_available", lambda: True)
+    monkeypatch.setattr("packages.semgrep.runner.run_rule", lambda *a, **kw:
+                        FakeSemgrepResult(findings=[FakeFinding(2)], errors=["another TU failed"]))
+    paths = _scanner.run_expanded_semgrep_stage(repo, out, [str(rule)], [])
+    assert len(json.loads(Path(paths[0]).read_text())["runs"][0]["results"]) == 1
+    assert "pack(s) failed" not in capsys.readouterr().err
