@@ -66,9 +66,6 @@ def _query_pack_available() -> bool:
         return False
 
 
-_QUERY_PACK_AVAILABLE = _query_pack_available()
-
-
 def _library_pack_available() -> bool:
     """True only if the ``codeql/python-all`` LIBRARY pack resolves.
 
@@ -90,9 +87,6 @@ def _library_pack_available() -> bool:
     return out.returncode == 0 and "codeql/python-all" in out.stdout
 
 
-_LIBRARY_PACK_AVAILABLE = _library_pack_available()
-
-
 def _build_db(src: Path, db: Path) -> None:
     subprocess.run(
         [_CODEQL, "database", "create", str(db), "--language=python",
@@ -111,12 +105,13 @@ def codeql_dbs(tmp_path_factory):
     return before_db, after_db
 
 
-@pytest.mark.skipif(
-    not _QUERY_PACK_AVAILABLE,
-    reason="codeql/python-queries pack not downloaded (needs `codeql pack download`)",
-)
-def test_pipeline_labels_post_fix_finding_as_missing_sanitizer_fp(codeql_dbs, tmp_path):
-    before_db, after_db = codeql_dbs
+def test_pipeline_labels_post_fix_finding_as_missing_sanitizer_fp(request, tmp_path):
+    if not _query_pack_available():
+        pytest.skip(
+            "codeql/python-queries pack not downloaded (needs `codeql pack download`)"
+        )
+    # Resolve packs only after selection, and before the expensive DB builds.
+    before_db, after_db = request.getfixturevalue("codeql_dbs")
     pairs = generate_corpus_for_pair(
         before_db, after_db, [_QUERY],
         cve_id="DEMO-CVE-0001", cwe="CWE-78", labeled_at="2026-05-25",
@@ -131,15 +126,13 @@ def test_pipeline_labels_post_fix_finding_as_missing_sanitizer_fp(codeql_dbs, tm
     assert by_verdict["true_positive"][0].sink.file_path == "app.py"
 
 
-@pytest.mark.skipif(
-    not _LIBRARY_PACK_AVAILABLE,
-    reason="codeql/python-all library pack not resolvable on this host",
-)
-def test_synthesized_barrier_suppresses_fp_and_preserves_tp(codeql_dbs, tmp_path):
+def test_synthesized_barrier_suppresses_fp_and_preserves_tp(request, tmp_path):
     """The sound-tier capstone, regression-guarded: the assembled barrier query
     must compile under real CodeQL and suppress the FP (after=0) without
     suppressing the real TP (before=1)."""
-    before_db, after_db = codeql_dbs
+    if not _library_pack_available():
+        pytest.skip("codeql/python-all library pack not resolvable on this host")
+    before_db, after_db = request.getfixturevalue("codeql_dbs")
     res = run_synthesis_loop(
         BarrierProposal(sink_class="cmdi", finding_id="DEMO",
                         sink_snippet="os.system(host)", source_context="(fixture)"),
