@@ -10,6 +10,11 @@ To configure a provider, start with [Quick Start](#quick-start), then check
 [model selection](#model-selection-logic) and [cost management](#cost-management).
 For a local model, follow the [Ollama guide](#ollama-offline--airgapped).
 
+**Related documentation:**
+[Model broker registry](model-brokers.md) |
+[Configuration](configuration.md) |
+[Environment Variables](environment.md)
+
 **On this page:**
 
 - [Supported Providers](#supported-providers)

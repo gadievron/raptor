@@ -18,6 +18,11 @@ then check the [agent inventory](#agent-inventory) and
 [human-approval gates](#human-approval). For process-level guarantees and
 platform limitations, use the [sandbox guide](sandbox.md).
 
+**Related documentation:**
+[Security](security.md) |
+[Sandbox](sandbox.md) |
+[Threat Model](threat-model.md)
+
 **On this page:**
 
 - [The capability rule](#the-capability-rule)
