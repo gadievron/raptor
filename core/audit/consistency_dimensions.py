@@ -2104,7 +2104,7 @@ def _dominating_sanitizer(
 ) -> tuple[str, int] | None:
     """(sanitizer, line) dominating *sink_ev*'s argument flow, or
     None. See the section docstring for the two accepted shapes."""
-    inline = sink_ev.arg_idents & set(sanitizers)
+    inline = sink_ev.arg_idents & sanitizers
     if inline:
         return sorted(inline)[0], sink_ev.line
     for ev in events:
@@ -2152,6 +2152,21 @@ def detect_sanitize_sink_deviations(
             dom = _dominating_sanitizer(evs, ev, sanitizer_set)
             by_sink.setdefault(ev.callee, []).append((key, ev, dom))
 
+    # Keep only the short exhibit text, not a source-sized split-line
+    # cache. Multiple sinks/sites can cite the same sanitizer line.
+    # Lifetime is this comparison over the supplied source strings.
+    exhibit_snippets: dict[tuple[str, int], str] = {}
+
+    def _exhibit_snippet(fp: str, line: int) -> str:
+        key = (fp, line)
+        if key not in exhibit_snippets:
+            lines = split_lines(source_texts.get(fp, ""))
+            exhibit_snippets[key] = (
+                lines[line - 1].strip()[:200]
+                if 1 <= line <= len(lines) else ""
+            )
+        return exhibit_snippets[key]
+
     deviations: list[SanitizeSinkDeviation] = []
     for sink_name, sites in sorted(by_sink.items()):
         n = len(sites)
@@ -2169,11 +2184,7 @@ def detect_sanitize_sink_deviations(
             if dom is None:
                 continue
             san_name, san_line = dom
-            lines = split_lines(source_texts.get(fp, ""))
-            snippet = (
-                lines[san_line - 1].strip()[:200]
-                if 1 <= san_line <= len(lines) else ""
-            )
+            snippet = _exhibit_snippet(fp, san_line)
             exhibits.append(PeerExhibit(
                 fp, san_line,
                 snippet or f"{san_name}() dominates {sink_name}()",
