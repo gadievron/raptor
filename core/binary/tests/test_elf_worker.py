@@ -131,3 +131,24 @@ def test_feasibility_has_no_parent_side_pwntools_imports():
                 assert not (node.module or '').startswith(('pwn', 'elftools')), (name, node.lineno)
             if isinstance(node, ast.Import):
                 assert not any(alias.name.startswith(('pwn', 'elftools')) for alias in node.names), (name, node.lineno)
+
+
+def test_descriptor_input_reads_pinned_inode_without_reopening_alias(tmp_path):
+    import os
+    from core.binary._elf_worker_child import _DescriptorInput
+    target = tmp_path / 'fixture'
+    target.write_bytes(b'validated input')
+    fd = os.open(target, os.O_RDONLY)
+    try:
+        replacement = tmp_path / 'replacement'
+        replacement.write_bytes(b'replacement input')
+        replacement.replace(target)
+        argument = _DescriptorInput(os.dup(fd))
+        assert os.fspath(argument) == 'input.elf'
+        with open(argument, 'rb') as parsed:
+            assert parsed.read() == b'validated input'
+        # Closing the parser's duplicate does not close the validation fd.
+        assert os.fstat(fd).st_size == len(b'validated input')
+        assert target.read_bytes() == b'replacement input'
+    finally:
+        os.close(fd)

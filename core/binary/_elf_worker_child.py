@@ -7,6 +7,18 @@ import stat
 import sys
 
 
+class _DescriptorInput(int):
+    """open() consumes the descriptor; os.fspath() supplies only a display name.
+
+    Pwntools opens its argument and separately normalises it for self.path.
+    Python's file API accepts this integer directly, while the path protocol
+    supplies a harmless label. No /dev/fd or /proc alias needs a read grant.
+    """
+
+    def __fspath__(self):
+        return 'input.elf'
+
+
 def _limit(resource_id, value):
     _, hard = resource.getrlimit(resource_id)
     if hard != resource.RLIM_INFINITY:
@@ -42,8 +54,9 @@ def _collect(path, user_site, max_input):
         if not stat.S_ISREG(info.st_mode) or info.st_size > max_input:
             raise ValueError('input is not a budgeted regular file')
         # Parse the validated inode, not a pathname the target can replace.
-        alias = ('/dev/fd/' if sys.platform == 'darwin' else '/proc/self/fd/') + str(descriptor)
-        elf = ELF(alias, checksec=False)
+        # ELF owns and closes its duplicate; keep our validation fd separate.
+        # A constructor failure terminates this one-shot worker.
+        elf = ELF(_DescriptorInput(os.dup(descriptor)), checksec=False)
         # checksec's FORTIFY flag tests imported *_chk function names in
         # elf.plt. Reconstruct names only: data symbols ending in _chk must
         # not mint FORTIFY, and no PLT addresses or emulation are needed.
