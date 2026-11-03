@@ -51,6 +51,11 @@ def _dockerfile(tmp_path: Path) -> Path:
     "2024.01.15",
     "1_0_0",
     "a" * 128,                    # exactly at the length cap
+], ids=[
+    "semver", "release-candidate", "v-prefix",
+    "distro-suffix", "jre-suffix", "three-digit-minor",
+    "patch-release", "calendar-version", "underscore-version",
+    "max-length",
 ])
 def test_accepts_real_fix_version_shapes(value: str) -> None:
     assert is_safe_version_literal(value)
@@ -73,6 +78,13 @@ def test_accepts_real_fix_version_shapes(value: str) -> None:
     "a" * 129,                     # over the length cap
     "1.2.3;echo",                  # semicolon
     "python:3.12",                 # colon — image refs are not versions
+], ids=[
+    "empty", "double-quote-injection", "single-quote",
+    "embedded-newline", "trailing-tab", "shell-operator",
+    "html-tag", "xml-closing-tag", "command-substitution",
+    "variable-expansion", "literal-backslash", "dot-prefix",
+    "dash-prefix", "over-max-length", "shell-separator",
+    "image-tag",
 ])
 def test_rejects_syntax_breaking_values(value: str) -> None:
     assert not is_safe_version_literal(value)
@@ -138,6 +150,8 @@ def test_safe_edit_still_applies(tmp_path: Path) -> None:
     "4.17.21\n",          # match(...$) admitted ONE trailing newline
     "4.17.21\r\n",
     "\n4.17.21",
+], ids=[
+    "trailing-lf", "trailing-crlf", "leading-lf",
 ])
 def test_trailing_newline_never_passes_the_gate(value: str) -> None:
     """`$` in the old anchor admitted one trailing newline — a value

@@ -323,6 +323,10 @@ def test_learned_model_has_no_narrowing_field():
 
 @pytest.mark.parametrize("function", [
     "", "rm -rf /", "a..b", "name\x1b[31m", "x" * 400, 42, None,
+], ids=[
+    "empty", "shell-command", "empty-segment",
+    "terminal-escape", "oversized-name", "integer",
+    "null",
 ])
 def test_invalid_function_names_refused(function):
     result = intake_learned_specs(

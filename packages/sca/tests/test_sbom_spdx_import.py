@@ -188,6 +188,9 @@ def test_distro_context_is_preserved_without_claiming_source_correspondence(tmp_
     (b'{"spdxVersion":"SPDX-2.3","name":"\\ud800"}', "Unicode scalar"),
     (b'{"spdxVersion":"SPDX-2.3","extra":NaN}', "non-finite"),
     (b'{"spdxVersion":"SPDX-2.3","extra":' + b'[' * 65 + b'0' + b']' * 65 + b'}', "nesting depth"),
+], ids=[
+    "duplicate-key", "invalid-utf8", "lone-surrogate",
+    "non-finite-number", "excessive-nesting",
 ])
 def test_untrusted_json_preserves_the_shared_read_guards(tmp_path, raw, message):
     path = tmp_path / "input.json"

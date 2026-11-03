@@ -66,7 +66,10 @@ def test_other_executables_notices_and_sources_are_preserved(tmp_path):
     assert all(path.read_bytes() == b"preserved" for path in files)
 
 
-@pytest.mark.parametrize("data", [b"not executable", pe()[:70], pe(0), b"MZ" + b"\0" * 126])
+@pytest.mark.parametrize("data", [b"not executable", pe()[:70], pe(0), b"MZ" + b"\0" * 126], ids=[
+    "non-executable", "truncated-pe", "wrong-machine",
+    "missing-pe-signature",
+])
 def test_unexpected_resource_content_aborts_without_removing_any_file(tmp_path, data):
     good = put(tmp_path, "usr/local/lib/python3.14/site-packages/distlib/t32.exe")
     bad = put(tmp_path, "usr/local/lib/python3.14/site-packages/distlib/w32.exe", data)

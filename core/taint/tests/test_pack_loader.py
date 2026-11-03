@@ -204,6 +204,9 @@ def test_unknown_source_kind(tmp_path, kind):
     "матч.module",                # non-ASCII
     "a-b.c",                      # dash in identifier
     "x" * 300,                    # over the length bound
+], ids=[
+    "shell-metacharacters", "empty-segment", "terminal-escape",
+    "non-ascii", "hyphenated-segment", "oversized-match",
 ])
 def test_bad_dotted_match_refused(tmp_path, match):
     refuse(tmp_path, mutate_entry("sinks", 0, match=match), "match")
