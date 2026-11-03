@@ -2060,11 +2060,6 @@
     "kind": "literal",
     "note": "summary serialization field names (FunctionSummary.to_dict JSON keys, shape-validated on cache load), not name vocabulary \u2014 same class as the finding-dict field-name entries"
   },
-  "core/testing/git_hermeticity.py::GIT_ENV_STRIP": {
-    "count": 18,
-    "kind": "literal",
-    "note": "git-documented environment variable names (identity + repo-redirection family) stripped at test-session start for hermeticity \u2014 an env-var strip-list, not learned API vocabulary"
-  },
   "core/threat_model/__init__.py::_EVIDENCE_RAW_KEY_ALLOWLIST": {
     "count": 15,
     "kind": "literal"
