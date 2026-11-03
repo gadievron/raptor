@@ -209,13 +209,15 @@ def capture(catalogue: dict, reader: Callable[[LayerDescriptor], Iterable[bytes]
     if any(origin not in layer_ids for _, origin in package_paths.directories):
         raise ValueError("package notice directory references an unrelated layer")
 
-    def location(loc: dict) -> tuple[str, str]:
-        path, layer = _path(loc["path"]), _digest(loc["layerID"])
+    def location(loc: dict, *, inventory_only: bool = False) -> tuple[str, str]:
+        path = _path(loc["path"], inventory_only=inventory_only)
+        layer = _digest(loc["layerID"])
         if layer not in layer_ids:
             raise ValueError("catalogue location references an unrelated layer")
         return path, layer
 
     def target(key: tuple[str, str], role: str, package: str | None = None, required: bool = True):
+        _path(key[0])  # Evidence selection never accepts inventory-only names.
         entry = targets.setdefault(key, {"roles": set(), "packages": set(), "required": False})
         entry["roles"].add(role)
         entry["required"] |= required
@@ -223,7 +225,7 @@ def capture(catalogue: dict, reader: Callable[[LayerDescriptor], Iterable[bytes]
             entry["packages"].add(package)
 
     for file in catalogue.get("files", []):
-        key = location(file["location"])
+        key = location(file["location"], inventory_only=True)
         if key in files:
             raise ValueError("duplicate catalogue file location")
         files[key] = file

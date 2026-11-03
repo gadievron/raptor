@@ -133,6 +133,7 @@ jobs:
             pipenv --version
             pnpm --version
             python3 /usr/local/libexec/use-system-node.py --check
+            python3 /usr/local/libexec/check-browser.py
           '
 
       - name: Publish verified image

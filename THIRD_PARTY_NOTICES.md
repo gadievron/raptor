@@ -97,3 +97,14 @@ is retained as a license-identification fixture. It comes from the official
 Python's project declaration is PSF-2.0; incorporated software retains its own
 terms, as the retained license explains. RAPTOR's license association does not
 replace those terms or certify that a binary was built from a particular source.
+
+## Container Chromium browser
+
+The Linux container ships Debian's unbranded Chromium package for browser
+automation. Its version-matched copyright inventory and license texts are
+installed at `/usr/share/doc/chromium/copyright`, with referenced common texts
+under `/usr/share/common-licenses`. Debian provides the corresponding source
+through its [Chromium source package](https://tracker.debian.org/pkg/chromium).
+Chromium and its incorporated third-party components retain their respective
+terms. This package replaces Google Chrome for Testing in new container builds;
+older image releases retain their original browser and associated terms.

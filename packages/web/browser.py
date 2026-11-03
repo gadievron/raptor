@@ -51,6 +51,16 @@ _DEFAULT_TIMEOUT_MS = 10_000
 _SETTLE_MS = 350
 
 
+def _launch_options() -> dict[str, Any]:
+    options: dict[str, Any] = {"headless": True}
+    executable = os.environ.get("RAPTOR_WEB_BROWSER_EXECUTABLE")
+    if executable:
+        if not os.path.isabs(executable):
+            raise ValueError("RAPTOR_WEB_BROWSER_EXECUTABLE must be an absolute path")
+        options["executable_path"] = executable
+    return options
+
+
 def browser_available() -> bool:
     """True when playwright + a launchable Chromium are present."""
     try:
@@ -59,7 +69,7 @@ def browser_available() -> bool:
         return False
     try:
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True)
+            browser = pw.chromium.launch(**_launch_options())
             browser.close()
         return True
     except Exception as e:
@@ -122,8 +132,8 @@ class BrowserEngine:
     def __enter__(self) -> "BrowserEngine":
         from playwright.sync_api import sync_playwright
 
+        launch_kwargs = _launch_options()
         self._pw = sync_playwright().start()
-        launch_kwargs: dict[str, Any] = {"headless": True}
         proxy = self._proxy_settings()
         if proxy:
             launch_kwargs["proxy"] = proxy

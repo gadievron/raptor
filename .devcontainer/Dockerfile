@@ -146,11 +146,13 @@ RUN uv pip install --python /usr/local/py-utils/venvs/pydocstyle/bin/python \
     && /usr/local/py-utils/venvs/pydocstyle/bin/python /usr/local/libexec/install-python-notices.py --skip-absent \
         --evidence /usr/share/doc/raptor-pydocstyle-notices
 
-# Install Playwright browser + system deps via Playwright's own dep installer.
-# Replaces a hand-rolled apt list that drifted out of sync with upstream Chromium deps.
+# Use Debian's unbranded Chromium and its package-maintained copyright inventory.
+# Playwright's default download on amd64 is Google Chrome for Testing.
 RUN apt-get update \
-    && python -m playwright install --with-deps chromium \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y --no-install-recommends chromium \
+    && apt-get clean && rm -rf /var/lib/apt/lists/* /root/.cache/ms-playwright
+
+COPY .devcontainer/check-browser.py /usr/local/libexec/check-browser.py
 
 # ============================================================================
 # CLAUDE CLI (claude-code npm package)
@@ -213,6 +215,7 @@ RUN python3 /usr/local/libexec/prune-windows-helpers.py
 ENV PATH="/workspaces/raptor/bin:${PATH}"
 ENV GIT_TERMINAL_PROMPT=0
 ENV PYTHONUNBUFFERED=1
+ENV RAPTOR_WEB_BROWSER_EXECUTABLE=/usr/bin/chromium
 # Ensure python can import repo packages when container runs
 # Adds repo root and `packages/` so `import core`, `import binary_analysis`, etc. work
 ENV PYTHONPATH="/workspaces/raptor:/workspaces/raptor/packages"

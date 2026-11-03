@@ -875,6 +875,12 @@ families: the dispatcher route pair is per-child state that only
 fd is a broken route.
 
 
+## Browser automation
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `RAPTOR_WEB_BROWSER_EXECUTABLE` | Playwright default; `/usr/bin/chromium` in the Linux container | Absolute path to the Chromium executable used by web scanning and its availability check. Set only to a browser installation you trust. An invalid override fails rather than falling back to a bundled browser. |
+
 ## External-standard variables
 
 Variables defined by other ecosystems that RAPTOR consumes or forwards
