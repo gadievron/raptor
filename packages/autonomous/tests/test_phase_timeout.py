@@ -16,6 +16,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 # parents[3] climbs:
 #   [0] packages/autonomous/tests/
 #   [1] packages/autonomous/
@@ -53,6 +55,7 @@ class PhaseTimeoutArgparseTests(unittest.TestCase):
         )
 
 
+@pytest.mark.slow  # Each check pays cold startup for the full CodeQL CLI.
 class RaptorCodeqlPhaseTimeoutTests(unittest.TestCase):
     """`/codeql --phase-timeout` parses + mutates RaptorConfig.CODEQL_TIMEOUT.
 
@@ -68,7 +71,7 @@ class RaptorCodeqlPhaseTimeoutTests(unittest.TestCase):
     def _run_help(self) -> subprocess.CompletedProcess:
         return subprocess.run(
             [sys.executable, str(self.RAPTOR_CODEQL), "--help"],
-            capture_output=True, text=True, timeout=15, check=False,
+            capture_output=True, text=True, timeout=60, check=False,
             env={**os.environ, "RAPTOR_DIR": str(REPO_ROOT)},
         )
 

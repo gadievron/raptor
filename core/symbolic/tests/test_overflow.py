@@ -32,6 +32,7 @@ def _compile(source: str, tmp_path: Path, extra_flags: tuple = ()) -> Path:
     return binary
 
 
+@pytest.mark.slow  # Even failure results launch a fresh sandboxed angr worker.
 def test_missing_binary_returns_failure(tmp_path: Path):
     """LLM-consumable failure shape, not an exception."""
     from core.symbolic import find_overflow_reaching_input
@@ -44,6 +45,7 @@ def test_missing_binary_returns_failure(tmp_path: Path):
     assert "not found" in result.reason
 
 
+@pytest.mark.slow
 def test_unmapped_target_returns_failure(tmp_path: Path):
     """Target address outside any mapped segment → fast fail."""
     from core.symbolic import find_overflow_reaching_input
@@ -228,6 +230,7 @@ def test_register_constraint_signals_gap_on_argchecked_target(tmp_path: Path):
     ), f"expected diagnostic failure reason, got: {solve.reason}"
 
 
+@pytest.mark.slow
 def test_fails_on_heap_uaf_target(tmp_path: Path):
     """A UAF target has no stack-overflow path → no unconstrained
     state → primitive correctly fails with a descriptive reason.
@@ -333,6 +336,7 @@ def test_cache_invalidates_on_mtime_change(tmp_path: Path, monkeypatch):
     assert first.entry_point == second.entry_point
 
 
+@pytest.mark.slow  # Real angr witness solving, with a 60-second solve deadline.
 def test_register_snapshot_on_hijack_solve(tmp_path: Path):
     """A successful hijack solve carries the register state at the
     redirected PC: rsp is concrete (the frame is fixed once the
@@ -361,6 +365,7 @@ def test_register_snapshot_on_hijack_solve(tmp_path: Path):
     assert isinstance(snap["rsp"]["value"], int)
 
 
+@pytest.mark.slow
 def test_memory_snapshot_on_hijack_solve(tmp_path: Path):
     """The hijacked state carries an rsp-relative stack window:
     concrete slots only (attacker-steerable slots stay absent),
@@ -392,6 +397,7 @@ def test_memory_snapshot_on_hijack_solve(tmp_path: Path):
     _json.dumps(mem)  # JSON-safe end to end
 
 
+@pytest.mark.slow
 def test_memory_snapshot_semantics(tmp_path: Path):
     """Two fixtures pin the memory-capture semantics.
 
@@ -524,6 +530,7 @@ def test_size_pin_helper():
     assert len(s2.solver._extra) == before
 
 
+@pytest.mark.slow
 def test_canary_presence_flagged(tmp_path: Path):
     """A hijack solve on a stack-protected binary carries
     canary_present=True — the model guard is solver-chosen, so the
@@ -552,6 +559,7 @@ def test_canary_presence_flagged(tmp_path: Path):
     assert solve.metadata["canary_present"] is True
 
 
+@pytest.mark.slow
 def test_no_canary_not_flagged(tmp_path: Path):
     from core.symbolic import find_overflow_reaching_input, load_binary
     from core.symbolic.tests.conftest import (
