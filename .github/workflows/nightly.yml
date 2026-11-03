@@ -90,23 +90,48 @@ jobs:
           cache-key-prefix: venv-grammars
           uv-export-extra-args: --extra grammars
           save-on-rebuild: 'true'
-      - name: Run intentional native-crash tests
+      - name: Run contained expected-crash tests
         env:
           RAPTOR_MAX_TEST_SECONDS: ""
         run: |
           set -euo pipefail
           source "$VENV_PATH/bin/activate"
-          python -m pytest core/symbolic/tests -m intentional_crash \
-            --run-crash-tests -v --tb=short -ra \
+          python -m pytest -v --tb=short -ra \
+            core/testing/tests/test_expected_crash.py \
+            core/symbolic/tests/test_availability_probe_isolation.py::test_probe_survives_import_that_aborts_the_process \
+            core/symbolic/tests/test_isolate.py::test_child_crash_reported_as_crash_not_budget_kill \
             --junitxml="$RUNNER_TEMP/intentional-crashes.xml"
-      - name: Require real crash coverage
+      - name: Require contained crash coverage
         run: |
           python - "$RUNNER_TEMP/intentional-crashes.xml" <<'PY'
           import sys
           import xml.etree.ElementTree as ET
           cases = list(ET.parse(sys.argv[1]).iter("testcase"))
-          assert len(cases) >= 2, "intentional crash tests were not collected"
-          assert not any(c.find("skipped") is not None for c in cases), "native crash coverage skipped"
+          assert len(cases) >= 13, "contained crash tests were not collected"
+          assert not any(c.find("skipped") is not None for c in cases), "contained crash coverage skipped"
+          PY
+      - name: Verify sandbox signal contracts on Linux
+        if: runner.os == 'Linux'
+        env:
+          RAPTOR_MAX_TEST_SECONDS: ""
+        run: |
+          set -euo pipefail
+          source "$VENV_PATH/bin/activate"
+          python -m pytest -m "" -v --tb=short -ra \
+            core/sandbox/tests/test_e2e_sandbox.py::TestE2ECrashObservability::test_segfault_detected \
+            core/sandbox/tests/test_e2e_sandbox.py::TestE2ECrashObservability::test_sigabrt_detected \
+            core/sandbox/tests/test_sandbox.py::TestSandboxObservability::test_crash_detected \
+            core/audit/tests/test_dark_verify.py::TestRealExecutionRust::test_confirms_panic_as_crash \
+            packages/llm_analysis/tests/test_exploit_verify_execute.py::test_null_deref_to_exit_signal \
+            packages/llm_analysis/tests/test_exploit_verify_execute.py::test_no_sanitizer_default_unchanged \
+            core/audit/tests/test_dynamic_sweep_forgery.py::TestGenuineUbsanStillSanitizerGrade::test_ubsan_overflow_classifies_sanitizer \
+            --junitxml="$RUNNER_TEMP/sandbox-signal-contracts.xml"
+          python - "$RUNNER_TEMP/sandbox-signal-contracts.xml" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+          cases = list(ET.parse(sys.argv[1]).iter("testcase"))
+          assert len(cases) >= 7, "sandbox signal contracts were not collected"
+          assert not any(c.find("skipped") is not None for c in cases), "sandbox signal coverage skipped"
           PY
       - name: Verify macOS toolchain runtime access
         if: runner.os == 'macOS'
@@ -127,6 +152,7 @@ jobs:
           path: |
             ${{ runner.temp }}/intentional-crashes.xml
             ${{ runner.temp }}/macos-toolchain.xml
+            ${{ runner.temp }}/sandbox-signal-contracts.xml
           if-no-files-found: ignore
 
   slow-integration:

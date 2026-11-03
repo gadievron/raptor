@@ -418,22 +418,16 @@ def _sandbox_delivers_signals() -> bool:
     except (SandboxSetupError, Exception):
         # SandboxSetupError is a BaseException on purpose (runtime
         # refusals must not be swallowed by broad handlers) — but this
-        # probe runs at COLLECTION time, and on a host that cannot
+        # probe runs only inside the test, and on a host that cannot
         # create user namespaces the floor refusal must read as
         # "signals not deliverable" (skip the class) rather than
-        # erroring the whole suite's collection.
+        # erroring the prerequisite check.
         return False
     return isinstance(r, _sp.CompletedProcess) and r.returncode < 0
 
 
 @pytest.mark.slow
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux sandbox")
-@pytest.mark.skipif(
-    not _sandbox_delivers_signals(),
-    reason="sandbox tier launders signal deaths to exit codes; the "
-           "sanitizer confirmed lane is documented-dark here and the "
-           "recall pin cannot apply",
-)
 class TestGenuineUbsanStillSanitizerGrade:
     """Recall pin for the signal-grade bar: a GENUINE UBSan-only hit
     (the CWE-190 class the sweep targets) must still classify as
@@ -455,6 +449,10 @@ class TestGenuineUbsanStillSanitizerGrade:
         from core.audit import dynamic_sweep as ds
         from core.sandbox import SandboxSetupError
 
+        # Never crash a prerequisite probe at collection time: marker-based
+        # deselection happens after modules have already been imported.
+        if not _sandbox_delivers_signals():
+            pytest.skip("sandbox does not expose native signal wait status")
         if _shutil.which("gcc") is None:
             pytest.skip("gcc not available")
         monkeypatch.setattr(

@@ -120,32 +120,37 @@ def test_dedicated_job_rejects_empty_or_skipped_results(tmp_path, body, success)
 
 
 
-def test_crash_job_separates_opt_in_from_toolchain_checks():
+def test_crash_job_runs_contained_fixtures_and_normal_sandbox_contracts():
     commands = list(_commands(_jobs()["intentional-crashes"]))
-    native = [command for command in commands if "--run-crash-tests" in command]
-    assert len(native) == 1
-    assert native[0][native[0].index("-m") + 1] == "intentional_crash"
-    assert "core/symbolic/tests" in native[0]
-    toolchain = [command for command in commands if "--run-crash-tests" not in command]
-    assert len(toolchain) == 1
+    assert len(commands) == 3
+    assert all("--run-crash-tests" not in command for command in commands)
+    assert all("--allow-raw-crashes" not in command for command in commands)
+    assert any("core/testing/tests/test_expected_crash.py" in command for command in commands)
+    sandbox = next(command for command in commands
+                   if any("test_segfault_detected" in arg for arg in command))
+    assert sandbox[sandbox.index("-m") + 1] == ""
+    assert any("test_confirms_panic_as_crash" in arg for arg in sandbox)
     assert any("test_apple_compiler_can_load_sdk_under_read_restrictions" in arg
-               for arg in toolchain[0])
+               for command in commands for arg in command)
 
 
-@pytest.mark.parametrize("body,success", [
-    pytest.param('<testsuite><testcase/><testcase/></testsuite>', True, id="two-executed"),
-    pytest.param('<testsuite/>', False, id="empty"),
-    pytest.param('<testsuite><testcase/></testsuite>', False, id="only-one"),
-    pytest.param('<testsuite><testcase/><testcase><skipped/></testcase></testsuite>',
-                 False, id="native-case-skipped"),
+@pytest.mark.parametrize("report_name,minimum", [
+    pytest.param("intentional-crashes.xml", 13, id="contained"),
+    pytest.param("sandbox-signal-contracts.xml", 7, id="sandbox-status"),
 ])
-def test_crash_job_requires_real_native_coverage(tmp_path, body, success):
+@pytest.mark.parametrize("scenario", ["complete", "empty", "short", "skipped"])
+def test_crash_job_requires_real_native_coverage(tmp_path, report_name, minimum, scenario):
+    count = {"complete": minimum, "empty": 0, "short": minimum - 1,
+             "skipped": minimum}[scenario]
+    body = '<testsuite>' + '<testcase/>' * count + '</testsuite>'
+    if scenario == "skipped":
+        body = body.replace('<testcase/>', '<testcase><skipped/></testcase>', 1)
     job = _jobs()["intentional-crashes"]
     script = next(s["run"] for s in job["steps"]
-                  if 'intentional-crashes.xml" <<' in s.get("run", ""))
+                  if report_name + '\" <<' in s.get("run", ""))
     guard = script.split("<<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
     report = tmp_path / "results.xml"
     report.write_text(body)
     process = subprocess.run([sys.executable, "-c", guard, str(report)],
                              capture_output=True, text=True, timeout=5)
-    assert (process.returncode == 0) is success, process.stderr
+    assert (process.returncode == 0) is (scenario == "complete"), process.stderr
