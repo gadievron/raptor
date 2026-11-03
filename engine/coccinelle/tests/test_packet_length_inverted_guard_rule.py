@@ -63,6 +63,8 @@ def test_inverted_guard_reaches_range_consumer(tmp_path, sink):
     {"after": "if (n <= left) return 0; else goto bad;"},
     {"after": "n = left;"},
     {"after": "n &= 15;"},
+    {"after": "++n;"},
+    {"after": "--n;"},
     {"after": "left = n;"},
     {"before": "left = 16;"},
     {"before": "wire = trusted_size;"},
@@ -112,4 +114,65 @@ def test_same_named_conditional_definitions_do_not_join(tmp_path):
 
 def test_reversed_comparison_and_nomark_consumer(tmp_path):
     text = _source(compare="left > n").replace("skb_to_sgvec(", "skb_to_sgvec_nomark(")
+    assert len(_run(tmp_path, text)) == 1
+
+
+@pytest.mark.parametrize("sink", ["direct", "wrapper"])
+@pytest.mark.parametrize("exit_kind", ["return", "goto"])
+def test_unreachable_consumer_is_refused(tmp_path, sink, exit_kind):
+    after = "return 0;" if exit_kind == "return" else "goto done;"
+    text = _source(sink=sink, after=after)
+    if exit_kind == "goto":
+        text = text.replace("bad: return -1;", "bad: return -1;\n done: return 0;")
+    assert _run(tmp_path, text) == []
+
+
+@pytest.mark.parametrize("sink", ["direct", "wrapper"])
+@pytest.mark.parametrize("branch", ["conditional-return", "goto-consumer"])
+def test_reachable_consumer_after_branch_is_preserved(tmp_path, sink, branch):
+    after = "if (n & 1) return -1;" if branch == "conditional-return" else "goto use;"
+    text = _source(sink=sink, after=after)
+    if branch == "goto-consumer":
+        text = text.replace(" ret = ", " use: ret = ", 1)
+    assert len(_run(tmp_path, text)) == 1
+
+
+@pytest.mark.parametrize("sink", ["direct", "wrapper"])
+def test_shadowed_length_does_not_join_outer_consumer(tmp_path, sink):
+    text = _source(sink=sink).replace("wire, n;", "wire, n = 0;")
+    text = text.replace("n = ntohl(wire);", "{ unsigned int n; n = ntohl(wire);")
+    text = text.replace("if (n < left) goto bad;", "if (n < left) goto bad; }")
+    assert _run(tmp_path, text) == []
+
+
+def test_shadowed_packet_does_not_join_outer_consumer(tmp_path):
+    text = _source()
+    text = text.replace("if (skb_copy_bits", "{ struct sk_buff *skb = other;\n if (skb_copy_bits")
+    text = text.replace("if (n < left) goto bad;", "if (n < left) goto bad; }")
+    assert _run(tmp_path, text) == []
+
+
+@pytest.mark.parametrize("sink", ["direct", "wrapper"])
+def test_shadowed_length_parameter_does_not_join_consumer(tmp_path, sink):
+    text = _source(sink=sink).replace("*other) {", "*other, unsigned int n) {")
+    text = text.replace("wire, n;", "wire;")
+    text = text.replace("n = ntohl(wire);", "{ unsigned int n; n = ntohl(wire);")
+    text = text.replace("if (n < left) goto bad;", "if (n < left) goto bad; }")
+    assert _run(tmp_path, text) == []
+
+
+def test_shadowed_wire_does_not_join_outer_decode(tmp_path):
+    text = _source().replace("wire, n;", "wire = 0, n;")
+    text = text.replace("if (skb_copy_bits", "{ unsigned int wire;\n if (skb_copy_bits")
+    text = text.replace("n = ntohl(wire);", "}\n n = ntohl(wire);")
+    assert _run(tmp_path, text) == []
+
+
+def test_unrelated_shadowing_does_not_suppress_candidate(tmp_path):
+    text = _source(before="{ int unrelated = 0; } { int unrelated = 1; }")
+    assert len(_run(tmp_path, text)) == 1
+
+
+def test_later_shadowing_does_not_suppress_candidate(tmp_path):
+    text = _source().replace("return ret;", "{ unsigned int n = 0; }\n return ret;")
     assert len(_run(tmp_path, text)) == 1

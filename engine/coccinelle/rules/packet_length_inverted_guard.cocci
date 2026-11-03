@@ -2,11 +2,13 @@
 // Require a wire read from an skb, ntohl decoding, an skb-derived budget,
 // rejection of lengths below that budget to a negative-return/abort label,
 // and a known range consumer.
-// Evidence is correlated within one function definition, in source order.
-// Any other bound comparison, reassignment, address escape, or helper taking
-// the decoded length before consumption refuses the candidate. This is a
-// detection lead: budget/offset arithmetic and cross-function preconditions
-// still need review. Deliberately misses helper-split decoders and aliases.
+// Evidence is correlated within one function definition, in source order,
+// with a CFG witness that consumption is reachable after the guard.
+// Shadowed relevant names, alternative upper/exact bounds, reassignments,
+// address escapes, and helpers taking the decoded length refuse a candidate.
+// This is a detection lead: budget/offset arithmetic and cross-function
+// preconditions still need review. Deliberately misses helper-split decoders
+// and aliases.
 // rxgk_decrypt_skb's in/out length feeds skb_to_sgvec before decryption
 // (net/rxrpc/rxgk_common.h); this is an explicit API contract model.
 // Covers CWE-20 / CWE-125.
@@ -159,6 +161,60 @@ length << consume.length;
 @@
 packet_record("consume", p, skb=skb, length=length)
 
+@reachable exists@
+identifier reject.length, reject.remaining, reject.bad;
+position reject.p;
+position q;
+expression skb, sg, offset, a, b, ec;
+@@
+if (length < remaining) goto bad@p;
+...
+(
+skb_to_sgvec@q(skb, sg, offset, length)
+|
+skb_to_sgvec_nomark@q(skb, sg, offset, length)
+|
+rxgk_decrypt_skb@q(a, b, skb, &offset, &length, &ec)
+)
+
+@script:python@
+p << reject.p;
+q << reachable.q;
+@@
+for sink in q:
+    packet_record("reachable", p, sink_line=sink.line, sink_col=sink.column)
+
+@local_binding disable decl_init@
+type T;
+identifier item;
+expression value;
+position p;
+@@
+(
+T item@p;
+|
+T item@p = value;
+)
+
+@script:python@
+p << local_binding.p;
+item << local_binding.item;
+@@
+packet_record("declaration", p, item=item)
+
+@parameter_binding@
+type Result, T;
+identifier fn, item;
+position p;
+@@
+Result fn(..., T item@p, ...) { ... }
+
+@script:python@
+p << parameter_binding.p;
+item << parameter_binding.item;
+@@
+packet_record("declaration", p, item=item)
+
 @write@
 identifier item;
 expression value;
@@ -190,6 +246,10 @@ item@p >>= value
 item@p++
 |
 item@p--
+|
+  ++item@p
+|
+  --item@p
 )
 
 @script:python@
@@ -266,6 +326,10 @@ for (file, function, start), events in _packet_evidence.items():
         for sink in events.get("consume", []):
             if sink["length"] != length or at(sink) <= at(guard):
                 continue
+            if not any(at(path) == at(guard)
+                       and (int(path["sink_line"]), int(path["sink_col"])) == at(sink)
+                       for path in events.get("reachable", [])):
+                continue
             decodes = [d for d in events.get("decode", [])
                        if d["length"] == length and at(d) < at(guard)]
             if not decodes:
@@ -278,6 +342,12 @@ for (file, function, start), events in _packet_evidence.items():
                        if b["skb"] == sink["skb"] and b["remaining"] == remaining
                        and at(b) < at(guard)]
             if not reads or not budgets:
+                continue
+            # Identifier names alone do not establish binding identity across
+            # nested scopes. Refuse joins when a relevant name is redeclared.
+            if any(len({at(d) for d in events.get("declaration", [])
+                        if d["item"] == item and at(d) < at(sink)}) > 1
+                   for item in (length, remaining, decoded["wire"], sink["skb"])):
                 continue
             read = max(reads, key=at)
             if any(e["item"] == decoded["wire"] and e["via"] != "skb_copy_bits"
