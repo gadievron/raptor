@@ -187,3 +187,53 @@ def recover_distribution_license(artifact: dict, files: list[dict], blobs: dict[
         if value in _TROVE and _TROVE[value] not in identifiers:
             return None
     return reviewed
+
+
+@lru_cache(maxsize=1)
+def _cpython_rule() -> dict:
+    path = Path(__file__).with_name("data") / "license_identifications.json"
+    corpus = loads(read_text_gated(path, 256 * 1024, follow_symlinks=False))
+    rule = corpus["native_runtimes"]["cpython"]
+    if (type(corpus.get("schema_version")) is not int or corpus["schema_version"] != 1
+            or rule["expression"] != "PSF-2.0"
+            or not re.fullmatch(r"[0-9a-f]{64}", rule["notice_sha256"])):
+        raise ValueError("invalid reviewed CPython declaration")
+    return rule
+
+
+def recover_cpython_license(artifact: dict, files: list[dict], blobs: dict[str, bytes]) -> dict | None:
+    """Recover CPython's explicit project declaration from a complete own notice.
+
+    Stable complete-file fingerprints survive version updates. Changed terms,
+    installation layouts, mixed origins and conflicting claims remain unresolved.
+    """
+    from core.oci.notice_paths import cpython_notice_paths
+
+    paths = cpython_notice_paths(artifact)
+    if not paths or not isinstance(artifact.get("licenses", []), list):
+        return None
+    for claim in artifact.get("licenses", []):
+        if not isinstance(claim, dict):
+            return None
+        value = claim.get("spdxExpression") or claim.get("value")
+        if not isinstance(value, str) or value.strip().upper() not in {
+            "UNKNOWN", "NOASSERTION", "LICENSEREF-UNKNOWN",
+        }:
+            return None
+    candidates = [row for row in files if row.get("content_kind") == "notice_candidate"
+                  and (row["path"], row["catalogue_layer_diff_id"]) in paths]
+    if len(candidates) != 1:
+        return None
+    row = candidates[0]
+    data = blobs.get(row["sha256"])
+    rule = _cpython_rule()
+    if (data is None or len(data) > 64 * 1024
+            or row["sha256"] != rule["notice_sha256"]
+            or hashlib.sha256(data).hexdigest() != row["sha256"]):
+        return None
+    return {"expression": rule["expression"], "basis": "reviewed_installed_cpython_project_notice",
+            "notice_path": row["path"], "notice_sha256": row["sha256"],
+            "catalogue_layer_diff_id": row["catalogue_layer_diff_id"],
+            "layer_blob_digest": row["layer_blob_digest"],
+            "original_catalogue_licenses": artifact.get("licenses", []),
+            "scope": "Explicit CPython project declaration; incorporated third-party code retains its own terms. No binary-source certification or licence conclusion."}
