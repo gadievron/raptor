@@ -419,3 +419,19 @@ class TestDocsComparison:
         """
         rc = self._run(det, None, [])
         assert rc == 0
+
+
+def test_container_runtime_environment_consumer_is_inventoried(det, tmp_path):
+    root = _tree(tmp_path, {
+        ".devcontainer/use-system-node.py": (
+            "import os\n"
+            "node = os.environ.get('PLAYWRIGHT_NODEJS_PATH')\n"
+        ),
+        "docs/environment.md": "### `PLAYWRIGHT_NODEJS_PATH`\n",
+    })
+    inventory = det.scan_tree(root)
+    assert _kinds(inventory, "PLAYWRIGHT_NODEJS_PATH") == ["read"]
+    assert inventory.vars["PLAYWRIGHT_NODEJS_PATH"][0].file == ".devcontainer/use-system-node.py"
+    documented, _, _ = det.documented_vars(root)
+    assert "PLAYWRIGHT_NODEJS_PATH" in documented
+    assert "PLAYWRIGHT_NODEJS_PATH" in inventory.vars

@@ -99,7 +99,8 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-PY_ROOTS = ["core", "packages", "plugins", "engine", "libexec"]
+# Container Python helpers are installed as runtime programs in published images.
+PY_ROOTS = ["core", "packages", "plugins", "engine", "libexec", ".devcontainer"]
 BASH_ROOTS = ["bin", "libexec"]
 
 # Artifact/scratch directory names, pruned from the walk. A *tracked
