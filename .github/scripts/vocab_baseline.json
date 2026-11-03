@@ -2022,6 +2022,11 @@
     "count": 26,
     "kind": "literal"
   },
+  "core/symbolic/_isolate.py::_POLICY_STATE": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Closed sandbox configuration-transfer schema: copies operator-approved profile, disable consent, containment floors, read grants and audit settings into the spawned symbolic broker. Attribute names defined by core/sandbox/state.py, not learned target function names; preserving this explicit list avoids copying probe caches or unrelated mutable state."
+  },
   "core/taint/emission.py::_scan_finding": {
     "count": 13,
     "kind": "literal",
