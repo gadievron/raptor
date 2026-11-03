@@ -212,11 +212,18 @@ To keep terminal output and a diagnostic log, including native Python
 crash tracebacks when available:
 
 ```bash
+results_dir=$(mktemp -d /tmp/raptor-tests.XXXXXX)
+echo "Results: $results_dir"
 set -o pipefail
+
 PYTHONFAULTHANDLER=1 env -u VIRTUAL_ENV uv run --extra grammars python -m pytest \
   core packages .github/tests .github/scripts/tests -v --tb=short -ra \
-  --junitxml=mac-tests.xml 2>&1 | tee mac-tests.log
+  --junitxml="$results_dir/results.xml" \
+  2>&1 | tee "$results_dir/tests.log"
 ```
+
+Each run saves its log and JUnit XML in the printed directory under `/tmp`,
+keeping those outputs out of the checkout.
 
 `-v` records test names as they run, `2>&1` includes stderr, and `pipefail`
 preserves a failing pipeline status. The text log remains useful if the
