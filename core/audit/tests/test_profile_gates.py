@@ -556,7 +556,8 @@ class TestGroupBudgetFormula:
 
         captured = []
         monkeypatch.setattr(
-            pipeline, "run_audit_pipeline", captured.append,
+            pipeline, "run_audit_pipeline",
+            lambda opts, **kw: captured.append(opts),
         )
         monkeypatch.setattr(
             run_corpus, "_build_checklist", lambda t, o: True,

@@ -262,7 +262,8 @@ class TestLabelPinning:
 
         captured = []
         monkeypatch.setattr(
-            pipeline, "run_audit_pipeline", captured.append,
+            pipeline, "run_audit_pipeline",
+            lambda opts, **kw: captured.append(opts),
         )
         monkeypatch.setattr(
             run_corpus, "_build_checklist", lambda t, o: True,
@@ -294,7 +295,8 @@ class TestLabelPinning:
 
         captured = []
         monkeypatch.setattr(
-            pipeline, "run_audit_pipeline", captured.append,
+            pipeline, "run_audit_pipeline",
+            lambda opts, **kw: captured.append(opts),
         )
         monkeypatch.setattr(
             run_corpus, "_build_checklist", lambda t, o: True,
@@ -349,7 +351,8 @@ class TestScopeAndExcerptPrep:
 
         captured = []
         monkeypatch.setattr(
-            pipeline, "run_audit_pipeline", captured.append,
+            pipeline, "run_audit_pipeline",
+            lambda opts, **kw: captured.append(opts),
         )
         monkeypatch.setattr(
             run_corpus, "_build_checklist", lambda t, o: True,
@@ -580,7 +583,8 @@ class TestTriageKnob:
 
         captured = []
         monkeypatch.setattr(
-            pipeline, "run_audit_pipeline", captured.append,
+            pipeline, "run_audit_pipeline",
+            lambda opts, **kw: captured.append(opts),
         )
         monkeypatch.setattr(
             run_corpus, "_build_checklist", lambda t, o: True,
@@ -726,7 +730,8 @@ class TestProfileKnob:
 
         captured = []
         monkeypatch.setattr(
-            pipeline, "run_audit_pipeline", captured.append,
+            pipeline, "run_audit_pipeline",
+            lambda opts, **kw: captured.append(opts),
         )
         monkeypatch.setattr(
             run_corpus, "_build_checklist", lambda t, o: True,
@@ -902,7 +907,8 @@ class TestPrefilterKnob:
 
         captured = []
         monkeypatch.setattr(
-            pipeline, "run_audit_pipeline", captured.append,
+            pipeline, "run_audit_pipeline",
+            lambda opts, **kw: captured.append(opts),
         )
         monkeypatch.setattr(
             run_corpus, "_build_checklist", lambda t, o: True,
