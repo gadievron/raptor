@@ -92,32 +92,28 @@ def _active(proxy: proxy_mod.EgressProxy) -> int:
         return proxy._active_tunnels
 
 
-def _serve_once(handler: Callable[[socket.socket], None]) -> int:
-    """One-shot loopback backend: accept a single connection, run
-    ``handler`` on it in a thread, close everything after. Returns
-    the listening port."""
-    lsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    lsock.bind(("127.0.0.1", 0))
-    lsock.listen(8)
-    lsock.settimeout(_DEADLINE * 2)
-    port = lsock.getsockname()[1]
-
-    def run() -> None:
+@pytest.fixture
+def serve_backend(request):
+    """Own captive backend threads even when a test fails before connecting."""
+    def start(handler: Callable[[socket.socket], None]) -> int:
+        lsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            conn, _ = lsock.accept()
-        except OSError:
-            return
-        finally:
+            lsock.bind(("127.0.0.1", 0))
+            lsock.listen(8)
+            port = lsock.getsockname()[1]
+
+            def serve(conn: socket.socket) -> None:
+                conn.settimeout(_DEADLINE * 2)
+                handler(conn)
+
+            server = SocketServer(lsock, serve)
+        except BaseException:
             lsock.close()
-        conn.settimeout(_DEADLINE * 2)
-        try:
-            handler(conn)
-        finally:
-            with contextlib.suppress(OSError):
-                conn.close()
+            raise
+        request.addfinalizer(server.close)
+        return port
 
-    threading.Thread(target=run, daemon=True).start()
-    return port
+    return start
 
 
 def _serve_echo_forever() -> "tuple[int, Callable[[], None]]":
@@ -182,7 +178,7 @@ def _recv_until_eof(s: socket.socket) -> bytes:
 class TestEofPropagation:
 
     def test_half_close_protocol_continues(self, reset_proxy,
-                                           loopback_permitted):
+                                           loopback_permitted, serve_backend):
         """Client shutdown(SHUT_WR) → backend must SEE the EOF, and
         its late reply must still flow back (send-then-half-close
         protocols: git, some RPC). Pre-fix the FIN was swallowed —
@@ -195,7 +191,7 @@ class TestEofPropagation:
             conn.sendall(b"late-reply")
             served.set()
 
-        backend_port = _serve_once(handler)
+        backend_port = serve_backend(handler)
         proxy = proxy_mod.EgressProxy(allowed_hosts={"127.0.0.1"})
         try:
             s = _open_tunnel(proxy.port, backend_port)
@@ -213,7 +209,7 @@ class TestEofPropagation:
             proxy.stop()
 
     def test_backend_close_propagates_eof_to_client(
-            self, reset_proxy, loopback_permitted):
+            self, reset_proxy, loopback_permitted, serve_backend):
         """Backend replies and closes → the client must receive the
         reply AND the EOF promptly. Pre-fix the client's read hung
         until the idle timeout because the backend FIN was never
@@ -222,9 +218,9 @@ class TestEofPropagation:
         def handler(conn: socket.socket) -> None:
             data = conn.recv(4)
             conn.sendall(data.upper())
-            # handler returns → _serve_once closes → FIN to proxy
+            # handler returns → SocketServer closes → FIN to proxy
 
-        backend_port = _serve_once(handler)
+        backend_port = serve_backend(handler)
         proxy = proxy_mod.EgressProxy(allowed_hosts={"127.0.0.1"})
         try:
             s = _open_tunnel(proxy.port, backend_port)
@@ -241,7 +237,7 @@ class TestEofPropagation:
 class TestResetTeardown:
 
     def test_client_rst_tears_down_backend_side(
-            self, reset_proxy, loopback_permitted):
+            self, reset_proxy, loopback_permitted, serve_backend):
         """Client aborts (RST): the proxy must close the backend leg
         promptly — the backend's blocked read unblocks and the slot
         is released without the backend doing anything."""
@@ -252,7 +248,7 @@ class TestResetTeardown:
                 _recv_until_eof(conn)
             unblocked.set()
 
-        backend_port = _serve_once(handler)
+        backend_port = serve_backend(handler)
         proxy = proxy_mod.EgressProxy(allowed_hosts={"127.0.0.1"})
         try:
             s = _open_tunnel(proxy.port, backend_port)
@@ -266,7 +262,7 @@ class TestResetTeardown:
             proxy.stop()
 
     def test_backend_rst_tears_down_client_side(
-            self, reset_proxy, loopback_permitted):
+            self, reset_proxy, loopback_permitted, serve_backend):
         """Backend aborts (RST): the client's blocked read must end
         promptly (EOF or reset — the proxy translates the abort into
         a close of the client leg) and the slot must be released
@@ -276,7 +272,7 @@ class TestResetTeardown:
             conn.recv(4)
             _rst_close(conn)
 
-        backend_port = _serve_once(handler)
+        backend_port = serve_backend(handler)
         proxy = proxy_mod.EgressProxy(allowed_hosts={"127.0.0.1"})
         try:
             s = _open_tunnel(proxy.port, backend_port)
