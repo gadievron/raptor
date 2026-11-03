@@ -771,27 +771,30 @@ def detect_cleanup_deviations(
         )
 
         # Cross-function leg: every function calling the acquirer.
-        acquirers: list[tuple[str, str, int, list[str], str]] = []
+        acquirers: list[tuple[str, str, int, list[str], str, int]] = []
         for file_path, name, start, body in spans:
             a_idx, binding = _acquire_binding(body, pair.acquire)
             if a_idx >= 0:
-                acquirers.append((file_path, name, start, body, binding))
+                acquirers.append((file_path, name, start, body, binding, a_idx))
 
         if len(acquirers) >= min_group:
-            releasing = [
-                a for a in acquirers
-                if any(release_re.search(line) for line in a[3])
+            # Keep each function's computed vote. Repeated list membership
+            # below compared every acquirer against all releasing bodies.
+            release_flags = [
+                any(release_re.search(line) for line in a[3])
+                for a in acquirers
             ]
+            releasing = [a for a, released in zip(acquirers, release_flags) if released]
             if len(releasing) >= len(acquirers) * ratio:
                 exhibits = [
                     PeerExhibit(a[0], a[2], f"{a[1]} releases via "
                                             f"{pair.release}()")
                     for a in releasing[:3]
                 ]
-                for a in acquirers:
-                    if a in releasing:
+                for a, released in zip(acquirers, release_flags):
+                    if released:
                         continue
-                    file_path, name, start, body, binding = a
+                    file_path, name, start, body, binding, _ = a
                     escapes = _binding_escapes(body, binding)
                     deviations.append(CleanupDeviation(
                         pair=pair,
@@ -828,8 +831,7 @@ def detect_cleanup_deviations(
                     ))
 
         # Intra-function leg: return segments after the acquisition.
-        for file_path, name, start, body, binding in acquirers:
-            a_idx, _ = _acquire_binding(body, pair.acquire)
+        for file_path, name, start, body, binding, a_idx in acquirers:
             segments: list[tuple[int, bool]] = []  # (ret line, released)
             released = False
             for idx in range(a_idx + 1, len(body)):
