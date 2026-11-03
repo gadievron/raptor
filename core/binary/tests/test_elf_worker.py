@@ -191,3 +191,31 @@ def test_cpu_refusal_still_aborts_worker(monkeypatch, platform):
         child._install_limits()
     assert calls == [(child.resource.RLIMIT_AS, 2048 * 1024 * 1024),
                      (child.resource.RLIMIT_CPU, 10)]
+
+
+@pytest.mark.parametrize('error,expected', [
+    (ModuleNotFoundError('owned', name='pwnlib'), 'ModuleNotFoundError (pwnlib)'),
+    (ImportError('owned', name='dependency'), 'ImportError (dependency)'),
+], ids=['missing-pwntools', 'broken-dependency'])
+def test_dependency_failure_is_distinct_from_parser_failure(monkeypatch, capsys, error, expected):
+    from core.binary import _elf_worker_child as child
+    def fail(*args):
+        raise error
+    monkeypatch.setattr(child, '_collect', fail)
+    monkeypatch.setattr(child.sys, 'argv', ['worker', 'fixture', '', '1024'])
+    assert child.main() == 1
+    captured = capsys.readouterr()
+    assert not captured.out
+    assert captured.err == 'ELF worker dependency import failed: ' + expected + '\n'
+
+
+def test_parser_failure_does_not_claim_missing_dependency(monkeypatch, capsys):
+    from core.binary import _elf_worker_child as child
+    def fail(*args):
+        raise ValueError('owned parser failure')
+    monkeypatch.setattr(child, '_collect', fail)
+    monkeypatch.setattr(child.sys, 'argv', ['worker', 'fixture', '', '1024'])
+    assert child.main() == 1
+    captured = capsys.readouterr()
+    assert not captured.out
+    assert captured.err == 'ELF worker failed: ValueError\n'

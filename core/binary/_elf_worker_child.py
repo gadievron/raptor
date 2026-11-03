@@ -105,6 +105,14 @@ def main():
             return 1
         sys.stdout.buffer.write(payload)
         return 0
+    except ImportError as exc:
+        # Identify missing packages separately from parser/limit failures.
+        # Parent logging bounds and escapes this diagnostic; no traceback
+        # or arbitrary exception message crosses the worker boundary.
+        name = str(exc.name or 'unknown')[:128]
+        sys.stderr.write('ELF worker dependency import failed: ' +
+                         type(exc).__name__ + ' (' + name + ')\n')
+        return 1
     except Exception as exc:
         # Parent logging bounds and escapes stderr; never serialize exceptions.
         sys.stderr.write('ELF worker failed: ' + type(exc).__name__ + '\n')

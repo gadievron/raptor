@@ -121,6 +121,26 @@ class TestResourceLimits(unittest.TestCase):
         self.assertEqual(hard, 512 * 1024 * 1024)
 
 
+    def test_memory_refusal_diagnostic_distinguishes_value_error_from_errno(self):
+        import resource
+        for error, expected in [(ValueError('owned'), b'(ValueError)'),
+                                (OSError(1, 'owned'), b'(errno=1)')]:
+            with self.subTest(error=type(error).__name__):
+                def setrlimit(resource_id, value):
+                    if resource_id == resource.RLIMIT_AS:
+                        raise error
+                fn = _make_preexec_fn({'memory_mb': 512, 'cpu_seconds': 10})
+                with patch('resource.setrlimit', side_effect=setrlimit) as limits, \
+                     patch('core.sandbox.preexec.warn_post_fork') as warn:
+                    fn()
+                diagnostic = b''.join(call.args[0] for call in warn.call_args_list)
+                self.assertIn(expected, diagnostic)
+                self.assertNotIn(b'errno=0', diagnostic)
+                self.assertIn(b'process may exceed requested virtual-address bound', diagnostic)
+                self.assertTrue(any(call.args[0] == resource.RLIMIT_CPU
+                                    for call in limits.call_args_list))
+
+
 class TestBlockedCheck(unittest.TestCase):
 
     def test_detects_unreachable_when_engaged(self):
@@ -2646,7 +2666,8 @@ class TestSeccompFilterLostWarning(unittest.TestCase):
         from core.sandbox import seccomp as seccomp_mod
         self._reset()
         try:
-            with patch.object(seccomp_mod, "check_seccomp_available",
+            with patch.object(seccomp_mod.sys, "platform", "linux"), \
+                 patch.object(seccomp_mod, "check_seccomp_available",
                               return_value=False):
                 with self.assertLogs("core.sandbox.seccomp",
                                      level="WARNING") as cm:
@@ -2667,13 +2688,28 @@ class TestSeccompFilterLostWarning(unittest.TestCase):
         from core.sandbox import seccomp as seccomp_mod
         self._reset()
         try:
-            with patch.object(seccomp_mod, "check_seccomp_available",
+            with patch.object(seccomp_mod.sys, "platform", "linux"), \
+                 patch.object(seccomp_mod, "check_seccomp_available",
                               return_value=False), \
                  self.assertNoLogs("core.sandbox.seccomp",
                                    level="WARNING"):
                 self.assertIsNone(seccomp_mod._make_seccomp_preexec(""))
                 self.assertIsNone(
                     seccomp_mod._make_seccomp_preexec("none"))
+        finally:
+            self._reset()
+
+    def test_darwin_does_not_probe_or_consume_linux_warning(self):
+        from core.sandbox import seccomp as seccomp_mod, state
+        self._reset()
+        try:
+            with patch.object(seccomp_mod.sys, "platform", "darwin"), \
+                 patch.object(seccomp_mod, "check_seccomp_available") as probe, \
+                 patch.object(state, "warn_once") as warn_once, \
+                 self.assertNoLogs("core.sandbox.seccomp", level="WARNING"):
+                self.assertIsNone(seccomp_mod._make_seccomp_preexec("full"))
+                probe.assert_not_called()
+                warn_once.assert_not_called()
         finally:
             self._reset()
 
