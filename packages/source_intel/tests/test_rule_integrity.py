@@ -156,33 +156,30 @@ def test_total_rule_count_matches():
         "carries spatch >= the floor."
     ),
 )
-def test_every_rule_parses(tmp_path):
+@pytest.mark.parametrize(
+    "rule", sorted(_RULES_ROOT.rglob("*.cocci")),
+    ids=lambda rule: str(rule.relative_to(_RULES_ROOT)),
+)
+def test_every_rule_parses(tmp_path, rule):
     """spatch --parse-cocci shouldn't error on any shipped rule."""
     empty = tmp_path / "empty.c"
     empty.write_text("int main(void) { return 0; }\n")
-    failed = []
-    for rule in _RULES_ROOT.rglob("*.cocci"):
-        proc = subprocess.run(
-            [
-                "spatch", "--sp-file", str(rule),
-                "--very-quiet", "--no-includes",
-                str(empty),
-            ],
-            capture_output=True, text=True, timeout=30,
-        )
-        # `--sp-file` parse errors surface as non-zero returncode
-        # OR "parse error" / "syntax error" / "Fatal error" in stderr.
-        err = (proc.stderr or "") + (proc.stdout or "")
-        if proc.returncode != 0 and (
-            "parse error" in err.lower()
-            or "syntax error" in err.lower()
-            or "fatal error" in err.lower()
-        ):
-            failed.append((rule.name, err[:300]))
-    assert not failed, (
-        "rules failed to parse:\n"
-        + "\n".join(f"  {n}: {e}" for n, e in failed)
+    proc = subprocess.run(
+        [
+            "spatch", "--sp-file", str(rule),
+            "--very-quiet", "--no-includes",
+            str(empty),
+        ],
+        capture_output=True, text=True, timeout=30,
     )
+    # Keep the existing parse-error classification, with each rule now
+    # reported and timed independently instead of one whole-tree batch.
+    err = (proc.stderr or "") + (proc.stdout or "")
+    failed = proc.returncode != 0 and any(
+        message in err.lower()
+        for message in ("parse error", "syntax error", "fatal error")
+    )
+    assert not failed, f"rule failed to parse: {rule.relative_to(_RULES_ROOT)}\n{err[:300]}"
 
 
 def test_every_rule_emits_cocciresult():
