@@ -176,6 +176,11 @@ class TestVendorShapeCoverage:
         # JWT whose header JSON has whitespace (eyA..., not eyJ...).
         ("auth eyAiYWxnIjogIkhTMjU2IiB9.eyAic3ViIjogIjEyMzQ1Njc4OTAiIH0."
          "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJVadQssw5c", "SflKxwRJSMe"),
+    ], ids=[
+        "aws-secret-assignment", "aws-secret-uppercase", "aws-secret-json",
+        "private-key-pem", "truncated-rsa-pem", "azure-account-key",
+        "oauth-client-secret", "slack-session", "google-refresh-token",
+        "jwt",
     ])
     def test_battery_shape_redacted(self, text, fragment):
         out = redact_secrets(text)

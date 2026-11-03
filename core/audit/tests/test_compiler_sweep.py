@@ -2018,6 +2018,9 @@ class TestLayer2AttributeScan:
         ('[[deprecated("x\n', "still open"),
         ('const char*s = R"x(abc\n[[clang::suppress]] int y;', "unverifiable"),
         ("[[" + "(" * 5000, "nesting"),
+    ], ids=[
+        "unbalanced-delimiters", "oversized-open-list", "unterminated-string",
+        "unterminated-raw-string", "excessive-nesting",
     ])
     def test_uncertain_lists_are_witnesses(self, text, why):
         hits = _l2_scan(text)

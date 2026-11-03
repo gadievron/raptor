@@ -160,6 +160,11 @@ class TestArgumentValidation:
         # target echoes into the analysis record and must never carry
         # display-reordering bytes.
         "vuln\x85.c", "vu‮ln.c", "vuln​.c",
+    ], ids=[
+        "null", "integer", "empty",
+        "oversized-path", "nul-byte", "escape-byte",
+        "newline", "c1-control", "bidi-override",
+        "zero-width-space",
     ])
     def test_bad_file_args_are_malformed(self, tmp_path, file_arg):
         _write_repo(tmp_path)
@@ -185,6 +190,11 @@ class TestArgumentValidation:
         # C1 / bidi / zero-width function names refused at validation
         # — never looked up, never echoed into a served record.
         "f\x85n", "ma‮in", "pro⁦cess⁩", "ma​in",
+    ], ids=[
+        "null", "integer", "empty",
+        "whitespace-only", "oversized-name", "terminal-title-escape",
+        "c1-control", "bidi-override", "bidi-isolate",
+        "zero-width-space",
     ])
     def test_bad_function_args_are_malformed(self, tmp_path, function):
         _write_repo(tmp_path)

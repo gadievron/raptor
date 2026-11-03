@@ -2245,7 +2245,13 @@ def test_build_command_raw_request_mode(tmp_path: Path):
         ("GET /x HTTP/1.1\nHost: example.test", {},
          "blank line"),
     ],
-)
+ ids=[
+    "off-scope-host", "missing-host", "missing-fuzz-marker",
+    "method-option-conflict", "path-option-conflict", "vhost-option-conflict",
+    "recursion-option-conflict", "absolute-form-request", "duplicate-host",
+    "folded-header", "lowercase-host", "pinned-port-mismatch",
+    "host-in-body", "unterminated-headers",
+])
 def test_raw_request_mode_rejections(
     tmp_path: Path, request_text: str, config_kwargs: dict, message: str,
 ):

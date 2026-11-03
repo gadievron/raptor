@@ -401,6 +401,12 @@ class TestCensusClassification:
         (b"   ", CENSUS_NEITHER),
         # overlong lines are refused before any split → "neither"
         (b"CONNECT " + b"a" * 6000 + b":443 HTTP/1.1", CENSUS_NEITHER),
+    ], ids=[
+        "terminal-escape-host", "missing-port", "non-numeric-port",
+        "port-overflow", "zero-port", "get-method",
+        "lowercase-connect", "missing-http-version", "invalid-http-version",
+        "extra-field", "empty-request", "whitespace-only",
+        "overlong-host",
     ])
     def test_refusals_classify_for_the_method_census(self, raw, census):
         result = parse_connect_request_line(raw)
@@ -1040,6 +1046,9 @@ class TestEndToEnd:
         # well-formed but non-allowlisted → the parse succeeded in the
         # jail and policy (in-process, unchanged) denied it
         (b"CONNECT not-allowed.test:443 HTTP/1.1\r\n\r\n", 403),
+    ], ids=[
+        "get-method", "missing-port", "non-numeric-port",
+        "port-overflow", "terminal-escape-host", "host-not-allowlisted",
     ])
     def test_connect_verdicts_unchanged_through_live_proxy(
         self, reset_proxy, request_head, expect_status,

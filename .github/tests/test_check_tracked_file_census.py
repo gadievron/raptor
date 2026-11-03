@@ -122,6 +122,9 @@ class TestCensus:
         # live control/format character sits in this source file.
         "engine/semgrep/rules/x\u009b.yaml",
         "engine/semgrep/rules/x\u202e.yaml",
+    ], ids=[
+        "trailing-newline", "placeholder-newline", "escape-byte",
+        "c1-csi", "bidi-override",
     ])
     def test_control_and_format_names_are_always_violations(self, name):
         v = census_violations([name])

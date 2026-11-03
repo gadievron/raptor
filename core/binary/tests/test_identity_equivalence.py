@@ -208,6 +208,8 @@ class TestElfEquivalence:
         "1234",          # sub-8 hex (ld --build-id=0x1234)
         "12",            # single-byte id
         "a" * 129,       # oversize: past the 128-hex plausibility cap
+    ], ids=[
+        "four-hex-digits", "two-hex-digits", "oversized-build-id",
     ])
     def test_documented_delta_implausible_length_build_id(
         self, monkeypatch, tmp_path, bad_bid,
@@ -263,6 +265,9 @@ class TestSha256FallbackEquivalence:
         bytes(range(256)),                # binary junk
         b"MZ" + b"\xff" * 64,            # MZ stub, no PE signature
         b"\xca\xfe\xba\xbe\x00\x00\x00\x00",  # fat header, no slices
+    ], ids=[
+        "shell-script", "empty-file", "zero-blob",
+        "all-byte-values", "incomplete-pe", "empty-fat-header",
     ])
     def test_non_identifiable_files_are_byte_identical(
         self, monkeypatch, tmp_path, data,

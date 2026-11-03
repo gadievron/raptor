@@ -49,7 +49,10 @@ def test_populated_timeout_is_not_success(scope):
         scope.release()
 
 
-@pytest.mark.parametrize('events', ['frozen 0\n', 'populated 2\n', 'populated\n', 'x' * 16385])
+@pytest.mark.parametrize('events', ['frozen 0\n', 'populated 2\n', 'populated\n', 'x' * 16385], ids=[
+    "missing-populated", "invalid-populated", "missing-value",
+    "oversized-events",
+])
 def test_invalid_events_do_not_prove_emptiness(scope, events):
     (scope.path / 'cgroup.events').write_text(events)
     with pytest.raises(ValueError):
