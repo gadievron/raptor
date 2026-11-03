@@ -25,6 +25,24 @@ iterator_names = frozenset((
     "hlist_for_each_entry_safe",
 ))
 iterator_cache = {}
+loop_initialized = set()
+loop_jump_functions = set()
+
+def loop_return_key(decl, returned, name):
+    return (decl.file, int(decl.line), int(decl.column),
+            int(returned.line), int(returned.column), str(name))
+
+def record_loop_initialization(declarations, returns, name, *values):
+    if any((decl.file, str(decl.current_element), int(decl.current_element_line))
+           in loop_jump_functions for decl in declarations):
+        return
+    # Assignment must not read the old, indeterminate value. Refuse even
+    # unevaluated occurrences rather than guess about expression semantics.
+    if any(str(name) in str(value) for value in values):
+        return
+    for decl in declarations:
+        for returned in returns:
+            loop_initialized.add(loop_return_key(decl, returned, name))
 
 def iterator_statement_end(view, start, pairs, depth=0):
     # Delimiter pairing handles compounds without re-scanning their bodies.
@@ -259,6 +277,21 @@ def initialized_iterator_return(path, decl_line, decl_column,
         index = parents[index]
     return False
 
+// Goto edges can enter or bypass a loop body. Refuse loop proofs for that
+// entire function rather than rely on the native error-path heuristic.
+@loop_jump@
+identifier target;
+position p;
+@@
+goto target@p;
+
+@script:python@
+p << loop_jump.p;
+@@
+for pos in p:
+    loop_jump_functions.add((pos.file, str(pos.current_element),
+                             int(pos.current_element_line)))
+
 // Pattern 1: int declared without init, returned without assignment
 // on at least one path (goto-error or direct return)
 @uninit_assign@
@@ -276,6 +309,101 @@ type T;
 )
 ...>
 
+// Initialization witnesses follow all paths between declaration, loop and
+// return. Other return values may exit early, but a return of this local
+// must not bypass initialization (including optional loops and goto exits).
+@loop_header_init@
+identifier uninit_assign.err;
+position uninit_assign.p_decl, uninit_assign.p_ret;
+type T;
+expression assigned;
+statement body;
+@@
+T err@p_decl;
+... when forall
+    when != return err;
+(
+for (err = assigned; ...; ...) body
+|
+for (...; (err = assigned); ...) body
+|
+while ((err = assigned)) body
+)
+... when exists
+return@p_ret err;
+
+@script:python depends on loop_header_init@
+p_decl << uninit_assign.p_decl;
+p_ret << uninit_assign.p_ret;
+err << uninit_assign.err;
+assigned << loop_header_init.assigned;
+@@
+record_loop_initialization(p_decl, p_ret, err, assigned)
+
+@mandatory_loop_init@
+identifier uninit_assign.err;
+position uninit_assign.p_decl, uninit_assign.p_ret;
+type T;
+expression assigned;
+@@
+T err@p_decl;
+... when forall
+    when != return err;
+(
+for (;;) {
+    err = assigned;
+    ...
+}
+|
+while (1) {
+    err = assigned;
+    ...
+}
+)
+... when exists
+return@p_ret err;
+
+@script:python depends on mandatory_loop_init@
+p_decl << uninit_assign.p_decl;
+p_ret << uninit_assign.p_ret;
+err << uninit_assign.err;
+assigned << mandatory_loop_init.assigned;
+@@
+record_loop_initialization(p_decl, p_ret, err, assigned)
+
+@mandatory_loop_branch_init@
+identifier uninit_assign.err;
+position uninit_assign.p_decl, uninit_assign.p_ret;
+type T;
+expression condition, assigned, alternative;
+@@
+T err@p_decl;
+... when forall
+    when != return err;
+(
+for (;;) {
+    if (condition) { err = assigned; } else { err = alternative; }
+    ...
+}
+|
+while (1) {
+    if (condition) { err = assigned; } else { err = alternative; }
+    ...
+}
+)
+... when exists
+return@p_ret err;
+
+@script:python depends on mandatory_loop_branch_init@
+p_decl << uninit_assign.p_decl;
+p_ret << uninit_assign.p_ret;
+err << uninit_assign.err;
+condition << mandatory_loop_branch_init.condition;
+assigned << mandatory_loop_branch_init.assigned;
+alternative << mandatory_loop_branch_init.alternative;
+@@
+record_loop_initialization(p_decl, p_ret, err, condition, assigned, alternative)
+
 @script:python@
 p_decl << uninit_assign.p_decl;
 p_ret << uninit_assign.p_ret;
@@ -285,10 +413,12 @@ err << uninit_assign.err;
 import json, sys
 for _pd in p_decl:
     for _pr in p_ret:
+        if loop_return_key(_pd, _pr, err) in loop_initialized:
+            continue
         if initialized_iterator_return(_pr.file, int(_pd.line), int(_pd.column),
                                        int(_pr.line), int(_pr.column), err):
             continue
-        if int(_pr.line) > int(_pd.line):
+        if (int(_pr.line), int(_pr.column)) > (int(_pd.line), int(_pd.column)):
             _m = {"file": _pr.file, "line": int(_pr.line), "col": int(_pr.column),
                    "line_end": int(_pr.line_end), "col_end": int(_pr.column_end),
                    "rule": "uninitialized_return",
@@ -394,6 +524,8 @@ def _find_switch_no_default(filepath, decl_line, ret_line, var_name):
 
 for _pd in p_decl:
     for _pr in p_ret:
+        if loop_return_key(_pd, _pr, err) in loop_initialized:
+            continue
         if initialized_iterator_return(_pr.file, int(_pd.line), int(_pd.column),
                                        int(_pr.line), int(_pr.column), err):
             continue
