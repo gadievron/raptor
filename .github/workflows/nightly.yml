@@ -41,6 +41,7 @@ on:
         default: full
         options:
           - full
+          - crashes
           - semgrep
           - java
           - cpp
@@ -58,6 +59,76 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  intentional-crashes:
+    if: github.event_name != 'workflow_dispatch' || inputs.suite == 'full' || inputs.suite == 'crashes'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Enable unprivileged user namespaces
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/enable-userns
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - name: Restore or rebuild venv
+        uses: ./.github/actions/setup-venv
+        with:
+          cache-key-prefix: venv-grammars
+          uv-export-extra-args: --extra grammars
+          save-on-rebuild: 'true'
+      - name: Run intentional native-crash tests
+        env:
+          RAPTOR_MAX_TEST_SECONDS: ""
+        run: |
+          set -euo pipefail
+          source "$VENV_PATH/bin/activate"
+          python -m pytest core/symbolic/tests -m intentional_crash \
+            --run-crash-tests -v --tb=short -ra \
+            --junitxml="$RUNNER_TEMP/intentional-crashes.xml"
+      - name: Require real crash coverage
+        run: |
+          python - "$RUNNER_TEMP/intentional-crashes.xml" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+          cases = list(ET.parse(sys.argv[1]).iter("testcase"))
+          assert len(cases) >= 2, "intentional crash tests were not collected"
+          assert not any(c.find("skipped") is not None for c in cases), "native crash coverage skipped"
+          PY
+      - name: Verify macOS toolchain runtime access
+        if: runner.os == 'macOS'
+        env:
+          RAPTOR_MAX_TEST_SECONDS: ""
+        run: |
+          set -euo pipefail
+          source "$VENV_PATH/bin/activate"
+          python -m pytest -m "" -v --tb=short \
+            core/sandbox/tests/test_macos_spawn.py::test_project_python_starts_with_restricted_home_metadata \
+            core/sandbox/tests/test_macos_spawn.py::test_apple_compiler_can_load_sdk_under_read_restrictions \
+            --junitxml="$RUNNER_TEMP/macos-toolchain.xml"
+      - name: Upload native-crash test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: intentional-crashes-${{ runner.os }}
+          path: |
+            ${{ runner.temp }}/intentional-crashes.xml
+            ${{ runner.temp }}/macos-toolchain.xml
+          if-no-files-found: ignore
+
   slow-integration:
     if: github.event_name != 'workflow_dispatch' || inputs.suite == 'full'
     runs-on: ubuntu-latest

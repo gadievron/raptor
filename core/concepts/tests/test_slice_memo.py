@@ -185,7 +185,12 @@ _HINT_MATRIX = [
 
 
 class TestGrepHintEquivalence:
-    @pytest.mark.parametrize("hint,source", _HINT_MATRIX)
+    @pytest.mark.parametrize("hint,source", _HINT_MATRIX, ids=[
+        "regex-hit", "regex-miss", "case-insensitive",
+        "invalid-regex-literal-hit", "invalid-regex-casefold", "redos-pattern-miss",
+        "redos-pattern-literal-hit", "oversized-hint-and-source", "word-boundaries",
+        "unicode-casefold",
+    ])
     def test_matches_reference(self, hint, source):
         assert _new_grep_hit(hint, source) == _ref_grep_hit(hint, source)
 

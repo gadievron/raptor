@@ -99,7 +99,10 @@ def test_is_retry_eligible_classes() -> None:
         "Bind source path does not exist: /host/missing/dir",
         'invalid mount config for type "bind": bind source path does not exist',
     ],
-)
+ ids=[
+    "oci-create-mount-failure", "oci-exec-mount-failure", "missing-bind-source",
+    "invalid-bind-mount",
+])
 def test_b12_fatal_compose_config_class(stderr: str) -> None:
     """B12: OCI mount / bind-source-missing errors are CONFIG bugs, not transient.
     Classifying them as fatal_compose_config lets is_retry_eligible() return

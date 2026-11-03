@@ -236,6 +236,30 @@ keeping those outputs out of the checkout.
 preserves a failing pipeline status. The text log remains useful if the
 process crashes; JUnit XML may be incomplete if pytest cannot finish.
 
+### Intentional native crashes
+
+Ordinary runs exclude tests marked `intentional_crash`, even with `-m ""`.
+Default tests still exercise subprocess isolation, unexpected child exits,
+real signal delivery with SIGTERM, and output capture. Tests that must prove
+recovery from a real fatal native signal require `--run-crash-tests`.
+
+The dedicated nightly job runs these tests on Linux and macOS. To reproduce
+that coverage explicitly (this may generate OS crash reports or dialogs):
+
+```bash
+results_dir=$(mktemp -d /tmp/raptor-crash-tests.XXXXXX)
+echo "Results: $results_dir"
+set -o pipefail
+PYTHONFAULTHANDLER=1 env -u VIRTUAL_ENV uv run --extra grammars python -m pytest \
+  core/symbolic/tests -m intentional_crash --run-crash-tests -v --tb=short -ra \
+  --junitxml="$results_dir/results.xml" 2>&1 | tee "$results_dir/tests.log"
+```
+
+Disabling core dumps does not prevent macOS diagnostic reports. Keep crash
+reporting enabled for unexpected product failures. Mark tests that really
+need fatal signals; test parsing/classification with ordinary child exits
+and supplied result data when kernel signal delivery is not the assertion.
+
 ## Writing hermetic tests
 
 A test must pass independently and leave the process ready for the next

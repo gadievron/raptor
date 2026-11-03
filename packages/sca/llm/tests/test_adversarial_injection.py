@@ -125,7 +125,10 @@ def _make_finding(script_body: str, severity: str = "high") -> SupplyChainFindin
 class TestPreflightDetection:
     """Preflight should flag injection indicators in adversarial fixtures."""
 
-    @pytest.mark.parametrize("name,content", _all_fixtures())
+    @pytest.mark.parametrize("name,content", [
+        pytest.param(name, content, id=name)
+        for name, content in _all_fixtures()
+    ])
     def test_preflight_runs_without_error(self, name: str, content: str):
         """Preflight must not crash on any fixture — it may or may not
         detect injection depending on the pattern, but must never error."""
@@ -143,7 +146,10 @@ class TestPreflightDetection:
 class TestMechanicalOverride:
     """LLM 'benign' verdict must not suppress mechanical findings."""
 
-    @pytest.mark.parametrize("name,content", _all_fixtures())
+    @pytest.mark.parametrize("name,content", [
+        pytest.param(name, content, id=name)
+        for name, content in _all_fixtures()
+    ])
     def test_benign_verdict_preserves_severity(self, name: str, content: str):
         """Even if the LLM says 'benign', the mechanical finding stays."""
         finding = _make_finding(content, severity="high")
@@ -160,7 +166,10 @@ class TestMechanicalOverride:
         )
         assert finding.evidence["llm_verdict"] == "benign"
 
-    @pytest.mark.parametrize("name,content", _all_fixtures())
+    @pytest.mark.parametrize("name,content", [
+        pytest.param(name, content, id=name)
+        for name, content in _all_fixtures()
+    ])
     def test_malicious_verdict_escalates(self, name: str, content: str):
         finding = _make_finding(content, severity="high")
         malicious_verdict = InstallHookVerdict(
@@ -175,7 +184,10 @@ class TestMechanicalOverride:
 class TestRunStageWithAdversarialInput:
     """run_stage with adversarial content should still produce valid output."""
 
-    @pytest.mark.parametrize("name,content", _all_fixtures())
+    @pytest.mark.parametrize("name,content", [
+        pytest.param(name, content, id=name)
+        for name, content in _all_fixtures()
+    ])
     def test_stage_completes_with_adversarial_input(
         self, name: str, content: str,
     ):
