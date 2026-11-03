@@ -19,6 +19,17 @@ size_t unmap(int present) { if (!present) return -ENOENT; return 4096; } /* unsa
 size_t count(int ready) { if (ready) return 1; return -EINVAL; } /* unsafe */
 size_t bytes(void) { return -ENOMEM; } /* unsafe */
 size_t wide(void) { return -EIO; } /* unsafe */
+static inline size_t wrapped(void) { return (-ENOENT); } /* unsafe */
+size_t nested_parens(void) { return (((-ENOMEM))); } /* unsafe */
+size_t operand_parens(void) { return -(EINVAL); } /* unsafe */
+size_t wrapped_operand(void) { return (-(EIO)); } /* unsafe */
+size_t digit_errno(void) { return -E2BIG; } /* unsafe */
+size_t multiline(void) { return ( /* unsafe */
+    -
+    (
+        EINVAL
+    )
+); }
 unsigned long encoded_syscall(void) { return -EINVAL; }
 unsigned int encoded_status(void) { return -ENOENT; }
 ssize_t signed_size(void) { return -ENOENT; }
@@ -28,17 +39,25 @@ size_t sentinel(void) { return -1; }
 size_t explicit_sentinel(void) { return SIZE_MAX; }
 size_t explicit_cast(void) { return (size_t)-EIO; }
 size_t unrelated(void) { return -entry_count; }
+size_t positive_again(void) { return -(-EINVAL); }
+size_t arithmetic(void) { return (-EINVAL + 1); }
+size_t composite_operand(void) { return -(EINVAL - 1); }
+size_t call_argument(void) { return handle(-EINVAL); }
+size_t paren_sentinel(void) { return (((-1))); }
+size_t paren_cast(void) { return (((size_t)-EINVAL)); }
+size_t comment_spacing(void) { return ( /* comment */ - /* comment */ EIO); } /* unsafe */
 '''
     target = tmp_path / "counts.c"
     target.write_text(source)
     result = subprocess.run(["spatch", "--sp-file", str(_RULE), str(target), "--no-show-diff"],
                             capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
-    actual = set()
+    actual = []
     for line in (result.stdout + result.stderr).splitlines():
         if line.startswith("COCCIRESULT:"):
             hit = json.loads(line.removeprefix("COCCIRESULT:"))
             assert hit["rule"] == "negative_errno_unsigned_return"
-            actual.add(hit["line"])
+            actual.append(hit["line"])
     expected = {i for i, line in enumerate(source.splitlines(), 1) if "/* unsafe */" in line}
-    assert actual == expected
+    assert set(actual) == expected
+    assert len(actual) == len(expected), "one diagnostic per return expression"
