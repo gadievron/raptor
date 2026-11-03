@@ -62,7 +62,7 @@ once each, at startup, per process. Who must NOT: the lifecycle stubs
 child processes mid-hold — a stub taking the lock would deadlock
 against its own parent), read-only consumers (``report`` / ``journal``
 / ``gaps`` / ``/review`` / coverage readers), the in-process pipeline
-tail (validate post-pass, ensemble passes, review passes — same
+tail (validate post-pass, review passes — same
 process, lock already held; in-process re-acquisition is a no-op by
 design), the journal append/compact seams (they keep their own RMW
 flocks and live-run refusal), and the corpus runner (calls
@@ -414,7 +414,7 @@ def acquire_run_lock(out_dir: Path, operation: str, *,
     * already held by this process (the ``_HELD`` handle registry —
       process-local state, unlike the stamp, which is file content any
       run-dir writer can forge) → return a no-op handle, so in-process
-      flows (ensemble passes, the validate post-pass) can never
+      flows (the validate post-pass) can never
       deadlock or refuse against their own orchestrator — even when
       the first acquisition's stamp write failed.
     * flock refused → a live foreign process holds it: refuse, naming
@@ -497,7 +497,7 @@ def acquire_run_lock(out_dir: Path, operation: str, *,
     # and the re-entry whose first acquisition's stamp write failed.
     if _held_by_this_process(lock_path):
         # First acquisition's fd keeps the flock — in-process re-entry
-        # (ensemble passes, the validate post-pass) is a no-op.
+        # (the validate post-pass) is a no-op.
         os.close(fd)
         return RunLockHandle(-1, lock_path)
     # O_CLOEXEC matters: the orchestrator execs tool children (semgrep,

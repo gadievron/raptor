@@ -154,8 +154,8 @@ _DEFAULT_QUERY_TIMEOUT_S = 300
 # quote target source code (``s.code``), so an unanchored / un-nonce'd
 # parse lets a scanned repo forge facts by simply containing the
 # marker text in a string or comment near a sink — minting refutations
-# or suppressing confirmations.  The nonce is minted per invocation
-# (the merge_fence record_nonce pattern), so target bytes present in
+# or suppressing confirmations.  The nonce is minted per invocation,
+# so target bytes present in
 # the CPG at scan time cannot predict it.
 _GD_FUNC = "RAPTOR_GD_FUNC:"
 _GD_SINKS = "RAPTOR_GD_SINKS:"

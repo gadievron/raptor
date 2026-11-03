@@ -1893,11 +1893,8 @@ _INT_FAMILY_HYP_RE = re.compile(
 )
 
 # Detector receipt families the anti-self-refutation floor consumes
-# (the last ``:``-segment of a mechanical detector name).  The
-# merge-lane receipt fence (:mod:`core.audit.merge_fence`) reuses this
-# exact taxonomy — one source of truth for what counts as a
-# floor-grade detection receipt; a family added here is covered by
-# the fence automatically.
+# (the last ``:``-segment of a mechanical detector name).  One source
+# of truth for what counts as a floor-grade detection receipt.
 FLOOR_DETECTOR_FAMILIES: frozenset[str] = frozenset(
     _DETECTOR_FAMILY_HYP_RES,
 )
