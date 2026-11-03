@@ -161,11 +161,9 @@ def import_reused_verdicts(
         _tally_outcome,
     )
 
-    # Idempotence guard: an ensemble/multi-pass run reusing cached
-    # prep would otherwise import the same candidates once per pass —
-    # skip anything this run's own journal already carries. Bypassed
-    # for same-run resume, whose candidates are by construction in
-    # this run's journal.
+    # Idempotence guard: skip anything this run's own journal already
+    # carries. Bypassed for same-run resume, whose candidates are by
+    # construction in this run's journal.
     already: set = set()
     if not same_run:
         try:

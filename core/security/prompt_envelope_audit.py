@@ -111,7 +111,6 @@ _PROMPT_CONSTRUCTION_FILES = (
     "core/audit/context.py",
     "core/audit/batch_glance.py",
     "core/audit/spec_inference.py",
-    "core/audit/security_classifier.py",
     "core/audit/chain_detector.py",
     "core/audit/refinement.py",
     "core/audit/validate.py",

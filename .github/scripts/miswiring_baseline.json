@@ -646,9 +646,6 @@
   "dead:dead_function:packages/exploit_feasibility/analyzer.py:check_system_exploitability": {
    "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
   },
-  "dead:dead_method:core/analysis/binary_oracle.py:_OwnedOutputReader.readinto": {
-   "note": "io.RawIOBase protocol override: io.BufferedReader invokes readinto internally while TextIOWrapper streams retained tool output. The native I/O dispatch is invisible to the AST reference census. test_binary_oracle_output.py exercises streaming and the positional reader, including child-shared offset isolation."
-  },
   "dead:dead_method:core/audit/tests/test_return_census.py:TestCpgUsage._fake_server_rows": {
    "note": "test scaffolding kept for the planned CPG-backed census cases; harmless"
   },

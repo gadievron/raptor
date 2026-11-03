@@ -238,10 +238,9 @@ class TestSpliceResults:
 class TestLabelPinning:
     """Labeled functions must be guaranteed review slots in EVERY pass.
 
-    Regression: a label-filtered ensemble rerun threaded the labels
-    into the bug_first pass but the security pass triage-skipped all
-    of them (0 reviewed), so the merge scored the labels ``error`` for
-    the missing mode.  Pins bypass triage skips and the budget cut.
+    Regression: a label-filtered rerun triage-skipped all labelled
+    functions (0 reviewed).  Pins bypass triage skips and the budget
+    cut.
     """
 
     def _label_for(self, fid, file, line=1):
@@ -290,36 +289,6 @@ class TestLabelPinning:
         # non-gap
         assert opts.force is True
 
-    def test_every_ensemble_pass_gets_pins(self, tmp_path, monkeypatch):
-        import core.audit.pipeline as pipeline
-
-        captured = []
-        monkeypatch.setattr(
-            pipeline, "run_audit_pipeline",
-            lambda opts, **kw: captured.append(opts),
-        )
-        monkeypatch.setattr(
-            run_corpus, "_build_checklist", lambda t, o: True,
-        )
-        src = tmp_path / "repo"
-        src.mkdir()
-        (src / "a.c").write_text("int f(void) { return 0; }\n")
-
-        labels = [self._label_for("a.c:f", "a.c")]
-        run_corpus._run_ensemble_audit(
-            labels, {"test": src}, out_dir=tmp_path / "out",
-        )
-        # security pass + bug_first pass, both pinned
-        assert len(captured) == 2
-        modes = {str(opts.mode) for opts in captured}
-        assert len(modes) == 2, f"expected two distinct modes, got {modes}"
-        for opts in captured:
-            assert opts.pins == ["a.c:f"], (
-                f"pass {opts.mode} lost the labeled-function pin"
-            )
-            assert opts.force is True, (
-                f"pass {opts.mode} lost the pin force semantics"
-            )
 
 
 class TestScopeAndExcerptPrep:
@@ -598,39 +567,6 @@ class TestTriageKnob:
         )
         assert captured[0].triage is False
 
-    def test_ensemble_threads_triage_to_both_passes(
-        self, tmp_path, monkeypatch,
-    ):
-        calls = []
-
-        def fake_run_audit(labels, dirs, **kw):
-            calls.append(kw)
-            return ([{
-                "function_id": lb.function_id,
-                "bug_class": lb.bug_class,
-                "expected": lb.expected_status,
-                "actual": "suspicious",
-                "match": False,
-                "hypothesis": "",
-                "evidence_tool": "",
-                "cost_usd": 0.0,
-                "duration_s": 0.0,
-            } for lb in labels], [])
-
-        monkeypatch.setattr(run_corpus, "_run_audit", fake_run_audit)
-        monkeypatch.setattr(
-            run_corpus, "_run_phase2_classify", lambda *a, **kw: 0.0,
-        )
-        src = tmp_path / "repo"
-        src.mkdir()
-        (src / "a.c").write_text("int f(void) { return 0; }\n")
-        run_corpus._run_ensemble_audit(
-            [self._label_for()], {"test": src},
-            out_dir=tmp_path / "out", triage=False,
-        )
-        assert len(calls) == 2
-        assert all(kw["triage"] is False for kw in calls)
-
     def test_meta_records_triage_setting(self, tmp_path, monkeypatch):
         from contextlib import contextmanager
 
@@ -657,17 +593,15 @@ class TestTriageKnob:
         )
         captured = {}
 
-        def fake_ensemble(labels, dirs, **kw):
+        def fake_audit(labels, dirs, **kw):
             captured.update(kw)
-            # model="" matches the default-model run so the
-            # conservation census stays clean.
             return (
                 [dict(_result_row("a.c:f", "clean", "clean"), model="")],
                 [],
             )
 
         monkeypatch.setattr(
-            run_corpus, "_run_ensemble_audit", fake_ensemble,
+            run_corpus, "_run_audit", fake_audit,
         )
         out = tmp_path / "results.json"
         run_corpus.main(["--output", str(out)])
@@ -767,39 +701,6 @@ class TestProfileKnob:
         opt_fields = {f.name for f in fields(AuditPipelineOpts)}
         assert set(run_corpus.COLD_PROFILE_GATES) <= opt_fields
 
-    def test_ensemble_threads_profile_to_both_passes(
-        self, tmp_path, monkeypatch,
-    ):
-        calls = []
-
-        def fake_run_audit(labels, dirs, **kw):
-            calls.append(kw)
-            return ([{
-                "function_id": lb.function_id,
-                "bug_class": lb.bug_class,
-                "expected": lb.expected_status,
-                "actual": "suspicious",
-                "match": False,
-                "hypothesis": "",
-                "evidence_tool": "",
-                "cost_usd": 0.0,
-                "duration_s": 0.0,
-            } for lb in labels], [])
-
-        monkeypatch.setattr(run_corpus, "_run_audit", fake_run_audit)
-        monkeypatch.setattr(
-            run_corpus, "_run_phase2_classify", lambda *a, **kw: 0.0,
-        )
-        src = tmp_path / "repo"
-        src.mkdir()
-        (src / "a.c").write_text("int f(void) { return 0; }\n")
-        run_corpus._run_ensemble_audit(
-            [self._label_for()], {"test": src},
-            out_dir=tmp_path / "out", profile="cold",
-        )
-        assert len(calls) == 2
-        assert all(kw["profile"] == "cold" for kw in calls)
-
     def test_meta_and_history_record_profile(self, tmp_path, monkeypatch):
         from contextlib import contextmanager
 
@@ -825,7 +726,7 @@ class TestProfileKnob:
             run_corpus, "_corpus_project_context", fake_project,
         )
         monkeypatch.setattr(
-            run_corpus, "_run_ensemble_audit",
+            run_corpus, "_run_audit",
             lambda labels, dirs, **kw: (
                 [dict(_result_row("a.c:f", "clean", "clean"), model="")],
                 [],
@@ -922,39 +823,6 @@ class TestPrefilterKnob:
         )
         assert captured[0].prefilter_skip is False
 
-    def test_ensemble_threads_prefilter_to_both_passes(
-        self, tmp_path, monkeypatch,
-    ):
-        calls = []
-
-        def fake_run_audit(labels, dirs, **kw):
-            calls.append(kw)
-            return ([{
-                "function_id": lb.function_id,
-                "bug_class": lb.bug_class,
-                "expected": lb.expected_status,
-                "actual": "suspicious",
-                "match": False,
-                "hypothesis": "",
-                "evidence_tool": "",
-                "cost_usd": 0.0,
-                "duration_s": 0.0,
-            } for lb in labels], [])
-
-        monkeypatch.setattr(run_corpus, "_run_audit", fake_run_audit)
-        monkeypatch.setattr(
-            run_corpus, "_run_phase2_classify", lambda *a, **kw: 0.0,
-        )
-        src = tmp_path / "repo"
-        src.mkdir()
-        (src / "a.c").write_text("int f(void) { return 0; }\n")
-        run_corpus._run_ensemble_audit(
-            [self._label_for()], {"test": src},
-            out_dir=tmp_path / "out", prefilter=False,
-        )
-        assert len(calls) == 2
-        assert all(kw["prefilter"] is False for kw in calls)
-
     def test_meta_records_prefilter_setting(self, tmp_path, monkeypatch):
         from contextlib import contextmanager
 
@@ -981,17 +849,15 @@ class TestPrefilterKnob:
         )
         captured = {}
 
-        def fake_ensemble(labels, dirs, **kw):
+        def fake_audit(labels, dirs, **kw):
             captured.update(kw)
-            # model="" matches the default-model run so the
-            # conservation census stays clean.
             return (
                 [dict(_result_row("a.c:f", "clean", "clean"), model="")],
                 [],
             )
 
         monkeypatch.setattr(
-            run_corpus, "_run_ensemble_audit", fake_ensemble,
+            run_corpus, "_run_audit", fake_audit,
         )
         out = tmp_path / "results.json"
         run_corpus.main(["--output", str(out)])
@@ -1269,7 +1135,7 @@ class TestConservationInMain:
             run_corpus, "_corpus_project_context", fake_project,
         )
         monkeypatch.setattr(
-            run_corpus, "_run_ensemble_audit",
+            run_corpus, "_run_audit",
             lambda labels, dirs, **kw: (rows, []),
         )
         out = tmp_path / "results.json"
@@ -1343,14 +1209,14 @@ class TestSpendGate:
         )
         ran = []
 
-        def fake_ensemble(labels, dirs, **kw):
+        def fake_audit(labels, dirs, **kw):
             ran.append(True)
             return (
                 [dict(_result_row("a.c:f"), model="")], [],
             )
 
         monkeypatch.setattr(
-            run_corpus, "_run_ensemble_audit", fake_ensemble,
+            run_corpus, "_run_audit", fake_audit,
         )
         out = tmp_path / "results.json"
         rc = run_corpus.main(["--output", str(out), *(argv or [])])
@@ -1481,7 +1347,7 @@ class TestRefireLoop:
         )
         seen = {}
 
-        def fake_ensemble(run_labels, dirs, **kw):
+        def fake_audit(run_labels, dirs, **kw):
             seen["fids"] = [lb.function_id for lb in run_labels]
             return ([
                 dict(
@@ -1495,7 +1361,7 @@ class TestRefireLoop:
             ], [])
 
         monkeypatch.setattr(
-            run_corpus, "_run_ensemble_audit", fake_ensemble,
+            run_corpus, "_run_audit", fake_audit,
         )
         return seen
 
@@ -1640,7 +1506,7 @@ class TestLlmCacheKnob:
         )
         captured = {}
 
-        def fake_ensemble(labels, dirs, **kw):
+        def fake_audit(labels, dirs, **kw):
             captured["env"] = os.environ.get("RAPTOR_LLM_CACHE")
             return (
                 [dict(_result_row("a.c:f", "clean", "clean"), model="")],
@@ -1648,7 +1514,7 @@ class TestLlmCacheKnob:
             )
 
         monkeypatch.setattr(
-            run_corpus, "_run_ensemble_audit", fake_ensemble,
+            run_corpus, "_run_audit", fake_audit,
         )
         out = tmp_path / "results.json"
         run_corpus.main(["--output", str(out), *argv])
@@ -1677,638 +1543,6 @@ class TestLlmCacheKnob:
         monkeypatch.setenv("RAPTOR_LLM_CACHE", "off")
         from core.llm.config import LLMConfig
         assert LLMConfig().enable_caching is False
-
-
-class TestPhase2Calibration:
-    """The corpus phase-2 pass and the in-run classifier must judge
-    with the SAME calibrated ruleset — an uncalibrated twin of the
-    prompt reliably demotes CWE-362 shared-state races to quality."""
-
-    def test_corpus_prompt_carries_shared_calibration(self):
-        import inspect
-
-        from core.audit.security_classifier import CALIBRATION_RULES
-
-        src = inspect.getsource(run_corpus._run_phase2_classify)
-        assert "CALIBRATION_RULES" in src
-        # The shared rules cover both the stream-consumer and the
-        # check-then-create shared-registry race mechanisms.
-        assert "check-then-create" in CALIBRATION_RULES
-        assert "concurrent" in CALIBRATION_RULES
-
-    def test_in_run_classifier_carries_same_rules(self):
-        from core.audit.security_classifier import (
-            CALIBRATION_RULES,
-            _CLASSIFICATION_SYSTEM,
-        )
-
-        assert CALIBRATION_RULES in _CLASSIFICATION_SYSTEM
-
-    def test_classify_sends_calibrated_system_prompt(self, monkeypatch):
-        captured = {}
-
-        class _Resp:
-            cost = 0.0
-            content = '{"is_security": true}'
-
-        class _Client:
-            class config:  # noqa: N801 - stand-in namespace
-                @staticmethod
-                def config_for_model(name):
-                    raise ValueError
-
-            def generate_structured(self, prompt, schema, *,
-                                    system_prompt="", **kw):
-                captured["system"] = system_prompt
-                return _Resp()
-
-        monkeypatch.setattr(
-            "core.llm.transcript.build_llm_client",
-            lambda *a, **kw: _Client(),
-        )
-        monkeypatch.setattr(
-            run_corpus, "structured_result",
-            lambda *a, **kw: {
-                "classification": "security_finding",
-                "is_security": True,
-                "primitive": "corruption",
-            },
-        )
-        rows = [{
-            "function_id": "a.go:W",
-            "actual": "suspicious",
-            "expected": "finding",
-            "hypothesis": "unsynchronized concurrent write",
-        }]
-        run_corpus._run_phase2_classify(rows)
-        from core.audit.security_classifier import CALIBRATION_RULES
-        assert CALIBRATION_RULES in captured["system"]
-        assert rows[0]["phase2_is_security"] is True
-
-
-class TestQualitySuppressionNullPrimitive:
-    """A null primitive from the classifier is the same ruling as the
-    string "none" — it must not exempt a quality finding from
-    suppression."""
-
-    def _row(self, primitive):
-        return {
-            "function_id": "a.go:NS.Scan",
-            "expected": "clean",
-            "actual": "suspicious",
-            "evidence_tool": "",
-            "phase2_classification": "quality_finding",
-            "phase2_is_security": False,
-            "phase2_primitive": primitive,
-        }
-
-    def test_null_primitive_suppressed(self):
-        rows = [self._row(None)]
-        assert run_corpus._suppress_quality_findings(rows) == 1
-        assert rows[0]["actual"] == "clean"
-
-    def test_real_primitive_not_suppressed(self):
-        rows = [self._row("write")]
-        assert run_corpus._suppress_quality_findings(rows) == 0
-        assert rows[0]["actual"] == "suspicious"
-
-
-class TestReceiptFlooredSuppressionExemption:
-    """A deterministic gate floor is mechanical evidence — the phase-2
-    quality suppression must not un-do it."""
-
-    def _row(self, floored):
-        return {
-            "function_id": "a.go:W",
-            "expected": "finding",
-            "actual": "suspicious",
-            "evidence_tool": "",
-            "receipt_floored": floored,
-            "phase2_classification": "quality_finding",
-            "phase2_is_security": False,
-            "phase2_primitive": "none",
-        }
-
-    def test_floored_row_survives(self):
-        rows = [self._row(True)]
-        assert run_corpus._suppress_quality_findings(rows) == 0
-        assert rows[0]["actual"] == "suspicious"
-
-    def test_unfloored_row_suppressed(self):
-        rows = [self._row(False)]
-        assert run_corpus._suppress_quality_findings(rows) == 1
-
-    def test_flag_threaded_from_gate_rows(self, tmp_path):
-        import json
-
-        from core.audit.corpus.run_corpus import (
-            _parse_audit_log_outcomes,
-        )
-        log = tmp_path / ".audit-log.jsonl"
-        rows = [
-            {"action": "orchestrator_review", "key": "a.go:W:5",
-             "status": "clean"},
-            {"action": "refutation_gate", "key": "a.go:W:5",
-             "gate": "receipt_corroborated_hypothesis",
-             "applied": True, "demote_to": "suspicious"},
-            {"action": "orchestrator_review", "key": "a.go:W:5",
-             "status": "suspicious", "final_status_correction": True},
-        ]
-        log.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
-        o, _ = _parse_audit_log_outcomes(log)
-        assert o["a.go:W"]["receipt_floored"] is True
-        assert o["a.go:W"]["status"] == "suspicious"
-
-
-_RXKAD_KEY = "net/rxrpc/rxkad.c:rxkad_verify_packet_2"
-
-_RXKAD_RECEIPT = {
-    "file": "net/rxrpc/rxkad.c",
-    "function": "rxkad_verify_packet_2",
-    "detector": "cocci:scatterlist_frag_undersize",
-    "line": 510,
-    "description": (
-        "scatterlist sized from bare fragment count "
-        "'skb_shinfo(skb)->nr_frags' at line 510 but 'skb' is mapped "
-        "via skb_to_sgvec at line 520"
-    ),
-}
-
-
-def _fence_lane(tmp_path, name, mech, suppressions=None):
-    import json
-
-    lane = tmp_path / name
-    grp = lane / "linux-kernel"
-    grp.mkdir(parents=True)
-    (grp / "mechanical-findings.json").write_text(json.dumps(mech))
-    if suppressions:
-        with (grp / "suppressions.jsonl").open("w") as fh:
-            for rec in suppressions:
-                fh.write(json.dumps(rec) + "\n")
-    return lane
-
-
-class TestMergeFenceReceiptStands:
-    """Merge-lane receipt fence: a standing floor-class detector
-    receipt with no mechanical refutation blocks the Phase-2
-    quality suppression from minting clean — prose may not override
-    a standing receipt; a recorded proof-grade refutation may."""
-
-    def _row(self, **over):
-        row = {
-            "function_id": _RXKAD_KEY,
-            "expected": "suspicious",
-            "actual": "suspicious",
-            "evidence_tool": "",
-            "receipt_floored": False,
-            "phase2_classification": "quality_finding",
-            "phase2_is_security": False,
-            "phase2_primitive": "none",
-        }
-        row.update(over)
-        return row
-
-    def _index(self, tmp_path, suppressions=None):
-        from core.audit.merge_fence import load_standing_receipts
-
-        lane = _fence_lane(
-            tmp_path, "lane-sec", {_RXKAD_KEY: [_RXKAD_RECEIPT]},
-            suppressions=suppressions,
-        )
-        return load_standing_receipts([lane])
-
-    def test_unrefuted_receipt_blocks_clean(self, tmp_path):
-        import json
-
-        rows = [self._row()]
-        n = run_corpus._suppress_quality_findings(
-            rows,
-            receipt_index=self._index(tmp_path),
-            record_dir=tmp_path / "merged",
-        )
-        assert n == 0
-        assert rows[0]["actual"] == "suspicious"
-        assert rows[0]["merge_fence"] == "receipt_stands"
-        assert not rows[0].get("phase2_suppressed")
-        sink = tmp_path / "merged" / "suppressions.jsonl"
-        recs = [json.loads(ln) for ln in sink.read_text().splitlines()]
-        assert [r["verdict"] for r in recs] == [
-            "merge_fence_receipt_stands",
-        ]
-        assert recs[0]["dropped"] is False
-        assert recs[0]["receipts"] == [
-            "cocci:scatterlist_frag_undersize",
-        ]
-
-    def test_tool_refuted_receipt_allows_clean(self, tmp_path):
-        from core.audit.refutation import DOMINANCE_VERDICT
-
-        dominance = {
-            "file_path": "net/rxrpc/rxkad.c",
-            "function": "rxkad_verify_packet_2",
-            "verdict": DOMINANCE_VERDICT,
-            "receipt": "cocci:scatterlist_frag_undersize",
-            "dropped": False,
-        }
-        rows = [self._row()]
-        n = run_corpus._suppress_quality_findings(
-            rows,
-            receipt_index=self._index(
-                tmp_path, suppressions=[dominance],
-            ),
-            record_dir=tmp_path / "merged",
-        )
-        assert n == 1
-        assert rows[0]["actual"] == "clean"
-        assert "merge_fence" not in rows[0]
-        assert not (tmp_path / "merged" / "suppressions.jsonl").exists()
-
-    def test_no_receipt_untouched_by_fence(self, tmp_path):
-        rows = [self._row(
-            function_id="net/ipv4/esp4.c:esp_output_tail",
-        )]
-        n = run_corpus._suppress_quality_findings(
-            rows,
-            receipt_index=self._index(tmp_path),
-            record_dir=tmp_path / "merged",
-        )
-        assert n == 1
-        assert rows[0]["actual"] == "clean"
-        assert "merge_fence" not in rows[0]
-        assert not (tmp_path / "merged" / "suppressions.jsonl").exists()
-
-    def test_grade_above_suspicious_never_lowered(self, tmp_path):
-        rows = [self._row(actual="finding", expected="finding")]
-        n = run_corpus._suppress_quality_findings(
-            rows,
-            receipt_index=self._index(tmp_path),
-            record_dir=tmp_path / "merged",
-        )
-        assert n == 0
-        assert rows[0]["actual"] == "finding"
-        assert rows[0]["merge_fence"] == "receipt_stands"
-
-    def test_security_ruling_never_engages_fence(self, tmp_path):
-        # Phase 2 does not attempt a demotion — the fence has nothing
-        # to block and must not touch the row.
-        rows = [self._row(
-            phase2_classification="security_finding",
-            phase2_is_security=True,
-        )]
-        n = run_corpus._suppress_quality_findings(
-            rows,
-            receipt_index=self._index(tmp_path),
-            record_dir=tmp_path / "merged",
-        )
-        assert n == 0
-        assert rows[0]["actual"] == "suspicious"
-        assert "merge_fence" not in rows[0]
-        assert not (tmp_path / "merged" / "suppressions.jsonl").exists()
-
-    def test_record_failure_fence_still_holds(self, tmp_path, caplog):
-        import logging
-
-        blocker = tmp_path / "merged"
-        blocker.write_text("a file where the record dir should be")
-        rows = [self._row()]
-        with caplog.at_level(
-            logging.WARNING, "core.audit.merge_fence",
-        ):
-            n = run_corpus._suppress_quality_findings(
-                rows,
-                receipt_index=self._index(tmp_path),
-                record_dir=blocker,
-            )
-        assert n == 0
-        assert rows[0]["actual"] == "suspicious"
-        assert rows[0]["merge_fence"] == "receipt_stands"
-        assert any(
-            "fence still holds" in r.message for r in caplog.records
-        )
-
-    def test_unarmed_call_keeps_prior_behavior(self):
-        # Without a receipt index (legacy call shape) the suppression
-        # demotes exactly as before — the fence is merge-lane opt-in.
-        rows = [self._row()]
-        assert run_corpus._suppress_quality_findings(rows) == 1
-        assert rows[0]["actual"] == "clean"
-
-
-class TestMergeFenceRxkadMergeCleanRegression:
-    """The rxkad merge-level wrong-clean shape: both lanes graded
-    rxkad_verify_packet_2 suspicious with the
-    cocci:scatterlist_frag_undersize receipt standing in BOTH lanes'
-    mechanical findings and no lane floor fired; the ensemble Phase-2
-    quality classification then minted a merge-level clean from prose
-    (callee-enforced bound).  The fence must hold the merged grade at
-    suspicious with an audit record — and must not shield the
-    receipt-free sibling (esp_output_tail) from the same Phase-2
-    demotion."""
-
-    def test_merge_clean_attempt_holds_suspicious(self, tmp_path):
-        import json
-
-        from core.audit.merge_fence import load_standing_receipts
-
-        leak_hits = [
-            {"file": "net/rxrpc/rxkad.c",
-             "function": "rxkad_verify_packet_2",
-             "detector": "cocci:resource_leak_err", "line": 516},
-            {"file": "net/rxrpc/rxkad.c",
-             "function": "rxkad_verify_packet_2",
-             "detector": "cocci:resource_leak_err", "line": 541},
-        ]
-        mech = {_RXKAD_KEY: [*leak_hits, _RXKAD_RECEIPT]}
-        sec = _fence_lane(tmp_path, "run-out-sec", mech)
-        bf = _fence_lane(tmp_path, "run-out-bf", mech)
-        base_out = tmp_path / "run-out"
-        base_out.mkdir()
-
-        rxkad = {
-            "function_id": _RXKAD_KEY,
-            "bug_class": "variant",
-            "repo": "linux-kernel",
-            "expected": "suspicious",
-            "mode": "ensemble",
-            "actual": "suspicious",
-            "match": True,
-            "hypothesis": (
-                "The scatterlist table sized from nr_frags+1 (line "
-                "510) can be overrun by skb_to_sgvec when the skb "
-                "carries a frag_list, causing an out-of-bounds write."
-            ),
-            "evidence_tool": (
-                "llm-claimed:cocci:scatterlist_frag_undersize L510 — "
-                "structural match confirmed (nsg omits frag_list), "
-                "exploit conclusion refuted by callee-enforced "
-                "-EMSGSIZE bound in skb_to_sgvec, handled at line 521"
-            ),
-            "receipt_floored": False,
-            "ensemble_source": "both_agree",
-            "security_actual": "suspicious",
-            "bug_first_actual": "suspicious",
-            # Phase-2 clean attempt: quality ruling, no primitive —
-            # the exact shape that minted the wrong clean.
-            "phase2_classification": "quality_finding",
-            "phase2_is_security": False,
-            "phase2_primitive": "none",
-        }
-        esp = {
-            "function_id": "net/ipv4/esp4.c:esp_output_tail",
-            "expected": "clean",
-            "actual": "suspicious",
-            "evidence_tool": "",
-            "receipt_floored": False,
-            "phase2_classification": "quality_finding",
-            "phase2_is_security": False,
-            "phase2_primitive": "none",
-        }
-        rows = [rxkad, esp]
-
-        n = run_corpus._suppress_quality_findings(
-            rows,
-            receipt_index=load_standing_receipts([sec, bf]),
-            record_dir=base_out,
-        )
-
-        # rxkad: held at suspicious over the standing receipt.
-        assert rxkad["actual"] == "suspicious"
-        assert rxkad["merge_fence"] == "receipt_stands"
-        assert rxkad["merge_fence_receipts"] == [
-            "cocci:scatterlist_frag_undersize",
-        ]
-        # esp: no floor-class receipt — the Phase-2 demotion stands.
-        assert n == 1
-        assert esp["actual"] == "clean"
-        assert "merge_fence" not in esp
-
-        recs = [
-            json.loads(ln)
-            for ln in (base_out / "suppressions.jsonl")
-            .read_text().splitlines()
-        ]
-        assert len(recs) == 1
-        assert recs[0]["verdict"] == "merge_fence_receipt_stands"
-        assert recs[0]["dropped"] is False
-        assert recs[0]["function"] == "rxkad_verify_packet_2"
-        assert recs[0]["held_status"] == "suspicious"
-
-
-class _FenceLabel:
-    def __init__(self, fid):
-        self.function_id = fid
-
-
-def _ensemble_row(fid, actual, **over):
-    r = {"function_id": fid, "expected": "clean", "actual": actual,
-         "evidence_tool": "", "cost_usd": 0.0, "duration_s": 0.0,
-         "match": False, "counter_hypothesis": "",
-         "hypothesis": "structural overflow claim", "model": "stub"}
-    r.update(over)
-    return r
-
-
-def _live_ensemble_merge(
-    tmp_path, monkeypatch, sec_rows, bf_rows,
-    mech_sec=None, mech_bf=None, phase2=None, shape="fresh",
-):
-    """Drive the REAL _run_ensemble_audit with stubbed lane passes
-    and a stubbed Phase-2 classifier.
-
-    *shape* selects which faithful path shape the stubbed lane pass
-    reproduces — the fence must engage on BOTH:
-
-    * ``"fresh"`` (the primary path): ``_run_audit`` returns the
-      PER-GROUP audit dirs (``<lane>/grp``) as its run dirs, and
-      fresh rows carry ``repo=<group>`` (callers stamp them);
-    * ``"resume"``: the checkpoint-resume branch has only the lane
-      ROOTS, and legacy checkpoint rows may carry no repo.
-    """
-    import core.llm.concurrency as conc
-
-    out = tmp_path / "ens-out"
-    sec_dir = Path(str(out) + "-sec")
-    bf_dir = Path(str(out) + "-bf")
-    for d, mech in ((sec_dir, mech_sec), (bf_dir, mech_bf)):
-        (d / "grp").mkdir(parents=True, exist_ok=True)
-        if mech is not None:
-            (d / "grp" / "mechanical-findings.json").write_text(
-                json.dumps(mech),
-            )
-    sec_ret = sec_dir / "grp" if shape == "fresh" else sec_dir
-    bf_ret = bf_dir / "grp" if shape == "fresh" else bf_dir
-
-    def fake_run_audit(labels, source_dirs, **kw):
-        if kw.get("mode") == "security":
-            return [dict(r) for r in sec_rows], [sec_ret]
-        wanted = {lb.function_id for lb in labels}
-        return [
-            dict(r) for r in bf_rows if r["function_id"] in wanted
-        ], [bf_ret]
-
-    def fake_phase2(findings, *, model=""):
-        for f in findings:
-            over = (phase2 or {}).get(f["function_id"], {})
-            f["phase2_classification"] = over.get(
-                "cls", "quality_finding",
-            )
-            f["phase2_is_security"] = over.get("sec", False)
-            f["phase2_primitive"] = over.get("prim", "none")
-        return 0.0
-
-    monkeypatch.setattr(run_corpus, "_run_audit", fake_run_audit)
-    monkeypatch.setattr(
-        run_corpus, "_run_phase2_classify", fake_phase2,
-    )
-    monkeypatch.setattr(conc, "derive_max_workers", lambda model: 1)
-    labels = [_FenceLabel(r["function_id"]) for r in sec_rows]
-    merged, _run_dirs = run_corpus._run_ensemble_audit(
-        labels, {"grp": tmp_path / "nonexistent-src"},
-        model="stub", out_dir=out,
-    )
-    return merged, out
-
-
-class TestMergeFloorFlagSurvivesMerge:
-    """A lane floor that fired (receipt_floored) is mechanical
-    evidence; the ensemble merge must carry it on the merged row
-    regardless of which lane's row wins — a winner copied from the
-    other lane used to drop the flag, letting Phase-2 mint clean over
-    a FIRED structural floor."""
-
-    def test_bf_winner_keeps_sec_lane_floor_flag(
-        self, tmp_path, monkeypatch,
-    ):
-        sec_rows = [_ensemble_row(
-            "x.c:victim", "suspicious", receipt_floored=True,
-        )]
-        bf_rows = [_ensemble_row("x.c:victim", "finding")]
-        merged, _out = _live_ensemble_merge(
-            tmp_path, monkeypatch, sec_rows, bf_rows,
-        )
-        (m,) = merged
-        assert m["receipt_floored"] is True
-        assert m["actual"] != "clean"
-        assert not m.get("phase2_suppressed")
-
-    def test_floored_winner_still_exempt(self, tmp_path, monkeypatch):
-        # Control: the floored row itself wins the merge.
-        sec_rows = [_ensemble_row(
-            "x.c:victim", "suspicious", receipt_floored=True,
-        )]
-        bf_rows = [_ensemble_row("x.c:victim", "suspicious")]
-        merged, _out = _live_ensemble_merge(
-            tmp_path, monkeypatch, sec_rows, bf_rows,
-        )
-        assert merged[0]["actual"] == "suspicious"
-
-    def test_unfloored_rows_unaffected(self, tmp_path, monkeypatch):
-        # No lane floor fired: the Phase-2 demotion proceeds as
-        # before.
-        sec_rows = [_ensemble_row("x.c:victim", "suspicious")]
-        bf_rows = [_ensemble_row("x.c:victim", "finding")]
-        merged, _out = _live_ensemble_merge(
-            tmp_path, monkeypatch, sec_rows, bf_rows,
-        )
-        assert merged[0]["actual"] == "clean"
-        assert merged[0]["receipt_floored"] is False
-
-
-class TestMergeFenceLiveEnsemble:
-    """The fence through the REAL ensemble merge: standing receipt in
-    the lanes' artifacts + Phase-2 clean attempt.  Exercised on BOTH
-    faithful path shapes — the fresh path (per-group run dirs,
-    repo-stamped rows: the incident's own path) and the
-    checkpoint-resume path (lane roots, legacy repo-less rows)."""
-
-    def _assert_fenced(self, merged, out):
-        import json as _json
-
-        (m,) = merged
-        assert m["actual"] == "suspicious"
-        assert m["merge_fence"] == "receipt_stands"
-        sink = out / "suppressions.jsonl"
-        recs = [
-            _json.loads(ln) for ln in sink.read_text().splitlines()
-        ]
-        fence = [
-            r for r in recs
-            if r.get("verdict") == "merge_fence_receipt_stands"
-        ]
-        assert len(fence) == 1
-        assert fence[0]["dropped"] is False
-
-    def test_fresh_path_receipt_holds(self, tmp_path, monkeypatch):
-        # The primary path: _run_audit returns per-group dirs and
-        # stamps rows with their repo group.  A group-resolution
-        # regression here unarms the fence on every fresh run.
-        mech = {_RXKAD_KEY: [_RXKAD_RECEIPT]}
-        sec_rows = [_ensemble_row(
-            _RXKAD_KEY, "suspicious", repo="grp",
-        )]
-        bf_rows = [_ensemble_row(
-            _RXKAD_KEY, "suspicious", repo="grp",
-        )]
-        merged, out = _live_ensemble_merge(
-            tmp_path, monkeypatch, sec_rows, bf_rows,
-            mech_sec=mech, mech_bf=mech, shape="fresh",
-        )
-        self._assert_fenced(merged, out)
-
-    def test_resume_path_receipt_holds(self, tmp_path, monkeypatch):
-        mech = {_RXKAD_KEY: [_RXKAD_RECEIPT]}
-        sec_rows = [_ensemble_row(_RXKAD_KEY, "suspicious")]
-        bf_rows = [_ensemble_row(_RXKAD_KEY, "suspicious")]
-        merged, out = _live_ensemble_merge(
-            tmp_path, monkeypatch, sec_rows, bf_rows,
-            mech_sec=mech, mech_bf=mech, shape="resume",
-        )
-        self._assert_fenced(merged, out)
-
-
-class TestMergeFenceUnarmedNotice:
-    """Resume with the lane out-dirs deleted: the fence cannot read
-    receipts — it unarms with a printed notice (never silently) and
-    Phase-2 behaves as before the fence existed."""
-
-    def test_notice_printed_and_demotion_proceeds(
-        self, tmp_path, monkeypatch, capsys,
-    ):
-        import core.llm.concurrency as conc
-
-        out = tmp_path / "run-out"
-        out.mkdir()
-        stamp = {
-            "model": "stub", "profile": "deployed",
-            "triage": True, "prefilter": True,
-        }
-        rows = [_ensemble_row(_RXKAD_KEY, "suspicious")]
-        for name in ("checkpoint-sec.json", "checkpoint-bf.json"):
-            (out / name).write_text(
-                json.dumps({"stamp": stamp, "rows": rows}),
-            )
-        # lane out dirs (run-out-sec / run-out-bf) deliberately absent
-
-        def fake_phase2(findings, *, model=""):
-            for f in findings:
-                f["phase2_classification"] = "quality_finding"
-                f["phase2_is_security"] = False
-                f["phase2_primitive"] = "none"
-            return 0.0
-
-        monkeypatch.setattr(
-            run_corpus, "_run_phase2_classify", fake_phase2,
-        )
-        monkeypatch.setattr(
-            conc, "derive_max_workers", lambda model: 1,
-        )
-        merged, _dirs = run_corpus._run_ensemble_audit(
-            [_FenceLabel(_RXKAD_KEY)],
-            {"grp": out / "nosrc"}, model="stub", out_dir=out,
-        )
-        assert "fence unarmed" in capsys.readouterr().out
-        assert merged[0]["actual"] == "clean"
 
 
 class TestExcerptIncludeClosure:
@@ -2423,7 +1657,7 @@ def _stub_main_run(
     resolve=lambda m: "",
     labels=None,
     source_text=None,
-    ensemble=None,
+    audit_stub=None,
 ):
     """Drive main() with the LLM run stubbed out.
 
@@ -2431,8 +1665,8 @@ def _stub_main_run(
     *labels* / *source_text*), a fake project context, stubbed pin
     verification, deterministic model resolution (*resolve*, so run
     stamps never depend on the host's LLM config), and an isolated
-    history store; the ensemble stub returns *rows* and *run_dirs*
-    (or use *ensemble* for a capturing stub).  Returns
+    history store; the audit stub returns *rows* and *run_dirs*
+    (or use *audit_stub* for a capturing stub).  Returns
     ``(rc, results_path, history_path)``.
     """
     from contextlib import contextmanager
@@ -2480,8 +1714,8 @@ def _stub_main_run(
         ],
     )
     monkeypatch.setattr(
-        run_corpus, "_run_ensemble_audit",
-        ensemble if ensemble is not None else (
+        run_corpus, "_run_audit",
+        audit_stub if audit_stub is not None else (
             lambda labels, dirs, **kw: (
                 list(rows or []), list(run_dirs or []),
             )
@@ -2497,7 +1731,7 @@ def _stub_main_run(
 def _run_stamp(**overrides):
     """The run stamp main() derives under _stub_main_run's defaults."""
     stamp = {
-        "mode": "ensemble",
+        "mode": "security",
         "model": "default",
         "model_resolved": "default",
         "profile": "cold",
@@ -2683,9 +1917,9 @@ class TestSpendMetaBreakdown:
 
 
 class TestRunLevelRunningTotal:
-    """The printed attributed running total is RUN-level: pass 2 of
-    the ensemble seeds it with pass 1's spend, so a mid-pass-2 cost
-    ceiling decision never compares against a per-pass fragment."""
+    """The printed attributed running total is RUN-level: a
+    mid-run cost ceiling decision must compare against the cumulative
+    total, not a per-group fragment."""
 
     def test_attributed_start_seeds_running_total(
         self, tmp_path, monkeypatch, capsys,
@@ -2714,45 +1948,6 @@ class TestRunLevelRunningTotal:
         )
         stdout = capsys.readouterr().out
         assert "$1.5000 this group, $11.5000 running total" in stdout
-
-    def test_ensemble_seeds_pass2_with_pass1_spend(
-        self, tmp_path, monkeypatch,
-    ):
-        starts = []
-
-        def fake_run_audit(
-            labels, dirs, *, mode=None, attributed_start=0.0, **kw,
-        ):
-            starts.append((mode, attributed_start))
-            return (
-                [
-                    dict(
-                        _result_row(lb.function_id, actual="suspicious"),
-                        model="", cost_usd=3.0,
-                    )
-                    for lb in labels
-                ],
-                [],
-            )
-
-        monkeypatch.setattr(run_corpus, "_run_audit", fake_run_audit)
-        monkeypatch.setattr(
-            run_corpus, "_run_phase2_classify",
-            lambda findings, model="": 0.0,
-        )
-        (tmp_path / "r1").mkdir()
-        (tmp_path / "r2").mkdir()
-        labels = [
-            _mk_label("a.c:f", repo="r1"),
-            _mk_label("b.c:g", file="b.c", repo="r2"),
-        ]
-        run_corpus._run_ensemble_audit(
-            labels,
-            {"r1": tmp_path / "r1", "r2": tmp_path / "r2"},
-            out_dir=tmp_path / "out",
-        )
-        assert starts[0] == ("security", 0.0)
-        assert starts[1] == ("bug_first", 6.0)
 
 
 def _stamped_ckpt(groups, **overrides):
@@ -3119,50 +2314,6 @@ class TestLabelOverlayHash:
         assert run_corpus._label_files_sha256(labels_dir) != first
 
 
-class TestEnsembleAttributedConsistency:
-    """The final attributed figure equals the running total the run
-    printed: ensemble rows carry BOTH passes' review spend — the
-    losing pass's cost is attributed money, not infra, and a ceiling
-    enforced against the printed total must match what meta records."""
-
-    def test_merged_rows_carry_both_passes_spend(
-        self, tmp_path, monkeypatch,
-    ):
-        def fake_run_audit(
-            labels, dirs, *, mode=None, attributed_start=0.0, **kw,
-        ):
-            return (
-                [
-                    dict(
-                        _result_row(lb.function_id, actual="suspicious"),
-                        model="", cost_usd=1.0, duration_s=2.0,
-                    )
-                    for lb in labels
-                ],
-                [],
-            )
-
-        monkeypatch.setattr(run_corpus, "_run_audit", fake_run_audit)
-        monkeypatch.setattr(
-            run_corpus, "_run_phase2_classify",
-            lambda findings, model="": 0.0,
-        )
-        (tmp_path / "r1").mkdir()
-        labels = [
-            _mk_label("a.c:f", repo="r1"),
-            _mk_label("a.c:g", repo="r1"),
-        ]
-        merged, _ = run_corpus._run_ensemble_audit(
-            labels, {"r1": tmp_path / "r1"}, out_dir=tmp_path / "out",
-        )
-        # Each label was reviewed by both passes at $1.00/2.0s each.
-        assert sorted(r["cost_usd"] for r in merged) == [2.0, 2.0]
-        assert sorted(r["duration_s"] for r in merged) == [4.0, 4.0]
-        # Run-level attributed sum == what the running total printed
-        # (security $2.00 seed + bug_first $2.00).
-        assert sum(r["cost_usd"] for r in merged) == 4.0
-
-
 class TestCheckpointConfigStamp:
     """A checkpoint written under a different run configuration
     (profile, triage, prefilter, mode, scope, resolved model) must be
@@ -3247,125 +2398,6 @@ class TestCheckpointConfigStamp:
         assert [r["function_id"] for r in results] == ["a.c:f"]
 
 
-class TestPassCheckpointGuards:
-    """Pass-level checkpoints (checkpoint-sec/bf/merged.json) get the
-    same defence as group checkpoints: a config stamp on the envelope
-    plus label-set and per-row model guards. A resume with any
-    flipped knob re-runs the pass instead of adopting rows that
-    would mislabel the measurement."""
-
-    @staticmethod
-    def _envelope(rows, **overrides):
-        stamp = {
-            "model": "", "profile": "deployed",
-            "triage": True, "prefilter": True,
-        }
-        stamp.update(overrides)
-        return {"stamp": stamp, "rows": rows}
-
-    def _run(self, tmp_path, monkeypatch, labels, **ensemble_kw):
-        modes = []
-
-        def fake_run_audit(
-            labels, dirs, *, mode=None, attributed_start=0.0, **kw,
-        ):
-            modes.append(mode)
-            return (
-                [
-                    dict(_result_row(lb.function_id), model="")
-                    for lb in labels
-                ],
-                [],
-            )
-
-        monkeypatch.setattr(run_corpus, "_run_audit", fake_run_audit)
-        (tmp_path / "r1").mkdir(exist_ok=True)
-        run_corpus._run_ensemble_audit(
-            labels, {"r1": tmp_path / "r1"}, out_dir=tmp_path / "out",
-            **ensemble_kw,
-        )
-        return modes
-
-    def test_foreign_model_pass_checkpoint_reruns(
-        self, tmp_path, monkeypatch,
-    ):
-        out = tmp_path / "out"
-        out.mkdir()
-        (out / "checkpoint-sec.json").write_text(json.dumps(
-            self._envelope(
-                [dict(_result_row("a.c:f"), model="other-model")],
-            ),
-        ))
-        modes = self._run(
-            tmp_path, monkeypatch, [_mk_label("a.c:f", repo="r1")],
-        )
-        assert "security" in modes, "foreign-model pass rows adopted"
-
-    def test_label_selection_change_reruns_pass(
-        self, tmp_path, monkeypatch,
-    ):
-        out = tmp_path / "out"
-        out.mkdir()
-        (out / "checkpoint-sec.json").write_text(json.dumps(
-            self._envelope([dict(_result_row("a.c:OTHER"), model="")]),
-        ))
-        modes = self._run(
-            tmp_path, monkeypatch, [_mk_label("a.c:f", repo="r1")],
-        )
-        assert "security" in modes
-
-    def test_matching_pass_checkpoint_still_resumes(
-        self, tmp_path, monkeypatch,
-    ):
-        out = tmp_path / "out"
-        out.mkdir()
-        (out / "checkpoint-sec.json").write_text(json.dumps(
-            self._envelope([dict(_result_row("a.c:f"), model="")]),
-        ))
-        (out / "checkpoint-bf.json").write_text(json.dumps(
-            self._envelope([dict(_result_row("a.c:f"), model="")]),
-        ))
-        modes = self._run(
-            tmp_path, monkeypatch, [_mk_label("a.c:f", repo="r1")],
-        )
-        assert modes == [], "valid pass checkpoints were not resumed"
-
-    def test_config_flip_on_pass_checkpoint_reruns(
-        self, tmp_path, monkeypatch,
-    ):
-        # Kill-after-pass-1, resume with a flipped knob: the whole
-        # security pass must re-run, not merge deployed-regime rows
-        # into a cold measurement.
-        out = tmp_path / "out"
-        out.mkdir()
-        (out / "checkpoint-sec.json").write_text(json.dumps(
-            self._envelope(
-                [dict(_result_row("a.c:f"), model="")],
-                profile="deployed",
-            ),
-        ))
-        modes = self._run(
-            tmp_path, monkeypatch, [_mk_label("a.c:f", repo="r1")],
-            profile="cold",
-        )
-        assert "security" in modes, "deployed pass rows adopted cold"
-
-    def test_legacy_bare_list_pass_checkpoint_discarded(
-        self, tmp_path, monkeypatch,
-    ):
-        # A pre-envelope checkpoint carries no config stamp — there
-        # is no way to tell which regime produced it, so it re-runs.
-        out = tmp_path / "out"
-        out.mkdir()
-        (out / "checkpoint-sec.json").write_text(json.dumps(
-            [dict(_result_row("a.c:f"), model="")],
-        ))
-        modes = self._run(
-            tmp_path, monkeypatch, [_mk_label("a.c:f", repo="r1")],
-        )
-        assert "security" in modes
-
-
 class TestResumeStateClearedOnCompletion:
     """Checkpoints and wall segments exist for interrupted runs; once
     results.json is finalized and recorded, they must go — otherwise a
@@ -3379,8 +2411,6 @@ class TestResumeStateClearedOnCompletion:
         out_dir.mkdir()
         for name in (
             "checkpoint-sec.json",
-            "checkpoint-bf.json",
-            "checkpoint-merged.json",
             "checkpoint-sec-groups.json",
             "wall-segments.json",
         ):
@@ -3595,7 +2625,7 @@ class TestSyntheticMutantRuns:
     ):
         captured = {}
 
-        def ensemble(labels, dirs, **kw):
+        def audit_fn(labels, dirs, **kw):
             tree = dirs["test"]
             captured["text"] = (
                 Path(tree) / "a.c"
@@ -3605,7 +2635,7 @@ class TestSyntheticMutantRuns:
         rc, out, hist = _stub_main_run(
             tmp_path, monkeypatch,
             labels=[_mutant_label()], source_text=MUTANT_SRC,
-            ensemble=ensemble,
+            audit_stub=audit_fn,
         )
         assert rc == 0
         # The audited tree got the mutation; content-verified apply
@@ -3635,7 +2665,7 @@ class TestSyntheticMutantRuns:
         # any review spend, and never half-mutate.
         called = {}
 
-        def ensemble(labels, dirs, **kw):
+        def audit_fn(labels, dirs, **kw):
             called["ran"] = True
             return [self._row()], []
 
@@ -3643,7 +2673,7 @@ class TestSyntheticMutantRuns:
         rc, out, _ = _stub_main_run(
             tmp_path, monkeypatch,
             labels=[_mutant_label(src=drifted)], source_text=drifted,
-            ensemble=ensemble,
+            audit_stub=audit_fn,
         )
         assert rc == 1
         assert "mutation application error" in capsys.readouterr().err
