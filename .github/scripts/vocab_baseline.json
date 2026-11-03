@@ -3243,7 +3243,7 @@
     "note": "result-dict field names of the web scanner's evidence/summary records (schema keys), not a name vocabulary"
   },
   "packages/web/scanner.py::result": {
-    "count": 20,
+    "count": 21,
     "kind": "literal",
     "note": "result-dict field names of the web scanner's evidence/summary records (schema keys), not a name vocabulary"
   },
