@@ -2452,7 +2452,9 @@ class TreeSitterExtractor:
         # reset at the top of every extract().
         self._seen_cache: tuple[int, set[str]] = (0, set())
 
-    def extract(self, filepath: str, content: str, _tree=None) -> list[FunctionInfo]:
+    def extract(
+        self, filepath: str, content: str, _tree=None, *, _tree_cache: dict | None = None,
+    ) -> list[FunctionInfo]:
         if _tree is None:
             try:
                 # parse_origin: a budget-abandoned parse must name
@@ -2483,6 +2485,8 @@ class TreeSitterExtractor:
             # event pass; every tree-sitter-parsed function already
             # carries its span and is left untouched.
             CExtractor._fill_line_ends(self._source_lines, functions)
+        if _tree_cache is not None:
+            _tree_cache["tree"] = _tree
         return functions
 
     def _class_annotations(self, node) -> list[str]:
@@ -3791,7 +3795,9 @@ _REGEX_EXTRACTORS = {
 }
 
 
-def extract_functions(filepath: str, language: str, content: str) -> list[CodeItem]:
+def extract_functions(
+    filepath: str, language: str, content: str, *, _tree_cache: dict | None = None,
+) -> list[CodeItem]:
     """Extract functions from a file using the best available extractor.
 
     Priority: tree-sitter (rich metadata) → Python AST → regex (basic).
@@ -3799,12 +3805,19 @@ def extract_functions(filepath: str, language: str, content: str) -> list[CodeIt
     The Python AST path also yields plain ``top_level`` :class:`CodeItem`
     units alongside :class:`FunctionInfo` — the declared return type
     reflects that mixed payload.
+
+    ``_tree_cache`` optionally receives the tree-sitter tree for reuse
+    within this operation, using the same source and grammar. Callers
+    must treat it as read-only; failures leave no reusable tree.
     """
     # Try tree-sitter first (rich metadata for all languages)
     if _TS_AVAILABLE:
         try:
             extractor = TreeSitterExtractor(language)
-            results = extractor.extract(filepath, content)
+            if _tree_cache is None:
+                results = extractor.extract(filepath, content)
+            else:
+                results = extractor.extract(filepath, content, _tree_cache=_tree_cache)
             if results:  # Empty = parse failed, fall through
                 return list(results)
         except RecursionError:

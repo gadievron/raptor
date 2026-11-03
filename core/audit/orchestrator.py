@@ -12852,12 +12852,12 @@ def _run_mechanical_detectors(
         digest_strings,
         file_content_sha,
         gap_spans_digest,
-        source_fingerprint,
         spatch_marker,
         tree_sitter_marker,
         vocabulary_digest,
         z3_marker,
     )
+    from .prep_cache import source_fingerprint_from_hashes
 
     det_cache = MechanicalDetectorCache.open(  # raw-open: not a filesystem open — detector cache constructor
         getattr(config, "out_dir", None),
@@ -13226,7 +13226,7 @@ def _run_mechanical_detectors(
         )
         if _cg_fp is not None and _vocab_component is not None:
             structural_key = digest_strings([
-                "sources", source_fingerprint(source_texts),
+                "sources", source_fingerprint_from_hashes(content_shas),
                 "gaps", gap_spans_digest(gaps),
                 "call-graphs", _cg_fp,
                 "vocab", _vocab_component,

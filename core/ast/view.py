@@ -140,7 +140,13 @@ def view(
     content = got[0]
 
     # Function discovery — inventory handles per-language dispatch.
-    functions = extract_functions(str(path), language, content)
+    # C/C++ consumers below use the same source and grammar. Keep their
+    # tree only for this operation, never in a cross-file/run cache.
+    tree_cache: dict = {}
+    if language in ("c", "cpp"):
+        functions = extract_functions(str(path), language, content, _tree_cache=tree_cache)
+    else:
+        functions = extract_functions(str(path), language, content)
     matches = [f for f in functions if f.name == function]
     if at_line is not None:
         # Narrow to functions whose range encloses at_line. line_end
@@ -167,11 +173,13 @@ def view(
         # Calls — filter file-wide graph by the function's line range.
         calls_made = _filter_calls(
             content, language, fi.line_start, fi.line_end,
+            _tree=tree_cache.get("tree"),
         )
 
         # Returns + inline asm.
         returns = _walk_returns(
             content, language, fi.line_start, fi.line_end,
+            _tree=tree_cache.get("tree"),
         )
         has_asm = _has_inline_asm(
             content, language, fi.line_start, fi.line_end,
@@ -204,6 +212,7 @@ def _filter_calls(
     language: str,
     line_start: int,
     line_end: int | None,
+    *, _tree=None,
 ) -> tuple:
     """Return calls inside the function's line range. Empty tuple
     when the language has no call-graph walker or the file is
@@ -212,7 +221,10 @@ def _filter_calls(
     if extractor is None:
         return ()
     try:
-        graph = extractor(content)
+        if _tree is not None and language in ("c", "cpp"):
+            graph = extractor(content, _tree=_tree)
+        else:
+            graph = extractor(content)
     except Exception:                                       # noqa: BLE001
         return ()
     if line_end is None:
@@ -234,6 +246,7 @@ def _walk_returns(
     language: str,
     line_start: int,
     line_end: int | None,
+    *, _tree=None,
 ) -> tuple[Return, ...]:
     """Return all explicit ``return`` statements inside the function.
 
@@ -252,7 +265,7 @@ def _walk_returns(
     grammar = _ts_grammar_module(language)
     if grammar is None:
         return ()
-    return _walk_returns_ts(content, grammar, line_start, line_end)
+    return _walk_returns_ts(content, grammar, line_start, line_end, _tree=_tree)
 
 
 def _walk_returns_python(
@@ -296,6 +309,7 @@ def _walk_returns_ts(
     grammar_module,
     line_start: int,
     line_end: int,
+    *, _tree=None,
 ) -> tuple[Return, ...]:
     """Generic tree-sitter ``return_statement`` walk.
 
@@ -312,8 +326,11 @@ def _walk_returns_ts(
         # libtree-sitter C state per call across thousands of files,
         # accumulating RSS in long inventory walks.
         from core.inventory.call_graph import _get_ts_parser
-        parser = _get_ts_parser(grammar_module.language)
-        tree = parser.parse(content.encode("utf-8", errors="replace"))
+        if _tree is None:
+            parser = _get_ts_parser(grammar_module.language)
+            tree = parser.parse(content.encode("utf-8", errors="replace"))
+        else:
+            tree = _tree
     except Exception:                                       # noqa: BLE001
         return ()
     out: list[Return] = []
