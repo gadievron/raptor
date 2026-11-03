@@ -98,6 +98,9 @@ def test_extracts_constraints_on_gated_target(tmp_path: Path):
     assert (raw[3] <= 100) or (raw[3] >= 0x80)
 
 
+# Real angr exploration and a PC-hijack solve can exceed the fast-tier
+# budget under parallel load; keep the full witness assertions in slow CI.
+@pytest.mark.slow
 def test_overflow_hijack_path_extracted_on_overflow_target(tmp_path: Path):
     """A PC-control-shape target has no natural CFG path to the marker, but
     stack overflow makes PC symbolic and a solve for PC == &win
