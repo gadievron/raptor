@@ -70,6 +70,7 @@ def _probe_or_skip_semgrep(tmp_path: Path) -> None:
 
 
 @needs_semgrep
+@pytest.mark.slow  # Real engine startup for both the probe and invalid-rule runs.
 class TestSemgrepAdapterTruth:
     def test_invalid_rule_surfaces_engine_error(self, tmp_path):
         _probe_or_skip_semgrep(tmp_path)
