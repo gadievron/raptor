@@ -71,7 +71,7 @@ def _deviation(
 
 
 class TestVerdictGrading:
-    def test_boundary_witness_promotes_at_the_floor(self):
+    def test_boundary_witness_promotes_at_the_floor(self, owned_smt_subprocess):
         # `i <= 8` where peers use `i < 8`: the admitted-but-excluded
         # value i == 8 is trivially satisfiable — a concrete witness.
         res = guard_predicate_verdict(_deviation())
@@ -81,7 +81,7 @@ class TestVerdictGrading:
         assert res.contract["source"] == "smt_witness"
         assert res.peer_evidence.contract_source == "smt_witness"
 
-    def test_below_promote_ratio_stays_detection_grade(self):
+    def test_below_promote_ratio_stays_detection_grade(self, owned_smt_subprocess):
         res = guard_predicate_verdict(_deviation(n=4, conforming=3))
         assert res.outcome == "confirmed"
         assert res.rule_id == "consistency:guard-predicate-majority"
@@ -120,7 +120,7 @@ class TestVerdictGrading:
         assert res.outcome == "confirmed"
         assert res.rule_id == RULE_GUARD_PREDICATE
 
-    def test_signedness_promotes_on_declared_unsigned(self):
+    def test_signedness_promotes_on_declared_unsigned(self, owned_smt_subprocess):
         source = (
             "int sum_d(int *a, size_t n)\n"
             "{\n"
