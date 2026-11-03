@@ -732,6 +732,15 @@ jobs:
           set -f
           python -m pytest $SANDBOX_FILES -v
 
+      - name: Run native audit checks (macOS slow)
+        env:
+          # Live kernel/log-stream checks are deliberately in the slow tier.
+          RAPTOR_MAX_TEST_SECONDS: "0"
+        run: |
+          source $VENV_PATH/bin/activate
+          python -m pytest -m "slow and darwin_native" \
+            core/sandbox/tests/test_macos_spawn.py -v
+
   # PR-time sandbox feature-matrix subset: the u24 image x the {full,
   # default} lanes of the weekly sandbox-matrix.yml, run against the
   # prebuilt GHCR image published by sandbox-matrix-image.yml

@@ -654,6 +654,7 @@ def test_block_network_actually_blocks(tmp_path):
     assert "LEAK" not in r.stdout
 
 
+@pytest.mark.slow  # real kernel log startup/drain can exceed the default budget
 @pytest.mark.darwin_native
 def test_audit_mode_writes_jsonl(tmp_path):
     """End-to-end: with audit_mode=True the LogStreamer must
@@ -748,6 +749,7 @@ def test_rlimits_applied(tmp_path):
     assert soft == 10 * 1024 * 1024
 
 
+@pytest.mark.slow  # real kernel log startup/drain can exceed the default budget
 @pytest.mark.darwin_native
 def test_audit_verbose_records_extended_categories(tmp_path):
     """End-to-end: with audit_verbose=True, the SBPL profile gets
@@ -817,6 +819,7 @@ def test_audit_verbose_records_extended_categories(tmp_path):
     )
 
 
+@pytest.mark.slow  # real kernel log startup/drain can exceed the default budget
 @pytest.mark.darwin_native
 def test_audit_summary_record_emitted(tmp_path):
     """LogStreamer.stop() must always emit an audit_summary record
