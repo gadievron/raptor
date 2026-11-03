@@ -199,7 +199,7 @@ def find_asymmetries(group: SiblingGroup) -> list[Asymmetry]:
 
 def _normalize_value(val: Any) -> str:
     if isinstance(val, bool):
-        return str(val).lower()
+        return "true" if val else "false"
     if isinstance(val, (list, tuple)):
         try:
             ordered = sorted(val)
