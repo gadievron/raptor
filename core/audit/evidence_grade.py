@@ -746,6 +746,7 @@ PIPELINE_OWNED_REVIEW_KEYS: frozenset[str] = frozenset({
     "ihv_refuted", "ihv_tools", "immediate_verified",
     "synthesis_refused", "tool_evidence", "tools_confirmed",
     "uncorrelated_tool_hits",
+    "weakness_a", "weakness_b", "weakness_chain",
 })
 
 #: ``review_result`` keys the MODEL authors (review JSON schema fields,

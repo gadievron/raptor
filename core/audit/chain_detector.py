@@ -557,16 +557,14 @@ def synthesise_chain_checker(
     primitive = chain.get("primitive", "")
     cwe = _PRIMITIVE_TO_CWE.get(primitive, "CWE-20")
 
+    from core.source.contained import read_text_capped
+
     sink_path = _Path(target_path) / sink.file
     source_path = _Path(target_path) / source.file
-    try:
-        sink_snippet = sink_path.read_text(errors="replace")
-    except OSError:
-        sink_snippet = getattr(sink, "body", "")
-    try:
-        source_snippet = source_path.read_text(errors="replace")
-    except OSError:
-        source_snippet = getattr(source, "body", "")
+    pair = read_text_capped(sink_path)
+    sink_snippet = pair[0] if pair else getattr(sink, "body", "")
+    pair = read_text_capped(source_path)
+    source_snippet = pair[0] if pair else getattr(source, "body", "")
 
     from core.audit.evidence_grade import defang_model_body
 
