@@ -11,8 +11,7 @@ SARIF feeds the dedup/analysis pipeline.
 The heavy machinery is REUSED from compiler_sweep, not reimplemented:
 toolchain probing (:func:`core.audit.compiler_sweep._gcc_analyzer` /
 ``_clang_path``), mechanical include-path derivation
-(``_derive_include_dirs``), the diagnostics parsers (``_parse_gcc_sarif``
-/ ``_parse_gcc_json`` / ``_parse_clang_text``), the per-TU timeout, and
+(``_derive_include_dirs``), the diagnostic parser dispatch (``_parse_analyzer_output``), the per-TU timeout, and
 the CWE family map (``COMPILER_CWE_MAP``) for tagging diagnostics with
 a CWE — plus the shared in-source suppression witness
 (``_suppression_witness`` / ``_closure_suppression_witness`` and their
@@ -77,14 +76,14 @@ from core.audit.compiler_sweep import (
     _derive_include_dirs,
     _gcc_analyzer,
     _id_matches,
-    _parse_clang_text,
-    _parse_gcc_json,
-    _parse_gcc_sarif,
+    _parse_analyzer_output,
     _suppression_witness,
     _witness_kind,
 )
 from core.inventory.exclusions import DEFAULT_EXCLUDES, should_exclude
-from core.run.scratch import scratch_dir
+from core.detectors.compiler import (
+    CompilerInvocationError, CompilerRequest, run_compiler_analysis,
+)
 from core.sarif import emit
 from core.source import read_text_capped
 
@@ -328,72 +327,28 @@ def analyze_tu(
         f"-I{d}" for d in _derive_include_dirs(target_path, full_path.parent)
     ]
 
-    with scratch_dir("compiler_scan_", dir=scratch_root) as workdir:
-        if gcc is not None:
-            gcc_path, mode = gcc
-            compiler_name = "gcc"
-            cmd = [
-                gcc_path, "-fanalyzer", *_union_flags("gcc_flags"),
-                f"-fdiagnostics-format={mode}",
-                *include_flags, "-c", str(full_path), "-o", os.devnull,
-            ]
-        else:
-            compiler_name = "clang"
-            mode = "analyze"
-            # ``--analyze`` runs sema too, so the warning-engine flags
-            # (-Wformat=2 etc.) fire in the same invocation.
-            cmd = [
-                clang, "--analyze", "--analyzer-output", "text",
-                *_union_flags("clang_flags"),
-                *include_flags, str(full_path),
-            ]
+    if gcc is not None:
+        gcc_path, mode = gcc
+        compiler_name = "gcc"
+        cmd = [
+            gcc_path, "-fanalyzer", *_union_flags("gcc_flags"),
+            f"-fdiagnostics-format={mode}",
+            *include_flags, "-c", str(full_path), "-o", os.devnull,
+        ]
+    else:
+        compiler_name = "clang"
+        mode = "analyze"
+        # ``--analyze`` runs sema too, so the warning-engine flags
+        # (-Wformat=2 etc.) fire in the same invocation.
+        cmd = [
+            clang, "--analyze", "--analyzer-output", "text",
+            *_union_flags("clang_flags"),
+            *include_flags, str(full_path),
+        ]
 
-        try:
-            proc = sandbox_run(
-                cmd,
-                block_network=True,
-                target=str(target_path),
-                output=str(workdir),
-                cwd=str(workdir),
-                capture_output=True,
-                text=True,
-                timeout=_COMPILE_TIMEOUT_S,
-                caller_label="compiler-scan",
-            )
-        except subprocess.TimeoutExpired:
-            return TuDiagnostics(
-                rel_path, ok=False, compiler=compiler_name,
-                reason=f"analyzer timed out ({_COMPILE_TIMEOUT_S}s)",
-            )
-        except (subprocess.SubprocessError, OSError, ValueError, TypeError) as exc:
-            return TuDiagnostics(
-                rel_path, ok=False, compiler=compiler_name,
-                reason=f"analyzer invocation failed: {exc}",
-            )
-
-        if compiler_name == "gcc" and mode == "sarif-file":
-            raw_diags = _parse_gcc_sarif(workdir / f"{full_path.name}.sarif")
-        elif compiler_name == "gcc":
-            raw_diags = _parse_gcc_json(proc.stderr or "")
-        else:
-            raw_diags = _parse_clang_text(proc.stderr or "")
-
-        if proc.returncode != 0:
-            # Broken compile (missing generated headers, dialect gaps,
-            # ICE) — the analyzer never saw well-formed code, so its
-            # partial output proves nothing.  No findings from here.
-            error_msgs = [
-                d["message"] for d in raw_diags
-                if "error" in str(d.get("kind", ""))
-            ][:3]
-            summary = "; ".join(error_msgs) or f"exit code {proc.returncode}"
-            return TuDiagnostics(
-                rel_path, ok=False, compiler=compiler_name,
-                reason=f"compile failed — cannot analyse: {summary}",
-            )
-
+    def interpret(record: dict[str, Any], workdir: Path) -> TuDiagnostics:
         kept: list[dict[str, Any]] = []
-        for d in raw_diags:
+        for d in record["diags"]:
             if "error" in str(d.get("kind", "")):
                 continue
             diag_id = d.get("id") or ""
@@ -427,6 +382,48 @@ def analyze_tu(
             rel_path, ok=True, compiler=compiler_name, diagnostics=kept,
             suppression_witness=witness, suppression_unvetted=unvetted,
         )
+
+    try:
+        execution = run_compiler_analysis(
+            CompilerRequest(
+                command=tuple(cmd), target=target_path,
+                timeout=_COMPILE_TIMEOUT_S, caller_label="compiler-scan",
+                scratch_prefix="compiler_scan_", scratch_root=scratch_root,
+                analyze=interpret,
+                parse=lambda workdir, stderr: _parse_analyzer_output(
+                    workdir, stderr, compiler_name=compiler_name,
+                    mode=mode, full_path=full_path,
+                ),
+            ),
+            sandbox_run,
+        )
+    except CompilerInvocationError as exc:
+        if isinstance(exc.error, subprocess.TimeoutExpired):
+            reason = f"analyzer timed out ({_COMPILE_TIMEOUT_S}s)"
+        else:
+            reason = f"analyzer invocation failed: {exc}"
+        return TuDiagnostics(rel_path, ok=False, compiler=compiler_name, reason=reason)
+
+    record = execution.value.record
+    assert record is not None
+    raw_diags = record["diags"]
+
+    if record["returncode"] != 0:
+        # Broken compile (missing generated headers, dialect gaps,
+        # ICE) — the analyzer never saw well-formed code, so its
+        # partial output proves nothing.  No findings from here.
+        error_msgs = [
+            d["message"] for d in raw_diags
+            if "error" in str(d.get("kind", ""))
+        ][:3]
+        summary = "; ".join(error_msgs) or f"exit code {record['returncode']}"
+        return TuDiagnostics(
+            rel_path, ok=False, compiler=compiler_name,
+            reason=f"compile failed — cannot analyse: {summary}",
+        )
+
+    assert isinstance(execution.value.result, TuDiagnostics)
+    return execution.value.result
 
 
 # ---------------------------------------------------------------------------

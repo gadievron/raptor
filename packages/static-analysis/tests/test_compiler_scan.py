@@ -1177,3 +1177,58 @@ def test_symlink_chain_marks_tu_unvetted_quickly(tmp_path, sandbox_spy, _clang_o
     assert result.ok is True, result.reason
     assert [u["tu"] for u in result.unvetted_tus] == ["t.c"], result.summary_line()
     assert took <= 5.0, took
+
+
+def test_pipeline_keeps_vetting_in_same_scratch_directory(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from core.detectors import compiler as detector
+
+    (tmp_path / "a.c").write_text("void f(void) {}\n")
+    monkeypatch.setattr(_cs, "_gcc_analyzer", lambda: ("gcc", "json"))
+    monkeypatch.setattr(_cs, "_clang_path", lambda: None)
+    calls = []
+    executions = []
+    original = detector.run_detector
+
+    def observe(*args):
+        result = original(*args)
+        executions.append(result)
+        return result
+
+    monkeypatch.setattr(detector, "run_detector", observe)
+
+    def run(cmd, **kw):
+        calls.append(kw)
+        return SimpleNamespace(returncode=0, stderr="[]")
+
+    def vet(*args):
+        workdir = args[5]
+        assert workdir.is_dir()
+        assert str(workdir) == calls[0]["output"]
+        return "", ""
+
+    monkeypatch.setattr(_cs, "_suppression_vet", vet)
+    result = _cs.analyze_tu(tmp_path, "a.c", sandbox_run=run)
+    assert result.ok and not result.diagnostics
+    assert len(calls) == len(executions) == 1
+    assert executions[0].identifier == "compiler-diagnostics"
+    assert [s.name for s in executions[0].stages] == ["prepare", "invoke", "parse", "analyze"]
+    assert not Path(calls[0]["output"]).exists()
+
+
+def test_parser_failure_still_propagates_from_scan(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    (tmp_path / "a.c").write_text("void f(void) {}\n")
+    monkeypatch.setattr(_cs, "_gcc_analyzer", lambda: ("gcc", "json"))
+    monkeypatch.setattr(_cs, "_clang_path", lambda: None)
+
+    def broken_parser(*args, **kw):
+        raise TypeError("parser failed")
+
+    monkeypatch.setattr(_cs, "_parse_analyzer_output", broken_parser)
+    with pytest.raises(TypeError, match="parser failed"):
+        _cs.analyze_tu(
+            tmp_path, "a.c",
+            sandbox_run=lambda *a, **kw: SimpleNamespace(returncode=0, stderr="[]"),
+        )
