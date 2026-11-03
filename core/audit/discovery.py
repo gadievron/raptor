@@ -2191,11 +2191,11 @@ def run_workflow_discovery(
     return results
 
 
-# ── multi-perspective sweep ──────────────────────────────────────────
+# ── focused-lens sweep ────────────────────────────────────────────────
 
-_PERSPECTIVE_JSON_SUFFIX = (
+_LENS_JSON_SUFFIX = (
     "\n\nguard_type must be one of: bounds, null_safety, validation, "
-    "sanitisation, lifetime, ordering, concurrency, other."
+    "sanitisation, lifetime, ordering, concurrency, auth, aliasing, other."
     "\n\nRate confidence: high (specific code paths prove the issue), "
     "medium (plausible but needs runtime context), low (speculative)."
     "\n\nRespond in JSON:\n"
@@ -2205,108 +2205,199 @@ _PERSPECTIVE_JSON_SUFFIX = (
     '\n\nIf no issues found: { "findings": [] }'
 )
 
-_PERSPECTIVE_QUESTIONS: list[tuple[str, str, str]] = [
+_LENS_SYSTEM = (
+    "You are a security auditor reviewing a function with cross-file "
+    "context from the same codebase. Focus on issues visible through "
+    "the specific analysis dimension requested. Respond only with JSON."
+)
+
+
+def _render_callers_block(callers: list[dict[str, Any]]) -> str:
+    """Render caller dicts to prompt text."""
+    if not callers:
+        return ""
+    lines = ["### Callers (cross-file)"]
+    for c in callers[:15]:
+        fid = c.get("file", "?") + ":" + c.get("name", "?")
+        line = c.get("line_start", "?")
+        lines.append(f"- `{fid}` (line {line})")
+        if c.get("call_site"):
+            lines.append(f"```\n{c['call_site']}\n```")
+    return "\n".join(lines)
+
+
+def _render_callees_block(callees: list[dict[str, Any]]) -> str:
+    """Render callee dicts to prompt text."""
+    if not callees:
+        return ""
+    lines = ["### Callees"]
+    for c in callees[:15]:
+        fid = c.get("file", "?") + ":" + c.get("name", "?")
+        sig = c.get("signature", "")
+        lines.append(f"- `{fid}`")
+        if sig:
+            lines.append(f"  signature: `{sig}`")
+        if c.get("source"):
+            src = c["source"]
+            if len(src) > 2000:
+                src = src[:2000] + "\n  ... (truncated)"
+            lines.append(f"```\n{src}\n```")
+    return "\n".join(lines)
+
+
+def _render_types_block(
+    type_defs: list[dict[str, Any]] | None,
+    macro_defs: list[tuple[str, str]] | None,
+) -> str:
+    """Render type and macro definitions to prompt text."""
+    lines: list[str] = []
+    if type_defs:
+        lines.append("### Type definitions (from headers)")
+        for td in type_defs:
+            name = td.get("name", "?")
+            where = td.get("file", "?") + ":" + str(td.get("line", "?"))
+            lines.append(f"\n**`{name}`** ({where})")
+            lines.append(f"```\n{td.get('source', '')}\n```")
+    if macro_defs:
+        lines.append("\n### Macro definitions")
+        for name, body in macro_defs:
+            lines.append(f"```\n#define {name} {body}\n```")
+    return "\n".join(lines)
+
+
+def _render_caller_contract(contract: dict[str, Any] | None) -> str:
+    """Render caller contract digest to prompt text."""
+    if not contract:
+        return ""
+    lines = ["### Caller contract digest"]
+    sites = contract.get("sites", [])
+    for s in sites[:10]:
+        caller = s.get("caller", "?")
+        lines.append(f"- `{caller}`")
+        if s.get("preconditions"):
+            for pc in s["preconditions"][:3]:
+                lines.append(f"  precondition: {pc}")
+        if s.get("arguments"):
+            lines.append(f"  arguments: {s['arguments']}")
+    if contract.get("universal_constraints"):
+        lines.append(f"\nUniversal: {contract['universal_constraints']}")
+    return "\n".join(lines)
+
+
+_LENS_DEFINITIONS: list[tuple[str, str, str]] = [
     (
-        "attacker",
-        "You are performing an authorised security assessment of this "
-        "code. Focus on attack surfaces automated tools miss.",
-        "Analyse this code from an attacker's perspective:\n\n"
-        "1. What would you exploit? Consider injection points, trust "
-        "boundaries, and unsafe data flows.\n"
-        "2. Are there authentication or authorisation bypasses?\n"
-        "3. Can you reach sensitive operations through unexpected paths?\n"
-        "4. Are there information leaks (timing, error messages, side "
-        "channels)?",
+        "caller",
+        "caller_interaction",
+        "What security issues arise from the INTERACTION between callers "
+        "and this function?\n\n"
+        "Focus on: implicit contracts between caller and callee, "
+        "assumption mismatches about argument validity or ownership, "
+        "values callers control but this function trusts without "
+        "validation, and aliasing where callers pass shared references "
+        "this function modifies in place.",
     ),
     (
-        "reliability",
-        "You are a reliability engineer reviewing this code for "
-        "production failures. Respond only with the JSON object.",
-        "Analyse this code for reliability and resource-safety issues:\n\n"
-        "1. Resource exhaustion: unbounded allocations, uncapped loops, "
-        "missing limits on user-controlled sizes.\n"
-        "2. Error handling: what happens when callees fail? Are errors "
-        "propagated or silently swallowed?\n"
-        "3. Concurrency: races between readers and writers, missing "
-        "synchronisation, lock ordering.\n"
-        "4. State corruption: partial writes on failure, missing rollback, "
-        "broken invariants after exceptions.",
+        "type",
+        "type_contract",
+        "Analyse type-level security issues in this function.\n\n"
+        "Focus on: width mismatches (uint32 to uint16 truncation, "
+        "signed/unsigned confusion), struct layout assumptions "
+        "(uninitialised fields, padding leaks), enum/flag gaps "
+        "(unhandled variants, missing default), and implicit type "
+        "contracts between this function and its collaborators.",
     ),
     (
-        "reviewer",
-        "You are an experienced code reviewer looking for correctness "
-        "bugs. Respond only with the JSON object.",
-        "Review this code for correctness:\n\n"
-        "1. Off-by-one errors in bounds, loop conditions, or size "
-        "calculations.\n"
-        "2. Type confusion or implicit narrowing conversions.\n"
-        "3. Contract violations: does this function uphold what callers "
-        "expect?\n"
-        "4. Unhandled edge cases: empty input, maximum values, NULL/nil, "
-        "negative numbers, zero-length buffers.",
-    ),
-    (
-        "adversarial_tester",
-        "You are a security tester crafting adversarial inputs. "
-        "Respond only with the JSON object.",
-        "What inputs would make this code behave unexpectedly?\n\n"
-        "1. Boundary values: INT_MAX, 0, -1, empty strings, "
-        "maximum-length inputs.\n"
-        "2. Encoding mismatches: UTF-8 overlong sequences, mixed "
-        "encodings, null bytes in strings.\n"
-        "3. Type confusion: values that pass one check but fail another "
-        '(e.g. "0" vs 0 vs NULL).\n'
-        "4. Parser differentials: inputs parsed differently by different "
-        "consumers (path traversal, header injection, protocol smuggling).",
+        "error",
+        "error_path",
+        "Analyse error and cleanup paths in this function.\n\n"
+        "Focus on: resources not freed on error, partial initialisation "
+        "visible to later code, error codes that silently succeed, "
+        "cleanup ordering (teardown racing with callbacks, free before "
+        "grace period), and state left inconsistent on early return.",
     ),
 ]
 
 
-def _build_perspective_prompt(
-    annotation: str,
-    callers_source: str,
+def _build_lens_prompt(
+    lens_name: str,
     question: str,
+    target: SweepTarget,
+    ctx: dict[str, Any] | None,
 ) -> str:
-    """Assemble the user prompt from parts, avoiding str.format on source."""
-    parts = [annotation]
-    if callers_source:
-        parts.append("\n\n### Callers\n\n" + callers_source)
+    """Build a focused-lens prompt from target source and context."""
+    parts = [target.annotation]
+
+    if ctx is not None:
+        if lens_name == "caller":
+            block = _render_callers_block(ctx.get("callers", []))
+            if block:
+                parts.append("\n\n" + block)
+            contract = _render_caller_contract(ctx.get("caller_contract"))
+            if contract:
+                parts.append("\n\n" + contract)
+        elif lens_name == "type":
+            block = _render_types_block(
+                ctx.get("type_definitions"),
+                ctx.get("macro_definitions"),
+            )
+            if block:
+                parts.append("\n\n" + block)
+        elif lens_name == "error":
+            callers = _render_callers_block(ctx.get("callers", []))
+            if callers:
+                parts.append("\n\n" + callers)
+            callees = _render_callees_block(ctx.get("callees", []))
+            if callees:
+                parts.append("\n\n" + callees)
+    elif target.callers_source:
+        parts.append("\n\n### Callers\n\n" + target.callers_source)
+
     parts.append("\n\n" + question)
-    parts.append(_PERSPECTIVE_JSON_SUFFIX)
+    parts.append(_LENS_JSON_SUFFIX)
     return "".join(parts)
 
 
-def run_multi_perspective_sweep(
+def run_focused_lens_sweep(
     targets: list[SweepTarget],
     *,
     review_fn: Callable[[str, str], tuple[str, float]],
     max_cost_usd: float = 5.0,
-    perspectives: list[str] | None = None,
+    lenses: list[str] | None = None,
+    contexts: dict[str, dict[str, Any]] | None = None,
 ) -> list[DiscoveryResult]:
-    """Run multiple prompt perspectives on the same targets.
+    """Run focused-lens analysis on high-priority targets.
 
-    Each perspective asks a different question about the same code,
-    surfacing different bug classes.  The grounding filter (identifier
-    overlap) applies to all perspectives equally.
+    Each lens examines the same code through a different analytical
+    dimension (caller interactions, type contracts, error paths),
+    using cross-file context from the orchestrator's pre-built
+    context maps.
+
+    Args:
+        targets: Functions selected by assumption mining.
+        review_fn: (system_prompt, user_prompt) -> (response, cost).
+        max_cost_usd: Budget cap for the sweep.
+        lenses: Subset of lens names to run (default: all three).
+        contexts: Pre-built context dicts keyed by fid, from the
+            orchestrator's ``_build_context``.  When provided, lenses
+            render cross-TU callers, types, and callees from these
+            instead of relying on the target's own source text.
     """
-    active = _PERSPECTIVE_QUESTIONS
-    if perspectives:
-        names = set(perspectives)
-        active = [p for p in _PERSPECTIVE_QUESTIONS if p[0] in names]
+    active = _LENS_DEFINITIONS
+    if lenses:
+        names = set(lenses)
+        active = [l for l in _LENS_DEFINITIONS if l[0] in names]
         if not active:
-            logger.warning(
-                "discovery: no matching perspectives for %s",
-                perspectives,
-            )
+            logger.warning("discovery: no matching lenses for %s", lenses)
             return []
 
     results: list[DiscoveryResult] = []
     total_cost = 0.0
+    ctx_map = contexts or {}
 
     for target in targets:
         if total_cost >= max_cost_usd:
             logger.info(
-                "discovery: multi-perspective cost cap reached "
+                "discovery: focused-lens cost cap reached "
                 "($%.2f >= $%.2f)",
                 total_cost, max_cost_usd,
             )
@@ -2316,30 +2407,28 @@ def run_multi_perspective_sweep(
             target.callers_source or ""
         )
         idents = _source_identifiers(all_source)
+        ctx = ctx_map.get(target.fid)
 
         seen_keys: set[tuple[str, str, str]] = set()
 
-        for name, system_prompt, question in active:
+        for lens_name, source_tag, question in active:
             if total_cost >= max_cost_usd:
                 break
 
-            prompt = _build_perspective_prompt(
-                target.annotation,
-                target.callers_source or "",
-                question,
+            prompt = _build_lens_prompt(
+                lens_name, question, target, ctx,
             )
-            source_tag = f"perspective_{name}"
 
             try:
-                response, cost = review_fn(system_prompt, prompt)
+                response, cost = review_fn(_LENS_SYSTEM, prompt)
             except Exception as exc:
                 from core.llm.client import is_budget_exceeded_error
                 if is_budget_exceeded_error(exc):
                     total_cost = max_cost_usd
                     break
                 logger.exception(
-                    "discovery: perspective %s failed for %s",
-                    name, target.fid,
+                    "discovery: lens %s failed for %s",
+                    lens_name, target.fid,
                 )
                 continue
             total_cost += cost
@@ -2357,7 +2446,7 @@ def run_multi_perspective_sweep(
             for w in result.weaknesses:
                 key = (
                     w.get("guard_type", ""),
-                    w.get("property", ""),
+                    w.get("assumed_property", w.get("property", "")),
                     w.get("mechanism", ""),
                 )
                 if key not in seen_keys:
@@ -2370,7 +2459,7 @@ def run_multi_perspective_sweep(
 
     total_findings = sum(len(r.weaknesses) for r in results)
     logger.info(
-        "discovery: multi-perspective sweep %d targets × %d perspectives, "
+        "discovery: focused-lens sweep %d targets × %d lenses, "
         "%d findings, $%.2f total",
         len(targets), len(active), total_findings, total_cost,
     )

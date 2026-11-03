@@ -2729,3 +2729,183 @@ class TestBuildWorkflowBundlesMultiEntry:
         assert len(bundles) == 1
         # path_fids should have no duplicates
         assert len(bundles[0].path_fids) == len(set(bundles[0].path_fids))
+
+
+# ── focused-lens sweep ──────────────────────────────────────────────
+
+from core.audit.discovery import run_focused_lens_sweep
+
+
+class TestFocusedLensSweep:
+    """Tests for the focused-lens discovery sweep."""
+
+    def _make_target(self, fid="a.c:foo", source="int foo(int x) { return x; }"):
+        return SweepTarget(
+            fid=fid,
+            source=source,
+            callers_source="",
+            annotation=f"## Function: foo (a.c)\n\n```c\n{source}\n```",
+            priority_score=5.0,
+            priority_reason="test",
+        )
+
+    def test_three_lenses_called(self):
+        calls = []
+
+        def review_fn(system, prompt):
+            calls.append(prompt)
+            return '{"findings": []}', 0.001
+
+        target = self._make_target()
+        results = run_focused_lens_sweep(
+            [target], review_fn=review_fn, max_cost_usd=1.0,
+        )
+        assert len(calls) == 3
+        assert len(results) == 3
+        assert {r.source for r in results} == {
+            "caller_interaction", "type_contract", "error_path",
+        }
+
+    def test_lens_subset(self):
+        calls = []
+
+        def review_fn(system, prompt):
+            calls.append(prompt)
+            return '{"findings": []}', 0.001
+
+        target = self._make_target()
+        results = run_focused_lens_sweep(
+            [target], review_fn=review_fn, max_cost_usd=1.0,
+            lenses=["caller"],
+        )
+        assert len(calls) == 1
+        assert results[0].source == "caller_interaction"
+
+    def test_budget_cap(self):
+        call_count = 0
+
+        def review_fn(system, prompt):
+            nonlocal call_count
+            call_count += 1
+            return '{"findings": []}', 0.50
+
+        target = self._make_target()
+        run_focused_lens_sweep(
+            [target], review_fn=review_fn, max_cost_usd=0.60,
+        )
+        assert call_count <= 2
+
+    def test_cross_tu_context_in_caller_lens(self):
+        captured = []
+
+        def review_fn(system, prompt):
+            captured.append(prompt)
+            return '{"findings": []}', 0.001
+
+        target = self._make_target()
+        ctx = {
+            "callers": [
+                {"file": "b.c", "name": "bar", "line_start": 10,
+                 "call_site": "  10  foo(user_input);"},
+            ],
+            "caller_contract": {
+                "sites": [{"caller": "bar", "preconditions": ["x > 0"]}],
+            },
+        }
+        run_focused_lens_sweep(
+            [target], review_fn=review_fn, max_cost_usd=1.0,
+            lenses=["caller"],
+            contexts={"a.c:foo": ctx},
+        )
+        assert len(captured) == 1
+        assert "b.c:bar" in captured[0]
+        assert "foo(user_input)" in captured[0]
+
+    def test_cross_tu_types_in_type_lens(self):
+        captured = []
+
+        def review_fn(system, prompt):
+            captured.append(prompt)
+            return '{"findings": []}', 0.001
+
+        target = self._make_target()
+        ctx = {
+            "type_definitions": [
+                {"name": "msg_header", "file": "include/msg.h",
+                 "line": 15, "source": "struct msg_header { uint16_t len; };"},
+            ],
+        }
+        run_focused_lens_sweep(
+            [target], review_fn=review_fn, max_cost_usd=1.0,
+            lenses=["type"],
+            contexts={"a.c:foo": ctx},
+        )
+        assert len(captured) == 1
+        assert "msg_header" in captured[0]
+        assert "include/msg.h" in captured[0]
+
+    def test_callees_in_error_lens(self):
+        captured = []
+
+        def review_fn(system, prompt):
+            captured.append(prompt)
+            return '{"findings": []}', 0.001
+
+        target = self._make_target()
+        ctx = {
+            "callers": [],
+            "callees": [
+                {"file": "c.c", "name": "cleanup", "line_start": 5,
+                 "signature": "void cleanup(ctx_t *c)"},
+            ],
+        }
+        run_focused_lens_sweep(
+            [target], review_fn=review_fn, max_cost_usd=1.0,
+            lenses=["error"],
+            contexts={"a.c:foo": ctx},
+        )
+        assert len(captured) == 1
+        assert "c.c:cleanup" in captured[0]
+
+    def test_findings_grounded_and_deduped(self):
+        call_idx = [0]
+
+        def review_fn(system, prompt):
+            call_idx[0] += 1
+            return json.dumps({"findings": [
+                {"guard_type": "bounds", "assumed_property": "x < 256",
+                 "mechanism": "foo overflow on x",
+                 "cwe_class": "CWE-120", "standalone": True,
+                 "confidence": "high"},
+            ]}), 0.001
+
+        target = self._make_target(
+            source="int foo(int x) { char buf[256]; buf[x] = 0; return x; }",
+        )
+        results = run_focused_lens_sweep(
+            [target], review_fn=review_fn, max_cost_usd=1.0,
+        )
+        all_w = [w for r in results for w in r.weaknesses]
+        assert len(all_w) >= 1
+        assert all_w[0]["guard_type"] == "bounds"
+
+    def test_no_context_falls_back_to_callers_source(self):
+        captured = []
+
+        def review_fn(system, prompt):
+            captured.append(prompt)
+            return '{"findings": []}', 0.001
+
+        target = SweepTarget(
+            fid="a.c:foo",
+            source="int foo(int x) { return x; }",
+            callers_source="bar(a.c:10): foo(42);",
+            annotation="## foo\n```c\nint foo(int x) { return x; }\n```",
+            priority_score=5.0,
+            priority_reason="test",
+        )
+        run_focused_lens_sweep(
+            [target], review_fn=review_fn, max_cost_usd=1.0,
+            lenses=["caller"],
+        )
+        assert "bar(a.c:10): foo(42);" in captured[0]
