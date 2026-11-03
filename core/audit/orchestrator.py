@@ -11108,6 +11108,49 @@ def _run_audit_body(
                         _mining_total_w, len(_mining_results),
                     )
 
+            # Multi-perspective sweep on the same targets
+            if _mining_targets:
+                from .discovery import run_multi_perspective_sweep
+
+                _mp_budget = (
+                    (config.max_cost_usd or 50.0)
+                    * config.discovery_budget_fraction
+                    * 0.20
+                )
+
+                _mp_client = _run_llm_client(config)
+
+                def _mp_review_fn(
+                    system: str, prompt: str,
+                ) -> tuple[str, float]:
+                    resp = _mp_client.generate(
+                        prompt, system_prompt=system,
+                    )
+                    return resp.content, resp.cost
+
+                _mp_results = run_multi_perspective_sweep(
+                    _mining_targets,
+                    review_fn=_mp_review_fn,
+                    max_cost_usd=_mp_budget,
+                )
+                _mp_total_w = 0
+                for mpr in _mp_results:
+                    if mpr.weaknesses:
+                        write_discovery_weaknesses(
+                            config.out_dir,
+                            mpr.seam_or_field,
+                            mpr.weaknesses,
+                            run_id=_disc_run_id,
+                            cost_usd=mpr.cost_usd,
+                        )
+                        _mp_total_w += len(mpr.weaknesses)
+                if _mp_total_w:
+                    logger.info(
+                        "open discovery: %d multi-perspective weaknesses "
+                        "from %d targets",
+                        _mp_total_w, len(_mp_results),
+                    )
+
             # --- Weakness composition (Phase C) ---
             try:
                 from .composition import (
