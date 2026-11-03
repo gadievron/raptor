@@ -25,8 +25,11 @@ from __future__ import annotations
 import os
 import stat
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
+
+import pytest
 
 REPO = Path(__file__).resolve().parents[3]
 
@@ -231,6 +234,16 @@ class TestExportedFunctionHardening(unittest.TestCase):
         self.assertIn("STRICT-OK", proc.stdout)
 
 
+def _probe_presweep_window(rel_script: str, arg: str, shadows: dict) -> str:
+    with tempfile.TemporaryDirectory() as home:
+        proc = subprocess.run(
+            ["bash", str(REPO / rel_script), arg],
+            capture_output=True, text=True, timeout=60,
+            env={"PATH": "/usr/bin:/bin", "HOME": home, **shadows},
+        )
+    return proc.stdout + proc.stderr
+
+
 class TestPreSweepWindow(unittest.TestCase):
     """The launchers resolve RAPTOR_DIR BEFORE the strip fragment can
     be sourced, and every name that window calls — `set` itself
@@ -244,27 +257,6 @@ class TestPreSweepWindow(unittest.TestCase):
     _NAMES = ("set", "command", "dirname", "readlink", "cd", "pwd",
               "unset", "echo", "read", "declare", "test", "trap")
 
-    def _probe(self, rel_script: str, arg: str, shadows: dict) -> str:
-        proc = subprocess.run(
-            ["bash", str(REPO / rel_script), arg],
-            capture_output=True, text=True, timeout=60,
-            env={"PATH": "/usr/bin:/bin",
-                 "HOME": os.environ.get("HOME", "/tmp"),
-                 **shadows},
-        )
-        return proc.stdout + proc.stderr
-
-    def test_shadow_battery_both_launchers(self):
-        for rel, arg in (("bin/cve-diff", "--help"),
-                         ("bin/raptor", "--version")):
-            for name in self._NAMES:
-                with self.subTest(launcher=rel, shadow=name):
-                    out = self._probe(rel, arg, {
-                        f"BASH_FUNC_{name}%%":
-                            "() { /bin/echo PWNED-" + name + " >&2; exit 9; }",
-                    })
-                    self.assertNotIn("PWNED", out)
-
     def test_simultaneous_shadows_both_launchers(self):
         shadows = {
             f"BASH_FUNC_{n}%%":
@@ -273,7 +265,7 @@ class TestPreSweepWindow(unittest.TestCase):
         }
         for rel, arg in (("bin/cve-diff", "--help"),
                          ("bin/raptor", "--version")):
-            self.assertNotIn("PWNED", self._probe(rel, arg, shadows), rel)
+            self.assertNotIn("PWNED", _probe_presweep_window(rel, arg, shadows), rel)
 
     def test_presweep_precedes_set_and_resolution(self):
         # Static pin: the sweep must precede `set -euo pipefail` AND
@@ -328,3 +320,13 @@ class TestPreSweepWindow(unittest.TestCase):
                  "HOME": os.environ.get("HOME", "/tmp")},
         )
         self.assertIn("posix=1", proc.stdout)
+
+
+@pytest.mark.parametrize("rel,arg", [("bin/cve-diff", "--help"), ("bin/raptor", "--version")])
+@pytest.mark.parametrize("name", TestPreSweepWindow._NAMES)
+def test_shadow_battery_both_launchers(rel, arg, name):
+    out = _probe_presweep_window(rel, arg, {
+        f"BASH_FUNC_{name}%%":
+            "() { /bin/echo PWNED-" + name + " >&2; exit 9; }",
+    })
+    assert "PWNED" not in out, f"{rel} shadow={name}: {out}"
