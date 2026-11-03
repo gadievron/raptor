@@ -107,6 +107,7 @@ def serve(directory, hosts_file, stop, ports=None):
                    timeout=15)
     key.chmod(0o600)
     tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    tls.minimum_version = ssl.TLSVersion.TLSv1_2
     tls.load_cert_chain(cert, key)
     original = None
     selector = selectors.DefaultSelector()
