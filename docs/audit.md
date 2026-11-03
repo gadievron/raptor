@@ -202,7 +202,9 @@ against an unverified dismissal, the dismissal is floored back to
 `suspicious` unless the refuting fact itself carries proof grade --
 verdicts record whether the refuter was a proof or a heuristic, and a
 proof-grade override is only accepted once its record lands in
-`suppressions.jsonl`.
+`suppressions.jsonl`.  The same fence holds across ensemble merges: a
+standing receipt survives a merge-level demotion to clean (Phase 2)
+unless a recorded proof-grade dominance row lifts it.
 
 Some dismissals can be discharged mechanically instead: trust-gated
 witnesses (Go internal-concurrency, C caller-held-lock, C lifetime,

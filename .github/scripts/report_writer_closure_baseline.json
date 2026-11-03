@@ -157,6 +157,15 @@
     "core/audit/corpus/run_corpus.py::_run_audit::unsanitised_llm_value::mechanical_skip": {
       "note": "mechanical_skip is a bool, error_reason/hypothesis reach the results-record dict (data artifact), and the terminal prints of the same fields are sanitised; dev corpus driver"
     },
+    "core/audit/corpus/run_corpus.py::_run_ensemble_audit::unsanitised_llm_value::_dampened": {
+      "note": "dev corpus/bench harness terminal lane over self-produced corpora; sanitise + register on next functional touch"
+    },
+    "core/audit/corpus/run_corpus.py::_run_ensemble_audit::unsanitised_llm_value::phase2_cost": {
+      "note": "dev corpus/bench harness terminal lane over self-produced corpora; sanitise + register on next functional touch"
+    },
+    "core/audit/corpus/run_corpus.py::_run_ensemble_audit::unsanitised_llm_value::suppressed": {
+      "note": "dev corpus/bench harness terminal lane over self-produced corpora; sanitise + register on next functional touch"
+    },
     "core/audit/corpus/run_corpus.py::main::unsanitised_llm_value::detail": {
       "note": "dev corpus/bench harness terminal lane over self-produced corpora; sanitise + register on next functional touch"
     },

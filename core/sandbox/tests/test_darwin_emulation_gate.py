@@ -61,6 +61,11 @@ def _nested_pytest(args, *, emulate=None, timeout=120):
     )
 
 
+# These four safety sentinels deliberately launch a complete pytest session
+# and import the real sandbox gates. Keep them in default CI: 30s allows
+# cold-start/load variance beyond the observed 10.5s without hiding a hung
+# nested session behind an unbounded budget.
+@pytest.mark.wall_budget(30)
 def test_native_marked_files_fully_deselected_under_emulation():
     """Deselection soundness: a darwin_native file collects to nothing
     under emulation (exit 5 = no tests ran), so no darwin-only
@@ -76,6 +81,7 @@ def test_native_marked_files_fully_deselected_under_emulation():
     assert "passed" not in r.stdout and "failed" not in r.stdout
 
 
+@pytest.mark.wall_budget(30)
 def test_dual_marked_real_kernel_file_deselected_under_emulation():
     """The NPROC rule, pinned: a module carrying BOTH native markers
     (binds to whichever real kernel is underneath) is entirely
@@ -88,6 +94,7 @@ def test_dual_marked_real_kernel_file_deselected_under_emulation():
     assert "passed" not in r.stdout
 
 
+@pytest.mark.wall_budget(30)
 def test_darwin_native_skips_honestly_on_native_linux():
     """Native (un-emulated) semantics: darwin_native tests SKIP on a
     Linux host — never run, never deselected-invisible."""
@@ -100,6 +107,7 @@ def test_darwin_native_skips_honestly_on_native_linux():
     assert "passed" not in r.stdout and "failed" not in r.stdout
 
 
+@pytest.mark.wall_budget(30)
 def test_unsupported_emulation_target_fails_loud():
     """Only 'darwin' is a supported target; anything else is a hard
     usage error, never a silently-native session."""
