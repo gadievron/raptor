@@ -47,7 +47,7 @@ def _python_files(root: Path):
 
 
 @lru_cache(maxsize=None)
-def python_credential_names(root: Path = _SOURCE_ROOT) -> frozenset[str]:
+def python_credential_declarations(root: Path = _SOURCE_ROOT) -> tuple[tuple[str, str, int], ...]:
     """Reserve exact credential-name literals, including policy-table entries.
 
     Looking at all matching literals also covers indirect os.environ access
@@ -55,7 +55,7 @@ def python_credential_names(root: Path = _SOURCE_ROOT) -> frozenset[str]:
     containing extra prose do not become declarations. Source read errors
     propagate so the optional catalog fails closed.
     """
-    names = set()
+    declarations = []
     for path in _python_files(root):
         text = read_bytes_gated(path, max_bytes=_MAX_SOURCE_BYTES)
         if path.suffix != ".py":
@@ -72,5 +72,11 @@ def python_credential_names(root: Path = _SOURCE_ROOT) -> frozenset[str]:
         for node in ast.walk(tree):
             if (isinstance(node, ast.Constant) and isinstance(node.value, str)
                     and _CREDENTIAL_NAME.fullmatch(node.value)):
-                names.add(node.value)
-    return frozenset(names)
+                declarations.append((node.value, str(path.relative_to(root)), node.lineno))
+    return tuple(declarations)
+
+
+@lru_cache(maxsize=None)
+def python_credential_names(root: Path = _SOURCE_ROOT) -> frozenset[str]:
+    """Credential names owned by application source, without importing it."""
+    return frozenset(name for name, _, _ in python_credential_declarations(root))

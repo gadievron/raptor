@@ -932,7 +932,7 @@ the JVM-installer caveat.
 
 | Variable | RAPTOR-specific behavior |
 |----------|--------------------------|
-| `xcrun_nocache` | Set to `1` for macOS sandbox children with an output directory. Apple compiler shims bypass their per-user lookup cache, which sits outside the call’s writable scratch. |
+| `SDKROOT` | macOS compiler children receive the installed macOS SDK path when their child environment has no explicit value. RAPTOR resolves fixed Apple developer tools and SDK metadata before sandbox entry; compilation remains sandboxed. The resolved compiler directory is prepended to the child’s `PATH` so linking avoids the system launcher’s host-cache writes. |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Required for `/oss-forensics` BigQuery; also a Vertex credential path in the LLM key table. Its absence is reported in the startup banner. |
 | `GITHUB_TOKEN` | Used by cve-diff/forensics tooling to raise GitHub API limits; forwarded to the relevant children only. |
 | `NIX_SSL_CERT_FILE` | Trust-root override stripped from caller environments. On macOS, mach-restricted seatbelt children receive the fixed root-owned system bundle at `/etc/ssl/cert.pem`; caller-supplied values are never inherited. |

@@ -110,3 +110,11 @@ def test_sweep_does_not_follow_symlink_escape(tmp_root: Path,
     assert sweep_stale_workspaces() == []
     assert victim.read_text(encoding="utf-8") == "keep me"
     assert link.is_symlink()
+
+
+@pytest.fixture(autouse=True)
+def _idle_fixture_cwds(monkeypatch):
+    # These tests own isolated directories; cwd discovery is a separate
+    # native integration concern. An unrelated lsof warning must not
+    # turn their dead-owner/age assertions into host-dependent results.
+    monkeypatch.setattr("core.run.tmp_ownership._live_cwds", lambda: set())

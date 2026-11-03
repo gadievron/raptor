@@ -562,7 +562,7 @@ class TestProjectDirScan(unittest.TestCase):
                               lambda pid: pid in (SESSION_PID,
                                                   os.getpid())), \
                  patch.object(sessions, "proc_starttime",
-                              lambda pid: "7"), \
+                              lambda pid: None if sys.platform != "linux" else "7"), \
                  patch("core.run.metadata._get_session_pid",
                        return_value=SESSION_PID), \
                  patch("core.run.metadata._pid_alive",

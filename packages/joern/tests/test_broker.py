@@ -447,7 +447,8 @@ def test_old_controller_cleanup_cannot_remove_concurrent_discovery_record(tmp_pa
             new_root, token = replacement.result(timeout=4)
             cleanup.result(timeout=4)
         assert new_root != old_root and not old_root.exists()
-        assert broker._record(new_root.parent / "current.json")["root"] == str(new_root)
+        registry = Path(broker._record(new_root / "controller.json")["registry"])
+        assert broker._record(registry / "current.json")["root"] == str(new_root)
         with broker._connect(new_root, token):
             pass
         assert broker.discover(tmp_path) == (new_root, token)

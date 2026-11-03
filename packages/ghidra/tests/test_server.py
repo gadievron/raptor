@@ -420,8 +420,24 @@ class TestServerTransportSelection:
         import tempfile
         with tempfile.TemporaryDirectory(prefix="raptor-pytest-ghidra-", dir="/tmp") as raw:
             fixture_root = Path(raw).resolve()
+            real_mkdtemp = tempfile.mkdtemp
+            monkeypatch.setattr(
+                tempfile, "mkdtemp",
+                lambda **kw: real_mkdtemp(**{**kw, "dir": str(fixture_root)}),
+            )
             srv = self._server(fixture_root, monkeypatch, capable=True)
             self._check_pathname_transport(srv)
+
+    def test_long_socket_path_uses_socketpair(self, tmp_path, monkeypatch):
+        srv = self._server(tmp_path, monkeypatch, capable=True)
+        # Exercise selection without starting a subprocess or requiring
+        # a filesystem that accepts this deliberately overlong path.
+        srv._work_dir = tmp_path / ("x" * 110)
+        transports = []
+        monkeypatch.setattr(srv, "_boot_transport",
+                            lambda *, use_pathname: transports.append(use_pathname))
+        srv._boot()
+        assert transports == [False]
 
     @staticmethod
     def _check_pathname_transport(srv):

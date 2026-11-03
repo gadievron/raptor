@@ -187,12 +187,16 @@ def test_runtime_reserves_new_python_declarations_without_importing_them(tmp_pat
     )
     reserved = python_credential_names(source_root)
     assert reserved == {"FUTURE_SERVICE_API_KEY"}
+    from core.llm.model_brokers._env_ownership import python_credential_declarations
+    declarations = python_credential_declarations(source_root)
+    assert declarations == (("FUTURE_SERVICE_API_KEY", "core/service.py", 2),)
+    monkeypatch.setattr(broker_registry, "python_credential_declarations", lambda: declarations)
     monkeypatch.setattr(broker_registry, "python_credential_names", lambda: reserved)
     path = tmp_path / "registry.json"
     path.write_text(json.dumps({"version": 1, "brokers": [
         asdict(replace(_EXAMPLE_BROKER, name="future_service")),
     ]}))
-    with pytest.raises(ValueError, match="Python-owned.*FUTURE_SERVICE_API_KEY"):
+    with pytest.raises(ValueError, match="Python-owned.*FUTURE_SERVICE_API_KEY.*core/service.py.*:2"):
         load_model_brokers(path)
 
 

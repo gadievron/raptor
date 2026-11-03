@@ -190,7 +190,14 @@ class GhidraServer:
         accepts for such hosts; it never widens any sandbox policy.
         """
         global _PATHNAME_TRANSPORT_DENIED
-        use_pathname = (not _PATHNAME_TRANSPORT_DENIED
+        assert self._work_dir is not None
+        # sun_path includes its terminating NUL (104 bytes on Darwin).
+        # Keep pathname transport where it fits; the existing connected
+        # socketpair also works under long caller-selected TMPDIR roots.
+        socket_path = self._work_dir / f"worker-{self._boot_seq + 1}.sock"
+        path_limit = 103 if sys.platform == "darwin" else 107
+        path_fits = len(os.fsencode(socket_path)) <= path_limit
+        use_pathname = (path_fits and not _PATHNAME_TRANSPORT_DENIED
                         and check_child_unix_sockets_available())
         try:
             self._boot_transport(use_pathname=use_pathname)
@@ -254,11 +261,9 @@ class GhidraServer:
             ]
         else:
             logger.info(
-                "ghidra server: sandboxed worker cannot create "
-                "AF_UNIX sockets on its lane (host pre-flight "
-                "negative, or a per-call lane demotion observed as "
-                "EPERM at socket setup) — using the "
-                "inherited-socketpair transport"
+                "ghidra server: pathname transport unavailable "
+                "(socket creation denied or socket path too long) — "
+                "using the inherited-socketpair transport"
             )
             parent_sock, child_sock = socket.socketpair()
             self._child_sock = child_sock

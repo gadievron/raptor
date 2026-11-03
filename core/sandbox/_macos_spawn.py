@@ -217,6 +217,80 @@ _PS_TIMEOUT_S = 10
 
 
 
+# Resolve only Apple's fixed system developer shims. Arbitrary target tools
+# must never be executed by the parent while preparing the sandbox.
+_APPLE_DEVELOPER_SHIMS = frozenset({
+    "cc", "c++", "gcc", "g++", "clang", "clang++", "ld", "ar", "nm",
+    "ranlib", "strip", "make", "git", "swift", "swiftc",
+})
+
+
+def _xcrun_path(*args: str) -> str | None:
+    """Probe the installed system toolchain outside Seatbelt, never a target.
+
+    xcrun can write its lookup cache even with xcrun_nocache set. Run only
+    fixed metadata queries here; compilation and all target arguments remain
+    inside the original sandbox with its original write restrictions.
+    """
+    from core.sandbox import seatbelt
+    try:
+        result = subprocess.run(
+            ["/usr/bin/xcrun", "--sdk", "macosx", *args],
+            cwd="/", env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+            capture_output=True, text=True, timeout=10,
+        )
+        path = result.stdout.strip()
+        if result.returncode or not path.startswith("/") or "\n" in path:
+            return None
+        resolved = os.path.realpath(path)
+        roots = seatbelt._developer_toolchain_read_dirs()
+        if not any(os.path.isdir(root) and
+                   os.path.commonpath((resolved, os.path.realpath(root))) == os.path.realpath(root)
+                   for root in roots):
+            return None
+        # Preserve clang++/c++ argv[0]: resolving its symlink to clang
+        # would silently change the driver's C++ linking mode.
+        return path if os.path.exists(resolved) else None
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+
+
+def _prepare_apple_tool(cmd: list[str], child_env: dict[str, str]) -> list[str]:
+    """Replace a system developer shim, including an inspection env prefix."""
+    import shutil
+    command = list(cmd)
+    if not command:
+        return command
+    index = 0
+    if command[0] in ("/usr/bin/env", "/bin/env"):
+        index = 1
+        while index < len(command) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", command[index]):
+            index += 1
+        if index == len(command) or command[index].startswith("-"):
+            return command
+    executable = command[index]
+    name = os.path.basename(executable)
+    resolved = (executable if os.path.isabs(executable) else
+                shutil.which(executable, path=child_env.get("PATH", "/usr/bin:/bin")))
+    system_shim = name in _APPLE_DEVELOPER_SHIMS and resolved == f"/usr/bin/{name}"
+    if not system_shim and name != "rustc":
+        return command
+    real_tool = _xcrun_path("--find", name) if system_shim else None
+    if real_tool is not None:
+        command[index] = real_tool
+    # Rust and compiler drivers otherwise invoke xcrun again to discover the
+    # SDK, or /usr/bin/cc when linking. Resolve those metadata dependencies too.
+    if name in {"cc", "c++", "gcc", "g++", "clang", "clang++", "rustc", "swift", "swiftc"}:
+        if "SDKROOT" not in child_env:
+            sdk = _xcrun_path("--show-sdk-path")
+            if sdk is not None:
+                child_env["SDKROOT"] = sdk
+        compiler = real_tool or _xcrun_path("--find", "clang")
+        if compiler is not None:
+            child_env["PATH"] = os.path.dirname(compiler) + os.pathsep + child_env.get("PATH", "/usr/bin:/bin")
+    return command
+
+
 def _safe_probe_env() -> dict:
     """Scrubbed allowlist env for the parent-side ps/sysctl probes —
     binaries are invoked by absolute path, but env steering
@@ -1004,9 +1078,6 @@ def run_sandboxed(cmd: list[str], *,
         except OSError:
             pass
         child_env["TMPDIR"] = _scratch_tmp
-        # Apple compiler shims otherwise access their per-user lookup cache
-        # outside this call's write grant, even when TMPDIR is redirected.
-        child_env["xcrun_nocache"] = "1"
     elif exclude_tmp_baseline:
         logger.warning(
             "exclude_tmp_baseline without output=: tmp writes are "
@@ -1126,6 +1197,7 @@ def run_sandboxed(cmd: list[str], *,
     #    It runs UNSANDBOXED, so its stdlib reads are never restricted.
     import sys as _sys
     _py = _sys.executable or "/usr/bin/python3"
+    cmd = _prepare_apple_tool(list(cmd), child_env)
     _inner = ["/bin/sh", "-c", 'printf K >&3; exec 3>&-; exec "$@"',
               "raptor-seatbelt-rdy"] + list(cmd)
     _sandboxed = [SANDBOX_EXEC, "-p", profile, "--"] + _inner
