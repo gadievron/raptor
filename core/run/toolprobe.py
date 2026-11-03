@@ -17,6 +17,9 @@ module fixes once:
   exec'd the BARE tool name, letting a PATH rewrite between check and
   exec swap the binary (the race packages/coccinelle/runner.py
   documents). Probes here exec the resolved absolute path.
+* **Working directory**: version probes run from the filesystem root,
+  stopping project/ancestor configuration discovery before tool startup.
+  Relative PATH results are pinned absolute before changing directory.
 * **Output access**: tools print versions to stdout or stderr
   (``java -version``!) — :attr:`ToolInfo.first_line` implements the
   common ``stdout-else-stderr`` first-line convention; the raw streams
@@ -34,6 +37,7 @@ about this module's state. :func:`reset_probe_cache` is the test hook.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -125,13 +129,15 @@ def probe(
         info: ToolInfo | None = None
     else:
         try:
+            path = os.path.abspath(path)
             proc = subprocess.run(
                 [path, *args],
                 capture_output=True,
                 text=True,
                 check=False,
                 timeout=timeout,
-                env=safe_subprocess_env(),
+                cwd=os.sep,
+                env=safe_subprocess_env(strip_target_markers=True),
             )
             # Retention cap: probes exec whatever PATH resolves, and a
             # hostile tool can answer --version with an arbitrarily

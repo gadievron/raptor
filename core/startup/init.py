@@ -332,15 +332,12 @@ def _cached_cli_version(binary: str) -> str | None:
             and isinstance(hit.get("version"), str):
         return hit["version"]
 
-    try:
-        from core.config import RaptorConfig
-        env = RaptorConfig.get_safe_env()
-    except Exception:  # noqa: BLE001
-        env = None
+    from core.security.env_sanitisation import safe_subprocess_env
+    env = safe_subprocess_env(strip_target_markers=True)
     try:
         proc = subprocess.run(
             [real, "--version"], capture_output=True, text=True,
-            check=False, timeout=15, env=env,
+            check=False, timeout=15, env=env, cwd=os.sep,
         )
     except (OSError, subprocess.SubprocessError):
         return None
