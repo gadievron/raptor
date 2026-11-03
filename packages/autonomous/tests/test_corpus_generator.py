@@ -8,9 +8,17 @@ from unittest.mock import patch
 from packages.autonomous.corpus_generator import CorpusGenerator
 
 
+class _FakeStringsForSourceTests:
+    returncode = 0
+    stdout = "dummy\n"
+    stderr = ""
+
+
 class TestCorpusGenerator(unittest.TestCase):
 
-    def test_discovers_documented_command_grammar_and_generates_seeds(self):
+    @patch("packages.autonomous.corpus_generator._inspect_binary",
+           return_value=_FakeStringsForSourceTests())
+    def test_discovers_documented_command_grammar_and_generates_seeds(self, _inspect):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             binary = root / "target"
@@ -34,7 +42,9 @@ class TestCorpusGenerator(unittest.TestCase):
             self.assertTrue(any(data.startswith(b"HEAP:") for data in seed_data))
             self.assertTrue(any(data.startswith(b"JSON:") for data in seed_data))
 
-    def test_discovers_strcmp_command_tokens_from_source(self):
+    @patch("packages.autonomous.corpus_generator._inspect_binary",
+           return_value=_FakeStringsForSourceTests())
+    def test_discovers_strcmp_command_tokens_from_source(self, _inspect):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             binary = root / "target"

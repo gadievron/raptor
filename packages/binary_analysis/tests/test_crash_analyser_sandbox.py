@@ -67,11 +67,12 @@ class TestAddr2lineRunsInsideTheSandbox:
         assert file_line == "/src/parser.c:42"
         assert len(sandbox_calls) == 1
         argv, kwargs = sandbox_calls[0]
-        assert argv[0] == "addr2line"
+        assert argv[9] == "addr2line"
         assert argv[-1] == "0x401000"
         assert str(binary.resolve()) in argv
         assert kwargs["block_network"] is True
-        assert kwargs["target"] == str(binary.resolve().parent)
+        assert kwargs["readable_paths"] == [str(binary.resolve().parent)]
+        assert kwargs["target"] == kwargs["output"] == kwargs["cwd"]
 
     def test_unavailable_tool_short_circuits_without_spawn(
             self, tmp_path, monkeypatch):

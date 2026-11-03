@@ -219,7 +219,8 @@ class TestPinFails:
             return _verdicts(bp) if bp == good else {}
 
         inv = _inventory()
-        with patch(_CLASSIFY, side_effect=classify):
+        with patch(_CLASSIFY, side_effect=classify), \
+                patch("core.analysis.binary_oracle.read_build_id", return_value=""):
             enrich_inventory_with_binary_oracle(
                 inv, [good, empty], identity_pins={str(empty): None})
         summary = inv["binary_oracle"]

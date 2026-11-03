@@ -54,7 +54,7 @@ def test_demangle_confines_filesystem(sandbox_calls: list[dict[str, Any]]):
 
     assert result == {"_Z3foov": "foo()"}
     [call] = sandbox_calls
-    assert call["cmd"] == ["c++filt"]
+    assert call["cmd"][9:] == ["c++filt"]
     assert call["block_network"] is True
     assert call["output"]  # write-side confinement engaged
     assert call["output_existed"] is True

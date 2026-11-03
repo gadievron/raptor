@@ -113,8 +113,8 @@ def _run(argv: list[str], timeout: int = 60,
     parity with the unsandboxed run was verified 2026-08-15; r2 already
     gets the same treatment in ``binary_oracle_edges``).
 
-    ``binary`` scopes the read side: its parent directory becomes the
-    sandbox ``target`` so the tool can read the file under mount-ns.
+    ``binary`` scopes reads to its input directory. Writes, HOME and cwd
+    use private scratch; the shared untrusted floor governs execution.
     """
     return _run_status(argv, timeout=timeout, binary=binary)[0]
 
@@ -129,15 +129,19 @@ def _run_status(argv: list[str], timeout: int = 60,
     # Lazy import — keep the classifier independently importable in
     # unit tests that stub the sandbox module.
     from core.sandbox import run as _sandbox_run
-    target = str(Path(binary).resolve().parent) if binary else None
+    from core.binary._inspection_policy import inspection_command, inspection_options
+    from core.security.env_sanitisation import subprocess_tmpdir
+    if binary is not None:
+        argv = [str(Path(binary).resolve()) if str(arg) == str(binary) else arg for arg in argv]
     try:
         # errors="replace": tool output over a malformed/hostile ELF can
         # carry non-UTF-8 bytes; the default strict decode would raise
         # UnicodeDecodeError instead of degrading to "no evidence".
-        proc = _sandbox_run(argv, block_network=True, target=target,
-                            capture_output=True, text=True,
-                            encoding="utf-8", errors="replace",
-                            timeout=timeout)
+        with tempfile.TemporaryDirectory(prefix="raptor-bininspect-", dir=subprocess_tmpdir()) as scratch:
+            proc = _sandbox_run(inspection_command(argv, scratch), **inspection_options(binary, argv[0], scratch),
+                                stdin=subprocess.DEVNULL,
+                                capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as e:
         logger.debug("binary_oracle: %s failed: %s", argv[0], e)
         return "", False
@@ -230,15 +234,17 @@ def _stream(argv: list[str], timeout: int,
     """
     from core.sandbox import run as _sandbox_run
     from core.security.env_sanitisation import subprocess_tmpdir
-    target = str(Path(binary).resolve().parent) if binary else None
+    from core.binary._inspection_policy import inspection_command, inspection_options
+    if binary is not None:
+        argv = [str(Path(binary).resolve()) if str(arg) == str(binary) else arg for arg in argv]
     with tempfile.TemporaryDirectory(prefix="raptor-bo-stream-", dir=subprocess_tmpdir()) as td, \
             _owned_output(td) as output_fd:
         wrapper = ["bash", "-c", 'exec 1>&"$1"; shift; exec "$@"',
                    "bo-stream", str(output_fd), *argv]
         try:
             proc = _sandbox_run(
-                wrapper, block_network=True, target=target, output=td,
-                strict_env=True, stdin=subprocess.DEVNULL,
+                inspection_command(wrapper, td), **inspection_options(binary, argv[0], td),
+                stdin=subprocess.DEVNULL,
                 # The newly created file is within output= and passes the
                 # ordinary descriptor policy; no capability waiver is needed.
                 pass_fds=(output_fd,),
@@ -603,32 +609,26 @@ def _demangle_linkage_names(linkage_names: Iterable[str]) -> dict[str, str]:
     seen = sorted({n for n in linkage_names if n})
     if not seen or not shutil.which("c++filt"):
         return {}
-    # Full sandbox, same rationale as _run: the mangled names being
-    # demangled are attacker-derived strings from the binary's DWARF.
-    # input= routes through the subprocess+preexec sandbox path.
-    # c++filt reads nothing and writes nothing beyond stdin/stdout, so
-    # a throwaway scratch dir as output= plus restrict_reads=True is
-    # the whole filesystem surface: writes confined to the scratch
-    # dir, reads confined to the system allowlist (toolchain + libc —
-    # all c++filt needs). Without them the sandbox applies no
-    # filesystem confinement (bare-run posture) and a c++filt parser
-    # bug over hostile mangled bytes would execute with the
-    # filesystem reachable.
+    # Mangled names are attacker-derived input too. Use the same private
+    # workspace and untrusted floor as file-based inspection, without any
+    # target-directory read grant. The sandbox spools input into fd 0.
     from core.sandbox import run as _sandbox_run
+    from core.binary._inspection_policy import inspection_command, inspection_options
+    from core.security.env_sanitisation import subprocess_tmpdir
     try:
         # errors="replace": mangled names are attacker-derived bytes; a
         # non-UTF-8 c++filt echo must degrade, not raise mid-classify.
         with tempfile.TemporaryDirectory(
-                prefix="raptor-bo-demangle-") as scratch:
+                prefix="raptor-bo-demangle-", dir=subprocess_tmpdir()) as scratch:
             proc = _sandbox_run(
-                ["c++filt"], block_network=True,
-                restrict_reads=True,
-                output=scratch,
+                inspection_command(["c++filt"], scratch), **inspection_options(None, "c++filt", scratch),
                 input="\n".join(seen),
                 capture_output=True, text=True,
                 encoding="utf-8", errors="replace", timeout=30,
             )
     except (OSError, subprocess.TimeoutExpired):
+        return {}
+    if proc.returncode != 0:
         return {}
     lines = proc.stdout.splitlines()
     if len(lines) != len(seen):

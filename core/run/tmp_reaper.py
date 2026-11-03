@@ -170,6 +170,7 @@ _DIR_PREFIXES = (
     # survival past the floor means the process died mid-batch
     # (SIGKILL/OOM skip __exit__).
     "raptor-bo-demangle-",
+    "raptor-bininspect-",
     # Corpus excerpt trees (core/audit/corpus/run_corpus.py); ownership
     # passes to the corpus loop, released in its finally. The owner
     # holds a scratch keepalive while live (excerpt trees are written
