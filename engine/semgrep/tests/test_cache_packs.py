@@ -480,7 +480,8 @@ def test_verified_import_rejects_before_writing(tmp_path, monkeypatch, mutation)
         bundle.write_bytes(_make_bundle(members))
         if mutation == 'duplicate':
             with zipfile.ZipFile(bundle, 'a') as zf:
-                zf.writestr('c.p.jwt.json', members['c.p.jwt.json'])
+                with pytest.warns(UserWarning, match=r"^Duplicate name: 'c\.p\.jwt\.json'$"):
+                    zf.writestr('c.p.jwt.json', members['c.p.jwt.json'])
         digest = hashlib.sha256(bundle.read_bytes()).hexdigest()
     with pytest.raises(SystemExit):
         mod.cmd_import(argparse.Namespace(zipfile=str(bundle), sha256=digest))
