@@ -48,7 +48,7 @@ from .prep_cache import (
     source_fingerprint as _source_fingerprint,
     write_prep_cache,
 )
-from .consistency_dimensions import DIMENSION_ORDERING, CallEventMemo
+from .consistency_dimensions import DIMENSION_ORDERING, CallEventMemo, FunctionSpanMemo
 from .consistency_stats import (
     Floors,
     floor_overrides_from_run_config,
@@ -836,6 +836,8 @@ def run_consistency_prepass(
         logger.debug("consistency prepass: learned pairs failed",
                      exc_info=True)
 
+    function_span_memo = FunctionSpanMemo()
+
     # ── cleanup dimension (§3.2) ────────────────────────────────────
     if not _over_budget():
         try:
@@ -843,6 +845,7 @@ def run_consistency_prepass(
             cleanup_devs = (
                 detect_cleanup_deviations(
                     source_texts, learned_pairs,
+                    _span_memo=function_span_memo,
                     min_group=int(floors.value("cleanup.min_group")),
                     ratio=float(floors.value("cleanup.ratio")),
                 )
@@ -1016,6 +1019,7 @@ def run_consistency_prepass(
             )
             iface_devs = detect_interface_deviations(
                 source_texts, peer_groups,
+                _span_memo=function_span_memo,
                 min_group=int(floors.value("interface.min_group")),
                 ratio=float(floors.value("interface.ratio")),
             )
@@ -1392,6 +1396,7 @@ def run_consistency_prepass(
             from .consistency_verify import guard_presence_verdict
             guard_devs = detect_guard_presence_deviations(
                 source_texts,
+                _span_memo=function_span_memo,
                 min_sites=int(
                     floors.value("guard-presence.min_sites"),
                 ),
@@ -1500,6 +1505,8 @@ def run_consistency_prepass(
                     line=dev.line,
                     security_relevant=True,
                 ))
+
+    del function_span_memo  # Release bodies after their last shared consumer.
 
     # ── guard-predicate dimension — adjudicated, SMT escalation ─────
     if not _over_budget():
