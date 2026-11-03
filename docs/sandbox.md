@@ -509,6 +509,21 @@ a CodeQL pack download) but should not get open network.
   exfiltration) when namespaces are unavailable; environment variables
   alone as the last resort. Runs record which tier engaged.
 
+### Binary inspection
+
+Read-only binary inspection and the binary oracle treat ELF/DWARF parsing as
+untrusted work, even though RAPTOR selects the tools. Their sandbox allows
+reads of system runtime files, the binary's directory (including sibling debug
+files), and declared tool runtime paths. HOME, working directory and temporary
+files use disposable scratch; the input directory remains read-only.
+
+Keep binaries in a dedicated directory. A binary directly in HOME or the shared
+temporary base is refused because admitting its parent would expose unrelated
+files. The usual sandbox floor and explicit consent settings apply. An isolation
+refusal is reported as a sandbox error, rather than an empty analysis result.
+For a toolchain installed outside standard locations, use `--sandbox-tool-path`
+to declare any additional runtime directories it needs.
+
 ### Request-line parser jail
 
 The proxy never interprets a client's raw request-line bytes in its

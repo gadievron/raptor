@@ -1,15 +1,13 @@
 """Tests for core.binary.inspect — sandboxed binutils inspection.
 
-Pin the consolidated contract: allowlist enforcement, full-sandbox
-invocation shape (block_network + Landlock target scoped to the
-binary's parent — the discipline binary_oracle proved and the other
-inspection families lacked), never-raise failure semantics, and raw
-byte-identical stream passthrough.
+Pin allowlist enforcement, read-only input grants, private scratch,
+failure semantics and raw stream passthrough.
 """
 
 from __future__ import annotations
 
 import shutil
+import sys
 import subprocess
 from unittest.mock import MagicMock, patch
 
@@ -46,9 +44,10 @@ class TestInvocationShape:
                 returncode=0, stdout="OUT", stderr="")
             result = readelf(binary, "-h", timeout=5)
             args, kwargs = mock_run.call_args
-        assert args[0] == ["readelf", "-h", str(binary.resolve())]
+        assert args[0][9:] == ["readelf", "-h", str(binary.resolve())]
         assert kwargs["block_network"] is True
-        assert kwargs["target"] == str(binary.parent.resolve())
+        assert kwargs["readable_paths"] == [str(binary.parent.resolve())]
+        assert kwargs["target"] == kwargs["output"] == kwargs["cwd"]
         assert kwargs["timeout"] == 5
         assert result == InspectResult(returncode=0, stdout="OUT", stderr="")
 
@@ -60,7 +59,7 @@ class TestInvocationShape:
                 returncode=0, stdout="", stderr="")
             nm(binary, "-D", "-C")
             argv = mock_run.call_args[0][0]
-        assert argv == ["nm", "-D", "-C", str(binary.resolve())]
+        assert argv[9:] == ["nm", "-D", "-C", str(binary.resolve())]
 
     def test_relative_dash_leading_name_resolved_in_argv(
             self, tmp_path, monkeypatch):
@@ -93,11 +92,12 @@ class TestTrailingOperands:
             result = addr2line(binary, "0x401000", timeout=5)
             argv = mock_run.call_args[0][0]
             kwargs = mock_run.call_args[1]
-        assert argv == [
+        assert argv[9:] == [
             "addr2line", "-f", "-C", "-e", str(binary.resolve()), "0x401000",
         ]
         assert kwargs["block_network"] is True
-        assert kwargs["target"] == str(binary.parent.resolve())
+        assert kwargs["readable_paths"] == [str(binary.parent.resolve())]
+        assert kwargs["target"] == kwargs["output"] == kwargs["cwd"]
         assert result.returncode == 0
 
     def test_option_shaped_operand_refused(self, tmp_path):
@@ -137,7 +137,8 @@ class TestFailureSemantics:
         assert "Not an ELF" in result.stderr
 
 
-@pytest.mark.skipif(not HAVE_READELF, reason="readelf not installed")
+@pytest.mark.integration
+@pytest.mark.skipif(not HAVE_READELF or sys.platform != "linux", reason="Linux readelf required")
 class TestRealBinary:
     def test_readelf_header_on_real_elf(self):
         # /bin/ls exists on every host this suite supports; the same

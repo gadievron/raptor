@@ -1,31 +1,21 @@
 """Sandboxed binutils inspection — the one way to run readelf/nm-class
 tools over a binary of unverified provenance.
 
-Three families of ELF-inspection code grew independently
-(``core/analysis/binary_oracle``, ``packages/exploit_feasibility``,
-``packages/binary_analysis/crash_analyser``) with drifting execution
-discipline: the binary_oracle runs binutils under the FULL sandbox
-(network blocked, Landlock scoped to the binary's parent dir, seccomp,
-rlimits — rationale: the tool binaries are RAPTOR-picked but the BYTES
-they parse come from the target's build tree or an operator-supplied
-path, and binutils' ELF/DWARF parsers have a long CVE history), while
-the other two families ran the same tools with ``run_trusted`` (safe
-env + rlimits only, no isolation).
+Trusted tools parse attacker-controlled ELF/DWARF bytes. Inspection admits
+system runtime paths, the input directory and declared tool runtime; HOME,
+cwd and writes use disposable scratch. The shared untrusted floor governs
+backend selection and explicit operator consent.
 
-This module adopts the strict posture as the shared default and hands
-back RAW streams so each consumer's parsing stays byte-identical —
-parse consolidation is deliberately out of scope (binary_oracle's
-parses are corpus-precision-validated; it keeps its own ``_run`` /
-``_stream`` for now and is the convergence template, not a consumer).
-
-Allowlisted read-only tools only; list-based argv; never raises —
-execution failure surfaces as ``returncode=None`` with empty streams.
+Raw streams remain available to existing consumers. Ordinary subprocess
+failures return ``returncode=None``; isolation refusals propagate so callers
+cannot mistake an unavailable sandbox for clean analysis.
 """
 
 from __future__ import annotations
 
 import logging
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -53,7 +43,7 @@ class InspectResult:
     """One tool invocation's outcome.
 
     ``returncode is None`` means the invocation itself failed (tool
-    missing, sandbox setup failure, timeout) — distinct from the tool
+    missing or timeout) — distinct from the tool
     running and rejecting the input (non-zero returncode, e.g. readelf
     on a Mach-O). Consumers that only substring-scan ``stdout`` can
     ignore the distinction; consumers that branch on "tool answered"
@@ -75,9 +65,8 @@ def inspect_binary(
 ) -> InspectResult:
     """Run ``tool *args binary *operands`` under the full sandbox.
 
-    The binary's parent directory becomes the sandbox ``target`` so
-    the tool can read the file under the mount namespace; network is
-    blocked. Never raises on execution failure (``returncode=None``);
+    The input directory is read-only; HOME, cwd and writes use private
+    scratch. Network is blocked and the shared untrusted floor applies. Ordinary subprocess failures do not raise (``returncode=None``);
     raises ``ValueError`` only on caller-contract violations (tool not
     allowlisted, option-shaped operand).
 
@@ -104,18 +93,19 @@ def inspect_binary(
         # dash-leading or @-leading (binutils option / response-file
         # expansion inside the sandbox); an absolute path is inert.
         resolved = Path(binary).resolve()
-        target = str(resolved.parent)
     except OSError:
         return InspectResult(returncode=None)
     try:
-        proc = _sandbox_run(
-            [tool, *args, str(resolved), *operands],
-            block_network=True,
-            target=target,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
+        from core.binary._inspection_policy import inspection_command, inspection_options
+        from core.security.env_sanitisation import subprocess_tmpdir
+        with tempfile.TemporaryDirectory(prefix="raptor-bininspect-", dir=subprocess_tmpdir()) as scratch:
+            proc = _sandbox_run(
+                inspection_command([tool, *args, str(resolved), *operands], scratch),
+                **inspection_options(resolved, tool, scratch),
+                stdin=subprocess.DEVNULL,
+                capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=timeout,
+            )
     except (OSError, subprocess.SubprocessError) as exc:
         logger.debug("core.binary.inspect: %s failed on %s: %s",
                      tool, binary, exc)
