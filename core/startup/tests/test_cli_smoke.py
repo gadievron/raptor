@@ -220,7 +220,9 @@ def test_invalid_mode_errors():
         ("scan", "repo"),
         ("agentic", "repo"),
         ("fuzz", "binary"),
-        ("codeql", "repo"),
+        # Cold CodeQL startup plus lifecycle teardown exceeds the fast-tier
+        # budget; preserve this full dispatcher path in slow CI.
+        pytest.param("codeql", "repo", marks=pytest.mark.slow),
     ],
 )
 def test_missing_required_arg_errors(mode: str, required_keyword: str):
@@ -235,7 +237,8 @@ def test_missing_required_arg_errors(mode: str, required_keyword: str):
     # 20 s tolerates the ~6 s python startup + lifecycle-wrapper
     # overhead before the inner script's argparse fires (codeql/fuzz
     # routes spend ~11 s in the wrapper before the missing-arg error
-    # is propagated up). Treat TimeoutExpired as a test failure path.
+    # is propagated up). On timeout, retain captured argparse diagnostics
+    # for the assertions below.
     try:
         r = _run_raptor(mode, timeout=20)
         combined = (r.stdout + r.stderr).lower()
