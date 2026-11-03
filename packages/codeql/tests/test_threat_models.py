@@ -11,6 +11,8 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 
@@ -204,6 +206,9 @@ class TestCliFlags:
         assert "--threat-models" in r.stdout
         assert "--no-threat-models" in r.stdout
 
+    # Full CLI startup imports the real orchestration stack and can exceed
+    # the default-tier budget under parallel load.
+    @pytest.mark.slow
     def test_raptor_codeql_parser_accepts_flags(self):
         import subprocess
         repo_root = Path(__file__).resolve().parents[3]
