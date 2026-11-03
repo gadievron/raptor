@@ -5604,9 +5604,18 @@ class TestSageRecallGate:
         per run, entirely orthogonal to the recall gate under test,
         and enough to trip the default-tier duration guard on a
         loaded CI runner."""
-        from core.audit import orchestrator as orch
+        from core.audit import capabilities, orchestrator as orch
+        from core.sage import hooks
         monkeypatch.setattr(orch, "_run_mechanical_detectors",
                             lambda *a, **k: ({}, set()))
+        # These gate cases do not exercise host tool discovery, background
+        # study, or observation recall. Keep those seams independent of
+        # installed tools and any operator SAGE service.
+        monkeypatch.setattr(capabilities, "probe_capabilities",
+                            lambda *a, **k: capabilities.AuditCapabilities())
+        monkeypatch.setattr(orch, "_study_consumer", lambda *a, **k: None)
+        monkeypatch.setattr(hooks, "recall_audit_observations",
+                            lambda *a, **k: [])
 
     def _run(self, tmp_path: Path, recall, *, config_kw=None):
         from unittest.mock import patch as _patch
@@ -5754,9 +5763,18 @@ class TestSageFpPrimer:
         per run, entirely orthogonal to the FP-primer injection under
         test, and enough to trip the default-tier duration guard on a
         loaded CI runner."""
-        from core.audit import orchestrator as orch
+        from core.audit import capabilities, orchestrator as orch
+        from core.sage import hooks
         monkeypatch.setattr(orch, "_run_mechanical_detectors",
                             lambda *a, **k: ({}, set()))
+        # These gate cases do not exercise host tool discovery, background
+        # study, or observation recall. Keep those seams independent of
+        # installed tools and any operator SAGE service.
+        monkeypatch.setattr(capabilities, "probe_capabilities",
+                            lambda *a, **k: capabilities.AuditCapabilities())
+        monkeypatch.setattr(orch, "_study_consumer", lambda *a, **k: None)
+        monkeypatch.setattr(hooks, "recall_audit_observations",
+                            lambda *a, **k: [])
 
     @staticmethod
     def _hash_for(target: Path, line: int) -> str:
