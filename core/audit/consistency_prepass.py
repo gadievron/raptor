@@ -48,7 +48,7 @@ from .prep_cache import (
     source_fingerprint as _source_fingerprint,
     write_prep_cache,
 )
-from .consistency_dimensions import DIMENSION_ORDERING
+from .consistency_dimensions import DIMENSION_ORDERING, CallEventMemo
 from .consistency_stats import (
     Floors,
     floor_overrides_from_run_config,
@@ -930,6 +930,8 @@ def run_consistency_prepass(
                 security_relevant=True,
             ))
 
+    call_event_memo = CallEventMemo()
+
     # ── ordering dimension (§3.5) — detection-grade throughout ──────
     if not _over_budget():
         try:
@@ -938,6 +940,7 @@ def run_consistency_prepass(
             )
             order_devs = detect_ordering_deviations(
                 source_texts, pairs=learned_pairs,
+                _event_memo=call_event_memo,
                 min_group=int(floors.value("ordering.min_group")),
                 ratio=float(floors.value("ordering.ratio")),
             )
@@ -1299,6 +1302,7 @@ def run_consistency_prepass(
             sanitize_devs = (
                 detect_sanitize_sink_deviations(
                     source_texts, sink_vocab, sanitizer_vocab,
+                    _event_memo=call_event_memo,
                     min_sites=int(
                         floors.value("sanitize-sink.min_sites"),
                     ),
@@ -1375,6 +1379,8 @@ def run_consistency_prepass(
                     line=dev.line,
                     security_relevant=True,
                 ))
+
+    del call_event_memo  # Release shared events after their last consumer.
 
     # ── bounds/null-guard presence dimension (§3.4) ─────────────────
     if not _over_budget():

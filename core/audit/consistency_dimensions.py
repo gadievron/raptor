@@ -1710,8 +1710,29 @@ def _call_arg_idents(call_node: Node, src: bytes) -> frozenset[str]:
     return frozenset(idents)
 
 
+# Operation-local reuse only. Large inputs/results retain the legacy
+# re-extraction path rather than extending their memory lifetime between
+# dimensions. These are admission limits, never analysis limits.
+_SHARED_EVENT_MAX_SOURCE_CHARS = 1_000_000
+_SHARED_EVENT_MAX_EVENTS = 4096
+
+
+@dataclass
+class CallEventMemo:
+    """Successful call-event extraction shared by one prepass.
+
+    Consumers only read events. Source items include order and exact text;
+    changed inputs miss. No trees or source-sized line lists are retained.
+    """
+
+    source_items: tuple[tuple[str, str], ...] = ()
+    events: dict[tuple[str, str], list[_CallEvent]] | None = None
+
+
 def _extract_call_events(
     source_texts: dict[str, str],
+    *,
+    _memo: CallEventMemo | None = None,
 ) -> dict[tuple[str, str], list[_CallEvent]]:
     """Ordered call events per (file, function), on the shared parse
     cache. Capped at ``_MAX_EVENTS_PER_FUNCTION`` events.
@@ -1720,11 +1741,23 @@ def _extract_call_events(
     (counted, logged) instead of aborting the dimension."""
     if not _TS_AVAILABLE:
         return {}
+    source_items = None
+    if _memo is not None:
+        if (len(source_texts) <= _SHARED_EVENT_MAX_EVENTS
+                and all(type(path) is str and type(source) is str
+                for path, source in source_texts.items())
+                and sum(map(len, source_texts.values())) <= _SHARED_EVENT_MAX_SOURCE_CHARS):
+            source_items = tuple(source_texts.items())
+            if _memo.events is not None and _memo.source_items == source_items:
+                return _memo.events
+        _memo.events = None
+        _memo.source_items = ()
     events: dict[tuple[str, str], list[_CallEvent]] = {}
     failed = 0
+    complete = True
     for file_path, source in source_texts.items():
         try:
-            _call_events_for_file(file_path, source, events)
+            complete = _call_events_for_file(file_path, source, events) and complete
         except Exception:
             failed += 1
             logger.debug("consistency: call-event extraction failed on "
@@ -1735,6 +1768,10 @@ def _extract_call_events(
             "that raised — event-based dimensions see a smaller "
             "source set", failed,
         )
+    if (_memo is not None and source_items is not None and not failed and complete
+            and sum(map(len, events.values())) <= _SHARED_EVENT_MAX_EVENTS):
+        _memo.source_items = source_items
+        _memo.events = events
     return events
 
 
@@ -1742,13 +1779,13 @@ def _call_events_for_file(
     file_path: str,
     source: str,
     events: dict[tuple[str, str], list[_CallEvent]],
-) -> None:
+) -> bool:
     tree, lang = parse_source_cached(file_path, source)
     if tree is None or lang is None:
-        return
+        return False
     call_types = _CALL_TYPES.get(lang, ())
     if not call_types:
-        return
+        return False
     src = source.encode("utf-8", errors="replace")
     lines = split_lines(source)
     # One read index per file: the per-site fallback would rebuild a
@@ -1782,6 +1819,7 @@ def _call_events_for_file(
                 if 1 <= line <= len(lines) else ""
             ),
         ))
+    return True
 
 
 @dataclass
@@ -1857,10 +1895,12 @@ def detect_ordering_deviations(
     pairs: list[LearnedPair] | None = None,
     min_group: int = ORDERING_MIN_GROUP,
     ratio: float = CONSISTENCY_RATIO,
+    _event_memo: CallEventMemo | None = None,
 ) -> list[OrderingDeviation]:
     """Ordering consistency comparator (§3.5). See the section
     docstring above for flavors, honesty rules and bounds."""
-    events = _extract_call_events(source_texts)
+    events = (_extract_call_events(source_texts) if _event_memo is None
+              else _extract_call_events(source_texts, _memo=_event_memo))
     if not events:
         return []
     acquires = {p.acquire for p in (pairs or [])}
@@ -2125,6 +2165,7 @@ def detect_sanitize_sink_deviations(
     *,
     min_sites: int = MIN_GROUP_SITES,
     ratio: float = CONSISTENCY_RATIO,
+    _event_memo: CallEventMemo | None = None,
 ) -> list[SanitizeSinkDeviation]:
     """Sanitize-before-sink comparator (§3.3).
 
@@ -2137,7 +2178,8 @@ def detect_sanitize_sink_deviations(
     """
     if not sinks or not sanitizers:
         return []
-    events = _extract_call_events(source_texts)
+    events = (_extract_call_events(source_texts) if _event_memo is None
+              else _extract_call_events(source_texts, _memo=_event_memo))
     if not events:
         return []
     sanitizer_set = frozenset(sanitizers)
