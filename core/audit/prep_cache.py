@@ -69,6 +69,25 @@ def source_fingerprint(source_texts: dict[str, str]) -> str:
     )
 
 
+def source_fingerprint_from_hashes(content_shas: dict[str, str]) -> str:
+    """The same fingerprint using already-computed per-source SHA-256s.
+
+    Hashes must be locally computed over the SAME immutable source strings
+    with UTF-8/errors=replace, not read from unverified cache records.
+    Preserve the original sorted path + NUL + binary digest framing;
+    neither fingerprint bytes nor the cache's authentication change.
+    """
+    h = hashlib.sha256()
+    for path in sorted(content_shas):
+        digest = bytes.fromhex(content_shas[path])
+        if len(digest) != 32:
+            raise ValueError("source fingerprint requires SHA-256 digests")
+        h.update(path.encode("utf-8", "replace"))
+        h.update(b"\0")
+        h.update(digest)
+    return h.hexdigest()
+
+
 def prep_cache_path(out_dir: Path | str, filename: str) -> Path:
     return Path(out_dir) / PREP_CACHE_DIRNAME / filename
 
