@@ -277,6 +277,7 @@ _DIR_PREFIXES = (
     "raptor-describe-",
     "raptor-doctor-probe-",
     "raptor-feas-seccomp-",
+    "raptor-feas-loader-",
     "raptor-gcov-",
     "raptor-joern-uds-",
     "raptor-ls-remote-",
