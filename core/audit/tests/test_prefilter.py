@@ -4491,12 +4491,10 @@ class TestSingleAssignmentHeaders:
          + "db.Query(q); \n}\n"),
     ], ids=["java-one-line-800k-uses", "java-4000-declarators-long-statement",
             "go-one-line-800k-uses"])
-    @pytest.mark.slow
     def test_binding_index_is_linear(self, tmp_path, fp, src):
         """Hundreds of thousands of uses on one line finish within the time
         bound."""
-        # Million-character inputs guard against super-linear blowup under
-        # the explicit 30-second bound, rather than the fast-tier budget.
+        # Guards against catastrophic (super-linear) blowup, not speed.
         import time
         t0 = time.perf_counter()
         _rule_ids(tmp_path, fp, src)

@@ -72,7 +72,7 @@ class TestReachesOrchestratorConfig:
         )
         config = _build_orchestrator_config(
             opts, client=None, models=["some-model"],
-            mode=ReviewMode.ENSEMBLE,
+            mode=ReviewMode.SECURITY,
         )
         assert config.max_workers == 7
         assert _resolve_max_workers(config) == 7
@@ -86,7 +86,7 @@ class TestReachesOrchestratorConfig:
         opts = AuditPipelineOpts(target_path=tmp_path, out_dir=tmp_path)
         config = _build_orchestrator_config(
             opts, client=None, models=["some-model"],
-            mode=ReviewMode.ENSEMBLE,
+            mode=ReviewMode.SECURITY,
         )
         assert config.max_workers == 0
 

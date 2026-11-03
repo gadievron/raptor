@@ -139,14 +139,14 @@ class TestRunHeader:
             SimpleNamespace(source=SimpleNamespace(repo="openssl")),
         ]
         args = SimpleNamespace(
-            profile="cold", mode="ensemble", triage="off",
+            profile="cold", mode="security", triage="off",
             prefilter="off", scope="excerpt",
         )
         _print_run_header(labels, args, [""])
         out = capsys.readouterr().out
         assert "Corpus run starting" in out
         assert "profile=cold" in out
-        assert "mode=ensemble" in out
+        assert "mode=security" in out
         assert "model=default" in out
         assert "pipeline-tree=" in out
         assert "labels=2" in out and "groups=2" in out

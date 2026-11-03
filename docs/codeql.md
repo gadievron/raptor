@@ -697,20 +697,6 @@ endpoint checks can remain reportable instead of rounded bounds hiding a
 truncation. Same-width signedness changes and implicit casts remain outside
 this rule's scope.
 
-A separate allocation-size query checks implicit narrowing in assignments,
-initializers and other integral conversions. It reports when the narrowed
-value influences an allocation size within the same function, including
-arithmetic such as bitmap rounding and shifting. A proved bound on the value
-before conversion suppresses the alert; checking the already narrowed value
-does not prove that no truncation occurred. Unrelated allocations and allocation
-flags do not count as size uses.
-
-This query covers common C allocation functions, kernel allocation functions
-and C++ array allocations. It does not follow size values across function
-boundaries, and same-width signedness changes remain outside its scope.
-An alert identifies a possible undersized allocation; confirming an overflow
-also requires checking the later accesses and their bounds.
-
 The native C/C++ tests use self-contained fixed-target declarations for the
 standalone test extractor. CI also compiles the same case bodies with real
 system headers. The separate C/C++ job runs on the full nightly and can be
