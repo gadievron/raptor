@@ -1,4 +1,4 @@
-"""Semgrep nightly cases have one visible owner in scheduled and full runs."""
+"""Nightly routing keeps focused suites and native crash coverage explicit."""
 
 import ast
 import importlib.util
@@ -75,8 +75,9 @@ def _commands(job):
 
 
 @pytest.mark.parametrize("event,suite,expected", [
-    ("schedule", "", {"slow-integration", "java-query-regressions", "cpp-query-regressions", "semgrep-regressions"}),
-    ("workflow_dispatch", "full", {"slow-integration", "java-query-regressions", "cpp-query-regressions", "semgrep-regressions"}),
+    ("schedule", "", {"slow-integration", "java-query-regressions", "cpp-query-regressions", "semgrep-regressions", "intentional-crashes"}),
+    ("workflow_dispatch", "full", {"slow-integration", "java-query-regressions", "cpp-query-regressions", "semgrep-regressions", "intentional-crashes"}),
+    ("workflow_dispatch", "crashes", {"intentional-crashes"}),
     ("workflow_dispatch", "semgrep", {"semgrep-regressions"}),
     ("workflow_dispatch", "java", {"java-query-regressions"}),
     ("workflow_dispatch", "cpp", {"cpp-query-regressions"}),
@@ -110,6 +111,38 @@ def test_engine_cases_are_excluded_from_both_broad_lanes_and_retry():
 def test_dedicated_job_rejects_empty_or_skipped_results(tmp_path, body, success):
     job = _jobs()["semgrep-regressions"]
     script = next(s["run"] for s in job["steps"] if "scan-regressions.xml\" <<'PY'" in s.get("run", ""))
+    guard = script.split("<<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+    report = tmp_path / "results.xml"
+    report.write_text(body)
+    process = subprocess.run([sys.executable, "-c", guard, str(report)],
+                             capture_output=True, text=True, timeout=5)
+    assert (process.returncode == 0) is success, process.stderr
+
+
+
+def test_crash_job_separates_opt_in_from_toolchain_checks():
+    commands = list(_commands(_jobs()["intentional-crashes"]))
+    native = [command for command in commands if "--run-crash-tests" in command]
+    assert len(native) == 1
+    assert native[0][native[0].index("-m") + 1] == "intentional_crash"
+    assert "core/symbolic/tests" in native[0]
+    toolchain = [command for command in commands if "--run-crash-tests" not in command]
+    assert len(toolchain) == 1
+    assert any("test_apple_compiler_can_load_sdk_under_read_restrictions" in arg
+               for arg in toolchain[0])
+
+
+@pytest.mark.parametrize("body,success", [
+    pytest.param('<testsuite><testcase/><testcase/></testsuite>', True, id="two-executed"),
+    pytest.param('<testsuite/>', False, id="empty"),
+    pytest.param('<testsuite><testcase/></testsuite>', False, id="only-one"),
+    pytest.param('<testsuite><testcase/><testcase><skipped/></testcase></testsuite>',
+                 False, id="native-case-skipped"),
+])
+def test_crash_job_requires_real_native_coverage(tmp_path, body, success):
+    job = _jobs()["intentional-crashes"]
+    script = next(s["run"] for s in job["steps"]
+                  if 'intentional-crashes.xml" <<' in s.get("run", ""))
     guard = script.split("<<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
     report = tmp_path / "results.xml"
     report.write_text(body)
