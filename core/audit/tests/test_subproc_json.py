@@ -123,3 +123,30 @@ class TestZ3DispatchJson:
         assert result is not None
         assert result[0] is True  # guard insufficient for 256-byte dst
         assert isinstance(result[2], dict)
+
+
+@pytest.mark.parametrize('platform,limit_name,allowed', [
+    pytest.param('darwin', 'RLIMIT_AS', True, id='macos-address-space'),
+    pytest.param('linux', 'RLIMIT_AS', False, id='linux-address-space'),
+    pytest.param('darwin', 'RLIMIT_CPU', False, id='macos-cpu'),
+    pytest.param('darwin', 'RLIMIT_FSIZE', False, id='macos-file-size'),
+])
+def test_worker_limit_refusals_are_platform_and_resource_specific(monkeypatch, platform, limit_name, allowed):
+    import io
+    import resource
+    from types import SimpleNamespace
+    from core.audit import _json_child as worker
+
+    output = io.StringIO()
+    monkeypatch.setattr(worker, 'sys', SimpleNamespace(platform=platform, stderr=output))
+    monkeypatch.setattr(resource, 'getrlimit', lambda which: (resource.RLIM_INFINITY, resource.RLIM_INFINITY))
+    def refused(which, value):
+        raise ValueError('unsupported resource limit')
+    monkeypatch.setattr(resource, 'setrlimit', refused)
+    if allowed:
+        worker._limit(getattr(resource, limit_name), 2048)
+        assert 'not enforced' in output.getvalue()
+    else:
+        with pytest.raises(ValueError, match='unsupported resource limit'):
+            worker._limit(getattr(resource, limit_name), 2048)
+        assert output.getvalue() == ''

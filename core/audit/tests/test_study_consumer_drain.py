@@ -13,6 +13,7 @@ full historical cap.
 from __future__ import annotations
 
 import subprocess
+import sys
 import threading
 import time
 import types
@@ -156,7 +157,7 @@ class TestRunStudyPrepInterruptible:
     def test_completes_normally(self):
         q = StudyQueue()
         proc = _run_study_prep(
-            ["/bin/true"], env={}, timeout=30, study_queue=q,
+            [sys.executable, "-c", "pass"], env={}, timeout=30, study_queue=q,
         )
         assert proc.returncode == 0
 

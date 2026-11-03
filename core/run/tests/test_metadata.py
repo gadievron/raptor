@@ -1,6 +1,7 @@
 """Tests for run metadata lifecycle."""
 
 import unittest
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -276,7 +277,7 @@ def _dead_pid() -> int:
     reap it. Reuse in the microseconds before the check is possible in
     principle but not observed in practice."""
     import subprocess
-    proc = subprocess.Popen(["/bin/true"])
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
     proc.wait()
     return proc.pid
 

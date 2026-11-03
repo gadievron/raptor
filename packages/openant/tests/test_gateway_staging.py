@@ -965,7 +965,8 @@ class TestGatewayAgainstRealDispatcher(unittest.TestCase):
         creds = CredentialStore.__new__(CredentialStore)
         creds._keys = {"anthropic": "real-key-held-by-dispatcher"}
 
-        with tempfile.TemporaryDirectory() as td:
+        with tempfile.TemporaryDirectory(prefix="raptor-pytest-gateway-", dir="/tmp") as td, \
+                patch("core.llm.dispatcher.server._SERVICE_TMP_BASE", td):
             d = LLMDispatcher(run_id="oa-gw", creds=creds,
                               audit_path=Path(td) / "audit.jsonl")
             original = d._rules["anthropic"]

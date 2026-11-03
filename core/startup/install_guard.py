@@ -490,7 +490,10 @@ def precompile() -> None:
     sys.pycache_prefix = None
     sources = _bytecode_sources()
     first = list(islice(sources, 9))
-    workers = min(4, len(os.sched_getaffinity(0)))
+    try:
+        workers = min(4, len(os.sched_getaffinity(0)))
+    except (AttributeError, OSError):
+        workers = 1
     if len(first) < 9 or workers < 2:
         for path, cache, source in chain(first, sources):
             _save_bytecode(cache, _compile_bytecode(source, str(path)))
@@ -812,6 +815,14 @@ def main() -> int:
                 except OSError:
                     pass
     except (OSError, RuntimeError, ImportError, ValueError, TypeError) as exc:
+        if sys.platform != "linux":
+            # Platform refusal precedes /proc-based fd validation. Do not
+            # write its diagnostic into an inherited installation/control
+            # file on a host where that validation cannot run.
+            try:
+                _reject_stdio(str(exc))
+            except ProtectionError:
+                pass
         try:
             print(f"raptor: installation protection failed: {_term(exc)}\n"
                   "No frontend was started. Start a new terminal session without --protect-install for normal behavior.", file=sys.stderr)

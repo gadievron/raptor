@@ -353,6 +353,10 @@ def _contained_system_tmp(tmp_path_factory: pytest.TempPathFactory):
     with scratch_dir(
         f"raptor-pytest-{os.getpid()}-", env=os.environ,
     ) as session_tmp:
+        # macOS aliases /var and /tmp through /private. Keep fixture paths
+        # consistent with the canonical paths production boundaries return.
+        session_tmp = session_tmp.resolve()
+        os.environ["TMPDIR"] = str(session_tmp)
         tempfile.tempdir = str(session_tmp)
         try:
             yield
@@ -1319,3 +1323,19 @@ def expected_crash_runner():
     if reason:
         pytest.skip(reason)
     return run_expected_crash
+
+
+@pytest.fixture
+def raw_byte_filenames(tmp_path):
+    """Require on-disk non-UTF8 names without assuming a particular OS."""
+    import errno
+    probe = os.fsencode(tmp_path) + b'/raw-name-\xff'
+    try:
+        fd = os.open(probe, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except OSError as exc:
+        if exc.errno == errno.EILSEQ:
+            pytest.skip('filesystem cannot represent non-UTF8 filenames')
+        raise
+    else:
+        os.close(fd)
+        os.unlink(probe)

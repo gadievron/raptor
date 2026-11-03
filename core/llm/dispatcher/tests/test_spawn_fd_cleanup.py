@@ -10,6 +10,7 @@ parent for the process lifetime.
 from __future__ import annotations
 
 import os
+import sys
 from unittest.mock import MagicMock
 
 import pytest
@@ -55,7 +56,7 @@ def test_successful_spawn_still_closes_token_fd():
 
     proc = spawn_worker(
         dispatcher,
-        ["/bin/true"],
+        [sys.executable, "-c", "pass"],
         label="test-worker",
         env={"PATH": "/usr/bin"},
     )

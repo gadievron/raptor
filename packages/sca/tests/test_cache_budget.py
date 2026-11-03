@@ -33,7 +33,10 @@ def test_size_pruning_keeps_recently_used_entry(tmp_path):
     assert result.bytes_freed == 100
 
 
-def test_expired_entry_precedes_older_valid_entry(tmp_path):
+@pytest.mark.parametrize("no_noatime", [False, True], ids=["host-flags", "without-noatime"])
+def test_expired_entry_precedes_older_valid_entry(tmp_path, monkeypatch, no_noatime):
+    if no_noatime:
+        monkeypatch.delattr(budget.os, "O_NOATIME", raising=False)
     from core.json.cache import JsonCache, TTL_FOREVER
     cache = JsonCache(tmp_path)
     cache.put('q/valid', 'x' * 100, ttl_seconds=TTL_FOREVER)

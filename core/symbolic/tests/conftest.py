@@ -112,6 +112,8 @@ def compile_fixture(
     )
     if result.returncode != 0:
         pytest.skip(f"gcc: {result.stderr[:120]}")
+    if binary.read_bytes()[:4] != b"\x7fELF":
+        pytest.skip("symbolic fixture requires an ELF-producing compiler")
     return binary
 
 #: Branch guard encoding a solver-hard UNSAT instance: 2**64-59 is

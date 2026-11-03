@@ -195,6 +195,9 @@ public enum CommentType { EOL, PLATE, PRE, POST }
 
 
 def _compile_import_script(tmp_path: Path, *, new_api: bool) -> None:
+    probe = subprocess.run(["javac", "-version"], capture_output=True, text=True, timeout=15)
+    if probe.returncode != 0:
+        pytest.skip("usable JDK required: " + probe.stderr[:300])
     stubs = dict(_GSON_STUBS)
     stubs.update(_GHIDRA_COMMON_STUBS)
     stubs["ghidra/program/model/listing/CodeUnit.java"] = (

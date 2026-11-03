@@ -33,6 +33,7 @@ def test_resolver_obeys_real_floor_resolution(tmp_path, monkeypatch, clean_polic
     monkeypatch.setattr(tiers, 'sys', SimpleNamespace(platform='linux'))
     monkeypatch.setattr(context, 'check_net_available', lambda: True)
     monkeypatch.setattr(context, 'check_seccomp_available', lambda: True)
+    monkeypatch.setattr('core.sandbox.seccomp.check_seccomp_available', lambda: True)
     if policy in ('env-landlock', 'flag-raises-env', 'project-raises-env'):
         monkeypatch.setenv('RAPTOR_ALLOW_DEGRADED_UNTRUSTED', '1')
     if policy.startswith('flag-'):
@@ -86,6 +87,7 @@ def test_gradle_wrapper_refused_before_execution_without_isolation(tmp_path, mon
     monkeypatch.setattr(context, 'sys', SimpleNamespace(platform=platform))
     monkeypatch.setattr(tiers, 'sys', SimpleNamespace(platform=platform))
     monkeypatch.setattr(context, 'check_seccomp_available', lambda: True)
+    monkeypatch.setattr('core.sandbox.seccomp.check_seccomp_available', lambda: True)
     monkeypatch.setattr(context, 'check_net_available', lambda: False)
     monkeypatch.setattr(context, 'check_seatbelt_available', lambda: False)
     monkeypatch.setattr(GradleResolver, 'is_available', lambda self: False)

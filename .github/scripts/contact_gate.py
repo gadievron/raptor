@@ -920,7 +920,7 @@ def ruff_findings(tree: Path, files: list[str]) -> tuple[set[tuple[str, str, str
         except json.JSONDecodeError as exc:
             raise RuntimeError(f"unparseable ruff JSON output: {exc}") from exc
         for rec in records:
-            path = os.path.relpath(rec.get("filename", ""), tree)
+            path = os.path.relpath(rec.get("filename", ""), tree.resolve())
             found.add((path, rec.get("code") or "", rec.get("message") or ""))
     return found, cp.stdout
 

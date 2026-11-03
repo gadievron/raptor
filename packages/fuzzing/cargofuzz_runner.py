@@ -78,6 +78,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -570,7 +571,7 @@ class CargoFuzzRunner(LibFuzzerRunner):
                 continue
             destination.parent.mkdir(parents=True, exist_ok=True)
             copy = subprocess.run(
-                ["cp", "-R", "--reflink=auto", "--", str(source),
+                ["cp", "-R", *(["--reflink=auto"] if sys.platform == "linux" else []), "--", str(source),
                  str(destination)],
                 capture_output=True, text=True,
                 env=scrub_identity_env(RaptorConfig.get_safe_env()),

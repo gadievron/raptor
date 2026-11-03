@@ -98,6 +98,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from itertools import islice
@@ -711,7 +712,7 @@ class JazzerRunner(LibFuzzerRunner):
     @staticmethod
     def _copy_seed(source: Path, destination: Path) -> None:
         copy = subprocess.run(
-            ["cp", "-R", "--reflink=auto", "--", str(source),
+            ["cp", "-R", *(["--reflink=auto"] if sys.platform == "linux" else []), "--", str(source),
              str(destination)],
             capture_output=True, text=True,
             env=scrub_identity_env(RaptorConfig.get_safe_env()),

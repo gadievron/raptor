@@ -689,6 +689,10 @@ class TestMakeDefaultDatabaseCrossCheck:
         make = shutil.which("make")
         if make is None:
             pytest.skip("make not installed")
+        version = subprocess.run([make, "--version"], capture_output=True, text=True, timeout=10)
+        match = re.search(r"GNU Make (\d+)\.(\d+)", version.stdout)
+        if not match or tuple(map(int, match.groups())) < (4, 0):
+            pytest.skip("GNU Make 4.x variable-universe cross-check")
         base_env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
                     "LC_ALL": "C"}
         proc = subprocess.run(

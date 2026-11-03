@@ -294,7 +294,9 @@ def ensure_route_for_client(
         except ImportError:
             message = message[:500]
         print(
-            f"{label}: dispatcher credential seeding refused — {message}",
+            f"{label}: dispatcher credential seeding refused — {message}\n"
+            "Fix: chmod 600 models.json. Deliberate override: "
+            "RAPTOR_ALLOW_WORLD_READABLE_MODELS_JSON=1.",
             file=sys.stderr,
         )
     except Exception:  # noqa: BLE001 — provider errors surface at call time

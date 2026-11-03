@@ -419,9 +419,10 @@ def test_stdio_cannot_hide_registered_file_handles_in_an_anon_inode(tmp_path, mo
 
 
 
+@pytest.mark.linux_native
 def test_parallel_bytecode_matches_serial_and_refreshes_changed_sources(tmp_path, monkeypatch):
     monkeypatch.setattr(guard, 'ROOT', tmp_path)
-    monkeypatch.setattr(guard.os, 'sched_getaffinity', lambda _: {0, 1})
+    monkeypatch.setattr(guard.os, 'sched_getaffinity', lambda _: {0, 1}, raising=False)
     for index in range(10):
         (tmp_path / f'module{index}.py').write_text(f'VALUE = {index}\n')
     (tmp_path / 'invalid.py').write_text('not valid python !!!')
@@ -486,7 +487,7 @@ time.sleep(60)
 
 def test_bytecode_worker_initialization_failure_stops_preparation(tmp_path, monkeypatch):
     monkeypatch.setattr(guard, 'ROOT', tmp_path)
-    monkeypatch.setattr(guard.os, 'sched_getaffinity', lambda _: {0, 1})
+    monkeypatch.setattr(guard.os, 'sched_getaffinity', lambda _: {0, 1}, raising=False)
     for index in range(9):
         (tmp_path / f'module{index}.py').write_text('VALUE = 1\n')
 
@@ -501,7 +502,7 @@ def test_bytecode_worker_initialization_failure_stops_preparation(tmp_path, monk
 def test_restricted_worker_ipc_still_performs_full_serial_validation(tmp_path, monkeypatch):
     import concurrent.futures
     monkeypatch.setattr(guard, 'ROOT', tmp_path)
-    monkeypatch.setattr(guard.os, 'sched_getaffinity', lambda _: {0, 1})
+    monkeypatch.setattr(guard.os, 'sched_getaffinity', lambda _: {0, 1}, raising=False)
     for index in range(9):
         (tmp_path / f'module{index}.py').write_text(f'VALUE = {index}\n')
 
@@ -815,14 +816,22 @@ def test_metadata_walk_tolerates_retired_atomic_files_without_skipping_other_ent
 
 
 
-def test_refusal_never_reports_into_another_protected_stdio_file(tmp_path):
+@pytest.mark.parametrize("forced_platform", [None, "darwin"], ids=["host", "unsupported-platform"])
+def test_refusal_never_reports_into_another_protected_stdio_file(tmp_path, forced_platform):
     root, script, env = _fixture(tmp_path)
     other = root / 'other.py'
     other.write_text('OTHER = 1\n')
     with (root / 'source.py').open('r') as source, other.open('a') as error_output:
-        result = subprocess.run([KERNEL_PYTHON, '-I', '-S', '-B', str(script), '--', '/usr/bin/true'],
-                                stdin=source, stderr=error_output, stdout=subprocess.PIPE,
-                                env=env, text=True, timeout=5)
+        if forced_platform:
+            code = ("import runpy, sys; sys.platform = sys.argv[1]; "
+                    "path = sys.argv[2]; sys.argv = sys.argv[2:]; "
+                    "runpy.run_path(path, run_name='__main__')")
+            command = [KERNEL_PYTHON, '-I', '-S', '-B', '-c', code,
+                       forced_platform, str(script), '--', '/usr/bin/true']
+        else:
+            command = [KERNEL_PYTHON, '-I', '-S', '-B', str(script), '--', '/usr/bin/true']
+        result = subprocess.run(command, stdin=source, stderr=error_output,
+                                stdout=subprocess.PIPE, env=env, text=True, timeout=5)
     assert result.returncode == 126
     assert (root / 'source.py').read_text() == 'VALUE = 1\n'
     assert other.read_text() == 'OTHER = 1\n'
@@ -841,6 +850,7 @@ def test_output_exception_survives_a_protected_library_ancestor(tmp_path, monkey
 
 
 
+@pytest.mark.linux_native
 def test_final_stdio_validation_preserves_owned_mount_pins(tmp_path):
     source = tmp_path / 'state'
     source.write_text('state')
@@ -886,3 +896,14 @@ def test_protection_refuses_to_seal_user_configuration_instead_of_migrating_it(t
     guard.validate_user_state([root], 'claude')
     assert not (home / '.claude').exists()
     assert not (home / '.claude.json').exists()
+
+
+def test_precompile_without_affinity_validates_all_sources_serially(tmp_path, monkeypatch):
+    monkeypatch.setattr(guard, 'ROOT', tmp_path)
+    monkeypatch.delattr(guard.os, 'sched_getaffinity', raising=False)
+    for index in range(10):
+        (tmp_path / f'module{index}.py').write_text(f'VALUE = {index}\n')
+    guard.precompile()
+    for index in range(10):
+        source = tmp_path / f'module{index}.py'
+        assert Path(importlib.util.cache_from_source(str(source))).read_bytes() == guard._compile_bytecode(source.read_bytes(), str(source))

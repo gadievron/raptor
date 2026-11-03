@@ -1257,18 +1257,23 @@ class TestUntrustedTreeHardening:
     the file index and snippet synthesis must stay bounded."""
 
     def test_deep_tree_does_not_recurse(self, tmp_path):
-        # ~1200 nesting levels blow a recursive walk's Python stack;
-        # the iterative index must survive and still find the file.
-        # One mkdir per level: pathlib's parents=True is itself
-        # recursive and cannot build a 1200-deep tree in one call.
+        import subprocess
+        import sys
+
         deep = tmp_path
-        for _ in range(1200):
+        for _ in range(200):
             deep = deep / "d"
             deep.mkdir()
         (deep / "leaf.c").write_text("int x;\n")
-        from core.sarif.import_normalizer import _build_file_index
-        index = _build_file_index(tmp_path)
-        assert "leaf.c" in index
+        source = (
+            "import sys; from pathlib import Path; "
+            "from core.sarif.import_normalizer import _build_file_index; "
+            "sys.setrecursionlimit(100); "
+            "assert 'leaf.c' in _build_file_index(Path(sys.argv[1]))"
+        )
+        result = subprocess.run([sys.executable, "-c", source, str(tmp_path)],
+                                capture_output=True, text=True, timeout=30)
+        assert result.returncode == 0, result.stderr
 
     def test_oversized_source_skips_snippet(self, tmp_path):
         from core.sarif.import_normalizer import (

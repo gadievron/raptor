@@ -583,6 +583,8 @@ class TestSourceSideBucketsE2E:
                 f"{result.stderr}",
             )
 
+        if binary.read_bytes()[:4] != b"\x7fELF":
+            pytest.skip("fixture requires an ELF-producing compiler")
         fp = capability_fingerprint(binary)
         assert fp is not None, (
             "fingerprint primitive returned None on a freshly-built "

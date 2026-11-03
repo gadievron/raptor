@@ -134,7 +134,7 @@ try:
     if _startup_tmpdir is not None:
         if any(not char.isprintable() for char in _startup_tmpdir):
             raise ValueError('temporary directory contains control bytes')
-        _default_subprocess_tmpdir = os.path.abspath(_startup_tmpdir)
+        _default_subprocess_tmpdir = os.path.realpath(_startup_tmpdir)
     else:
         _default_subprocess_tmpdir = _system_tmpdir(sys.platform)
 except (OSError, ValueError, AttributeError):

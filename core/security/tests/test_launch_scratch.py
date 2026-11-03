@@ -323,3 +323,20 @@ def test_allocated_sessions_have_independent_random_root_and_record_ids(tmp_path
         assert re.fullmatch(r'session-[a-f0-9]{32}', root.name)
         session_id = scratch_lifecycle.register(metadata, os.getpid())
         assert session_id == root.name.removeprefix('session-')
+
+
+def test_standalone_default_records_canonical_operator_tmpdir(tmp_path):
+    actual = tmp_path / 'physical'
+    actual.mkdir()
+    alias = tmp_path / 'alias'
+    alias.symlink_to(actual, target_is_directory=True)
+    source = (
+        "import sys; sys.path.insert(0, sys.argv[1]); "
+        "from core.security import env_sanitisation as env; "
+        "print(env._default_subprocess_tmpdir)"
+    )
+    result = subprocess.run([sys.executable, '-I', '-c', source, str(ROOT)],
+                            env={'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'TMPDIR': str(alias)},
+                            capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(actual.resolve())

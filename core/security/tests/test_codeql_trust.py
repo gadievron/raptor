@@ -889,6 +889,7 @@ class TestHostileYamlBounded:
         assert "malformed YAML" in labels
         assert any("alias" in f.value for f in fs.findings)
 
+    @pytest.mark.linux_native
     def test_alias_bomb_bounded_under_memory_cap(self, tmp_path):
         """Depth-30 bomb (~660 bytes → tens of GiB if expanded) under
         a 2 GiB address-space cap: must exit cleanly with a blocking

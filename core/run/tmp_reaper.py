@@ -621,19 +621,33 @@ def _max_age_seconds() -> float | None:
     return floor_s
 
 
-def _live_cwds() -> set[str]:
+def _live_cwds() -> set[str] | None:
     """Working directories of every process this user can inspect."""
     cwds: set[str] = set()
+    if sys.platform == "darwin":
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["/usr/sbin/lsof", "-a", "-u", str(os.geteuid()), "-d", "cwd", "-Fn"],
+                capture_output=True, text=True, timeout=5, cwd="/",
+                env={"PATH": "/usr/bin:/bin:/usr/sbin", "LC_ALL": "C"},
+            )
+            if result.returncode != 0 or result.stderr.strip():
+                return None  # lsof warnings can mean a partial process census.
+            return {os.path.realpath(line[1:]) for line in result.stdout.splitlines()
+                    if line.startswith("n/")} or None
+        except (OSError, subprocess.TimeoutExpired):
+            return None
     try:
         pids = [p for p in os.listdir("/proc") if p.isdigit()]
     except OSError:
-        return cwds
+        return None
     for pid in pids:
         try:
             cwds.add(os.readlink(f"/proc/{pid}/cwd"))
         except OSError:
             continue
-    return cwds
+    return cwds or None
 
 
 def _socket_answers(sock_path: Path) -> bool:
@@ -692,7 +706,7 @@ def _recent_activity(path: Path, now: float, max_age: float) -> bool:
     return False
 
 
-def _dir_in_use(path: Path, live_cwds: set[str]) -> bool:
+def _dir_in_use(path: Path, live_cwds: set[str] | None) -> bool:
     """Liveness probes for a candidate dir: cwd references, live sockets.
 
     The socket scan covers TOP-LEVEL entries only. Every covered
@@ -700,7 +714,9 @@ def _dir_in_use(path: Path, live_cwds: set[str]) -> bool:
     llm.sock); a future prefix that nests its socket needs this
     walk deepened or it will be reaped while live.
     """
-    p = str(path)
+    if live_cwds is None:
+        return True  # Cannot establish liveness: never delete on that guess.
+    p = os.path.realpath(path)
     if any(cwd == p or cwd.startswith(p + os.sep) for cwd in live_cwds):
         return True
     try:
@@ -842,6 +858,7 @@ def _reap(now: float | None) -> list[Path]:
 
     # /proc scan only when a dir is actually up for consideration.
     live_cwds: set[str] | None = None
+    cwd_probe_done = False
 
     for path in dir_candidates:
         try:
@@ -859,8 +876,9 @@ def _reap(now: float | None) -> list[Path]:
         # writing inside its scratch would otherwise be reaped mid-run.
         if _recent_activity(path, now, max_age):
             continue
-        if live_cwds is None:
+        if not cwd_probe_done:
             live_cwds = _live_cwds()
+            cwd_probe_done = True
         if _dir_in_use(path, live_cwds):
             continue
         # Same validation-to-delete identity pin as reap_stale_runs:
@@ -1202,6 +1220,7 @@ def _reap_runs(parent: Path, now: float | None) -> list[Path]:
     euid = os.geteuid()
     reaped: list[Path] = []
     live_cwds: set[str] | None = None
+    cwd_probe_done = False
     for d in children:
         try:
             st = d.lstat()
@@ -1233,8 +1252,9 @@ def _reap_runs(parent: Path, now: float | None) -> list[Path]:
         # a resume about to flip it back to running). A live process
         # cwd'd inside — or a socket still answering — keeps the dir
         # this sweep, same probes as the tmp sweep.
-        if live_cwds is None:
+        if not cwd_probe_done:
             live_cwds = _live_cwds()
+            cwd_probe_done = True
         if _dir_in_use(d, live_cwds):
             continue
         # Everything above was decided against the lstat() snapshot

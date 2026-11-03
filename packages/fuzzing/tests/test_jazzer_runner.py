@@ -1154,3 +1154,17 @@ class TestProjectCorpusDir(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_jazzer_cache_seed_uses_portable_copy_on_darwin(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from packages.fuzzing import jazzer_runner as module
+
+    monkeypatch.setattr(module, 'sys', SimpleNamespace(platform='darwin'))
+    source = tmp_path / 'host'
+    source.mkdir()
+    (source / 'artifact.jar').write_bytes(b'dependency')
+    destination = tmp_path / 'owned'
+    module.JazzerRunner._copy_seed(source, destination)
+    assert (destination / 'artifact.jar').read_bytes() == b'dependency'
+    assert (destination / 'artifact.jar').stat().st_ino != (source / 'artifact.jar').stat().st_ino

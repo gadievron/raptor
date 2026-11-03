@@ -417,7 +417,14 @@ class TestServerTransportSelection:
         return server_mod.GhidraServer(gpr, lifetime_s=60)
 
     def test_pathname_transport_when_capable(self, tmp_path, monkeypatch):
-        srv = self._server(tmp_path, monkeypatch, capable=True)
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="raptor-pytest-ghidra-", dir="/tmp") as raw:
+            fixture_root = Path(raw).resolve()
+            srv = self._server(fixture_root, monkeypatch, capable=True)
+            self._check_pathname_transport(srv)
+
+    @staticmethod
+    def _check_pathname_transport(srv):
         srv.start()
         try:
             assert srv._child_sock is None  # never created

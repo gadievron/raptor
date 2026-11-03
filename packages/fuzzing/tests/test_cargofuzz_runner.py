@@ -816,3 +816,20 @@ class TestRustPanicParsing(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_cargo_cache_seed_uses_portable_copy_on_darwin(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from packages.fuzzing import cargofuzz_runner as module
+
+    monkeypatch.setattr(module, 'sys', SimpleNamespace(platform='darwin'))
+    source = tmp_path / 'host/registry/index/idx/dep'
+    source.parent.mkdir(parents=True)
+    source.write_text('registry metadata')
+    runner = module.CargoFuzzRunner.__new__(module.CargoFuzzRunner)
+    runner._host_cargo_home = tmp_path / 'host'
+    runner._run_cargo_home = tmp_path / 'owned'
+    runner._seed_run_cargo_home()
+    copied = tmp_path / 'owned/registry/index/idx/dep'
+    assert copied.read_text() == 'registry metadata'
+    assert copied.stat().st_ino != source.stat().st_ino

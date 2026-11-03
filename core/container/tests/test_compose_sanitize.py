@@ -396,11 +396,15 @@ def test_staging_prunes_escaping_symlinks_keeps_internal(tmp_path: Path) -> None
 
 def _compose_available() -> bool:
     try:
-        probe = subprocess.run(
-            ["docker", "compose", "version"],
-            capture_output=True, timeout=10,
-        )
-    except (OSError, subprocess.TimeoutExpired):
+        scratch = cco._resolver_scratch_home()
+        try:
+            probe = subprocess.run(
+                [*cco._compose_invocation(), "version"],
+                capture_output=True, timeout=10, env=cco._resolver_env(scratch),
+            )
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+    except (OSError, subprocess.TimeoutExpired, cco.ComposeError):
         return False
     return probe.returncode == 0
 
@@ -594,14 +598,15 @@ def test_resolver_home_never_inside_staging(tmp_path: Path) -> None:
         seen["config_dir_existed"] = Path(env["DOCKER_CONFIG"]).is_dir()
         seen["config_json"] = sorted(
             p.name for p in Path(env["DOCKER_CONFIG"]).iterdir())
-        return "services: {}\n"
+        return "services:\n  web:\n    image: img\n"
 
-    staged, staging = cco.rewrite_for_localhost(compose)
-    try:
-        with patch.object(cco, "_run_resolver", fake_run_resolver):
+    with patch.object(cco, "_compose_invocation", return_value=("docker", "compose")), \
+            patch.object(cco, "_run_resolver", fake_run_resolver):
+        staged, staging = cco.rewrite_for_localhost(compose)
+        try:
             cco._resolve_effective_model(staged)
-    finally:
-        cco.cleanup_staging(staging)
+        finally:
+            cco.cleanup_staging(staging)
 
     home = Path(seen["env"]["HOME"])
     staging_prefix = str(seen["staging"].resolve())
@@ -631,14 +636,15 @@ def test_planted_resolver_home_file_does_not_break_resolution(
     compose.write_text(yaml.safe_dump(
         {"services": {"web": {"image": "img"}}}))
 
-    staged, staging = cco.rewrite_for_localhost(compose)
-    try:
-        with patch.object(cco, "_run_resolver",
-                          lambda *a, **kw: "services: {}\n"):
+    with patch.object(cco, "_compose_invocation", return_value=("docker", "compose")), \
+            patch.object(cco, "_run_resolver",
+                      lambda *a, **kw: "services:\n  web:\n    image: img\n"):
+        staged, staging = cco.rewrite_for_localhost(compose)
+        try:
             resolved = cco._resolve_effective_model(staged)
-    finally:
-        cco.cleanup_staging(staging)
-    assert resolved == {"services": {}}
+        finally:
+            cco.cleanup_staging(staging)
+    assert resolved == {"services": {"web": {"image": "img"}}}
 
 
 def test_resolver_scratch_home_cleaned_on_failure(tmp_path: Path) -> None:
