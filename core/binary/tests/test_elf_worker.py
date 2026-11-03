@@ -152,3 +152,42 @@ def test_descriptor_input_reads_pinned_inode_without_reopening_alias(tmp_path):
         assert target.read_bytes() == b'replacement input'
     finally:
         os.close(fd)
+
+
+@pytest.mark.parametrize('platform', ['linux', 'darwin'])
+@pytest.mark.parametrize('error_type', [OSError, ValueError])
+def test_address_space_refusal_is_advisory_only_on_darwin(monkeypatch, capsys, platform, error_type):
+    from core.binary import _elf_worker_child as child
+    calls = []
+    def limit(resource_id, value):
+        calls.append((resource_id, value))
+        if resource_id == child.resource.RLIMIT_AS:
+            raise error_type('owned address-space refusal')
+    monkeypatch.setattr(child.sys, 'platform', platform)
+    monkeypatch.setattr(child, '_limit', limit)
+    if platform == 'darwin':
+        child._install_limits()
+        assert calls == [(child.resource.RLIMIT_AS, 2048 * 1024 * 1024),
+                         (child.resource.RLIMIT_CPU, 10)]
+        assert 'memory bound is best effort' in capsys.readouterr().err
+    else:
+        with pytest.raises(error_type, match='owned address-space refusal'):
+            child._install_limits()
+        assert len(calls) == 1
+        assert not capsys.readouterr().err
+
+
+@pytest.mark.parametrize('platform', ['linux', 'darwin'])
+def test_cpu_refusal_still_aborts_worker(monkeypatch, platform):
+    from core.binary import _elf_worker_child as child
+    calls = []
+    def limit(resource_id, value):
+        calls.append((resource_id, value))
+        if resource_id == child.resource.RLIMIT_CPU:
+            raise ValueError('owned CPU refusal')
+    monkeypatch.setattr(child.sys, 'platform', platform)
+    monkeypatch.setattr(child, '_limit', limit)
+    with pytest.raises(ValueError, match='owned CPU refusal'):
+        child._install_limits()
+    assert calls == [(child.resource.RLIMIT_AS, 2048 * 1024 * 1024),
+                     (child.resource.RLIMIT_CPU, 10)]

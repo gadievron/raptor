@@ -26,12 +26,22 @@ def _limit(resource_id, value):
     resource.setrlimit(resource_id, (value, value))
 
 
-def _collect(path, user_site, max_input):
-    # Linux enforces AS; macOS accepts it without a hard memory guarantee.
-    # Failure to install the limits refuses parsing, rather than silently
-    # trusting the sandbox backend's best-effort setrlimit warning.
-    _limit(resource.RLIMIT_AS, 2048 * 1024 * 1024)
+def _install_limits():
+    # Linux requires the address-space cap. Darwin may reject RLIMIT_AS
+    # altogether; even when accepted it is not a hard memory guarantee.
+    try:
+        _limit(resource.RLIMIT_AS, 2048 * 1024 * 1024)
+    except (OSError, ValueError):
+        if sys.platform != 'darwin':
+            raise
+        sys.stderr.write('ELF worker: macOS address-space limit unavailable; '
+                         'memory bound is best effort\n')
+    # CPU failures remain fatal on every platform.
     _limit(resource.RLIMIT_CPU, 10)
+
+
+def _collect(path, user_site, max_input):
+    _install_limits()
     if user_site:
         import site
         site.addsitedir(user_site)  # installed user hooks run only after confinement
