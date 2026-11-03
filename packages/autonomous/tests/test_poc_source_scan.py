@@ -494,7 +494,7 @@ def test_validate_exploit_rejects_absolute_include(tmp_path):
     assert result.exploit_path is None
 
 
-def test_validate_exploit_passes_clean_source(tmp_path):
+def test_validate_exploit_passes_clean_source(tmp_path, owned_poc_compile_policy):
     """Sanity: a benign PoC isn't blocked by the pre-scan. We can't
     assert successful compilation without a working gcc on the test host
     (CI may not have one); the assertion is only that the pre-scan
@@ -587,7 +587,7 @@ def test_e2e_all_known_exfil_shapes_blocked_before_gcc(tmp_path):
         assert result.exploit_path is None, f"{name}: unexpected binary"
 
 
-def test_e2e_validate_and_refine_loop_handles_source_scan_rejection(tmp_path):
+def test_e2e_validate_and_refine_loop_handles_source_scan_rejection(tmp_path, owned_poc_compile_policy):
     """Exercise the iterative-refinement loop: malicious PoC enters
     iter 1, source-scan blocks, refiner is asked to fix, returns a
     clean PoC, iter 2 succeeds. The errors fed to the refiner must be
