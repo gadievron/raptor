@@ -250,9 +250,6 @@
   "artifacts:write_only_artifact::binary-analysis-report.md": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },
-  "artifacts:write_only_artifact::bug-chains.json": {
-   "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
-  },
   "artifacts:write_only_artifact::candidates.json": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },
@@ -439,9 +436,6 @@
   "artifacts:write_only_artifact::payloads.json": {
    "note": "sanwit witness data file: written by core/audit/sanwit and read by the generated PHP probe inside the sandbox - the reader is not Python, so the census cannot see it"
   },
-  "artifacts:write_only_artifact::phase2-classifications.json": {
-   "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
-  },
   "artifacts:write_only_artifact::pipeline-summary.json": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },
@@ -574,6 +568,9 @@
   "artifacts:write_only_artifact::warm.md": {
    "note": "raptor-recall-measure warm subcommand output: operator-facing would-suppress report, also printed to stdout at the end of the run"
   },
+  "artifacts:write_only_artifact::weakness-chains.json": {
+   "note": "output artefact consumed by report generation and /review"
+  },
   "artifacts:write_only_artifact::web-context-map.json": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },
@@ -645,6 +642,9 @@
   },
   "dead:dead_function:packages/exploit_feasibility/analyzer.py:check_system_exploitability": {
    "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
+  },
+  "dead:dead_method:core/analysis/binary_oracle.py:_OwnedOutputReader.readinto": {
+   "note": "RawIOBase protocol — called by Python IO layer, not by name"
   },
   "dead:dead_method:core/audit/tests/test_return_census.py:TestCpgUsage._fake_server_rows": {
    "note": "test scaffolding kept for the planned CPG-backed census cases; harmless"
