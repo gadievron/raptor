@@ -783,6 +783,7 @@ dispatcher or aggregator route.
 |----------|--------|
 | `API_ROUTE_API_KEY` | [API Route](https://www.api-route.com) |
 | `ATLASCLOUD_API_KEY` | [Atlas Cloud](https://www.atlascloud.ai) |
+| `CHEAPAIMODEL_API_KEY` | [cheapaimodel](https://cheapaimodel.ai) |
 | `CHEAPER_INFERENCE_API_KEY` | Cheaper Inference |
 | `COHERE_API_KEY` | Cohere |
 | `DEEPINFRA_API_KEY` | DeepInfra |
@@ -802,6 +803,14 @@ For API Route, set `API_ROUTE_API_KEY` to your own key. Dispatcher requests to
 `https://global.api-route.com/v1/chat/completions` with Bearer authentication.
 Use a model ID from API Route's `/v1/models` catalog. This route is opt-in and
 does not change the default provider or model selection.
+
+For cheapaimodel, set `CHEAPAIMODEL_API_KEY` to a key created in the console at
+https://cheapaimodel.ai. Dispatcher requests to
+`/cheapaimodel/v1/chat/completions` are forwarded to
+`https://api.cheapaimodel.ai/v1/chat/completions` with Bearer authentication.
+Use a model ID from cheapaimodel's `/v1/models` catalog (for example
+`deepseek-v4-1-flash`). This route is opt-in and does not change the default
+provider or model selection.
 
 For Opper, set `OPPER_API_KEY` to a key from https://platform.opper.ai.
 Dispatcher requests to `/opper/v3/compat/chat/completions` are forwarded to

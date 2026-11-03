@@ -49,6 +49,7 @@ def _make_empty_store() -> CredentialStore:
         # Aggregators
         "apiroute": None,
         "atlascloud": None,
+        "cheapaimodel": None,
         "cheaperinference": None,
         "cohere": None,
         "deepinfra": None,
