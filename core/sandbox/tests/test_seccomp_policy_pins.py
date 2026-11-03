@@ -194,6 +194,7 @@ class _FakeSeccompLib:
         idx = len(self.rules)
         args = []
         if argc:
+            argv = ctypes.cast(argv, ctypes.POINTER(sc._ScmpArgCmp))
             for i in range(argc):
                 cmp_ = argv[i]
                 args.append((cmp_.arg, cmp_.op, cmp_.datum_a,
@@ -979,3 +980,24 @@ def test_connect_scoping_rule_failures_abort_exec(
             child.close()
         except OSError:
             pass
+
+
+@requires_libseccomp
+@pytest.mark.parametrize("profile", ["full", "debug", "frida", "rr", "chromium"])
+def test_only_chromium_admits_required_nested_namespaces(exit_sentinel, profile):
+    h = _harness(profile, block_ns_creation=True, deny_fd_exec=True)
+    h.fn()
+    syscalls = _cell(h.fn, "ns_syscall_nums")
+    # Independent Linux UAPI constants; no implementation table as oracle.
+    permitted = {0x10000000, 0x20000000, 0x40000000} if profile == "chromium" else set()
+    all_flags = {0x10000000, 0x20000000, 0x40000000, 0x20000,
+                 0x08000000, 0x04000000, 0x02000000, 0x80}
+    for syscall in ("clone", "unshare"):
+        rules = [r for r in h.lib.rules if r.num == syscalls[syscall] and r.args]
+        denied = {r.args[0][2] for r in rules}
+        assert denied == all_flags - permitted
+    assert any(r.num == syscalls["setns"] and not r.args for r in h.lib.rules)
+    assert any(r.num == syscalls["clone3"] and not r.args for r in h.lib.rules)
+    if profile == "chromium":
+        assert _cell(h.fn, "deny_memfd_create") is False
+        assert any(r.num == _cell(h.fn, "execveat_num") for r in h.lib.rules)

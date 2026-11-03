@@ -3,8 +3,8 @@
 Exercises REAL Chromium via Playwright: rendered-DOM crawling,
 execution-proof XSS (reflected and fragment/DOM shapes), the
 origin gate, and the reflection-without-execution negative. Skips
-when playwright or a launchable Chromium is absent, so CI degrades
-to the mocked scanner-wiring tests.
+when the runtime or required containment is absent in generic pytest runs.
+The dedicated wrapper-acceptance lane provisions Chromium and rejects skips.
 """
 
 from __future__ import annotations
@@ -16,15 +16,18 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import pytest
 
-try:
-    from packages.web.browser import BrowserEngine, browser_available
-    _BROWSER_OK = browser_available()
-except ImportError:
-    _BROWSER_OK = False
+from packages.web.browser import BrowserEngine, browser_available
 
-pytestmark = pytest.mark.skipif(
-    not _BROWSER_OK, reason="playwright/chromium not available",
-)
+pytestmark = [pytest.mark.slow, pytest.mark.integration,
+              pytest.mark.linux_native, pytest.mark.darwin_native]
+
+
+@pytest.fixture(scope="module", autouse=True)
+def installed_native_browser():
+    # Never launch a driver/browser during collection or a deselected unit run.
+    # The explicit wrapper-acceptance lane provisions Chromium and rejects skips.
+    if not browser_available():
+        pytest.skip("playwright/chromium or required containment not available")
 
 
 class _FixtureHandler(BaseHTTPRequestHandler):

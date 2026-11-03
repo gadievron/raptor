@@ -423,6 +423,7 @@ Profiles bundle layer settings into a single name for CLI use:
 | `debug` | blocked | yes | debug (permits ptrace) | For [crash analysis](crash-analysis.md) with GDB/LLDB. Target and debugger run in the same sandbox. Composes with `--audit`. |
 | `rr` | blocked; private loopback only | yes | rr (ptrace and per-task counters) | Linux replay; requires private mount/PID/network namespaces and functional seccomp. General lower-floor consent cannot relax this requirement. |
 | `frida` | **open** | yes | frida (AF_UNIX allowed) | For [Frida](frida.md) helper IPC. Netlink/packet/raw sockets stay blocked. |
+| `chromium` | requested TCP ports | yes | chromium | Required browser containment. Read-only runtime, private HOME/scratch and fresh Linux mount/PID namespaces or macOS Seatbelt; no fallback to an unconfined browser. |
 | `network-only` | blocked | off | none | Tools whose correctness needs unrestricted filesystem or syscalls. |
 | `none` | open | off | none | Emergency escape hatch. Rlimits only. |
 
@@ -1462,3 +1463,44 @@ forced the degrade.
 The module docstring in `core/sandbox/__init__.py` carries the current
 threat-model statement -- what the sandbox does and does not protect
 against.
+
+
+### Browser containment
+
+Web scans with `--browser` run Playwright's Node driver and its Chromium process
+tree inside the `chromium` profile. Only installed runtime resources and private
+scratch are admitted. The driver receives a small environment without account
+credentials, trust markers or user Node startup options. Screenshots are returned
+through Playwright to the parent. The driver has a five-minute wall timeout,
+a 128 MiB per-file limit and a 120-second CPU limit; virtual address space is
+uncapped because V8 reserves large address ranges.
+
+Chromium's own sandbox defaults on. RAPTOR checks the actual browser command line
+and refuses runtime flags that disable it. If either required layer cannot start,
+browser checks are unavailable; other web checks can continue and the scan result
+records the coverage gap. There is no automatic retry without protection.
+`--allow-unsandboxed-chromium` explicitly waives only Chromium's inner sandbox.
+The waiver is logged and recorded in `browser_isolation` in the JSON result;
+RAPTOR's outer confinement remains required.
+
+The Linux profile maps the operator to a nonzero namespace UID, with no new host
+identity or privileges. It permits Chromium's nested user/PID/network namespace
+creation and shared-memory memfds. Mount/IPC/UTS/cgroup/time namespace creation,
+setns, clone3, ptrace, perf counters and `execveat(AT_EMPTY_PATH)` remain restricted.
+The memfd/JIT support means this profile does not enforce W^X or forbid all
+fileless execution. Nested
+namespace rules and Landlock restrictions are inherited. Chromium must write
+namespace ID maps for newly created children, so the profile admits writes to its
+fresh PID-namespace procfs; global proc control subtrees are remounted read-only
+before execution. The private init waiter is made non-dumpable before the target
+fork so its memory and descriptor interfaces remain protected. This allowance
+is forbidden on fallback, host-procfs and image
+rootfs lanes. Normal profiles retain their existing namespace and memfd denies.
+
+TCP connections are restricted to the target and configured proxy ports. This is
+a port restriction, not a destination-host firewall; DNS/UDP is not restricted by
+the TCP allowlist. Existing HTTP and WebSocket origin gates remain active. Browser
+runtime files, the kernel and Playwright's parent-side protocol parser remain
+trusted components. Linux requires a non-root operator, Landlock ABI 4+, seccomp and usable mount/PID
+namespaces; macOS requires Seatbelt. Native acceptance must run on each platform
+before compatibility is claimed.

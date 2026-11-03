@@ -47,8 +47,8 @@ jobs:
         if: runner.os == 'Linux'
       - uses: ./.github/actions/setup-venv
         with:
-          cache-key-prefix: venv-sandbox-wrappers
-          uv-export-extra-args: --extra binary --extra r2pipe --extra frida --extra llm --extra grammars
+          cache-key-prefix: venv-sandbox-wrappers-browser
+          uv-export-extra-args: --extra binary --extra r2pipe --extra frida --extra llm --extra grammars --extra web
           save-on-rebuild: 'true'
       - name: Install Linux parser tools
         if: runner.os == 'Linux'
@@ -70,6 +70,18 @@ jobs:
           echo "$GITHUB_WORKSPACE/$VENV_PATH/bin" >> "$GITHUB_PATH"
           gem install --no-document --install-dir "$RUNNER_TEMP/wrapper-gems" one_gadget -v 1.10.0
           echo "$RUNNER_TEMP/wrapper-gems/bin" >> "$GITHUB_PATH"
+      - name: Install isolated Chromium runtime
+        shell: bash
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/wrapper-browsers
+        run: |
+          set -euo pipefail
+          echo "PLAYWRIGHT_BROWSERS_PATH=$PLAYWRIGHT_BROWSERS_PATH" >> "$GITHUB_ENV"
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            "$VENV_PATH/bin/python" -m playwright install --with-deps chromium
+          else
+            "$VENV_PATH/bin/python" -m playwright install chromium
+          fi
       - name: Exercise registered dispatch contracts
         shell: bash
         run: |

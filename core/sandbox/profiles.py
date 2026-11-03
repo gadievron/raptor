@@ -88,6 +88,10 @@ PROFILES = types.MappingProxyType({
     "rr":           types.MappingProxyType({"block_network": True, "use_landlock": True,
                                             "seccomp": "rr", "restrict_reads": True}),
     FRIDA_PROFILE:  types.MappingProxyType({"block_network": False, "use_landlock": True,  "seccomp": "frida"}),
+    # Browser-only: strict filesystem/process containment, required web TCP
+    # ports, and seccomp exceptions for Chromium's nested renderer sandbox.
+    "chromium":     types.MappingProxyType({"block_network": False, "use_landlock": True,
+                                            "seccomp": "chromium", "restrict_reads": True}),
     "network-only": types.MappingProxyType({"block_network": True,  "use_landlock": False, "seccomp": ""}),
     "none":         types.MappingProxyType({"block_network": False, "use_landlock": False, "seccomp": ""}),
 })

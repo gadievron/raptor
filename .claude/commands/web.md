@@ -95,6 +95,10 @@ python3 raptor.py web --url https://target --ffuf-wordlist dirs.txt \
 # crawl sees the post-JS DOM (SPA routes, dynamic forms); XSS is graded
 # by actual JavaScript execution, not reflection; fragment probes catch
 # DOM sinks the server never sees. Page requests are origin-gated.
+# RAPTOR confines the driver/browser tree; Chromium's inner sandbox is ON.
+# If that inner sandbox is unsupported, browser checks report unavailable.
+# An explicit --allow-unsandboxed-chromium waives ONLY the inner layer;
+# it never disables RAPTOR containment and is recorded in the scan results.
 python3 raptor.py web --url https://target --browser
 
 # Blind SSRF via out-of-band callbacks: the listener runs INSIDE the

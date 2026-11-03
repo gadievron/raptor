@@ -888,7 +888,11 @@ with specific behavior.
 
 ### `PLAYWRIGHT_NODEJS_PATH`
 
-Selects the Node.js executable used by Playwright. The Linux container sets it
+`PLAYWRIGHT_BROWSERS_PATH` selects the trusted browser installation cache.
+Web scanning preserves that read-only runtime selection while giving the driver
+and browser a private HOME and profile. It does not copy account settings.
+
+Selects the Node.js executable used by Playwright. Web scanning preserves this selection inside its confined driver and temporarily uses a private transport launcher; the parent environment is restored after driver startup. The Linux container sets it
 to `/usr/bin/node` and removes Playwright's duplicate bundled runtime. Keep this
 value in the environment when running browser automation in the container.
 Manual installations use Playwright's own default unless configured otherwise.

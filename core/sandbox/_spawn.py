@@ -1638,6 +1638,12 @@ def run_sandboxed(
         if not isinstance(descriptor, int) or descriptor < 0:
             raise ValueError("pass_fds must contain nonnegative descriptors")
         os.fstat(descriptor)
+    if seccomp_profile == "chromium" and os.getuid() == 0:
+        raise ValueError("Chromium profile requires a non-root operator")
+    if seccomp_profile == "chromium" and (
+            skip_mount_ns or skip_pid_ns or not (target or output) or rootfs is not None
+            or not landlock_required):
+        raise ValueError("Chromium profile requires its own mount/PID namespaces and Landlock; no fallback or rootfs lane")
     if rootfs is not None:
         # Rootfs mode is mount-ns-or-nothing: without the pivot there is
         # no image filesystem to run against — the command would execute
@@ -2269,6 +2275,14 @@ def run_sandboxed(
                 # post-pivot; if the devpts mount degraded, it names
                 # the empty stub dir — a no-op grant.
                 effective_paths.append("/dev/pts")
+            if seccomp_profile == "chromium":
+                # The renderer sandbox writes uid_map/gid_map/setgroups on
+                # newly-created process directories. Landlock cannot express
+                # future per-PID pathname patterns. This names ONLY the fresh
+                # PID-namespace procfs mounted before rule installation. Global
+                # control subtrees are remounted read-only below; Node execs as
+                # a nonzero namespace uid without setup capabilities.
+                effective_paths.append("/proc")
             if rootfs is not None:
                 # Landlock rule paths are opened POST-pivot (the child
                 # applies landlock_fn at step 10, after setup_mount_ns),
@@ -2626,6 +2640,11 @@ def run_sandboxed(
         # inherited fd table (registration and close both take the
         # same lock); the `with` exit releases the lock in BOTH
         # processes before either branch runs.
+        # Chromium refuses uid 0 even inside a user namespace. Its profile
+        # uses one nonzero namespace identity mapped to the SAME host caller.
+        # Namespace ownership still grants setup capabilities before exec;
+        # exec of the non-root Node image drops those capabilities normally.
+        _mapped_id = 1000 if seccomp_profile == "chromium" else 0
         with _DEATH_W_LOCK:
             child_pid = os.fork()
     except BaseException:
@@ -2940,8 +2959,8 @@ def run_sandboxed(
             finally:
                 os.close(p_go_r)
 
-            # Child is now uid 0 in the new ns.
-            if os.getuid() != 0:
+            # Verify the exact identity the parent requested in the map.
+            if os.getuid() != _mapped_id:
                 # newuidmap silently didn't map (parent wrote go but the
                 # uid map didn't take). The parent IS waiting to reap and
                 # WILL read the status pipe, so this 'U' makes it fail loud
@@ -3306,6 +3325,25 @@ def run_sandboxed(
                                 b"proc", b"/proc", b"proc", 0, None))
                     except Exception:  # noqa: BLE001
                         _proc_rc = -1
+                    if seccomp_profile == "chromium":
+                        if _proc_rc != 0:
+                            _write_setup_status(status_w, b"F", "Chromium requires fresh private procfs")
+                            os._exit(126)
+                        # Never expose writable kernel controls with the per-PID
+                        # map allowance. These are mounts in this private mount
+                        # namespace, established before Landlock/exec.
+                        for _proc_name in os.listdir('/proc'):
+                            if _proc_name.isdecimal() or _proc_name in ('self', 'thread-self'):
+                                continue
+                            _control = os.fsencode('/proc/' + _proc_name)
+                            # proc/net and proc/mounts are aliases into per-PID
+                            # directories, not standalone kernel-control nodes.
+                            if os.path.islink(_control) or not os.path.exists(_control):
+                                continue
+                            if (_libc.mount(_control, _control, None, 4096, None) != 0
+                                    or _libc.mount(None, _control, None, 4096 | 32 | 1 | 2 | 4 | 8, None) != 0):
+                                _write_setup_status(status_w, b"M", "Chromium proc control read-only mount failed")
+                                os._exit(126)
                     if _proc_rc == 0 and _persona_proc_pins:
                         _MS_BIND_G = 4096
                         for _pt, _pfd in _persona_proc_pins:
@@ -3392,6 +3430,15 @@ def run_sandboxed(
                     _status_step = b"S"
                     seccomp_fn()
                 _status_step = b"X"
+                if seccomp_profile == "chromium":
+                    # The init waiter retains a fork of Python's memory and
+                    # wait-status channel. Procfs writes must never permit a
+                    # target to open its mem/fd interfaces. Apply before the
+                    # split so there is no target-vs-init startup race; the
+                    # ordinary Node exec restores its own dumpable posture.
+                    if _libc is None or _libc.prctl(4, 0, 0, 0, 0) != 0:
+                        _write_setup_status(status_w, b"X", "Chromium init dumpability protection failed")
+                        os._exit(126)
                 if not skip_pid_ns:
                     # Split so the target is PID 2 of the pid-ns, not
                     # PID 1: a PID-1 target has kill(2)-delivered
@@ -3949,8 +3996,8 @@ def run_sandboxed(
                 "the uidmap package"
             )
             raise FileNotFoundError(msg)
-        uid_lines = ["0", str(host_uid), "1"]
-        gid_lines = ["0", str(host_gid), "1"]
+        uid_lines = [str(_mapped_id), str(host_uid), "1"]
+        gid_lines = [str(_mapped_id), str(host_gid), "1"]
         gidmap_binary = newgidmap
         if rootfs is not None:
             # Rootfs mode wants a RANGE map: container-image entrypoints

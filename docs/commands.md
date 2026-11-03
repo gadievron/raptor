@@ -419,6 +419,7 @@ Web application security scanner (alpha).
 | `--ffuf-stop-on-all-errors` | Stop on all error cases (`-sa`) |
 | `--ffuf-header <header>` | Custom HTTP header (repeatable) |
 | `--ffuf-cookie <cookie>` | Cookie to include in requests (repeatable) |
+| `--allow-unsandboxed-chromium` | Explicitly waive Chromium’s inner sandbox (requires `--browser`); RAPTOR’s outer confinement remains mandatory. Recorded in logs and scan results. |
 | `--browser` | Headless-browser phases: rendered crawl (post-JS DOM), execution-proof XSS, fragment DOM-XSS probes |
 | `--oob-listen <[host:]port>` | In-process out-of-band callback listener; injects blind-SSRF canaries (0 = ephemeral port) |
 | `--oob-callback-host <host[:port]>` | Externally reachable callback address when it differs from the bind (NAT/container) |

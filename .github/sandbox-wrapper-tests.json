@@ -680,6 +680,23 @@
       ]
     },
     {
+      "source": "packages/web/_browser_driver.py",
+      "entrypoints": [
+        "run_driver"
+      ],
+      "contracts": [
+        "packages/web/tests/test_browser_sandbox_policy.py::test_inner_sandbox_is_explicit_and_outer_policy_is_unchanged"
+      ]
+    },
+    {
+      "source": "packages/web/_browser_sandbox.py",
+      "entrypoints": [],
+      "discovery": "Private Playwright transport launcher delegates the entire Node/browser process tree to the browser driver wrapper.",
+      "contracts": [
+        "packages/web/tests/test_browser_sandbox_policy.py::test_launcher_restores_environment_and_keeps_controls_outside_work"
+      ]
+    },
+    {
       "source": "packages/web/external_validators.py",
       "entrypoints": [
         "ExternalValidatorRunner._nuclei_batch"
@@ -1027,6 +1044,43 @@
           "expected": 1,
           "manual": true,
           "reason": "Requires an operator-installed CodeQL CLI; this suite does not download vendor runtimes. Select explicitly with --include-manual."
+        }
+      }
+    },
+    {
+      "id": "playwright-browser",
+      "platforms": {
+        "linux": {
+          "tests": [
+            "packages/web/tests/test_browser_sandbox_native.py::test_owned_driver_cannot_escape_outer_boundary",
+            "packages/web/tests/test_browser_sandbox_native.py::test_real_browser_javascript_and_explicit_inner_policy",
+            "packages/web/tests/test_browser_live.py::TestBrowserEngineLive::test_rendered_crawl_sees_js_built_dom_and_blocks_off_origin",
+            "packages/web/tests/test_browser_live.py::TestBrowserEngineLive::test_reflected_xss_execution_proof",
+            "packages/web/tests/test_browser_live.py::TestBrowserEngineLive::test_escaped_reflection_is_not_execution",
+            "packages/web/tests/test_browser_live.py::TestBrowserEngineLive::test_dom_fragment_sink_detected_without_server_roundtrip",
+            "packages/web/tests/test_browser_live.py::TestBrowserEngineLive::test_plain_page_has_no_dom_sink",
+            "packages/web/tests/test_browser_live.py::TestBrowserEngineLive::test_off_origin_render_refused",
+            "packages/web/tests/test_browser_live.py::TestBrowserEngineLive::test_fragment_payload_survives_url_encoding",
+            "packages/web/tests/test_browser_live.py::TestOriginGateHardening::test_redirect_hop_cannot_leave_origin",
+            "packages/web/tests/test_browser_live.py::TestOriginGateHardening::test_websocket_cannot_leave_origin"
+          ],
+          "expected": 12
+        },
+        "darwin": {
+          "tests": [
+            "packages/web/tests/test_browser_sandbox_native.py::test_owned_driver_cannot_escape_outer_boundary",
+            "packages/web/tests/test_browser_sandbox_native.py::test_real_browser_javascript_and_explicit_inner_policy",
+            "packages/web/tests/test_browser_live.py::TestBrowserEngineLive::test_rendered_crawl_sees_js_built_dom_and_blocks_off_origin",
+            "packages/web/tests/test_browser_live.py::TestBrowserEngineLive::test_reflected_xss_execution_proof",
+            "packages/web/tests/test_browser_live.py::TestBrowserEngineLive::test_escaped_reflection_is_not_execution",
+            "packages/web/tests/test_browser_live.py::TestBrowserEngineLive::test_dom_fragment_sink_detected_without_server_roundtrip",
+            "packages/web/tests/test_browser_live.py::TestBrowserEngineLive::test_plain_page_has_no_dom_sink",
+            "packages/web/tests/test_browser_live.py::TestBrowserEngineLive::test_off_origin_render_refused",
+            "packages/web/tests/test_browser_live.py::TestBrowserEngineLive::test_fragment_payload_survives_url_encoding",
+            "packages/web/tests/test_browser_live.py::TestOriginGateHardening::test_redirect_hop_cannot_leave_origin",
+            "packages/web/tests/test_browser_live.py::TestOriginGateHardening::test_websocket_cannot_leave_origin"
+          ],
+          "expected": 12
         }
       }
     }
