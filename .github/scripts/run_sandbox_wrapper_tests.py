@@ -32,6 +32,15 @@ def check_report(path: Path, *, expected: int | None = None, minimum: int = 1) -
     return problems
 
 
+def interpreter_tool_path(executable: str, inherited: str) -> str:
+    """Keep console scripts installed beside the selected venv interpreter visible.
+
+    Do not resolve the executable symlink: that would select the base Python
+    bin directory instead of the virtual environment containing the tools.
+    """
+    return str(Path(executable).absolute().parent) + os.pathsep + inherited
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--lane', choices=('contracts', 'native'), required=True)
@@ -89,6 +98,7 @@ def main():
             for directory in ('home', 'scratch', 'out', 'registry'):
                 (root/directory).mkdir(mode=0o700)
             env = dict(os.environ, HOME=str(root/'home'), TMPDIR=str(root/'scratch'),
+                       PATH=interpreter_tool_path(sys.executable, os.environ.get('PATH', os.defpath)),
                        RAPTOR_OUT_DIR=str(root/'out'), RAPTOR_REGISTRY_HOME=str(root/'registry'),
                        PYTHONDONTWRITEBYTECODE='1', RAPTOR_MAX_TEST_SECONDS='', **overrides)
             for key in ('RAPTOR_ALLOW_DEGRADED_UNTRUSTED', 'RAPTOR_TEST_EMULATE_PLATFORM', 'PYTHONPATH'):
