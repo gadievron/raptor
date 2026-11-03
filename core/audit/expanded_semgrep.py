@@ -41,11 +41,13 @@ import os
 import re
 import tempfile
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from core.atomic_fs import write_bytes_atomically
+from core.detectors.semgrep import define_semgrep_detector
 from core.sarif import emit
 from core.source import read_text_capped
 
@@ -58,6 +60,8 @@ from .preprocessor_view import (
 )
 
 logger = logging.getLogger(__name__)
+
+DETECTOR = define_semgrep_detector("expanded-semgrep", "1")
 
 # C-family suffixes eligible for expansion. Headers included for the
 # audit-side second pass (a .h preprocesses fine as a lone TU); the
@@ -197,103 +201,127 @@ def run_expanded_semgrep_rule(
     ``[line_start, line_end]`` when given) are kept.
     """
 
-    def _degraded(reason: str) -> ExpandedRuleResult:
-        logger.debug(
-            "expanded_semgrep degraded for %s: %s", file_path, reason,
-        )
-        return ExpandedRuleResult(
-            ok=False, file_path=file_path, rule_config=rule_config,
-            reason=reason,
-        )
-
-    if not is_c_family(file_path):
-        return _degraded(f"not a C/C++ file: {file_path}")
-    if safe_join(Path(target_path), file_path) is None:
-        return _degraded(f"path escapes target: {file_path}")
-
-    budget = budget if budget is not None else _PROCESS_BUDGET
-    view = budget.view_for(
-        Path(target_path), file_path,
-        macro_config=macro_config, out_dir=out_dir,
+    from core.detectors.semgrep import (
+        PreparedInput,
+        PreparationUnavailable,
+        run_semgrep_analysis,
     )
-    if view is None:
-        return _degraded(
-            f"expansion budget exhausted "
-            f"({budget.max_expansions} preprocessor runs)",
+
+    @contextmanager
+    def prepare():
+        if not is_c_family(file_path):
+            raise PreparationUnavailable(f"not a C/C++ file: {file_path}")
+        if safe_join(Path(target_path), file_path) is None:
+            raise PreparationUnavailable(f"path escapes target: {file_path}")
+        expansion_budget = budget if budget is not None else _PROCESS_BUDGET
+        view = expansion_budget.view_for(
+            Path(target_path), file_path, macro_config=macro_config, out_dir=out_dir,
         )
-    if not view.ok:
-        return _degraded(
-            "no fidelity-3 view: " + "; ".join(str(e) for e in view.errors),
-        )
-
-    try:
-        from packages.semgrep.runner import is_available, run_rule
-    except ImportError as exc:
-        return _degraded(f"semgrep runner unavailable: {exc}")
-    if not is_available():
-        return _degraded("semgrep not installed")
-
-    suffix = Path(file_path).suffix or ".c"
-    scratch = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            "w", prefix="expanded_", suffix=suffix,
-            delete=False, encoding="utf-8", errors="replace",
-        ) as f:
-            f.write(view.text)
-            scratch = Path(f.name)
-
-        try:
-            result = run_rule(scratch, rule_config, timeout=timeout)
-        except Exception as exc:  # noqa: BLE001 — degrade, never kill the caller
-            return _degraded(f"semgrep on expanded view failed: {exc}")
-
-        if result.errors and not result.findings:
-            return _degraded(
-                "semgrep errors on expanded view: "
-                + "; ".join(result.errors[:3]),
+        if view is None:
+            raise PreparationUnavailable(
+                f"expansion budget exhausted ({expansion_budget.max_expansions} preprocessor runs)",
             )
+        if not view.ok:
+            raise PreparationUnavailable(
+                "no fidelity-3 view: " + "; ".join(str(e) for e in view.errors),
+            )
+        try:
+            from packages.semgrep.runner import is_available
+        except ImportError as exc:
+            raise PreparationUnavailable(f"semgrep runner unavailable: {exc}") from exc
+        if not is_available():
+            raise PreparationUnavailable("semgrep not installed")
 
-        tu_rel = file_path.replace(os.sep, "/")
-        matches: list[dict[str, Any]] = []
-        dropped = 0
-        for finding in result.findings:
-            exp_line = getattr(finding, "line", 0) or 0
-            origin = view.origin_of(exp_line)
-            if origin is None or origin[0] != tu_rel:
-                # System-header / other-file expansion — noise by policy.
-                dropped += 1
-                logger.debug(
-                    "expanded_semgrep: dropping match at expanded line %d "
-                    "of %s (origin %s — outside the target file)",
-                    exp_line, file_path,
-                    origin[0] if origin else "<unattributable>",
-                )
-                continue
-            orig_line = origin[1]
-            if line_start and orig_line < line_start:
-                continue
-            if line_end and orig_line > line_end:
-                continue
-            matches.append({
-                "line": orig_line,
-                "expanded_line": exp_line,
-                "rule_id": getattr(finding, "rule_id", "") or "",
-                "message": getattr(finding, "message", "") or "",
-                "file": tu_rel,
-                "expanded_view": True,
-            })
+        scratch = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w", prefix="expanded_", suffix=Path(file_path).suffix or ".c",
+                delete=False, encoding="utf-8", errors="replace",
+            ) as output:
+                scratch = Path(output.name)
+                output.write(view.text)
+            yield PreparedInput(
+                scratch,
+                lambda findings: _translate_file_findings(
+                    view, file_path, findings, line_start=line_start, line_end=line_end,
+                ),
+            )
+        finally:
+            if scratch is not None:
+                try:
+                    os.unlink(scratch)
+                except OSError:
+                    pass
 
+    execution = run_semgrep_analysis(
+        detector=DETECTOR, prepare=prepare, rule_config=rule_config, timeout=timeout,
+    )
+    state = execution.value
+    if execution.status in ("skipped", "error"):
+        reason = execution.reason
+        if state.invocation_error is not None:
+            reason = f"semgrep on expanded view failed: {state.invocation_error}"
+        elif state.errors:
+            reason = "semgrep errors on expanded view: " + "; ".join(state.errors[:3])
+        logger.debug("expanded_semgrep degraded for %s: %s", file_path, reason)
         return ExpandedRuleResult(
-            ok=True, file_path=file_path, rule_config=rule_config,
-            matches=matches, dropped_out_of_file=dropped,
+            ok=False, file_path=file_path, rule_config=rule_config, reason=reason,
         )
-    finally:
-        if scratch is not None:
-            try:
-                os.unlink(scratch)
-            except OSError:
-                pass
+    return ExpandedRuleResult(
+        ok=True, file_path=file_path, rule_config=rule_config,
+        matches=state.matches, dropped_out_of_file=state.dropped,
+    )
+
+
+def _translate_finding(
+    view: ExpandedView,
+    original_rel: str,
+    finding: Any,
+    *,
+    line_start: int = 0,
+    line_end: int = 0,
+) -> tuple[dict[str, Any] | None, bool]:
+    """Map one match; range exclusions are not counted as attribution noise."""
+    expanded_line = getattr(finding, "line", 0) or 0
+    origin = view.origin_of(expanded_line)
+    if origin is None or origin[0] != original_rel:
+        logger.debug(
+            "expanded-semgrep: dropping match at expanded line %d of %s "
+            "(origin %s — outside the target file)",
+            expanded_line, original_rel, origin[0] if origin else "<unattributable>",
+        )
+        return None, True
+    if (line_start and origin[1] < line_start) or (line_end and origin[1] > line_end):
+        return None, False
+    return {
+        "file": original_rel,
+        "line": origin[1],
+        "expanded_line": expanded_line,
+        "rule_id": getattr(finding, "rule_id", "") or "",
+        "message": getattr(finding, "message", "") or "",
+        "expanded_view": True,
+    }, False
+
+
+def _translate_file_findings(
+    view: ExpandedView,
+    file_path: str,
+    findings: list[Any],
+    *,
+    line_start: int,
+    line_end: int,
+) -> tuple[list[dict[str, Any]], int]:
+    matches: list[dict[str, Any]] = []
+    dropped = 0
+    for finding in findings:
+        mapped, noise = _translate_finding(
+            view, file_path.replace(os.sep, "/"), finding,
+            line_start=line_start, line_end=line_end,
+        )
+        dropped += noise
+        if mapped is not None:
+            matches.append(mapped)
+    return matches, dropped
 
 
 # ---------------------------------------------------------------------------
@@ -509,30 +537,14 @@ def translate_corpus_findings(
                 f_file,
             )
             continue
-        exp_line = getattr(finding, "line", 0) or 0
-        origin = tu.view.origin_of(exp_line)
-        if origin is None or origin[0] != tu.original_rel:
-            dropped += 1
-            logger.debug(
-                "expanded-semgrep: dropping match at expanded line %d of "
-                "%s (origin %s — outside the target file)",
-                exp_line, tu.original_rel,
-                origin[0] if origin else "<unattributable>",
-            )
+        mapped, noise = _translate_finding(tu.view, tu.original_rel, finding)
+        dropped += noise
+        if mapped is None:
             continue
-        rule_id = getattr(finding, "rule_id", "") or ""
-        key = (rule_id, tu.original_rel, origin[1])
-        if key in seen:
-            continue
-        seen.add(key)
-        translated.append({
-            "file": tu.original_rel,
-            "line": origin[1],
-            "expanded_line": exp_line,
-            "rule_id": rule_id,
-            "message": getattr(finding, "message", "") or "",
-            "expanded_view": True,
-        })
+        key = (mapped["rule_id"], mapped["file"], mapped["line"])
+        if key not in seen:
+            seen.add(key)
+            translated.append(mapped)
     return translated, dropped
 
 

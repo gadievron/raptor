@@ -358,6 +358,38 @@ def test_budget_caches_views_per_file(tmp_path, sandbox_spy, monkeypatch):
     assert "budget" in r3.reason
 
 
+@needs_cpp
+def test_audit_uses_shared_pipeline_and_retains_partial_findings(tmp_path, sandbox_spy, monkeypatch):
+    from core.detectors import semgrep as detector
+
+    target = _write_fixture(tmp_path)
+    executions = []
+    original = detector.run_detector
+
+    def record(definition, state):
+        result = original(definition, state)
+        executions.append(result)
+        return result
+
+    def match(path, config, **kwargs):
+        assert path.exists()
+        assert kwargs == {"timeout": 19}
+        line = next(i for i, text in enumerate(path.read_text().splitlines(), 1)
+                    if "strcpy(dst, src)" in text)
+        return FakeSemgrepResult(findings=[FakeFinding(line)], errors=["partial parse elsewhere"])
+
+    monkeypatch.setattr("packages.semgrep.runner.is_available", lambda: True)
+    monkeypatch.setattr("packages.semgrep.runner.run_rule", match)
+    monkeypatch.setattr(detector, "run_detector", record)
+    result = run_expanded_semgrep_rule(
+        target_path=target, file_path="main.c", rule_config="rule.yml",
+        budget=ExpansionBudget(1), timeout=19,
+    )
+    assert result.ok and result.matches[0]["line"] == _MACRO_CALL_LINE
+    assert len(executions) == 1 and executions[0].status == "partial"
+    assert not executions[0].value._input.target.exists()
+
+
 # ---------------------------------------------------------------------
 # Degradation
 # ---------------------------------------------------------------------
