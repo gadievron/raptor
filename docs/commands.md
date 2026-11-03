@@ -23,6 +23,11 @@ Choose the task category below, then follow its feature guide for setup,
 examples, and output interpretation. Slash-command examples run inside a
 RAPTOR session; terminal entry points are listed in the [Python CLI](python-cli.md).
 
+**Related documentation:**
+[Python CLI](python-cli.md) |
+[Autonomous Workflow](agentic.md) |
+[Configuration](configuration.md)
+
 **On this page:**
 
 - [Security Testing](#security-testing)

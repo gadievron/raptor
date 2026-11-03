@@ -11,6 +11,11 @@ reviewing. For RAPTOR's own defences, see [security](security.md),
 [agent security](agent-security.md), and [sandbox](sandbox.md).
 For project commands, see the [command reference](commands.md#project).
 
+**Related documentation:**
+[Audit](audit.md) |
+[Concepts](concepts.md) |
+[Agent Security](agent-security.md)
+
 **On this page:**
 
 - [What Gets Created](#what-gets-created)

@@ -24,6 +24,11 @@ Start with the guarantees and [containment floor](#containment-floor) before
 choosing a [profile](#profiles). For a refused run, use
 [Troubleshooting](#troubleshooting) to identify the missing host capability.
 
+**Related documentation:**
+[Agent Security](agent-security.md) |
+[Configuration](configuration.md) |
+[Troubleshooting](troubleshooting.md)
+
 **On this page:**
 
 - [What a sandboxed run gets you](#what-a-sandboxed-run-gets-you)

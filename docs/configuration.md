@@ -8,6 +8,7 @@ the relevant section below; each setting has its own precedence rules.
 
 **Related documentation:**
 [LLM Providers](llm.md) |
+[Model broker registry](model-brokers.md) |
 [Sandbox](sandbox.md) |
 [Dependencies](dependencies.md)
 

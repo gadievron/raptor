@@ -126,6 +126,7 @@ The catalogue below preserves each command's maturity status. See the
 | [WSL](wsl.md) | Running under WSL2: Landlock routes, Windows-interop mounts, tool notes |
 | [Agent Security](agent-security.md) | Agent capabilities, tool boundaries, network controls and human approval |
 | [LLM Providers](llm.md) | Provider configuration, Bedrock, multi-model workflows, cost management |
+| [Model Broker Registry](model-brokers.md) | Third-party broker configuration, authentication, and credential isolation |
 | [SAGE](sage.md) | Persistent memory: setup, HMAC key, CPU/GPU, use cases, upgrades |
 | [Security](security.md) | RAPTOR's own security model |
 | [Threat Model](threat-model.md) | Per-project threat model feature |

@@ -1,5 +1,21 @@
 # Model broker registry
 
+[Documentation index](README.md)
+
+**Related documentation:**
+[LLM Providers](llm.md) |
+[Configuration](configuration.md) |
+[Environment Variables](environment.md)
+
+**On this page:**
+
+- [Add a broker](#add-a-broker)
+- [Choose a model](#choose-a-model)
+- [Credential isolation](#credential-isolation)
+- [Python authority and validation](#python-authority-and-validation)
+
+## Add a broker
+
 To contribute a standard broker, edit only
 [`core/llm/model_brokers/registry.json`](../core/llm/model_brokers/registry.json). Add one entry to the
 `brokers` array under the existing `version: 1` envelope:
@@ -39,6 +55,8 @@ preserved. Restart RAPTOR after changing the catalog.
   preserves raw dispatcher forwarding for a gateway such as Replicate whose
   native API is not an OpenAI chat API. It does not add an SDK adapter.
 
+## Choose a model
+
 Operators still choose a model and supply credentials. For an OpenAI-compatible
 broker, a `models.json` entry needs no API base:
 
@@ -54,6 +72,8 @@ Export `EXAMPLEBROKER_API_KEY` before starting RAPTOR, or use the existing
 `models.json` credential seeding mechanism. Registration or exporting a key
 alone never changes the default model. The operator must select the broker.
 
+## Credential isolation
+
 Broker SDK calls require the RAPTOR dispatcher. The parent consumes the key,
 removes it from its environment, and injects authentication per upstream
 request. Spawned dispatcher workers have broker credential variables removed
@@ -68,6 +88,8 @@ file; the registry does not change filesystem access policy.
 For raw HTTP gateways, address the dispatcher at
 `/<name><api_path>/<resource>` with the existing worker capability token.
 Selecting `protocol: http` does not claim OpenAI SDK compatibility.
+
+## Python authority and validation
 
 Python has final authority. JSON cannot register executable hooks, import
 modules, add arbitrary authentication headers, override native adapters, or
