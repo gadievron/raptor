@@ -120,6 +120,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends buildah skopeo
 
+      - uses: ./.github/actions/enable-userns
+
       - name: Build and verify cleaned image
         run: |
           set -euo pipefail
@@ -141,6 +143,20 @@ jobs:
             python3 /usr/local/libexec/use-system-node.py --check
             python3 /usr/local/libexec/check-browser.py
           '
+
+      - name: Verify confined Debian Chromium
+        run: |
+          set -euo pipefail
+          browser_image="raptor-browser-check:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          sudo buildah push localhost/raptor-publish:checked "docker-daemon:${browser_image}"
+          trap 'docker image rm "$browser_image"' EXIT
+          # Exercise Docker's actual devcontainer runtime policy, as vscode.
+          docker run --rm --network none --cap-add SYS_PTRACE \
+            --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
+            --security-opt systempaths=unconfined \
+            --mount type=bind,source="$GITHUB_WORKSPACE",target=/workspaces/raptor,readonly \
+            --entrypoint python3 "$browser_image" \
+            -I -B /workspaces/raptor/.devcontainer/check-browser.py --confined /workspaces/raptor
 
       - name: Export immutable image
         id: export_image

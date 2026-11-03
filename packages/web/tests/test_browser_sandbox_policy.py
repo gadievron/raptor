@@ -33,7 +33,11 @@ def test_inner_sandbox_is_explicit_and_outer_policy_is_unchanged(tmp_path, monke
         assert options['profile'] == 'chromium'
         assert str(Path(config['node']).parent) in options['tool_paths']
         assert config['node'] not in options['tool_paths']
-        assert options['restrict_reads'] and options['fake_home']
+        assert options['restrict_reads'] and options['fake_home'] is False
+        for name in ('HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME'):
+            assert Path(options['env'][name]).is_dir()
+            assert Path(options['env'][name]).is_relative_to(tmp_path)
+        assert options['limits']['nproc'] == 256
         assert options['exclude_tmp_baseline'] and options['require_fresh_procfs']
         assert options['strict_env'] and options['strip_trust_markers']
         assert options['stdin'] == 0 and options['capture_output'] is False
@@ -64,6 +68,9 @@ def test_launcher_restores_environment_and_keeps_controls_outside_work(tmp_path,
         monkeypatch.delenv('PLAYWRIGHT_NODEJS_PATH', raising=False)
     else:
         monkeypatch.setenv('PLAYWRIGHT_NODEJS_PATH', previous)
+    long_base = tmp_path / ('long-session-' * 8)
+    long_base.mkdir()
+    monkeypatch.setattr(boundary.tempfile, 'tempdir', str(long_base))
     launched = []
     closed = []
     class Factory:
@@ -72,6 +79,7 @@ def test_launcher_restores_environment_and_keeps_controls_outside_work(tmp_path,
             launched.append(launcher)
             import json
             config = json.loads((launcher.parent/'driver.json').read_text())
+            assert len(os.fsencode(config['work'] + '/org.chromium.Chromium.123456/SingletonSocket')) < 104
             assert Path(config['work']).parent == launcher.parent
             assert not launcher.is_relative_to(Path(config['work']))
             assert config['ports'] == sorted([proxy_port, 8443])

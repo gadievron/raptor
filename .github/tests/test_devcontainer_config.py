@@ -108,3 +108,10 @@ def test_claude_mount_serves_the_cli_user():
     ]
     assert claude_targets, "the ~/.claude mount disappeared entirely"
     assert claude_targets == [f"{home}/.claude"], claude_targets
+
+
+def test_nested_sandbox_runtime_retains_container_boundary():
+    args = _load_devcontainer()['runArgs']
+    assert 'apparmor=unconfined' in args
+    assert 'systempaths=unconfined' in args
+    assert not any('SYS_ADMIN' in arg or 'pid=host' in arg or 'network=host' in arg for arg in args)

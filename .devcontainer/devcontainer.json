@@ -31,7 +31,13 @@
   // only succeeds under that profile (it degrades silently
   // otherwise). Pinned by .github/tests/test_devcontainer_config.py:
   // --privileged must never be the default again.
-  "runArgs": ["--cap-add=SYS_PTRACE", "--security-opt", "seccomp=unconfined"],
+  // Nested mount/PID namespaces need AppArmor mount permission and an
+  // unmasked procfs ancestry. RAPTOR mounts fresh procfs and installs its own
+  // per-child filesystem/syscall policy. These options relax Docker's outer
+  // AppArmor/proc masks; they add neither SYS_ADMIN nor host device access.
+  "runArgs": ["--cap-add=SYS_PTRACE", "--security-opt", "seccomp=unconfined",
+              "--security-opt", "apparmor=unconfined",
+              "--security-opt", "systempaths=unconfined"],
   "features": {
     "ghcr.io/devcontainers/features/git:1": {},
     "ghcr.io/devcontainers/features/github-cli:1": {}
