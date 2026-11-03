@@ -37,8 +37,8 @@ import pytest
 # core/sandbox/tests/test_coordinator_isolation.py
 #   parents[3] = repo root
 REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO))
-os.environ.setdefault("_RAPTOR_TRUSTED", "1")
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 
 COORDINATOR = REPO / "core" / "sandbox" / "netns_coordinator.py"
 
@@ -49,11 +49,9 @@ def _probe_output_dir() -> str:
     nor output=, so every probe spec names a scratch run directory as
     its writable surface.
 
-    Removed at interpreter exit rather than per-test: the first caller
-    is the module-level ``_coordinator_works`` availability probe,
-    which runs during collection (skipif), before any fixture teardown
-    exists to hook — pre-fix every collection of this module leaked a
-    raptor-coord-isolation- dir per call site."""
+    Each call gets a distinct directory, removed at interpreter exit.
+    The availability fixture and the individual probe helpers share
+    this allocator."""
     import atexit
     import shutil
     d = tempfile.mkdtemp(prefix="raptor-coord-isolation-")
@@ -102,6 +100,8 @@ def _coordinator_works() -> bool:
     }
     env = dict(os.environ)
     env["RAPTOR_DIR"] = str(REPO)
+    env["_RAPTOR_TRUSTED"] = "1"
+    p = None
     try:
         p = subprocess.Popen(
             [sys.executable, str(COORDINATOR)],
@@ -130,19 +130,45 @@ def _coordinator_works() -> bool:
         return bool(target_ns) and target_ns == exploit_ns
     except Exception:
         return False
+    finally:
+        if p is not None and p.poll() is None:
+            p.kill()
+            p.communicate(timeout=5)
 
 
-_COORD_OK = _coordinator_works()
+@pytest.fixture(scope="module")
+def coordinator_available():
+    # Probe once when a kernel test executes, never during collection.
+    # The mocked _run_child contract tests do not require namespaces.
+    if not _coordinator_works():
+        pytest.skip(
+            "netns_coordinator not operational on this host — needs either "
+            "kernel.apparmor_restrict_unprivileged_userns=0 OR the apparmor "
+            "profile loaded for raptor-coord-launcher (see "
+            "core/sandbox/helpers/raptor-coord-launcher.apparmor)"
+        )
 
-pytestmark = pytest.mark.skipif(
-    not _COORD_OK,
-    reason=(
-        "netns_coordinator not operational on this host — needs either "
-        "kernel.apparmor_restrict_unprivileged_userns=0 OR the apparmor "
-        "profile loaded for raptor-coord-launcher (see "
-        "core/sandbox/helpers/raptor-coord-launcher.apparmor)"
-    ),
-)
+
+def test_availability_probe_reaps_timed_out_child(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    proc = Mock()
+    proc.communicate.side_effect = [
+        subprocess.TimeoutExpired("coordinator", 20), (b"", b""),
+    ]
+    proc.poll.return_value = None
+    popen = Mock(return_value=proc)
+    monkeypatch.setattr(sys.modules[__name__], "subprocess", SimpleNamespace(
+        Popen=popen, PIPE=subprocess.PIPE,
+    ))
+    monkeypatch.setattr(sys.modules[__name__], "_probe_output_dir",
+                        lambda: str(tmp_path))
+    assert _coordinator_works() is False
+    proc.kill.assert_called_once_with()
+    assert proc.communicate.call_count == 2
+    proc.communicate.assert_called_with(timeout=5)
+    assert popen.call_args.kwargs["env"]["_RAPTOR_TRUSTED"] == "1"
 
 
 # ----------------------------------------------------------------------
@@ -171,6 +197,7 @@ def _run_probe_via_coordinator(probe_code: str, *, timeout_s: float = 5.0):
     }
     env = dict(os.environ)
     env["RAPTOR_DIR"] = str(REPO)
+    env["_RAPTOR_TRUSTED"] = "1"
     p = subprocess.Popen(
         [sys.executable, str(COORDINATOR)],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -197,7 +224,7 @@ def _run_probe_via_coordinator(probe_code: str, *, timeout_s: float = 5.0):
 # ----------------------------------------------------------------------
 
 
-def test_cannot_reach_host_loopback_service():
+def test_cannot_reach_host_loopback_service(coordinator_available):
     """Bind a TCP listener on the HOST's 127.0.0.1, then have the
     probe try to connect to it. If the netns is shared with the host,
     the connect succeeds (bad — escape). With proper isolation, the
@@ -231,7 +258,7 @@ def test_cannot_reach_host_loopback_service():
     assert rc == 0, f"probe didn't exit cleanly: rc={rc}"
 
 
-def test_cannot_reach_external_internet():
+def test_cannot_reach_external_internet(coordinator_available):
     """8.8.8.8:53 is publicly reachable from any unfirewalled host.
     The sandboxed child is in a private netns with only loopback up;
     any external connect attempt should fail at the network layer
@@ -253,7 +280,7 @@ def test_cannot_reach_external_internet():
     assert "BLOCKED" in stdout, f"unexpected stdout: {stdout!r}"
 
 
-def test_cannot_unshare_into_fresh_netns():
+def test_cannot_unshare_into_fresh_netns(coordinator_available):
     """The sandboxed child has no host CAP_SYS_ADMIN, so a bare
     unshare(CLONE_NEWNET) should fail with EPERM. (It's in a user-ns
     where it's root, but the unshare check happens against the
@@ -280,7 +307,7 @@ def test_cannot_unshare_into_fresh_netns():
     )
 
 
-def test_cannot_setns_into_host_netns():
+def test_cannot_setns_into_host_netns(coordinator_available):
     """The host's netns is identified by its inode in
     /proc/1/ns/net. Try to open it (likely ENOENT — different
     pid-ns hides /proc/1) and setns into it (definitely EPERM —
@@ -309,7 +336,7 @@ def test_cannot_setns_into_host_netns():
     assert "BLOCKED" in stdout, f"unexpected stdout: {stdout!r}"
 
 
-def test_cannot_open_raw_socket():
+def test_cannot_open_raw_socket(coordinator_available):
     """Raw sockets need CAP_NET_RAW. The probe should get EPERM."""
     probe = (
         "import socket\n"
@@ -330,7 +357,7 @@ def test_cannot_open_raw_socket():
     assert "BLOCKED" in stdout, f"unexpected stdout: {stdout!r}"
 
 
-def test_only_loopback_interface_visible():
+def test_only_loopback_interface_visible(coordinator_available):
     """The shared netns should expose ONLY the loopback interface.
     /proc/self/net/dev lists kernel interfaces visible to this
     netns. Any non-`lo` line means the netns has unexpected
@@ -358,7 +385,7 @@ def test_only_loopback_interface_visible():
     assert "BLOCKED" in stdout
 
 
-def test_target_and_exploit_share_same_netns():
+def test_target_and_exploit_share_same_netns(coordinator_available):
     """Sibling check: the substrate's whole point is target + exploit
     in the SAME shared netns (so they can talk on 127.0.0.1). Verify
     by running both as probes that print their /proc/self/ns/net
@@ -386,6 +413,7 @@ def test_target_and_exploit_share_same_netns():
     }
     env = dict(os.environ)
     env["RAPTOR_DIR"] = str(REPO)
+    env["_RAPTOR_TRUSTED"] = "1"
     p = subprocess.Popen(
         [sys.executable, str(COORDINATOR)],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -419,6 +447,7 @@ def _drive_coordinator(payload: bytes) -> dict:
     and return its parsed stdout response."""
     env = dict(os.environ)
     env["RAPTOR_DIR"] = str(REPO)
+    env["_RAPTOR_TRUSTED"] = "1"
     p = subprocess.Popen(
         [sys.executable, str(COORDINATOR)],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -428,7 +457,7 @@ def _drive_coordinator(payload: bytes) -> dict:
     return json.loads(out.decode())
 
 
-def test_malformed_json_request_returns_structured_error():
+def test_malformed_json_request_returns_structured_error(coordinator_available):
     """Non-JSON on stdin must produce a JSON error object on stdout
     with reason='bad_request' — not a Python traceback on stderr that
     would leave the parent process waiting on an empty stdout."""
@@ -437,7 +466,7 @@ def test_malformed_json_request_returns_structured_error():
     assert "parse" in resp["error"]["message"].lower()
 
 
-def test_missing_target_key_returns_structured_error():
+def test_missing_target_key_returns_structured_error(coordinator_available):
     """Request missing the 'target' key triggers the schema check,
     not a KeyError traceback."""
     resp = _drive_coordinator(json.dumps({
@@ -447,7 +476,7 @@ def test_missing_target_key_returns_structured_error():
     assert "target" in resp["error"]["message"]
 
 
-def test_missing_exploit_key_returns_structured_error():
+def test_missing_exploit_key_returns_structured_error(coordinator_available):
     """Symmetric to the above for the 'exploit' key."""
     resp = _drive_coordinator(json.dumps({
         "target": {"cmd": ["/bin/true"]},
@@ -455,7 +484,7 @@ def test_missing_exploit_key_returns_structured_error():
     assert resp.get("error", {}).get("reason") == "bad_request", resp
 
 
-def test_non_numeric_wait_listen_port_returns_structured_error():
+def test_non_numeric_wait_listen_port_returns_structured_error(coordinator_available):
     """``int("xyz")`` would raise ValueError mid-handler; the coord
     must validate numerics up front and surface them as bad_request."""
     resp = _drive_coordinator(json.dumps({
@@ -466,7 +495,7 @@ def test_non_numeric_wait_listen_port_returns_structured_error():
     assert resp.get("error", {}).get("reason") == "bad_request", resp
 
 
-def test_request_top_level_not_object_returns_structured_error():
+def test_request_top_level_not_object_returns_structured_error(coordinator_available):
     """A bare JSON array or scalar must not slip past — accessing
     ``.get`` on a list raises AttributeError."""
     resp = _drive_coordinator(b"[]\n")
