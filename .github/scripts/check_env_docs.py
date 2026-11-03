@@ -840,7 +840,7 @@ _DOC_HEADING = re.compile(r"^#{2,4}\s+(.*)")
 _DOC_TOKEN = re.compile(r"`([A-Za-z_][A-Za-z0-9_*]*)`")
 
 
-def documented_vars(root: Path) -> tuple[set[str], set[str], set[str]]:
+def documented_vars(root: Path, inventory: Inventory | None = None) -> tuple[set[str], set[str], set[str]]:
     """(documented names, documented prefixes, mentioned names).
 
     A variable counts as *documented* when a backticked token for it
@@ -850,6 +850,10 @@ def documented_vars(root: Path) -> tuple[set[str], set[str], set[str]]:
     elsewhere in the page counts as *mentioned* — enough to silence
     the warn-only classes (internal / external-standard), but not to
     satisfy the operator-documentation requirement.
+
+    The documented broker naming convention covers credentials derived from
+    the JSON registry. Reuse those inventory entries rather than requiring
+    a documentation row per broker or silencing arbitrary API-key variables.
     """
     path = root / DOC_PATH
     names: set[str] = set()
@@ -877,6 +881,12 @@ def documented_vars(root: Path) -> tuple[set[str], set[str], set[str]]:
         for token in _DOC_TOKEN.findall(line):
             if not token.endswith("*"):
                 mentioned.add(token)
+    if inventory is not None and "`<UPPERCASE_NAME>_<credential_suffix>`" in text:
+        mentioned.update(
+            name for name, occurrences in inventory.vars.items()
+            if any(o.file == "core/llm/model_brokers/registry.json"
+                   and o.kind == "declared:LLM_API_KEY_VARS" for o in occurrences)
+        )
     return names, prefixes, mentioned
 
 
@@ -938,7 +948,7 @@ def main() -> int:
             print(f"{name:40s} {cls:18s} {','.join(kinds)}")
         return 0
 
-    doc_names, doc_prefixes, mentioned = documented_vars(args.root)
+    doc_names, doc_prefixes, mentioned = documented_vars(args.root, inv)
     baseline = load_baseline(args.baseline)
 
     def is_documented(name: str) -> bool:
