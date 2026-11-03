@@ -956,7 +956,7 @@ def generate_lua_harness(
             print(json_encode({{status="import_error", token=_tok, message="function {spec.function} not found"}}))
             os.exit(0)
         end
-        local ok, result = pcall(fn, {args_str})
+        local ok, result = pcall(fn{', ' + args_str if args_str else ''})
         if ok then
             print(json_encode({{status="returned", token=_tok, value=tostring(result)}}))
         else

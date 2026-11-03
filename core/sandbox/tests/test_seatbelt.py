@@ -31,6 +31,25 @@ def test_baseline_is_allow_default():
     assert "(deny default)" not in p
 
 
+def test_home_grant_allows_ancestor_metadata_without_sibling_access():
+    profile = seatbelt.build_profile(
+        restrict_reads=True, readable_paths=["/Users/mrk/github/raptor/.venv"],
+    )
+    for path in ("/Users", "/Users/mrk", "/Users/mrk/github", "/Users/mrk/github/raptor"):
+        assert f'(literal "{path}")' in profile
+        assert f'(subpath "{path}")' not in profile or path == "/Users"
+    assert '(deny file-read-metadata (subpath "/Users"))' in profile
+    assert '(subpath "/Users/mrk/.ssh")' not in profile
+    assert '(allow file-read-data (literal "/Users/mrk"))' not in profile
+
+
+def test_apple_sdk_and_frameworks_are_readable_but_user_caches_are_not():
+    profile = seatbelt.build_profile(restrict_reads=True)
+    assert '(subpath "/Library/Developer")' in profile
+    assert '(subpath "/Applications/Xcode.app/Contents")' in profile
+    assert '(subpath "/private/var/folders")' not in profile
+
+
 def test_version_pragma_first():
     """SBPL requires (version 1) before any rule. Out-of-order or
     missing version pragma rejects the profile."""

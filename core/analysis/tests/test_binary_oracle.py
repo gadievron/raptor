@@ -48,7 +48,7 @@ EXPECTED_VERDICTS = {
 
 
 def _have_toolchain() -> bool:
-    return all(shutil.which(t) for t in ("cc", "make", "nm",
+    return sys.platform == "linux" and all(shutil.which(t) for t in ("cc", "make", "nm",
                                          "objdump", "readelf"))
 
 
@@ -59,12 +59,12 @@ def _have_toolchain() -> bool:
 # binaries feed shells out to nm/objdump/readelf, so those join the
 # compiler in each gate.
 _needs_cc = pytest.mark.skipif(
-    not all(shutil.which(t) for t in ("gcc", "nm", "objdump", "readelf")),
-    reason="gcc toolchain (gcc/nm/objdump/readelf) not available",
+    sys.platform != "linux" or not all(shutil.which(t) for t in ("gcc", "nm", "objdump", "readelf")),
+    reason="requires Linux ELF and gcc/nm/objdump/readelf",
 )
 _needs_cxx = pytest.mark.skipif(
-    not all(shutil.which(t) for t in ("g++", "nm", "objdump", "readelf")),
-    reason="g++ toolchain (g++/nm/objdump/readelf) not available",
+    sys.platform != "linux" or not all(shutil.which(t) for t in ("g++", "nm", "objdump", "readelf")),
+    reason="requires Linux ELF and g++/nm/objdump/readelf",
 )
 _needs_strip = pytest.mark.skipif(
     not shutil.which("strip"), reason="strip not available",
@@ -382,8 +382,8 @@ def _clang_built_demo(tmp_path_factory):
     compile cost lands in fixture SETUP, not in the test's CALL phase
     (CI's 10s call-duration guard fires otherwise — clang cold-start
     on a Makefile-driven 3-file build is ~12s on CI runners)."""
-    if not shutil.which("clang"):
-        pytest.skip("clang not available")
+    if not _have_toolchain() or not shutil.which("clang"):
+        pytest.skip("requires Linux ELF and clang/make/nm/objdump/readelf")
     work = tmp_path_factory.mktemp("clang_fixture")
     for f in ("lib.c", "lib.h", "main.c", "Makefile"):
         (work / f).write_bytes((FIXTURE_DIR / f).read_bytes())
@@ -409,6 +409,7 @@ def test_classifier_handles_clang_indexed_string_dwarf(_clang_built_demo) -> Non
 
 
 @pytest.mark.slow
+@_needs_cxx
 def test_classifier_handles_cpp_mangled_symbols(tmp_path: Path) -> None:
     """nm emits mangled C++ symbols; the source side has unmangled names.
     Without ``nm --demangle`` every C++ method would classify ``absent``.
@@ -688,8 +689,8 @@ def _nm_qualified_cpp_binary(tmp_path_factory):
     on CI runners can take ~30s for a 2-line program). Used only by
     ``test_nm_index_stores_qualified_no_args_form_for_cpp``."""
     import subprocess as _sp
-    if not all(shutil.which(t) for t in ("g++", "nm")):
-        pytest.skip("g++ toolchain (g++/nm) not available")
+    if sys.platform != "linux" or not all(shutil.which(t) for t in ("g++", "nm")):
+        pytest.skip("requires Linux ELF and g++/nm")
     work = tmp_path_factory.mktemp("nm_qualified")
     src = work / "x.cc"
     src.write_text(

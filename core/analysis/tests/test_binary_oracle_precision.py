@@ -169,6 +169,15 @@ def _crates_io_unreachable() -> str | None:
 def _require_corpus_substrate(
     *, network: bool, crates_io: bool = False,
 ) -> None:
+    import shutil
+    import sys
+
+    if sys.platform != "linux":
+        pytest.skip("binary oracle corpus classification requires Linux ELF")
+    missing = [tool for tool in ("cc", "make", "nm", "objdump", "readelf")
+               if not shutil.which(tool)]
+    if missing:
+        pytest.skip("binary oracle corpus tools missing: " + ", ".join(missing))
     reason = _sandboxed_build_unavailable()
     if reason:
         pytest.skip(

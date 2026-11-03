@@ -880,6 +880,17 @@ def _load_file_state(
             path, e,
         )
         return _FileState("", [])
+    # Case-insensitive filesystems may resolve Foo.c.md and foo.c.md
+    # to the same inode. Never attribute or rewrite notes for the other
+    # spelling. Older files without a source heading remain readable.
+    heading = next((line for line in text.splitlines() if line.startswith("# ")), "")
+    if (heading.startswith("# ") and heading[2:] != source_file
+            and heading[2:].casefold() == source_file.casefold()):
+        msg = f"annotation file {path} has a case-colliding source heading: {heading[2:]!r}"
+        if strict:
+            raise AnnotationFileError(msg)
+        logger.warning("%s — skipping", msg)
+        return _FileState("", [])
     # Detect format version. Files without a marker are legacy v1 —
     # parse permissively. Files with a future version emit a warning
     # but still try (partial-results-better-than-nothing). In strict
