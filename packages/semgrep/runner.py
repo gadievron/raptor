@@ -54,6 +54,7 @@ _DEFAULT_RULE_TIMEOUT = 60
 # semgrep 1.95 (Nov 2024).  Older CLIs reject it as unknown (rc=2).
 # Version-gated: below-floor scans omit the flag and log a warning.
 _SCOPE_ISOLATION_MIN_VERSION = (1, 95, 0)
+_scope_upgrade_warned = False
 
 # RAPTOR-owned scan-scope baseline, passed as repeated ``--exclude``
 # args by build_cmd (gitignore-style patterns; trailing ``/`` = match
@@ -571,6 +572,7 @@ def run_rule(
     """
     # The private bind tree need not carry the caller's working directory.
     # Preserve file identity while making scan/rule arguments cwd-independent.
+    global _scope_upgrade_warned
     target = Path(target).absolute()
     extra_targets = tuple(Path(path).absolute() for path in extra_targets)
     # Registry identifiers keep their meaning even if a hostile working
@@ -594,7 +596,8 @@ def run_rule(
         )
 
     scope_ok = scope_isolation_available()
-    if not scope_ok:
+    if not scope_ok and not _scope_upgrade_warned:
+        _scope_upgrade_warned = True
         v = version() or "unknown"
         floor = ".".join(str(p) for p in _SCOPE_ISOLATION_MIN_VERSION)
         logger.warning(
