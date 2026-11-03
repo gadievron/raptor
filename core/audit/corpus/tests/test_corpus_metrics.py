@@ -405,21 +405,6 @@ class TestModeMismatches:
             "expected": "finding", "actual": "clean",
         }]
 
-    def test_ensemble_per_mode_actuals(self):
-        rows = [
-            _row("a:f1", "finding", "finding", "finding",
-                 mode="ensemble",
-                 security_actual="clean",
-                 bug_first_actual="finding",
-                 expected_mode_results={
-                     "security": "finding", "bug_first": "finding",
-                 }),
-        ]
-        checked, mismatches = compute_mode_mismatches(rows)
-        assert checked == 2
-        assert len(mismatches) == 1
-        assert mismatches[0]["mode"] == "security"
-
     def test_unexercised_mode_not_counted(self):
         rows = [
             _row("a:f1", "clean", "clean", "clean",

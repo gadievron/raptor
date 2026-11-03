@@ -91,8 +91,7 @@ class TestFunctionLabel:
 
     def test_expected_mode_results_valid(self):
         label = _make_label(expected_mode_results={
-            "security": "finding", "bug_first": "finding",
-            "quality": "clean",
+            "security": "finding", "quality": "clean",
         })
         assert label.expected_mode_results["security"] == "finding"
 
@@ -213,14 +212,14 @@ class TestLoadLabel:
             "labeler": "test",
             "labeled_at": "2026-07-28",
             "expected_mode_results": {
-                "security": "finding", "bug_first": "finding",
+                "security": "finding",
             },
         }
         p = tmp_path / "test.label.json"
         p.write_text(json.dumps(label_data))
         label = load_label(p)
         assert label.expected_mode_results == {
-            "security": "finding", "bug_first": "finding",
+            "security": "finding",
         }
 
     def test_expected_rule_hits_not_dropped(self, tmp_path):

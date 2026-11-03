@@ -1939,7 +1939,7 @@ def format_context_for_prompt(
     if ctx.get("sink_unreachable"):
         narrowed = ctx.get("sink_narrowed_classes", [])
         review_mode = ctx.get("review_mode", "security")
-        if review_mode in ("bug_first", "quality"):
+        if review_mode == "quality":
             focus = (
                 "Focus on: logic bugs, resource handling, error paths, "
                 "contract violations, concurrency."
@@ -3152,7 +3152,7 @@ def _format_glance_prompt(ctx: dict[str, Any]) -> str:
     function warrants further investigation.
     """
     mode = ctx.get("review_mode", "security")
-    if mode in ("bug_first", "quality"):
+    if mode == "quality":
         question = (
             "\nDoes this function contain a potential defect — logic "
             "error, resource leak, error handling gap, or incorrect "
