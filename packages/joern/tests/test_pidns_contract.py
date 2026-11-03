@@ -42,10 +42,14 @@ def _pidns_available() -> bool:
         return False
 
 
-needs_pidns = pytest.mark.skipif(
-    not _pidns_available(),
-    reason="single-call unshare(USER|NET|PID) unavailable on this host",
-)
+@pytest.fixture(scope="module")
+def pidns_available():
+    if not _pidns_available():
+        pytest.skip("single-call unshare(USER|NET|PID) unavailable on this host")
+    return True
+
+
+needs_pidns = pytest.mark.usefixtures("pidns_available")
 
 
 @pytest.fixture

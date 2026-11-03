@@ -64,9 +64,8 @@ _STUB_SLEEPER = (
 
 def _userns_available() -> bool:
     """Same capability the boot needs, probed the same way as
-    test_netns_forwarder.py (deliberately a local copy: importing a
-    sibling test module for its probe would couple this file to that
-    module's internals and re-run its module-level probe anyway)."""
+    test_netns_forwarder.py (deliberately a local copy so this file
+    does not depend on a sibling test module's internals)."""
     try:
         return subprocess.run(
             [sys.executable, str(_SCRIPT), "--self-probe"],
@@ -76,10 +75,14 @@ def _userns_available() -> bool:
         return False
 
 
-needs_userns = pytest.mark.skipif(
-    not _userns_available(),
-    reason="unprivileged user namespaces unavailable",
-)
+@pytest.fixture(scope="module")
+def userns_available():
+    if not _userns_available():
+        pytest.skip("unprivileged user namespaces unavailable")
+    return True
+
+
+needs_userns = pytest.mark.usefixtures("userns_available")
 
 
 def _free_port() -> int:
