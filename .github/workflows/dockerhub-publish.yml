@@ -5,8 +5,8 @@ name: Publish devcontainer image to Docker Hub
 # instead of building ~6GB locally. See gadievron/raptor#191.
 #
 # Tags pushed:
-#   :latest      — moving tag, updated on every push to main that touches
-#                  the Dockerfile (mirrors ci-deps-image.yml's pattern).
+#   :latest      — moving tag, updated on pushes to main that change
+#                  container inputs or the Python dependency lock.
 #   :<version>   — pushed only on tagged releases (vX.Y.Z -> X.Y.Z), via
 #                  the dispatch from release.yml (see below).
 #
@@ -35,20 +35,11 @@ on:
   push:
     branches: [ main ]
     paths:
-      - '.devcontainer/Dockerfile'
-      - '.devcontainer/codeql-bootstrap.py'
-      - '.devcontainer/github-release-pins.json'
-      - '.devcontainer/install-npm-notices.py'
-      - '.devcontainer/refresh-npm-notices.py'
-      - '.devcontainer/install-python-notices.py'
-      - '.devcontainer/refresh-python-notices.py'
-      - '.devcontainer/python-notices/**'
-      - '.devcontainer/pydocstyle-notices/**'
-      - '.devcontainer/opentelemetry-notices/**'
-      - '.devcontainer/semgrep-notices/**'
-      - '.devcontainer/npm-notices/**'
-      - '.devcontainer/pnpm-notices/**'
-      - '.devcontainer/corepack-notices/**'
+      # Include future notice helpers and evidence without maintaining a file list.
+      - '.devcontainer/**'
+      # These files determine the Python packages installed into the image.
+      - 'pyproject.toml'
+      - 'uv.lock'
       - '.github/workflows/dockerhub-publish.yml'
   workflow_dispatch:
     inputs:
