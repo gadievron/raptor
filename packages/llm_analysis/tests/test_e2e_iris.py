@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -191,6 +192,29 @@ def _findings_and_analyses():
 
 class TestE2EIris:
     """End-to-end exercise of IRIS validation on the synthetic target."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated_prebuilt_queries(self, tmp_path, monkeypatch):
+        from packages.hypothesis_validation.adapters import codeql
+        from packages.llm_analysis import dataflow_validation
+
+        query = tmp_path / "CommandInjection.ql"
+        query.write_text("/** @kind path-problem */\n")
+        monkeypatch.setattr(
+            dataflow_validation, "discover_prebuilt_query",
+            lambda language, cwe: query if (language, cwe) == ("python", "CWE-78") else None,
+        )
+
+        def run_prebuilt(adapter, query_path, target, **kwargs):
+            # Each case's run double supplies its own ordered tool evidence.
+            return adapter.run(str(query_path), target, **kwargs)
+
+        monkeypatch.setattr(codeql.CodeQLAdapter, "run_prebuilt_query", run_prebuilt)
+
+        def forbid_runner(*args, **kwargs):
+            pytest.fail("IRIS wiring tests must not launch real CodeQL")
+
+        monkeypatch.setattr(codeql, "make_sandbox_runner", forbid_runner)
 
     def test_real_dataflow_confirmed_no_downgrade(self, tmp_path):
         """A real dataflow case: validation confirms, no downgrade."""

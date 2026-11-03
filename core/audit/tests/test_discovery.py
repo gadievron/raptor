@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import sys
 from collections import Counter
 from pathlib import Path
+
+import pytest
 
 _REPO_ROOT = str(Path(__file__).resolve().parents[3])
 
@@ -950,23 +953,25 @@ class TestCLIArgParsing:
     def test_open_discovery_flag(self):
         import subprocess
         result = subprocess.run(
-            ["python3", "libexec/raptor-audit", "run", "--help"],
-            capture_output=True, text=True, cwd=_REPO_ROOT,
+            [sys.executable, "libexec/raptor-audit", "run", "--help"],
+            capture_output=True, text=True, cwd=_REPO_ROOT, timeout=60,
         )
         assert "--no-open-discovery" in result.stdout
 
     def test_discovery_budget_flag(self):
         import subprocess
         result = subprocess.run(
-            ["python3", "libexec/raptor-audit", "run", "--help"],
-            capture_output=True, text=True, cwd=_REPO_ROOT,
+            [sys.executable, "libexec/raptor-audit", "run", "--help"],
+            capture_output=True, text=True, cwd=_REPO_ROOT, timeout=60,
         )
         assert "--discovery-budget" in result.stdout
 
 
 # ── end-to-end dry-run via CLI ─────────────────────────────────────
 
+@pytest.mark.slow
 class TestDryRunEndToEnd:
+    # These intentionally retain full discovery CLI startup and preparation.
     def test_dry_run_with_synthetic_target(self, tmp_path: Path):
         """Full dry-run pipeline: checklist + source → bundle listing."""
         # Build a synthetic target codebase
@@ -1096,13 +1101,13 @@ class TestDryRunEndToEnd:
         import subprocess
         result = subprocess.run(
             [
-                "python3", "-m", "core.audit.discovery",
+                sys.executable, "-m", "core.audit.discovery",
                 "--run-dir", str(run_dir),
                 "--target", str(target),
                 "--dry-run",
             ],
             capture_output=True, text=True,
-            cwd=_REPO_ROOT,
+            cwd=_REPO_ROOT, timeout=60,
         )
         assert result.returncode == 0, result.stderr
         assert "Seam bundles:" in result.stdout
@@ -1130,13 +1135,13 @@ class TestDryRunEndToEnd:
         import subprocess
         result = subprocess.run(
             [
-                "python3", "-m", "core.audit.discovery",
+                sys.executable, "-m", "core.audit.discovery",
                 "--run-dir", str(run_dir),
                 "--target", str(tmp_path / "target"),
                 "--dry-run",
             ],
             capture_output=True, text=True,
-            cwd=_REPO_ROOT,
+            cwd=_REPO_ROOT, timeout=60,
         )
         assert result.returncode == 0
         assert "Seam bundles: 0" in result.stdout
