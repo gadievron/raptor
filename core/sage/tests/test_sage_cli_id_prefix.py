@@ -16,12 +16,13 @@ Hermetic: a stub client stands in for the SDK; no SAGE, no docker.
 import importlib.machinery
 import importlib.util
 import os
+import sys
 import types
 import unittest
 from argparse import Namespace
 from pathlib import Path
+from unittest.mock import patch
 
-os.environ.setdefault("_RAPTOR_TRUSTED", "1")
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CLI = REPO_ROOT / "libexec" / "raptor-sage"
@@ -42,7 +43,11 @@ def _load_cli():
     return mod
 
 
-cli = _load_cli()
+with (
+    patch.dict(os.environ, {"_RAPTOR_TRUSTED": "1"}),
+    patch.object(sys, "path", sys.path.copy()),
+):
+    cli = _load_cli()
 
 
 class StubClient:
