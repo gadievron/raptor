@@ -1951,6 +1951,10 @@ class TestLayer2AttributeScan:
         "#define RP )\n__attribute__((aligned(8 RP,\n  suppress)) int f(void);",
         # whole attribute produced by a macro body
         "#define NOCHECK __attribute__((aligned(sizeof(int)),\\\n  suppress))\nNOCHECK int f(void);",
+    ], ids=[
+        "nested-struct", "nested-sizeof", "cxx-nested-sizeof",
+        "quoted-delimiters", "commented-delimiters", "multiple-attribute-lists",
+        "long-attribute-list", "delimiter-macro", "attribute-macro",
     ])
     def test_suppress_in_list_is_witnessed(self, text):
         assert _l2_scan(text), text

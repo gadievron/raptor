@@ -160,12 +160,33 @@ def _hang_forever() -> None:
     _time.sleep(300)
 
 
-def _abort_child() -> None:
-    """Child payload for the crash-reporting direction test."""
+def _exit_child() -> None:
+    """Exit before writing a result, without a native crash report."""
     import os
+    os._exit(23)
+
+
+def test_child_exit_without_result_is_not_a_budget_kill(require_worker_sandbox):
+    from core.symbolic._isolate import run_isolated
+    result = run_isolated(
+        "core.symbolic.tests.test_isolate", "_exit_child", {}, timeout=60.0,
+    )
+    assert result.succeeded is False
+    assert result.metadata.get("crashed") is True
+    assert result.metadata.get("killed") is False
+    assert result.metadata.get("exitcode") == 23
+    assert "crash, not a budget kill" in result.reason
+
+
+def _abort_child() -> None:
+    """Child payload for the opt-in native-crash direction test."""
+    import os
+    import resource
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     os.abort()
 
 
+@pytest.mark.intentional_crash
 def test_child_crash_reported_as_crash_not_budget_kill(require_worker_sandbox):
     """A child that dies hard (SIGABRT here; segfault in the wild)
     closes the pipe long before the budget elapses — the report must

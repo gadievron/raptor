@@ -7,6 +7,7 @@ import inspect
 import json
 import os
 import shutil
+import signal
 import sys
 import subprocess
 import tempfile
@@ -3927,6 +3928,10 @@ class TestAnchoredCapture:
             cap_dir=tmp_path,
             stderr_anchors=anchors,
         )
+        # Output capture is real; only the final signal status is supplied.
+        # These assertions exercise stderr retention, not kernel crash delivery.
+        assert proc.returncode == 1
+        proc.returncode = -signal.SIGABRT
         return ex._classify_native_output(
             spec, proc, getattr(proc, "sandbox_info", None), "c",
             expected_token=self._TOKEN,
@@ -3939,7 +3944,7 @@ class TestAnchoredCapture:
         window — a genuine crash read inconclusive."""
         sentinel = ex._CALL_MARKER_PREFIX + self._TOKEN
         code = (
-            "import sys, os\n"
+            "import sys\n"
             "w = sys.stderr.write\n"
             "w('P' * 200000)\n"
             f"w('\\n{sentinel}\\n')\n"
@@ -3948,7 +3953,7 @@ class TestAnchoredCapture:
             "on address 0x0000\\n')\n"
             "w('R' * 200000)\n"
             "sys.stderr.flush()\n"
-            "os.abort()\n"
+            "raise SystemExit(1)\n"
         )
         spec = DarkWitnessSpec(
             finding_key="f1", file="a.c", function="f", language="c",
@@ -3962,10 +3967,10 @@ class TestAnchoredCapture:
         proves nothing — must be ``error``, not a silent
         inconclusive."""
         code = (
-            "import sys, os\n"
+            "import sys\n"
             "sys.stderr.write('P' * 300000)\n"
             "sys.stderr.flush()\n"
-            "os.abort()\n"
+            "raise SystemExit(1)\n"
         )
         spec = DarkWitnessSpec(
             finding_key="f1", file="a.c", function="f", language="c",

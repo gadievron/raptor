@@ -5,10 +5,9 @@ import chain reaches pypcode_native's C++ init, which can abort the
 host uncatchably (SIGABRT) — Python cannot catch a signal raised
 inside a C extension's init, so an in-process probe kills the whole
 run (observed as full xdist worker node-down). These tests make the
-hazard deterministic with a scratch module whose import calls
-``os.abort()``: with an in-process probe the test process itself
-dies with SIGABRT; with the isolated probe the child dies and the
-caller gets a clean False.
+process boundary visible with a scratch module that exits nonzero.
+The opt-in intentional_crash test additionally imports a module that calls
+``os.abort()``: the isolated child dies and the caller gets a clean False.
 """
 from __future__ import annotations
 
@@ -37,6 +36,7 @@ def _fresh_cache(monkeypatch: pytest.MonkeyPatch):
             "json",
             "raptor_scratch_no_such_module",
             "raptor_scratch_abort_on_import",
+            "raptor_scratch_exit_on_import",
             "raptor_scratch_sleep_on_import",
         },
     )
@@ -67,6 +67,21 @@ def test_probe_nonexistent_module_unavailable() -> None:
     assert _probe("scratch-nope", "raptor_scratch_no_such_module") is False
 
 
+def test_probe_child_nonzero_exit_is_unavailable(scratch_import_path: Path) -> None:
+    """Default coverage proves the process boundary without a native crash."""
+    mod = scratch_import_path / "raptor_scratch_exit_on_import.py"
+    entered = scratch_import_path / "exit-probe-pid"
+    mod.write_text(
+        "import os\n"
+        f"open({str(entered)!r}, 'w').write(str(os.getpid()))\n"
+        "raise SystemExit(23)\n"
+    )
+    assert _probe("scratch-exit", "raptor_scratch_exit_on_import") is False
+    assert int(entered.read_text()) != os.getpid()
+    assert _probe("scratch-json-after-exit", "json") is True
+
+
+@pytest.mark.intentional_crash
 def test_probe_survives_import_that_aborts_the_process(
     scratch_import_path: Path,
 ) -> None:

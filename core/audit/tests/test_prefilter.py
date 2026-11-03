@@ -2338,7 +2338,20 @@ class TestPhpSqlInjectionComplexInterpolation:
     helpers (PHP 7.4/8.3 run the hidden tainted query): the
     historical hit is kept (monotonic)."""
 
-    @pytest.mark.parametrize("source,line", _COMPLEX_INTERP_KEPT)
+    @pytest.mark.parametrize("source,line", _COMPLEX_INTERP_KEPT, ids=[
+        "second-function-import", "uppercase-function-import", "floatval-import",
+        "interpolation-before-safe-call", "block-comment-brace", "hash-comment-brace",
+        "line-comment-brace", "block-comment-double-quote", "block-comment-single-quote",
+        "heredoc-interpolation", "heredoc-label-in-interpolation", "new-in-index",
+        "comment-before-redeclared-intval", "newline-before-redeclared-intval", "grouped-function-import",
+        "long-function-import-list", "uppercase-new", "redeclared-boolval",
+        "reference-returning-intval", "uppercase-intval", "uppercase-new-class",
+        "mixed-interpolation-forms", "generated-php83-mix-01", "generated-php83-mix-02",
+        "generated-php83-mix-03", "generated-php83-mix-04", "generated-php83-mix-05",
+        "generated-php83-mix-06", "generated-php83-mix-07", "generated-php83-mix-08",
+        "generated-php83-mix-09", "generated-php83-mix-10", "generated-php83-mix-11",
+        "generated-php83-mix-12",
+    ])
     def test_complex_interp_kept(self, tmp_path, source, line):
         """Comments inside interpolation once desynced the lexer and hid a
         query PHP runs; main's hit must survive them."""
@@ -2400,7 +2413,14 @@ class TestPhpSqlInjectionMonotonic:
             hits = set(_php_file_sql_lines(tmp_path, source))
             assert set(_php_sql_base_lines(source)) <= hits, (name, source)
 
-    @pytest.mark.parametrize("source,line", _ATTRIBUTE_KEPT)
+    @pytest.mark.parametrize("source,line", _ATTRIBUTE_KEPT, ids=[
+        "multiline-double-quote-attribute", "multiline-single-quote-attribute", "bracket-in-attribute-string",
+        "attribute-hides-intval-shadow", "generated-php83-attribute-01", "generated-php83-attribute-02",
+        "generated-php83-attribute-03", "generated-php83-attribute-04", "generated-php83-attribute-05",
+        "generated-php83-attribute-06", "generated-php83-attribute-07", "generated-php83-attribute-08",
+        "generated-php83-attribute-09", "generated-php83-attribute-10", "generated-php83-attribute-11",
+        "generated-php83-attribute-12",
+    ])
     def test_attribute_kept(self, tmp_path, source, line):
         """A PHP 8 #[...] attribute with an unbalanced quote must not hide
         main's hit on the same line."""
@@ -2541,13 +2561,26 @@ class TestPhpSqlInjectionAdditionsFilter:
     backslash-spelled quotes, cast-then-ternary, shadowed or look-alike
     helpers and Unicode receivers never prove."""
 
-    @pytest.mark.parametrize("source,line", _FILTER_KEPT)
+    @pytest.mark.parametrize("source,line", _FILTER_KEPT, ids=[
+        "shell-output", "cast-ternary", "nested-query",
+        "prepare-execute-under-cast", "callback-under-cast", "call-user-func",
+        "constructed-receiver", "method-ternary", "returned-callable",
+        "tainted-operand-beside-constant", "different-unicode-receiver", "redefined-intval",
+        "dotless-i-intval-global", "namespaced-intval", "imported-intval",
+        "dotless-i-intval-local", "nested-method-sink", "nested-procedural-sink",
+        "continued-query", "backslash-quoted-operand",
+    ])
     def test_filter_kept(self, tmp_path, source, line):
         """Nested sinks, continuation-line variables, cast-then-ternary,
         shadowed or look-alike helpers and Unicode names never prove."""
         assert line in _php_file_sql_lines(tmp_path, source), source
 
-    @pytest.mark.parametrize("source", _FILTER_NO_ADDITION)
+    @pytest.mark.parametrize("source", _FILTER_NO_ADDITION, ids=[
+        "numeric-call-cast", "numeric-expression-cast", "parenthesized-cast",
+        "db-prefix-int-cast", "main-db-prefix-int-cast", "table-constant-intval",
+        "db-prefix-bool-cast", "int-cast", "prepared-query-elsewhere",
+        "long-s-lookalike",
+    ])
     def test_filter_no_addition(self, tmp_path, source):
         """Named constants and call-free numeric casts are safe operands
         (OpenCart DB_PREFIX + (int)), so these add no hit."""
@@ -3662,6 +3695,20 @@ class TestSuppressorGuardsReadCodeView:
         ("perl-sql-injection", "a.pl",
          "sub get {\n    my $sth = $dbh->prepare(\"SELECT * FROM u WHERE id=?\""
          " . $id);\n}\n"),
+    ], ids=[
+        "path-join-no-containment-01", "path-join-no-containment-02", "open-user-controlled-path-01",
+        "yaml-unsafe-load-01", "go-sql-string-concat-01", "go-sql-string-concat-02",
+        "go-sql-string-concat-03", "go-path-traversal-01", "go-path-traversal-02",
+        "go-path-traversal-03", "php-path-traversal-01", "php-path-traversal-02",
+        "php-path-traversal-03", "php-path-traversal-04", "php-path-traversal-05",
+        "php-path-traversal-06", "php-path-traversal-07", "go-sql-string-concat-04",
+        "go-sql-string-concat-05", "java-xxe-01", "java-xxe-02",
+        "path-join-no-containment-03", "java-xxe-03", "java-xxe-04",
+        "java-xxe-05", "java-xxe-06", "java-xxe-07",
+        "js-path-traversal-01", "js-path-traversal-02", "js-path-traversal-03",
+        "js-path-traversal-04", "atoi-unchecked-01", "array-index-unchecked-01",
+        "post-loop-oob-write-01", "use-after-free-01", "php-sql-injection-01",
+        "perl-xss-01", "perl-xss-02", "perl-sql-injection-01",
     ])
     def test_live_sanitizer_still_suppresses(self, tmp_path, rule, fp, src):
         """A real sanitizer in code still suppresses (per rule and language),

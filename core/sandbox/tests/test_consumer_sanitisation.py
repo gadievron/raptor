@@ -37,7 +37,10 @@ PR2_CONSUMERS = [
 ]
 
 
-@pytest.mark.parametrize("rel,min_sites,descriptor", PR2_CONSUMERS)
+@pytest.mark.parametrize("rel,min_sites,descriptor", PR2_CONSUMERS, ids=[
+    "binary-debugger", "crash-analyser", "afl-showmap",
+    "codeql-database-create",
+])
 def test_consumer_passes_sanitise_host_fingerprint(rel, min_sites, descriptor):
     """Every site in the file that calls `_sandbox_run(...)` /
     `sandbox_run(...)` / `sandbox.run(...)` AND looks like it

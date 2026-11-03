@@ -629,7 +629,24 @@ def _projects_registry_in_tmp(monkeypatch):
 _RANDOMISE_SEED_RAW = os.environ.get("RAPTOR_RANDOMISE_TESTS")
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--run-crash-tests", action="store_true", default=False,
+        help="Run intentional native-crash tests (may produce OS crash reports/dialogs).",
+    )
+
+
 def pytest_collection_modifyitems(config, items):
+    # Even `-m ""` must not turn a normal developer run into deliberate
+    # native crashes. Explicit opt-in keeps real signal coverage in CI.
+    if not config.getoption("run_crash_tests"):
+        selected = [item for item in items
+                    if not item.get_closest_marker("intentional_crash")]
+        deselected = [item for item in items
+                      if item.get_closest_marker("intentional_crash")]
+        if deselected:
+            config.hook.pytest_deselected(items=deselected)
+            items[:] = selected
     # Native-kernel markers: deselect under emulation, honest skip on
     # native runs (see the darwin-emulation gate block above).
     if _EMULATED_PLATFORM is not None:

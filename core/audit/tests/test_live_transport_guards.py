@@ -1445,6 +1445,10 @@ class TestPinnedSubprocess:
             )
 
     def test_signal_narrowing_keeps_product_signals(self) -> None:
+        import signal
+
+        # SIGTERM proves real signal delivery without deliberately generating
+        # a segmentation-fault report on the developer's machine.
         # skip_signals=(9,) — a non-KILL signal is the engine's own
         # behaviour on the input and must reach the caller.
         proc = None
@@ -1452,13 +1456,13 @@ class TestPinnedSubprocess:
         def body() -> None:
             nonlocal proc
             proc = run_pinned_subprocess(
-                ["/bin/sh", "-c", "kill -SEGV $$"], timeout=30,
+                ["/bin/sh", "-c", "kill -TERM $$"], timeout=30,
                 context="pin", skip_signals=(9,),
             )
 
         _fail_on_skip(body)
         assert proc is not None
-        assert proc.returncode == -11
+        assert proc.returncode == -signal.SIGTERM
 
 
 # ---------------------------------------------------------------------
