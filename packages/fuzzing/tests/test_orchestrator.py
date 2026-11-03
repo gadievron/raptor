@@ -10,6 +10,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch
 
+from core.binary.inspect import InspectResult
 from packages.fuzzing.capability import CapabilityReport
 from packages.fuzzing.orchestrator import FuzzingOrchestrator
 
@@ -86,7 +87,9 @@ class TestOrchestratorPlanning(unittest.TestCase):
             with patch("packages.fuzzing.orchestrator.probe_capabilities",
                        return_value=_full_caps_linux()), \
                  patch.object(FuzzingOrchestrator, "_is_libfuzzer_instrumented",
-                              return_value=False):
+                              return_value=False), \
+                 patch("packages.fuzzing.orchestrator._inspect_binary",
+                       return_value=InspectResult(returncode=0)):
                 orch = FuzzingOrchestrator()
                 plan = orch.plan(tmp)
             self.assertEqual(plan.fuzzer, "afl")
