@@ -1,15 +1,7 @@
 """Case-variant source paths are distinct annotation identities.
 
-Pins CURRENT behavior: the annotation store keys on the source path
-exactly as supplied, so ``src/Foo.c`` and ``src/foo.c`` are two
-independent identities with two on-disk .md files. That is correct
-on case-sensitive filesystems (two such files can genuinely coexist)
-and is the accepted duplicate-identity shape on case-insensitive
-stores (WSL drvfs mounts, macOS default APFS), where one real file
-reachable under two case spellings yields two entries — noise in the
-safe direction (nothing merges, nothing suppresses). A future change
-that casefolds identities must decide per-store, not globally; this
-fixture makes that a deliberate decision rather than a drift.
+Case-sensitive stores can represent both files. Case-insensitive
+stores must refuse the colliding write and preserve the original notes.
 """
 
 from __future__ import annotations
@@ -18,6 +10,7 @@ import pytest
 
 from core.annotations.models import Annotation
 from core.annotations.storage import (
+    AnnotationFileError,
     annotation_path,
     read_annotation,
     write_annotation,
@@ -36,6 +29,13 @@ def test_case_variant_paths_are_distinct_identities(tmp_path):
         file="src/Foo.c", function="parse",
         body="upper-case spelling", metadata={"status": "clean"},
     ))
+    if lower.exists():
+        with pytest.raises(AnnotationFileError, match="case-colliding"):
+            write_annotation(base, Annotation(
+                file="src/foo.c", function="parse", body="lower-case spelling"))
+        assert read_annotation(base, "src/foo.c", "parse") is None
+        assert read_annotation(base, "src/Foo.c", "parse").body == "upper-case spelling"
+        return
     write_annotation(base, Annotation(
         file="src/foo.c", function="parse",
         body="lower-case spelling", metadata={"status": "suspicious"},
@@ -60,3 +60,18 @@ def test_case_variant_functions_within_one_file_are_distinct(tmp_path):
     lower = read_annotation(base, "src/x.c", "init")
     assert upper is not None and upper.body == "A"
     assert lower is not None and lower.body == "B"
+
+
+def test_case_colliding_heading_refuses_rewrite_without_losing_notes(tmp_path):
+    """Reproduce a case-insensitive lookup even on a Linux test host."""
+    base = tmp_path / "annotations"
+    write_annotation(base, Annotation(file="src/Foo.c", function="parse", body="operator notes"))
+    original = annotation_path(base, "src/Foo.c")
+    colliding = annotation_path(base, "src/foo.c")
+    text = original.read_text()
+    # On a case-insensitive store these already refer to the same file.
+    colliding.write_text(text)
+    with pytest.raises(AnnotationFileError, match="case-colliding"):
+        write_annotation(base, Annotation(file="src/foo.c", function="parse", body="replacement"))
+    assert colliding.read_text() == text
+    assert read_annotation(base, "src/foo.c", "parse") is None

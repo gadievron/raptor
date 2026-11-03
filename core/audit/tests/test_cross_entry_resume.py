@@ -9,7 +9,7 @@ from core.audit.cross_entry.catalogue import Catalogue
 from core.audit.cross_entry.integration import prepare_cross_entry
 from core.audit.cross_entry.progress import WorkQueue, acknowledge_delivery, exclusive_session
 from core.audit.cross_entry.study import run_studies
-from core.audit.tests.test_cross_entry import Client, semantic, sources
+from core.audit.tests.test_cross_entry import Client, grammar, semantic, sources  # noqa: F401 -- reuse the autouse C-parser prerequisite
 
 
 def test_single_call_segments_resume_refutation_without_rebuying_study(tmp_path):

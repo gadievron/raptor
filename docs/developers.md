@@ -2,15 +2,17 @@
 
 [Documentation index](README.md)
 
-**This page is developer-facing by design.** It is the one sanctioned
-home for developer documentation under `docs/` — everything else in
-this directory documents the operator surface (flags, outputs,
-behaviour). It carries the durable orientation a new contributor
-needs and nothing deeper: the tree, docstrings, and `--help` output
-are the reference for anything this page does not cover, and if a
-section here grows past orientation size it is restoring cut material,
-not curating. Contribution *process* — setup, tests, style, review,
-security conventions — lives in [CONTRIBUTING.md](../CONTRIBUTING.md).
+This is the technical reference for contributors: architecture, package
+responsibilities, rule authoring, sandbox assumptions, test execution,
+and hermetic test patterns. [CONTRIBUTING.md](../CONTRIBUTING.md) covers the
+contribution workflow, [initial setup](../CONTRIBUTING.md#getting-started),
+[test-writing requirements](../CONTRIBUTING.md#tests), style, and security
+rules. Start there when preparing a change; use this page for implementation
+and testing details.
+
+Keep this reference focused on orientation and practical developer workflows.
+The tree, docstrings, and `--help` output own API and CLI details;
+[CI controls](ci-controls.md) owns the full check inventory.
 
 **Related documentation:**
 [Contributing](../CONTRIBUTING.md) |
@@ -25,6 +27,7 @@ security conventions — lives in [CONTRIBUTING.md](../CONTRIBUTING.md).
 - [engine/: authoring detection rules](#engine-authoring-detection-rules)
 - [CLI help-text standard](#cli-help-text-standard)
 - [Sandbox: what code may assume](#sandbox-what-code-may-assume)
+- [Running tests](#running-tests)
 - [Writing hermetic tests](#writing-hermetic-tests)
 - [Mechanical gates you will hit](#mechanical-gates-you-will-hit)
 
@@ -179,6 +182,45 @@ given host — the run's `sandbox_info` stamps (`proxy_enforcement`,
 truth, so read them instead of assuming; that `$HOME`, `/tmp`, or the
 network inside a sandbox are the host's; or that it may bypass
 `core.sandbox` for subprocess work touching untrusted input.
+
+## Running tests
+
+Run from the repository root. Install the locked development tools and
+optional source parsers, then use the project environment through `uv run`:
+
+```bash
+uv sync --locked --group dev --extra grammars
+uv run --extra grammars python -m pytest core packages -q
+```
+
+Keep `--extra grammars` on subsequent `uv run` commands so syncing retains
+the optional parsers. No virtualenv activation is needed. If another
+virtualenv is active, `env -u VIRTUAL_ENV uv run ...` avoids the environment
+mismatch warning while using the project's `.venv`.
+
+On macOS, run natively to exercise Seatbelt; Linux ELF and `/proc` tests
+require a Linux host (or the devcontainer). Binary-oracle integration
+tests need GNU binutils as well as a compiler. Installing binutils on a
+Mac does not turn native Mach-O fixtures into ELF fixtures.
+
+The default test tier excludes slow, network integration, and corpus tests.
+Add `-m ""` to select all tiers; optional tools and service credentials are
+still required for their respective tests. Tests should gate missing
+prerequisites explicitly while keeping product failures visible.
+
+To keep terminal output and a diagnostic log, including native Python
+crash tracebacks when available:
+
+```bash
+set -o pipefail
+PYTHONFAULTHANDLER=1 env -u VIRTUAL_ENV uv run --extra grammars python -m pytest \
+  core packages .github/tests .github/scripts/tests -v --tb=short -ra \
+  --junitxml=mac-tests.xml 2>&1 | tee mac-tests.log
+```
+
+`-v` records test names as they run, `2>&1` includes stderr, and `pipefail`
+preserves a failing pipeline status. The text log remains useful if the
+process crashes; JUnit XML may be incomplete if pytest cannot finish.
 
 ## Writing hermetic tests
 

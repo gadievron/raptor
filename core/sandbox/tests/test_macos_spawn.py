@@ -27,6 +27,46 @@ import pytest
 
 from core.sandbox import _macos_spawn
 
+
+@pytest.mark.darwin_native
+def test_project_python_starts_with_restricted_home_metadata(tmp_path):
+    """Exercise venv realpath and framework loads under the real policy."""
+    from core.sandbox import run
+    from core.sandbox.python_paths import python_runtime_tool_paths
+
+    result = run(
+        [sys.executable, "-c", "import os, sys; print(os.path.realpath(sys.executable))"],
+        target=str(tmp_path), output=str(tmp_path / "out"),
+        tool_paths=python_runtime_tool_paths(),
+        block_network=True, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == os.path.realpath(sys.executable)
+
+
+@pytest.mark.darwin_native
+@pytest.mark.slow
+def test_apple_compiler_can_load_sdk_under_read_restrictions(tmp_path):
+    from core.sandbox import run
+
+    probe = subprocess.run(
+        ["/usr/bin/xcrun", "--find", "clang"],
+        capture_output=True, text=True, timeout=30,
+    )
+    if probe.returncode != 0:
+        pytest.skip("Apple Command Line Tools or Xcode not installed: " + probe.stderr)
+    source = tmp_path / "main.c"
+    source.write_text("#include <stdio.h>\nint main(void) { puts(\"sdk ready\"); }\n")
+    output = tmp_path / "out"
+    output.mkdir()
+    result = run(
+        ["/usr/bin/clang", str(source), "-o", str(output / "demo")],
+        target=str(tmp_path), output=str(output),
+        block_network=True, capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (output / "demo").is_file()
+
 # macOS-only — sandbox-exec is Apple-specific: real-kernel tests carry
 # the darwin_native marker (pytest.ini) instead of an ad hoc skipif, so
 # the darwin-emulation gate deselects them and native non-darwin hosts

@@ -923,7 +923,14 @@ class TestTreeWalk:
         d = tmp_path
         for _ in range(600):
             d = d / "d"
-        d.mkdir(parents=True)
+        try:
+            d.mkdir(parents=True)
+        except OSError as exc:
+            import errno
+            if exc.errno == errno.ENAMETOOLONG:
+                import pytest
+                pytest.skip("filesystem cannot represent a 600-level test tree")
+            raise
         (d / "leaf.c").write_text("int z;\n")
         names = [p.name for p in _walk_tree_entries(tmp_path)]
         assert names.count("leaf.c") == 1

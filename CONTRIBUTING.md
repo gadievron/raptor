@@ -3,9 +3,12 @@
 RAPTOR is mostly built with AI under human direction. Contributions are
 welcome — whether you're writing code by hand, with an AI, or a mix of
 both. The conventions below keep the codebase consistent regardless of how
-the code was written. For orientation on the internals — layering,
-package map, rule authoring, the sandbox model — see
-[docs/developers.md](docs/developers.md).
+the code was written.
+
+This page covers the contribution workflow: setup, change requirements,
+test-writing conventions, style, and security rules. The
+[developer reference](docs/developers.md) explains architecture, package
+responsibilities, detailed test execution, and hermetic test patterns.
 
 
 ## Getting started
@@ -13,15 +16,18 @@ package map, rule authoring, the sandbox model — see
 ```bash
 git clone https://github.com/gadievron/raptor.git
 cd raptor
-uv sync --locked                      # installs all deps from uv.lock
+uv sync --locked --group dev --extra grammars  # test tools and source parsers
 uv tool install semgrep                # required for /scan
 ```
 
 Run the test suite:
 
 ```bash
-python -m pytest core/ packages/ -x -q
+uv run --extra grammars python -m pytest core/ packages/ -x -q
 ```
+
+For platform prerequisites, test tiers, and logging, see the
+[developer testing reference](docs/developers.md#running-tests).
 
 Launch RAPTOR itself:
 
@@ -32,9 +38,13 @@ claude    # from the repo root
 
 ## Code organisation
 
+See the developer reference for [layering](docs/developers.md#layering-rules)
+and the [package map](docs/developers.md#package-map).
+
 - **`core/`** — shared infrastructure. Each subdirectory is a Python
   package with its own `tests/` directory. Core packages are imported by
-  everything else; they must not import from `packages/`.
+  everything else; avoid module-level imports from `packages/` (the layering
+  reference documents the limited lazy-import exceptions).
 
 - **`packages/`** — independent security capabilities (scanning, fuzzing,
   CodeQL, SCA, etc.). Each package owns its domain logic, CLI, and tests.
@@ -82,6 +92,10 @@ frontmatter field pointing at the CLI entry point. The entry point goes in
 
 
 ## Tests
+
+For execution and prerequisites, see [Running tests](docs/developers.md#running-tests);
+for isolation and cleanup patterns, see
+[Writing hermetic tests](docs/developers.md#writing-hermetic-tests).
 
 - Tests live in `tests/` subdirectories alongside the code they test.
 - Use `pytest`. No `jsonschema` validation — assert on actual data shapes.

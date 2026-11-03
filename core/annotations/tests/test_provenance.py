@@ -292,6 +292,8 @@ class TestDetectCorroborationFacts:
         assert out.stdout.strip() == "self"
 
 
+@pytest.mark.linux_native
+@pytest.mark.skipif(not Path("/proc/self/stat").is_file(), reason="requires Linux /proc ancestry")
 class TestDeepChainScriptDetection:
     def test_script_beyond_recorded_window_is_still_recorded(
         self, tmp_path,
@@ -333,6 +335,8 @@ class TestDeepChainScriptDetection:
         assert not is_human_grade(_human_interactive(parents=chain))
 
 
+@pytest.mark.linux_native
+@pytest.mark.skipif(not Path("/proc/self/stat").is_file(), reason="requires Linux /proc ancestry")
 class TestDeepChainAgentDetection:
     """The deep ancestry scan covers every verdict-bearing name, not
     only ``script``: an agent comm pushed past the 4-name recorded
@@ -431,6 +435,8 @@ class TestAncestryTruncation:
         )
         return out.stdout.strip()
 
+    @pytest.mark.linux_native
+    @pytest.mark.skipif(not Path("/proc/self/stat").is_file(), reason="requires Linux /proc ancestry")
     def test_exhausted_scan_records_truncation(self, tmp_path):
         # 33 fork intermediaries + the 'script'-named wrapper: the
         # wrapper sits past the 32-deep scan window.

@@ -562,6 +562,10 @@ def build_profile(*,
         # file-read* under SBPL semantics for the same path).
         SYSTEM_READ_DIRS = (
             "/usr", "/System", "/Library/Frameworks",
+            # Apple compiler shims use xcrun to load the SDK and DVT
+            # frameworks. These installed toolchains are runtime data,
+            # like /usr and Homebrew; user caches remain ungranted.
+            "/Library/Developer", "/Applications/Xcode.app/Contents",
             "/private/etc", "/private/var/db/timezone",
             # Homebrew prefixes (ARM and Intel). These are the de-facto
             # /usr/local of macOS: interpreters and their dylibs live
@@ -678,8 +682,8 @@ def build_profile(*,
             # home tree. Deriving the allow set from read_exceptions
             # (already realpath'd and deduped) keeps the invariant
             # mechanical: metadata coverage is a SUPERSET of
-            # data-read coverage everywhere — equal under /Users,
-            # wider outside — so stat-before-open patterns keep
+            # data-read coverage everywhere, with ancestor-inode
+            # traversal grants under /Users, so stat-before-open patterns keep
             # working on every path a data read is possible on.
             # SYSTEM_READ_LITERALS carry no home-tree entries by
             # construction ("/" + /dev files), pinned by test.
@@ -702,13 +706,10 @@ def build_profile(*,
             # the granted subtrees keeps working — if the re-allow
             # measures inert there, the toolchain battery fails loud
             # and the narrowing must be reverted, never worked
-            # around). Second open question for that run: whether
-            # path traversal / cwd canonicalisation needs metadata
-            # on the ANCESTOR components of a grant (/Users,
-            # /Users/<u>) — if the battery breaks there, the
-            # contingency is ancestor-inode `(literal ...)` metadata
-            # allows, a strictly smaller leak than the universal
-            # grant this replaces.
+            # around). Path traversal / cwd canonicalisation also
+            # needs metadata on ANCESTOR components of a grant
+            # (/Users, /Users/<u>). The literal-only metadata allows
+            # below permit that walk without granting sibling reads.
             #
             # Skip the narrowing when any data-read grant covers the
             # home root itself (a grant of "/" or "/Users"): the
@@ -740,6 +741,24 @@ def build_profile(*,
                     parts.append(
                         f"(allow file-read-metadata {_meta_subpaths})"
                     )
+                    # realpath/getcwd walk every ancestor inode before
+                    # reaching a granted venv or target. Allow metadata
+                    # on those exact ancestors, never their siblings or
+                    # contents (not a subpath or file-read-data grant).
+                    _ancestors: set[str] = set()
+                    for p in _home_meta_allows:
+                        parent = os.path.dirname(p)
+                        while parent == MACOS_HOME_TREE_ROOT or parent.startswith(_home_prefix):
+                            _ancestors.add(parent)
+                            parent = os.path.dirname(parent)
+                    if _ancestors:
+                        _meta_literals = " ".join(
+                            f"(literal {_quote_sbpl(p)})"
+                            for p in sorted(_ancestors)
+                        )
+                        parts.append(
+                            f"(allow file-read-metadata {_meta_literals})"
+                        )
             data_allow_clauses = " ".join(
                 [f"(subpath {_quote_sbpl(p)})" for p in read_exceptions]
                 + [f"(literal {_quote_sbpl(p)})"
