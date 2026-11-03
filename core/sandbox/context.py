@@ -8446,9 +8446,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         #     clause (the default exception list is /private/tmp +
         #     output + writable_paths), so use_seatbelt itself is
         #     sufficient signal that fs writes are gated.
-        #   seccomp: macOS has no real equivalent; we treat the
-        #     SBPL hardening clauses (Tier 1.4, deny process-info etc.)
-        #     as a coarse stand-in when seccomp_profile is requested.
+        #   seccomp: Linux only. Seatbelt EPERM is not evidence of a
+        #     seccomp syscall denial and must not suggest Linux remedies.
         network_engaged = bool(
             (need_unshare and block_network)
             or (use_seatbelt and (block_network or use_egress_proxy))
@@ -8460,8 +8459,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             or use_seatbelt
         )
         seccomp_engaged = bool(
-            (seccomp_profile and check_seccomp_available())
-            or (use_seatbelt and seccomp_profile and seccomp_profile != "none")
+            sys.platform == "linux" and seccomp_profile
+            and seccomp_profile != "none" and check_seccomp_available()
         )
         if stderr_text and (network_engaged or landlock_engaged or seccomp_engaged):
             _check_blocked(stderr_text, cmd_display, result.returncode,
