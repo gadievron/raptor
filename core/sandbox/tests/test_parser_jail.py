@@ -240,20 +240,24 @@ class _FakeWorker:
         except OSError:
             pass
         finally:
-            self.kill()
+            self._sock.close()
+            self._dead.set()
 
     def poll(self) -> "int | None":
         return 0 if self._dead.is_set() else None
 
     def kill(self) -> None:
-        self._dead.set()
+        # close() in another thread need not interrupt its blocked recv().
+        # Leave descriptor closure to the worker after shutdown wakes it.
         try:
-            self._sock.close()
+            self._sock.shutdown(socket.SHUT_RDWR)
         except OSError:
             pass
 
     def wait(self, timeout: "float | None" = None) -> int:
         self._thread.join(timeout)
+        if self._thread.is_alive():
+            raise subprocess.TimeoutExpired("fake parser worker", timeout)
         return 0
 
 
@@ -273,6 +277,68 @@ def _fake_subprocess(ready: "dict | None",
 
 _READY_OK = {"ready": True, "landlock": True, "pid": -1}
 _REF = b"CONNECT example.com:443 HTTP/1.1"
+
+
+class TestFakeWorkerLifecycle:
+
+    def test_kill_wakes_blocked_read_with_peer_still_open(self, monkeypatch):
+        entered = threading.Event()
+        recv_exact = _recv_exact
+
+        def observed_recv(*args):
+            entered.set()
+            return recv_exact(*args)
+
+        monkeypatch.setitem(globals(), "_recv_exact", observed_recv)
+        parent, child = socket.socketpair()
+        worker = None
+        try:
+            worker = _FakeWorker([], pass_fds=(child.fileno(),), ready=None,
+                                 responder=_honest_responder)
+            child.close()
+            assert entered.wait(2)
+            worker.kill()
+            assert worker.wait(timeout=2) == 0
+            assert worker.poll() == 0
+            assert worker._sock.fileno() == -1
+        finally:
+            parent.close()
+            child.close()
+            if worker is not None:
+                worker.kill()
+                worker.wait(timeout=2)
+
+    def test_wait_reports_timeout_until_responder_exits(self):
+        entered = threading.Event()
+        release = threading.Event()
+
+        def responder(*args):
+            entered.set()
+            release.wait()
+            return False
+
+        parent, child = socket.socketpair()
+        worker = None
+        try:
+            worker = _FakeWorker([], pass_fds=(child.fileno(),), ready=None,
+                                 responder=responder)
+            child.close()
+            _send_frame(parent, 1, _REF)
+            assert entered.wait(2)
+            worker.kill()
+            with pytest.raises(subprocess.TimeoutExpired):
+                worker.wait(timeout=0)
+            assert worker.poll() is None
+            release.set()
+            assert worker.wait(timeout=2) == 0
+            assert worker.poll() == 0
+        finally:
+            release.set()
+            parent.close()
+            child.close()
+            if worker is not None:
+                worker.kill()
+                worker.wait(timeout=2)
 
 
 # ---------------------------------------------------------------------------
