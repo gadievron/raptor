@@ -460,6 +460,9 @@
   "artifacts:write_only_artifact::pr-comment.md": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },
+  "artifacts:write_only_artifact::prep-profile.json": {
+   "note": "Operator-facing diagnostic report: core.audit.prep_profile.PrepProfile.write emits per-step inclusive timings, errors, and cache observations at audit finalization, replacing the report on resume. docs/audit.md documents this output for inspection; it intentionally has no production reader and does not drive scheduling, spend, or verdict decisions."
+  },
   "artifacts:write_only_artifact::protocol-state.json": {
    "note": "operator-facing run artifact: protocol_state channel prepass receipts (core/audit/protocol_state.py), consumed via /review and manual triage \u2014 no production reader by design (the audit-log artifact pattern)"
   },
