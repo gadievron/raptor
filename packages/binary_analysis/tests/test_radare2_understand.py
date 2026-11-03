@@ -2,6 +2,7 @@
 
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -438,6 +439,24 @@ class TestCmdTimeout(unittest.TestCase):
     r2.cmd() in a worker thread; on timeout, kills the r2 subprocess
     via r2pipe's `process` handle and raises TimeoutError."""
 
+    def _block_command(self, r2):
+        release = threading.Event()
+        workers = []
+
+        def command(_command):
+            workers.append(threading.current_thread())
+            release.wait()
+
+        def cleanup():
+            release.set()
+            for worker in workers:
+                worker.join(timeout=2)
+                self.assertFalse(worker.is_alive(), "fake r2 command did not stop")
+
+        self.addCleanup(cleanup)
+        r2.cmd.side_effect = command
+        return release
+
     def test_normal_command_returns_result(self):
         """Fast r2 response → result returned, no timeout."""
         r2 = MagicMock()
@@ -448,11 +467,11 @@ class TestCmdTimeout(unittest.TestCase):
 
     def test_timeout_raises_timeouterror(self):
         """r2.cmd() blocks > timeout → TimeoutError raised, r2 killed."""
-        import time
         r2 = MagicMock()
-        # Simulate r2 hanging: cmd() never returns.
-        r2.cmd.side_effect = lambda c: time.sleep(10)
+        release = self._block_command(r2)
         r2.process = MagicMock()
+        # Killing the real subprocess closes the pipe read; emulate that.
+        r2.process.kill.side_effect = release.set
         with self.assertRaises(TimeoutError) as ctx:
             BinaryUnderstand._cmd_t(r2, "aaa", timeout_s=0.5)
         self.assertIn("aaa", str(ctx.exception))
@@ -465,9 +484,8 @@ class TestCmdTimeout(unittest.TestCase):
         """If r2pipe doesn't expose `process` (older versions, custom
         subclass), _cmd_t must still raise TimeoutError without
         crashing on the missing attribute."""
-        import time
         r2 = MagicMock(spec=["cmd"])  # no `process` attr
-        r2.cmd.side_effect = lambda c: time.sleep(10)
+        self._block_command(r2)
         with self.assertRaises(TimeoutError):
             BinaryUnderstand._cmd_t(r2, "aaa", timeout_s=0.3)
 
