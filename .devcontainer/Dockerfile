@@ -200,6 +200,11 @@ RUN npm install -g yarn@1.22.22 pnpm@11.11.0 \
         --package-root /usr/lib/node_modules/pnpm \
         --evidence /usr/share/doc/raptor-pnpm-notices
 
+# Remove packaging helpers that can only run on Windows. Publication squashes
+# all layers, including the base, so deleted executables are not distributed.
+COPY .devcontainer/prune-windows-helpers.py /usr/local/libexec/prune-windows-helpers.py
+RUN python3 /usr/local/libexec/prune-windows-helpers.py
+
 # ============================================================================
 # ENVIRONMENT CONFIGURATION
 # ============================================================================

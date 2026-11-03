@@ -10,9 +10,8 @@ name: Publish devcontainer image to Docker Hub
 #   :<version>   — pushed only on tagged releases (vX.Y.Z -> X.Y.Z), via
 #                  the dispatch from release.yml (see below).
 #
-# Uses the plain `docker` CLI rather than docker/* marketplace actions,
-# to keep the third-party action surface to just actions/checkout
-# (pinned to the same SHA the rest of the repo uses).
+# Buildah squashes the cleaned filesystem, including inherited base layers.
+# Verify the flattened candidate before tagging or publishing it.
 #
 # VERSIONED-IMAGE COUPLING: release.yml commits the version stamp
 # AFTER the operator's tag push and force-moves the tag to the stamp
@@ -109,17 +108,40 @@ jobs:
         run: |
           echo "${DOCKERHUB_TOKEN}" | docker login -u "${DOCKERHUB_USERNAME}" --password-stdin
 
-      - name: Build and push
+      - name: Install image builder
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends buildah
+
+      - name: Build and verify cleaned image
+        run: |
+          set -euo pipefail
+          sudo buildah build --format docker --squash \
+            -f .devcontainer/Dockerfile -t localhost/raptor-publish:checked .
+          test "$(sudo buildah inspect --type image --format '{{len .OCIv1.RootFS.DiffIDs}}' localhost/raptor-publish:checked)" = 1
+          candidate_container=$(sudo buildah from localhost/raptor-publish:checked)
+          trap 'sudo buildah rm "$candidate_container"' EXIT
+          sudo buildah run --network none --cap-drop ALL --user 0 "$candidate_container" -- \
+            python3 /usr/local/libexec/prune-windows-helpers.py --check
+          sudo buildah run --network none "$candidate_container" -- bash -euc '
+            test "$(id -un)" = vscode
+            python3 -m venv /tmp/raptor-venv-check
+            /tmp/raptor-venv-check/bin/python -m pip --version
+            virtualenv --no-download /tmp/raptor-virtualenv-check
+            /tmp/raptor-virtualenv-check/bin/python -m pip --version
+            pipenv --version
+            pnpm --version
+          '
+
+      - name: Publish verified image
         env:
           TAGS: ${{ steps.tags.outputs.tags }}
         run: |
           set -euo pipefail
-          build_args=()
           for tag in ${TAGS//,/ }; do
-            build_args+=(-t "${tag}")
-          done
-          docker build -f .devcontainer/Dockerfile "${build_args[@]}" .
-          for tag in ${TAGS//,/ }; do
-            docker push "${tag}"
+            sudo buildah tag localhost/raptor-publish:checked "${tag}"
+            sudo buildah push --authfile "${DOCKER_CONFIG:-$HOME/.docker}/config.json" \
+              "${tag}" "docker://${tag}"
           done
 

@@ -177,3 +177,37 @@ def test_gunzip_guard_translates_corrupt_stream() -> None:
     from core.tar import TarOpenError
     with pytest.raises(TarOpenError):
         list(blob_mod._gunzip_ratio_guarded(iter([b"not gzip at all"])))
+
+
+@pytest.mark.parametrize("size", [None, 0, -1, 1024, 370 * 1024 * 1024])
+def test_entry_budget_preserves_existing_small_layer_limit(size):
+    assert blob_mod.layer_entry_count_budget(size) == 50_000
+
+
+def test_entry_budget_admits_merged_image_and_has_absolute_ceiling():
+    assert blob_mod.layer_entry_count_budget(1_000 * 1024 * 1024) > 80_000
+    assert blob_mod.layer_entry_count_budget(10 ** 20) == 250_000
+
+
+def test_entry_budget_accepts_large_tar_but_refuses_dense_small_gzip(monkeypatch):
+    from core.tar import TarEntryCountExceeded
+
+    monkeypatch.setattr(blob_mod, "DEFAULT_MAX_ENTRY_COUNT", 3)
+    monkeypatch.setattr(blob_mod, "ENTRY_COUNT_BUDGET_CEILING", 6)
+    monkeypatch.setattr(blob_mod, "COMPRESSED_BYTES_PER_ENTRY", 1024)
+    out = io.BytesIO()
+    with tarfile.open(fileobj=out, mode="w") as archive:
+        for i in range(4):
+            member = tarfile.TarInfo(f"file-{i}")
+            member.size = 1
+            archive.addfile(member, io.BytesIO(b"x"))
+    raw = out.getvalue()
+    assert extract_files_from_layer([raw], {"file-3"},
+        media_type="application/vnd.oci.image.layer.v1.tar", compressed_size=len(raw)) == {"file-3": b"x"}
+    packed = gzip.compress(raw)
+    with pytest.raises(TarEntryCountExceeded):
+        extract_files_from_layer([packed], {"file-3"}, compressed_size=len(packed))
+    monkeypatch.setattr(blob_mod, "ENTRY_COUNT_BUDGET_CEILING", 3)
+    with pytest.raises(TarEntryCountExceeded):
+        extract_files_from_layer([raw], {"file-3"},
+            media_type="application/vnd.oci.image.layer.v1.tar", compressed_size=len(raw))

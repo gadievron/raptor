@@ -107,6 +107,25 @@ or build it locally using the included `Dockerfile`:
 docker build -f .devcontainer/Dockerfile -t danielcuthbert/raptor:latest .
 ```
 
+The Linux image omits Windows-only packaging launchers, including copies inside
+bundled Python wheels. The packaging tools remain installed. WSL uses their
+Linux launchers; native Windows installations keep their own Windows launchers.
+The cleanup runs during the Linux image build.
+
+To build a redistributable image on Linux, use Buildah's
+full-layer squashing so removed files from the base image are excluded too:
+
+```bash
+sudo buildah build --format docker --squash -f .devcontainer/Dockerfile -t localhost/raptor:local .
+sudo buildah push localhost/raptor:local docker-daemon:raptor:local
+```
+
+This requires Buildah and a running Docker daemon. Publication also uses
+full-layer squashing. An ordinary Docker build retains the inherited base layers, including
+bytes deleted from the final filesystem. Squashed-image updates download the
+new combined layer rather than reusing individual base layers. Windows helpers
+may reappear if you reinstall packaging tools inside a running container.
+
 The image expects the RAPTOR framework (this repo) to be mounted into
 `/workspaces/raptor` on startup. You can optionally mount a target folder for local
 analysis.
