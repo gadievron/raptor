@@ -10,8 +10,8 @@ from packages.sca.sbom_distro_python_notices import associate_project_notices
 GAP = "no associated notice candidate; licence text completeness is unverified"
 
 
-def fixture(source="Source: https://pypi.org/project/pip/\n"):
-    text = (source + "\nFiles: *\nLicense: Expat\n Full text\n").encode()
+def fixture(source="Source: https://pypi.org/project/pip/\n", *, newline="\n"):
+    text = (source + "\nFiles: *\nLicense: Expat\n Full text\n").replace("\n", newline).encode()
     sha = hashlib.sha256(text).hexdigest()
     row = {"path": "/usr/share/doc/python3-pip/copyright", "sha256": sha,
            "catalogue_layer_diff_id": "layer", "content_kind": "notice_candidate"}
@@ -28,8 +28,9 @@ def fixture(source="Source: https://pypi.org/project/pip/\n"):
     "Source: https://pypi.python.org/pypi/pip\n",
     "It was downloaded from\nhttp://pypi.python.org/pypi/pip\n",
 ])
-def test_project_notice_is_associated_without_inheriting_license(source):
-    native, records, blobs = fixture(source)
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["LF", "CRLF"])
+def test_project_notice_is_associated_without_inheriting_license(source, newline):
+    native, records, blobs = fixture(source, newline=newline)
     original = deepcopy((native, blobs))
     associate_project_notices(native, records, blobs)
     assert records[0]["status"] == "notice_candidate_captured"
@@ -49,8 +50,9 @@ def test_project_notice_is_associated_without_inheriting_license(source):
     "License:\nSource: https://pypi.org/project/pip/\n",
     "Source: https://pypi.org/project/pip/\nSource: https://pypi.org/project/other/\n",
 ])
-def test_incidental_or_conflicting_source_does_not_close_gap(source):
-    data = fixture(source)
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["LF", "CRLF"])
+def test_incidental_or_conflicting_source_does_not_close_gap(source, newline):
+    data = fixture(source, newline=newline)
     original = deepcopy(data)
     associate_project_notices(*data)
     assert data == original
