@@ -68,7 +68,7 @@ VALID_EXCERPT_SCOPES = frozenset({
 # Review modes the runner exposes via --mode.  ``run_corpus`` builds
 # its argparse choices from this set — labels and runner cannot drift.
 VALID_REVIEW_MODES = frozenset({
-    "security", "quality",
+    "security", "bug_first", "quality", "ensemble",
 })
 
 # Length of ``SourcePin.span_sha`` — matches the repo-wide span-hash

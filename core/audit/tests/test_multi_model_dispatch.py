@@ -11,7 +11,7 @@ Two stacked defects previously made ``--model A --model B`` inert:
 
 These tests pin the fix: N configured models → N independent reviews
 per function, each through its own per-model review_fn, merged by the
-existing merge. All LLM interaction is stubbed.
+existing ensemble merge. All LLM interaction is stubbed.
 """
 
 from __future__ import annotations

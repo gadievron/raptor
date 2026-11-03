@@ -1,15 +1,34 @@
-"""Verification evidence gate wrapper and reuse exemption pins.
+"""Verification evidence is an allowlist, not a blocklist.
 
-The evidence-grade firewall recognises a part only when
-``is_tool_evidence`` AND not ``_is_detection_only``; everything unknown
-fails closed. The gate wrapper (``_is_verification_evidence_for_gate``)
-delegates the composite parse whole.
+``_is_verification_evidence`` is the merge-tie breaker: it decides
+whether a stamp is strong enough for the conservative ensemble merge to
+keep a suspicious row against a clean sibling, and (via the gate
+wrapper) whether an evidence-free-suspicious resolution pass may touch
+a row. The old shape rejected two known-bad prefixes and accepted
+everything else — a stamp in a namespace no producer table had ever
+heard of counted as verification. These pins hold the inverted
+direction: a part qualifies only when the evidence-grade firewall
+recognises it (``is_tool_evidence``) AND it is not detection-role
+(``_is_detection_only``); everything unknown fails closed. The one
+receipt kind with no qualifying single part — the Bayesian
+aggregation-promotion composite (``"+".join(confirmed)``, >=2 distinct
+detection-role namespaces jointly crossing the confirm threshold) —
+qualifies via the whole-stamp rule, but never when an ``llm-claimed:``
+or ``prefilter:`` part contaminates the composite.
+
+Composite boundary: ``sanitize_llm_evidence_tool`` namespaces the
+model's WHOLE raw answer, so in a mixed stamp everything from the first
+``llm-claimed:`` part onward is claim text, not receipts. A genuine
+receipt ahead of the marker (the evidence-combine shape) keeps its
+status; a claim tail (``llm-claimed:smt+joern``) earns nothing.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from core.audit.evidence_grade import sanitize_llm_evidence_tool
 from core.audit.orchestrator import (
@@ -19,6 +38,93 @@ from core.audit.orchestrator import (
     _is_verification_evidence_for_gate,
     _resolve_gate_demoted,
 )
+from core.audit.pipeline import _is_verification_evidence, _merge_outcomes
+
+
+class TestVerificationAllowlist:
+    """Direct pins on the classifier, both directions."""
+
+    @pytest.mark.parametrize("stamp", [
+        # Verification-role receipts from registered producers.
+        "smt:check-integer-narrowing",
+        "smt:check-overflow",
+        "smt:check-integer-narrowing:witness",
+        "semgrep:go-parse-int-narrowing",
+        "joern:flow",
+        # Provenance wrapper around a real receipt: the wrapper is
+        # history, the wrapped stamp is the evidence.
+        "clean-refuted:smt",
+        # Evidence-combine shape: the surviving side's receipt leads,
+        # the discarded side's sanitized claim rides behind it.
+        "smt:check-integer-narrowing+llm-claimed:smt",
+        # Bayesian aggregation-promotion receipt
+        # (_aggregate_channel_confirmations mints "+".join(confirmed)
+        # after >=2 independent detection-role channels jointly cross
+        # the confirm threshold): no single part suffices — by
+        # construction — but the composite is a genuine confirmation.
+        "consistency:cwe190-majority+fail_open:handler-outcome-naming",
+        # Same rule when one channel's namespace is also a registered
+        # tool namespace (stock cocci detection rule + detection SMT
+        # verb: two distinct detection-role channels).
+        "coccinelle:missing_bounds_check+smt:check-toctou",
+    ])
+    def test_verification(self, stamp: str) -> None:
+        assert _is_verification_evidence(stamp), stamp
+
+    @pytest.mark.parametrize("stamp", [
+        "",
+        # Unknown namespace: no producer table names it — fail closed,
+        # however confident it sounds.
+        "futuretool:confirmed",
+        # Provenance-only stamps whose own doctrine forbids breaking a
+        # merge tie: cross-run reuse ("journal:recall is not tool
+        # evidence"), SAGE recall, dead-code / preprocessor verdict
+        # provenance, guard-sufficiency clean marks, silent-SARIF marks.
+        "journal:recall:run-3",
+        "sage:recall:prior-audit",
+        "reachability:dead_code",
+        "inventory:preprocessor_dead",
+        "mechanical:guard_sufficiency",
+        "sarif:no_alerts",
+        # Detection-role receipts corroborate, never convict (stock
+        # cocci rule with ``// @role: detection`` metadata; SMT verb
+        # the role table demotes).
+        "smt:check-toctou",
+        "coccinelle:missing_bounds_check",
+        # Model-authored values.
+        "llm-claimed:smt",
+        "Semgrep",
+        "manual",
+        # Claim tail: the model wrote "smt+joern"; the sanitizer
+        # namespaces the whole answer, so the "joern" part is claim
+        # text, not a receipt.
+        "llm-claimed:smt+joern",
+        # The surviving side's provenance leads: a stamp headed by a
+        # non-mechanical part never qualifies, whatever follows.
+        "prefilter:sink-scan+semgrep:rule",
+        # One channel confirming twice is one observation, not an
+        # aggregation (same-engine receipts are correlated — the
+        # producer's own distinct-namespace floor).
+        "smt:check-toctou+smt:check-auth-bypass",
+        # Contaminated composites never ride the aggregation rule: an
+        # llm-claimed: part anywhere means the tail is claim text, and
+        # a prefilter: part means this is not the pristine
+        # "+".join(confirmed) receipt the producer mints.
+        "consistency:cwe190-majority+llm-claimed:x+fail_open:handler-outcome-naming",
+        "consistency:cwe190-majority+prefilter:sink-scan+fail_open:handler-outcome-naming",
+        "llm-claimed:x+consistency:cwe190-majority+fail_open:handler-outcome-naming",
+    ])
+    def test_not_verification(self, stamp: str) -> None:
+        assert not _is_verification_evidence(stamp), stamp
+
+    def test_sanitized_claim_tail_matches_pipeline_shape(self) -> None:
+        # The claim-tail pin above, derived the way the pipeline
+        # actually mints it rather than hand-written.
+        stamp = sanitize_llm_evidence_tool("smt+joern")
+        assert stamp == "llm-claimed:smt+joern"
+        assert not _is_verification_evidence(stamp)
+
+
 def _row(evidence: str, **overrides: Any) -> ReviewOutcome:
     kwargs: dict[str, Any] = {
         "file": "src/user.go",
@@ -51,6 +157,48 @@ class TestGateWrapper:
         assert not _is_verification_evidence_for_gate(
             _row("journal:recall:run-3"),
         )
+
+
+_AGG_STAMP = "consistency:cwe190-majority+fail_open:handler-outcome-naming"
+
+
+class TestAggregationMergeTieBreak:
+    """The aggregation receipt survives the ensemble merge end-to-end.
+
+    ``_aggregate_channel_confirmations`` promotes a row only after >=2
+    independent detection-role channels jointly cross the posterior
+    threshold, and ``_record_aggregated_promotion`` stamps the receipt.
+    The ``_merge_outcomes`` tie-break must treat that composite as
+    verification: a clean sibling lane must not flatten a
+    threshold-crossed confirmation (and its evidence must not be
+    erased). The contaminated counterpart pins the boundary — the same
+    channels with a model-authored part spliced in are NOT the
+    producer's receipt and earn nothing.
+    """
+
+    def test_aggregation_stamped_suspicious_survives_clean_sibling(
+        self,
+    ) -> None:
+        row = _row(_AGG_STAMP)
+        clean = ReviewOutcome(
+            file="src/user.go", function="SetUser",
+            status="clean", body="clean lane",
+        )
+        merged = _merge_outcomes([row], [clean])
+        assert merged[0].status == "suspicious"
+        assert _AGG_STAMP in (merged[0].evidence_tool or "")
+
+    def test_contaminated_composite_does_not_break_the_tie(self) -> None:
+        row = _row(
+            "consistency:cwe190-majority+llm-claimed:x"
+            "+fail_open:handler-outcome-naming",
+        )
+        clean = ReviewOutcome(
+            file="src/user.go", function="SetUser",
+            status="clean", body="clean lane",
+        )
+        merged = _merge_outcomes([row], [clean])
+        assert merged[0].status == "clean"
 
 
 def _make_result(*outcomes: ReviewOutcome) -> OrchestratorResult:

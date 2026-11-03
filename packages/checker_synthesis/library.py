@@ -320,6 +320,11 @@ class RuleLibrary:
         self._entries: list[LibraryEntry] | None = None
         self._lock = threading.Lock()
 
+    def __deepcopy__(self, memo):
+        fresh = RuleLibrary(self._dir)
+        memo[id(self)] = fresh
+        return fresh
+
     @property
     def library_dir(self) -> Path:
         return self._dir

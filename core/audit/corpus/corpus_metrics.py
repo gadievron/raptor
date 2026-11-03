@@ -282,9 +282,10 @@ def compute_mode_mismatches(
     """Check per-mode expectations where per-mode actuals exist.
 
     A label's ``expected_mode_results`` maps review mode -> expected
-    status.  A row exposes per-mode actuals through its ``mode`` field.
-    Modes the run never exercised are not counted — attribution never
-    guesses.
+    status.  A row exposes per-mode actuals through its ``mode`` field
+    (single-mode runs) and the ensemble merge's ``security_actual`` /
+    ``bug_first_actual`` fields.  Modes the run never exercised are
+    not counted — attribution never guesses.
 
     Returns ``(checked_count, mismatches)``.
     """
@@ -299,6 +300,8 @@ def compute_mode_mismatches(
             actuals[str(row["mode"])] = row.get("actual", "")
         if row.get("security_actual") is not None:
             actuals["security"] = row["security_actual"]
+        if row.get("bug_first_actual") is not None:
+            actuals["bug_first"] = row["bug_first_actual"]
         for mode, expected in emr.items():
             actual = actuals.get(mode)
             if actual is None:
