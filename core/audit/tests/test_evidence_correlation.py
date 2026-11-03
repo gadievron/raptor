@@ -151,6 +151,12 @@ def _patch_common(monkeypatch, *, hits, chain_confirms):
         return list(chain_confirms)
 
     monkeypatch.setattr("core.audit.orchestrator._run_tool_chain", fake_chain)
+    # Exhausted tool chains may fall back to LLM rule synthesis. These
+    # correlation checks model no further evidence from that separate lane.
+    monkeypatch.setattr(
+        "core.audit.orchestrator._synthesize_unmapped_suspicious",
+        lambda *a, **kw: None,
+    )
     return calls
 
 
