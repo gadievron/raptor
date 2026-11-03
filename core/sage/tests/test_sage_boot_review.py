@@ -29,7 +29,6 @@ from unittest.mock import patch
 
 import pytest
 
-os.environ.setdefault("_RAPTOR_TRUSTED", "1")
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SETUP = REPO_ROOT / "libexec" / "raptor-sage-setup"
@@ -44,7 +43,10 @@ def _load_reviewer():
     return mod
 
 
-with patch.object(sys, "path", sys.path.copy()):
+with (
+    patch.dict(os.environ, {"_RAPTOR_TRUSTED": "1"}),
+    patch.object(sys, "path", sys.path.copy()),
+):
     bpr = _load_reviewer()
     guard = bpr._load_guard()
 
