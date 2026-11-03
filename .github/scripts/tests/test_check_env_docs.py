@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
@@ -60,6 +61,29 @@ def test_api_token_broker_is_inventoried(det, tmp_path):
     inv = det.scan_tree(root)
     assert _kinds(inv, "EXAMPLE_API_TOKEN") == ["declared:LLM_API_KEY_VARS", "read"]
     assert "EXAMPLE_API_KEY" not in inv.vars
+
+
+@pytest.mark.parametrize("suffix", ["API_KEY", "API_TOKEN"])
+@pytest.mark.parametrize("has_convention", [True, False])
+def test_broker_docs_convention_covers_only_registry_credentials(
+    det, tmp_path, capsys, monkeypatch, suffix, has_convention,
+):
+    convention = "`<UPPERCASE_NAME>_<credential_suffix>`" if has_convention else "No naming convention."
+    root = _tree(tmp_path, {
+        "docs/environment.md": f"# Environment variables\n\nModel brokers use {convention}.\n",
+        "core/llm/model_brokers/registry.json": (
+            '{"version":1,"brokers":[{"name":"examplebroker",'
+            f'"credential_suffix":"{suffix}"' + '}]}'
+        ),
+        "core/plumbing.py": 'child_env = {}\nchild_env["UNRELATED_API_KEY"] = "value"\n',
+    })
+    monkeypatch.setattr(sys, "argv", ["check_env_docs.py", "--root", str(root),
+                                     "--baseline", str(tmp_path / "missing-baseline.json")])
+    assert det.main() == 0
+    output = capsys.readouterr().out
+    broker_warning = f"undocumented external-standard variable: EXAMPLEBROKER_{suffix}"
+    assert (broker_warning in output) is not has_convention
+    assert "undocumented internal variable: UNRELATED_API_KEY" in output
 
 
 class TestPythonExtraction:
