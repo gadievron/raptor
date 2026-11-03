@@ -33,8 +33,8 @@ Soundness contract (inherits the memo's, plus durability rules):
   trail path is refused into the same rotation — never followed,
   never blocks the loader (which runs under the registry lock).
 * Writes are concurrent-writer safe by construction: every record is
-  one fully-formed line appended via ``core.json.append_jsonl``
-  (O_APPEND + single ``os.write`` — line-atomic for these record
+  one fully-formed line appended via the shared ``core.json.jsonl``
+  byte writer (O_APPEND + single ``os.write`` — line-atomic for these record
   sizes, O_NOFOLLOW against planted symlinks). There is no
   read-modify-write of shared file state, so parallel workers — and a
   future cross-file worker pool on the primary pass — compose with
@@ -627,16 +627,18 @@ class SweepCheckpoint:
             return
         rec[TOKEN_KEY] = _mint_token(mac, rec, self._run_binding)
         line = json.dumps(rec, separators=(",", ":"), allow_nan=False)
-        # +1 for the newline append_jsonl adds.
-        if len(line.encode("utf-8")) + 1 > self._max_record_bytes:
+        # Check and append exactly the same encoded JSONL record. Reusing
+        # these bytes avoids a second serialization in append_jsonl.
+        encoded_line = (line + "\n").encode("utf-8")
+        if len(encoded_line) > self._max_record_bytes:
             logger.debug(
                 "sweep checkpoint: oversize record skipped (%d bytes)",
                 len(line),
             )
             return
         try:
-            from core.json import append_jsonl
-            append_jsonl(self._path, rec, compact=True)
+            from core.json.jsonl import _append_jsonl_bytes
+            _append_jsonl_bytes(self._path, encoded_line)
         except (OSError, TypeError, ValueError):
             self._write_failed = True
             logger.warning(
