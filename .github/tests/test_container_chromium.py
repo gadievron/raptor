@@ -28,9 +28,15 @@ def test_confined_browser_acceptance_is_required_before_publication():
 def test_confined_check_exercises_both_policies_with_disposable_state(tmp_path, monkeypatch):
     import importlib.util
     import os
-    from types import SimpleNamespace
+    import sys
+    from types import ModuleType, SimpleNamespace
     from unittest.mock import MagicMock
-    from packages.web import browser
+    browser = ModuleType("packages.web.browser")
+    config = ModuleType("core.config")
+    config.RaptorConfig = SimpleNamespace(LOG_DIR=tmp_path / "operator-logs")
+    original_logs = config.RaptorConfig.LOG_DIR
+    monkeypatch.setitem(sys.modules, "packages.web.browser", browser)
+    monkeypatch.setitem(sys.modules, "core.config", config)
     spec = importlib.util.spec_from_file_location("container_browser_check", ROOT / ".devcontainer/check-browser.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -51,8 +57,9 @@ def test_confined_check_exercises_both_policies_with_disposable_state(tmp_path, 
         instance._browser.new_browser_cdp_session.return_value.send.return_value = {
             "arguments": ["--no-sandbox"] if allow_unsandboxed_chromium else ["--enable-automation"]}
         return instance
-    monkeypatch.setattr(browser, "BrowserEngine", engine)
+    monkeypatch.setattr(browser, "BrowserEngine", engine, raising=False)
     monkeypatch.setattr(module.sys, "path", list(module.sys.path))
     module.check_confined(ROOT)
     assert selected == [False, True]
     assert dict(os.environ) == previous
+    assert config.RaptorConfig.LOG_DIR == original_logs

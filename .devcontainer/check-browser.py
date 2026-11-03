@@ -10,10 +10,10 @@ import tempfile
 import threading
 from pathlib import Path
 
-from playwright.sync_api import sync_playwright
-
 
 def check_basic() -> None:
+    from playwright.sync_api import sync_playwright
+
     executable = os.environ.get("RAPTOR_WEB_BROWSER_EXECUTABLE")
     if executable != "/usr/bin/chromium":
         raise ValueError("container browser must select /usr/bin/chromium")
