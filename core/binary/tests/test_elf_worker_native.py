@@ -29,7 +29,9 @@ def native_host():
 
 
 @pytest.fixture(autouse=True)
-def delivered_tier(monkeypatch, native_host):
+def delivered_tier(monkeypatch, native_host, caplog):
+    import logging
+    caplog.set_level(logging.DEBUG, logger=worker.__name__)
     from core import sandbox
     original = sandbox.run
     def observe(command, **options):
