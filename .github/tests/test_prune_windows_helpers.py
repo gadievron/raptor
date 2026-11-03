@@ -8,10 +8,10 @@ import importlib.util
 import io
 from pathlib import Path
 import struct
+import re
 import zipfile
 
 import pytest
-import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("prune_windows_helpers", ROOT / ".devcontainer/prune-windows-helpers.py")
@@ -174,15 +174,16 @@ def test_wheel_check_is_read_only(tmp_path):
 
 
 def test_publication_verifies_flattened_candidate_before_tagging_and_push():
-    workflow = yaml.load((ROOT / ".github/workflows/dockerhub-publish.yml").read_text(), Loader=yaml.BaseLoader)
-    steps = workflow["jobs"]["build-push"]["steps"]
-    verified = next(i for i, step in enumerate(steps) if "buildah build" in step.get("run", ""))
-    published = next(i for i, step in enumerate(steps) if "docker://${tag}" in step.get("run", ""))
+    workflow = (ROOT / ".github/workflows/dockerhub-publish.yml").read_text()
+    # Check the literal shell blocks without requiring a YAML runtime dependency.
+    blocks = re.findall(r"^        run: \|\n((?:          .*\n|\n)+)", workflow, re.MULTILINE)
+    verified = next(i for i, block in enumerate(blocks) if "buildah build" in block)
+    published = next(i for i, block in enumerate(blocks) if "docker://${tag}" in block)
     assert verified < published
-    block = steps[verified]["run"]
+    block = blocks[verified]
     assert "--squash" in block and "len .OCIv1.RootFS.DiffIDs" in block
     assert "prune-windows-helpers.py --check" in block
-    assert "buildah tag localhost/raptor-publish:checked" in steps[published]["run"]
+    assert "buildah tag localhost/raptor-publish:checked" in blocks[published]
     dockerfile = (ROOT / ".devcontainer/Dockerfile").read_text()
     assert dockerfile.index("RUN python3 /usr/local/libexec/prune-windows-helpers.py") < dockerfile.index("USER vscode")
 
@@ -247,3 +248,19 @@ def test_native_windows_cleanup_is_refused_before_any_mutation(tmp_path, monkeyp
         with pytest.raises(ValueError, match="Linux images only"):
             PRUNE.prune(tmp_path)
     assert path.read_bytes() == pe()
+
+
+def test_wheel_inspection_scratch_is_contained_and_cleaned(tmp_path, monkeypatch):
+    path, _ = wheel(tmp_path)
+    original = PRUNE.tempfile.TemporaryDirectory
+    parents = []
+
+    def contained(*args, **kwargs):
+        parents.append(kwargs.get("dir"))
+        assert kwargs.get("dir") == path.parent
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(PRUNE.tempfile, "TemporaryDirectory", contained)
+    PRUNE.wheel_helpers(path)
+    assert parents
+    assert not list(path.parent.glob("wheel-pe-*"))
