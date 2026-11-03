@@ -616,8 +616,25 @@ class CleanupDeviation:
 _RETURN_LINE_RE = re.compile(r"^\s*return\b")
 
 
+# Admission limits bound extra retention between prepass dimensions;
+# exceeding them never limits extraction or changes comparator inputs.
+_SHARED_SPAN_MAX_CHARS = 1_000_000
+_SHARED_SPAN_MAX_FUNCTIONS = 4096
+_SHARED_SPAN_MAX_LINES = 16_384
+
+
+@dataclass
+class FunctionSpanMemo:
+    """Read-only spans shared within one prepass, never across runs."""
+
+    source_items: tuple[tuple[str, str], ...] = ()
+    spans: list[tuple[str, str, int, list[str]]] | None = None
+
+
 def _function_spans(
     source_texts: dict[str, str],
+    *,
+    _memo: FunctionSpanMemo | None = None,
 ) -> list[tuple[str, str, int, list[str]]]:
     """(file, function, start_line, body_lines) per function, on the
     shared parse cache.
@@ -626,11 +643,23 @@ def _function_spans(
     (counted, logged) instead of aborting the dimension."""
     if not _TS_AVAILABLE:
         return []
+    source_items = None
+    if _memo is not None:
+        if (len(source_texts) <= _SHARED_SPAN_MAX_FUNCTIONS
+                and all(type(path) is str and type(source) is str
+                        for path, source in source_texts.items())
+                and sum(map(len, source_texts.values())) <= _SHARED_SPAN_MAX_CHARS):
+            source_items = tuple(source_texts.items())
+            if _memo.spans is not None and _memo.source_items == source_items:
+                return _memo.spans
+        _memo.spans = None
+        _memo.source_items = ()
     spans: list[tuple[str, str, int, list[str]]] = []
     failed = 0
+    complete = True
     for file_path, source in source_texts.items():
         try:
-            _function_spans_for_file(file_path, source, spans)
+            complete = _function_spans_for_file(file_path, source, spans) and complete
         except Exception:
             failed += 1
             logger.debug("consistency: span extraction failed on %s",
@@ -641,6 +670,13 @@ def _function_spans(
             "raised — span-based dimensions see a smaller source set",
             failed,
         )
+    if (_memo is not None and source_items is not None and not failed and complete
+            and len(spans) <= _SHARED_SPAN_MAX_FUNCTIONS
+            and sum(len(body) for _, _, _, body in spans) <= _SHARED_SPAN_MAX_LINES
+            and sum(len(line) for _, _, _, body in spans for line in body)
+            <= _SHARED_SPAN_MAX_CHARS):
+        _memo.source_items = source_items
+        _memo.spans = spans
     return spans
 
 
@@ -657,14 +693,14 @@ def _function_spans_for_file(
     file_path: str,
     source: str,
     spans: list[tuple[str, str, int, list[str]]],
-) -> None:
+) -> bool:
     from .ts_extract import _FUNCTION_TYPES
     tree, lang = parse_source_cached(file_path, source)
     if tree is None or lang is None:
-        return
+        return False
     func_types = _FUNCTION_TYPES.get(lang, ())
     if not func_types:
-        return
+        return False
     src = source.encode("utf-8", errors="replace")
     lines = split_lines(source)
     for node in _walk_descendants(tree.root_node):
@@ -674,6 +710,7 @@ def _function_spans_for_file(
         start = node.start_point[0] + 1
         end = node.end_point[0] + 1
         spans.append((file_path, name, start, lines[start - 1:end]))
+    return True
 
 
 def _acquire_binding(body: list[str], acquire: str) -> tuple[int, str]:
@@ -708,6 +745,7 @@ def detect_cleanup_deviations(
     *,
     min_group: int = MIN_GROUP_SITES,
     ratio: float = CONSISTENCY_RATIO,
+    _span_memo: FunctionSpanMemo | None = None,
 ) -> list[CleanupDeviation]:
     """Error-path resource cleanup comparator (§3.2), two legs:
 
@@ -724,7 +762,8 @@ def detect_cleanup_deviations(
     if not pairs:
         return []
     deviations: list[CleanupDeviation] = []
-    spans = _function_spans(source_texts)
+    spans = (_function_spans(source_texts) if _span_memo is None
+             else _function_spans(source_texts, _memo=_span_memo))
 
     for pair in pairs:
         release_re = re.compile(
@@ -1453,6 +1492,7 @@ def detect_interface_deviations(
     *,
     min_group: int = INTERFACE_MIN_GROUP,
     ratio: float = CONSISTENCY_RATIO,
+    _span_memo: FunctionSpanMemo | None = None,
 ) -> list[InterfaceDeviation]:
     """Interface-implementor parity comparator (§3.8). See the
     section docstring for group sources, properties and bounds."""
@@ -1460,7 +1500,8 @@ def detect_interface_deviations(
         return []
     from .sibling_analysis import SiblingGroup, find_asymmetries
 
-    spans = _function_spans(source_texts)
+    spans = (_function_spans(source_texts) if _span_memo is None
+             else _function_spans(source_texts, _memo=_span_memo))
     by_key: dict[tuple[str, str], tuple[int, str]] = {}
     by_name: dict[str, tuple[str, int, str]] = {}
     for file_path, name, start, lines in spans:
@@ -2626,6 +2667,7 @@ def detect_guard_presence_deviations(
     min_sites: int = MIN_GROUP_SITES,
     ratio: float = CONSISTENCY_RATIO,
     budget_s: float | None = None,
+    _span_memo: FunctionSpanMemo | None = None,
 ) -> list[GuardPresenceDeviation]:
     """Bounds/null-guard presence comparator (§3.4). See the section
     docstring for legs, dominance approximation and bounds.
@@ -2637,7 +2679,8 @@ def detect_guard_presence_deviations(
     deadline = (
         time.monotonic() + budget_s if budget_s is not None else None
     )
-    spans = _function_spans(source_texts)
+    spans = (_function_spans(source_texts) if _span_memo is None
+             else _function_spans(source_texts, _memo=_span_memo))
     if not spans:
         return []
     deviations: list[GuardPresenceDeviation] = []
