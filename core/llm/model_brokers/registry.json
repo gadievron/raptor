@@ -1,0 +1,112 @@
+// Third-party model brokers. Add an entry here; no Python changes needed.
+// Comments use // or # (full-line or inline); ordinary JSON rules still apply.
+// Native providers and Python-owned environment variables cannot be overridden.
+{
+  "version": 1,
+  // Required fields:
+  //   name: lowercase route name; its uppercase form prefixes the credential variable.
+  //   upstream_base_url: bare HTTPS origin, without a path or trailing slash.
+  //   api_path: API root appended to the origin; empty string is allowed.
+  // Optional fields:
+  //   auth_scheme: Bearer (default) or Token; controls the Authorization header.
+  //   credential_suffix: API_KEY (default) or API_TOKEN; provider-compatible env naming.
+  //   protocol: openai (default, SDK support) or http (raw dispatcher API only).
+  // Credential variable is <UPPERCASE_NAME>_<credential_suffix>; suffix and auth are independent.
+  // Workers use the dispatcher; keys stay in the parent. No direct fallback.
+  "brokers": [
+    {
+      "name": "apiroute", // Credential: APIROUTE_API_KEY
+      "auth_scheme": "Bearer",
+      "upstream_base_url": "https://global.api-route.com",
+      "api_path": "/v1"
+    },
+    {
+      "name": "atlascloud",
+      "auth_scheme": "Bearer",
+      "upstream_base_url": "https://api.atlascloud.ai",
+      "api_path": "/v1"
+    },
+    {
+      "name": "cheapaimodel",
+      "auth_scheme": "Bearer",
+      "upstream_base_url": "https://api.cheapaimodel.ai",
+      "api_path": "/v1"
+    },
+    {
+      "name": "cheaperinference",
+      "auth_scheme": "Bearer",
+      "upstream_base_url": "https://api.cheaperinference.com",
+      "api_path": "/v1"
+    },
+    {
+      "name": "deepinfra",
+      "auth_scheme": "Bearer",
+      "upstream_base_url": "https://api.deepinfra.com",
+      "api_path": "/v1/openai"
+    },
+    {
+      "name": "fireworks",
+      "auth_scheme": "Bearer",
+      "upstream_base_url": "https://api.fireworks.ai",
+      "api_path": "/inference/v1"
+    },
+    {
+      "name": "groq",
+      "auth_scheme": "Bearer",
+      "upstream_base_url": "https://api.groq.com",
+      "api_path": "/openai/v1"
+    },
+    {
+      "name": "openrouter",
+      "auth_scheme": "Bearer",
+      "upstream_base_url": "https://openrouter.ai",
+      "api_path": "/api/v1"
+    },
+    {
+      "name": "opper",
+      "auth_scheme": "Bearer",
+      "upstream_base_url": "https://api.opper.ai",
+      "api_path": "/v3/compat"
+    },
+    {
+      "name": "orcarouter",
+      "auth_scheme": "Bearer",
+      "upstream_base_url": "https://api.orcarouter.ai",
+      "api_path": "/v1"
+    },
+    {
+      "name": "perplexity",
+      "auth_scheme": "Bearer",
+      "upstream_base_url": "https://api.perplexity.ai",
+      "api_path": "" // This API is rooted at the origin.
+    },
+    {
+      // Native predictions API: https://replicate.com/docs/reference/http
+      // Bearer authentication, with the provider's REPLICATE_API_TOKEN spelling.
+      "name": "replicate",
+      "auth_scheme": "Bearer",
+      "credential_suffix": "API_TOKEN",
+      "upstream_base_url": "https://api.replicate.com",
+      "api_path": "/v1",
+      "protocol": "http"
+    },
+    {
+      "name": "runcrate",
+      "auth_scheme": "Bearer",
+      "upstream_base_url": "https://api.runcrate.ai",
+      "api_path": "/v1"
+    },
+    {
+      "name": "together",
+      "auth_scheme": "Bearer",
+      "upstream_base_url": "https://api.together.xyz",
+      "api_path": "/v1"
+    },
+    {
+      "name": "yapi",
+      "auth_scheme": "Bearer",
+      "upstream_base_url": "https://api.y-api.bestvirtualgoods.com",
+      "api_path": "/v1"
+    }
+  ]
+}

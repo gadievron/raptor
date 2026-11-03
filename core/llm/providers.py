@@ -1693,7 +1693,16 @@ class OpenAICompatibleProvider(LLMProvider):
             and config.provider == "openai"
             and not config.api_base
         )
-        if use_dispatcher:
+        from core.llm.model_brokers import model_broker
+        broker = model_broker(config.provider)
+        if broker:
+            if config.api_base and config.api_base.rstrip("/") != broker.api_base:
+                raise ValueError(
+                    f"Broker {broker.name!r} api_base conflicts with its registered endpoint"
+                )
+            from core.llm.dispatcher.client import make_broker_client
+            self.client = make_broker_client(broker.name, timeout=config.timeout)
+        elif use_dispatcher:
             from core.llm.dispatcher.client import make_openai_client
             self.client = make_openai_client(timeout=config.timeout)
             logger.debug("OpenAICompatibleProvider: routing via credential-isolation dispatcher")

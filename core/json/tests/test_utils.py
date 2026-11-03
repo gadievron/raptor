@@ -53,6 +53,19 @@ class TestLoadJson(unittest.TestCase):
 
 class TestLoadJsonWithComments(unittest.TestCase):
 
+    def test_object_pairs_hook_receives_duplicate_fields_after_comment_stripping(self):
+        seen = []
+
+        def hook(pairs):
+            seen.extend(pairs)
+            return dict(pairs)
+
+        with TemporaryDirectory() as d:
+            p = Path(d) / "config.json"
+            p.write_text('// comment\n{"key": 1, "key": 2} # inline\n')
+            self.assertEqual(load_json_with_comments(p, object_pairs_hook=hook), {"key": 2})
+        self.assertEqual(seen, [("key", 1), ("key", 2)])
+
     def test_strips_comments(self):
         with TemporaryDirectory() as d:
             p = Path(d) / "config.json"

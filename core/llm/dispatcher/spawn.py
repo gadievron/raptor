@@ -90,6 +90,9 @@ def spawn_worker(
         # (the dispatcher still injects the actual secrets at request
         # time from its in-memory store).
         base_env.update(RaptorConfig.llm_routing_env())
+    from core.llm.model_brokers import MODEL_BROKERS
+    for broker in MODEL_BROKERS:
+        base_env.pop(broker.api_key_env, None)
     base_env["RAPTOR_LLM_SOCKET"] = socket_path
     base_env["RAPTOR_LLM_TOKEN_FD"] = str(token_fd)
 

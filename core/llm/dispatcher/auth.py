@@ -3,7 +3,7 @@
 Each provider's authentication scheme is a small fact: which headers
 to strip from the worker's request, which to inject from the parent's
 secret store, which upstream URL to forward to. Encoded as data so
-adding a provider is a single dict entry plus a credentials-source.
+adding a static-auth gateway is a single model_brokers/registry.json entry.
 
 Only providers RAPTOR actively dispatches to are supported here. If
 ``api_key`` is None at request time, the dispatcher rejects with
@@ -81,6 +81,8 @@ import urllib.parse
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+
+from core.llm.model_brokers import MODEL_BROKERS, read_broker_key
 
 _log = logging.getLogger(__name__)
 
@@ -224,20 +226,9 @@ def _read_env(var: str) -> str | None:
     return val
 
 
-# ``_read_env_keep`` below marks env-keyed providers with a
-# dispatcher RULE but NO worker-side dispatcher client factory:
-# workers reach those providers env-direct
-# (``OpenAICompatibleProvider`` dispatcher-routes only ``openai``
-# proper; nothing routes the aggregator tail), and worker-side model
-# DETECTION is itself gated on the env key being visible. Erasing
-# these keys at store construction therefore killed both detection
-# and auth for exactly these providers in every spawned worker — the
-# launcher builds worker envs from the live environ AFTER the store
-# is constructed. Their keys are read WITHOUT erasure (one warning
-# names the residual exposure) until a worker-side dispatcher route
-# exists; keys whose provider IS worker-routable (anthropic / openai /
-# gemini / bedrock) keep the read-and-erase isolation via
-# ``_read_env``.
+# Native SDKs without a dispatcher client retain env-direct credentials.
+# Registered brokers always have dispatcher routes and use read-and-erase;
+# catalog entries cannot change this credential policy.
 
 
 class CredentialStore:
@@ -275,31 +266,16 @@ class CredentialStore:
             return val
 
         self._keys: dict[str, str | None] = {
+            # Broker secrets belong to the parent dispatcher only.
+            **{broker.name: read_broker_key(broker, consume=True)
+               for broker in MODEL_BROKERS},
             # --- direct providers (read-and-erase) ---
             "anthropic":  _read_env("ANTHROPIC_API_KEY"),
             "gemini":     _read_env("GEMINI_API_KEY") or _google_api_key,
             "openai":     _read_env("OPENAI_API_KEY"),
-            # --- aggregator / routing providers (read-and-keep) ---
-            # Workers reach these env-direct (no worker-side dispatcher
-            # factory routes them); see the comment above the class.
-            "apiroute": _read_env_keep("API_ROUTE_API_KEY"),
-            "atlascloud": _read_env_keep("ATLASCLOUD_API_KEY"),
-            "cheapaimodel": _read_env_keep("CHEAPAIMODEL_API_KEY"),
-            "cheaperinference": _read_env_keep("CHEAPER_INFERENCE_API_KEY"),
-            "cohere":     _read_env_keep("COHERE_API_KEY"),
-            "deepinfra":  _read_env_keep("DEEPINFRA_API_KEY"),
-            "fireworks":  _read_env_keep("FIREWORKS_API_KEY"),
-            "groq":       _read_env_keep("GROQ_API_KEY"),
+            # Preserve env-direct SDK credential availability.
             "mistral":    _read_env_keep("MISTRAL_API_KEY"),
-            "openrouter": _read_env_keep("OPENROUTER_API_KEY"),
-            "opper":      _read_env_keep("OPPER_API_KEY"),
-            "orcarouter": _read_env_keep("ORCAROUTER_API_KEY"),
-            "perplexity": _read_env_keep("PERPLEXITY_API_KEY"),
-            # Replicate — uses ``Token <key>`` prefix, not ``Bearer``.
-            "replicate":  _read_env_keep("REPLICATE_API_TOKEN"),
-            "runcrate":   _read_env_keep("RUNCRATE_API_KEY"),
-            "together":   _read_env_keep("TOGETHER_API_KEY"),
-            "yapi":       _read_env_keep("YAPI_API_KEY"),
+            "cohere":     _read_env_keep("COHERE_API_KEY"),
             # --- cloud gateways ---
             # Azure OpenAI — endpoint absent → sentinel producing 503.
             "azure_openai":           _read_env_keep("AZURE_OPENAI_API_KEY"),
@@ -1006,24 +982,11 @@ def build_rules(creds: CredentialStore) -> dict[str, ProviderRule]:
         # the header so the dispatcher injects it that way.
         return {"x-goog-api-key": key}
 
-    # Bearer-auth aggregators — closure factory keeps each header
-    # injector tight (just reads the matching credential). All use
-    # the OpenAI-style ``Authorization: Bearer <key>`` shape.
-    def _bearer_headers(provider_key: str):
+    def _authorization_headers(provider_key: str, scheme: str):
         def _impl() -> dict[str, str]:
             key = creds.get(provider_key)
-            if not key:
-                return {}
-            return {"Authorization": f"Bearer {key}"}
+            return {"Authorization": f"{scheme} {key}"} if key else {}
         return _impl
-
-    def _replicate_headers() -> dict[str, str]:
-        # Replicate uses ``Token <key>`` (not Bearer). One-off rather
-        # than parameterising the factory above for clarity.
-        key = creds.get("replicate")
-        if not key:
-            return {}
-        return {"Authorization": f"Token {key}"}
 
     def _azure_openai_headers() -> dict[str, str]:
         # Azure OpenAI uses ``api-key`` header (not Bearer). Endpoint
@@ -1249,7 +1212,16 @@ def build_rules(creds: CredentialStore) -> dict[str, ProviderRule]:
             return True
         return creds.aws_signer() is not None
 
-    return {
+    rules = {
+        broker.name: ProviderRule(
+            name=broker.name,
+            upstream_base_url=broker.upstream_base_url,
+            inject_headers=_authorization_headers(broker.name, broker.auth_scheme),
+        )
+        for broker in MODEL_BROKERS
+    }
+    # Python adapters have final authority, even if validation is bypassed.
+    rules.update({
         "anthropic": ProviderRule(
             name="anthropic",
             upstream_base_url="https://api.anthropic.com",
@@ -1266,108 +1238,15 @@ def build_rules(creds: CredentialStore) -> dict[str, ProviderRule]:
             upstream_base_url="https://api.openai.com",
             inject_headers=_openai_headers,
         ),
-        # --- aggregator / routing providers ---
-        "apiroute": ProviderRule(
-            name="apiroute",
-            # Preserve the SDK's /v1 path, as with other compatible gateways.
-            upstream_base_url="https://global.api-route.com",
-            inject_headers=_bearer_headers("apiroute"),
-        ),
-        "atlascloud": ProviderRule(
-            name="atlascloud",
-            # /v1 root (OpenAI-compatible); bare host is the correct
-            # upstream — SDK path preserved end-to-end.
-            upstream_base_url="https://api.atlascloud.ai",
-            inject_headers=_bearer_headers("atlascloud"),
-        ),
-        "cheapaimodel": ProviderRule(
-            name="cheapaimodel",
-            # /v1 root (OpenAI-compatible); bare host is the correct
-            # upstream — SDK path preserved end-to-end.
-            upstream_base_url="https://api.cheapaimodel.ai",
-            inject_headers=_bearer_headers("cheapaimodel"),
-        ),
-        "cheaperinference": ProviderRule(
-            name="cheaperinference",
-            # /v1 root (OpenAI-compatible); bare host is the correct
-            # upstream — SDK path preserved end-to-end.
-            upstream_base_url="https://api.cheaperinference.com",
-            inject_headers=_bearer_headers("cheaperinference"),
+        "mistral": ProviderRule(
+            name="mistral",
+            upstream_base_url="https://api.mistral.ai",
+            inject_headers=_authorization_headers("mistral", "Bearer"),
         ),
         "cohere": ProviderRule(
             name="cohere",
             upstream_base_url="https://api.cohere.ai",
-            inject_headers=_bearer_headers("cohere"),
-        ),
-        "deepinfra": ProviderRule(
-            name="deepinfra",
-            upstream_base_url="https://api.deepinfra.com",
-            inject_headers=_bearer_headers("deepinfra"),
-        ),
-        "fireworks": ProviderRule(
-            name="fireworks",
-            upstream_base_url="https://api.fireworks.ai",
-            inject_headers=_bearer_headers("fireworks"),
-        ),
-        "groq": ProviderRule(
-            name="groq",
-            upstream_base_url="https://api.groq.com",
-            inject_headers=_bearer_headers("groq"),
-        ),
-        "mistral": ProviderRule(
-            name="mistral",
-            upstream_base_url="https://api.mistral.ai",
-            inject_headers=_bearer_headers("mistral"),
-        ),
-        "openrouter": ProviderRule(
-            name="openrouter",
-            # API rooted at /api/v1; bare host is the correct upstream.
-            upstream_base_url="https://openrouter.ai",
-            inject_headers=_bearer_headers("openrouter"),
-        ),
-        "opper": ProviderRule(
-            name="opper",
-            # API rooted at /v3/compat (OpenAI-compatible); bare host is the
-            # correct upstream, same shape as OpenRouter.
-            upstream_base_url="https://api.opper.ai",
-            inject_headers=_bearer_headers("opper"),
-        ),
-        "orcarouter": ProviderRule(
-            name="orcarouter",
-            # /v1 root (OpenAI-compatible); bare host — same shape as
-            # OpenRouter.
-            upstream_base_url="https://api.orcarouter.ai",
-            inject_headers=_bearer_headers("orcarouter"),
-        ),
-        "perplexity": ProviderRule(
-            name="perplexity",
-            upstream_base_url="https://api.perplexity.ai",
-            inject_headers=_bearer_headers("perplexity"),
-        ),
-        "replicate": ProviderRule(
-            name="replicate",
-            upstream_base_url="https://api.replicate.com",
-            inject_headers=_replicate_headers,
-        ),
-        "runcrate": ProviderRule(
-            name="runcrate",
-            # /v1 root (OpenAI-compatible); bare host is the correct
-            # upstream, SDK path preserved end-to-end.
-            upstream_base_url="https://api.runcrate.ai",
-            inject_headers=_bearer_headers("runcrate"),
-        ),
-        "together": ProviderRule(
-            name="together",
-            upstream_base_url="https://api.together.xyz",
-            inject_headers=_bearer_headers("together"),
-        ),
-        "yapi": ProviderRule(
-            name="yapi",
-            # /v1 root (OpenAI-compatible); bare host is the correct
-            # upstream — the worker's SDK path is preserved end-to-end, so
-            # vendor-slashed model ids reach the relay untouched.
-            upstream_base_url="https://api.y-api.bestvirtualgoods.com",
-            inject_headers=_bearer_headers("yapi"),
+            inject_headers=_authorization_headers("cohere", "Bearer"),
         ),
         # --- cloud gateways ---
         "azure_openai": ProviderRule(
@@ -1393,7 +1272,8 @@ def build_rules(creds: CredentialStore) -> dict[str, ProviderRule]:
             prepare_request=_bedrock_prepare,
             is_configured=_bedrock_configured,
         ),
-    }
+    })
+    return rules
 
 
 def seed_from_config(store: CredentialStore) -> None:

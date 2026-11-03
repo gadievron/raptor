@@ -32,6 +32,36 @@ def _kinds(inv, name):
     return sorted({o.kind for o in inv.vars.get(name, [])})
 
 
+def test_broker_json_credentials_are_inventoried(det, tmp_path):
+    root = _tree(tmp_path, {"core/llm/model_brokers/registry.json": (
+        '// self-documenting registry\n'
+        '{"version":1,"brokers":[{"name":"examplebroker"}]} # inline comment\n'
+    )})
+    inv = det.scan_tree(root)
+    name = "EXAMPLEBROKER_API_KEY"
+    assert _kinds(inv, name) == ["declared:LLM_API_KEY_VARS", "read"]
+    assert det.classify(name, inv.vars[name]) == "external-standard"
+
+
+def test_broker_cannot_claim_python_env_variable(det, tmp_path):
+    root = _tree(tmp_path, {
+        "core/llm/model_brokers/registry.json": '{"version":1,"brokers":[{"name":"example"}]}',
+        "core/other.py": 'import os\nx = os.environ.get("EXAMPLE_API_KEY")\n',
+    })
+    with pytest.raises(ValueError, match="conflicts with Python-owned environment variable"):
+        det.scan_tree(root)
+
+
+def test_api_token_broker_is_inventoried(det, tmp_path):
+    root = _tree(tmp_path, {"core/llm/model_brokers/registry.json": (
+        '{"version":1,"brokers":[{"name":"example","auth_scheme":"Bearer",'
+        '"credential_suffix":"API_TOKEN"}]}'
+    )})
+    inv = det.scan_tree(root)
+    assert _kinds(inv, "EXAMPLE_API_TOKEN") == ["declared:LLM_API_KEY_VARS", "read"]
+    assert "EXAMPLE_API_KEY" not in inv.vars
+
+
 class TestPythonExtraction:
     def test_direct_environ_forms(self, det, tmp_path):
         root = _tree(tmp_path, {"core/a.py": (

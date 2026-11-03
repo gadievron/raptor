@@ -107,7 +107,7 @@ class TestCredentialShape:
             "AWS_SESSION_TOKEN",
             "GITHUB_TOKEN",
             "MY_SERVICE_PASSWORD",
-            "REPLICATE_API_TOKEN",
+            "EXAMPLE_API_TOKEN",
             "RAPTOR_SESSION_TOKEN",
             "anthropic_api_key",  # case-folded
         ):

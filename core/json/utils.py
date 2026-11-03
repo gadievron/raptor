@@ -431,6 +431,7 @@ def load_json_with_comments(
     path: str | Path,
     *,
     max_bytes: int | None | _DefaultBudget = _USE_DEFAULT_BUDGET,
+    object_pairs_hook=None,
 ) -> Any | None:
     """Load a JSON file that may contain ``//`` or ``#`` comments.
 
@@ -438,6 +439,10 @@ def load_json_with_comments(
     preserving comment characters inside quoted strings. Used for
     config files (e.g. ``tuning.json``, ``models.json``). Returns
     None on missing file or parse error.
+
+    ``object_pairs_hook`` optionally validates object fields (for example,
+    rejecting duplicates). When supplied, parsing uses the stdlib decoder
+    so the hook runs even when orjson is installed.
 
     Refusal semantics mirror :func:`load_json` (non-strict form),
     checked BEFORE any read:
@@ -479,6 +484,9 @@ def load_json_with_comments(
         stripped = _strip_json_comments(text)
         if not stripped.strip():
             return None
+        if object_pairs_hook is not None:
+            return json.loads(stripped, object_pairs_hook=object_pairs_hook,
+                              parse_constant=_reject_non_finite)
         return _loads(stripped, parse_constant=_reject_non_finite)
     except (json.JSONDecodeError, ValueError, OSError, RecursionError) as e:
         logger.warning("load_json_with_comments: failed to parse %s: %s", p, e)

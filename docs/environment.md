@@ -5,6 +5,7 @@
 **Related documentation:**
 [Configuration](configuration.md) |
 [LLM Providers](llm.md) |
+[Model broker registry](model-brokers.md) |
 [Sandbox](sandbox.md) |
 [SAGE](sage.md) |
 [Security](security.md)
@@ -773,36 +774,17 @@ calls natively.
 | `GOOGLE_API_KEY` | Gemini (alternate name) |
 | `MISTRAL_API_KEY` | Mistral |
 | `OPENAI_API_KEY` | OpenAI |
-
-**Aggregator / routing providers** — OpenAI-compatible gateways that
-front other models.  RAPTOR doesn't call these directly today, but
-their keys need to flow through when the operator wires up a custom
-dispatcher or aggregator route.
-
-| Variable | Serves |
-|----------|--------|
-| `API_ROUTE_API_KEY` | [API Route](https://www.api-route.com) |
-| `ATLASCLOUD_API_KEY` | [Atlas Cloud](https://www.atlascloud.ai) |
-| `CHEAPAIMODEL_API_KEY` | [cheapaimodel](https://cheapaimodel.ai) |
-| `CHEAPER_INFERENCE_API_KEY` | Cheaper Inference |
 | `COHERE_API_KEY` | Cohere |
-| `DEEPINFRA_API_KEY` | DeepInfra |
-| `FIREWORKS_API_KEY` | Fireworks |
-| `GROQ_API_KEY` | Groq |
-| `OPENROUTER_API_KEY` | OpenRouter |
-| `OPPER_API_KEY` | [Opper](https://opper.ai) |
-| `ORCAROUTER_API_KEY` | OrcaRouter |
-| `PERPLEXITY_API_KEY` | Perplexity |
-| `REPLICATE_API_TOKEN` | Replicate (note the `_TOKEN` suffix) |
-| `RUNCRATE_API_KEY` | [Runcrate](https://runcrate.ai) |
-| `TOGETHER_API_KEY` | Together |
-| `YAPI_API_KEY` | [Y-API](https://y-api.bestvirtualgoods.com) |
 
-For API Route, set `API_ROUTE_API_KEY` to your own key. Dispatcher requests to
-`/apiroute/v1/chat/completions` are forwarded to
-`https://global.api-route.com/v1/chat/completions` with Bearer authentication.
-Use a model ID from API Route's `/v1/models` catalog. This route is opt-in and
-does not change the default provider or model selection.
+**Model brokers** — credentials are derived from each broker's registry name
+as `<UPPERCASE_NAME>_<credential_suffix>`. The suffix defaults to `API_KEY`
+and can be `API_TOKEN` for provider naming compatibility. It is independent
+of `auth_scheme`: Replicate reads `REPLICATE_API_TOKEN` and sends Bearer
+authentication. There are no aliases. The parent dispatcher consumes the
+key and injects authentication; broker workers receive no keys and have no
+direct-network fallback. Broker routes are opt-in and do not change default
+model selection. See the [registry guide](model-brokers.md) for configuration
+and the JSON-only contribution path.
 
 For cheapaimodel, set `CHEAPAIMODEL_API_KEY` to a key created in the console at
 https://cheapaimodel.ai. Dispatcher requests to

@@ -9,6 +9,8 @@ import os
 from pathlib import Path
 from typing import ClassVar
 
+from core.llm.model_brokers import MODEL_BROKERS
+
 # Imported at module level DELIBERATELY (stdlib-only leaf module, no
 # cycle risk): get_safe_env() runs inside post-fork sandbox children
 # (_spawn.run_sandboxed's env=None default), where a lazy first-time
@@ -1259,6 +1261,10 @@ class RaptorConfig:
         # Belt + braces: strip anything dangerous that somehow made it
         # through (either allowlisted explicitly or matching a prefix).
         env = strip_env_vars(env, RaptorConfig.DANGEROUS_ENV_VARS)
+        # Credential policy outranks safe prefixes (a registered key could
+        # otherwise look like a locale variable, e.g. LC_BROKER_API_KEY).
+        for name in RaptorConfig.LLM_API_KEY_VARS:
+            env.pop(name, None)
         # Replace ambient TMPDIR with the launcher-owned session workspace.
         # Do not initialize it here: this path also runs inside restricted,
         # post-fork children where imports/mkdir and inherited locks are unsafe.
@@ -1328,26 +1334,11 @@ class RaptorConfig:
     # SAFE_ENV_ALLOWLIST — untrusted-code subprocesses (CodeQL builds,
     # fuzz harnesses) must never see credentials.  get_llm_env() layers
     # them on top of get_safe_env() for our own LLM-calling scripts.
-    # Aggregator / routing provider keys — RAPTOR doesn't call these
-    # directly today, but they need to flow through when the operator
-    # wires up a custom dispatcher or aggregator route.
-    _LLM_AGGREGATOR_KEYS = (
-        "API_ROUTE_API_KEY",
-        "ATLASCLOUD_API_KEY",
-        "CHEAPAIMODEL_API_KEY",
-        "CHEAPER_INFERENCE_API_KEY",
-        "COHERE_API_KEY",
-        "DEEPINFRA_API_KEY",
-        "FIREWORKS_API_KEY",
-        "GROQ_API_KEY",
-        "OPENROUTER_API_KEY",
-        "OPPER_API_KEY",
-        "ORCAROUTER_API_KEY",
-        "PERPLEXITY_API_KEY",
-        "REPLICATE_API_TOKEN",  # uses _TOKEN suffix
-        "RUNCRATE_API_KEY",
-        "TOGETHER_API_KEY",
-        "YAPI_API_KEY",
+    # Static-auth gateway keys come from the shared broker registry.
+    # Keep them available for env-direct SDK calls as well as dispatcher
+    # routes; untrusted-code subprocesses still never receive them.
+    _LLM_AGGREGATOR_KEYS = tuple(
+        broker.api_key_env for broker in MODEL_BROKERS
     )
 
     # Cloud gateway keys (Bedrock, Vertex AI, Azure OpenAI).
@@ -1380,8 +1371,9 @@ class RaptorConfig:
         # Direct providers
         "GEMINI_API_KEY",
         "GOOGLE_API_KEY",       # alternate Gemini env name
-        "MISTRAL_API_KEY",
         "OPENAI_API_KEY",
+        "MISTRAL_API_KEY",
+        "COHERE_API_KEY",
         *_LLM_AGGREGATOR_KEYS,
         *_LLM_CLOUD_KEYS,
     )

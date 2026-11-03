@@ -18,6 +18,7 @@ import pytest
 
 from core.llm.dispatcher.auth import CredentialStore, ProviderRule
 from core.llm.dispatcher.server import LLMDispatcher, _TOKEN_HEADER
+from core.llm.model_brokers import MODEL_BROKERS
 
 
 @pytest.fixture
@@ -27,30 +28,14 @@ def all_providers_creds():
         "anthropic": "anthropic-real-NOT-LEAKED",
         "openai":    "sk-openai-real-NOT-LEAKED",
         "gemini":    "AIza-gemini-real-NOT-LEAKED",
-        # Aggregators — distinct values so a header-injection bug that
-        # swaps providers shows up immediately in the upstream-captured
-        # headers.
-        "apiroute": "apiroute-real-NOT-LEAKED",
-        "atlascloud": "ac-atlascloud-real-NOT-LEAKED",
-        "cheapaimodel": "cam-cheapaimodel-real-NOT-LEAKED",
-        "cheaperinference": "ci-cheaperinference-real-NOT-LEAKED",
-        "cohere":      "cohere-real-NOT-LEAKED",
-        "deepinfra":   "deepinfra-real-NOT-LEAKED",
-        "fireworks":   "fw-fireworks-real-NOT-LEAKED",
-        "groq":        "gsk-groq-real-NOT-LEAKED",
-        "mistral":     "mistral-real-NOT-LEAKED",
-        "openrouter":  "sk-or-real-NOT-LEAKED",
-        "opper":       "opper-real-NOT-LEAKED",
-        "orcarouter":  "sk-orca-real-NOT-LEAKED",
-        "perplexity":  "pplx-perplexity-real-NOT-LEAKED",
-        "replicate":   "r8-replicate-real-NOT-LEAKED",
-        "runcrate":    "rc-runcrate-real-NOT-LEAKED",
-        "together":    "together-real-NOT-LEAKED",
-        "yapi":        "yapi-real-NOT-LEAKED",
+        "cohere": "cohere-real-NOT-LEAKED",
+        "mistral": "mistral-real-NOT-LEAKED",
         # Cloud gateways
         "azure_openai":          "azure-real-NOT-LEAKED",
         "azure_openai_endpoint": "https://example-azure.invalid",
     }
+    # Distinct keys expose accidental cross-broker credential injection.
+    creds._keys.update({b.name: f"{b.name}-registry-test-key" for b in MODEL_BROKERS})
     return creds
 
 
@@ -88,6 +73,45 @@ class _CaptiveUpstream:
     def shutdown(self):
         self._server.shutdown()
         self._server.server_close()
+
+
+@pytest.mark.upstream_forward
+@pytest.mark.parametrize("broker", MODEL_BROKERS, ids=lambda b: b.name)
+def test_registry_broker_roundtrip(all_providers_creds, tmp_path, broker):
+    """New JSON rows automatically exercise the actual SDK/dispatcher boundary."""
+    from core.llm.dispatcher.client import make_broker_client
+
+    upstream = _CaptiveUpstream()
+    d = _setup_with_provider_redirected(
+        all_providers_creds, tmp_path, broker.name, upstream.base_url,
+    )
+    try:
+        _, fd = d.allocate_worker(label=f"registry-{broker.name}")
+        token = os.read(fd, 64).decode().strip()
+        os.close(fd)
+        if broker.protocol == "openai":
+            with make_broker_client(broker.name, socket_path=str(d.socket_path),
+                                    token=token, timeout=5) as client:
+                client.chat.completions.create(
+                    model="example-model", messages=[{"role": "user", "content": "test"}],
+                )
+            assert upstream.captured["path"] == broker.api_path + "/chat/completions"
+        else:
+            response = _post_via_dispatcher(
+                d, token, f"http://_/{broker.name}{broker.api_path}/predictions",
+                b'{"model":"example-model"}', {"Authorization": "worker-dummy"},
+            )
+            assert response.status_code == 200
+            assert upstream.captured["path"] == broker.api_path + "/predictions"
+        headers = {k.lower(): v for k, v in upstream.captured["headers"].items()}
+        assert headers["authorization"] == (
+            f"{broker.auth_scheme} {all_providers_creds.get(broker.name)}"
+        )
+        assert _TOKEN_HEADER.lower() not in headers
+        assert "dummy-not-used" not in str(headers)
+    finally:
+        upstream.shutdown()
+        d.shutdown()
 
 
 def _setup_with_provider_redirected(creds, tmp_path, provider: str, base_url: str):
@@ -276,37 +300,12 @@ class TestUnknownProviderPath:
 
 
 # ---------------------------------------------------------------------
-# Phase C-β: 8 OpenAI-compatible aggregators (Bearer auth) +
-# Replicate (Token auth) + Azure OpenAI (api-key + operator-set
-# endpoint). Each gets the same shape of test:
-#   1. Captive upstream stands in for the real provider.
-#   2. POST through the dispatcher with a dummy auth header.
-#   3. Assert the upstream got the real key in the right header,
-#      the dummy was stripped, and the path was forwarded as-is.
+# Native Bearer providers; broker forwarding is generated from the catalog.
 # ---------------------------------------------------------------------
 
-
-# Bearer-auth providers — 8 OpenAI-compatible aggregators all use
-# ``Authorization: Bearer <key>``. Parameterised so a future provider
-# with the same shape adds one row, not a whole new class.
 _BEARER_PROVIDERS = [
-    # (provider name, path tail, expected key)
-    ("apiroute", "v1/chat/completions", "apiroute-real-NOT-LEAKED"),
-    ("atlascloud", "v1/chat/completions", "ac-atlascloud-real-NOT-LEAKED"),
-    ("cheapaimodel", "v1/chat/completions", "cam-cheapaimodel-real-NOT-LEAKED"),
-    ("cheaperinference", "v1/chat/completions", "ci-cheaperinference-real-NOT-LEAKED"),
-    ("cohere",     "v1/chat",                "cohere-real-NOT-LEAKED"),
-    ("deepinfra",  "v1/openai/chat/completions", "deepinfra-real-NOT-LEAKED"),
-    ("fireworks",  "inference/v1/chat/completions", "fw-fireworks-real-NOT-LEAKED"),
-    ("groq",       "openai/v1/chat/completions", "gsk-groq-real-NOT-LEAKED"),
-    ("mistral",    "v1/chat/completions",    "mistral-real-NOT-LEAKED"),
-    ("openrouter", "api/v1/chat/completions", "sk-or-real-NOT-LEAKED"),
-    ("opper",      "v3/compat/chat/completions", "opper-real-NOT-LEAKED"),
-    ("orcarouter", "v1/chat/completions", "sk-orca-real-NOT-LEAKED"),
-    ("perplexity", "chat/completions",       "pplx-perplexity-real-NOT-LEAKED"),
-    ("runcrate",   "v1/chat/completions",    "rc-runcrate-real-NOT-LEAKED"),
-    ("together",   "v1/chat/completions",    "together-real-NOT-LEAKED"),
-    ("yapi",       "v1/chat/completions",    "yapi-real-NOT-LEAKED"),
+    ("cohere", "v1/chat", "cohere-real-NOT-LEAKED"),
+    ("mistral", "v1/chat/completions", "mistral-real-NOT-LEAKED"),
 ]
 
 
@@ -342,39 +341,6 @@ def test_bearer_provider_authorization_injected(
     finally:
         upstream.shutdown()
         d.shutdown()
-
-
-@pytest.mark.upstream_forward
-class TestReplicateProvider:
-
-    def test_token_prefix_injected_dummy_stripped(
-        self, all_providers_creds, tmp_path,
-    ):
-        """Replicate uses ``Authorization: Token <key>`` (not Bearer).
-        Dispatcher rule encodes that prefix; verify the upstream
-        sees ``Token`` not ``Bearer``."""
-        upstream = _CaptiveUpstream()
-        d = _setup_with_provider_redirected(
-            all_providers_creds, tmp_path, "replicate", upstream.base_url,
-        )
-        try:
-            _, fd = d.allocate_worker(label="replicate-test")
-            token = os.read(fd, 64).decode().strip()
-            os.close(fd)
-            _post_via_dispatcher(
-                d, token, "http://_/replicate/v1/predictions",
-                b'{"version":"x","input":{}}',
-                {"Authorization": "Token dummy-stripped"},
-            )
-            sent = {k.lower(): v for k, v in upstream.captured["headers"].items()}
-            assert sent.get("authorization") == "Token r8-replicate-real-NOT-LEAKED"
-            assert sent.get("authorization") != "Token dummy-stripped"
-            # Crucially, NOT a Bearer prefix:
-            assert not sent.get("authorization", "").startswith("Bearer ")
-            assert upstream.captured["path"] == "/v1/predictions"
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
 
 @pytest.mark.upstream_forward
@@ -497,66 +463,31 @@ class TestNewProvidersUnconfiguredKeyReturns503:
 
 
 class TestCredentialStoreReadsAggregatorEnvs:
-    """Real CredentialStore() — every aggregator key is read at init
-    time and KEPT in the environ: no worker-side dispatcher factory
-    routes these providers, so workers authenticate (and detect the
-    provider) env-direct — erasure silently killed their auth in
-    every spawned worker."""
+    """Native env-direct SDK credentials stay; broker credentials are erased."""
 
-    def test_all_new_keys_read_and_kept_in_env(self, monkeypatch):
+    def test_native_keys_kept_and_broker_keys_erased(self, monkeypatch):
         env_to_set = {
-            "API_ROUTE_API_KEY": "apiroute-test",
-            "ATLASCLOUD_API_KEY": "atlascloud-test",
-            "CHEAPAIMODEL_API_KEY": "cheapaimodel-test",
-            "CHEAPER_INFERENCE_API_KEY": "cheaperinference-test",
-            "COHERE_API_KEY":     "cohere-test",
-            "DEEPINFRA_API_KEY":  "deepinfra-test",
-            "FIREWORKS_API_KEY":  "fireworks-test",
-            "GROQ_API_KEY":       "groq-test",
-            "MISTRAL_API_KEY":    "mistral-test",
-            "OPENROUTER_API_KEY": "openrouter-test",
-            "OPPER_API_KEY":      "opper-test",
-            "ORCAROUTER_API_KEY": "orcarouter-test",
-            "PERPLEXITY_API_KEY": "perplexity-test",
-            "REPLICATE_API_TOKEN": "replicate-test",
-            "RUNCRATE_API_KEY":   "runcrate-test",
-            "TOGETHER_API_KEY":   "together-test",
-            "YAPI_API_KEY":         "yapi-test",
+            **{broker.api_key_env: f"{broker.name}-test" for broker in MODEL_BROKERS},
+            "COHERE_API_KEY": "cohere-test",
+            "MISTRAL_API_KEY": "mistral-test",
             "AZURE_OPENAI_API_KEY": "azure-test",
             "AZURE_OPENAI_ENDPOINT": "https://example-azure.invalid",
         }
         for k, v in env_to_set.items():
             monkeypatch.setenv(k, v)
         creds = CredentialStore()
-        # Each key landed in the store under the expected name.
-        assert creds.get("apiroute") == "apiroute-test"
-        assert creds.get("atlascloud") == "atlascloud-test"
-        assert creds.get("cheapaimodel") == "cheapaimodel-test"
-        assert creds.get("cheaperinference") == "cheaperinference-test"
-        assert creds.get("cohere") == "cohere-test"
-        assert creds.get("deepinfra") == "deepinfra-test"
-        assert creds.get("fireworks") == "fireworks-test"
-        assert creds.get("groq") == "groq-test"
-        assert creds.get("mistral") == "mistral-test"
-        assert creds.get("openrouter") == "openrouter-test"
-        assert creds.get("opper") == "opper-test"
-        assert creds.get("orcarouter") == "orcarouter-test"
-        assert creds.get("perplexity") == "perplexity-test"
-        assert creds.get("replicate") == "replicate-test"
-        assert creds.get("runcrate") == "runcrate-test"
-        assert creds.get("together") == "together-test"
-        assert creds.get("yapi") == "yapi-test"
-        assert creds.get("azure_openai") == "azure-test"
-        assert creds.get("azure_openai_endpoint") == "https://example-azure.invalid"
-        # Each env var STAYS in os.environ — workers reach these
-        # providers env-direct (worker env is built from the live
-        # environ after the store is constructed), so erasing them
-        # here would strip worker auth for exactly these providers.
+        for broker in MODEL_BROKERS:
+            assert creds.get(broker.name) == f"{broker.name}-test"
+        for provider in ("cohere", "mistral", "azure_openai"):
+            assert creds.get(provider) == env_to_set[f"{provider.upper()}_API_KEY"]
+        assert creds.get("azure_openai_endpoint") == env_to_set["AZURE_OPENAI_ENDPOINT"]
+        # Broker keys are parent-only; legacy native SDK keys stay available.
+        broker_keys = {broker.api_key_env for broker in MODEL_BROKERS}
         for k, v in env_to_set.items():
-            assert os.environ.get(k) == v, (
-                f"{k} erased from environ — env-direct worker auth "
-                f"for its provider would silently break"
-            )
+            if k in broker_keys:
+                assert k not in os.environ
+            else:
+                assert os.environ.get(k) == v
 
     def test_kept_keys_warn_once_by_name(self, monkeypatch, caplog):
         import logging

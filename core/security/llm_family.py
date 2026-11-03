@@ -24,6 +24,8 @@ from __future__ import annotations
 
 from typing import Literal, TYPE_CHECKING
 
+from core.llm.model_brokers import MODEL_BROKERS
+
 
 Family = Literal[
     "anthropic", "openai", "google", "meta", "mistral",
@@ -49,10 +51,10 @@ _PROVIDER_STEMS: tuple[tuple[str, Family], ...] = (
     ("mistralai", "mistral"),
     ("ollama", "ollama"),
     ("cohere", "cohere"),
-    # Aggregator hosts (Together, Groq, OpenRouter, Fireworks) re-host
+    # Aggregator hosts (for example, OpenRouter) re-host
     # models from underlying families. The provider stem alone doesn't
-    # tell us the family — `together/meta-llama/Llama-3-8B` is meta,
-    # `together/anthropic/claude-haiku-4-5` is anthropic. Strip the
+    # tell us the family — `openrouter/meta-llama/Llama-3-8B` is meta,
+    # `openrouter/anthropic/claude-haiku-4-5` is anthropic. Strip the
     # aggregator prefix and recurse on the remainder. Without this,
     # cross-family validation against an aggregator-hosted model
     # produced "unknown" and the safety check silently no-op'd.
@@ -86,29 +88,8 @@ _MODEL_STEMS: tuple[tuple[str, Family], ...] = (
 
 
 _AGGREGATOR_PREFIXES: tuple[str, ...] = (
-    "apiroute/",
-    "atlascloud/",
-    "cheapaimodel/",
-    "cheaperinference/",
-    "deepinfra/",
-    "fireworks/",
-    "groq/",
-    "openrouter/",
-    "opper/",
-    "orcarouter/",
-    "perplexity/",
-    "replicate/",
-    "runcrate/",
-    "together/",
-    "yapi/",
-    # Route-prefixed Bedrock ids (``bedrock/anthropic.claude-…``) — the
-    # form the mode resolver and operator ``--model`` overrides use.
-    # Peeling it leaves the dotted Bedrock id, which the existing
-    # Bedrock-shape handling resolves (provider ``bedrock``, bare name
-    # stripped of the vendor segment). Without this peel, provider_of
-    # returned "" and every route-prefixed override raised — the audit
-    # fell back to the default model with only a warning.
-    "bedrock/",
+    *(f"{broker.name}/" for broker in MODEL_BROKERS),
+    "bedrock/",  # custom transport; underlying lineage comes from the model id
 )
 
 
@@ -214,7 +195,7 @@ def provider_of(model_id: str) -> str:
     """
     needle = model_id.lower()
     # Same iterated peel as family_of so chained shapes like
-    # ``together/us.anthropic.claude-opus-4-7`` resolve to
+    # ``openrouter/us.anthropic.claude-opus-4-7`` resolve to
     # ``"bedrock"`` routing (the model is Bedrock-routed even when
     # nominally aggregator-prefixed; the aggregator can't host a
     # Bedrock-shaped id meaningfully).
@@ -358,7 +339,7 @@ def bare_model_id(model_id: str) -> str:
 
         bare_model_id("anthropic/claude-haiku-4-5")
             -> "claude-haiku-4-5"
-        bare_model_id("together/anthropic/claude-haiku-4-5")
+        bare_model_id("openrouter/anthropic/claude-haiku-4-5")
             -> "claude-haiku-4-5"
         bare_model_id("claude-haiku-4-5")
             -> "claude-haiku-4-5"
@@ -421,18 +402,17 @@ def family_of(model_id: str) -> Family:
     every ``ollama/*`` collapsed to ``ollama`` and the cross-family
     safety check silently no-op'd.
 
-    Aggregator-host prefixes (``together/``, ``groq/``, ``openrouter/``,
-    etc.) are STRIPPED first before family resolution — they re-host
+    Aggregator-host prefixes (for example, ``openrouter/``) are STRIPPED first before family resolution — they re-host
     models from underlying families and must not be mistaken for a
     family of their own. Without this peel,
-    `together/anthropic/claude-haiku-4-5` resolved to "unknown" and
+    `openrouter/anthropic/claude-haiku-4-5` resolved to "unknown" and
     the cross-family safety check silently no-op'd.
 
     Unknown identifiers return ``"unknown"``.
     """
     needle = model_id.lower()
     # Iterate both peels (Bedrock regional + aggregator) so chained
-    # shapes like ``together/us.anthropic.claude-opus-4-7`` resolve
+    # shapes like ``openrouter/us.anthropic.claude-opus-4-7`` resolve
     # correctly.  Bedrock and aggregator prefixes use different
     # separators (``.`` vs ``/``) and don't overlap in vocabulary,
     # so a fixed-bound iteration converges in at most a handful of
