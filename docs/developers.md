@@ -377,6 +377,39 @@ including object identity or live resources where relevant. Do not hide
 leaks with a blanket teardown reset: clean up at the owning fixture or fix
 the shared helper or library import that causes them.
 
+### Detecting accidental LLM calls
+
+The fast CI unit-test job loads `core.testing.llm_tripwire`. Every worker
+gets a loopback OpenAI error endpoint and private model configuration;
+subprocesses inherit that configuration. Any traffic fails the session,
+even when the test passes because production code swallowed the error.
+Request journals retain test IDs and bounded prompt excerpts, never
+authorization headers. Explicit fake HTTP servers remain usable.
+
+Run this layer locally, including on macOS, with:
+
+```bash
+python -m pytest -p core.testing.llm_tripwire --llm-tripwire-dir /tmp/llm-evidence core packages
+```
+
+Linux CI also redirects published provider/broker hostnames and configured
+regional endpoints to an untrusted TLS sink. Certificate failures still
+count: before rejecting TLS, the sink maps the connection tuple to a socket
+inode, owning PID, and pytest worker via `/proc`. Exec-inherited
+`PYTEST_CURRENT_TEST` identifies child origins; the worker publishes its
+active and previous tests across setup, call, and teardown. These fields
+can differ when background work survives its originating test. Unknown
+ownership still fails CI. A final independent connection check also runs
+when pytest exits unsuccessfully. CI restores its original hosts file.
+
+This is a tripwire, not a complete network firewall: arbitrary new endpoint
+hosts, literal IPs, external forward proxies, and private resolver/hosts
+namespaces can bypass hostname redirection. Add configured endpoints with
+the prepare command's `--models` option. Keep new provider endpoints in the
+catalog and mock every model transport in CI; a live provider is never a
+valid fallback for missing test fixtures. HTTP journals and connection
+evidence are uploaded as CI artifacts.
+
 ## Mechanical gates you will hit
 
 The full control inventory, triggers, and reproduce-locally commands
