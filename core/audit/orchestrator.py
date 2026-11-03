@@ -21993,17 +21993,21 @@ def _memoized_sweep_step(
     )
     if checkpoint is None:
         return memo.get_or_run(key, runner)
-    cached = memo.get(key)
-    if cached is not None:
-        return cached
-    replayed = checkpoint.lookup(key)
-    if replayed is not None:
-        memo.put(key, replayed)
-        return replayed
-    result = runner()
-    memo.put(key, result)
-    checkpoint.record(key, result)
-    return result
+    # Protect both checkpoint lookup and fresh dispatch, preserving their
+    # existing order. The in-memory-only path uses the same guard inside
+    # get_or_run, so cold parallel requests cannot all spawn the tool.
+    with memo.key_guard(key):
+        cached = memo.get(key)
+        if cached is not None:
+            return cached
+        replayed = checkpoint.lookup(key)
+        if replayed is not None:
+            memo.put(key, replayed)
+            return replayed
+        result = runner()
+        memo.put(key, result)
+        checkpoint.record(key, result)
+        return result
 
 
 def _run_tool_chain(
