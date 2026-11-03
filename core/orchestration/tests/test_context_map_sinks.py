@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
+
+import pytest
 
 from core.inventory.sink_discovery import (
     FrameworkAPI,
@@ -309,6 +312,7 @@ class TestE2ELibexecShim:
     tree-sitter dependency — works in CI).
     """
 
+    @pytest.mark.slow
     def test_e2e_synthetic_target(self, tmp_path: Path):
         """Full pipeline: synthetic Python target -> enriched context-map."""
         import json
@@ -348,9 +352,10 @@ class TestE2ELibexecShim:
 
         raptor_dir = Path(__file__).resolve().parents[3]
         result = subprocess.run(
-            ["python3", str(raptor_dir / "libexec" / "raptor-enrich-context-map-sinks"),
+            [sys.executable, str(raptor_dir / "libexec" / "raptor-enrich-context-map-sinks"),
              str(workdir)],
             capture_output=True, text=True, check=False,
+            timeout=60,
             env={
                 **dict(__import__("os").environ),
                 "_RAPTOR_TRUSTED": "1",
@@ -391,9 +396,10 @@ class TestE2ELibexecShim:
 
         # Verify idempotency
         result2 = subprocess.run(
-            ["python3", str(raptor_dir / "libexec" / "raptor-enrich-context-map-sinks"),
+            [sys.executable, str(raptor_dir / "libexec" / "raptor-enrich-context-map-sinks"),
              str(workdir)],
             capture_output=True, text=True, check=False,
+            timeout=60,
             env={
                 **dict(__import__("os").environ),
                 "_RAPTOR_TRUSTED": "1",
