@@ -216,3 +216,52 @@ Releases are tagged as `vX.Y.Z` and built automatically by CI. Commit prefixes d
 what goes in the changelog: `feat:` for new features, `fix:` for bug fixes, `security:`
 for security changes, `docs:` for documentation. Anything without a prefix lands in
 "Other changes". No strict convention required, but it helps.
+
+### Sandbox wrapper tests
+
+Every policy-owning sandbox wrapper must have an executable test case. The
+registry in `.github/sandbox-wrapper-tests.json` binds each source file and its
+sandbox entrypoints to reviewed pytest cases. The CI census detects direct public
+sandbox calls, including import aliases, outside the sandbox backend itself.
+Self-confining or delegated workers without a direct call need an explicit
+registry row and discovery rationale. Backend implementations remain covered by
+`core/sandbox/tests`.
+
+A binding must exercise the adapter's dispatch or refusal path and assert its
+security contract; an import-only test is insufficient. Multiple dispatch paths
+need cases for their different policies. Update the bindings when adding an
+entrypoint. The census enforces registration and selector existence; reviewing
+whether the assertions cover the policy remains part of code review.
+
+Run the selected contracts with the project environment:
+
+```sh
+python .github/scripts/run_sandbox_wrapper_tests.py --lane contracts --report-dir out/wrapper-contracts
+```
+
+The `Sandbox wrapper acceptance` workflow runs those contracts on Linux and
+macOS, followed by existing native suites for binary inspection, streamed output,
+pwntools, SMT, radare2, Python/Ruby gadget parsers, Joern's guard, PoC execution,
+fuzz/build dispatch and symbolic workers. Linux additionally exercises loader and
+procfs probes. These are real platform backends: expected execution counts are
+checked, and a required skipped case fails acceptance. Linux containment results
+do not substitute for Seatbelt results.
+
+```sh
+python .github/scripts/run_sandbox_wrapper_tests.py --lane native --report-dir out/wrapper-native
+```
+
+The plan and summary distinguish native execution from cells not exercised.
+Vendor-dependent Joern service and CodeQL traced-build cases, and rr cases that
+need compatible Linux perf/PMU hardware, require explicit selection on a prepared
+host. They are not counted as hosted CI passes. For example:
+
+```sh
+python .github/scripts/run_sandbox_wrapper_tests.py --lane native --family rr-record-pack --include-manual --report-dir out/wrapper-rr
+```
+
+Other vendor adapters have portable dispatch contracts; the matrix does not claim
+that every installed vendor tool has been exercised natively. Add native families
+as their dependencies can be provisioned reliably. The runner uses disposable
+HOME, output and scratch directories, copies no account state, and launches no
+frontend. Native probes use owned files and processes.

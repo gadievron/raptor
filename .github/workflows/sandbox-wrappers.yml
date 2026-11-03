@@ -1,0 +1,92 @@
+name: Sandbox wrapper acceptance
+
+on:
+  merge_group:
+  pull_request:
+    paths: ['core/**', 'packages/**', 'libexec/**', '.github/**', 'pyproject.toml', 'uv.lock', 'conftest.py', 'pytest.ini']
+  push:
+    branches: [main]
+    paths: ['core/**', 'packages/**', 'libexec/**', '.github/**', 'pyproject.toml', 'uv.lock', 'conftest.py', 'pytest.ini']
+  schedule:
+    - cron: '30 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sandbox-wrappers-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: '3.14'
+  VENV_PATH: .venv
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  acceptance:
+    name: wrappers-${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - uses: ./.github/actions/enable-userns
+        if: runner.os == 'Linux'
+      - uses: ./.github/actions/setup-venv
+        with:
+          cache-key-prefix: venv-sandbox-wrappers
+          uv-export-extra-args: --extra binary --extra r2pipe --extra frida --extra llm --extra grammars
+          save-on-rebuild: 'true'
+      - name: Install Linux parser tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends binutils radare2 ruby libseccomp2
+      - name: Install macOS parser tools
+        if: runner.os == 'macOS'
+        run: |
+          brew install binutils radare2 ruby
+          echo "$(brew --prefix ruby)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix binutils)/libexec/gnubin" >> "$GITHUB_PATH"
+      - name: Install Python and Ruby parser dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv pip install --python "$VENV_PATH/bin/python" pwntools==4.15.0 ROPgadget==7.7 capstone==5.0.6
+          gem install --no-document --install-dir "$RUNNER_TEMP/wrapper-gems" one_gadget -v 1.10.0
+          echo "$RUNNER_TEMP/wrapper-gems/bin" >> "$GITHUB_PATH"
+      - name: Exercise registered dispatch contracts
+        shell: bash
+        run: |
+          "$VENV_PATH/bin/python" .github/scripts/run_sandbox_wrapper_tests.py \
+            --lane contracts --report-dir "$RUNNER_TEMP/wrapper-contracts"
+      - name: Exercise real platform confinement
+        shell: bash
+        env:
+          RAPTOR_TEST_GEM_ROOT: ${{ runner.temp }}/wrapper-gems
+          GEM_HOME: ${{ runner.temp }}/wrapper-gems
+        run: |
+          "$VENV_PATH/bin/python" .github/scripts/run_sandbox_wrapper_tests.py \
+            --lane native --report-dir "$RUNNER_TEMP/wrapper-native"
+      - name: Retain coverage and native exclusions
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sandbox-wrappers-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/wrapper-contracts
+            ${{ runner.temp }}/wrapper-native
+          if-no-files-found: error

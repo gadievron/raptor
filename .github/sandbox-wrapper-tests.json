@@ -1,0 +1,1034 @@
+{
+  "version": 1,
+  "wrappers": [
+    {
+      "source": "core/analysis/binary_oracle.py",
+      "entrypoints": [
+        "_demangle_linkage_names",
+        "_run_status",
+        "_stream"
+      ],
+      "contracts": [
+        "core/binary/tests/test_inspection_policy.py::test_adapters_apply_shared_policy_and_cleanup"
+      ]
+    },
+    {
+      "source": "core/analysis/binary_oracle_autodetect.py",
+      "entrypoints": [
+        "_has_dwarf"
+      ],
+      "contracts": [
+        "core/binary/tests/test_additional_wrapper_contracts.py::test_small_parser_adapter_reaches_sandbox[autodetect]"
+      ]
+    },
+    {
+      "source": "core/analysis/binary_oracle_cli.py",
+      "entrypoints": [
+        "_filter_locally_built"
+      ],
+      "contracts": [
+        "core/analysis/tests/test_binary_oracle_cli.py::TestProvenanceGateSandboxed::test_git_routes_through_sandbox"
+      ]
+    },
+    {
+      "source": "core/analysis/binary_oracle_edges.py",
+      "entrypoints": [
+        "_extract_direct_call_edges_impl"
+      ],
+      "contracts": [
+        "core/analysis/tests/test_binary_oracle_edges.py::test_extract_handles_offset_keyed_aflj_without_crashing"
+      ]
+    },
+    {
+      "source": "core/audit/capabilities.py",
+      "entrypoints": [
+        "_has_dwarf"
+      ],
+      "contracts": [
+        "core/binary/tests/test_additional_wrapper_contracts.py::test_small_parser_adapter_reaches_sandbox[capabilities]"
+      ]
+    },
+    {
+      "source": "core/audit/codeql_backend.py",
+      "entrypoints": [
+        "codeql_pre_sweep"
+      ],
+      "contracts": [
+        "core/audit/tests/test_codeql_validation.py::TestPreSweepResolveSandboxed::test_resolve_routes_through_sandbox"
+      ]
+    },
+    {
+      "source": "core/audit/compile_probe.py",
+      "entrypoints": [
+        "_compile_tu"
+      ],
+      "contracts": [
+        "core/audit/tests/test_compile_probe.py::TestGracefulDegradation::test_no_sandbox_is_unavailable"
+      ]
+    },
+    {
+      "source": "core/audit/compiler_sweep.py",
+      "entrypoints": [
+        "run_compiler_analyzer_sweep._run_closure_vet",
+        "run_compiler_analyzer_sweep._run_tu_analysis"
+      ],
+      "contracts": [
+        "core/audit/tests/test_compiler_sweep.py::TestSandboxInvocation::test_sandbox_used_with_network_deny"
+      ]
+    },
+    {
+      "source": "core/audit/dark_verify/_execute.py",
+      "entrypoints": [
+        "_sandbox_run_capped"
+      ],
+      "contracts": [
+        "core/audit/tests/test_dark_verify.py::TestRunScriptWitnessRestrictsReads::test_sandbox_run_receives_restrict_reads_true"
+      ]
+    },
+    {
+      "source": "core/audit/disasm_xcheck.py",
+      "entrypoints": [
+        "_run_objdump"
+      ],
+      "contracts": [
+        "core/audit/tests/test_disasm_xcheck.py::TestRunSynthetic::test_sandboxed_invocation_shape"
+      ]
+    },
+    {
+      "source": "core/audit/dynamic_sweep.py",
+      "entrypoints": [
+        "_run_c_harness",
+        "_run_python_harness"
+      ],
+      "contracts": [
+        "core/audit/tests/test_dynamic_sweep.py::TestHarnessContainment::test_c_harness_confines_compile_and_run"
+      ]
+    },
+    {
+      "source": "core/audit/git_oracle.py",
+      "entrypoints": [
+        "_run_git"
+      ],
+      "contracts": [
+        "core/audit/tests/test_git_oracle.py::TestHardenedInvocation::test_sandbox_kwargs_and_hardening_flags"
+      ]
+    },
+    {
+      "source": "core/audit/preprocessor_view.py",
+      "entrypoints": [
+        "expand_translation_unit"
+      ],
+      "contracts": [
+        "core/audit/tests/test_preprocessor_view.py::TestSandboxInvocation::test_sandbox_used_with_network_deny"
+      ]
+    },
+    {
+      "source": "core/audit/subproc_json.py",
+      "entrypoints": [
+        "run_json_child"
+      ],
+      "contracts": [
+        "core/audit/tests/test_smt_worker_policy.py::test_policy_cleanup_and_no_bare_fallback"
+      ]
+    },
+    {
+      "source": "core/audit/sweep.py",
+      "entrypoints": [
+        "_sandboxed_codeql_runner._runner"
+      ],
+      "contracts": [
+        "core/audit/tests/test_codeql_sweep_confinement.py::TestRunnerConfinement::test_passes_fs_confinement"
+      ]
+    },
+    {
+      "source": "core/binary/elf_worker.py",
+      "entrypoints": [
+        "inspect_elf"
+      ],
+      "contracts": [
+        "core/binary/tests/test_elf_worker.py::test_request_policy_and_cleanup"
+      ]
+    },
+    {
+      "source": "core/binary/inspect.py",
+      "entrypoints": [
+        "inspect_binary"
+      ],
+      "contracts": [
+        "core/binary/tests/test_inspection_policy.py::test_adapters_apply_shared_policy_and_cleanup"
+      ]
+    },
+    {
+      "source": "core/build/build_detector.py",
+      "entrypoints": [
+        "BuildDetector._cc_suggest_flags",
+        "BuildDetector._dry_run"
+      ],
+      "contracts": [
+        "core/build/tests/test_synthesised_javac_hardening.py::test_dry_run_passes_read_confinement"
+      ]
+    },
+    {
+      "source": "core/container/compose.py",
+      "entrypoints": [
+        "_run_resolver"
+      ],
+      "contracts": [
+        "core/container/tests/test_compose_sanitize.py::test_resolver_sandbox_granted_scratch_home"
+      ]
+    },
+    {
+      "source": "core/coverage/collect.py",
+      "entrypoints": [
+        "_sandboxed_run"
+      ],
+      "contracts": [
+        "core/coverage/tests/test_collect.py::test_collectors_refuse_when_sandbox_cannot_engage"
+      ]
+    },
+    {
+      "source": "core/dataflow/cvefix_walk.py",
+      "entrypoints": [
+        "_run_autobuild_sandboxed"
+      ],
+      "contracts": [
+        "core/dataflow/tests/test_cvefix_walk.py::test_autobuild_fails_closed_without_sandbox"
+      ]
+    },
+    {
+      "source": "core/env/handle.py",
+      "entrypoints": [
+        "SandboxHandle.exec"
+      ],
+      "contracts": [
+        "core/env/tests/test_handle.py::test_sandbox_handle_exec_strips_loader_env"
+      ],
+      "contract_platforms": {
+        "darwin": [
+          "core/env/tests/test_handle.py::test_sandbox_handle_gates_on_rootfs_support"
+        ]
+      }
+    },
+    {
+      "source": "core/git/clone.py",
+      "entrypoints": [
+        "clone_repository",
+        "fetch_commit._run",
+        "ls_remote"
+      ],
+      "contracts": [
+        "core/git/tests/test_clone.py::test_successful_clone_calls_sandbox"
+      ]
+    },
+    {
+      "source": "core/inventory/binary_oracle_corpora/_sandbox_exec.py",
+      "entrypoints": [
+        "run_build_step"
+      ],
+      "contracts": [
+        "core/inventory/tests/test_corpora_sandbox_exec.py::TestRunBuildStep::test_scope_widens_sandbox_root_but_not_cwd"
+      ]
+    },
+    {
+      "source": "core/inventory/binary_oracle_corpora/zstd_holdout.py",
+      "entrypoints": [
+        "_build_fresh._z"
+      ],
+      "contracts": [
+        "core/binary/tests/test_additional_wrapper_contracts.py::test_corpus_workload_dispatches_owned_build_through_sandbox"
+      ]
+    },
+    {
+      "source": "core/inventory/perlasm.py",
+      "entrypoints": [
+        "generate_asm"
+      ],
+      "contracts": [
+        "core/inventory/tests/test_perlasm.py::TestGenerationAndCache::test_sandboxed_generation_and_cache_hit"
+      ]
+    },
+    {
+      "source": "core/orchestration/frida_validation_bridge.py",
+      "entrypoints": [
+        "_addr2line_batch"
+      ],
+      "contracts": [
+        "core/binary/tests/test_additional_wrapper_contracts.py::test_small_parser_adapter_reaches_sandbox[addr2line]"
+      ]
+    },
+    {
+      "source": "core/orchestration/skill_dispatch.py",
+      "entrypoints": [
+        "run_skill_dispatch"
+      ],
+      "contracts": [
+        "core/orchestration/tests/test_skill_dispatch.py::DispatchFlowTests::test_context_dirs_reach_sandbox"
+      ]
+    },
+    {
+      "source": "core/security/python_probe.py",
+      "entrypoints": [],
+      "contracts": [
+        "core/security/tests/test_python_probe.py::test_probe_ignores_target_cwd_and_startup_environment"
+      ],
+      "discovery": "self-confining or dependency-probe worker"
+    },
+    {
+      "source": "core/symbolic/_isolate.py",
+      "entrypoints": [
+        "_run_confined"
+      ],
+      "contracts": [
+        "core/symbolic/tests/test_worker_sandbox_policy.py::test_worker_obeys_untrusted_floor"
+      ]
+    },
+    {
+      "source": "libexec/raptor-bq-query",
+      "entrypoints": [
+        "_run_sandboxed"
+      ],
+      "contracts": [
+        "core/forensics/tests/test_bq_query_cli.py::TestSandboxCredentialPreflight::test_sandboxed_mode_requires_explicit_credentials"
+      ]
+    },
+    {
+      "source": "libexec/raptor-r2-sandboxed",
+      "entrypoints": [
+        "<module>"
+      ],
+      "contracts": [
+        "core/binary/tests/test_radare2_policy.py::test_full_policy_and_stdio_are_preserved"
+      ]
+    },
+    {
+      "source": "libexec/raptor-run-sandboxed",
+      "entrypoints": [
+        "<module>"
+      ],
+      "contracts": [
+        "core/sandbox/tests/test_run_sandboxed_args.py::test_relative_program_path_absolutized"
+      ]
+    },
+    {
+      "source": "libexec/raptor-validation-helper",
+      "entrypoints": [
+        "_build_standalone_pocs"
+      ],
+      "contracts": [
+        "core/run/tests/test_validation_helper_lifecycle.py::TestWitnessExecutionGate::test_gate_receives_run_target_and_run_dir"
+      ]
+    },
+    {
+      "source": "packages/autonomous/exploit_validator.py",
+      "entrypoints": [
+        "ExploitValidator.safe_test_exploit",
+        "ExploitValidator.validate_exploit"
+      ],
+      "contracts": [
+        "packages/autonomous/tests/test_poc_execution_floor.py::test_poc_consumer_obeys_real_floor_resolution"
+      ]
+    },
+    {
+      "source": "packages/binary_analysis/blamed_lines.py",
+      "entrypoints": [
+        "_run_checker"
+      ],
+      "contracts": [
+        "packages/binary_analysis/tests/test_blamed_lines.py::TestCheckerProvenance::test_checker_execution_routes_through_full_sandbox"
+      ]
+    },
+    {
+      "source": "packages/binary_analysis/corpus_profile.py",
+      "entrypoints": [
+        "_run_bpf_objdump"
+      ],
+      "contracts": [
+        "core/binary/tests/test_additional_wrapper_contracts.py::test_small_parser_adapter_reaches_sandbox[ebpf]"
+      ]
+    },
+    {
+      "source": "packages/binary_analysis/crash_analyser.py",
+      "entrypoints": [
+        "CrashAnalyser._run_asan_analysis",
+        "CrashAnalyser._run_gdb_analysis_internal",
+        "CrashAnalyser._run_lldb_analysis",
+        "CrashAnalyser._run_lldb_fallback"
+      ],
+      "contracts": [
+        "packages/binary_analysis/tests/test_crash_execution_policy.py::test_consumers_enforce_floor_and_disable_implicit_configuration"
+      ]
+    },
+    {
+      "source": "packages/binary_analysis/debugger.py",
+      "entrypoints": [
+        "GDBDebugger.run_commands"
+      ],
+      "contracts": [
+        "packages/binary_analysis/tests/test_crash_execution_policy.py::test_consumers_enforce_floor_and_disable_implicit_configuration"
+      ]
+    },
+    {
+      "source": "packages/binary_analysis/rr_record.py",
+      "entrypoints": [
+        "_execute_target",
+        "_verify_recording",
+        "pack"
+      ],
+      "contracts": [
+        "packages/binary_analysis/tests/test_rr_record.py::test_record_preserves_target_exit_and_pins_stdin",
+        "packages/binary_analysis/tests/test_rr_record.py::test_pack_has_no_counter_or_ptrace_exception",
+        "packages/binary_analysis/tests/test_rr_record.py::test_plain_reproduction_is_confined_and_does_not_need_rr",
+        "packages/binary_analysis/tests/test_rr_record.py::test_verification_scopes_and_failures"
+      ]
+    },
+    {
+      "source": "packages/binary_analysis/rr_replay.py",
+      "entrypoints": [
+        "replay"
+      ],
+      "contracts": [
+        "packages/binary_analysis/tests/test_rr_replay.py::test_dispatch_scopes_recording_and_private_scratch"
+      ]
+    },
+    {
+      "source": "packages/coccinelle/runner.py",
+      "entrypoints": [
+        "_sandboxed_run"
+      ],
+      "contracts": [
+        "packages/coccinelle/tests/test_runner.py::TestDefaultRunnerConfinement::test_run_rule_confines_target_output_and_scratch"
+      ]
+    },
+    {
+      "source": "packages/code_understanding/dispatch/hunt_cocci_dispatch.py",
+      "entrypoints": [
+        "_make_locked_sandbox_runner._runner"
+      ],
+      "contracts": [
+        "packages/code_understanding/tests/dispatch/test_hunt_cocci_dispatch.py::test_dispatch_uses_sandbox_runner_by_default"
+      ]
+    },
+    {
+      "source": "packages/codeql/database_manager.py",
+      "entrypoints": [
+        "DatabaseManager.create_database"
+      ],
+      "contracts": [
+        "packages/codeql/tests/test_traced_build_floor.py::test_toolchain_grants_are_scoped_and_wrapper_is_cleaned"
+      ]
+    },
+    {
+      "source": "packages/codeql/offline.py",
+      "entrypoints": [
+        "_run"
+      ],
+      "contracts": [
+        "packages/codeql/tests/test_offline.py::test_network_denied_checks_keep_compiler_cache_writable"
+      ]
+    },
+    {
+      "source": "packages/codeql/query_runner.py",
+      "entrypoints": [
+        "QueryRunner._compatible_query_args",
+        "QueryRunner._run_compatible_custom_queries",
+        "QueryRunner._run_selected_local_pack",
+        "QueryRunner.run_suite",
+        "QueryRunner.run_suite._download"
+      ],
+      "contracts": [
+        "packages/codeql/tests/test_query_filesystem_scope.py::test_real_consumers_declare_filesystem_scope"
+      ]
+    },
+    {
+      "source": "packages/exploit_feasibility/context.py",
+      "entrypoints": [
+        "_live_maps_snapshot",
+        "_seccomp_tools_dump_sandboxed"
+      ],
+      "contracts": [
+        "packages/exploit_feasibility/tests/test_runtime_probe_floor.py::test_runtime_probe_obeys_floor"
+      ]
+    },
+    {
+      "source": "packages/exploit_feasibility/toolexec.py",
+      "entrypoints": [
+        "run_tool_on_binary"
+      ],
+      "contracts": [
+        "packages/exploit_feasibility/tests/test_gadget_parser_policy.py::test_parser_uses_private_inspection_policy"
+      ]
+    },
+    {
+      "source": "packages/exploit_feasibility/under_mitigations.py",
+      "entrypoints": [
+        "_run_profile"
+      ],
+      "contracts": [
+        "packages/autonomous/tests/test_poc_execution_floor.py::test_poc_consumer_obeys_real_floor_resolution"
+      ]
+    },
+    {
+      "source": "packages/exploitability_validation/symbolic_witness.py",
+      "entrypoints": [
+        "_replay"
+      ],
+      "contracts": [
+        "packages/exploitability_validation/tests/test_witness_helper_floor.py::test_stage_receives_workdir_as_run_dir"
+      ]
+    },
+    {
+      "source": "packages/frida/sandboxed.py",
+      "entrypoints": [
+        "main"
+      ],
+      "contracts": [
+        "packages/frida/tests/test_substrate.py::TestSandboxedMain::test_spawn_mode_passes_block_network"
+      ]
+    },
+    {
+      "source": "packages/fuzzing/afl_runner.py",
+      "entrypoints": [
+        "AFLRunner.run_showmap",
+        "_SandboxedAFLInstance._run"
+      ],
+      "contracts": [
+        "packages/fuzzing/tests/test_untrusted_execution_floor.py::test_consumer_obeys_real_floor_resolution"
+      ]
+    },
+    {
+      "source": "packages/fuzzing/coverage_bridge.py",
+      "entrypoints": [
+        "_default_runner"
+      ],
+      "contracts": [
+        "packages/fuzzing/tests/test_untrusted_execution_floor.py::test_consumer_obeys_real_floor_resolution"
+      ]
+    },
+    {
+      "source": "packages/fuzzing/libfuzzer_runner.py",
+      "entrypoints": [
+        "LibFuzzerRunner.run"
+      ],
+      "contracts": [
+        "packages/fuzzing/tests/test_untrusted_execution_floor.py::test_consumer_obeys_real_floor_resolution"
+      ]
+    },
+    {
+      "source": "packages/ghidra/decomp_conformance.py",
+      "entrypoints": [
+        "_sandboxed_ts_scan"
+      ],
+      "contracts": [
+        "packages/ghidra/tests/test_decomp_conformance.py::TestSandboxPins::test_production_ts_leg_routes_the_sandbox"
+      ]
+    },
+    {
+      "source": "packages/ghidra/ebpf_probe.py",
+      "entrypoints": [
+        "ghidra_decode"
+      ],
+      "contracts": [
+        "core/binary/tests/test_additional_wrapper_contracts.py::test_small_parser_adapter_reaches_sandbox[ghidra]"
+      ]
+    },
+    {
+      "source": "packages/ghidra/headless.py",
+      "entrypoints": [
+        "create_project_from_binary",
+        "export_project",
+        "import_enrichments"
+      ],
+      "contracts": [
+        "packages/ghidra/tests/test_headless.py::TestCreateProjectFromBinary::test_create_invokes_headless_and_returns_gpr"
+      ]
+    },
+    {
+      "source": "packages/ghidra/objdump_import.py",
+      "entrypoints": [
+        "_run_binutil"
+      ],
+      "contracts": [
+        "core/binary/tests/test_additional_wrapper_contracts.py::test_small_parser_adapter_reaches_sandbox[objdump]"
+      ]
+    },
+    {
+      "source": "packages/ghidra/server.py",
+      "entrypoints": [
+        "GhidraServer._boot_transport._serve"
+      ],
+      "contracts": [
+        "packages/ghidra/tests/test_server.py::TestServerTransportSelection::test_pathname_eperm_boot_falls_back_to_socketpair"
+      ]
+    },
+    {
+      "source": "packages/hypothesis_validation/adapters/base.py",
+      "entrypoints": [
+        "make_sandbox_runner._runner"
+      ],
+      "contracts": [
+        "packages/hypothesis_validation/tests/test_security.py::TestMakeSandboxRunner::test_default_engages_read_restriction_and_fake_home"
+      ]
+    },
+    {
+      "source": "packages/joern/worker_guard.py",
+      "entrypoints": [],
+      "contracts": [
+        "packages/joern/tests/test_worker_guard.py::test_refusal_sanitises_terminal_text"
+      ],
+      "discovery": "self-confining or dependency-probe worker"
+    },
+    {
+      "source": "packages/llm_analysis/cc_dispatch.py",
+      "entrypoints": [
+        "invoke_cc_simple"
+      ],
+      "contracts": [
+        "packages/llm_analysis/tests/test_cc_dispatch_sandbox.py::test_sysprompt_tempfile_readable_inside_restrict_reads_sandbox"
+      ]
+    },
+    {
+      "source": "packages/llm_analysis/exploit_verify.py",
+      "entrypoints": [
+        "compile_and_execute"
+      ],
+      "contracts": [
+        "packages/autonomous/tests/test_poc_execution_floor.py::test_poc_consumer_obeys_real_floor_resolution"
+      ]
+    },
+    {
+      "source": "packages/llm_analysis/patch_gate.py",
+      "entrypoints": [
+        "_make_runner._runner"
+      ],
+      "contracts": [
+        "packages/llm_analysis/tests/test_patch_gate.py::TestDegradation::test_sandbox_unavailable_fails_closed"
+      ]
+    },
+    {
+      "source": "packages/openant/scanner.py",
+      "entrypoints": [
+        "_spawn_and_collect",
+        "run_openant_parse"
+      ],
+      "contracts": [
+        "packages/openant/tests/test_scanner.py::TestSandboxIntegration::test_uses_sandbox_run"
+      ]
+    },
+    {
+      "source": "packages/sca/agent.py",
+      "entrypoints": [
+        "_run_sandboxed",
+        "run_sca_subprocess"
+      ],
+      "contracts": [
+        "packages/sca/tests/test_dispatch_trust_markers.py::test_sca_subprocess_opts_into_keep_trust_markers"
+      ]
+    },
+    {
+      "source": "packages/sca/harden.py",
+      "entrypoints": [
+        "_run_self_test"
+      ],
+      "contracts": [
+        "packages/sca/tests/test_harden_self_test_sandbox.py::test_self_test_routes_git_calls_through_run_untrusted"
+      ]
+    },
+    {
+      "source": "packages/sca/patch_apply.py",
+      "entrypoints": [
+        "apply_patch_to_target"
+      ],
+      "contracts": [
+        "packages/sca/tests/test_patch_apply.py::test_sandboxed_apply_rejects_bad_patch_with_same_error_shape"
+      ]
+    },
+    {
+      "source": "packages/sca/resolvers/__init__.py",
+      "entrypoints": [
+        "_run"
+      ],
+      "contracts": [
+        "packages/sca/resolvers/tests/test_execution_floor.py::test_resolver_obeys_real_floor_resolution"
+      ]
+    },
+    {
+      "source": "packages/semgrep/runner.py",
+      "entrypoints": [
+        "_default_sandbox_runner._runner"
+      ],
+      "contracts": [
+        "packages/semgrep/tests/test_runner.py::test_single_file_scan_binds_exact_file_without_changing_scan_argv"
+      ]
+    },
+    {
+      "source": "packages/static-analysis/compiler_scan.py",
+      "entrypoints": [
+        "_suppression_vet",
+        "analyze_tu"
+      ],
+      "contracts": [
+        "packages/static-analysis/tests/test_compiler_scan.py::test_scan_refuses_without_sandbox"
+      ]
+    },
+    {
+      "source": "packages/static-analysis/scanner.py",
+      "entrypoints": [
+        "run"
+      ],
+      "contracts": [
+        "core/binary/tests/test_additional_wrapper_contracts.py::test_small_parser_adapter_reaches_sandbox[scanner]"
+      ]
+    },
+    {
+      "source": "packages/web/external_validators.py",
+      "entrypoints": [
+        "ExternalValidatorRunner._nuclei_batch"
+      ],
+      "contracts": [
+        "packages/web/tests/test_external_validators.py::test_batch_invocation_shape_and_scope"
+      ]
+    },
+    {
+      "source": "packages/web/ffuf.py",
+      "entrypoints": [
+        "FfufRunner.run"
+      ],
+      "contracts": [
+        "packages/web/tests/test_ffuf.py::test_run_resolves_symlinked_wordlists_for_argv_and_scope"
+      ]
+    },
+    {
+      "source": "packages/zkpox/reproduce.py",
+      "entrypoints": [
+        "_reproduce_replay"
+      ],
+      "contracts": [
+        "packages/zkpox/tests/test_reproduce.py::test_replay_uses_run_untrusted_with_hardened_defaults"
+      ]
+    }
+  ],
+  "native": [
+    {
+      "id": "binary-inspection",
+      "platforms": {
+        "linux": {
+          "tests": [
+            "core/binary/tests/test_inspection_boundaries_native.py::test_native_parser_cannot_read_or_modify_outside_scope",
+            "core/binary/tests/test_inspection_boundaries_native.py::test_native_binutils_preserve_real_binary_evidence"
+          ],
+          "expected": 5
+        },
+        "darwin": {
+          "tests": [
+            "core/binary/tests/test_inspection_boundaries_native.py::test_native_parser_cannot_read_or_modify_outside_scope"
+          ],
+          "expected": 4
+        }
+      }
+    },
+    {
+      "id": "oracle-output",
+      "platforms": {
+        "linux": {
+          "tests": [
+            "core/analysis/tests/test_binary_oracle_output_native.py::test_native_descriptor_preserves_large_output_and_neutral_stdin",
+            "core/analysis/tests/test_binary_oracle_output_native.py::test_native_output_path_replacement_cannot_redirect_parent",
+            "core/analysis/tests/test_binary_oracle_output_native.py::test_native_nonzero_discards_stdout_and_escapes_stderr"
+          ],
+          "expected": 3
+        },
+        "darwin": {
+          "tests": [
+            "core/analysis/tests/test_binary_oracle_output_native.py::test_native_descriptor_preserves_large_output_and_neutral_stdin",
+            "core/analysis/tests/test_binary_oracle_output_native.py::test_native_output_path_replacement_cannot_redirect_parent",
+            "core/analysis/tests/test_binary_oracle_output_native.py::test_native_nonzero_discards_stdout_and_escapes_stderr"
+          ],
+          "expected": 3
+        }
+      }
+    },
+    {
+      "id": "elf-worker",
+      "platforms": {
+        "linux": {
+          "tests": [
+            "core/binary/tests/test_elf_worker_native.py::test_native_worker_preserves_mitigation_facts",
+            "core/binary/tests/test_elf_worker_native.py::test_native_data_import_named_chk_is_not_fortify",
+            "core/binary/tests/test_elf_worker_native.py::test_native_malformed_elf_returns_no_partial_facts",
+            "core/binary/tests/test_elf_worker_native.py::test_native_wall_timeout_reclaims_worker",
+            "core/binary/tests/test_elf_worker_native.py::test_native_memory_limit_is_enforced",
+            "core/binary/tests/test_elf_worker_native.py::test_native_worker_cannot_read_or_write_outside_scope",
+            "core/binary/tests/test_elf_worker_native.py::test_native_oversized_complete_prefix_is_refused"
+          ],
+          "expected": 8
+        },
+        "darwin": {
+          "tests": [
+            "core/binary/tests/test_elf_worker_native.py::test_native_worker_preserves_mitigation_facts[plt]",
+            "core/binary/tests/test_elf_worker_native.py::test_native_malformed_elf_returns_no_partial_facts",
+            "core/binary/tests/test_elf_worker_native.py::test_native_wall_timeout_reclaims_worker",
+            "core/binary/tests/test_elf_worker_native.py::test_native_worker_cannot_read_or_write_outside_scope",
+            "core/binary/tests/test_elf_worker_native.py::test_native_oversized_complete_prefix_is_refused"
+          ],
+          "expected": 5
+        }
+      }
+    },
+    {
+      "id": "smt-worker",
+      "platforms": {
+        "linux": {
+          "tests": [
+            "core/audit/tests/test_smt_worker_native.py::test_native_solver_round_trip",
+            "core/audit/tests/test_smt_worker_native.py::test_native_sweep_keeps_kernel_vocabulary_without_read_grant",
+            "core/audit/tests/test_smt_worker_native.py::test_native_worker_has_no_host_or_network_authority",
+            "core/audit/tests/test_smt_worker_native.py::test_native_timeout_returns_no_verdict",
+            "core/audit/tests/test_smt_worker_native.py::test_native_memory_limit",
+            "core/audit/tests/test_smt_worker_native.py::test_native_oversized_valid_prefix_cannot_be_accepted"
+          ],
+          "expected": 8
+        },
+        "darwin": {
+          "tests": [
+            "core/audit/tests/test_smt_worker_native.py::test_native_solver_round_trip",
+            "core/audit/tests/test_smt_worker_native.py::test_native_sweep_keeps_kernel_vocabulary_without_read_grant",
+            "core/audit/tests/test_smt_worker_native.py::test_native_worker_has_no_host_or_network_authority",
+            "core/audit/tests/test_smt_worker_native.py::test_native_timeout_returns_no_verdict",
+            "core/audit/tests/test_smt_worker_native.py::test_native_oversized_valid_prefix_cannot_be_accepted"
+          ],
+          "expected": 7
+        }
+      }
+    },
+    {
+      "id": "radare2",
+      "platforms": {
+        "linux": {
+          "tests": [
+            "core/binary/tests/test_radare2_policy_native.py::test_native_radare2_protocol_and_selected_tool",
+            "core/binary/tests/test_radare2_policy_native.py::test_native_radare2_shell_escape_remains_confined",
+            "core/binary/tests/test_radare2_policy_native.py::test_native_real_r2pipe_round_trip"
+          ],
+          "expected": 4
+        },
+        "darwin": {
+          "tests": [
+            "core/binary/tests/test_radare2_policy_native.py::test_native_radare2_protocol_and_selected_tool",
+            "core/binary/tests/test_radare2_policy_native.py::test_native_radare2_shell_escape_remains_confined",
+            "core/binary/tests/test_radare2_policy_native.py::test_native_real_r2pipe_round_trip"
+          ],
+          "expected": 4
+        }
+      }
+    },
+    {
+      "id": "gadget-parsers",
+      "platforms": {
+        "linux": {
+          "tests": [
+            "packages/exploit_feasibility/tests/test_gadget_parser_native.py::test_native_owned_parser_boundaries",
+            "packages/exploit_feasibility/tests/test_gadget_parser_native.py::test_native_installed_ropgadget_runtime",
+            "packages/exploit_feasibility/tests/test_gadget_parser_native.py::test_native_installed_one_gadget_runtime"
+          ],
+          "expected": 4
+        },
+        "darwin": {
+          "tests": [
+            "packages/exploit_feasibility/tests/test_gadget_parser_native.py::test_native_owned_parser_boundaries",
+            "packages/exploit_feasibility/tests/test_gadget_parser_native.py::test_native_installed_ropgadget_runtime",
+            "packages/exploit_feasibility/tests/test_gadget_parser_native.py::test_native_installed_one_gadget_runtime"
+          ],
+          "expected": 4
+        }
+      }
+    },
+    {
+      "id": "joern-guard",
+      "platforms": {
+        "linux": {
+          "tests": [
+            "packages/joern/tests/test_worker_guard_acceptance.py::test_worker_can_write_scratch_but_not_installation_or_connect_tcp"
+          ],
+          "expected": 1
+        },
+        "darwin": {
+          "tests": [
+            "packages/joern/tests/test_worker_guard_acceptance.py::test_worker_can_write_scratch_but_not_installation_or_connect_tcp"
+          ],
+          "expected": 1
+        }
+      }
+    },
+    {
+      "id": "poc-execution",
+      "platforms": {
+        "linux": {
+          "tests": [
+            "packages/autonomous/tests/test_poc_execution_floor.py::test_native_poc_consumer_meets_floor"
+          ],
+          "expected": 2
+        },
+        "darwin": {
+          "tests": [
+            "packages/autonomous/tests/test_poc_execution_floor.py::test_native_poc_consumer_meets_floor"
+          ],
+          "expected": 2
+        }
+      }
+    },
+    {
+      "id": "fuzz-build",
+      "platforms": {
+        "linux": {
+          "tests": [
+            "packages/fuzzing/tests/test_untrusted_execution_acceptance.py::test_native_consumer_restricts_reads_and_writes"
+          ],
+          "expected": 4
+        },
+        "darwin": {
+          "tests": [
+            "packages/fuzzing/tests/test_untrusted_execution_acceptance.py::test_native_consumer_restricts_reads_and_writes"
+          ],
+          "expected": 4
+        }
+      },
+      "env": {
+        "RAPTOR_FUZZ_FLOOR_ACCEPTANCE": "1"
+      }
+    },
+    {
+      "id": "symbolic-probes",
+      "platforms": {
+        "linux": {
+          "tests": [
+            "core/symbolic/tests/test_probe_sandbox_acceptance.py::test_angr_probe_inherits_private_worker_scratch",
+            "core/symbolic/tests/test_probe_sandbox_acceptance.py::test_shared_worker_delivers_required_tier",
+            "core/symbolic/tests/test_probe_sandbox_acceptance.py::test_only_selected_binary_is_readable",
+            "core/symbolic/tests/test_probe_sandbox_acceptance.py::test_user_installed_dependency_and_nested_probe_keep_private_scratch"
+          ],
+          "expected": 4
+        },
+        "darwin": {
+          "tests": [
+            "core/symbolic/tests/test_probe_sandbox_acceptance.py::test_angr_probe_inherits_private_worker_scratch",
+            "core/symbolic/tests/test_probe_sandbox_acceptance.py::test_shared_worker_delivers_required_tier",
+            "core/symbolic/tests/test_probe_sandbox_acceptance.py::test_only_selected_binary_is_readable",
+            "core/symbolic/tests/test_probe_sandbox_acceptance.py::test_user_installed_dependency_and_nested_probe_keep_private_scratch"
+          ],
+          "expected": 4
+        }
+      }
+    },
+    {
+      "id": "loader-execution",
+      "platforms": {
+        "linux": {
+          "tests": [
+            "packages/exploit_feasibility/tests/test_loader_execution_native.py::test_direct_loader_confines_reads_writes_and_uses_private_scratch",
+            "packages/exploit_feasibility/tests/test_loader_execution_native.py::test_real_ldd_and_reported_system_libc_execute_at_full_tier"
+          ],
+          "expected": 2
+        },
+        "darwin": {
+          "reason": "Linux ELF loader and ldd; portable policy contracts still run on macOS."
+        }
+      }
+    },
+    {
+      "id": "runtime-probes",
+      "platforms": {
+        "linux": {
+          "tests": [
+            "packages/exploit_feasibility/tests/test_runtime_probe_native.py::test_native_runtime_probe_retains_full_mount_namespace",
+            "packages/exploit_feasibility/tests/test_runtime_probe_native.py::test_supervisor_reaps_owned_child_without_polling_host_processes"
+          ],
+          "expected": 3
+        },
+        "darwin": {
+          "reason": "Linux procfs and ptrace probes; portable policy contracts still run on macOS."
+        }
+      }
+    },
+    {
+      "id": "rr-replay",
+      "platforms": {
+        "linux": {
+          "tests": [
+            "packages/binary_analysis/tests/test_rr_native.py::test_real_recording_replays_under_rr_filter",
+            "packages/binary_analysis/tests/test_rr_native.py::test_real_reverse_replay_has_filesystem_and_network_containment"
+          ],
+          "expected": 4,
+          "manual": true,
+          "reason": "Requires Linux rr-compatible perf/PMU hardware and ptrace permissions; explicitly run with --include-manual on an operator test host."
+        },
+        "darwin": {
+          "reason": "Requires Linux rr-compatible perf/PMU hardware and ptrace permissions; explicitly run with --include-manual on an operator test host."
+        }
+      }
+    },
+    {
+      "id": "rr-record-pack",
+      "platforms": {
+        "linux": {
+          "tests": [
+            "packages/binary_analysis/tests/test_rr_record_native.py::test_record_pack_replay_boundaries"
+          ],
+          "expected": 4,
+          "manual": true,
+          "reason": "Requires Linux rr-compatible perf/PMU hardware and ptrace permissions; explicitly run with --include-manual on an operator test host."
+        },
+        "darwin": {
+          "reason": "Requires Linux rr-compatible perf/PMU hardware and ptrace permissions; explicitly run with --include-manual on an operator test host."
+        }
+      }
+    },
+    {
+      "id": "joern-service",
+      "platforms": {
+        "linux": {
+          "tests": [
+            "packages/joern/tests/test_graph_service_acceptance.py::test_real_joern_same_graph_leases_and_installation_protection",
+            "packages/joern/tests/test_graph_service_acceptance.py::test_real_default_parser_and_public_client_share_controller",
+            "packages/joern/tests/test_graph_service_acceptance.py::test_real_parser_through_native_namespace_sandbox"
+          ],
+          "expected": 3,
+          "manual": true,
+          "reason": "Requires an installed compatible Joern/JVM and at least 4 GiB worker budget; select explicitly with --include-manual."
+        },
+        "darwin": {
+          "tests": [
+            "packages/joern/tests/test_graph_service_acceptance.py::test_real_joern_same_graph_leases_and_installation_protection",
+            "packages/joern/tests/test_graph_service_acceptance.py::test_real_default_parser_and_public_client_share_controller"
+          ],
+          "expected": 2,
+          "manual": true,
+          "reason": "Requires an installed compatible Joern/JVM and at least 4 GiB worker budget; select explicitly with --include-manual."
+        }
+      }
+    },
+    {
+      "id": "codeql-traced-build",
+      "env": {
+        "RAPTOR_CODEQL_FLOOR_ACCEPTANCE": "1"
+      },
+      "platforms": {
+        "linux": {
+          "tests": [
+            "packages/codeql/tests/test_traced_build_acceptance.py::test_real_traced_build_confines_repo_home_and_runtime"
+          ],
+          "expected": 1,
+          "manual": true,
+          "reason": "Requires an operator-installed CodeQL CLI; this suite does not download vendor runtimes. Select explicitly with --include-manual."
+        },
+        "darwin": {
+          "tests": [
+            "packages/codeql/tests/test_traced_build_acceptance.py::test_real_traced_build_confines_repo_home_and_runtime"
+          ],
+          "expected": 1,
+          "manual": true,
+          "reason": "Requires an operator-installed CodeQL CLI; this suite does not download vendor runtimes. Select explicitly with --include-manual."
+        }
+      }
+    }
+  ]
+}
