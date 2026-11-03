@@ -8,12 +8,15 @@
 @negative_errno@
 type T;
 identifier fn;
-identifier error =~ "^E[A-Z][A-Z0-9_]*$";
+// Constrain the complete normalized expression: parentheses do not change
+// unary negation, but casts, arithmetic and double negation do. Errno names
+// can start with a digit after E (for example, E2BIG).
+expression error =~ "^[ (]*-[ (]*E[A-Z0-9][A-Z0-9_]*[ )]*$";
 position p;
 @@
 T fn(...) {
 <...
-return -error@p;
+return error@p;
 ...>
 }
 
