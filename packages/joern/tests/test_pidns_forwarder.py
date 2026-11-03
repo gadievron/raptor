@@ -60,11 +60,14 @@ def _pidns_available() -> bool:
         return False
 
 
-_HAS_PIDNS = _pidns_available()
-needs_pidns = pytest.mark.skipif(
-    not _HAS_PIDNS,
-    reason="single-call unshare(USER|NET|PID) unavailable on this host",
-)
+@pytest.fixture(scope="module")
+def pidns_available():
+    if not _pidns_available():
+        pytest.skip("single-call unshare(USER|NET|PID) unavailable on this host")
+    return True
+
+
+needs_pidns = pytest.mark.usefixtures("pidns_available")
 
 
 @pytest.fixture
@@ -472,8 +475,8 @@ class TestSelfProbePidns:
         assert rc in (0, 1)
 
     @needs_pidns
-    def test_probe_passes_where_pidns_works(self):
-        assert _HAS_PIDNS  # gate and assertion agree by construction
+    def test_probe_passes_where_pidns_works(self, pidns_available):
+        assert pidns_available
 
 
 @needs_pidns

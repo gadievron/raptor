@@ -47,10 +47,14 @@ def _userns_available() -> bool:
         return False
 
 
-_HAS_USERNS = _userns_available()
-needs_userns = pytest.mark.skipif(
-    not _HAS_USERNS, reason="unprivileged user namespaces unavailable",
-)
+@pytest.fixture(scope="module")
+def userns_available():
+    if not _userns_available():
+        pytest.skip("unprivileged user namespaces unavailable")
+    return True
+
+
+needs_userns = pytest.mark.usefixtures("userns_available")
 
 
 # ── stub upstreams (plain TCP, host namespace) ──────────────────────
@@ -498,8 +502,8 @@ class TestSelfProbe:
         assert rc in (0, 1)
 
     @needs_userns
-    def test_probe_passes_where_userns_works(self):
-        assert _HAS_USERNS  # gate and assertion agree by construction
+    def test_probe_passes_where_userns_works(self, userns_available):
+        assert userns_available
 
 
 class TestUnmappedEuidHint:
