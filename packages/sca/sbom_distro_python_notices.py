@@ -35,8 +35,8 @@ def project_notices(artifact, record, artifacts, blobs):
     # Source belongs to the project header, never a vendored dependency stanza.
     header = re.split(r"(?m)^Files:|^License:", text, maxsplit=1)[0]
     sources = re.findall(
-        r"(?m)^(?:Source:[ \t]*|It was downloaded from[ \t]*\n)"
-        r"https?://(?:pypi\.org|pypi\.python\.org)/(?:project|pypi)/([A-Za-z0-9_.-]+)/?[ \t]*$",
+        r"(?m)^(?:Source:[ \t]*|It was downloaded from[ \t]*\r?\n)"
+        r"https?://(?:pypi\.org|pypi\.python\.org)/(?:project|pypi)/([A-Za-z0-9_.-]+)/?[ \t]*\r?$",
         header,
     )
     if len(sources) != 1 or _project(sources[0]) != project:
