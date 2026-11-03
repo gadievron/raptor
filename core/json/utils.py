@@ -5,6 +5,7 @@ patterns used across 60+ files, with consistent error handling and
 serialization of Path/datetime objects.
 """
 
+from collections.abc import Iterator
 import json
 import logging
 import math
@@ -712,12 +713,28 @@ def dumps_artifact(
     )
 
 
+def _json_chunks(data: Any, *, sort_keys: bool) -> Iterator[bytes]:
+    """Encode artifact JSON without materializing the complete output string."""
+    encoder = _RaptorEncoder(indent=2, sort_keys=sort_keys, ensure_ascii=False, allow_nan=False)
+    parts, characters = [], 0
+    for part in encoder.iterencode(data):
+        parts.append(part)
+        characters += len(part)
+        if characters >= 64 * 1024:
+            yield "".join(parts).encode("utf-8")
+            parts.clear()
+            characters = 0
+    parts.append("\n")
+    yield "".join(parts).encode("utf-8")
+
+
 def save_json(
     path: str | Path,
     data: Any,
     mode: int | None = None,
     *,
     sort_keys: bool = False,
+    stream: bool = False,
 ) -> None:
     """Save data as pretty-printed JSON. Handles Path/datetime serialization.
 
@@ -743,11 +760,22 @@ def save_json(
         mode: Optional POSIX file permission bits (e.g. 0o600). When set,
               the mode is installed on the tempfile before rename — no
               chmod-after-rename window.
+        stream: encode incrementally with the stdlib encoder and a bounded
+              output buffer, preserving atomic writes and error handling.
+              Memory use is bounded by that buffer plus the largest encoded
+              scalar. The default keeps the existing serializer selection.
         sort_keys: sort object keys. Cosmetic (stable operator diffs
               across runs) — never a byte contract; hash/byte-compare
               lanes use :func:`dumps_canonical`. Str-keyed objects
               only (see the same caveat on :func:`dumps_artifact`).
     """
+    if stream:
+        from core.atomic_fs import write_bytes_atomically
+        write_bytes_atomically(
+            path, _json_chunks(data, sort_keys=sort_keys), mode=mode,
+            tmp_prefix=".~savejson-",
+        )
+        return
     if _orjson is not None:
         _reject_non_finite_floats(data)
         opt = _orjson.OPT_INDENT_2 | _orjson.OPT_NON_STR_KEYS
