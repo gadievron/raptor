@@ -30,6 +30,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from core.sandbox import context, landlock as landlock_mod, probes as probes_mod, seccomp as seccomp_mod  # noqa: E402
+from core.sandbox.errors import SandboxSetupError
 from core.sandbox.profiles import DEFAULT_PROFILE, PROFILES  # noqa: E402
 
 pytestmark = pytest.mark.skipif(
@@ -116,7 +117,7 @@ def _resolved_enforcement(
         for p in patchers:
             p.start()
         with context.sandbox(profile=profile, target=str(target),
-                             output=str(target) if profile == "rr" else None) as run:
+                             output=str(target) if profile in ("rr", "chromium") else None) as run:
             try:
                 run(["/bin/true"], capture_output=True, timeout=30)
             except Exception as exc:  # noqa: BLE001 — shape recorded below
@@ -234,7 +235,7 @@ def test_profile_capability_pins_are_mutation_sensitive(
             try:
                 mutated = _resolved_enforcement(name, tmp_path,
                                                 profiles_table=table)
-            except Exception:  # noqa: BLE001 — refusal = noticed
+            except (Exception, SandboxSetupError):  # refusal = noticed
                 continue
             if mutated == baseline[name]:
                 blind.append(f"{name}.{key}")
@@ -251,3 +252,12 @@ def test_rr_profile_enforcement(tmp_path: Path) -> None:
     assert got["seccomp_profile"] == "rr"
     assert got["restrict_reads"] is True
     assert got["target_bound"] is True
+
+
+def test_chromium_profile_requires_restricted_browser_enforcement(tmp_path):
+    got = _resolved_enforcement('chromium', tmp_path)
+    assert got['lane'] == 'spawn'
+    assert got['block_network'] is False
+    assert got['seccomp_profile'] == 'chromium'
+    assert got['restrict_reads'] is True
+    assert got['target_bound'] is True

@@ -9,16 +9,12 @@ crawl collects the post-JS DOM, and the XSS prover injects a canary
 whose only observable effect is a JavaScript side-channel write, so a
 hit is execution proof, not string matching.
 
-Scope discipline: the browser is the scan's own process tree (like the
-OOB listener — trusted code, not a sandboxed external tool), but the
-PAGES it renders are hostile. Every request a page makes — navigation,
-subresource, XHR — passes a routing gate that aborts anything
-off-origin, so a hostile page cannot use the browser as an egress
-vehicle or a cross-origin probe. JavaScript executes (that is the
-point); its network reach ends at the target origin. Chromium's own
-process sandbox stays ON — if the host cannot support it, the engine
-reports unavailable rather than degrading isolation for hostile
-content.
+The Playwright Node driver and its browser descendants run inside RAPTOR's
+required outer sandbox. Pages are hostile: every page request passes the
+origin gate below. The outer network policy restricts TCP destination ports,
+not hostnames; origin checks remain an application-layer defence. Chromium's
+own process sandbox is enabled by default. Its explicit waiver never disables
+the outer filesystem/process boundary.
 
 The outbound proxy environment (HTTPS_PROXY/HTTP_PROXY/NO_PROXY) is
 passed through explicitly: Chromium ignores proxy env vars unless told,
@@ -51,8 +47,12 @@ _DEFAULT_TIMEOUT_MS = 10_000
 _SETTLE_MS = 350
 
 
-def _launch_options() -> dict[str, Any]:
-    options: dict[str, Any] = {"headless": True}
+def _launch_options(*, allow_unsandboxed_chromium=False) -> dict[str, Any]:
+    if type(allow_unsandboxed_chromium) is not bool:
+        raise TypeError("allow_unsandboxed_chromium must be a bool")
+    # Browser.getBrowserCommandLine requires this flag on supported Chromium builds.
+    options: dict[str, Any] = {"headless": True, "chromium_sandbox": not allow_unsandboxed_chromium,
+                               "args": ["--enable-automation"]}
     executable = os.environ.get("RAPTOR_WEB_BROWSER_EXECUTABLE")
     if executable:
         if not os.path.isabs(executable):
@@ -61,19 +61,20 @@ def _launch_options() -> dict[str, Any]:
     return options
 
 
-def browser_available() -> bool:
-    """True when playwright + a launchable Chromium are present."""
+def browser_available(*, base_url="https://browser-probe.invalid", allow_unsandboxed_chromium=False) -> bool:
+    """Probe the same confined path used for scans; never retry weaker."""
     try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        return False
-    try:
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(**_launch_options())
-            browser.close()
+        with BrowserEngine(base_url, allow_unsandboxed_chromium=allow_unsandboxed_chromium):
+            pass
         return True
-    except Exception as e:
-        logger.debug("browser engine unavailable: %s", e)
+    except Exception as error:
+        from core.security.log_sanitisation import sanitise_for_terminal
+        from core.security.redaction import redact_secrets
+        reason = redact_secrets(str(error))
+        if len(reason) > 4000:
+            reason = reason[:1000] + "\n...\n" + reason[-3000:]
+        logger.warning("Browser unavailable under required RAPTOR containment: %s",
+                       sanitise_for_terminal(reason, max_len=32768))
         return False
 
 
@@ -108,7 +109,10 @@ class BrowserEngine:
         screenshots_dir: Any = None,
         cookies: dict[str, str] | None = None,
         extra_headers: dict[str, str] | None = None,
+        allow_unsandboxed_chromium: bool = False,
     ) -> None:
+        self._launch_kwargs = _launch_options(allow_unsandboxed_chromium=allow_unsandboxed_chromium)
+        self._driver_scope = None
         self._origin = self._normalized_origin(base_url)
         self._base_url = base_url.rstrip("/")
         self._timeout_ms = timeout_ms
@@ -132,38 +136,59 @@ class BrowserEngine:
     def __enter__(self) -> "BrowserEngine":
         from playwright.sync_api import sync_playwright
 
-        launch_kwargs = _launch_options()
-        self._pw = sync_playwright().start()
+        from packages.web._browser_sandbox import confined_driver
+        launch_kwargs = dict(self._launch_kwargs)
         proxy = self._proxy_settings()
         if proxy:
             launch_kwargs["proxy"] = proxy
-        self._browser = self._pw.chromium.launch(**launch_kwargs)
-        # service_workers="block": a worker's fetches bypass page-level
-        # routing; nothing the scan renders needs one.
-        self._context = self._browser.new_context(
-            ignore_https_errors=True,
-            service_workers="block",
-        )
-        self._context.set_default_timeout(self._timeout_ms)
-        self._context.route("**/*", self._route_gate)
-        # WebSocket connections never enter context.route — gate them
-        # separately: same-origin sockets proxy through to the target,
-        # off-origin sockets never connect anywhere.
-        self._context.route_web_socket("**/*", self._websocket_gate)
-        if self._extra_headers:
-            self._context.set_extra_http_headers(self._extra_headers)
-        if self._cookies:
-            parsed = urlparse(self._base_url)
-            self._context.add_cookies([
-                {
-                    "name": name,
-                    "value": value,
-                    "domain": parsed.hostname or "",
-                    "path": "/",
-                }
-                for name, value in self._cookies.items()
-            ])
-        return self
+        self._driver_scope = confined_driver(self._base_url, launch_kwargs.get("executable_path"), proxy)
+        try:
+            start = self._driver_scope.__enter__()
+            self._pw = start(sync_playwright)
+            if not launch_kwargs["chromium_sandbox"]:
+                logger.warning("Chromium sandbox explicitly disabled; RAPTOR outer containment remains required")
+            self._browser = self._pw.chromium.launch(**launch_kwargs)
+            if launch_kwargs["chromium_sandbox"]:
+                cdp = self._browser.new_browser_cdp_session()
+                try:
+                    arguments = cdp.send("Browser.getBrowserCommandLine").get("arguments")
+                    if not isinstance(arguments, list) or not all(isinstance(arg, str) for arg in arguments):
+                        raise RuntimeError("Cannot verify Chromium sandbox launch arguments")
+                    if any(arg.split("=", 1)[0] == "--no-sandbox" or
+                           (arg.startswith("--disable-") and arg.split("=", 1)[0].endswith("-sandbox"))
+                           for arg in arguments):
+                        raise RuntimeError("Chromium runtime disabled its sandbox despite the required launch policy")
+                finally:
+                    cdp.detach()
+            # service_workers="block": a worker's fetches bypass page-level
+            # routing; nothing the scan renders needs one.
+            self._context = self._browser.new_context(
+                ignore_https_errors=True,
+                service_workers="block",
+            )
+            self._context.set_default_timeout(self._timeout_ms)
+            self._context.route("**/*", self._route_gate)
+            # WebSocket connections never enter context.route — gate them
+            # separately: same-origin sockets proxy through to the target,
+            # off-origin sockets never connect anywhere.
+            self._context.route_web_socket("**/*", self._websocket_gate)
+            if self._extra_headers:
+                self._context.set_extra_http_headers(self._extra_headers)
+            if self._cookies:
+                parsed = urlparse(self._base_url)
+                self._context.add_cookies([
+                    {
+                        "name": name,
+                        "value": value,
+                        "domain": parsed.hostname or "",
+                        "path": "/",
+                    }
+                    for name, value in self._cookies.items()
+                ])
+            return self
+        except BaseException:
+            self.__exit__()
+            raise
 
     def __exit__(self, *_exc: object) -> None:
         for closer in (self._context, self._browser):
@@ -178,6 +203,9 @@ class BrowserEngine:
         except Exception:
             logger.debug("playwright stop failed", exc_info=True)
         self._pw = self._browser = self._context = None
+        if self._driver_scope is not None:
+            self._driver_scope.__exit__(None, None, None)
+            self._driver_scope = None
 
     @staticmethod
     def _proxy_settings() -> dict[str, str] | None:

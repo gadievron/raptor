@@ -204,6 +204,9 @@ class TestCheckFailureSurfacing(unittest.TestCase):
             scanner.client.reveal_secrets = False
             scanner._check_failures = {"passive_checks": ["ExplodingCheck"]}
             scanner._check_degraded = {"auth_checks": {"SlowCheck": 2}}
+            scanner.use_browser = True
+            scanner.allow_unsandboxed_chromium = True
+            scanner._browser_coverage_gaps = ['rendered crawl unavailable']
             result = scanner._phase_report(
                 [], _discovery_mock(),
                 {"stats": {}, "discovered_urls": [],
@@ -215,6 +218,13 @@ class TestCheckFailureSurfacing(unittest.TestCase):
             self.assertEqual(
                 result["checks_degraded"], {"auth_checks": {"SlowCheck": 2}},
             )
+            from core.json import load_json
+            saved = load_json(Path(tmpdir) / 'web_scan_report.json')
+            self.assertEqual(saved['browser_isolation'], result['browser_isolation'])
+            self.assertTrue(saved['browser_isolation']['explicit_chromium_waiver'])
+            self.assertFalse(saved['browser_isolation']['chromium_sandbox'])
+            self.assertEqual(saved['browser_isolation']['outer_sandbox'], 'required')
+            self.assertEqual(saved['browser_isolation']['coverage_gaps'], ['rendered crawl unavailable'])
 
 
 class TestPrincipalClientLifecycle(unittest.TestCase):

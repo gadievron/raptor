@@ -54,7 +54,7 @@
  *        (same positional-arg format as newgidmap)
  *
  * The only RAPTOR call site is core/sandbox/_spawn.py, which passes
- * exactly one triple — "0 <invoker's own gid> 1" — for a namespace the
+ * exactly one triple — "<namespace gid> <invoker's own gid> 1" — for a namespace the
  * invoker just created.
  */
 

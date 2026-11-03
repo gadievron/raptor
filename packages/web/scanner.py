@@ -181,6 +181,7 @@ class WebScanner:
         oob_callback_host: str | None = None,
         oob_grace: float = 10.0,
         browser: bool = False,
+        allow_unsandboxed_chromium: bool = False,
     ) -> None:
         import time
 
@@ -210,6 +211,8 @@ class WebScanner:
         self.ffuf_wordlist_dir = ffuf_wordlist_dir
         self.ffuf_api_wordlist = ffuf_api_wordlist
         self.use_browser = browser
+        self.allow_unsandboxed_chromium = allow_unsandboxed_chromium
+        self._browser_coverage_gaps = []
         self.oob_grace = oob_grace
         self.oob_listener = None
         if oob_listen:
@@ -1751,6 +1754,7 @@ class WebScanner:
             cookies=cookies,
             extra_headers=headers,
             screenshots_dir=screenshots,
+            allow_unsandboxed_chromium=self.allow_unsandboxed_chromium,
         )
 
     def _phase_browser_crawl(self, crawl_data: dict) -> None:
@@ -1773,10 +1777,10 @@ class WebScanner:
         except WebPolicyError as e:
             logger.warning("Rendered crawl skipped: %s", self._redact(str(e)))
             return
-        if not browser_available():
+        if not browser_available(base_url=self.base_url, allow_unsandboxed_chromium=self.allow_unsandboxed_chromium):
+            self._browser_coverage_gaps.append("rendered crawl: browser unavailable under required containment")
             logger.warning(
-                "Rendered crawl skipped: no launchable Chromium "
-                "(python3 -m playwright install chromium)",
+                "Rendered crawl skipped: required browser containment or runtime unavailable; see preceding diagnostic",
             )
             return
         urls = list(dict.fromkeys(
@@ -1811,6 +1815,7 @@ class WebScanner:
                                     params.append(name)
                 blocked = engine.blocked_requests
         except Exception as e:
+            self._browser_coverage_gaps.append("rendered crawl incomplete")
             logger.warning(
                 "Rendered crawl failed after +%d URL(s), +%d form(s): %s",
                 new_urls, new_forms, self._redact(str(e)),
@@ -1855,7 +1860,8 @@ class WebScanner:
             logger.warning("Browser XSS phase skipped: %s",
                            self._redact(str(e)))
             return []
-        if not browser_available():
+        if not browser_available(base_url=self.base_url, allow_unsandboxed_chromium=self.allow_unsandboxed_chromium):
+            self._browser_coverage_gaps.append("execution-proof XSS: browser unavailable under required containment")
             return []
         logger.info("Phase 6b: Execution-proof XSS (headless browser)")
         new_findings: list[WebFinding] = []
@@ -1896,6 +1902,7 @@ class WebScanner:
                 if poison is not None:
                     new_findings.append(poison)
         except Exception as e:
+            self._browser_coverage_gaps.append("execution-proof XSS incomplete")
             logger.warning(
                 "Browser XSS phase failed after %d finding(s): %s",
                 len(new_findings), self._redact(str(e)),
@@ -2950,6 +2957,13 @@ class WebScanner:
 
         result = {
             "target": self.base_url,
+            "browser_isolation": {
+                "requested": self.use_browser,
+                "outer_sandbox": "required",
+                "chromium_sandbox": not self.allow_unsandboxed_chromium,
+                "explicit_chromium_waiver": self.allow_unsandboxed_chromium,
+                "coverage_gaps": list(self._browser_coverage_gaps),
+            },
             "findings": findings_dicts,
             "total_findings": len(findings),
             "total_vulnerabilities": len(findings),
@@ -3301,6 +3315,10 @@ Examples:
         ),
     )
     parser.add_argument(
+        "--allow-unsandboxed-chromium", action="store_true",
+        help="Explicitly waive Chromium's inner sandbox; RAPTOR outer containment remains required (requires --browser)",
+    )
+    parser.add_argument(
         "--browser",
         action="store_true",
         help=(
@@ -3616,6 +3634,8 @@ def main():
 
     parser = build_arg_parser()
     args = parser.parse_args()
+    if args.allow_unsandboxed_chromium and not args.browser:
+        parser.error("--allow-unsandboxed-chromium requires --browser")
     if args.project is not None:
         from core.run.pin import set_process_project
         set_process_project(args.project)
@@ -3764,6 +3784,7 @@ def main():
         oob_callback_host=args.oob_callback_host,
         oob_grace=args.oob_grace,
         browser=bool(args.browser),
+        allow_unsandboxed_chromium=bool(args.allow_unsandboxed_chromium),
     )
 
     try:

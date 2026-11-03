@@ -1,0 +1,130 @@
+"""Private Playwright driver launcher: Node and Chromium share one outer jail."""
+from contextlib import contextmanager, suppress
+import json
+import os
+from pathlib import Path
+import shlex
+import shutil
+import sys
+import tempfile
+import threading
+from urllib.parse import urlsplit
+
+_ENV_LOCK = threading.RLock()
+
+
+def browser_runtime_paths(executable=None):
+    """Grant installed browser resources read-only, never an ambient HOME."""
+    cache = os.environ.get('PLAYWRIGHT_BROWSERS_PATH')
+    if cache == '0':
+        import playwright
+        cache = str(Path(playwright.__file__).parent / 'driver/package/.local-browsers')
+    elif not cache:
+        if sys.platform == 'darwin':
+            cache = str(Path.home() / 'Library/Caches/ms-playwright')
+        else:
+            cache = str(Path(os.environ.get('XDG_CACHE_HOME', str(Path.home()/'.cache'))) / 'ms-playwright')
+    paths = [Path(cache).resolve()]
+    if executable:
+        selected = Path(executable).resolve()
+        bundle = next((p for p in selected.parents if p.suffix == '.app'), None)
+        paths.append(bundle or selected.parent)
+    from core.sandbox.python_paths import _home_roots
+    forbidden = {Path(p).resolve() for p in ('/', '/tmp', '/var/tmp', *_home_roots())}
+    for path in paths:
+        if any(path == root or path in root.parents for root in forbidden):
+            raise ValueError('Browser runtime must be in a dedicated installation directory')
+    return [str(path) for path in paths if path.exists()]
+
+
+def _require_browser_containment():
+    """Fail before Playwright starts a transport when prerequisites are absent.
+
+    Delivery is checked again by the strict profile in the child. This early
+    gate avoids creating a partially initialised async client on known failures.
+    """
+    from core.sandbox import probes
+    if sys.platform == 'darwin':
+        if not probes.check_seatbelt_available():
+            raise RuntimeError('Browser containment requires usable Seatbelt')
+    elif sys.platform == 'linux':
+        from core.sandbox import landlock, seccomp
+        if os.getuid() == 0:
+            raise RuntimeError('Browser containment requires a non-root Linux operator')
+        if not probes.check_mount_available():
+            raise RuntimeError('Browser containment requires usable mount/PID namespaces')
+        if not seccomp.check_seccomp_available():
+            raise RuntimeError('Browser containment requires usable libseccomp')
+        if not landlock.check_landlock_available() or landlock._get_landlock_abi() < 4:
+            raise RuntimeError('Browser containment requires Landlock ABI 4+')
+    else:
+        raise RuntimeError('Browser containment requires Linux or macOS')
+
+
+@contextmanager
+def confined_driver(base_url, executable=None, proxy=None):
+    """Temporarily select a private executable using Playwright's Node override.
+
+    The override is restored immediately after transport startup. Serialise that
+    brief process-global environment change; browser operations remain concurrent.
+    Control files are outside the child's writable work directory.
+    """
+    _require_browser_containment()
+    from playwright._impl._driver import compute_driver_executable
+    with _ENV_LOCK:
+        node, cli = compute_driver_executable()
+    node = shutil.which(node) or node
+    if not Path(node).is_file():
+        raise RuntimeError('Playwright Node runtime is missing')
+    private_base = os.confstr(65537) if sys.platform == 'darwin' else None
+    with tempfile.TemporaryDirectory(prefix='raptor-web-browser-', dir=private_base) as private:
+        root = Path(private)
+        work = root / 'work'
+        work.mkdir(mode=0o700)
+        ports = {urlsplit(base_url).port or (443 if urlsplit(base_url).scheme == 'https' else 80)}
+        if proxy:
+            server = proxy['server']
+            parsed = urlsplit(server if '://' in server else 'http://' + server)
+            default_port = 1080 if parsed.scheme in ('socks4', 'socks5', 'socks5h') else (443 if parsed.scheme == 'https' else 80)
+            ports.add(parsed.port if parsed.port is not None else default_port)
+        cache_paths = browser_runtime_paths(executable)
+        config = dict(node=str(Path(node).resolve()), cli=str(Path(cli).resolve()),
+                      work=str(work), reads=cache_paths, ports=sorted(ports))
+        cache = os.environ.get('PLAYWRIGHT_BROWSERS_PATH')
+        if cache == '0':
+            config['browsers'] = '0'
+        elif cache:
+            config['browsers'] = str(Path(cache).resolve())
+        else:
+            config['browsers'] = cache_paths[0] if cache_paths else ''
+        control = root / 'driver.json'
+        control.write_text(json.dumps(config), encoding='utf-8')
+        control.chmod(0o600)
+        launcher = root / 'node'
+        helper = Path(__file__).with_name('_browser_driver.py')
+        launcher.write_text('#!/bin/sh\nexec ' + shlex.join([
+            sys.executable, '-I', '-B', str(helper), str(root)]) + ' "$@"\n')
+        launcher.chmod(0o700)
+        def start(factory):
+            with _ENV_LOCK:
+                previous = os.environ.get('PLAYWRIGHT_NODEJS_PATH')
+                os.environ['PLAYWRIGHT_NODEJS_PATH'] = str(launcher)
+                try:
+                    manager = factory()
+                    try:
+                        return manager.start()
+                    except BaseException:
+                        # Startup can fail after the transport child exists.
+                        # Close the public context manager before removing its
+                        # private launcher/control files; preserve the cause.
+                        close = getattr(manager, '__exit__', None)
+                        if close is not None:
+                            with suppress(Exception):
+                                close(None, None, None)
+                        raise
+                finally:
+                    if previous is None:
+                        os.environ.pop('PLAYWRIGHT_NODEJS_PATH', None)
+                    else:
+                        os.environ['PLAYWRIGHT_NODEJS_PATH'] = previous
+        yield start

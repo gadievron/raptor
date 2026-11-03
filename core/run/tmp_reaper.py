@@ -81,6 +81,7 @@ logger = logging.getLogger(__name__)
 # Dir prefixes whose creators ALWAYS intend cleanup — presence past the
 # age floor means the owning process died without its exit path.
 _DIR_PREFIXES = (
+    "raptor-web-browser-",
     "raptor-rr-replay-",
     "raptor-rr-verify-",
     # Native installation-namespace probe; TemporaryDirectory normally

@@ -245,7 +245,7 @@ class TestProfileSet:
         from core.sandbox.profiles import PROFILES
         assert set(PROFILES) == {
             "full", "strict", "target_run", "debug", "frida", "rr",
-            "network-only", "none",
+            "chromium", "network-only", "none",
         }
 
     def test_no_audit_mode_field_in_profile_dicts(self):

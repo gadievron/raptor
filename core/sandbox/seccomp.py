@@ -1010,7 +1010,10 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
     # wholesale memfd deny aborts every sandboxed spawn/attach at
     # injection time. See the docstring for why this is a consented
     # instrumentation capability, not a containment loss.
-    deny_memfd_create = deny_fd_exec and profile != "frida"
+    # Chromium's shared-memory regions also use memfd_create. This admits
+    # shared-memory allocation, not fd-based process execution: execveat's
+    # AT_EMPTY_PATH deny remains installed, as do ptrace and perf denies.
+    deny_memfd_create = deny_fd_exec and profile not in ("frida", "chromium")
     memfd_create_num = _resolve("memfd_create") if deny_memfd_create else -1
     execveat_num = _resolve("execveat") if deny_fd_exec else -1
 
@@ -1224,7 +1227,13 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                 # primitive never downgrades to allow-and-log.
                 if block_ns_creation and ns_syscall_nums:
                     _errno_enosys = 38
-                    for _fl in _CLONE_NS_FLAGS.values():
+                    for _name, _fl in _CLONE_NS_FLAGS.items():
+                        # Chromium builds its renderer sandbox inside the outer
+                        # jail. Retain mount/IPC/UTS/cgroup/time namespace denies,
+                        # setns, clone3->ENOSYS and execveat AT_EMPTY_PATH denies.
+                        # Landlock rules and NO_NEW_PRIVS survive nested userns.
+                        if profile == "chromium" and _name in ("NEWUSER", "NEWPID", "NEWNET"):
+                            continue
                         for _sysname in ("unshare", "clone"):
                             _num = ns_syscall_nums.get(_sysname, -1)
                             if _num < 0:

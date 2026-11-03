@@ -2522,7 +2522,10 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         # "full (default)" contract. Callers that genuinely want an
         # open-network sandbox say block_network=False explicitly.
         block_network = PROFILES[DEFAULT_PROFILE]["block_network"]
-    strict_required = profile == "strict"
+    strict_required = profile in ("strict", "chromium")
+    if profile == "chromium" and not (target and output):
+        from .errors import SandboxSetupError
+        raise SandboxSetupError("Chromium profile requires explicit private target and output directories")
     # Explicitly disabled: no seccomp either (rlimits-only contract).
     if effectively_disabled:
         seccomp_profile = None
