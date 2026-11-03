@@ -15,6 +15,26 @@ from core.testing.llm_tripwire import Listener
 ROOT = Path(__file__).resolve().parents[3]
 
 
+def test_plugin_import_does_not_initialize_sdk_or_console_handlers():
+    code = '''
+import logging, sys
+sys.path.insert(0, sys.argv[1])
+import core.testing.llm_tripwire
+assert 'core.llm.client' not in sys.modules
+assert 'core.logging' not in sys.modules
+assert not logging.getLogger('raptor').handlers
+from core.llm.model_brokers import BROKER_REGISTRY_ERROR, MODEL_BROKERS
+assert BROKER_REGISTRY_ERROR is None, BROKER_REGISTRY_ERROR
+assert MODEL_BROKERS
+assert 'core.llm.client' not in sys.modules
+'''
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", code, str(ROOT)],
+        capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_listener_records_bounded_body_and_joins(tmp_path):
     journal = tmp_path / "requests.jsonl"
     listener = Listener(journal, "unit")

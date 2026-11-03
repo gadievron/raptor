@@ -29,25 +29,39 @@ Dead-scaffolding cleanups elsewhere should converge suites onto these
 rather than deleting-and-reinventing.
 """
 
-from core.testing.fake_llm import (
-    FakeModel,
-    FakeStructuredProvider,
-    ensure_anthropic_error_types,
-    install_provider,
-    make_anthropic_provider,
-    make_test_client,
-)
-from core.testing.gitrepo import git_run, init_scratch_repo
-from core.testing.llm_env import (
-    DEFAULT_OLLAMA_HOST,
-    PROXY_ENV_VARS,
-    reset_llm_egress_state,
-)
-from core.testing.treesitter import (
-    force_census_regex_fallback,
-    requires_ts,
-    ts_parser_available,
-)
+# Pytest loads infrastructure plugins before capture and test configuration.
+# Importing this package must not initialize SDKs, logging handlers, or model
+# selection merely to reach a lightweight helper such as llm_tripwire.
+_EXPORT_MODULES = {
+    "FakeModel": "fake_llm",
+    "FakeStructuredProvider": "fake_llm",
+    "ensure_anthropic_error_types": "fake_llm",
+    "install_provider": "fake_llm",
+    "make_anthropic_provider": "fake_llm",
+    "make_test_client": "fake_llm",
+    "git_run": "gitrepo",
+    "init_scratch_repo": "gitrepo",
+    "DEFAULT_OLLAMA_HOST": "llm_env",
+    "PROXY_ENV_VARS": "llm_env",
+    "reset_llm_egress_state": "llm_env",
+    "force_census_regex_fallback": "treesitter",
+    "requires_ts": "treesitter",
+    "ts_parser_available": "treesitter",
+}
+
+
+def __getattr__(name):
+    module = _EXPORT_MODULES.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from importlib import import_module
+    value = getattr(import_module(f"{__name__}.{module}"), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))
 
 __all__ = [
     "DEFAULT_OLLAMA_HOST",

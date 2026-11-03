@@ -4,6 +4,9 @@
   "artifacts:orphan_reader::*-metadata.json": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },
+  "artifacts:orphan_reader::*.active.json": {
+   "note": "CI LLM tripwire context files: llm_tripwire._publish writes each worker/PID context to a .next file and atomically replaces its generated .active.json path. llm_connections.active_tests reads those published files with glob('*.active.json'); the indexer does not connect the rename destination to the glob reader."
+  },
   "artifacts:orphan_reader::*.md": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },
@@ -27,6 +30,9 @@
   },
   "artifacts:orphan_reader::*exploit*context*.json": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+  },
+  "artifacts:orphan_reader::.active.json": {
+   "note": "Normalized suffix of the generated CI LLM tripwire worker/PID context path. llm_tripwire._publish publishes it by replacing a written .next file, and llm_connections.active_tests consumes the matching *.active.json files; atomic-rename publication is not modeled as a writer."
   },
   "artifacts:orphan_reader::.raptor.json": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
@@ -174,6 +180,9 @@
   },
   "artifacts:write_only_artifact::-manifest.json": {
    "note": "seed-harvest corpus manifest (packages/frida/seeds.py writes <seeds>-manifest.json): operator-facing harvest accounting, deliberately written NEXT TO the corpus dir so AFL never ingests it as a seed; consumed by the operator reviewing a harvest, production code uses extract_seeds' return value"
+  },
+  "artifacts:write_only_artifact::-models.json": {
+   "note": "CI LLM tripwire generates a private per-worker models.json and exports its path through RAPTOR_CONFIG. The normal core.llm configuration loader and inherited subprocesses read that environment-selected path; the reader has no literal generated filename for the artifact indexer to pair with this writer."
   },
   "artifacts:write_only_artifact::-postfix.json": {
    "note": "raptor-recall-measure cvefix-manifest output: generated fp-only twin manifest ({cve}-postfix.json); same operator hand-off as the -prefix recall manifest \u2014 consumed via the --manifest path flag, no literal filename at the read site"
@@ -402,6 +411,9 @@
   },
   "artifacts:write_only_artifact::hash-pin.json": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+  },
+  "artifacts:write_only_artifact::hosts-before.txt": {
+   "note": "Deliberate recovery record from the Linux CI hostname tripwire: preserve the original hosts file for diagnosis or manual recovery if the listener is killed. Normal shutdown restores the in-memory original in serve's finally block, so this backup intentionally has no automated production reader."
   },
   "artifacts:write_only_artifact::io-correlation.json": {
    "note": "operator/LLM-facing output: packages/frida cli._maybe_correlate_io writes the ingest-payload/call-argument correlation report after a run and prints its path for the operator to inspect; no in-repo literal-name production reader by design (tests assert the file, the CLI only echoes the path)"

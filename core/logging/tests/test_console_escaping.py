@@ -9,7 +9,7 @@ import logging
 
 import pytest
 
-from core.logging import EscapingConsoleFormatter, RaptorLogger
+from core.logging import EscapingConsoleFormatter
 
 # The closure detector lives in core.logging.console_audit so the
 # per-PR lint gate (.github/scripts/check_console_chokepoint.py) and
@@ -69,23 +69,38 @@ class TestEscapingConsoleFormatter:
 
 
 class TestConsoleHandlersUseEscapingFormatter:
-    def test_raptor_and_root_console_handlers_escaping(self):
-        RaptorLogger()  # singleton — idempotent init
+    def test_raptor_and_root_console_handlers_escaping(self, tmp_path):
+        # A process-global singleton may retain an earlier pytest capture
+        # stream. Exercise initialization with one stable stderr instead.
+        import subprocess
         import sys
-        checked = 0
-        for logger in (logging.getLogger("raptor"), logging.getLogger()):
-            for handler in logger.handlers:
-                if (isinstance(handler, logging.StreamHandler)
-                        and getattr(handler, "stream", None) is sys.stderr):
-                    assert isinstance(
-                        handler.formatter, EscapingConsoleFormatter,
-                    ), (
-                        f"console handler on {logger.name or 'root'!r} "
-                        "not using the escaping formatter — foreign "
-                        "bytes in log lines reach the TTY raw"
-                    )
-                    checked += 1
-        assert checked >= 1
+        from pathlib import Path
+
+        code = '''
+import logging, sys
+from pathlib import Path
+from unittest.mock import patch
+sys.path.insert(0, sys.argv[1])
+from core.config import RaptorConfig
+from core.logging import EscapingConsoleFormatter, RaptorLogger
+with patch.object(RaptorConfig, 'LOG_DIR', Path(sys.argv[2])), \\
+     patch.object(RaptorConfig, 'ensure_directories'):
+    RaptorLogger()
+    RaptorLogger()  # Idempotent initialization must retain the formatter.
+checked = 0
+for logger in (logging.getLogger('raptor'), logging.getLogger()):
+    for handler in logger.handlers:
+        if isinstance(handler, logging.StreamHandler) and getattr(handler, 'stream', None) is sys.stderr:
+            assert isinstance(handler.formatter, EscapingConsoleFormatter), logger.name
+            checked += 1
+assert checked >= 1
+'''
+        result = subprocess.run(
+            [sys.executable, "-I", "-c", code,
+             str(Path(__file__).resolve().parents[3]), str(tmp_path)],
+            capture_output=True, text=True, timeout=10,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
 
 
 
