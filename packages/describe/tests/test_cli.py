@@ -18,6 +18,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 _RAPTOR_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -51,6 +53,9 @@ class TestRaptorPrepareMode:
     """``python3 raptor.py describe ...`` — the operator-facing
     dispatcher path."""
 
+    # Successful report builds include cold CLI startup and real detection.
+    # Error/refusal smoke checks below remain in the default tier.
+    @pytest.mark.slow
     def test_text_output_against_c_daemon_target(self, tmp_path):
         target = _c_daemon_target(tmp_path / "t")
         result = _run([
@@ -77,6 +82,7 @@ class TestRaptorPrepareMode:
         )
         assert str(target) in out
 
+    @pytest.mark.slow
     def test_json_output_parses_and_has_expected_keys(self, tmp_path):
         target = _c_daemon_target(tmp_path / "t")
         result = _run([
@@ -149,6 +155,7 @@ class TestLibexecRaptorPrepare:
     """``libexec/raptor-describe`` — the slash-command surface
     invoked from Claude Code sessions."""
 
+    @pytest.mark.slow
     def test_libexec_text_output(self, tmp_path):
         target = _c_daemon_target(tmp_path / "t")
         result = _run([
@@ -160,6 +167,7 @@ class TestLibexecRaptorPrepare:
         assert "Target analysis:" in result.stdout
         assert "Detected type: c.userspace-daemon" in result.stdout
 
+    @pytest.mark.slow
     def test_libexec_json_output(self, tmp_path):
         target = _c_daemon_target(tmp_path / "t")
         result = _run([
