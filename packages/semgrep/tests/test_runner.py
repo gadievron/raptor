@@ -271,7 +271,8 @@ class TestRunRuleMocked:
         assert result.findings == []
         assert not result.ok
 
-    def test_below_floor_warns_and_omits_scope_flag(self, tmp_path, caplog):
+    @pytest.mark.parametrize("root_level", ["WARNING", "ERROR", "CRITICAL"])
+    def test_below_floor_warns_and_omits_scope_flag(self, tmp_path, caplog, root_level):
         import logging
         target = tmp_path / "src"
         target.mkdir()
@@ -289,9 +290,12 @@ class TestRunRuleMocked:
                 return MagicMock(stdout=_make_sarif(count=0), stderr="",
                                 returncode=0)
             mock_run.side_effect = side_effect
-            with caplog.at_level(logging.WARNING, logger="raptor"):
-                run_rule(target, "p/x", unsandboxed=True)
-        assert any("semgrepignore" in r.message for r in caplog.records)
+            with caplog.at_level(getattr(logging, root_level)), \
+                 caplog.at_level(logging.WARNING, logger="packages.semgrep.runner"):
+                result = run_rule(target, "p/x", unsandboxed=True)
+        assert result.ok
+        assert any(r.name == "packages.semgrep.runner" and "semgrepignore" in r.message
+                   for r in caplog.records)
 
     def test_run_basic(self, tmp_path):
         target = tmp_path / "src"
