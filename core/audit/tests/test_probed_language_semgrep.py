@@ -285,9 +285,14 @@ needs_semgrep = pytest.mark.skipif(
 
 
 @needs_semgrep
+@pytest.mark.slow
 class TestLiveProbedTarget:
     """Live pins against the installed engine — the exact executed
-    path (run_semgrep_sweep → packages.semgrep.runner.run_rule)."""
+    path (run_semgrep_sweep → packages.semgrep.runner.run_rule).
+
+    Real engine startup and repeated scans exceed the fast-tier budget;
+    the other classes retain mocked dispatch and language-gate coverage.
+    """
 
     def _rule(self):
         rule = resolve_semgrep_rule_for_cwe(
