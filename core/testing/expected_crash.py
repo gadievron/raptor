@@ -38,6 +38,32 @@ class ExpectedCrashError(AssertionError):
     """The expected signal was not observed, or containment failed."""
 
 
+def _terminate_and_reap(pid, ptrace, *, timeout=2):
+    """Kill an owned tracee and consume stops until its final wait status.
+
+    Darwin may report SIGKILL as a traced stop first. A stopped status is
+    neither an exit code nor proof that the child has been reaped.
+    """
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            found, status = os.waitpid(pid, os.WNOHANG | os.WUNTRACED)
+        except ChildProcessError:
+            return None
+        if found:
+            if os.WIFEXITED(status) or os.WIFSIGNALED(status):
+                return os.waitstatus_to_exitcode(status)
+            if os.WIFSTOPPED(status):
+                ptrace(8, pid)  # PT_KILL / PTRACE_KILL: terminate the stopped tracee
+        if time.monotonic() >= deadline:
+            raise TimeoutError('owned crash fixture did not terminate during cleanup')
+        time.sleep(0.005)
+
+
 def _trace(command, deadline, ready_file):
     """CLI-only tracer: fork in a fresh, single-threaded interpreter."""
     libc = ctypes.CDLL('/usr/lib/libSystem.B.dylib' if sys.platform == 'darwin' else None,
@@ -109,11 +135,9 @@ def _trace(command, deadline, ready_file):
     finally:
         if not reaped:
             try:
-                os.kill(pid, signal.SIGKILL)
-                _, status = os.waitpid(pid, 0)
-                result['returncode'] = os.waitstatus_to_exitcode(status)
-            except (ProcessLookupError, ChildProcessError):
-                pass
+                result['returncode'] = _terminate_and_reap(pid, ptrace)
+            except (OSError, TimeoutError) as exc:
+                result['error'] = f'cleanup failed: {type(exc).__name__}: {exc}'
         setup = os.read(read_fd, 4096)
         os.close(read_fd)
         if setup:
