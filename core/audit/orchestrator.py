@@ -11108,47 +11108,69 @@ def _run_audit_body(
                         _mining_total_w, len(_mining_results),
                     )
 
-            # Multi-perspective sweep on the same targets
+            # Focused-lens sweep: re-examine mining targets through
+            # caller-interaction, type-contract, and error-path lenses,
+            # using the orchestrator's pre-built cross-TU context.
             if _mining_targets:
-                from .discovery import run_multi_perspective_sweep
+                from .discovery import run_focused_lens_sweep
 
-                _mp_budget = (
+                _lens_budget = (
                     (config.max_cost_usd or 50.0)
                     * config.discovery_budget_fraction
                     * 0.20
                 )
 
-                _mp_client = _run_llm_client(config)
+                _lens_client = _run_llm_client(config)
 
-                def _mp_review_fn(
+                def _lens_review_fn(
                     system: str, prompt: str,
                 ) -> tuple[str, float]:
-                    resp = _mp_client.generate(
+                    resp = _lens_client.generate(
                         prompt, system_prompt=system,
                     )
                     return resp.content, resp.cost
 
-                _mp_results = run_multi_perspective_sweep(
+                _gap_index: dict[str, dict[str, Any]] = {
+                    f"{g['file']}:{g['name']}": g for g in gaps
+                }
+                _lens_contexts: dict[str, dict[str, Any]] = {}
+                for _lt in _mining_targets:
+                    _lt_gap = _gap_index.get(_lt.fid)
+                    if _lt_gap is not None:
+                        try:
+                            _lens_contexts[_lt.fid] = _build_context(
+                                config, _lt_gap, checklist,
+                                context_map, evidence_index,
+                                blind=True,
+                            )
+                        except Exception:
+                            logger.debug(
+                                "lens context build failed for %s",
+                                _lt.fid, exc_info=True,
+                            )
+
+                _lens_results = run_focused_lens_sweep(
                     _mining_targets,
-                    review_fn=_mp_review_fn,
-                    max_cost_usd=_mp_budget,
+                    review_fn=_lens_review_fn,
+                    max_cost_usd=_lens_budget,
+                    contexts=_lens_contexts,
                 )
-                _mp_total_w = 0
-                for mpr in _mp_results:
-                    if mpr.weaknesses:
+                _lens_total_w = 0
+                for _lr in _lens_results:
+                    if _lr.weaknesses:
                         write_discovery_weaknesses(
                             config.out_dir,
-                            mpr.seam_or_field,
-                            mpr.weaknesses,
+                            _lr.seam_or_field,
+                            _lr.weaknesses,
                             run_id=_disc_run_id,
-                            cost_usd=mpr.cost_usd,
+                            cost_usd=_lr.cost_usd,
                         )
-                        _mp_total_w += len(mpr.weaknesses)
-                if _mp_total_w:
+                        _lens_total_w += len(_lr.weaknesses)
+                if _lens_total_w:
                     logger.info(
-                        "open discovery: %d multi-perspective weaknesses "
+                        "open discovery: %d focused-lens weaknesses "
                         "from %d targets",
-                        _mp_total_w, len(_mp_results),
+                        _lens_total_w, len(_lens_results),
                     )
 
             # --- Weakness composition (Phase C) ---
