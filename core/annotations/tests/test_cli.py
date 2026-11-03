@@ -20,6 +20,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CLI = REPO_ROOT / "libexec" / "raptor-annotate"
 
@@ -347,11 +349,23 @@ class TestAdd:
 
 
 class TestLs:
+    @staticmethod
+    def _seed(base, file, function, *, body="", **metadata):
+        # Filtering exercises the ls subprocess; setup uses the public writer.
+        # The dedicated round-trip below still covers real CLI add -> ls.
+        from core.annotations import Annotation, write_annotation
+
+        metadata.setdefault("source", "agent")
+        write_annotation(base, Annotation(
+            file=file, function=function, body=body, metadata=metadata,
+        ))
+
     def test_empty_says_so(self, tmp_path):
         r = _run("ls", "--base", str(tmp_path))
         assert r.returncode == 0
         assert "(no annotations)" in r.stdout
 
+    @pytest.mark.slow  # Three cold CLI startups exceed the fast-tier budget.
     def test_lists_added(self, tmp_path):
         _run("add", "src/a.py", "f1", "--base", str(tmp_path),
              "--status", "clean", "-m", "ok")
@@ -363,68 +377,55 @@ class TestLs:
         assert "src/b.py" in r.stdout
 
     def test_filter_by_status(self, tmp_path):
-        _run("add", "src/a.py", "f1", "--base", str(tmp_path),
-             "--status", "clean", "-m", "ok")
-        _run("add", "src/b.py", "f2", "--base", str(tmp_path),
-             "--status", "finding", "-m", "bad")
+        self._seed(tmp_path, 'src/a.py', 'f1', status='clean', body='ok')
+        self._seed(tmp_path, 'src/b.py', 'f2', status='finding', body='bad')
         r = _run("ls", "--base", str(tmp_path), "--status", "finding")
         assert "src/b.py" in r.stdout
         assert "src/a.py" not in r.stdout
 
     def test_filter_by_source(self, tmp_path):
-        _run("add", "src/a.py", "f1", "--base", str(tmp_path),
-             "--source", "human", "-m", "manual")
-        _run("add", "src/b.py", "f2", "--base", str(tmp_path),
-             "--source", "llm", "-m", "auto")
+        self._seed(tmp_path, 'src/a.py', 'f1', source='human', body='manual')
+        self._seed(tmp_path, 'src/b.py', 'f2', source='llm', body='auto')
         r = _run("ls", "--base", str(tmp_path), "--source", "llm")
         assert "src/b.py" in r.stdout
         assert "src/a.py" not in r.stdout
 
     def test_filter_by_cwe(self, tmp_path):
-        _run("add", "src/a.py", "f1", "--base", str(tmp_path),
-             "--status", "finding", "--cwe", "CWE-78", "-m", "x")
-        _run("add", "src/b.py", "f2", "--base", str(tmp_path),
-             "--status", "finding", "--cwe", "CWE-89", "-m", "x")
+        self._seed(tmp_path, 'src/a.py', 'f1', status='finding', cwe='CWE-78', body='x')
+        self._seed(tmp_path, 'src/b.py', 'f2', status='finding', cwe='CWE-89', body='x')
         r = _run("ls", "--base", str(tmp_path), "--cwe", "CWE-78")
         assert "src/a.py" in r.stdout
         assert "src/b.py" not in r.stdout
 
     def test_filter_by_rule_id_substring(self, tmp_path):
-        _run("add", "src/a.py", "f1", "--base", str(tmp_path),
-             "--meta", "rule_id=py/sql-injection", "-m", "x")
-        _run("add", "src/b.py", "f2", "--base", str(tmp_path),
-             "--meta", "rule_id=cpp/buffer-overflow", "-m", "x")
+        self._seed(tmp_path, 'src/a.py', 'f1', rule_id='py/sql-injection', body='x')
+        self._seed(tmp_path, 'src/b.py', 'f2', rule_id='cpp/buffer-overflow', body='x')
         # Substring "py/" scopes to Python rules.
         r = _run("ls", "--base", str(tmp_path), "--rule-id", "py/")
         assert "src/a.py" in r.stdout
         assert "src/b.py" not in r.stdout
 
     def test_grep_body(self, tmp_path):
-        _run("add", "src/a.py", "f1", "--base", str(tmp_path),
-             "-m", "uses subprocess.call shell=True")
-        _run("add", "src/b.py", "f2", "--base", str(tmp_path),
-             "-m", "constant-time compare")
+        self._seed(tmp_path, 'src/a.py', 'f1', body='uses subprocess.call shell=True')
+        self._seed(tmp_path, 'src/b.py', 'f2', body='constant-time compare')
         r = _run("ls", "--base", str(tmp_path), "--grep", "subprocess")
         assert "src/a.py" in r.stdout
         assert "src/b.py" not in r.stdout
 
     def test_grep_case_insensitive(self, tmp_path):
-        _run("add", "src/a.py", "f1", "--base", str(tmp_path),
-             "-m", "Subprocess Call")
+        self._seed(tmp_path, 'src/a.py', 'f1', body='Subprocess Call')
         r = _run("ls", "--base", str(tmp_path), "--grep", "SUBPROCESS")
         assert "src/a.py" in r.stdout
 
     def test_grep_metadata_value(self, tmp_path):
-        _run("add", "src/a.py", "f1", "--base", str(tmp_path),
-             "--meta", "ticket=BUG-42", "-m", "x")
-        _run("add", "src/b.py", "f2", "--base", str(tmp_path),
-             "-m", "x")
+        self._seed(tmp_path, 'src/a.py', 'f1', ticket='BUG-42', body='x')
+        self._seed(tmp_path, 'src/b.py', 'f2', body='x')
         r = _run("ls", "--base", str(tmp_path), "--grep", "BUG-42")
         assert "src/a.py" in r.stdout
         assert "src/b.py" not in r.stdout
 
     def test_since_filter_all_recent(self, tmp_path):
-        _run("add", "src/a.py", "f1", "--base", str(tmp_path), "-m", "x")
+        self._seed(tmp_path, 'src/a.py', 'f1', body='x')
         # Just-written annotation falls inside any reasonable window.
         r = _run("ls", "--base", str(tmp_path), "--since", "1h")
         assert "src/a.py" in r.stdout
@@ -432,7 +433,7 @@ class TestLs:
     def test_since_filter_excludes_old(self, tmp_path):
         import os
         import time
-        _run("add", "src/a.py", "f1", "--base", str(tmp_path), "-m", "x")
+        self._seed(tmp_path, 'src/a.py', 'f1', body='x')
         # Backdate the annotation file by 30 days.
         ann_file = tmp_path / "src" / "a.py.md"
         old_ts = time.time() - (30 * 86400)
@@ -441,22 +442,20 @@ class TestLs:
         assert "src/a.py" not in r.stdout
 
     def test_since_bad_value_errors(self, tmp_path):
-        _run("add", "src/a.py", "f1", "--base", str(tmp_path), "-m", "x")
+        self._seed(tmp_path, 'src/a.py', 'f1', body='x')
         r = _run("ls", "--base", str(tmp_path), "--since", "garbage")
         assert r.returncode == 2
         assert "since" in r.stderr.lower()
 
     def test_since_supported_units(self, tmp_path):
-        _run("add", "src/a.py", "f1", "--base", str(tmp_path), "-m", "x")
+        self._seed(tmp_path, 'src/a.py', 'f1', body='x')
         for unit in ("60s", "5m", "1h", "1d", "1w"):
             r = _run("ls", "--base", str(tmp_path), "--since", unit)
             assert r.returncode == 0, f"{unit}: {r.stderr}"
 
     def test_filter_by_file(self, tmp_path):
-        _run("add", "src/a.py", "f1", "--base", str(tmp_path),
-             "--status", "clean", "-m", "ok")
-        _run("add", "src/b.py", "f2", "--base", str(tmp_path),
-             "--status", "clean", "-m", "ok")
+        self._seed(tmp_path, 'src/a.py', 'f1', status='clean', body='ok')
+        self._seed(tmp_path, 'src/b.py', 'f2', status='clean', body='ok')
         r = _run("ls", "--base", str(tmp_path), "--file", "src/a.py")
         assert "src/a.py" in r.stdout
         assert "src/b.py" not in r.stdout
