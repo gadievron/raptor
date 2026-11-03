@@ -287,6 +287,17 @@ covering C/C++ structural patterns that require control-flow sensitivity:
 
 Run `ls engine/coccinelle/rules/` for the current file list.
 
+### Uninitialised returns
+
+`uninitialized_return` distinguishes a loop initializer or mandatory first
+assignment from an assignment that may never execute. A zero-iteration loop,
+an early break before assignment, or an optional assignment can still leave
+the returned local uninitialised.
+
+The rule handles these initialization patterns conservatively. Complex
+control flow, functions with `goto`, and macro-defined initialization can
+still require manual review; an empty result is not a general proof of definite assignment.
+
 ### Memory leaks on error paths
 
 `resource_leak_err` reports kernel allocations that may remain allocated

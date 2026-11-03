@@ -195,3 +195,56 @@ def test_comments_and_literals_do_not_override_iterator_model(tmp_path, noise):
         }
     """))
     assert results == []
+
+
+
+_LOOP_CASES = (
+    ("int value; for (value = 0; value < limit; value++) { use(value); } return value;", False),
+    ("int value; for (;;) { value = work(); if (done()) break; } return value;", False),
+    ("int value; while (1) { value = work(); if (done()) break; } return value;", False),
+    ("int value; do { value = work(); } while (done()); return value;", False),
+    ("int value; for (;;) { if (flag) value = 1; else value = 2; break; } return value;", False),
+    ("int value; for (; (value = work()); ) { use(value); } return value;", False),
+    ("int value; for (; limit; value = work()) { if (flag) break; } return value;", True),
+    ("int value; while (limit--) { value = work(); } return value;", True),
+    ("int value; for (; limit; ) { value = work(); } return value;", True),
+    ("int value; for (;;) { if (flag) break; value = work(); if (done()) break; } return value;", True),
+    ("int value; do { if (flag) break; value = work(); } while (done()); return value;", True),
+    ("int value; for (;;) { if (flag) value = work(); break; } return value;", True),
+    ("int value; if (flag) { for (value = 0; value < limit; value++) {} } return value;", True),
+    ("int value; if (flag) goto out; for (value = 0; value < limit; value++) {} out: return value;", True),
+    ("int value; for (int value = 0; value < limit; value++) {} return value;", True),
+    ("int value; for (value = 0; value < limit; value++) { int value; return value; } return 0;", True),
+    ("int value; if (flag) value = 0; return value;", True),
+    ("int value; if (flag) return -1; for (value = 0; value < limit; value++) {} if (value > 0) return value; return 0;", False),
+    ("int value; if (flag) return value; for (value = 0; value < limit; value++) {} return value;", True),
+    ("int value; for (value = value + 1; value < limit; value++) {} return value;", True),
+    ("int value; for (;;) { value = work(value); if (done()) break; } return value;", True),
+    ("int value; if (flag) goto inside; for (;;) { value = work(); inside: break; } return value;", True),
+    ("int value; switch (flag) { case 1: value = 0; break; } return value;", True),
+    ("int value; while (limit--) { for (value = 0; value < limit; value++) {} } return value;", True),
+    ("int value; for (;;) { if (flag) break; for (value = 0; value < limit; value++) {} break; } return value;", True),
+    ("int value; while (limit--) { if (flag) continue; for (value = 0; value < limit; value++) {} } return value;", True),
+    ("int value; for (value = 0; value < limit; value++) {} { int value; return value; }", True),
+)
+
+
+@pytest.mark.parametrize("compact", [False, True])
+@pytest.mark.parametrize("batch", range((len(_LOOP_CASES) + 2) // 3))
+def test_loop_initialization_paths(tmp_path, compact, batch):
+    # Share spatch startup across a few independent functions without making
+    # one test phase a heavyweight scan. Attribute by generated source spans;
+    # no external file layout or fixed line number is part of the contract.
+    lines = []
+    line_to_case = {}
+    expected = set()
+    for index, (body, fires) in enumerate(_LOOP_CASES[batch * 3:batch * 3 + 3]):
+        layout = body if compact else body.replace("; ", ";\n")
+        function = f"int sample_{index}(int limit, int flag) {{ " + layout + " }"
+        for line in function.splitlines():
+            lines.append(line)
+            line_to_case[len(lines)] = index
+        if fires:
+            expected.add(index)
+    results = _run_rule(tmp_path, "\n".join(lines) + "\n")
+    assert {line_to_case[result["line"]] for result in results} == expected
