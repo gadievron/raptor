@@ -865,8 +865,7 @@ def is_verification_evidence(ev: str) -> bool:
     spelling counts toward the aggregation floor, and an unlisted
     spelling earns nothing (fail-closed, non-poisonous).
 
-    Composite parse: the surviving outcome's provenance leads
-    (evidence-combine in ``pipeline._merge_outcomes``), so a stamp
+    Composite parse: the surviving outcome's provenance leads, so a stamp
     whose FIRST part is non-mechanical (``llm-claimed:``,
     ``prefilter:``) is never verification. Scanning later parts stops
     at the first ``llm-claimed:`` part: ``sanitize_llm_evidence_tool``
