@@ -671,26 +671,47 @@ def save_index(
     # owner-only posture the previous mkstemp+chmod pattern installed.
     # Compact separators keep the adjacency rows dense; the format is
     # Python-version independent by construction (plain JSON).
-    payload = _HEADER_MAGIC + json.dumps(
-        _index_to_jsonable(index), separators=(",", ":"),
-    ).encode("utf-8")
-    # Write-time budget mirroring the loader's read cap: an entry the
-    # loader will refuse is pure waste — the target re-pays the full
-    # reachability computation every run AND the dead entry squats an
-    # eviction slot. Skip caching loudly instead of writing it.
-    if len(payload) > _MAX_INDEX_BYTES:
-        logger.warning(
-            "reach_cache: index for this target serializes to %d bytes, "
-            "past the loader's %d-byte cap — not caching (reachability "
-            "recomputes each run for targets this large)",
-            len(payload), _MAX_INDEX_BYTES,
-        )
-        return
+    # Keep only a small output buffer alongside the JSONable graph, rather
+    # than retaining the full JSON string, UTF-8 bytes and prefixed payload.
+    # A private exception unwinds the atomic writer before its rename when
+    # the running byte count (including the header) exceeds the read cap.
+    class _IndexTooLarge(Exception):
+        pass
+
+    def chunks():
+        total = len(_HEADER_MAGIC)
+        if total > _MAX_INDEX_BYTES:
+            raise _IndexTooLarge(total)
+        yield _HEADER_MAGIC
+        pending = bytearray()
+        encoder = json.JSONEncoder(separators=(",", ":"))
+        for piece in encoder.iterencode(_index_to_jsonable(index)):
+            encoded = piece.encode("utf-8")
+            total += len(encoded)
+            if total > _MAX_INDEX_BYTES:
+                raise _IndexTooLarge(total)
+            pending.extend(encoded)
+            # Coalesce encoder tokens to avoid a syscall for each scalar
+            # or punctuation token; this does not change the emitted bytes.
+            if len(pending) >= 64 * 1024:
+                yield pending
+                pending = bytearray()
+        if pending:
+            yield pending
+
     try:
         write_bytes_atomically(
-            path, payload,
+            path, chunks(),
             mode=0o600, tmp_prefix=".reach-tmp-",
         )
+    except _IndexTooLarge as exc:
+        logger.warning(
+            "reach_cache: index for this target serializes to at least %d "
+            "bytes, past the loader's %d-byte cap — not caching "
+            "(reachability recomputes each run for targets this large)",
+            exc.args[0], _MAX_INDEX_BYTES,
+        )
+        return
     except OSError as exc:
         logger.debug("reach_cache: write failed for %s: %s", path, exc)
         return

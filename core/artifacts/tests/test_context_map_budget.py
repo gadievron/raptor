@@ -422,3 +422,92 @@ def test_still_over_budget_warning_states_consumer_consequence(caplog):
     messages = [r.getMessage() for r in caplog.records]
     assert any("refuse the WHOLE artifact" in msg for msg in messages)
     assert any("proceeds mapless" in msg for msg in messages)
+
+
+def test_compact_stream_matches_existing_encoders(monkeypatch, tmp_path):
+    from datetime import datetime
+    from core.json import utils
+
+    original_backend = utils._orjson
+    for backend in (None, original_backend):
+        monkeypatch.setattr(utils, "_orjson", backend)
+        for sort_keys in (False, True):
+            data = {
+                "unicode": "café 漢字 😀\n\t\"\\",
+                "floats": [1e-7, 1e20, -0.0, 1.2345678901234567],
+                "nested": [{"b": True, "a": None}] * 5000,
+                "path": Path("café"), "date": datetime(2026, 11, 3),
+            }
+            # A >64-bit integer exercises orjson's whole-document fallback.
+            for large_int in (False, True):
+                if large_int:
+                    data["large_int"] = 2 ** 100
+                expected = dumps_artifact(data, indent=None, sort_keys=sort_keys).encode("utf-8")
+                assert b"".join(cmb._compact_chunks(data, sort_keys=sort_keys)) == expected
+                assert cmb._serialized_size(data) == len(expected)
+                target = tmp_path / "map.json"
+                assert cmb.save_context_map(target, data, sort_keys=sort_keys,
+                                            budget_bytes=len(expected)) == []
+                assert target.read_bytes() == expected + b"\n"
+
+
+def test_streaming_budget_threshold_preserves_degradation(monkeypatch):
+    from core.json import utils
+
+    monkeypatch.setattr(utils, "_orjson", None)
+    data = _context_map(n_llm=1, n_synth=1)
+    data["unicode"] = "😀 café"
+    exact = len(dumps_artifact(data, indent=None).encode("utf-8"))
+    before = copy.deepcopy(data)
+    assert cmb.enforce_context_map_budget(data, budget_bytes=exact) == []
+    assert data == before
+    steps = cmb.enforce_context_map_budget(data, budget_bytes=exact - 1)
+    assert steps == ["dropped ast_view on 1 synthesized entry point(s)"]
+    assert "ast_view" in data["entry_points"][0]
+    assert "ast_view" not in data["entry_points"][1]
+
+
+def test_streaming_late_failure_rolls_back(monkeypatch, tmp_path):
+    import pytest
+    from core.json import utils
+
+    monkeypatch.setattr(utils, "_orjson", None)
+    target = tmp_path / "map.json"
+    target.write_bytes(b"prior\n")
+    target.chmod(0o600)
+    # Bypass the measurement pass to exercise failure AFTER writer chunks
+    # reached its temporary file, rather than pre-write validation failure.
+    monkeypatch.setattr(cmb, "enforce_context_map_budget", lambda *a, **kw: [])
+    payload = {"rows": ["a" * 1024] * 100, "late": float("nan")}
+    chunks = cmb._document_chunks(payload, sort_keys=False)
+    assert len(next(chunks)) >= 64 * 1024
+    with pytest.raises(ValueError):
+        cmb.save_context_map(target, payload)
+    assert target.read_bytes() == b"prior\n"
+    assert target.stat().st_mode & 0o777 == 0o600
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["map.json"]
+
+
+def test_native_backend_key_and_failure_contracts(monkeypatch, tmp_path):
+    import pytest
+    from core.json import utils
+
+    for backend in (utils._orjson, None):
+        monkeypatch.setattr(utils, "_orjson", backend)
+        payload = {"keys": {1: "one", None: "none", False: "false"}}
+        expected = dumps_artifact(payload, indent=None).encode("utf-8")
+        assert b"".join(cmb._compact_chunks(payload)) == expected
+        for bad in ({"number": float("inf")}, {"key": {(1, 2): "bad"}}):
+            with pytest.raises((TypeError, ValueError)):
+                cmb.save_context_map(tmp_path / "bad.json", bad)
+            assert not (tmp_path / "bad.json").exists()
+
+
+def test_streamed_write_preserves_requested_mode(monkeypatch, tmp_path):
+    from core.json import utils
+
+    monkeypatch.setattr(utils, "_orjson", None)
+    path = tmp_path / "map.json"
+    cmb.save_context_map(path, {"notes": "😀"}, mode=0o600)
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert path.read_bytes() == b'{"notes":"\xf0\x9f\x98\x80"}\n'

@@ -287,3 +287,67 @@ class TestManifestSurvivesCleanup:
         assert manifest["packs"][0]["sarif_sha256"] == expected_sha
         # And combined.sarif (canonical, untouched by cleanup) is intact.
         assert combined.exists()
+
+
+def test_combined_provenance_hashes_incrementally_from_one_open_file(tmp_path, monkeypatch):
+    combined = tmp_path / "combined.sarif"
+    original = b'{"runs":[]}\n'
+    combined.write_bytes(original)
+    real_hash = _scanner_mod.sha256_fileobj
+
+    def replace_path_while_hashing(stream, chunk_size):
+        combined.rename(tmp_path / "original.sarif")
+        combined.write_bytes(b"different replacement bytes")
+        return real_hash(stream, chunk_size=chunk_size)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("provenance hashing must not materialize the whole file")
+
+    monkeypatch.setattr(_scanner_mod, "sha256_fileobj", replace_path_while_hashing)
+    monkeypatch.setattr(Path, "read_bytes", forbidden)
+    manifest = _compose_verification_manifest([], combined, tmp_path)
+    assert manifest["combined_sarif"]["sha256"] == hashlib.sha256(original).hexdigest()
+    assert manifest["combined_sarif"]["size_bytes"] == len(original)
+
+
+def test_pack_provenance_preserves_exact_hash_for_invalid_utf8_json(tmp_path):
+    path = tmp_path / "codeql_sample.sarif"
+    raw = b'{"runs":[{"results":[{"message":{"text":"\xff"}}]}]}'
+    path.write_bytes(raw)
+    pack = _scanner_mod._pack_provenance_from_sarif(path, tmp_path)
+    assert pack["findings"] == 1
+    assert pack["sarif_sha256"] == hashlib.sha256(raw).hexdigest()
+
+
+def test_oversize_pack_remains_uncountable(tmp_path):
+    path = tmp_path / "codeql_sample.sarif"
+    with path.open("wb") as stream:
+        stream.truncate(128 * 1024 * 1024 + 1)
+    pack = _scanner_mod._pack_provenance_from_sarif(path, tmp_path)
+    assert pack["findings"] is None and pack["sarif_sha256"] == ""
+
+
+def test_pack_symlink_cannot_hash_an_outside_file(tmp_path):
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"runs":[]}')
+    path = tmp_path / "codeql_sample.sarif"
+    path.symlink_to(outside)
+    pack = _scanner_mod._pack_provenance_from_sarif(path, tmp_path)
+    assert pack["findings"] is None and pack["sarif_sha256"] == ""
+
+
+def test_owned_sarif_filter_matches_public_copy_without_changing_public_contract():
+    from copy import deepcopy
+
+    original = {"runs": [{"tool": {"driver": {"name": "tool", "rules": [{"id": "r"}]}},
+                         "results": [{"ruleId": "r", "locations": [{"physicalLocation": {
+                             "artifactLocation": {"uri": "vendor/file.c"}}}]}, {"ruleId": "r", "unknown": {"retained": True}}],
+                         "invocations": [{"executionSuccessful": True}]}]}
+    snapshot = deepcopy(original)
+    expected, count = _scanner_mod.filter_sarif_by_exclude_globs(original, ["vendor/*"])
+    assert original == snapshot
+    owned = deepcopy(original)
+    actual, actual_count = _scanner_mod.filter_sarif_by_exclude_globs(owned, ["vendor/*"], _copy_input=False)
+    assert actual is owned and actual == expected and count == actual_count == 1
+    actual["runs"][0]["tool"]["driver"]["rules"][0]["id"] = "modified"
+    assert original == snapshot

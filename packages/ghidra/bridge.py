@@ -634,7 +634,7 @@ class GhidraBridge:
         # reader the empty window and the run negative-caches "no
         # Ghidra context" for its whole lifetime.
         from core.json import save_json
-        save_json(out_path, doc)
+        save_json(out_path, doc, stream=True)
         logger.info("wrote %s (%d functions)", out_path, len(db.functions))
         # Writer-side parity with the shared read ceiling: silently
         # writing past what every capped reader accepts strands the

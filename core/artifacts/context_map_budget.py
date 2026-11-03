@@ -36,11 +36,12 @@ Lossy degradation runs only when even the compact form is over budget.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-from core.atomic_fs import write_text_atomically
-from core.json import dumps_artifact
+from core.atomic_fs import write_bytes_atomically
+from core.json import utils as _json_utils
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,54 @@ def _is_machine_sink(entry: Any) -> bool:
             and entry.get("source") in _MACHINE_SINK_SOURCES)
 
 
+def _compact_chunks(data: Any, *, sort_keys: bool = False) -> Iterator[bytes]:
+    """Yield the existing compact artifact encoding without its newline.
+
+    The stdlib path buffers small encoder tokens into bounded writes. Keep
+    the optional orjson path's float formatting, key handling and
+    whole-document fallback: budget decisions must retain the host's
+    existing encoding exactly. Its native byte output avoids decoding and
+    re-encoding a complete document, though orjson itself is not streaming.
+    """
+    backend = _json_utils._orjson
+    if backend is not None:
+        _json_utils._reject_non_finite_floats(data)
+        options = backend.OPT_NON_STR_KEYS
+        if sort_keys:
+            options |= backend.OPT_SORT_KEYS
+        try:
+            encoded = backend.dumps(
+                data, option=options, default=_json_utils._orjson_default,
+            )
+        except TypeError:
+            # Same whole-document fallback as dumps_artifact: large
+            # integers, exotic keys and depth can refuse the fast path.
+            pass
+        else:
+            yield encoded
+            return
+    encoder = _json_utils._RaptorEncoder(
+        indent=None, separators=(",", ":"), sort_keys=sort_keys,
+        ensure_ascii=False, allow_nan=False,
+    )
+    parts: list[str] = []
+    characters = 0
+    for part in encoder.iterencode(data):
+        parts.append(part)
+        characters += len(part)
+        if characters >= 64 * 1024:
+            yield "".join(parts).encode("utf-8")
+            parts.clear()
+            characters = 0
+    if parts:
+        yield "".join(parts).encode("utf-8")
+
+
+def _document_chunks(data: Any, *, sort_keys: bool) -> Iterator[bytes]:
+    yield from _compact_chunks(data, sort_keys=sort_keys)
+    yield b"\n"
+
+
 def _serialized_size(data: Any) -> int:
     """Size of *data* in the compact artifact encoding.
 
@@ -102,7 +151,7 @@ def _serialized_size(data: Any) -> int:
     compact form fit both caps). Key order does not change compact
     length, so the measurement is exact regardless of ``sort_keys``.
     """
-    return len(dumps_artifact(data, indent=None).encode("utf-8"))
+    return sum(map(len, _compact_chunks(data)))
 
 
 def _entries(context_map: dict[str, Any], key: str) -> list[Any]:
@@ -392,9 +441,9 @@ def save_context_map(
     applied = enforce_context_map_budget(
         context_map, budget_bytes=budget_bytes,
     )
-    write_text_atomically(
+    write_bytes_atomically(
         path,
-        dumps_artifact(context_map, indent=None, sort_keys=sort_keys) + "\n",
+        _document_chunks(context_map, sort_keys=sort_keys),
         tmp_prefix=".~savejson-",
         mode=mode,
     )

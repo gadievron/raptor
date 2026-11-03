@@ -173,13 +173,31 @@ def read_bytes_gated(
                 f"max_bytes={max_bytes}: {p}"
             )
             raise budget_error(msg)
-        raw = fh.read(max_bytes + 1 if max_bytes is not None else -1)
-    if max_bytes is not None and len(raw) > max_bytes:
-        msg = (
-            f"file grew past max_bytes={max_bytes} during read: {p}"
-        )
-        raise budget_error(msg)
-    return raw
+        if max_bytes is None:
+            return fh.read()
+        # BufferedReader.read(n) may reserve n bytes even when EOF is far
+        # earlier. Size the normal read to the opened inode, not its often
+        # much larger policy ceiling. The extra byte detects growth (also
+        # for regular pseudo-files whose reported size is zero).
+        raw = fh.read(min(st.st_size + 1, max_bytes + 1))
+        total = len(raw)
+        if total <= st.st_size:
+            return raw
+        # Growth needs an EOF-seeking continuation to preserve complete
+        # within-budget reads. Bounded chunks avoid cap-sized reservations;
+        # join once, only after the growth gate has accepted every chunk.
+        chunks = [raw]
+        while True:
+            if total > max_bytes:
+                msg = (
+                    f"file grew past max_bytes={max_bytes} during read: {p}"
+                )
+                raise budget_error(msg)
+            chunk = fh.read(min(1024 * 1024, max_bytes + 1 - total))
+            if not chunk:
+                return b"".join(chunks)
+            total += len(chunk)
+            chunks.append(chunk)
 
 
 def read_text_gated(
