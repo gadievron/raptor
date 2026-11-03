@@ -19,9 +19,9 @@ on Linux (where /tmp == gettempdir()) but silently break macOS
 from __future__ import annotations
 
 import os
-import shutil
 import sys
 import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -80,9 +80,8 @@ class TestTmpBaselineEnforcement:
 
         output = tmp_path / "out"
         output.mkdir()
-        probe_file = os.path.join(tempfile.gettempdir(), f"raptor_test_{os.getpid()}")
-
-        try:
+        with tempfile.TemporaryDirectory(prefix="baseline-probe-") as probe_dir:
+            probe_file = os.path.join(probe_dir, "probe")
             r = sandbox_run(
                 _write_probe_script(probe_file),
                 target=str(tmp_path), output=str(output),
@@ -93,11 +92,6 @@ class TestTmpBaselineEnforcement:
                 f"expected write to {probe_file} to succeed under default "
                 f"baseline; got: {r.stdout.strip()}"
             )
-        finally:
-            try:
-                os.unlink(probe_file)
-            except OSError:
-                pass
 
     def test_exclude_tmp_baseline_blocks_gettempdir(self, tmp_path):
         """With exclude_tmp_baseline=True, even gettempdir() is blocked."""
@@ -105,26 +99,21 @@ class TestTmpBaselineEnforcement:
 
         output = tmp_path / "out"
         output.mkdir()
-        probe_file = os.path.join(tempfile.gettempdir(), f"raptor_test_{os.getpid()}")
-
-        r = sandbox_run(
-            _write_probe_script(probe_file),
-            target=str(tmp_path), output=str(output),
-            exclude_tmp_baseline=True,
-            capture_output=True, text=True, timeout=15,
-        )
-        # The child process may exit 0 (caught OSError) or non-zero
-        # (uncaught signal from sandbox). Either way, the write must
-        # NOT have succeeded.
-        assert "WRITTEN" not in (r.stdout or ""), (
-            f"exclude_tmp_baseline=True did NOT block write to "
-            f"{probe_file}; stdout: {r.stdout.strip()}"
-        )
-        # Clean up in case enforcement somehow failed
-        try:
-            os.unlink(probe_file)
-        except OSError:
-            pass
+        with tempfile.TemporaryDirectory(prefix="excluded-probe-") as probe_dir:
+            probe_file = os.path.join(probe_dir, "probe")
+            r = sandbox_run(
+                _write_probe_script(probe_file),
+                target=str(tmp_path), output=str(output),
+                exclude_tmp_baseline=True,
+                capture_output=True, text=True, timeout=15,
+            )
+            # A caught denial or an enforcement signal must never produce
+            # a successful write. The owned directory also cleans up if
+            # enforcement regresses and the assertion raises.
+            assert "WRITTEN" not in (r.stdout or ""), (
+                f"exclude_tmp_baseline=True did NOT block write to "
+                f"{probe_file}; stdout: {r.stdout.strip()}"
+            )
 
     def test_write_outside_allowlist_blocked(self, tmp_path):
         """A directory not in target/output/tmp must be blocked."""
@@ -132,15 +121,11 @@ class TestTmpBaselineEnforcement:
 
         output = tmp_path / "out"
         output.mkdir()
-        # Use a path well outside any writable baseline. tmp_path
-        # itself is under gettempdir() on most hosts, so a subdir
-        # of it would be allowed. Place the probe under the user's
-        # home instead — never in the writable allowlist.
-        blocked_dir = os.path.join(
-            os.path.expanduser("~"), f".raptor_test_blocked_{os.getpid()}"
-        )
-        os.makedirs(blocked_dir, exist_ok=True)
-        probe_file = os.path.join(blocked_dir, "should_not_exist")
+        # Own scratch outside the temp baseline instead of creating a
+        # predictable path in the operator's home.
+        probe_parent = Path("/var/tmp").resolve()
+        if probe_parent.is_relative_to(Path(tempfile.gettempdir()).resolve()):
+            pytest.skip("/var/tmp is inside this host's writable temp baseline")
         # target must exist: bind sources are inode-pinned at
         # validation time and a missing target/output fails the call
         # loudly (SandboxSetupError) instead of degrading — this
@@ -149,7 +134,10 @@ class TestTmpBaselineEnforcement:
         target_dir = tmp_path / "target_dummy"
         target_dir.mkdir()
 
-        try:
+        with tempfile.TemporaryDirectory(
+            prefix="outside-baseline-", dir=probe_parent,
+        ) as blocked_dir:
+            probe_file = os.path.join(blocked_dir, "should_not_exist")
             r = sandbox_run(
                 _write_probe_script(probe_file),
                 target=str(target_dir),
@@ -161,5 +149,3 @@ class TestTmpBaselineEnforcement:
                 f"stdout: {r.stdout.strip()}"
             )
             assert not os.path.exists(probe_file)
-        finally:
-            shutil.rmtree(blocked_dir, ignore_errors=True)
