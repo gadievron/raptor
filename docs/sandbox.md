@@ -524,6 +524,26 @@ refusal is reported as a sandbox error, rather than an empty analysis result.
 For a toolchain installed outside standard locations, use `--sandbox-tool-path`
 to declare any additional runtime directories it needs.
 
+### ELF library inspection
+
+Exploit-feasibility pwntools inspection runs in a disposable sandbox worker.
+RAPTOR receives a bounded JSON record of architecture and mitigation facts;
+worker crashes, timeouts and invalid replies fall back to sandboxed readelf.
+Isolation refusals remain errors. The existing bounded stdlib ELF fallback
+remains available for basic architecture detection.
+
+The worker uses private HOME, cwd and temporary storage, read-only input/code
+paths and the normal untrusted sandbox floor. Installed user-site Python
+packages remain supported, with their startup hooks running only inside the
+sandbox. PLT emulation is disabled; FORTIFY is inferred from imported function
+names rather than depending on Unicorn memory reservations.
+
+Input is capped at 512 MiB before the pwntools lane. Each worker has a 20-second
+wall timeout, a 10-second CPU cap and a 2 GiB address-space cap; it cannot fork
+after loading its dependencies. Linux enforces the address-space limit. macOS
+provides process separation and wall/CPU limits, but its address-space limit is
+best effort. These are per-worker limits, not an aggregate host memory budget.
+
 ### Gadget parser runtimes
 
 ROPgadget and one_gadget use the same restricted inspection workspace and
