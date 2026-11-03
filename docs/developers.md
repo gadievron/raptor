@@ -218,19 +218,28 @@ To run with four workers while keeping terminal output and a diagnostic
 log, including native Python crash tracebacks when available:
 
 ```bash
-results_dir=$(mktemp -d /tmp/raptor-tests.XXXXXX)
-echo "Results: $results_dir"
+(
+results_dir=$(mktemp -d /tmp/raptor-tests.XXXXXX) || exit
 set -o pipefail
+test_status=0
+echo "Results: $results_dir"
 
 PYTHONFAULTHANDLER=1 env -u VIRTUAL_ENV uv run --extra grammars python -m pytest \
   core packages .github/tests .github/scripts/tests \
   -n 4 --dist worksteal -v --tb=short -ra \
   --junitxml="$results_dir/results.xml" \
-  2>&1 | tee "$results_dir/tests.log"
+  2>&1 | tee "$results_dir/tests.log" || test_status=$?
+
+printf '\nTest log: %s\nJUnit XML: %s\n' \
+  "$results_dir/tests.log" "$results_dir/results.xml"
+exit "$test_status"
+)
 ```
 
 Each run saves its log and JUnit XML in the printed directory under `/tmp`,
-keeping those outputs out of the checkout.
+keeping those outputs out of the checkout. Both filenames are printed again
+at the end, including when tests fail. The subshell returns the test pipeline
+status after printing the paths, without exiting your interactive shell.
 
 `-v` records test names as they run, `2>&1` includes stderr, and `pipefail`
 preserves a failing pipeline status. The text log remains useful if the
