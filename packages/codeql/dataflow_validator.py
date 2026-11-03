@@ -43,6 +43,7 @@ from core.llm.task_types import TaskType
 from core.logging import get_logger
 from core.paths import confine
 from core.source import read_text_capped, split_lines
+from core.source.windows import read_text_line_window_capped
 from core.security.prompt_defense_profiles import CONSERVATIVE
 from core.security.prompt_envelope import (
     TaintedString,
@@ -647,12 +648,17 @@ class DataflowValidator:
                 resolved = maybe
             else:
                 resolved = Path(file_path).resolve()
-            # Capped read (shared core.source helper, 10 MB default):
-            # a source file past the cap (auto-generated lexer
-            # tables, vendored bundles, single-file compiled JS
-            # blobs) yields a context window over the truncated
-            # prefix instead of loading whole into memory.
-            got = read_text_capped(resolved, newline="")
+            # Normal coordinates retain only the requested window. Keep the
+            # legacy path for unusual arguments and its negative-bound rules.
+            streaming = (type(line) is int and type(context_lines) is int
+                         and line >= 0 and context_lines >= 0)
+            if streaming:
+                start = max(0, line - context_lines - 1)
+                got = read_text_line_window_capped(
+                    resolved, start, line + context_lines,
+                )
+            else:
+                got = read_text_capped(resolved, newline="")
             if got is None:
                 self.logger.warning(
                     "Failed to read source context at %s", resolved)
@@ -663,19 +669,18 @@ class DataflowValidator:
                     "Source file %s exceeded the capped read; context window reflects truncated read",
                     resolved,
                 )
-            # \n-model split (core.source.lines contract): *line*
-            # is CodeQL's, counting \n only — a splitlines() view
-            # put the >>> marker and the context window on the
-            # wrong lines after any in-literal form feed.
-            lines = split_lines(content)
-
-            start = max(0, line - context_lines - 1)
-            end = min(len(lines), line + context_lines)
+            if streaming:
+                lines = content
+            else:
+                lines = split_lines(content)
+                start = max(0, line - context_lines - 1)
+                end = min(len(lines), line + context_lines)
+                lines = [lines[i] for i in range(start, end)]
 
             context = []
-            for i in range(start, end):
+            for i, source_line in enumerate(lines, start=start):
                 marker = ">>> " if i == line - 1 else "    "
-                context.append(f"{marker}{i + 1:4d}: {lines[i].rstrip()}")
+                context.append(f"{marker}{i + 1:4d}: {source_line.rstrip()}")
 
             return "\n".join(context)
         except Exception as e:  # noqa: BLE001 — defensive: degrade, never crash the pipeline
