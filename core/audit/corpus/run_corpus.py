@@ -910,6 +910,7 @@ def _run_audit(
     checkpoint_stamp: dict[str, Any] | None = None,
     heartbeat: Callable[[], None] | None = None,
     attributed_start: float = 0.0,
+    prep_caches: dict[str, dict] | None = None,
 ) -> tuple[list[dict[str, Any]], list[Path]]:
     """Run /audit's orchestrator against labeled functions.
 
@@ -1092,6 +1093,10 @@ def _run_audit(
             )
             study_root = full_src if full_src and full_src != src_dir else None
             repo_out = out_dir / repo_key if out_dir else None
+            group_cache = (
+                prep_caches.setdefault(repo_key, {})
+                if prep_caches is not None else None
+            )
             outcomes, bare_key_entries, audit_dir = _run_audit_on_target(
                 src_dir, repo_labels, model=model, out_dir=repo_out,
                 joern_server=joern_srv, study_root=study_root,
@@ -1099,6 +1104,7 @@ def _run_audit(
                 prefilter=prefilter, profile=profile,
                 open_discovery=open_discovery,
                 immediate_verify=immediate_verify,
+                prep_cache=group_cache,
             )
             if audit_dir:
                 run_dirs.append(audit_dir)
@@ -1426,6 +1432,7 @@ def _run_audit_on_target(
     profile: str = "deployed",
     open_discovery: bool = False,
     immediate_verify: bool = True,
+    prep_cache: dict | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], Path | None]:
     """Run /audit orchestrator on a target (in-process).
 
@@ -1556,7 +1563,7 @@ def _run_audit_on_target(
             # as they do on a trusted project target.
             repo_trusted=True,
         )
-        run_audit_pipeline(pipeline_opts)
+        run_audit_pipeline(pipeline_opts, prep_cache=prep_cache)
         rc = 0
     except Exception:
         logger.exception("Audit pipeline failed")
@@ -2799,6 +2806,8 @@ def _run_ensemble_audit(
             require_all=False, name="Bug-first pass",
         )
 
+        prep_caches: dict[str, dict] = {}
+
         if sec_results is not None and bf_results is not None:
             print("  Resuming from checkpoints (both passes cached)",
                   flush=True)
@@ -2823,6 +2832,7 @@ def _run_ensemble_audit(
                     checkpoint=sec_groups_ckpt,
                     checkpoint_stamp=checkpoint_extra,
                     heartbeat=heartbeat,
+                    prep_caches=prep_caches,
                 )
                 _checkpoint_write(
                     sec_ckpt,
@@ -2887,13 +2897,10 @@ def _run_ensemble_audit(
                         checkpoint=bf_groups_ckpt,
                         checkpoint_stamp=checkpoint_extra,
                         heartbeat=heartbeat,
-                        # Seed the running attributed total with the
-                        # security pass's spend: mid-pass-2 progress
-                        # lines state the run-level figure a cost
-                        # ceiling compares against.
                         attributed_start=sum(
                             r.get("cost_usd", 0.0) for r in sec_results
                         ),
+                        prep_caches=prep_caches,
                     )
                 else:
                     print("  All functions confident clean — skipping pass 2",
