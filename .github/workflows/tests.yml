@@ -477,6 +477,17 @@ jobs:
           # pycs stay valid across checkout mtime churn.
           python -m compileall -q --invalidation-mode checked-hash core packages *.py
 
+      - name: Start LLM hostname tripwire
+        run: |
+          source $VENV_PATH/bin/activate
+          python core/testing/llm_hosts_tripwire.py prepare \
+            --directory "$RUNNER_TEMP/llm-hosts"
+          sudo "$PWD/$VENV_PATH/bin/python" "$PWD/core/testing/llm_hosts_tripwire.py" serve \
+            --directory "$RUNNER_TEMP/llm-hosts" --hosts-file /etc/hosts \
+            > "$RUNNER_TEMP/llm-hosts/server.log" 2>&1 &
+          python core/testing/llm_hosts_tripwire.py wait \
+            --directory "$RUNNER_TEMP/llm-hosts"
+
       - name: Run unit tests (batch ${{ matrix.batch }})
         env:
           TEST_FILES: ${{ matrix.files }}
@@ -493,7 +504,29 @@ jobs:
           # its file-per-worker grouping is what bounds module/class
           # fixture instantiation under the seeded shuffle.
           set -f  # word-split $TEST_FILES without glob expansion
-          pytest -n auto --dist worksteal $TEST_FILES
+          python -m pytest -p core.testing.llm_tripwire \
+            --llm-tripwire-dir "$RUNNER_TEMP/llm-tripwire" \
+            --llm-tripwire-host-dir "$RUNNER_TEMP/llm-hosts" \
+            -n auto --dist worksteal $TEST_FILES
+
+      - name: Stop LLM hostname tripwire and check connections
+        if: always()
+        run: |
+          sudo "$PWD/$VENV_PATH/bin/python" "$PWD/core/testing/llm_hosts_tripwire.py" stop \
+            --directory "$RUNNER_TEMP/llm-hosts"
+
+      - name: Upload LLM tripwire evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: llm-tripwire-${{ matrix.batch }}
+          path: |
+            ${{ runner.temp }}/llm-tripwire/**/*.jsonl
+            ${{ runner.temp }}/llm-hosts/*.jsonl
+            ${{ runner.temp }}/llm-hosts/endpoints.json
+            ${{ runner.temp }}/llm-hosts/server.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       # Note: the CLI smoke tests for raptor.py used to live at
       # test/test_cli_smoke.py with a dedicated group-1 step (to dodge
