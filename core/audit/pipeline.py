@@ -339,6 +339,10 @@ def _make_llm_client(opts: AuditPipelineOpts):
     if primary_model:
         client = build_llm_client(pinned_model=primary_model)
         client.config.max_cost_per_scan = max_cost
+        resolved = getattr(client.config.primary_model, "model_name", None)
+        if resolved and resolved != primary_model:
+            models = [resolved] + models[1:]
+            primary_model = resolved
     else:
         llm_cfg = LLMConfig(max_cost_per_scan=max_cost)
         client = build_llm_client(config=llm_cfg)
