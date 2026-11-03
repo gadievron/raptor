@@ -190,7 +190,7 @@ optional source parsers, then use the project environment through `uv run`:
 
 ```bash
 uv sync --locked --group dev --extra grammars
-uv run --extra grammars python -m pytest core packages -q
+uv run --extra grammars python -m pytest core packages -n 4 --dist worksteal -q
 ```
 
 Keep `--extra grammars` on subsequent `uv run` commands so syncing retains
@@ -208,8 +208,14 @@ Add `-m ""` to select all tiers; optional tools and service credentials are
 still required for their respective tests. Tests should gate missing
 prerequisites explicitly while keeping product failures visible.
 
-To keep terminal output and a diagnostic log, including native Python
-crash tracebacks when available:
+`-n 4` runs four pytest-xdist worker processes; `--dist worksteal` lets
+workers share remaining tests to reduce idle time. pytest-xdist is included
+in the `dev` dependency group installed above. Start with four workers and
+adjust for available memory; `-n auto` uses the detected CPU count and can
+start many workers. Omit `-n 4 --dist worksteal` for a serial run.
+
+To run with four workers while keeping terminal output and a diagnostic
+log, including native Python crash tracebacks when available:
 
 ```bash
 results_dir=$(mktemp -d /tmp/raptor-tests.XXXXXX)
@@ -217,7 +223,8 @@ echo "Results: $results_dir"
 set -o pipefail
 
 PYTHONFAULTHANDLER=1 env -u VIRTUAL_ENV uv run --extra grammars python -m pytest \
-  core packages .github/tests .github/scripts/tests -v --tb=short -ra \
+  core packages .github/tests .github/scripts/tests \
+  -n 4 --dist worksteal -v --tb=short -ra \
   --junitxml="$results_dir/results.xml" \
   2>&1 | tee "$results_dir/tests.log"
 ```
