@@ -1400,19 +1400,46 @@ _INTERFACE_PROPERTY_CWE = {
 }
 
 
-def _interface_properties(body: str) -> dict[str, bool]:
+_INTERFACE_PROPERTY_MAX_ENTRIES = 256
+_INTERFACE_PROPERTY_MAX_CHARS = 1_000_000
+
+
+@dataclass
+class InterfacePropertyMemo:
+    """Bounded body-only property scans shared within one prepass.
+
+    Keys are exact body strings, so independent family/name resolution
+    remains each consumer's responsibility. Returned dicts are isolated:
+    route-specific facts must never enter the shared body census.
+    """
+
+    properties: dict[str, dict[str, bool]] = field(default_factory=dict)
+    retained_chars: int = 0
+
+
+def _interface_properties(
+    body: str, *, _memo: InterfacePropertyMemo | None = None,
+) -> dict[str, bool]:
+    if (_memo is not None and len(body) <= _INTERFACE_PROPERTY_MAX_CHARS
+            and body in _memo.properties):
+        return dict(_memo.properties[body])
     from .sibling_analysis import (
         _AUTH_CHECK_RE,
         _BOUNDS_GUARD_RE,
         _ERROR_RETURN_RE,
         _NULL_GUARD_RE,
     )
-    return {
+    props = {
         "auth_check": bool(_AUTH_CHECK_RE.search(body)),
         "null_guard": bool(_NULL_GUARD_RE.search(body)),
         "bounds_guard": bool(_BOUNDS_GUARD_RE.search(body)),
         "error_handling": bool(_ERROR_RETURN_RE.search(body)),
     }
+    if (_memo is not None and len(_memo.properties) < _INTERFACE_PROPERTY_MAX_ENTRIES
+            and _memo.retained_chars + len(body) <= _INTERFACE_PROPERTY_MAX_CHARS):
+        _memo.properties[body] = dict(props)
+        _memo.retained_chars += len(body)
+    return props
 
 
 #: Public spelling of :func:`_interface_properties` — cross-module
@@ -1495,6 +1522,7 @@ def detect_interface_deviations(
     min_group: int = INTERFACE_MIN_GROUP,
     ratio: float = CONSISTENCY_RATIO,
     _span_memo: FunctionSpanMemo | None = None,
+    _property_memo: InterfacePropertyMemo | None = None,
 ) -> list[InterfaceDeviation]:
     """Interface-implementor parity comparator (§3.8). See the
     section docstring for group sources, properties and bounds."""
@@ -1542,7 +1570,8 @@ def detect_interface_deviations(
         def _member_properties(
             s: Any, body: str,
         ) -> dict[str, bool]:
-            props = _interface_properties(body)
+            props = (_interface_properties(body) if _property_memo is None
+                     else _interface_properties(body, _memo=_property_memo))
             # Route-family adapter: the L10 layer stamps every
             # member with a two-valued auth-DECORATION fact; it is
             # voted as its own property so a decoration deviant

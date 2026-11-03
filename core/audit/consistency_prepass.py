@@ -48,7 +48,9 @@ from .prep_cache import (
     source_fingerprint as _source_fingerprint,
     write_prep_cache,
 )
-from .consistency_dimensions import DIMENSION_ORDERING, CallEventMemo, FunctionSpanMemo
+from .consistency_dimensions import (
+    DIMENSION_ORDERING, CallEventMemo, FunctionSpanMemo, InterfacePropertyMemo,
+)
 from .consistency_stats import (
     Floors,
     floor_overrides_from_run_config,
@@ -1010,6 +1012,8 @@ def run_consistency_prepass(
                 ],
             })
 
+    interface_property_memo = InterfacePropertyMemo()
+
     # ── interface-implementor parity (§3.8) — escalation-only ───────
     if not _over_budget() and peer_groups:
         try:
@@ -1019,6 +1023,7 @@ def run_consistency_prepass(
             )
             iface_devs = detect_interface_deviations(
                 source_texts, peer_groups,
+                _property_memo=interface_property_memo,
                 _span_memo=function_span_memo,
                 min_group=int(floors.value("interface.min_group")),
                 ratio=float(floors.value("interface.ratio")),
@@ -1804,6 +1809,7 @@ def run_consistency_prepass(
 
             uniform_absence = uniform_absence_records(
                 source_texts, peer_groups,
+                _property_memo=interface_property_memo,
                 min_group=int(floors.value("interface.min_group")),
             )
         except Exception:
@@ -1812,6 +1818,8 @@ def run_consistency_prepass(
                          "failed", exc_info=True)
         if uniform_absence:
             telemetry["uniform_absence_records"] = len(uniform_absence)
+
+    del interface_property_memo  # Release body keys after the last consumer.
 
     capped_leads = _rank_leads(leads)
     telemetry["leads_seeded"] = len(capped_leads)
