@@ -17,8 +17,8 @@ SPEC.loader.exec_module(INSTALLER)
 
 class NoticeTests(unittest.TestCase):
     EVIDENCE = HERE / "npm-notices"
-    EXPECTED_COUNT = 3
-    UNRESOLVED = "@npmcli/agent"
+    EXPECTED_COUNT = 4
+    UNRESOLVED = None
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

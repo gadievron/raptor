@@ -108,3 +108,32 @@ through its [Chromium source package](https://tracker.debian.org/pkg/chromium).
 Chromium and its incorporated third-party components retain their respective
 terms. This package replaces Google Chrome for Testing in new container builds;
 older image releases retain their original browser and associated terms.
+
+## Container package license supplements
+
+Debian's Python package notices are installed under `/usr/share/doc/python3-pip/`,
+`/usr/share/doc/python3-setuptools/`, and `/usr/share/doc/python3-wheel/`.
+Their copyright files retain project and bundled dependency terms, including
+references to `/usr/share/common-licenses/`.
+
+For packages that declare a standard SPDX license without shipping its full
+text, the container retains the upstream declaration and author metadata with
+an unchanged, clearly attributed standard reference text. Each supplement
+records its package version, declaration, and text source. It is not an
+upstream-authored package notice.
+
+The [upstream manifest for @npmcli/agent 4.0.2](https://github.com/npm/agent/blob/db7852869c74ceb8985d7c36b291a2e7a866741c/package.json)
+declares ISC and names GitHub Inc. as its author. The checked-in
+[ISC reference supplement](.devcontainer/npm-notices/agent-ISC-reference.txt)
+records that version's evidence. `spdx-exceptions` and `spdx-license-ids` also
+have version-scoped supplements containing full CC-BY-3.0 and CC0-1.0 texts,
+alongside their original upstream READMEs.
+
+For the versions actually installed in an image, inspect each package's
+`NOTICE` and the current provenance under `/usr/share/doc/raptor-npm-notices/`.
+The build refreshes those records for installed versions rather than treating
+the checked-in examples as declarations for every future release.
+
+The Linux image omits pnpm's unused macOS/Windows reflink dependency scope
+and NVM's development test fixtures. NVM's runtime and its own license remain
+installed under `/usr/local/share/nvm/`.

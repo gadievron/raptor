@@ -51,6 +51,14 @@ class PythonNoticeTests(unittest.TestCase):
             self.assertEqual((self.package / "METADATA").read_bytes(), self.metadata)
             self.assertEqual((self.package / "RECORD").read_bytes(), b"original wheel inventory\n")
 
+    def test_unavailable_notice_warns_without_changing_installed_metadata(self):
+        self.entry["status"] = "unresolved"
+        self.entry.pop("sha256", None)
+        self.save_manifest()
+        self.assertEqual(self.install(), 0)
+        self.assertFalse(self.target.exists())
+        self.assertEqual((self.package / "METADATA").read_bytes(), self.metadata)
+
     def test_removed_distribution_can_be_skipped(self):
         shutil.rmtree(self.package)
         self.assertEqual(INSTALLER.install(self.site, self.evidence, skip_absent=True), 0)

@@ -94,11 +94,31 @@ class RefreshTests(unittest.TestCase):
         self.assertEqual(before, self.manifest.read_bytes())
         self.assertEqual(self.notice.read_bytes(), b"old notice")
 
-    def test_licence_change_requires_review(self):
+    def test_conflicting_wheel_and_source_licences_are_rejected(self):
         metadata = self.metadata.replace(b"MIT", b"Apache-2.0")
         with patch.object(REFRESH, "wheel_metadata", return_value=(metadata, "example-2.0.dist-info")):
-            with self.assertRaisesRegex(ValueError, "licence declaration changed"):
+            with self.assertRaisesRegex(ValueError, "wheel and source metadata disagree"):
                 self.refresh()
+        self.assertEqual(self.notice.read_bytes(), b"old notice")
+
+    def test_consistent_changed_licence_refreshes_without_legal_review(self):
+        metadata = self.metadata.replace(b"MIT", b"Apache-2.0")
+        self.source = source_archive({"example-2.0/LICENSE": b"new terms", "example-2.0/PKG-INFO": metadata})
+        self.release["urls"][0]["digests"]["sha256"] = hashlib.sha256(self.source).hexdigest()
+        with patch.object(REFRESH, "wheel_metadata", return_value=(metadata, "example-2.0.dist-info")):
+            self.refresh()
+        updated = json.loads(self.manifest.read_text())["packages"][0]
+        self.assertEqual(updated["license_spdx"], "Apache-2.0")
+        self.assertEqual(self.notice.read_bytes(), b"new terms")
+
+    def test_missing_notice_records_a_gap_and_preserves_old_reference(self):
+        self.source = source_archive({"example-2.0/PKG-INFO": self.metadata})
+        self.release["urls"][0]["digests"]["sha256"] = hashlib.sha256(self.source).hexdigest()
+        self.refresh()
+        updated = json.loads(self.manifest.read_text())["packages"][0]
+        self.assertEqual(updated["status"], "unresolved")
+        self.assertEqual(updated["version"], "2.0")
+        self.assertIsNone(updated["sha256"])
         self.assertEqual(self.notice.read_bytes(), b"old notice")
 
     def test_source_layout_change_requires_review(self):

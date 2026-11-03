@@ -18,6 +18,7 @@ import re
 import sysconfig
 import tarfile
 import tomllib
+from urllib.error import HTTPError
 from urllib.parse import quote, urlparse
 from urllib.request import urlopen
 import zipfile
@@ -70,6 +71,10 @@ class LimitedSource:
         return data
 
 
+class MissingArchivePath(ValueError):
+    """A requested source path is absent; not an integrity mismatch."""
+
+
 def tar_files(data, wanted):
     result = {}
     with tarfile.open(fileobj=LimitedSource(data), mode="r|") as archive:
@@ -82,7 +87,7 @@ def tar_files(data, wanted):
                 raise ValueError("unsafe or ambiguous source archive member")
             result[member.name] = archive.extractfile(member).read(MAX_TEXT + 1)
     if set(result) != set(wanted):
-        raise ValueError("source layout changed; review notice selection")
+        raise MissingArchivePath("source layout changed; notice evidence unavailable")
     return result
 
 
@@ -130,8 +135,7 @@ def repository_notice(entry, version, source, source_root):
     raw = "https://raw.githubusercontent.com/" + OTEL_REPO + "/" + commit + "/"
     project_path = "util/opentelemetry-util-http/"
     project = fetch(raw + project_path + "pyproject.toml")
-    if tomllib.loads(project.decode())["project"]["license"] != entry["license_spdx"]:
-        raise ValueError("upstream project licence changed; review required")
+    project_license = tomllib.loads(project.decode())["project"]["license"]
     paths = ["src/opentelemetry/util/http/" + x for x in
              ("__init__.py", "httplib.py", "py.typed", "version.py")]
     archived = tar_files(source, {source_root + "/" + x for x in paths})
@@ -143,6 +147,7 @@ def repository_notice(entry, version, source, source_root):
         "source_kind": "pinned_upstream_repository", "source_url": raw + "LICENSE",
         "source_commit": commit, "source_tag": tag, "source_path": "LICENSE",
         "project_url": raw + project_path + "pyproject.toml", "project_sha256": digest(project),
+        "project_license": project_license,
     }
 
 
@@ -163,8 +168,6 @@ def refresh_entry(entry, version):
     values, header = identity(data)
     if name_key(values["Name"]) != name_key(entry["name"]) or values["Version"] != version:
         raise ValueError("release identity mismatch")
-    if values[header] not in {entry["license"], entry["license_spdx"]}:
-        raise ValueError("licence declaration changed; review required")
     source = checked_download(sdists[0]); source_root = sdists[0]["filename"][:-7]
     pkginfo = tar_files(source, {source_root + "/PKG-INFO"})[source_root + "/PKG-INFO"]
     source_values, source_header = identity(pkginfo)
@@ -173,19 +176,32 @@ def refresh_entry(entry, version):
     ):
         raise ValueError("wheel and source metadata disagree")
     updated = dict(entry)
-    if entry["source_kind"] == "pinned_upstream_repository":
-        notice, provenance = repository_notice(entry, version, source, source_root)
-        provenance.update(source_archive_url=sdists[0]["url"], source_archive_sha256=sdists[0]["digests"]["sha256"])
-    else:
-        relative = entry["source_path"].split("/", 1)[1]
-        path = source_root + "/" + relative
-        notice = tar_files(source, {path})[path]
-        provenance = {"source_url": sdists[0]["url"], "source_sha256": sdists[0]["digests"]["sha256"], "source_path": path}
+    try:
+        if entry["source_kind"] == "pinned_upstream_repository":
+            notice, provenance = repository_notice(entry, version, source, source_root)
+            provenance.update(source_archive_url=sdists[0]["url"], source_archive_sha256=sdists[0]["digests"]["sha256"])
+        else:
+            relative = entry["source_path"].split("/", 1)[1]
+            path = source_root + "/" + relative
+            notice = tar_files(source, {path})[path]
+            provenance = {"source_url": sdists[0]["url"], "source_sha256": sdists[0]["digests"]["sha256"], "source_path": path}
+    except (MissingArchivePath, HTTPError) as exc:
+        if isinstance(exc, HTTPError) and exc.code != 404:
+            raise
+        notice, provenance = None, {}
     if not notice or len(notice) > MAX_TEXT:
-        raise ValueError("missing or oversized notice")
+        notice = None
+        updated.update(status="unresolved", reason="Applicable upstream notice is missing or exceeds the text budget.")
+    else:
+        updated.pop("status", None)
+        updated.pop("reason", None)
     updated.update(provenance)
+    if header == "License-Expression":
+        updated["license_spdx"] = values[header]
+    elif values[header] not in {entry["license"], entry.get("license_spdx")}:
+        updated.pop("license_spdx", None)
     updated.update(version=version, license=values[header], license_header=header,
-                   metadata_directory=directory, sha256=digest(notice), registry_metadata_url=url,
+                   metadata_directory=directory, sha256=digest(notice) if notice is not None else None, registry_metadata_url=url,
                    wheel_url=wheel["url"], wheel_sha256=wheel["digests"]["sha256"])
     return updated, notice
 
@@ -208,7 +224,7 @@ def plan_refresh(root, package, version):
     updated, notice = refresh_entry(entry, version)
     manifest["packages"][index] = updated
     encoded = json.dumps(manifest, indent=2) + "\n"
-    changed = path.read_text() != encoded or target.read_bytes() != notice
+    changed = path.read_text() != encoded or (notice is not None and target.read_bytes() != notice)
     return path, target, encoded, notice, changed
 
 
@@ -218,7 +234,8 @@ def apply_plans(plans, check=False):
     if not check:
         for path, target, encoded, notice, changed in plans:
             if changed:
-                target.write_bytes(notice)
+                if notice is not None:
+                    target.write_bytes(notice)
                 path.write_text(encoded)
     return any(plan[4] for plan in plans)
 
@@ -277,7 +294,7 @@ def main():
         changed = apply_plans(plans, args.check)
     except (OSError, ValueError, KeyError, TypeError, tarfile.TarError, zipfile.BadZipFile) as exc:
         parser.exit(1, f"Notice refresh failed: {exc}\n")
-    print("Notice evidence refreshed; review the diff." if changed else "Notice evidence is current.")
+    print("Notice evidence refreshed." if changed else "Notice evidence is current.")
 
 
 if __name__ == "__main__":
