@@ -15,7 +15,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from core.json import load_json_with_comments
-from core.llm.model_brokers._env_ownership import python_credential_names
+from core.llm.model_brokers._env_ownership import python_credential_declarations, python_credential_names
 
 
 @dataclass(frozen=True)
@@ -58,7 +58,13 @@ def read_broker_key(broker: ModelBroker, *, consume: bool = False) -> str | None
 
 def _validate_credential_owner(broker: ModelBroker) -> None:
     if broker.api_key_env in python_credential_names():
-        raise ValueError(f"Broker credential conflicts with Python-owned environment variable: {broker.api_key_env}")
+        origins = [(path, line) for name, path, line in python_credential_declarations()
+                   if name == broker.api_key_env]
+        # Locations identify stale/generated application source without ever
+        # logging a credential value. repr escapes hostile filename controls.
+        detail = ", ".join(f"{path[:200]!r}:{line}" for path, line in origins[:3])
+        suffix = f" (declared at {detail})" if detail else ""
+        raise ValueError(f"Broker credential conflicts with Python-owned environment variable: {broker.api_key_env}{suffix}")
 
 
 def load_model_brokers(path: Path) -> tuple[ModelBroker, ...]:

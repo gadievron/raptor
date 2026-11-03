@@ -506,3 +506,11 @@ class TestTempRootInteropAdvisory:
             pass
         assert "temp root" not in capsys.readouterr().err
         assert wsl._tmpdir_warned is False
+
+
+@pytest.fixture(autouse=True)
+def _idle_fixture_cwds(monkeypatch):
+    # These tests own isolated directories; cwd discovery is a separate
+    # native integration concern. An unrelated lsof warning must not
+    # turn their dead-owner/age assertions into host-dependent results.
+    monkeypatch.setattr("core.run.tmp_reaper._live_cwds", lambda: set())

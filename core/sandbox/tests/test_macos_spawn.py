@@ -386,7 +386,7 @@ def test_tmpdir_steered_into_output_scratch_under_write_isolation(
     out_dir.mkdir()
 
     r = _macos_spawn.run_sandboxed(
-        ["/bin/sh", "-c", 'test "$xcrun_nocache" = 1 && printf %s "$TMPDIR"'],
+        ["/bin/sh", "-c", 'printf %s "$TMPDIR"'],
         output=str(out_dir),
         # A host-default-style TMPDIR rides the safe-env allowlist
         # into every child env — the steer must override it, not
@@ -1188,3 +1188,68 @@ def test_orphan_teardown_on_orchestrator_kill():
             orch.kill()
             orch.wait()
         _kill_exact_sleepers(marker)
+
+
+@pytest.mark.parametrize('wrapped', [False, True], ids=['direct', 'inspection-env'])
+def test_system_compiler_is_resolved_before_sandbox_entry(monkeypatch, wrapped):
+    probes = []
+    def probe(*args):
+        probes.append(args)
+        return ('/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk'
+                if args == ('--show-sdk-path',) else
+                '/Library/Developer/CommandLineTools/usr/bin/clang')
+    monkeypatch.setattr(_macos_spawn, '_xcrun_path', probe)
+    prefix = ['/usr/bin/env', 'TMPDIR=/private/scratch'] if wrapped else []
+    env = {'PATH': '/usr/bin:/bin'}
+    got = _macos_spawn._prepare_apple_tool(prefix + ['/usr/bin/cc', 'target.c'], env)
+    assert got == prefix + ['/Library/Developer/CommandLineTools/usr/bin/clang', 'target.c']
+    assert env['SDKROOT'].endswith('/MacOSX.sdk')
+    assert env['PATH'].startswith('/Library/Developer/CommandLineTools/usr/bin:')
+    assert probes == [('--find', 'cc'), ('--show-sdk-path',)]
+
+
+def test_custom_target_tool_is_never_probed_in_parent(monkeypatch):
+    def refuse(*args):
+        pytest.fail('arbitrary target tool reached parent-side probe')
+    monkeypatch.setattr(_macos_spawn, '_xcrun_path', refuse)
+    command = ['/tmp/target/bin/clang', 'target.c']
+    assert _macos_spawn._prepare_apple_tool(command, {'PATH': '/usr/bin'}) == command
+
+
+def test_rust_linker_uses_resolved_sdk_and_system_compiler(monkeypatch):
+    def probe(*args):
+        return ('/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk'
+                if args == ('--show-sdk-path',) else
+                '/Library/Developer/CommandLineTools/usr/bin/clang')
+    monkeypatch.setattr(_macos_spawn, '_xcrun_path', probe)
+    env = {'PATH': '/cargo/bin:/usr/bin', 'SDKROOT': '/explicit/sdk'}
+    command = ['/cargo/bin/rustc', 'target.rs']
+    assert _macos_spawn._prepare_apple_tool(command, env) == command
+    assert env['SDKROOT'] == '/explicit/sdk'
+    assert env['PATH'].split(':')[0] == '/Library/Developer/CommandLineTools/usr/bin'
+
+
+@pytest.mark.parametrize('output', ['/tmp/target/clang', 'relative/path', '/Library/Developer/CommandLineTools/usr/bin/clang\nextra'], ids=['outside-toolchain', 'relative-path', 'multiple-lines'])
+def test_xcrun_probe_rejects_untrusted_results(monkeypatch, output):
+    from types import SimpleNamespace
+    def run(command, **kwargs):
+        assert command == ['/usr/bin/xcrun', '--sdk', 'macosx', '--find', 'clang']
+        assert kwargs['cwd'] == '/'
+        assert kwargs['env'] == {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'}
+        return SimpleNamespace(returncode=0, stdout=output)
+    monkeypatch.setattr(subprocess, 'run', run)
+    assert _macos_spawn._xcrun_path('--find', 'clang') is None
+
+
+def test_xcrun_keeps_cpp_driver_spelling(monkeypatch):
+    from types import SimpleNamespace
+    cpp = '/Library/Developer/CommandLineTools/usr/bin/clang++'
+    clang = '/Library/Developer/CommandLineTools/usr/bin/clang'
+    monkeypatch.setattr(subprocess, 'run', lambda *a, **kw:
+                        SimpleNamespace(returncode=0, stdout=cpp + '\n'))
+    monkeypatch.setattr(_macos_spawn.seatbelt, '_developer_toolchain_read_dirs',
+                        lambda: ('/Library/Developer/CommandLineTools',))
+    monkeypatch.setattr(os.path, 'realpath', lambda p: clang if p == cpp else p)
+    monkeypatch.setattr(os.path, 'isdir', lambda p: True)
+    monkeypatch.setattr(os.path, 'exists', lambda p: True)
+    assert _macos_spawn._xcrun_path('--find', 'clang++') == cpp

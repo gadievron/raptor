@@ -21,6 +21,20 @@ _OLD = time.time() - 25 * 3600  # past the 24h default age floor
 # root-namespace pin below replaces the module ATTRIBUTE for every
 # test. None on a tree that predates the probe.
 _REAL_IN_CHILD_PID_NS = getattr(_reaper_module, "_in_child_pid_ns", None)
+_REAL_LIVE_CWDS = _reaper_module._live_cwds
+
+
+@pytest.fixture(autouse=True)
+def _idle_fixture_cwds(monkeypatch):
+    # Unit sweeps own private roots. Native cwd discovery has explicit
+    # integration tests below; unknown host liveness still keeps dirs.
+    monkeypatch.setattr(_reaper_module, "_live_cwds", lambda: set())
+
+
+@pytest.fixture
+def native_cwd_probe(monkeypatch):
+    monkeypatch.setattr(_reaper_module, "_live_cwds", _REAL_LIVE_CWDS)
+
 
 
 @pytest.fixture(autouse=True)
@@ -256,7 +270,7 @@ class TestDirReaping:
         assert reap_stale_tmp() == [d]
         assert not d.exists()
 
-    def test_dir_serving_as_live_cwd_kept(self, tmp_root):
+    def test_dir_serving_as_live_cwd_kept(self, tmp_root, native_cwd_probe):
         d = _make_old_dir(tmp_root, "raptor-cc-cwd-livecwd")
         proc = subprocess.Popen(
             ["sleep", "30"], cwd=str(d),
@@ -527,7 +541,7 @@ class TestRunReaping:
         assert reap_stale_runs(out_root) == [d]
         assert not d.exists()
 
-    def test_failed_run_in_use_as_cwd_kept(self, out_root):
+    def test_failed_run_in_use_as_cwd_kept(self, out_root, native_cwd_probe):
         # A live process cwd'd inside an aged-out failed run (an
         # operator inspecting the journal) keeps it this sweep.
         import subprocess
@@ -1018,7 +1032,7 @@ class TestMultiRootSweep:
         assert reap_stale_tmp() == []
         assert other.is_dir()
 
-    def test_fresh_and_live_root_strays_kept(self, roots):
+    def test_fresh_and_live_root_strays_kept(self, roots, native_cwd_probe):
         _session, system, _runuser = roots
         fresh = system / "raptor-pytest-fresh1"
         fresh.mkdir()  # young: age floor keeps it
@@ -1754,7 +1768,7 @@ class TestPidNamespaceRefusal:
 
 
 @pytest.mark.parametrize("outcome", ["busy", "unavailable"], ids=["live-cwd", "unknown-liveness"])
-def test_darwin_cwd_probe_keeps_live_or_unverifiable_scratch(tmp_path, monkeypatch, outcome):
+def test_darwin_cwd_probe_keeps_live_or_unverifiable_scratch(tmp_path, monkeypatch, outcome, native_cwd_probe):
     import subprocess
     from types import SimpleNamespace
     from core.run import tmp_reaper as reaper

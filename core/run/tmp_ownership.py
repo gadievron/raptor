@@ -180,6 +180,7 @@ def _sweep(
     now = time.time()
     removed: list[Path] = []
     live_cwds: set[str] | None = None
+    cwd_probe_done = False
 
     for name in names:
         if not name.startswith(prefix):
@@ -224,8 +225,9 @@ def _sweep(
         # its own session survives its dead Python parent with the
         # workspace as cwd, and a marker-less dispatcher dir may hold
         # a socket a live process still answers on.
-        if live_cwds is None:
+        if not cwd_probe_done:
             live_cwds = _live_cwds()
+            cwd_probe_done = True
         if _dir_in_use(path, live_cwds):
             continue
 

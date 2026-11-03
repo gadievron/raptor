@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -31,6 +32,12 @@ def _run_launcher(args: list, stdin: str = ""):
         "_RAPTOR_DEP_CHECK": "0",
     }
     with tempfile.TemporaryDirectory() as scratch:
+        # Pin the supported test interpreter: /usr/bin/python3 on macOS
+        # can be the older Xcode Python, unrelated to this test environment.
+        interpreter_bin = Path(scratch) / "bin"
+        interpreter_bin.mkdir(mode=0o700)
+        (interpreter_bin / "python3").symlink_to(sys.executable)
+        env["PATH"] = f"{interpreter_bin}:/usr/bin:/bin"
         # Isolated session-scratch base (see test_launcher_path_scrub:
         # the shared per-uid /tmp base races concurrent launchers).
         env.setdefault("RAPTOR_WORK_DIR", scratch)

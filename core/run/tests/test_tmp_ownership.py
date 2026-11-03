@@ -193,3 +193,23 @@ class TestOwnerPidGatedRead:
         marker = tmp_path / OWNER_MARKER_NAME
         marker.write_text(json.dumps({"pid": os.getpid()}))
         assert _owner_pid(marker) == os.getpid()
+
+
+@pytest.fixture(autouse=True)
+def _idle_fixture_cwds(monkeypatch):
+    # These tests own isolated directories; cwd discovery is a separate
+    # native integration concern. An unrelated lsof warning must not
+    # turn their dead-owner/age assertions into host-dependent results.
+    monkeypatch.setattr("core.run.tmp_ownership._live_cwds", lambda: set())
+
+
+def test_unknown_cwd_census_is_probed_once_per_sweep(tmp_root, monkeypatch):
+    from core.run import tmp_ownership
+    probes = []
+    monkeypatch.setattr(tmp_ownership, "_pid_alive", lambda pid: False)
+    monkeypatch.setattr(tmp_ownership, "_live_cwds", lambda: probes.append(1))
+    paths = [_mkdir(tmp_root, PREFIX + suffix, pid=999991)
+             for suffix in ("first", "second")]
+    assert sweep_dead_owner_dirs(PREFIX) == []
+    assert probes == [1]
+    assert all(path.is_dir() for path in paths)

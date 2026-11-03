@@ -263,7 +263,7 @@ class TestProxyBridge:
         candidate = str(tmp_path / "r.sock")
         if len(candidate) > 100:
             import tempfile
-            self.tmp = Path(tempfile.mkdtemp(prefix="rpt_"))
+            self.tmp = Path(tempfile.mkdtemp(prefix="rpt_", dir="/tmp")).resolve()
             self._short_dir = self.tmp
         else:
             self.tmp = tmp_path

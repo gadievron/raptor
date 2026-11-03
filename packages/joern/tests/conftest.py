@@ -35,6 +35,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import weakref
 from pathlib import Path
@@ -74,7 +75,7 @@ _UDS_SOCK_NAME_MAX: int = len("joern.sock")
 #   undecodable bytes reaches Python as surrogate-escaped str, which
 #   .encode() rejects (UnicodeEncodeError) but os.fsencode
 #   round-trips back to the original bytes the kernel will see.
-_SUN_PATH_MAX: int = 107
+_SUN_PATH_MAX: int = 103 if sys.platform == "darwin" else 107
 
 
 def _uds_budget_ok(root: str) -> bool:
@@ -100,8 +101,8 @@ def uds_dir() -> Iterator[str]:
 
     Length budget, both directions:
 
-    * why not longer — sun_path caps the WHOLE path at 107 bytes
-      (108 with the NUL); every byte of directory nesting is
+    * why not longer — sun_path caps the WHOLE path at 103 bytes on
+      Darwin and 107 on Linux (plus the NUL); every byte of directory nesting is
       spent against that fixed ceiling, so the fixture creates its
       dir directly under the TMPDIR root with a one-char prefix and
       asserts the worst-case socket filename still fits;

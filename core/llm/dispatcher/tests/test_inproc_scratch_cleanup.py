@@ -135,3 +135,11 @@ def test_ensure_inprocess_sweeps_dead_owner_dirs(
             d.shutdown()
         shutil.rmtree(live, ignore_errors=True)
         shutil.rmtree(dead, ignore_errors=True)
+
+
+@pytest.fixture(autouse=True)
+def _idle_fixture_cwds(monkeypatch):
+    # These tests own isolated directories; cwd discovery is a separate
+    # native integration concern. An unrelated lsof warning must not
+    # turn their dead-owner/age assertions into host-dependent results.
+    monkeypatch.setattr("core.run.tmp_ownership._live_cwds", lambda: set())
