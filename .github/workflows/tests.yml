@@ -734,8 +734,8 @@ jobs:
 
       - name: Run native audit checks (macOS slow)
         env:
-          # Live kernel/log-stream checks are deliberately in the slow tier.
-          RAPTOR_MAX_TEST_SECONDS: "0"
+          # Empty disables the default-tier guard; zero enforces a zero-second limit.
+          RAPTOR_MAX_TEST_SECONDS: ""
         run: |
           source $VENV_PATH/bin/activate
           python -m pytest -m "slow and darwin_native" \
