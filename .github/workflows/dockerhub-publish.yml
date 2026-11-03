@@ -132,6 +132,7 @@ jobs:
             /tmp/raptor-virtualenv-check/bin/python -m pip --version
             pipenv --version
             pnpm --version
+            python3 /usr/local/libexec/use-system-node.py --check
           '
 
       - name: Publish verified image
