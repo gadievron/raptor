@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core.source.contained import open_regular
+from core.source.contained import DEFAULT_MAX_SOURCE_CHARS, open_regular
 from core.source.lines import split_lines
 
 _CHUNK_BYTES = 64 * 1024
+_CHUNK_CHARS = 64 * 1024
 
 
 def _after_newlines(chunk: bytes, count: int) -> int:
@@ -58,3 +59,62 @@ def read_line_window_capped(
     except OSError:
         return None
     return split_lines(selected.decode("utf-8", errors="replace")), False
+
+
+def _after_text_newlines(chunk: str, count: int) -> int:
+    offset = 0
+    for _ in range(count):
+        offset = chunk.index("\n", offset) + 1
+    return offset
+
+
+def read_text_line_window_capped(
+    path: Path, start: int, end: int, *, max_chars: int = DEFAULT_MAX_SOURCE_CHARS,
+) -> tuple[list[str], bool] | None:
+    """Window over read_text_capped(..., newline="")'s visible prefix.
+
+    Unlike the byte-capped reader, oversize input returns a truncated
+    prefix. Probe max_chars+1 decoded characters, retaining only the
+    requested zero-based/half-open window. Match the legacy last-partial-
+    line trimming (and its no-newline exception) before splitting lines.
+    Read through the character probe even after finding the window so
+    later read errors and the truncation flag retain their meaning.
+    """
+    if start < 0 or end < 0 or max_chars < 0:
+        raise ValueError("window bounds and character cap must be nonnegative")
+    stream = open_regular(path, "r", encoding="utf-8", errors="replace", newline="")
+    if stream is None:
+        return None
+    parts: list[str] = []
+    consumed = 0
+    line = 0
+    truncated = False
+    try:
+        with stream:
+            while chunk := stream.read(min(_CHUNK_CHARS, max_chars + 1 - consumed)):
+                allowed = max_chars - consumed
+                consumed += len(chunk)
+                truncated = consumed > max_chars
+                if truncated:
+                    chunk = chunk[:allowed]
+                if line < end and end > start:
+                    breaks = chunk.count("\n")
+                    lower = 0
+                    if line < start:
+                        lower = (_after_text_newlines(chunk, start - line)
+                                 if line + breaks >= start else len(chunk))
+                    upper = (_after_text_newlines(chunk, end - line)
+                             if line + breaks >= end else len(chunk))
+                    if lower < upper:
+                        parts.append(chunk[lower:upper])
+                    line += breaks
+                if truncated:
+                    break
+    except OSError:
+        return None
+    selected = "".join(parts)
+    if truncated and line > 0 and start <= line < end:
+        # The cap cut the currently selected line. The preceding newline
+        # can be before this window, in which case none of it is visible.
+        selected = selected.rsplit("\n", 1)[0] + "\n" if "\n" in selected else ""
+    return split_lines(selected), truncated
