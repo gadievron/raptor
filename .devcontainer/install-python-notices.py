@@ -46,6 +46,11 @@ def canonical_name(value: str) -> str:
     return re.sub(r"[-_.]+", "-", value).lower()
 
 
+def _term(value: str) -> str:
+    """Render a bounded name as printable ASCII using the terminal JSON lane."""
+    return json.dumps(value[:200], ensure_ascii=True)
+
+
 def install(site_packages: Path, evidence: Path, *, skip_absent: bool = False) -> int:
     manifest = json.loads(read_regular(regular_path(evidence, "provenance.json")))
     if manifest.get("schema_version") != 1:
@@ -82,11 +87,11 @@ def install(site_packages: Path, evidence: Path, *, skip_absent: bool = False) -
         ):
             raise ValueError(
                 "installed distribution changed; refresh notice evidence with "
-                f"python .devcontainer/refresh-python-notices.py --package {entry['name']} "
-                f"--version {values['Version']}"
+                f"python .devcontainer/refresh-python-notices.py --package {_term(entry['name'])} "
+                f"--version {_term(values['Version'])}"
             )
         if entry.get("status") == "unresolved":
-            print(f"Unresolved Python notice: {entry['name']}; see provenance.json", file=sys.stderr)
+            print(f"Unresolved Python notice: {_term(entry['name'])}; see provenance.json", file=sys.stderr)
             continue
         data = read_regular(regular_path(evidence, entry["notice_file"]))
         if hashlib.sha256(data).hexdigest() != entry["sha256"]:
