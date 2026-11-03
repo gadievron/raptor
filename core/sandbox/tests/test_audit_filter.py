@@ -3,12 +3,13 @@ would have been allowed under enforcement; `audit-verbose` logs them all.
 
 Mocked tests of the filter logic (allowlist matching, path resolution,
 write-intent detection, sockaddr decoding) plus an end-to-end test that
-runs both profiles against the same workload and verifies the record
-count differs in the expected direction.
+runs both profiles against explicit file operations and verifies permitted
+reads are filtered while out-of-policy write attempts remain visible.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import platform
 from typing import ClassVar
@@ -1349,12 +1350,15 @@ class TestFilterDispatchSeccomp:
 @requires_landlock
 class TestEndToEndAuditVsAuditVerbose:
     """Real run: same workload under `audit` and `audit-verbose`,
-    verify record counts differ in the expected direction."""
+    verify allowed reads are dropped and out-of-policy writes retained."""
 
     @staticmethod
     def _prereqs_ok():
         if not probes.check_net_available():
             return False, "user namespaces unavailable"
+        from core.sandbox.seccomp import check_seccomp_available
+        if not check_seccomp_available():
+            return False, "seccomp unavailable"
         if not ptrace_probe.check_ptrace_available():
             return False, "ptrace unavailable"
         if not probes.check_mount_available():
@@ -1375,44 +1379,77 @@ class TestEndToEndAuditVsAuditVerbose:
         run_verbose = tmp_path / "verbose"
         run_verbose.mkdir()
 
-        # `python -c "pass"` opens many files in /usr/lib/... — all
-        # legitimate, all in the system allowlist. Filtered audit
-        # should produce 0 records; verbose should produce many.
-        cmd = ["/usr/bin/python3", "-c", "pass"]
+        # Generate known syscalls instead of depending on the host Python's
+        # startup/import behavior. Reads are permitted by the declared policy;
+        # the write is outside writable_paths and must survive filtering.
+        source = tmp_path / "source"
+        source.mkdir()
+        reads = [source / f"allowed-read-{index}" for index in range(8)]
+        for path in reads:
+            path.write_bytes(b"owned read")
+        write = source / "would-block-write"
+        program = """
+import os, sys
+for path in sys.argv[1:-1]:
+    fd = os.open(path, os.O_RDONLY)
+    assert os.read(fd, 64) == b'owned read'
+    os.close(fd)
+try:
+    fd = os.open(sys.argv[-1], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+except PermissionError:
+    pass  # Filesystem confinement can still deny the attempted write.
+else:
+    os.write(fd, b'owned write')
+    os.close(fd)
+"""
+        cmd = ["/usr/bin/python3", "-I", "-S", "-c", program,
+               *(str(path) for path in reads), str(write)]
 
         def _run(rd, verbose):
             return run_sandboxed(
                 cmd,
-                target=str(tmp_path), output=str(tmp_path),
+                target=str(source), output=str(rd),
                 block_network=False, nproc_limit=0, limits={},
-                writable_paths=[str(tmp_path)], readable_paths=None,
+                writable_paths=[str(rd)], readable_paths=[str(source)],
+                restrict_reads=True,
                 allowed_tcp_ports=None,
                 seccomp_profile="full", seccomp_block_udp=False,
                 env=None, cwd=None, timeout=15,
-                audit_mode=True, audit_run_dir=str(rd),
+                audit_mode=True, audit_run_dir=str(rd), audit_required=True,
                 audit_verbose=verbose,
             )
 
         r1 = _run(run_filtered, verbose=False)
         r2 = _run(run_verbose, verbose=True)
-        assert r1.returncode == 0
-        assert r2.returncode == 0
+        assert r1.returncode == 0, f"filtered workload failed: {r1.stderr!r}"
+        assert r2.returncode == 0, f"verbose workload failed: {r2.stderr!r}"
 
-        # Filtered: 0 or near-zero records (python opens only system
-        # paths).
-        f_jsonl = (run_filtered / evidence_mod.AUDIT_SUBDIR
-                   / tracer_mod._DENIALS_FILENAME)
-        f_count = (len(f_jsonl.read_text().splitlines())
-                   if f_jsonl.exists() else 0)
-        # Verbose: many records (Python startup is open-heavy).
-        v_jsonl = (run_verbose / evidence_mod.AUDIT_SUBDIR
-                   / tracer_mod._DENIALS_FILENAME)
-        assert v_jsonl.exists()
-        v_count = len(v_jsonl.read_text().splitlines())
+        def syscall_records(directory):
+            path = (directory / evidence_mod.AUDIT_SUBDIR
+                    / tracer_mod._DENIALS_FILENAME)
+            assert path.exists(), f"missing audit evidence: {path}"
+            records = [json.loads(line) for line in path.read_text().splitlines()]
+            syscalls = [record for record in records if "syscall" in record]
+            assert syscalls, f"audit contains no syscall events: {records!r}"
+            return syscalls
 
-        # Verbose should have at least 5x more records than filtered.
-        # (Real ratio is more like 30-100x; 5x is a lower bound.)
-        assert v_count >= max(5 * f_count, 5), (
-            f"audit-verbose should produce many more records than "
-            f"audit (filtered): filtered={f_count}, verbose={v_count}"
+        filtered = syscall_records(run_filtered)
+        verbose = syscall_records(run_verbose)
+        filtered_paths = {record.get("path") for record in filtered}
+        verbose_paths = {record.get("path") for record in verbose}
+        expected_reads = {str(path) for path in reads}
+        assert expected_reads <= verbose_paths, (
+            f"verbose audit lost explicit reads: {expected_reads - verbose_paths}; "
+            f"records={verbose!r}"
         )
+        assert expected_reads.isdisjoint(filtered_paths), (
+            f"filtered audit retained allowed reads: {expected_reads & filtered_paths}"
+        )
+        for records in (filtered, verbose):
+            assert any(record.get("path") == str(write)
+                       and record.get("syscall") in ("open", "openat", "openat2")
+                       for record in records), (
+                f"audit lost the out-of-policy write: {records!r}"
+            )
+        if write.exists():
+            assert write.read_bytes() == b"owned write"
