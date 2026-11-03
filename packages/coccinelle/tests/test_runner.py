@@ -1068,6 +1068,9 @@ class TestRunRuleIntegration:
         assert str(target) in result.files_examined
 
 
+_SHIPPED_ENGINE_DIR = Path(__file__).resolve().parents[3] / "engine"
+
+
 @pytest.mark.skipif(
     not is_available(),
     reason="spatch not installed",
@@ -1284,7 +1287,13 @@ class TestShippedRulesIntegration:
         assert result.returncode == 0
         assert result.match_count == 0
 
-    def test_all_shipped_cocci_parse(self):
+    @pytest.mark.parametrize(
+        "cocci_file",
+        sorted(_SHIPPED_ENGINE_DIR.rglob("*.cocci")) or [None],
+        ids=lambda path: path.relative_to(_SHIPPED_ENGINE_DIR).as_posix()
+        if path is not None else "no-shipped-rules",
+    )
+    def test_all_shipped_cocci_parse(self, cocci_file):
         """Every shipped .cocci must pass `spatch --parse-cocci`.
 
         A rule that trips the SmPL parser contributes nothing on its
@@ -1300,9 +1309,7 @@ class TestShippedRulesIntegration:
         import re
         import subprocess
 
-        engine_dir = self.RULES_DIR.parents[1]
-        cocci_files = sorted(engine_dir.rglob("*.cocci"))
-        assert cocci_files, f"no .cocci files under {engine_dir}"
+        assert cocci_file is not None, f"no .cocci files under {_SHIPPED_ENGINE_DIR}"
 
         spatch = runner_mod._spatch_path()
         # Catches every declared virtual metavariable, including the
@@ -1310,20 +1317,18 @@ class TestShippedRulesIntegration:
         # Over-matching (e.g. a comment) is harmless: spatch accepts
         # -D names that no rule declares.
         virtual_re = re.compile(r"virtual\.(\w+)")
-        failures = []
-        for f in cocci_files:
-            cmd = [spatch, "--parse-cocci", str(f)]
-            names = set(virtual_re.findall(f.read_text(encoding="utf-8")))
-            for name in sorted(names):
-                cmd.extend(["-D", f"{name}=raptor_parse_probe"])
-            proc = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=120,
-                check=False,
-            )
-            if proc.returncode != 0:
-                tail = (proc.stderr or proc.stdout).strip().splitlines()[-3:]
-                failures.append(f"{f}: {' | '.join(tail)}")
-        assert not failures, "unparseable .cocci rules:\n" + "\n".join(failures)
+        cmd = [spatch, "--parse-cocci", str(cocci_file)]
+        names = set(virtual_re.findall(cocci_file.read_text(encoding="utf-8")))
+        for name in sorted(names):
+            cmd.extend(["-D", f"{name}=raptor_parse_probe"])
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=120,
+            check=False,
+        )
+        tail = (proc.stderr or proc.stdout).strip().splitlines()[-3:]
+        assert proc.returncode == 0, (
+            f"unparseable .cocci rule {cocci_file}: {' | '.join(tail)}"
+        )
 
 
 class TestSpatchScratchTmpdir:
