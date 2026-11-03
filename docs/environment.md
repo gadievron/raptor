@@ -951,6 +951,11 @@ the JVM-installer caveat.
 | `GOPATH`, `GOCACHE`, `TMPDIR` | Redirected by RAPTOR into per-run scratch space when spawning build/tool children (Go builds in cvefix/dark-verify, the run-scoped `TMPDIR` in `core.run.scratch`) so untrusted builds cannot write into the operator's real caches. |
 | `CARGO_HOME` | Honoured (with the standard `~/.cargo` default) when locating the Rust toolchain for corpus builds; also on the dangerous-env scan list for target-repo settings. |
 | `DOCKER_CONFIG` | Honoured when locating registry credentials for OCI auth (`core.oci.auth`), standard `~/.docker` default. |
+| `JAVA_HOME` | JDK home used when resolving Java tools. RAPTOR passes the selected JDK home explicitly to JVM children such as Jazzer and Joern; target-repository settings cannot supply this executable-search override. |
+| `GRADLE_USER_HOME` | Gradle configuration and cache home, including init scripts and repository settings. Jazzer uses a per-run Gradle home; SCA resolution consults Gradle configuration/cache metadata. |
+| `RUSTUP_HOME` | Rust toolchain home (normally `~/.rustup`). Toolchain discovery resolves it and passes the selected home explicitly to Rust build children. |
+| `LC_ALL` | Standard locale override. RAPTOR forces `C` for deterministic tool-output parsing and launcher byte checks where required. |
+| `TZ` | Standard time-zone setting retained by the relevant sanitized child environments for date/time-handling tools. |
 
 
 ## Test-suite and CI knobs
@@ -1007,6 +1012,17 @@ setting them manually either does nothing or weakens a boundary.
 
 | Variable | Set by | Purpose |
 |----------|--------|---------|
+| `CARGO_NET_OFFLINE` | CargoFuzz runner | Set to `true` for offline builds; required dependencies must already be cached. |
+| `CARGO_TARGET_DIR` | CargoFuzz runner, Rust binary-oracle corpus builder | Redirects Cargo build artifacts into the run or fixture build directory. |
+| `RUST_BACKTRACE` | CargoFuzz runner | Set to `1` so panic output includes stack frames used to identify findings. |
+| `YARN_ENABLE_SCRIPTS` | SCA Yarn resolver | Set to `false` to disable package lifecycle scripts during resolution. |
+| `RAPTOR_FRIDA_RUNDIR_NONCE` | Frida active runner | Nonce matching the child helper's run-directory announcement to its parent invocation; the helper unsets it after the handoff. |
+| `RAPTOR_GCOV_OUT` | Coverage collector | Output path used by the child shell wrapper to capture gcov output. |
+| `RAPTOR_PROJECT_PIN_THREADED` | Project-dispatch harness | Set to `1` when forwarding a project selection to a child, distinguishing an inherited selection from an operator-supplied `--project`. |
+| `_RAPTOR_DEP_CHECK` | Process initialization override | Exact value `0` suppresses the startup dependency-presence check; unset defaults to checking outside CI. Private startup override; it does not install missing dependencies. |
+| `_RAPTOR_LAUNCH_METADATA` | Launcher | Path to launcher-owned metadata used for protected launches and scratch/session setup. Caller-supplied values are discarded before launch setup. |
+| `_RAPTOR_SCRATCH_AUTH` | Launcher and scratch/session helpers | Private authorization packet for launcher-created scratch/session state. Caller-supplied values are discarded; do not publish packet contents. |
+| `_RAPTOR_SEATBELT_EGRESS_PROXY` | Sandbox spawn layer | Parent egress-proxy address used by RAPTOR HTTP clients in restricted macOS children. Inbound caller values are dropped before the trusted handoff. |
 | `RAPTOR_DIR` | `bin/raptor` (exported after symlink resolution) | Installation root; RAPTOR's own children derive libexec/tool paths. `get_safe_env()` **re-pins** it to the current tree so a multi-checkout operator's ambient value cannot cross-import trees. The only value ever added to `sys.path`. Stripped from EVERY sandboxed target env by default (member of `TARGET_ENV_STRIP_SET`) — the checkout path is a pure "inside RAPTOR" tell; only keep-trust dispatch children retain it. |
 | `RAPTOR_CALLER_DIR` | `bin/raptor` | Operator's `$PWD` at launch; default-target resolution for commands run without a path. Refuses control bytes. |
 | `_RAPTOR_TRUSTED` | `bin/raptor`, sandbox shims | Trust marker: `libexec/` scripts exit 2 unless it or `CLAUDECODE` is present. Stripped from target-bound envs BY DEFAULT at the sandbox env chokepoint (`TARGET_ENV_STRIP_SET` — trust markers + the session credential; the keep-trust skill dispatch is the only exception) so target-spawned processes cannot invoke libexec as trusted callers. Power users may set `_RAPTOR_TRUSTED=1` to drive libexec scripts directly — with the understanding that it bypasses the dispatch guard. |
@@ -1053,6 +1069,11 @@ macros (`core/sandbox/helpers/`). These are output-stream sentinel
 strings or preprocessor symbols; none is read from a process
 environment, so none belongs in the tables above.
 
+
+The inventory also detects shell-local names: `BUILD_ONLY` is initialized
+by the sandbox feature-matrix script and set by its `--build-only` flag;
+`CHECK_TARGET` is computed by `bin/raptor` for the target trust check.
+Neither is an environment configuration interface.
 
 ## Policy tables
 
