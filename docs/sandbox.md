@@ -1504,3 +1504,30 @@ runtime files, the kernel and Playwright's parent-side protocol parser remain
 trusted components. Linux requires a non-root operator, Landlock ABI 4+, seccomp and usable mount/PID
 namespaces; macOS requires Seatbelt. Native acceptance must run on each platform
 before compatibility is claimed.
+
+
+### Nested confinement in the Linux devcontainer
+
+The devcontainer keeps a non-root runtime user, the ordinary Docker capability
+set plus SYS_PTRACE, and Docker's PID/network/device isolation. It does not use
+privileged mode or add SYS_ADMIN. Its runtime disables Docker's seccomp and
+AppArmor profiles and procfs masking so RAPTOR can create nested mount/PID
+namespaces and mount fresh procfs. This removes those outer-container controls
+for the whole session, including ordinary shell commands; RAPTOR's per-child
+policies apply only to commands dispatched through its sandbox wrappers.
+
+When a setuid UID mapper is unusable inside a container, the single-ID backend
+can ask the kernel to map the caller's own UID/GID directly, after denying
+setgroups. It grants no subordinate ranges or other host identities. Rootfs
+range mappings and the custom setgroups-preserving helper do not use this
+alternative. A failed mapping or missing namespace capability still refuses
+strict browser execution.
+
+Browser scratch uses a short, private directory under `/tmp` (covered by the
+abandoned-directory reaper), because session directory names can exceed the
+pathname Unix-socket limit used by distro Chromium.
+The browser driver keeps its disposable HOME and XDG state under its granted
+work directory, rather than the staged namespace tmpfs home. Its 256-task limit
+includes Linux threads and accommodates the distro Chromium process tree.
+The image publication gate checks JavaScript execution and both inner-sandbox
+modes against the installed Debian browser with a read-only source mount.

@@ -19,7 +19,13 @@ def run_driver(config, argv):
             raise SandboxSetupError('Browser containment requires Landlock ABI 4+ on Linux')
     work = config['work']
     env = dict(PATH=os.defpath, HOME=str(Path(work)/'.home'),
-               TMPDIR=work, TMP=work, TEMP=work, LANG='C.UTF-8')
+               TMPDIR=work, TMP=work, TEMP=work, LANG='C.UTF-8',
+               XDG_CONFIG_HOME=str(Path(work)/'.home/.config'),
+               XDG_CACHE_HOME=str(Path(work)/'.home/.cache'))
+    # Keep HOME on the granted work inode, rather than staging /tmp/.home
+    # (the namespace tmpfs is deliberately outside the writable allowlist).
+    for name in ('HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME'):
+        Path(env[name]).mkdir(mode=0o700, parents=True, exist_ok=True)
     if config.get('browsers'):
         env['PLAYWRIGHT_BROWSERS_PATH'] = config['browsers']
     # Protocol annotations only: no credentials, user Node options or trust markers.
@@ -30,13 +36,13 @@ def run_driver(config, argv):
                   config['node'], config['cli'], 'run-driver'],
                  profile='chromium', block_network=False,
                  target=work, output=work, writable_paths=[work],
-                 restrict_reads=True, fake_home=True, exclude_tmp_baseline=True,
+                 restrict_reads=True, fake_home=False, exclude_tmp_baseline=True,
                  # Directory tool grants carry Landlock EXECUTE; file read grants do not.
                  tool_paths=[str(Path(config['node']).parent), str(Path(config['cli']).parent), *config['reads']],
                  allowed_tcp_ports=config['ports'], require_fresh_procfs=True,
                  env=env, strict_env=True, strip_trust_markers=True,
                  cwd=work, stdin=0, capture_output=False, start_new_session=True,
-                 timeout=300, limits=dict(max_file_mb=128, cpu_seconds=120, nproc=128, nofile=4096, memory_mb=0),
+                 timeout=300, limits=dict(max_file_mb=128, cpu_seconds=120, nproc=256, nofile=4096, memory_mb=0),
                  caller_label='playwright-browser')
     return result.returncode
 

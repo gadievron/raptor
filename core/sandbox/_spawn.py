@@ -702,6 +702,32 @@ def _run_newuidmap(child_pid: int, binary: str, mapping_lines: Sequence[str]) ->
         raise RuntimeError(msg)
 
 
+def _map_own_ids_unprivileged(child_pid: int, inside_id: int) -> None:
+    """Map only the caller's own IDs, using the kernel's unprivileged path.
+
+    The caller holds this live child at the pre-exec handshake. Pin its proc
+    directory once. No subordinate ranges or privileged helper are involved;
+    the kernel authorises each write. Denying setgroups is mandatory here.
+    """
+    uid, gid = os.getuid(), os.getgid()
+    if uid == 0 or inside_id not in (0, 1000):
+        raise ValueError("Own-ID mapping requires a non-root caller and a supported namespace ID")
+    proc_fd = os.open(f"/proc/{child_pid}", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    try:
+        for name, value in (("uid_map", f"{inside_id} {uid} 1\n"),
+                            ("setgroups", "deny\n"),
+                            ("gid_map", f"{inside_id} {gid} 1\n")):
+            fd = os.open(name, os.O_WRONLY | os.O_CLOEXEC | os.O_NOFOLLOW, dir_fd=proc_fd)
+            try:
+                payload = value.encode("ascii")
+                if os.write(fd, payload) != len(payload):
+                    raise OSError("Short own-ID map write")
+            finally:
+                os.close(fd)
+    finally:
+        os.close(proc_fd)
+
+
 def _set_rlimits(limits: dict, status_fd: "int | None" = None) -> None:
     """Apply rlimits in the child. Mirrors preexec.py's _set_limits but
     designed to run before mount ops / Landlock / seccomp.
@@ -4033,7 +4059,19 @@ def run_sandboxed(
                     "chown/setuid to other uids will fail (EINVAL)"
                 )
         try:
-            _run_newuidmap(child_pid, newuidmap, uid_lines)
+            _own_ids_mapped = False
+            try:
+                _run_newuidmap(child_pid, newuidmap, uid_lines)
+            except RuntimeError:
+                # Setuid helpers can lose authority under an outer container.
+                # Plain newgidmap already denies setgroups. Preserve the custom
+                # allow-helper and rootfs/range-map contracts by refusing this
+                # alternative for those callers.
+                if host_uid == 0 or rootfs is not None or gidmap_allow is not None:
+                    raise
+                _map_own_ids_unprivileged(child_pid, _mapped_id)
+                _own_ids_mapped = True
+                logger.info("Sandbox: setuid UID mapping unavailable; mapped only the caller's own IDs without privilege")
             # Argument contract with raptor-gidmap-allow (see the header
             # comment in helpers/raptor-gidmap-allow.c): exactly ONE
             # strictly-numeric triple mapping gid 0 inside the namespace
@@ -4042,7 +4080,8 @@ def run_sandboxed(
             # by other uids, and non-numeric or oversized mappings
             # (exit 3) — which is why the rootfs range map above swaps
             # to plain newgidmap.
-            _run_newuidmap(child_pid, gidmap_binary, gid_lines)
+            if not _own_ids_mapped:
+                _run_newuidmap(child_pid, gidmap_binary, gid_lines)
         except Exception:
             _kill_and_reap(child_pid)
             raise

@@ -76,7 +76,10 @@ def confined_driver(base_url, executable=None, proxy=None):
     node = shutil.which(node) or node
     if not Path(node).is_file():
         raise RuntimeError('Playwright Node runtime is missing')
-    private_base = os.confstr(65537) if sys.platform == 'darwin' else None
+    # Chromium's singleton uses a pathname Unix socket under TMPDIR.
+    # Session/pytest scratch paths can exceed sockaddr_un even when writable.
+    # Keep this owned, reaper-covered directory short on Linux and macOS.
+    private_base = '/tmp'
     with tempfile.TemporaryDirectory(prefix='raptor-web-browser-', dir=private_base) as private:
         root = Path(private)
         work = root / 'work'
