@@ -31,7 +31,10 @@ does not cover — stays a documented limit, not a silent one.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .consistency_dimensions import InterfacePropertyMemo
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +67,7 @@ def uniform_absence_records(
     peer_groups: list[Any] | None,
     *,
     min_group: int = 3,
+    _property_memo: InterfacePropertyMemo | None = None,
 ) -> list[dict[str, Any]]:
     """Uniform-absence records over the mechanically-certain families.
 
@@ -140,7 +144,9 @@ def uniform_absence_records(
             continue
 
         props = [
-            interface_properties(body) for _s, _line, body in resolved
+            (interface_properties(body) if _property_memo is None
+             else interface_properties(body, _memo=_property_memo))
+            for _s, _line, body in resolved
         ]
         for prop in _ABSENCE_PROPERTIES:
             if any(p.get(prop) for p in props):
