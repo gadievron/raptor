@@ -302,6 +302,19 @@ Review a warning against every path to the reported return. If another
 function takes ownership of the allocation, or a custom cleanup function
 releases it, the warning may be a false alarm.
 
+### Double-free checks
+
+`double_free` looks for two free sites connected by a path without an
+intervening pointer assignment. This includes a free inside a branch
+followed by another free after the branch. A pointer assignment ends that
+comparison; resetting it to null or replacing an allocation avoids the
+common cleanup-loop false alarm.
+
+The rule does not track alias identity across assignments or different
+pointer expressions. It can also miss repeated executions of a single free
+site inside a loop. An empty
+result does not establish that a function is free of double-free bugs.
+
 ### Prerequisites
 
 `spatch` (the Coccinelle binary) must be on `PATH`. Minimum version
