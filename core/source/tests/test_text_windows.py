@@ -84,3 +84,16 @@ def test_missing_and_final_symlink_refused(tmp_path):
     real.write_text('a\n')
     path.symlink_to(real)
     assert windows.read_text_line_window_capped(path, 0, 1) is None
+
+
+@pytest.mark.parametrize("chunk_chars", [512, 8192, 65536])
+@pytest.mark.parametrize("cap", [2500, 10000, 40000])
+def test_late_text_windows_match_capped_prefix(tmp_path, monkeypatch, chunk_chars, cap):
+    raw = ("row\r\né🙂\nseparator:\u2028\n" * 1000).encode()
+    path = tmp_path / "many-lines.c"
+    path.write_bytes(raw)
+    monkeypatch.setattr(windows, "_CHUNK_CHARS", chunk_chars)
+    text, truncated = read_text_capped(path, cap, newline="")
+    lines = split_lines(text)
+    for start, end in [(250, 260), (990, 1010), (1999, 2003)]:
+        assert windows.read_text_line_window_capped(path, start, end, max_chars=cap) == (lines[start:end], truncated)
