@@ -691,3 +691,40 @@ class TestClosureReadDiscipline:
         files, unresolved = resolve_include_closure(tmp_path, "src/a.c")
         assert any("wedge.h" in u for u in unresolved)
         assert all("wedge.h" not in str(f) for f in files)
+
+
+@pytest.mark.parametrize("max_files", [3, 20])
+def test_include_closure_preserves_fifo_reads_with_cycles_and_duplicates(
+    tmp_path, monkeypatch, max_files,
+):
+    from core.audit import defassign
+
+    sources = {
+        "main.c": '#include "a.h"\n#include "b.h"\n#include "a.h"\n',
+        "a.h": '#include "shared.h"\n',
+        "b.h": '#include "shared.h"\n#include "tail.h"\n',
+        "shared.h": '#include "main.c"\n',
+        "tail.h": "int tail;\n",
+    }
+    for name, text in sources.items():
+        (tmp_path / name).write_text(text)
+    reads = []
+    original = defassign.read_text_capped
+
+    def recorded_read(path, *args, **kwargs):
+        reads.append(Path(path).name)
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(defassign, "read_text_capped", recorded_read)
+    if max_files == 3:
+        with pytest.raises(defassign.ProofRefusal, match="file cap"):
+            resolve_include_closure(tmp_path, "main.c", max_files=max_files)
+        assert reads == ["main.c", "a.h", "b.h"]
+    else:
+        files, unresolved = resolve_include_closure(
+            tmp_path, "main.c", max_files=max_files,
+        )
+        expected = ["main.c", "a.h", "b.h", "shared.h", "tail.h"]
+        assert [path.name for path in files] == expected
+        assert reads == expected
+        assert unresolved == []

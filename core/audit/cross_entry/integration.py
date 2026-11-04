@@ -5,6 +5,7 @@ import os
 import hashlib
 import re
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -96,10 +97,10 @@ def collect_sources(target: Path, report_files: Iterable[str], limits: Limits, *
     missing_includes = set()
 
     def headers(keys: list[str], *, recursive: bool, cap: int, record_budget: bool = True) -> None:
-        queue = list(keys)
+        queue = deque(keys)
         processed = set()
         while queue and time.monotonic()-start < limits.scan_seconds:
-            key = queue.pop(0)
+            key = queue.popleft()
             if key in processed:
                 continue
             processed.add(key)
