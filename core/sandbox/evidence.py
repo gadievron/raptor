@@ -215,11 +215,11 @@ class EvidenceFile:
         if os.sep in filename or filename in (".", ".."):
             raise ValueError(
                 f"evidence filename must be a bare name, got {filename!r}")
-        dirfd = ensure_audit_dirfd(run_dir)
-        path = evidence_write_path(run_dir, filename)
         flags = os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW | os.O_CLOEXEC
         fd = None
+        dirfd = ensure_audit_dirfd(run_dir)
         try:
+            path = evidence_write_path(run_dir, filename)
             try:
                 fd = os.open(filename, flags | os.O_CREAT | os.O_EXCL,
                              0o600, dir_fd=dirfd)
