@@ -300,9 +300,14 @@ class ParserJail:
             self._spawn_worker_locked()
         except ParserJailError:
             self._spawn_failures += 1
-            backoff = min(
-                _SPAWN_BACKOFF_BASE_S * (2 ** (self._spawn_failures - 1)),
-                _SPAWN_BACKOFF_CAP_S)
+            # Saturate before doing unbounded exponent arithmetic. A
+            # persistent outage must keep producing typed refusals even
+            # after thousands of failed attempts.
+            backoff = min(_SPAWN_BACKOFF_BASE_S, _SPAWN_BACKOFF_CAP_S)
+            remaining = self._spawn_failures - 1
+            while remaining and 0 < backoff < _SPAWN_BACKOFF_CAP_S:
+                backoff = min(backoff * 2, _SPAWN_BACKOFF_CAP_S)
+                remaining -= 1
             self._next_spawn_attempt = time.monotonic() + backoff
             raise
         self._spawn_failures = 0
@@ -337,93 +342,109 @@ class ParserJail:
             child_argv.append("-P")
         child_argv += ["-m", "core.sandbox._parser_jail_child"]
 
-        parent_sock, child_sock = socket.socketpair()
+        parent_sock = None
+        proc = None
+        committed = False
         try:
+            parent_sock, child_sock = socket.socketpair()
             try:
-                proc = subprocess.Popen(
-                    child_argv + [str(child_sock.fileno())],
-                    stdin=subprocess.DEVNULL,
-                    # Diagnostics travel in the ready frame; stray
-                    # child output must never interleave with the
-                    # orchestrator's streams. Residual: post-startup
-                    # tracebacks are discarded — the parent logs the
-                    # exit context instead.
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    close_fds=True,
-                    pass_fds=(child_sock.fileno(),),
-                    cwd=_raptor_dir(),
-                    env=env,
-                )
-            except OSError as exc:
+                try:
+                    proc = subprocess.Popen(
+                        child_argv + [str(child_sock.fileno())],
+                        stdin=subprocess.DEVNULL,
+                        # Diagnostics travel in the ready frame; stray
+                        # child output must never interleave with the
+                        # orchestrator's streams. Residual: post-startup
+                        # tracebacks are discarded — the parent logs the
+                        # exit context instead.
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        close_fds=True,
+                        pass_fds=(child_sock.fileno(),),
+                        cwd=_raptor_dir(),
+                        env=env,
+                    )
+                except OSError as exc:
+                    raise ParserJailUnavailable(
+                        f"parser worker spawn failed: {exc}") from exc
+            finally:
+                try:
+                    child_sock.close()
+                except OSError:
+                    pass
+
+            parent_sock.settimeout(_READY_TIMEOUT_S)
+            try:
+                ready = self._read_ready_frame(parent_sock)
+            except (_ProtocolError, OSError) as exc:
+                # Attribute the worker's fate before the unconditional
+                # kill+reap destroys it: a child that died pre-frame (its
+                # stderr is /dev/null and no frame ever arrived) is
+                # otherwise a bare "closed the socket" with zero forensic
+                # signal. EOF usually races the child's _exit by
+                # microseconds, so give it a short beat to become
+                # reapable; a genuinely wedged child (ready timeout) is
+                # still alive and says so.
+                try:
+                    exit_status: "int | None" = proc.wait(timeout=0.5)
+                except subprocess.TimeoutExpired:
+                    exit_status = None
+                if exit_status is None:
+                    exit_note = "worker was still alive; parent killed it"
+                elif exit_status < 0:
+                    exit_note = f"worker died to signal {-exit_status}"
+                else:
+                    exit_note = f"worker exited with code {exit_status}"
                 raise ParserJailUnavailable(
-                    f"parser worker spawn failed: {exc}") from exc
+                    f"parser worker failed confinement handshake: {exc} "
+                    f"({exit_note})"
+                ) from exc
+
+            if ready.get("ready") is not True:
+                err = ready.get("error")
+                err_txt = (sanitise_for_terminal(str(err))[:_MAX_REASON_LEN]
+                           if err is not None else "no reason reported")
+                raise ParserJailUnavailable(
+                    f"parser worker refused to confine: {err_txt}")
+
+            rlimits_failed = ready.get("rlimits_failed")
+            if rlimits_failed:
+                # Child-supplied text: sanitise + bound before logging,
+                # same as the refusal-reason treatment above.
+                logger.warning(
+                    "parser-jail: worker applied its rlimits only "
+                    "partially — failed: %s (best-effort per limit; the "
+                    "worker still runs with every limit that did apply)",
+                    sanitise_for_terminal(str(rlimits_failed))[:_MAX_REASON_LEN],
+                )
+
+            landlocked = ready.get("landlock") is True
+            self._landlocked = landlocked
+            if not landlocked and not self._degraded_warned:
+                self._degraded_warned = True
+                logger.warning(
+                    "parser-jail: worker running WITHOUT Landlock "
+                    "confinement (kernel lacks Landlock) — degraded floor: "
+                    "rlimits, fd hygiene, sanitised environment, and "
+                    "process isolation only",
+                )
+
+            parent_sock.settimeout(_ROUNDTRIP_TIMEOUT_S)
+            self._proc = proc
+            self._sock = parent_sock
+            committed = True
+        except OSError as exc:
+            raise ParserJailUnavailable(
+                f"parser worker startup failed: {exc}") from exc
         finally:
-            child_sock.close()
-
-        parent_sock.settimeout(_READY_TIMEOUT_S)
-        try:
-            ready = self._read_ready_frame(parent_sock)
-        except (_ProtocolError, OSError) as exc:
-            parent_sock.close()
-            # Attribute the worker's fate before the unconditional
-            # kill+reap destroys it: a child that died pre-frame (its
-            # stderr is /dev/null and no frame ever arrived) is
-            # otherwise a bare "closed the socket" with zero forensic
-            # signal. EOF usually races the child's _exit by
-            # microseconds, so give it a short beat to become
-            # reapable; a genuinely wedged child (ready timeout) is
-            # still alive and says so.
-            try:
-                exit_status: "int | None" = proc.wait(timeout=0.5)
-            except subprocess.TimeoutExpired:
-                exit_status = None
-            self._reap_locked(proc)
-            if exit_status is None:
-                exit_note = "worker was still alive; parent killed it"
-            elif exit_status < 0:
-                exit_note = f"worker died to signal {-exit_status}"
-            else:
-                exit_note = f"worker exited with code {exit_status}"
-            raise ParserJailUnavailable(
-                f"parser worker failed confinement handshake: {exc} "
-                f"({exit_note})"
-            ) from exc
-
-        if ready.get("ready") is not True:
-            err = ready.get("error")
-            err_txt = (sanitise_for_terminal(str(err))[:_MAX_REASON_LEN]
-                       if err is not None else "no reason reported")
-            parent_sock.close()
-            self._reap_locked(proc)
-            raise ParserJailUnavailable(
-                f"parser worker refused to confine: {err_txt}")
-
-        rlimits_failed = ready.get("rlimits_failed")
-        if rlimits_failed:
-            # Child-supplied text: sanitise + bound before logging,
-            # same as the refusal-reason treatment above.
-            logger.warning(
-                "parser-jail: worker applied its rlimits only "
-                "partially — failed: %s (best-effort per limit; the "
-                "worker still runs with every limit that did apply)",
-                sanitise_for_terminal(str(rlimits_failed))[:_MAX_REASON_LEN],
-            )
-
-        landlocked = ready.get("landlock") is True
-        self._landlocked = landlocked
-        if not landlocked and not self._degraded_warned:
-            self._degraded_warned = True
-            logger.warning(
-                "parser-jail: worker running WITHOUT Landlock "
-                "confinement (kernel lacks Landlock) — degraded floor: "
-                "rlimits, fd hygiene, sanitised environment, and "
-                "process isolation only",
-            )
-
-        parent_sock.settimeout(_ROUNDTRIP_TIMEOUT_S)
-        self._proc = proc
-        self._sock = parent_sock
+            if not committed:
+                if parent_sock is not None:
+                    try:
+                        parent_sock.close()
+                    except OSError:
+                        pass
+                if proc is not None:
+                    self._reap_locked(proc)
 
     def _read_ready_frame(self, sock: socket.socket) -> dict:
         length, frame_id = FRAME_HEADER.unpack(
