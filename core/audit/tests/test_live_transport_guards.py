@@ -1712,7 +1712,11 @@ class TestCppSurfaceFences:
         # guard's transport arm on purpose, so it must bypass the
         # guard). The pinned-budget tests also bypass the guard to
         # inspect deterministic sandbox stubs and pre-launch exhaustion.
+        # The prepared-view fixture also stubs tool discovery and sandbox
+        # execution. Nested helper calls count for the fixture as well.
         assert _callers_of(calls, "expand_translation_unit") == {
+            "expand",
+            "prepared_reuse",
             "test_non_c_file_degrades",
             "test_path_escape_degrades",
             "test_missing_file_degrades",
@@ -1724,6 +1728,7 @@ class TestCppSurfaceFences:
             "_expand_tu_guarded",
         }
         assert _callers_of(calls, "_expand_tu_guarded") == {
+            "test_shared_include_memo_does_not_share_preprocessor_macro_context",
             "test_tu_lines_map_to_original_coordinates",
             "test_macro_expanded_line_keeps_original_line",
             "test_system_header_expansion_is_unattributable",
