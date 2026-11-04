@@ -213,23 +213,38 @@ class TestGHArchiveIntegration:
         """Create collector - will fail lazily if no credentials."""
         return GHArchiveCollector()
 
-    def test_fetch_amazon_q_issue_event(self, collector):
+    @pytest.fixture(scope="class")
+    def live_collector(self):
+        """Resolve live credentials once, including an unavailable result.
+
+        Keep input-validation cases on the lazy collector: those must run
+        even when live BigQuery credentials are unavailable.
+        """
+        from google.auth.exceptions import DefaultCredentialsError
+        from google.cloud import bigquery
+
+        if getattr(bigquery, "_raptor_test_stub", False):
+            pytest.skip("BigQuery SDK is not installed")
+
+        collector = GHArchiveCollector()
+        try:
+            collector.client._get_client()
+        except (ModuleNotFoundError, DefaultCredentialsError) as exc:
+            pytest.skip(f"BigQuery not available: {exc}")
+        return collector
+
+    def test_fetch_amazon_q_issue_event(self, live_collector):
         """
         Fetch the malicious issue #7651 from GH Archive.
 
         This is a historic event that should always be queryable.
         Timestamp: 2025-07-13 07:52 UTC
         """
-        try:
-            events = collector.collect_events(
-                timestamp="202507130752",  # Minute when issue #7651 was created
-                repo="aws/aws-toolkit-vscode",
-                event_type="IssuesEvent",
-            )
-        except (ModuleNotFoundError, Exception) as e:
-            if isinstance(e, ModuleNotFoundError) or "credentials" in str(e).lower() or "bigquery" in str(e).lower():
-                pytest.skip(f"BigQuery not available: {e}")
-            raise
+        events = live_collector.collect_events(
+            timestamp="202507130752",  # Minute when issue #7651 was created
+            repo="aws/aws-toolkit-vscode",
+            event_type="IssuesEvent",
+        )
 
         # Find issue #7651
         issue_7651 = None
@@ -243,22 +258,17 @@ class TestGHArchiveIntegration:
         assert "aws amazon donkey" in issue_7651.issue_title.lower()
         assert issue_7651.verification.source == EvidenceSource.GHARCHIVE
 
-    def test_fetch_amazon_q_push_event(self, collector):
+    def test_fetch_amazon_q_push_event(self, live_collector):
         """
         Fetch push events from the attack timeframe.
 
         Timestamp: 2025-07-13 20:37 UTC - when commits were pushed.
         """
-        try:
-            events = collector.collect_events(
-                timestamp="202507132037",  # Minute when push occurred
-                repo="aws/aws-toolkit-vscode",
-                event_type="PushEvent",
-            )
-        except (ModuleNotFoundError, Exception) as e:
-            if isinstance(e, ModuleNotFoundError) or "credentials" in str(e).lower() or "bigquery" in str(e).lower():
-                pytest.skip(f"BigQuery not available: {e}")
-            raise
+        events = live_collector.collect_events(
+            timestamp="202507132037",  # Minute when push occurred
+            repo="aws/aws-toolkit-vscode",
+            event_type="PushEvent",
+        )
 
         # Should have push events
         assert len(events) > 0, "No push events found"
@@ -268,54 +278,39 @@ class TestGHArchiveIntegration:
             assert event.verification.source == EvidenceSource.GHARCHIVE
             assert event.verification.bigquery_table is not None
 
-    def test_fetch_amazon_q_pull_request_event(self, collector):
+    def test_fetch_amazon_q_pull_request_event(self, live_collector):
         """Fetch PR events from GH Archive for the attack timeframe."""
-        try:
-            events = collector.collect_events(
-                timestamp="202507130752",
-                repo="aws/aws-toolkit-vscode",
-                event_type="PullRequestEvent",
-            )
-        except (ModuleNotFoundError, Exception) as e:
-            if isinstance(e, ModuleNotFoundError) or "credentials" in str(e).lower() or "bigquery" in str(e).lower():
-                pytest.skip(f"BigQuery not available: {e}")
-            raise
+        events = live_collector.collect_events(
+            timestamp="202507130752",
+            repo="aws/aws-toolkit-vscode",
+            event_type="PullRequestEvent",
+        )
 
         # May or may not have PRs in this minute
         for event in events:
             assert event.verification.source == EvidenceSource.GHARCHIVE
             assert hasattr(event, "pr_number")
 
-    def test_fetch_amazon_q_issue_comment_event(self, collector):
+    def test_fetch_amazon_q_issue_comment_event(self, live_collector):
         """Fetch issue comment events from GH Archive."""
-        try:
-            events = collector.collect_events(
-                timestamp="202507130752",
-                repo="aws/aws-toolkit-vscode",
-                event_type="IssueCommentEvent",
-            )
-        except (ModuleNotFoundError, Exception) as e:
-            if isinstance(e, ModuleNotFoundError) or "credentials" in str(e).lower() or "bigquery" in str(e).lower():
-                pytest.skip(f"BigQuery not available: {e}")
-            raise
+        events = live_collector.collect_events(
+            timestamp="202507130752",
+            repo="aws/aws-toolkit-vscode",
+            event_type="IssueCommentEvent",
+        )
 
         # May or may not have comments in this minute
         for event in events:
             assert event.verification.source == EvidenceSource.GHARCHIVE
             assert hasattr(event, "comment_body")
 
-    def test_fetch_create_event(self, collector):
+    def test_fetch_create_event(self, live_collector):
         """Fetch CreateEvent (branch/tag creation) from GH Archive."""
-        try:
-            events = collector.collect_events(
-                timestamp="202507130752",
-                repo="aws/aws-toolkit-vscode",
-                event_type="CreateEvent",
-            )
-        except (ModuleNotFoundError, Exception) as e:
-            if isinstance(e, ModuleNotFoundError) or "credentials" in str(e).lower() or "bigquery" in str(e).lower():
-                pytest.skip(f"BigQuery not available: {e}")
-            raise
+        events = live_collector.collect_events(
+            timestamp="202507130752",
+            repo="aws/aws-toolkit-vscode",
+            event_type="CreateEvent",
+        )
 
         # May or may not have create events in this minute
         for event in events:
@@ -323,52 +318,37 @@ class TestGHArchiveIntegration:
             assert hasattr(event, "ref_type")
             assert hasattr(event, "ref_name")
 
-    def test_fetch_watch_event(self, collector):
+    def test_fetch_watch_event(self, live_collector):
         """Fetch WatchEvent (stars) from GH Archive."""
-        try:
-            events = collector.collect_events(
-                timestamp="202507130752",
-                repo="aws/aws-toolkit-vscode",
-                event_type="WatchEvent",
-            )
-        except (ModuleNotFoundError, Exception) as e:
-            if isinstance(e, ModuleNotFoundError) or "credentials" in str(e).lower() or "bigquery" in str(e).lower():
-                pytest.skip(f"BigQuery not available: {e}")
-            raise
+        events = live_collector.collect_events(
+            timestamp="202507130752",
+            repo="aws/aws-toolkit-vscode",
+            event_type="WatchEvent",
+        )
 
         # May or may not have watch events in this minute
         for event in events:
             assert event.verification.source == EvidenceSource.GHARCHIVE
 
-    def test_fetch_fork_event(self, collector):
+    def test_fetch_fork_event(self, live_collector):
         """Fetch ForkEvent from GH Archive."""
-        try:
-            events = collector.collect_events(
-                timestamp="202507130752",
-                repo="aws/aws-toolkit-vscode",
-                event_type="ForkEvent",
-            )
-        except (ModuleNotFoundError, Exception) as e:
-            if isinstance(e, ModuleNotFoundError) or "credentials" in str(e).lower() or "bigquery" in str(e).lower():
-                pytest.skip(f"BigQuery not available: {e}")
-            raise
+        events = live_collector.collect_events(
+            timestamp="202507130752",
+            repo="aws/aws-toolkit-vscode",
+            event_type="ForkEvent",
+        )
 
         # May or may not have fork events in this minute
         for event in events:
             assert event.verification.source == EvidenceSource.GHARCHIVE
             assert hasattr(event, "fork_full_name")
 
-    def test_gharchive_query_returns_empty_for_nonexistent_repo(self, collector):
+    def test_gharchive_query_returns_empty_for_nonexistent_repo(self, live_collector):
         """Query for nonexistent repo returns empty list, not error."""
-        try:
-            events = collector.collect_events(
-                timestamp="202507130752",
-                repo="this-owner-does-not-exist-12345/this-repo-does-not-exist-12345",
-            )
-        except (ModuleNotFoundError, Exception) as e:
-            if isinstance(e, ModuleNotFoundError) or "credentials" in str(e).lower() or "bigquery" in str(e).lower():
-                pytest.skip(f"BigQuery not available: {e}")
-            raise
+        events = live_collector.collect_events(
+            timestamp="202507130752",
+            repo="this-owner-does-not-exist-12345/this-repo-does-not-exist-12345",
+        )
 
         assert events == []
 
@@ -397,9 +377,9 @@ class TestGHArchiveIntegration:
 class TestLocalGitIntegration:
     """Integration tests for local git operations."""
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def temp_repo(self):
-        """Clone a real GitHub repo into a temp directory for testing."""
+        """Share one real clone across these read-only client checks."""
         import subprocess
         import tempfile
         import shutil

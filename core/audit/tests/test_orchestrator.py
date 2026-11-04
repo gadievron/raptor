@@ -252,8 +252,33 @@ class TestGetReviewedSet:
         assert "src/a.c:reviewed" in get_reviewed_set(tmp_path)
 
 
+@pytest.fixture
+def _no_native_review_tools(monkeypatch):
+    """Keep fake-review contracts independent of installed native tools.
+
+    Only the explicitly opted-in classes use this seam. Native detector,
+    sweep, and gate integration tests below retain their real preparation.
+    """
+    monkeypatch.setattr(
+        "core.audit.orchestrator._run_mechanical_detectors",
+        lambda *a, **k: ({}, set()),
+    )
+    from core.audit import capabilities
+
+    monkeypatch.setattr(
+        capabilities, "probe_capabilities",
+        lambda *a, **k: capabilities.AuditCapabilities(),
+    )
+    monkeypatch.setattr(
+        "core.audit.orchestrator._study_consumer", lambda *a, **k: None,
+    )
+
+
 @pytest.mark.slow
+@pytest.mark.usefixtures("_no_native_review_tools")
 class TestRunOrchestrator:
+    """Review-loop contracts with fake reviews; live Joern has dedicated tests."""
+
     def test_reviews_all_gaps(self, tmp_path: Path):
         target, out = _setup_target(tmp_path)
 
@@ -268,6 +293,7 @@ class TestRunOrchestrator:
 
         config = OrchestratorConfig(
             target_path=target, out_dir=out, resume=False,
+            joern_overrides={"enabled": False},
         )
         result = run_orchestrator(config, review_fn)
         assert result.reviewed == 2
@@ -287,6 +313,7 @@ class TestRunOrchestrator:
 
         config = OrchestratorConfig(
             target_path=target, out_dir=out, budget=1, resume=False,
+            joern_overrides={"enabled": False},
         )
         result = run_orchestrator(config, review_fn)
         assert result.reviewed == 1
@@ -312,6 +339,7 @@ class TestRunOrchestrator:
 
         config = OrchestratorConfig(
             target_path=target, out_dir=out, resume=True,
+            joern_overrides={"enabled": False},
         )
         result = run_orchestrator(config, review_fn)
         assert result.reviewed == 1
@@ -333,6 +361,7 @@ class TestRunOrchestrator:
 
         config = OrchestratorConfig(
             target_path=target, out_dir=out, resume=False,
+            joern_overrides={"enabled": False},
         )
         result = run_orchestrator(config, review_fn)
         assert result.reviewed == 2
@@ -354,6 +383,7 @@ class TestRunOrchestrator:
             target_path=target, out_dir=out,
             max_cost_usd=0.5,
             resume=False,
+            joern_overrides={"enabled": False},
         )
         result = run_orchestrator(config, review_fn)
         assert result.reviewed >= 1
@@ -367,6 +397,8 @@ class TestRunOrchestrator:
             target_path=target, out_dir=out,
             max_seconds=0.001,
             resume=False,
+            joern_overrides={"enabled": False},
+            open_discovery=False,
         )
 
         import time
@@ -399,6 +431,7 @@ class TestRunOrchestrator:
 
         config = OrchestratorConfig(
             target_path=target, out_dir=out, resume=False,
+            joern_overrides={"enabled": False},
         )
         result = run_orchestrator(config, failing_review)
         assert result.reviewed == 2
@@ -438,6 +471,7 @@ class TestRunOrchestrator:
             joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
             sweep_validate_findings=False,
+            deepen_suspicious=False,
             max_refinements=0,
         )
         result = run_orchestrator(config, mixed_review)
@@ -462,6 +496,7 @@ class TestRunOrchestrator:
         config = OrchestratorConfig(
             target_path=target, out_dir=out, resume=False,
             max_refinements=0,
+            joern_overrides={"enabled": False},
         )
         run_orchestrator(config, review_fn, on_progress=on_progress)
         reviews = [(i, t, fn) for i, t, fn in progress_log if t > 0]
@@ -513,6 +548,7 @@ class TestRunOrchestrator:
         config = OrchestratorConfig(
             target_path=target, out_dir=out,
             scope="src/", resume=False,
+            joern_overrides={"enabled": False},
         )
         result = run_orchestrator(config, review_fn)
         assert result.reviewed == 1
@@ -532,6 +568,7 @@ class TestRunOrchestrator:
 
         config = OrchestratorConfig(
             target_path=target, out_dir=out, resume=False,
+            joern_overrides={"enabled": False},
         )
         run_orchestrator(config, review_fn)
 
@@ -563,6 +600,7 @@ class TestRunOrchestrator:
 
         config = OrchestratorConfig(
             target_path=target, out_dir=out, resume=False,
+            joern_overrides={"enabled": False},
         )
         run_orchestrator(config, review_fn)
         assert len(reviewed) == 2
@@ -616,6 +654,7 @@ def _setup_varied_sloc(tmp_path: Path):
 
 
 @pytest.mark.slow
+@pytest.mark.usefixtures("_no_native_review_tools")
 class TestBatching:
     def test_trivial_functions_batched(self, tmp_path: Path):
         target, out = _setup_varied_sloc(tmp_path)
@@ -631,6 +670,8 @@ class TestBatching:
             )
 
         config = OrchestratorConfig(
+            open_discovery=False,  # batching uses only the supplied fake reviewer
+            joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
             batch_sloc_threshold=5,
         )
@@ -653,6 +694,8 @@ class TestBatching:
             )
 
         config = OrchestratorConfig(
+            open_discovery=False,  # batching uses only the supplied fake reviewer
+            joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
             batch_sloc_threshold=0,
         )
@@ -692,6 +735,8 @@ class TestBatching:
             )
 
         config = OrchestratorConfig(
+            open_discovery=False,  # batching uses only the supplied fake reviewer
+            joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
             batch_sloc_threshold=5,
         )
@@ -701,6 +746,7 @@ class TestBatching:
 
 
 @pytest.mark.slow
+@pytest.mark.usefixtures("_no_native_review_tools")
 class TestContentFilter:
     def test_content_filter_records_error(self, tmp_path: Path):
         target, out = _setup_target(tmp_path)
@@ -718,6 +764,7 @@ class TestContentFilter:
             )
 
         config = OrchestratorConfig(
+            joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
             batch_sloc_threshold=0,
         )
@@ -729,6 +776,7 @@ class TestContentFilter:
 
 
 @pytest.mark.slow
+@pytest.mark.usefixtures("_no_native_review_tools")
 class TestCheckedByLabels:
     def test_checked_by_written_to_journal(self, tmp_path: Path):
         target, out = _setup_target(tmp_path)
@@ -743,6 +791,7 @@ class TestCheckedByLabels:
             )
 
         config = OrchestratorConfig(
+            joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
             batch_sloc_threshold=0,
             prefilter=False,
@@ -766,6 +815,7 @@ class TestCheckedByLabels:
             raise RuntimeError("boom")
 
         config = OrchestratorConfig(
+            joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
             batch_sloc_threshold=0,
         )
@@ -789,6 +839,7 @@ class TestCheckedByLabels:
             )
 
         config = OrchestratorConfig(
+            joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
             batch_sloc_threshold=0,
         )
@@ -806,6 +857,7 @@ class TestCheckedByLabels:
 
 
 @pytest.mark.slow
+@pytest.mark.usefixtures("_no_native_review_tools")
 class TestFuzzCoverage:
     def test_fuzz_data_passed_to_context(self, tmp_path: Path):
         target, out = _setup_target(tmp_path)
@@ -835,6 +887,7 @@ class TestFuzzCoverage:
             )
 
         config = OrchestratorConfig(
+            joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
             batch_sloc_threshold=0,
         )
@@ -870,6 +923,7 @@ class TestFuzzCoverage:
             )
 
         config = OrchestratorConfig(
+            joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
             batch_sloc_threshold=0,
         )
@@ -889,6 +943,7 @@ class TestFuzzCoverage:
             )
 
         config = OrchestratorConfig(
+            joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
             batch_sloc_threshold=0,
         )
@@ -897,6 +952,7 @@ class TestFuzzCoverage:
 
 
 @pytest.mark.slow
+@pytest.mark.usefixtures("_no_native_review_tools")
 class TestConstraintWiring:
     def test_constraints_extracted_and_saved(self, tmp_path: Path):
         target, out = _setup_target(tmp_path)
@@ -919,6 +975,7 @@ class TestConstraintWiring:
             )
 
         config = OrchestratorConfig(
+            joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
             propagate_constraints=True,
             batch_sloc_threshold=0,
@@ -949,6 +1006,7 @@ class TestConstraintWiring:
             )
 
         config = OrchestratorConfig(
+            joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
             propagate_constraints=False,
             batch_sloc_threshold=0,
@@ -968,6 +1026,7 @@ class TestConstraintWiring:
             )
 
         config = OrchestratorConfig(
+            joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
             propagate_constraints=True,
             batch_sloc_threshold=0,

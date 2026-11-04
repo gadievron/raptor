@@ -26,13 +26,15 @@ _needs_gcc = pytest.mark.skipif(
 )
 
 
-@pytest.fixture
-def build_tree(tmp_path: Path) -> Path:
+@pytest.fixture(scope="module")
+def _compiled_tree(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """A target tree shaped like a real autotools / CMake build.
     Synthesises ELF binaries with DWARF via a tiny compile."""
     if not all(shutil.which(t) for t in ("gcc", "readelf")):
         pytest.skip("gcc/readelf not available")
     import subprocess as _sp
+
+    tmp_path = tmp_path_factory.mktemp("autodetect_binaries")
 
     # Source file shared by all binaries.
     src = tmp_path / "x.c"
@@ -58,6 +60,12 @@ def build_tree(tmp_path: Path) -> Path:
     os.chmod(tmp_path / "script.sh", 0o755)
 
     return tmp_path
+
+
+@pytest.fixture
+def build_tree(tmp_path: Path, _compiled_tree: Path) -> Path:
+    """Give each discovery test its own writable copy of real binaries."""
+    return shutil.copytree(_compiled_tree, tmp_path / "target")
 
 
 def test_detect_hybrid_returns_both_libs_and_exes(build_tree: Path) -> None:

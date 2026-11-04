@@ -40,3 +40,4 @@ def test_partial_google_install_preserves_real_parent_bindings(
             parent, attr = name.rsplit(".", 1)
             assert getattr(modules[parent], attr) is modules[name]
     assert modules["google.cloud"].bigquery is sys.modules["google.cloud.bigquery"]
+    assert modules["google.cloud"].bigquery._raptor_test_stub is True

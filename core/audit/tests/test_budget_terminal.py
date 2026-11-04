@@ -100,6 +100,9 @@ def _config(target: Path, out: Path, **kw) -> OrchestratorConfig:
         "batch_sloc_threshold": 0,  # force the executor path, no batching
         "prefilter": False,         # every function reaches review_fn
         "validate": False,
+        # Review-budget behavior is under test, not post-loop discovery
+        # through an ambient model client after a partial completion.
+        "open_discovery": False,
         # Budget rails are under test, not the Joern channel: on a
         # joern-equipped host run_orchestrator otherwise starts a REAL
         # server (JVM spawn + CPG build + pre-sweep + stop, ~9s on the
@@ -134,6 +137,16 @@ class TestBudgetExceededError:
 
 @pytest.mark.slow
 class TestBudgetStopsReviewLoop:
+    @pytest.fixture(autouse=True)
+    def _no_unrelated_detector_battery(self, monkeypatch):
+        # These cases exercise budget rails, per-function preparation and
+        # real journal/gap handling. Detector behavior has its own suites.
+        import core.audit.orchestrator as orch
+
+        monkeypatch.setattr(
+            orch, "_run_mechanical_detectors", lambda *a, **k: ({}, set()),
+        )
+
     def test_loop_stops_and_unreviewed_stay_gaps(self, tmp_path: Path):
         target, out, names = _setup_target(tmp_path, n_functions=3)
 

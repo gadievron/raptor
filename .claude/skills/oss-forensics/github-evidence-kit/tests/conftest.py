@@ -83,6 +83,7 @@ def _stub_google_modules() -> None:
 
     cloud = types.ModuleType("google.cloud")
     bigquery = types.ModuleType("google.cloud.bigquery")
+    bigquery._raptor_test_stub = True
 
     class _QueryJobConfig:
         def __init__(self, **kw):

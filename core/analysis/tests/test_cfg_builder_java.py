@@ -133,7 +133,8 @@ class TestScale:
         import time
         n = 16000
         body = "".join(f"        int v{i} = {i};\n" for i in range(n))
-        cfg, _ = _cfg(body)
+        # Warm parser initialization without building the large graph twice.
+        _cfg("        int warmup = 0;\n")
         t0 = time.monotonic()
         cfg, _ = _cfg(body)
         elapsed = time.monotonic() - t0
