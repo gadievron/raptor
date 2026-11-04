@@ -62,6 +62,7 @@ import logging
 import os
 import platform
 import resource
+import shutil
 # Module-level, ALIASED: the setup child's step-7 go-pipe wait needs
 # select POST-FORK, where imports are banned (an import can allocate,
 # lock, and run arbitrary module code in the forked child) — and the
@@ -1017,50 +1018,21 @@ def _sweep_stale_audit_configs(max_age_s: float = 3600.0) -> None:
 
 
 def _cleanup_stub(root_dir: str) -> None:
-    """Remove the mkdtemp sandbox-root stub after the child exits.
+    """Remove a sandbox-root stub without following raced directory links.
 
-    lstat-check defeats TOCTOU: if a same-UID attacker raced to replace
-    the random-name stub with a symlink between tmpdir creation and our
-    cleanup, the lstat + S_ISDIR guard returns without touching it.
-    A plain rmdir is tried first; when partial setup left sub-dirs
-    (pre-pivot makedirs) we fall back to a symlink-hardened manual walk
-    (os.walk followlinks=False; unlink never follows, rmdir on a
-    symlink fails ENOTDIR) — never a follow-happy shutil.rmtree.
-    Whatever the hardened walk cannot remove is left behind: stale
-    stubs are an acceptable leak, removing the wrong thing via
-    symlink-follow is not.
+    The parent is unrestricted: a confined sibling sharing the temporary
+    tree must not be able to steer its cleanup through a symlink. A manual
+    os.walk(followlinks=False) does not pin ancestors of subsequent unlinks.
+    Use only the stdlib's descriptor-based rmtree; on platforms without
+    that implementation, leave non-empty stubs rather than risk host files.
     """
     try:
-        st = os.lstat(root_dir)
-    except OSError:
-        return
-    import stat as _stat
-    if not _stat.S_ISDIR(st.st_mode):
-        return
-    try:
         os.rmdir(root_dir)
         return
     except OSError:
         pass
-    # Partial setup can leave sub-dirs (pre-pivot makedirs). Walk with
-    # O_NOFOLLOW-equivalent via os.walk(followlinks=False).
-    for dirpath, dirnames, filenames in os.walk(
-        root_dir, topdown=False, followlinks=False
-    ):
-        for f in filenames:
-            try:
-                os.unlink(os.path.join(dirpath, f))
-            except OSError:
-                pass
-        for d in dirnames:
-            try:
-                os.rmdir(os.path.join(dirpath, d))
-            except OSError:
-                pass
-    try:
-        os.rmdir(root_dir)
-    except OSError:
-        pass
+    if getattr(shutil.rmtree, "avoids_symlink_attacks", False):
+        shutil.rmtree(root_dir, ignore_errors=True)
 
 
 def _pin_bind_sources(

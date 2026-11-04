@@ -1123,6 +1123,20 @@
           "reason": "Linux close_range, Landlock and mount/PID namespace descriptor boundary."
         }
       }
+    },
+    {
+      "id": "linux-cleanup-boundary",
+      "platforms": {
+        "linux": {
+          "tests": [
+            "core/sandbox/tests/test_cleanup_stub_boundary.py::test_confined_sibling_cannot_redirect_parent_cleanup"
+          ],
+          "expected": 2
+        },
+        "darwin": {
+          "reason": "Linux namespace-root cleanup and Landlock-confined sibling race."
+        }
+      }
     }
   ]
 }
