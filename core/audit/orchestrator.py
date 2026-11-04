@@ -13555,6 +13555,7 @@ def _run_mechanical_detectors(
         )
         from packages.coccinelle.runner import (
             run_rule as _run_cocci_rule,
+            run_rules_batched as _run_cocci_batch,
         )
 
         raptor_dir = Path(os.environ["RAPTOR_DIR"])
@@ -13600,6 +13601,7 @@ def _run_mechanical_detectors(
                     for fp in source_texts
                     if any(fp.endswith(ext) for ext in _C_EXTS)
                 ]
+                ordered_rules = [Path(p) for p in sorted(standing_rules)]
                 for src_fp, c_file in c_files:
                     if not c_file.is_file():
                         continue
@@ -13627,19 +13629,35 @@ def _run_mechanical_detectors(
                             continue
                     file_records: list[Any] = []
                     file_complete = True
-                    for rule_path_str in sorted(standing_rules):
-                        sr = _profile_call(
+                    try:
+                        batch = _profile_call(
                             config,
-                            "mechanical.coccinelle",
-                            _run_cocci_rule,
-                            c_file,
-                            Path(rule_path_str),
-                            no_includes=True,
-                            timeout=60,
-                            # In-repo standing engine/coccinelle rules
-                            # (code trust) — @script:python trusted.
+                            "mechanical.coccinelle_batch",
+                            _run_cocci_batch,
+                            c_file, ordered_rules,
+                            no_includes=True, timeout=60,
+                            # Only shipped, code-trust standing rules.
                             allow_scripting=True,
                         )
+                        if not isinstance(batch, dict):
+                            batch = {}
+                    except Exception:
+                        logger.debug(
+                            "mechanical: standing batch failed for %s; "
+                            "retrying rules individually", src_fp, exc_info=True,
+                        )
+                        batch = {}
+                    # Keep rule order and routing identical to the serial
+                    # path. The runner isolates lifecycle rules and recovers
+                    # failed batches; missing results retain a serial fallback.
+                    for rule_path in ordered_rules:
+                        sr = batch.get(rule_path.stem)
+                        if sr is None:
+                            sr = _profile_call(
+                                config, "mechanical.coccinelle", _run_cocci_rule,
+                                c_file, rule_path,
+                                no_includes=True, timeout=60, allow_scripting=True,
+                            )
                         if sr.errors:
                             # Timeout partials / spatch errors are not
                             # a stable result — cache nothing so the
@@ -13649,7 +13667,7 @@ def _run_mechanical_detectors(
                         for match in sr.matches:
                             f_file = match.file or str(c_file)
                             f_line = match.line or 0
-                            f_rule = sr.rule or Path(rule_path_str).stem
+                            f_rule = sr.rule or rule_path.stem
                             try:
                                 rel = str(
                                     Path(f_file).relative_to(config.target_path)
