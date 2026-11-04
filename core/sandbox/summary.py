@@ -64,6 +64,7 @@ import math
 import os
 import stat as _stat
 import threading
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -921,10 +922,9 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
 
     Returns the summary dict (also written to disk), or None if no denials
     were recorded for this run. The intermediate JSONL is renamed away
-    up-front and unlinked as soon as its contents are in memory —
-    BEFORE the summary write, and even when the write fails or there
-    are no denials (rename-then-read race hardening; see the inline
-    comments). Operators read the summary, not the JSONL.
+    up-front and removed after the summary is successfully written (or
+    an empty stream produces no summary). I/O failures retain the claimed
+    JSONL at the path named in the warning for operator recovery.
 
     Idempotent: if called again with the same run_dir and no JSONL is
     present, returns None without writing.
@@ -1000,12 +1000,10 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
     # renamed inode (which we then unlink — those entries are lost,
     # but they're a strictly small race window vs the bigger
     # multi-second post-summary race the prior code had).
-    import threading as _threading
-    # pid+tid suffix — two threads in the same summariser process can
-    # race on the same pid; tid disambiguates. Mirrors core/json/utils.py
-    # and core/json/cache.py.
+    # A unique claim name also preserves earlier failed attempts when
+    # fresh evidence arrives and the same process/thread finalises again.
     tmp = jsonl.with_name(
-        f"{jsonl.name}.summarising.{os.getpid()}.{_threading.get_ident()}"
+        f"{jsonl.name}.summarising.{uuid.uuid4().hex}"
     )
     try:
         os.replace(str(jsonl), str(tmp))
@@ -1056,13 +1054,9 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
             # must see it. Mirrors c5a4505 / 8edf0f6 family.
             logger.warning(
                 "summarize_and_write: failed to open renamed JSONL "
-                "for reading",
+                "for reading; evidence retained at %s", tmp,
                 exc_info=True,
             )
-            try:
-                tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
             return None
     if fd is not None:
         try:
@@ -1091,13 +1085,10 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
             # a second close would race a concurrent thread's fd
             # reuse.
             logger.warning(
-                "summarize_and_write: failed to read renamed JSONL",
+                "summarize_and_write: failed to read renamed JSONL; "
+                "evidence retained at %s", tmp,
                 exc_info=True,
             )
-            try:
-                tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
             return None
         finally:
             try:
@@ -1145,20 +1136,26 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
             continue
         records.append(record)
 
-    # tmp object's data (if any) is now in memory; remove it. Also
-    # removes a planted FIFO/symlink so the run dir finalises clean.
-    try:
-        tmp.unlink(missing_ok=True)
-    except OSError:
-        # KEEP-SILENT (F071 per-site triage W21): housekeeping unlink
-        # of a file whose contents we've already drained. Failure
-        # leaves a leftover file but doesn't affect summary output.
-        pass
-
-    return _assemble_and_write_summary(
+    result = _assemble_and_write_summary(
         run_dir, records=records, refusals=None,
         corrupt_lines=corrupt_lines, inode_mismatch=inode_mismatch,
         planted_object=planted_object)
+    if result is None and (records or corrupt_lines or inode_mismatch
+                           or planted_object):
+        logger.warning(
+            "summarize_and_write: summary not written; evidence retained at %s",
+            tmp,
+        )
+        return None
+
+    # Only discard the claimed stream after persistence succeeds, or
+    # when an empty stream has no evidence to summarise.
+    try:
+        tmp.unlink(missing_ok=True)
+    except OSError:
+        # Cleanup failure leaves a redundant snapshot, not lost evidence.
+        pass
+    return result
 
 
 def _assemble_and_write_summary(
@@ -1480,13 +1477,7 @@ def _assemble_and_write_summary(
         )
         return None
 
-    # The intermediate JSONL was already renamed-and-unlinked above
-    # (see the rename-then-read pattern at the start of the
-    # function). Nothing to clean up here. The bare `jsonl.unlink()`
-    # that lived here pre-fix was redundant after the rename and
-    # would always OSError now (caught by the swallow); keeping the
-    # comment marker for clarity.
-    #
+    # The caller removes the claimed evidence after this succeeds.
     # Consume the parent-memory refusal mirror now that it is folded
     # into a successfully WRITTEN summary: leaving it armed made a
     # second summarize call on the same run dir (sweep-mode CLI, a
