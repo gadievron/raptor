@@ -62,9 +62,13 @@ class _CaptiveUpstream:
                 self.wfile.write(resp)
 
         self._server = http.server.HTTPServer(("127.0.0.1", 0), _H)
-        self.host, self.port = self._server.server_address
-        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
-        self._thread.start()
+        try:
+            self.host, self.port = self._server.server_address
+            self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+            self._thread.start()
+        except BaseException:
+            self._server.server_close()
+            raise
 
     @property
     def base_url(self) -> str:
