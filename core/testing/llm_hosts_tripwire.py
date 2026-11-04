@@ -20,9 +20,10 @@ import sys
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
+from typing import TYPE_CHECKING
 
 # Direct execution deliberately avoids core.testing's SDK-heavy __init__.
-if __package__:
+if TYPE_CHECKING or __package__:
     from .llm_connections import active_tests, attribute_connection
 else:
     from llm_connections import active_tests, attribute_connection

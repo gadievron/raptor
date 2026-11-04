@@ -28,6 +28,7 @@ import json
 import logging
 import math
 import sys
+import types
 import threading
 import time
 from dataclasses import dataclass
@@ -338,7 +339,7 @@ def _caller_chain() -> list[dict[str, Any]]:
     the chain: this is a call-site hint, not an audited-function identity.
     """
     chain = []
-    frame = sys._getframe(1)
+    frame: types.FrameType | None = sys._getframe(1)
     try:
         for _ in range(32):
             if frame is None:

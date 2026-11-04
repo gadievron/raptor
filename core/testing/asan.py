@@ -36,15 +36,16 @@ def _runtime_unavailable_reason(compiler: str) -> str | None:
         env = RaptorConfig.get_safe_env()
         env["TMPDIR"] = str(root)
         env["ASAN_OPTIONS"] = "detect_leaks=0:symbolize=0:abort_on_error=0"
-        options = dict(env=env, cwd=os.sep, capture_output=True, text=True)
         try:
             built = subprocess.run(
                 [compiler, "-fsanitize=address", "-x", "c++", "-", "-o", str(binary)],
-                input=_CLEAN_SOURCE, timeout=15, **options,
+                input=_CLEAN_SOURCE, timeout=15, env=env, cwd=os.sep,
+                capture_output=True, text=True,
             )
             if built.returncode:
                 return f"clean ASAN probe did not compile (exit {built.returncode})"
-            ran = subprocess.run([str(binary)], timeout=5, **options)
+            ran = subprocess.run([str(binary)], timeout=5, env=env, cwd=os.sep,
+                                 capture_output=True, text=True)
         except subprocess.TimeoutExpired:
             return "clean ASAN probe timed out before successful completion"
         except OSError as exc:

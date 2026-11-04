@@ -303,6 +303,7 @@ def _developer_toolchain_read_dirs() -> tuple[str, ...]:
     or the installed default developer trees when no selection exists.
     Toolchain trees hold compilers, SDK headers and libraries; the
     grant matches the /usr and Homebrew posture."""
+    developer_dirs: tuple[str, ...]
     developer_dir = _realpath_or_none(_XCODE_SELECT_LINK)
     if developer_dir and developer_dir != _XCODE_SELECT_LINK \
             and os.path.isdir(developer_dir):

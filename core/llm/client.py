@@ -1598,6 +1598,7 @@ class LLMClient:
             self.config = _pinned_llm_config(pinned_model)
         else:
             self.config = LLMConfig()
+        self._pinned_model: str | None
         if pinned_model is not None and self.config.primary_model:
             self._pinned_model = self.config.primary_model.model_name
         else:
