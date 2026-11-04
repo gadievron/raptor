@@ -60,13 +60,27 @@ def test_stale_readiness_marker_is_refused(tmp_path, expected_crash_runner):
         expected_crash_runner([sys.executable, '-c', 'pass'], ready_file=marker)
 
 
-def test_hanging_fixture_times_out_and_is_reaped(tmp_path, expected_crash_runner):
+def test_hanging_fixture_times_out_and_is_reaped(tmp_path, expected_crash_runner, monkeypatch):
+    from core.testing import expected_crash as helper
+
     marker = tmp_path / 'entered'
-    pid_file = tmp_path / 'pid'
-    suffix = f'Path({str(pid_file)!r}).write_text(str(os.getpid())); import time; time.sleep(30)'
+    traces = []
+    real_invoke = helper._invoke
+
+    def capture_trace(*args, **options):
+        process, trace = real_invoke(*args, **options)
+        traces.append(trace)
+        return process, trace
+
+    monkeypatch.setattr(helper, '_invoke', capture_trace)
     with pytest.raises(ExpectedCrashError, match="'timed_out': True"):
-        expected_crash_runner(command(marker, suffix), ready_file=marker, timeout=1)
-    pid = int(pid_file.read_text())
+        expected_crash_runner(command(marker, 'import time; time.sleep(30)'),
+                              ready_file=marker, timeout=1)
+    assert marker.exists(), 'timeout fixture never entered'
+    assert len(traces) == 1
+    # The tracer owns child identity. A child-written PID file can be left
+    # empty or incomplete when this test's timeout kills its writer.
+    pid = traces[0]['pid']
     with pytest.raises(ProcessLookupError):
         os.kill(pid, 0)
 
