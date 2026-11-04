@@ -974,6 +974,8 @@ class LogStreamer:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             # Buffering: line-buffered so we get records as they
             # arrive rather than accumulating in a 4K pipe buffer.
             bufsize=1,
