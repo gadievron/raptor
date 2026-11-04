@@ -504,3 +504,105 @@ def test_document_digest_keeps_exact_input_bytes(tmp_path, raw):
     assert data == {"text": "é"}
     assert digest == hashlib.sha256(raw).hexdigest()
     assert path.read_bytes() == raw
+
+
+@pytest.fixture
+def nvm_source_case():
+    import hashlib
+    native, cdx, spdx = documents("npm", "nvm", "0.40.8",
+        {"homepage": "https://github.com/nvm-sh/nvm", "url": "git://github.com/nvm-sh/nvm.git"}, "pkg:npm/nvm@0.40.8")
+    artifact = native["artifacts"][0]
+    artifact["locations"] = [{"path": "/opt/nvm/package.json"}]
+    payloads = {name: name.encode() for name in ("nvm.sh", "nvm-exec", "bash_completion", "install.sh", "LICENSE.md")}
+    payloads["package.json"] = b'{"version":"0.40.8"}'
+    native["files"] = [{"location": {"path": "/opt/nvm/" + name}, "digests": [
+        {"algorithm": "sha256", "value": hashlib.sha256(raw).hexdigest()}]} for name, raw in payloads.items()]
+    def fetch(url):
+        if "/commits/" in url:
+            return json.dumps({"sha": "c" * 40}).encode()
+        assert "/" + "c" * 40 + "/" in url
+        return payloads[url.rsplit("/", 1)[1]]
+    return native, cdx, spdx, fetch
+
+
+def test_verified_nvm_source_is_bound_to_all_runtime_files(nvm_source_case):
+    native, cdx, spdx, fetch = nvm_source_case
+    checks = mod.verify_nvm_source(native, fetch=fetch)
+    check = checks[native["artifacts"][0]["id"]]
+    assert check["status"] == "verified_interpreted_source"
+    assert len(check["files"]) == 6
+    c, s, report = mod.prepare(native, cdx, spdx, MANIFEST, source_checks=checks)
+    record = report["packages"][0]
+    assert record["gaps"] == []
+    assert record["source_check"] == check
+    assert record["sources"][0]["status"] == "verified_interpreted_source"
+    assert "verified_interpreted_source" in s["packages"][1]["sourceInfo"]
+    assert c["components"][0]["externalReferences"][0]["url"].endswith("c" * 40)
+
+
+@pytest.mark.parametrize("fault", ["changed", "missing", "duplicate", "network", "revision", "version"])
+def test_nvm_source_refuses_incomplete_or_different_evidence(nvm_source_case, fault):
+    native, cdx, spdx, fetch = nvm_source_case
+    if fault == "changed":
+        native["files"][0]["digests"][0]["value"] = "0" * 64
+    elif fault == "missing":
+        native["files"].pop()
+    elif fault == "duplicate":
+        native["files"].append(native["files"][0])
+    original = fetch
+    def fetch(url):
+        if fault == "network":
+            raise OSError("offline")
+        if fault == "revision" and "/commits/" in url:
+            return b'{"sha":"main"}'
+        if fault == "version" and url.endswith("/package.json"):
+            return b'{"version":"0.40.9"}'
+        return original(url)
+    checks = mod.verify_nvm_source(native, fetch=fetch)
+    assert checks[native["artifacts"][0]["id"]]["status"] == "unverified"
+    report = mod.prepare(native, cdx, spdx, MANIFEST, source_checks=checks)[2]
+    assert report["packages"][0]["gaps"]
+
+
+def test_nvm_new_version_resolves_source_without_manifest_edit(nvm_source_case):
+    import hashlib
+    native, cdx, spdx, fetch = nvm_source_case
+    version = "0.40.99"
+    raw = json.dumps({"version": version}).encode()
+    for file in native["files"]:
+        if file["location"]["path"].endswith("/package.json"):
+            file["digests"][0]["value"] = hashlib.sha256(raw).hexdigest()
+    for obj, key in [(native["artifacts"][0], "version"), (cdx["components"][0], "version"),
+                     (spdx["packages"][1], "versionInfo")]:
+        obj[key] = version
+    calls = []
+    def track(url):
+        calls.append(url)
+        return raw if url.endswith("/package.json") else fetch(url)
+    checks = mod.verify_nvm_source(native, fetch=track)
+    assert calls[0].endswith("/commits/v" + version)
+    assert all("/" + "c" * 40 + "/" in url for url in calls[1:])
+    report = mod.prepare(native, cdx, spdx, MANIFEST, source_checks=checks)[2]
+    assert report["packages"][0]["gaps"] == []
+
+
+def test_nvm_retained_source_cache_verifies_offline(nvm_source_case, tmp_path):
+    native, _, _, fetch = nvm_source_case
+    responses = {}
+    def retain(url):
+        raw = fetch(url)
+        responses[url] = raw.decode()
+        return raw
+    expected = mod.verify_nvm_source(native, fetch=retain)
+    path = tmp_path / "source-cache.json"
+    path.write_text(json.dumps({"version": 1, "responses": responses}))
+    assert mod.verify_nvm_cache(native, path) == expected
+    del responses[next(url for url in responses if url.endswith("/nvm.sh"))]
+    path.write_text(json.dumps({"version": 1, "responses": responses}))
+    assert mod.verify_nvm_cache(native, path)[native["artifacts"][0]["id"]]["status"] == "unverified"
+
+
+def test_nvm_missing_cache_keeps_warning(nvm_source_case, tmp_path):
+    native, _, _, _ = nvm_source_case
+    checks = mod.verify_nvm_cache(native, tmp_path / "absent.json")
+    assert checks[native["artifacts"][0]["id"]]["status"] == "unverified"

@@ -17,6 +17,8 @@ import sys
 import subprocess
 import tomllib
 import urllib.parse
+import urllib.request
+import urllib.error
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
@@ -119,6 +121,104 @@ def root_lock_package(artifact: dict) -> bool:
         location.get("path") in {"uv.lock", "/uv.lock"} for location in artifact.get("locations", []))
 
 
+
+def _upstream_bytes(url: str) -> bytes:
+    """Fetch bounded immutable upstream evidence; never execute its contents."""
+    request = urllib.request.Request(url, headers={"User-Agent": "raptor-sbom-source-check"})
+    with urllib.request.urlopen(request, timeout=20) as response:
+        data = response.read(2 * 1024 * 1024 + 1)
+    if len(data) > 2 * 1024 * 1024:
+        raise ValueError("upstream source exceeds byte budget")
+    return data
+
+
+def verify_nvm_source(native: dict, *, fetch=_upstream_bytes) -> dict:
+    """Check shipped interpreted runtime bytes against a resolved upstream commit.
+
+    This proves source-content correspondence, not a compiler/build attestation.
+    Version tags select candidates only; all runtime files must match SHA-256.
+    """
+    checks = {}
+    required = ("nvm.sh", "nvm-exec", "bash_completion", "install.sh", "package.json", "LICENSE.md")
+    for artifact in native.get("artifacts", []):
+        metadata = artifact.get("metadata") or {}
+        if (artifact.get("type"), artifact.get("name"), metadata.get("homepage"), metadata.get("url")) != (
+                "npm", "nvm", "https://github.com/nvm-sh/nvm", "git://github.com/nvm-sh/nvm.git"):
+            continue
+        identifier = artifact["id"]
+        check = {"status": "unverified", "scope": "NVM interpreted runtime and package/license metadata"}
+        checks[identifier] = check
+        try:
+            version = artifact.get("version", "")
+            if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
+                raise ValueError("unsupported version")
+            locations = artifact.get("locations", [])
+            paths = {loc.get("path") for loc in locations}
+            if len(paths) != 1:
+                raise ValueError("ambiguous installed root")
+            package_path = next(iter(paths))
+            if not isinstance(package_path, str) or not package_path.startswith("/") or not package_path.endswith("/package.json"):
+                raise ValueError("invalid package location")
+            root = package_path[:-len("package.json")]
+            if str(PurePosixPath(root)) + "/" != root or ".." in PurePosixPath(root).parts:
+                raise ValueError("noncanonical package root")
+            files = {}
+            for file in native.get("files", []):
+                path = file.get("location", {}).get("path", "")
+                if path in {root + name for name in required}:
+                    if path in files:
+                        raise ValueError("duplicate file evidence")
+                    digests = file.get("digests", [])
+                    sha = [d.get("value") for d in digests if d.get("algorithm") == "sha256"]
+                    if len(sha) != 1 or not re.fullmatch(r"[0-9a-f]{64}", sha[0] or ""):
+                        raise ValueError("missing file hash")
+                    files[path] = sha[0]
+            if len(files) != len(required):
+                raise ValueError("runtime evidence incomplete")
+            # Resolve each installed version afresh, so routine base-image bumps
+            # do not require another hand-maintained provenance manifest entry.
+            ref = json.loads(fetch("https://api.github.com/repos/nvm-sh/nvm/commits/v" + version))
+            revision = ref.get("sha", "") if isinstance(ref, dict) else ""
+            if not re.fullmatch(r"[0-9a-f]{40}", revision):
+                raise ValueError("invalid source revision")
+            evidence = []
+            for name in required:
+                url = "https://raw.githubusercontent.com/nvm-sh/nvm/" + revision + "/" + name
+                raw = fetch(url)
+                digest = hashlib.sha256(raw).hexdigest()
+                if digest != files[root + name]:
+                    raise ValueError("installed source differs from upstream")
+                if name == "package.json":
+                    package = json.loads(raw)
+                    if not isinstance(package, dict) or package.get("version") != version:
+                        raise ValueError("source version mismatch")
+                evidence.append({"path": root + name, "sha256": digest, "source_url": url})
+            check.update(status="verified_interpreted_source", revision=revision,
+                         url="https://github.com/nvm-sh/nvm/tree/" + revision,
+                         tag="v" + version, files=evidence)
+        except (ValueError, TypeError, KeyError, OSError, urllib.error.URLError):
+            # Unavailability and changed bytes remain warnings; publication is
+            # independent of the optional evidence service.
+            check["gap"] = "NVM upstream source check unavailable or installed runtime content differs"
+    return checks
+
+
+def verify_nvm_cache(native: dict, path: Path) -> dict:
+    """Validate source hashes with no network access; missing cache keeps warnings."""
+    try:
+        cache, _ = read_document(path)
+        responses = cache.get("responses", {}) if cache.get("version") == 1 else {}
+        if not isinstance(responses, dict):
+            responses = {}
+    except (OSError, ValueError):
+        responses = {}
+    def offline_fetch(url):
+        raw = responses.get(url)
+        if not isinstance(raw, str):
+            raise ValueError("upstream response not retained")
+        return raw.encode("utf-8")
+    return verify_nvm_source(native, fetch=offline_fetch)
+
 def plan(artifact: dict, candidates: dict, project: dict | None, locked: dict | None = None) -> dict | None:
     kind, name, version = (artifact.get(k) for k in ("type", "name", "version"))
     metadata = artifact.get("metadata") or {}
@@ -190,7 +290,7 @@ def _properties(component: dict, record: dict) -> None:
         props.append({"name": "raptor:provenance:source-status", "value": source["status"]})
 
 
-def prepare(native: dict, cdx: dict, spdx: dict, manifest: dict, project: dict | None = None, lock: dict | None = None, notice_summary: dict | None = None, *, _copy_inputs: bool = True) -> tuple[dict, dict, dict]:
+def prepare(native: dict, cdx: dict, spdx: dict, manifest: dict, project: dict | None = None, lock: dict | None = None, notice_summary: dict | None = None, *, _copy_inputs: bool = True, source_checks: dict | None = None) -> tuple[dict, dict, dict]:
     if native.get("schema", {}).get("version", "").split(".", 1)[0] != "16":
         raise ValueError("expected Syft JSON schema 16.x")
     if cdx.get("bomFormat") != "CycloneDX" or cdx.get("specVersion") != "1.5" or spdx.get("spdxVersion") != "SPDX-2.3":
@@ -249,6 +349,19 @@ def prepare(native: dict, cdx: dict, spdx: dict, manifest: dict, project: dict |
         if (component.get("name"), component.get("version", ""), component.get("purl", "")) != (artifact["name"], artifact.get("version", ""), artifact.get("purl", "")) or package.get("name") != artifact["name"] or package.get("versionInfo", "") != artifact.get("version", "") or purls != ([artifact["purl"]] if artifact.get("purl") else []):
             raise ValueError("paired exports conflict with native package identity")
         record = plan(artifact, candidates, project, locked)
+        check = (source_checks or {}).get(identifier)
+        if record is not None and check is not None:
+            record["source_check"] = deepcopy(check)
+            if check.get("status") == "verified_interpreted_source" and record.get("origin") == "https://github.com/nvm-sh/nvm":
+                record["sources"] = [{"type": "vcs", "url": check["url"],
+                                      "status": check["status"], "tag": check["tag"],
+                                      "licence_url": check["url"].replace("/tree/", "/blob/") + "/LICENSE.md"}]
+                record["gaps"] = [gap for gap in record["gaps"] if gap not in {
+                    "installed source revision is not established by package.json version",
+                    "upstream tag/commit is a source candidate; correspondence to installed artifact is unverified",
+                    "no source candidate is recorded for this package version"}]
+            elif check.get("gap"):
+                record["gaps"].append(check["gap"])
         if record is None:
             continue
         records.append(record)
@@ -517,6 +630,12 @@ def main() -> None:
     owner_source = parser.add_mutually_exclusive_group()
     owner_source.add_argument("--owner-registry-ref", help="verify missing owner files from IMAGE@sha256:DIGEST")
     owner_source.add_argument("--owner-oci-layout", type=Path, help="verify missing owner files from an offline OCI blob store")
+    parser.add_argument("--fetch-upstream-sources", type=Path,
+                        help="download NVM source responses to this cache and exit")
+    parser.add_argument("--upstream-source-cache", type=Path,
+                        help="verify NVM sources offline using retained upstream responses")
+    parser.add_argument("--verify-upstream-sources", action="store_true",
+                        help="compare NVM installed runtime SHA-256 with upstream source (network; warnings on failure)")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     if (args.owner_registry_ref is not None or args.owner_oci_layout is not None) and not args.notice_evidence:
@@ -533,6 +652,15 @@ def main() -> None:
     digests = [None] * len(paths)
     native, digests[0] = read_document(args.syft)
     manifest, digests[3] = read_document(args.provenance)
+    if args.fetch_upstream_sources:
+        responses = {}
+        def cache_fetch(url):
+            raw = _upstream_bytes(url)
+            responses[url] = raw.decode("utf-8")
+            return raw
+        verify_nvm_source(native, fetch=cache_fetch)
+        save_json(args.fetch_upstream_sources, {"version": 1, "responses": responses})
+        return
     capture_document = None
     notice_summary, notice_blobs = None, {}
     if args.notice_evidence:
@@ -570,10 +698,15 @@ def main() -> None:
         project = {"name": config["name"], "version": config["version"], "revision": revision}
         repo_inputs = [{"path": str(args.repo / name), "sha256": hashlib.sha256(raw).hexdigest()}
                        for name, raw in [("pyproject.toml", config_raw), ("uv.lock", lock_raw)]]
+    source_checks = None
+    if args.upstream_source_cache:
+        source_checks = verify_nvm_cache(native, args.upstream_source_cache)
+    elif args.verify_upstream_sources:
+        source_checks = verify_nvm_source(native)
     native = _provenance_view(native)
     cdx, digests[1] = read_document(args.cyclonedx)
     spdx, digests[2] = read_document(args.spdx)
-    prepared_cdx, prepared_spdx, report = prepare(native, cdx, spdx, manifest, project, lock, notice_summary, _copy_inputs=False)
+    prepared_cdx, prepared_spdx, report = prepare(native, cdx, spdx, manifest, project, lock, notice_summary, _copy_inputs=False, source_checks=source_checks)
     if args.repo:
         bundles, references = bundled_materials(args.repo, project["revision"], manifest)
         append_bundles(prepared_cdx, prepared_spdx, bundles)
