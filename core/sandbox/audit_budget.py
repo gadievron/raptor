@@ -39,7 +39,7 @@ Five mechanisms compose:
      bounded separately: cumulative sampled keeps across all
      categories may not exceed `global_cap` (a second hard ceiling).
      Total records a run can emit is therefore at most
-     `2 * global_cap` (+ a handful of control-plane markers) — after
+     `2 * global_cap` (+ bounded control-plane markers) — after
      that an over-cap flood produces no keeps at all, no matter its
      volume. Without this second ceiling, JSONL output would stay
      proportional (1/N) to attacker volume forever.
@@ -59,6 +59,9 @@ Decision return shape:
            its marker-emitted memory is deliberately dropped with it,
            so the same PID can re-emit its cap-exceeded marker
            (duplicate markers beat unbounded memory).
+           Marker-only PID tracking (a nonpositive pid_cap admits no
+           records) is bounded too; suppressed notices set
+           pid_budget_markers_truncated on the final summary.
 
 Thread-safety: each backend's writer is single-threaded (Linux
 tracer is a separate process, macOS LogStreamer has one daemon
@@ -346,6 +349,7 @@ class AuditBudget:
         self._dropped: dict[str, int] = {}
         self._cat_marker_emitted: set = set()
         self._pid_marker_emitted: set = set()
+        self._pid_marker_tracking_truncated = False
         # Token bucket: per-category (current_tokens, last_refill_ts).
         # Initialised lazily on first event in each category so the
         # bucket starts at full capacity.
@@ -375,6 +379,9 @@ class AuditBudget:
         # ceilings. _pid_marker_emitted is also evicted in
         # lock-step so a re-seen PID can re-emit its marker if it
         # again hits the per-PID cap.
+        # This also bounds marker-only PIDs when pid_cap <= 0. Once
+        # full, new PID notices are suppressed and the summary says so;
+        # every dropped record still contributes to drop accounting.
         self._pid_dict_cap = 10_000
 
     # ----- snapshot accessors (for end-of-run summary) -------------
@@ -447,6 +454,12 @@ class AuditBudget:
         if pid_cur >= self.pid_cap:
             self._dropped[cat] = self._dropped.get(cat, 0) + 1
             if pid not in self._pid_marker_emitted:
+                # A zero/negative PID cap admits no keeps, so those
+                # PIDs never enter the normal tracker/eviction path.
+                # Bound marker memory and output even in that case.
+                if len(self._pid_marker_emitted) >= self._pid_dict_cap:
+                    self._pid_marker_tracking_truncated = True
+                    return DROP, None
                 self._pid_marker_emitted.add(pid)
                 marker = self._make_marker(
                     "pid_budget_exceeded",
@@ -684,7 +697,7 @@ class AuditBudget:
         """End-of-run summary. Caller appends this once when the
         audit session closes (LogStreamer.stop / tracer exit)."""
         from datetime import datetime, timezone
-        return {
+        summary = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "type": "audit_summary",
             "audit": True,
@@ -695,6 +708,9 @@ class AuditBudget:
             "pid_counts": dict(self._pid_counts),
             "global_cap": self.global_cap,
         }
+        if self._pid_marker_tracking_truncated:
+            summary["pid_budget_markers_truncated"] = True
+        return summary
 
 
 # ---------------------------------------------------------------------
