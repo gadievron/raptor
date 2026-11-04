@@ -63,3 +63,15 @@ def test_confined_check_exercises_both_policies_with_disposable_state(tmp_path, 
     assert selected == [False, True]
     assert dict(os.environ) == previous
     assert config.RaptorConfig.LOG_DIR == original_logs
+
+
+def test_nightly_provisions_browser_sdk_and_native_runtime():
+    workflow = (ROOT / ".github/workflows/nightly.yml").read_text()
+    slow_job = workflow.split("  slow-integration:", 1)[1]
+    # Limit assertions to this job, excluding following sibling jobs.
+    import re
+    slow_job = re.split(r"^  [A-Za-z0-9_-]+:\s*$", slow_job, maxsplit=1, flags=re.MULTILINE)[0]
+    assert "cache-key-prefix: venv-grammars-web" in slow_job
+    assert "uv-export-extra-args: --extra grammars --extra web" in slow_job
+    install = slow_job.index("python -m playwright install --with-deps chromium")
+    assert install < slow_job.index("python -m pytest -m slow")

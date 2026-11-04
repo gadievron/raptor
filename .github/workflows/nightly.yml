@@ -185,18 +185,21 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 
-      # Grammars-flavoured venv (dev deps + grammar wheels, an
-      # optional-dependency group in pyproject.toml, locked in uv.lock)
-      # under its own cache-key prefix so a prefix-match restore never
-      # hands this job the plain venv that lacks the grammar wheels.
-      # Fast unit tests share this profile. Saving successful rebuilds
-      # makes the grammar wheels reusable across both workflows.
-      - name: Restore or rebuild venv (with grammars)
+      # Grammar and web extras supply the parsers and Playwright needed
+      # by the real slow/integration cases. Keep this venv separate from
+      # the grammar-only profiles used by other lanes.
+      # The selected extras remain pinned by pyproject.toml and uv.lock.
+      - name: Restore or rebuild venv (with grammars and web)
         uses: ./.github/actions/setup-venv
         with:
-          cache-key-prefix: venv-grammars
-          uv-export-extra-args: --extra grammars
+          cache-key-prefix: venv-grammars-web
+          uv-export-extra-args: --extra grammars --extra web
           save-on-rebuild: 'true'
+
+      - name: Install Chromium for native browser tests
+        run: |
+          source "$VENV_PATH/bin/activate"
+          python -m playwright install --with-deps chromium
 
       - name: Install semgrep
         # semgrep is deliberately NOT a pyproject.toml dep (optional
