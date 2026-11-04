@@ -26,7 +26,8 @@ from packages.sca.sbom_import import _check_document, _unique_object, _read_cycl
 from packages.sca.sbom_spdx_import import _read_spdx
 import json
 
-MAX_BYTES = 50 * 1024 * 1024
+# All-file hashing enlarges inventories; keep the reporter's bounded 64 MiB ceiling.
+MAX_BYTES = 64 * 1024 * 1024
 REPOSITORY = "https://github.com/gadievron/raptor"
 
 

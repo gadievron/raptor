@@ -496,3 +496,15 @@ def test_inventory_path_mode_still_refuses_traversal_and_normalization(filename)
     native, blob = fixture_image({"pkg/LICENSE": b"original licence\n", filename: b"data"})
     with pytest.raises(ValueError, match="unsafe or ambiguous"):
         capture(native, lambda layer: [blob])
+
+
+def test_all_file_metadata_does_not_select_unrelated_unicode_symlink():
+    filename = "usr/local/bin/𝜋thon"
+    native, blob = fixture_image({"pkg/LICENSE": b"original licence\n", filename: b"alias"})
+    entry = next(row for row in native["files"] if row["location"]["path"] == "/" + filename)
+    entry["metadata"]["type"] = "SymbolicLink"
+    report, notices = capture(native, lambda layer: [blob])
+    assert [row["path"] for row in report["files"]] == ["/pkg/LICENSE"]
+    assert list(notices.values()) == [b"original licence\n"]
+    with pytest.raises(ValueError, match="unsafe or ambiguous"):
+        capture(native, lambda layer: [blob], identify=("/" + filename,))

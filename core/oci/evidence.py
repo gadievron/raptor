@@ -11,6 +11,7 @@ import hashlib
 import json
 import posixpath
 import re
+import unicodedata
 from collections.abc import Callable, Iterable
 from pathlib import PurePosixPath
 from typing import TypedDict
@@ -225,6 +226,16 @@ def capture(catalogue: dict, reader: Callable[[LayerDescriptor], Iterable[bytes]
             entry["packages"].add(package)
 
     for file in catalogue.get("files", []):
+        # All-file metadata includes Unicode executable aliases. Ignore only
+        # noncanonical symlink names, after validating their normalized path
+        # and layer. Never select them as evidence or follow their targets.
+        # Canonical links stay indexed for common-license target refusals.
+        if file.get("metadata", {}).get("type") == "SymbolicLink":
+            path = file["location"]["path"]
+            normal = unicodedata.normalize("NFKC", path)
+            if normal != path:
+                location({**file["location"], "path": normal}, inventory_only=True)
+                continue
         key = location(file["location"], inventory_only=True)
         if key in files:
             raise ValueError("duplicate catalogue file location")
