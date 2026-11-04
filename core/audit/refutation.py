@@ -2280,6 +2280,7 @@ def rescue_self_refuted(
     target_path: Path | str | None = None,
     out_dir: Path | str | None = None,
     repo_trusted: bool | None = None,
+    require_receipt: bool = False,
 ) -> RefutationVerdict | None:
     """Rescue hypotheses the LLM formed then refuted without evidence.
 
@@ -2358,7 +2359,10 @@ def rescue_self_refuted(
     structural-receipt floor outranks it by construction.
 
     Returns a verdict that promotes clean → suspicious so the sweep
-    pass can attempt mechanical verification.
+    pass can attempt mechanical verification. With *require_receipt*,
+    only a matching detector or structural receipt may trigger the
+    promotion. Use this after verification has finished: an unverified
+    counter or a CWE family alone must not re-arm a resolved verdict.
     """
     if outcome.status != "clean":
         return None
@@ -2786,7 +2790,7 @@ def rescue_self_refuted(
                     "write its record",
                     getattr(outcome, "function", "?"),
                 )
-        if cwes & _SELF_REFUTATION_CWES:
+        if not require_receipt and cwes & _SELF_REFUTATION_CWES:
             return RefutationVerdict(
                 gate="anti_self_refutation",
                 reason=(
@@ -2861,7 +2865,7 @@ def rescue_self_refuted(
         # unverifiable from the local review alone — promote to
         # suspicious so the sweep can dispatch a cross-function
         # tool (Joern/CodeQL dataflow).
-        if _counter_scope_cross_function(h):
+        if not require_receipt and _counter_scope_cross_function(h):
             return RefutationVerdict(
                 gate="anti_self_refutation",
                 reason=(
