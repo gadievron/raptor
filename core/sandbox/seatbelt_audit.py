@@ -44,6 +44,7 @@ drain period.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -878,6 +879,8 @@ class LogStreamer:
         events can never pass the scoped predicate and the gate
         would always time out. Callers choosing predicate-level
         scoping trade away the cold-start attachment confirmation."""
+        if self._proc is not None:
+            raise RuntimeError("seatbelt audit streamer has already been started")
         predicate = self._build_predicate()
         self._proc = subprocess.Popen(
             [
@@ -938,35 +941,37 @@ class LogStreamer:
                     "workload may be missed)",
                     _WARM_UP_TIMEOUT_S,
                 )
+            self._reader = threading.Thread(target=self._read_loop, daemon=True)
+            self._reader.start()
         except BaseException:
-            # Warm-up itself raised: tear down `log stream` so caller
-            # doesn't leak a zombie subprocess with nobody reading it.
+            # Startup owns the producer until the reader starts, including
+            # thread construction/start failures and warm-up cancellation.
+            proc = self._proc
             try:
-                self._proc.terminate()
+                with contextlib.suppress(OSError):
+                    proc.terminate()
                 try:
-                    self._proc.wait(timeout=5)
-                except Exception:  # noqa: BLE001 — any wait failure (timeout, interpreter shutdown) must escalate to kill
-                    self._proc.kill()
+                    proc.wait(timeout=5)
+                except Exception:  # noqa: BLE001 — any wait failure must escalate to kill
+                    with contextlib.suppress(OSError):
+                        proc.kill()
                     try:
-                        self._proc.wait(timeout=10)
-                    except subprocess.TimeoutExpired:
-                        if self._proc.stdout:
-                            self._proc.stdout.close()
+                        proc.wait(timeout=10)
+                    except Exception:  # noqa: BLE001 — preserve the startup failure
                         logger.debug(
-                            "seatbelt audit: killed log-stream "
-                            "process did not exit within 10s; "
-                            "abandoning reap",
+                            "seatbelt audit: could not reap log-stream "
+                            "process after failed startup",
+                            exc_info=True,
                         )
-            except OSError:
-                # KEEP-SILENT (F070 per-site triage W21): terminate()
-                # on an already-dead process is the only realistic
-                # OSError here. The outer `raise` re-raises the
-                # underlying cause; a WARNING about a cleanup attempt
-                # would be noise that obscures the real failure.
-                pass
+            finally:
+                # No reader owns stdout after a refused startup.
+                # Close it even when the process has already exited.
+                with contextlib.suppress(Exception):
+                    if proc.stdout is not None:
+                        proc.stdout.close()
+                self._reader = None
+                self._proc = None
             raise
-        self._reader = threading.Thread(target=self._read_loop, daemon=True)
-        self._reader.start()
 
     def _warm_up_until_attached(self) -> bool:
         """Spawn a synthetic ``sandbox-exec`` workload and drain
