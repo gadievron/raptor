@@ -413,9 +413,10 @@ def build_state_field_index(
                             and fld not in fields:
                         skipped = True
                         continue
-                    bucket = fields.setdefault(
-                        fld, {"writes": [], "reads": []},
-                    )
+                    bucket = fields.get(fld)
+                    if bucket is None:
+                        bucket = {"writes": [], "reads": []}
+                        fields[fld] = bucket
                     terminal = depth == len(idents) - 1
                     if terminal and wm is not None:
                         kind = "writes"
