@@ -47,7 +47,13 @@ REPO = Path(__file__).resolve().parents[2]
 # Adjudicated exceptions: "<repo-relative-path>::<pattern>" -> reason
 # the narrow glob is correct THERE. Every row must name why the
 # .yaml half of the grammar is genuinely out of that site's universe.
-_ALLOWLISTED_SITES: dict[str, str] = {}
+_ALLOWLISTED_SITES: dict[str, str] = {
+    ".github/scripts/check_playwright_source.py::*.yml":
+        "Playwright packages/protocol/spec inputs for reconstructing the "
+        "driver's protocol.yml payload, not GitHub Actions workflows; "
+        "preserve the source generator's single-extension input set for "
+        "the installed-payload hash comparison",
+}
 
 _GLOB_CALL_RE = re.compile(r"\.r?glob\(\s*[rbu]*[\"']([^\"']+)[\"']")
 
