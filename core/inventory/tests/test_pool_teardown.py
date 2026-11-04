@@ -23,6 +23,8 @@ from types import FrameType
 
 import pytest
 
+from core.testing.pipes import pipes_for_setup
+
 from core.inventory.builder import (
     _init_inventory_worker,
     _shutdown_pool_nowait,
@@ -366,11 +368,11 @@ def test_clean_shutdown_escalates_on_exit_wedge(caplog) -> None:
     # only matter across exec). EOF on the read end after teardown
     # proves no worker survived holding it — the exact leak class
     # that keeps a CI step's output pipe open.
-    r, w = os.pipe()
-    ctx = multiprocessing.get_context("fork")
-    pool = ProcessPoolExecutor(
-        max_workers=1, mp_context=ctx, initializer=_install_exit_wedge,
-    )
+    with pipes_for_setup(1) as ((r, w),):
+        ctx = multiprocessing.get_context("fork")
+        pool = ProcessPoolExecutor(
+            max_workers=1, mp_context=ctx, initializer=_install_exit_wedge,
+        )
     procs: list = []
     try:
         futs = [pool.submit(_square, i) for i in range(4)]
