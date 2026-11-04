@@ -22,8 +22,12 @@ class PreparationUnavailable(Exception):
 
 @dataclass(frozen=True)
 class PreparedInput:
+    """Explicit scan inputs and their optional caller-owned sandbox root."""
+
     target: Path
     analyze: Callable[[list[Any]], tuple[list[dict[str, Any]], int]]
+    extra_targets: tuple[Path, ...] = ()
+    target_root: Path | None = None
 
 
 @dataclass
@@ -60,6 +64,10 @@ def _match(state: SemgrepAnalysis) -> StageResult:
             kwargs["name"] = state.name
         if state.env_factory is not None:
             kwargs["env"] = state.env_factory()
+        if state._input.extra_targets:
+            kwargs["extra_targets"] = state._input.extra_targets
+        if state._input.target_root is not None:
+            kwargs["target_root"] = state._input.target_root
         state._raw = run_rule(state._input.target, state.rule_config, **kwargs)
     except Exception as exc:  # one failed invocation is a recorded engine failure
         state.invocation_error = str(exc)
