@@ -167,9 +167,13 @@ def summarise_egress(run_dir: Path) -> dict[str, Any] | None:
 def _format_bytes(n: int) -> str:
     if n < 1024:
         return f"{n} B"
-    if n < 1024 * 1024:
-        return f"{n / 1024:.1f} KiB"
-    return f"{n / (1024 * 1024):.1f} MiB"
+    unit, suffix = (1024, "KiB") if n < 1024 * 1024 else (1024 * 1024, "MiB")
+    # Round to one decimal with ties to even, without converting counts
+    # to float: valid JSON integers may exceed the float range.
+    tenths, remainder = divmod(n * 10, unit)
+    if remainder * 2 > unit or (remainder * 2 == unit and tenths % 2):
+        tenths += 1
+    return f"{tenths // 10}.{tenths % 10} {suffix}"
 
 
 def finalize_egress_summary(output_dir: Path) -> dict[str, Any] | None:
