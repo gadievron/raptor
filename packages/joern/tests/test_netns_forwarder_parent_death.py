@@ -215,8 +215,12 @@ _SUPERVISOR_CODE = (
     "_start_orphan_watchdog(lambda: child, _Idle(),\n"
     "                       poll_s=0.1, grace_s=1.0, idle_ttl_s=0.5)\n"
     "child = subprocess.Popen([sys.executable, '-c', sys.argv[1]])\n"
-    "with open(os.environ['READY_FILE'], 'w') as f:\n"
+    # The reader's existence check must see the complete supervisor/child pair.
+    "ready = os.environ['READY_FILE']\n"
+    "pending = ready + '.pending'\n"
+    "with open(pending, 'w') as f:\n"
     "    f.write(f'{os.getpid()} {child.pid}')\n"
+    "os.replace(pending, ready)\n"
     "while True:\n"
     "    try:\n"
     "        child.wait(timeout=0.1)\n"

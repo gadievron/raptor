@@ -78,6 +78,43 @@ def sink(tmp_path):
         assert hosts.read_text() == original
 
 
+def test_ready_manifest_is_complete_when_published(tmp_path, monkeypatch):
+    if not shutil.which("openssl"):
+        pytest.skip("openssl required for untrusted test certificate")
+    directory = tmp_path / "sink"
+    directory.mkdir()
+    (directory / "endpoints.json").write_text(json.dumps({
+        "hosts": ["api.openai.com"], "ports": [0],
+    }))
+    ready = directory / "ready.json"
+    real_write_text = Path.write_text
+    observations = []
+
+    def partial_write(path, text, **options):
+        if path.parent == directory and '"addresses"' in text:
+            with path.open("w", **options) as stream:
+                stream.write(text[:1])
+                stream.flush()
+                # Model a reader scheduled between creation and the full write.
+                assert not ready.exists(), "partial readiness manifest was published"
+                stream.write(text[1:])
+            return len(text)
+        return real_write_text(path, text, **options)
+
+    monkeypatch.setattr(Path, "write_text", partial_write)
+
+    def stop():
+        info = json.loads(ready.read_text())
+        assert info["pid"] == os.getpid()
+        assert len(info["addresses"]) == 2
+        observations.append(info)
+        return True
+
+    serve(directory, None, stop)
+    assert len(observations) == 1
+    assert not ready.exists()
+
+
 @pytest.mark.parametrize("family", [0, 1])
 def test_invalid_certificate_still_records_child_origin_and_worker(sink, family):
     ready = json.loads((sink / "ready.json").read_text())
