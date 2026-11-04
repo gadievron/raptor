@@ -447,11 +447,12 @@ class TestLs:
         assert r.returncode == 2
         assert "since" in r.stderr.lower()
 
-    def test_since_supported_units(self, tmp_path):
+    @pytest.mark.parametrize("unit", ("60s", "5m", "1h", "1d", "1w"))
+    def test_since_supported_units(self, tmp_path, unit):
         self._seed(tmp_path, 'src/a.py', 'f1', body='x')
-        for unit in ("60s", "5m", "1h", "1d", "1w"):
-            r = _run("ls", "--base", str(tmp_path), "--since", unit)
-            assert r.returncode == 0, f"{unit}: {r.stderr}"
+        r = _run("ls", "--base", str(tmp_path), "--since", unit)
+        assert r.returncode == 0, f"{unit}: {r.stderr}"
+        assert "src/a.py" in r.stdout
 
     def test_filter_by_file(self, tmp_path):
         self._seed(tmp_path, 'src/a.py', 'f1', status='clean', body='ok')
@@ -859,14 +860,17 @@ class TestProvenanceQuirks:
         assert r.returncode == 2
         assert not (tmp_path / "src" / "a.py.md").exists()
 
-    def test_meta_tty_and_provenance_are_reserved(self, tmp_path):
-        for pair in ("tty=stdin", "provenance=interactive-tty",
-                     "sid=inherited", "envm=trusted", "parents=bash",
-                     "corroboration=pre-era"):
-            r = _run("add", "src/a.py", "f", "--base", str(tmp_path),
-                     "--meta", pair, "-m", "x")
-            assert r.returncode == 2, pair
-            assert "reserved" in r.stderr
+    @pytest.mark.parametrize(
+        "pair",
+        ("tty=stdin", "provenance=interactive-tty", "sid=inherited",
+         "envm=trusted", "parents=bash", "corroboration=pre-era"),
+        ids=("tty", "provenance", "sid", "envm", "parents", "corroboration"),
+    )
+    def test_meta_tty_and_provenance_are_reserved(self, tmp_path, pair):
+        r = _run("add", "src/a.py", "f", "--base", str(tmp_path),
+                 "--meta", pair, "-m", "x")
+        assert r.returncode == 2, pair
+        assert "reserved" in r.stderr
         assert not (tmp_path / "src" / "a.py.md").exists()
 
 
