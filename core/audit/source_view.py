@@ -472,6 +472,9 @@ def _build_view(
 # PREFIX like ``#if 0 || FOO``, which is LIVE when FOO is truthy —
 # is refused (build-dependent truth is not judged here).
 _PP_IF_COND_RE = re.compile(r"^[ \t]*#[ \t]*if\b(?P<cond>.*)$")
+# Necessary prefix for every accepted zero spelling; whole-condition
+# recognition below still decides whether a region is dead.
+_PP_ZERO_IF_START_RE = re.compile(r"#[ \t]*if\b[ \t(]*0")
 _PP_ALWAYS_DEAD_COND_RE = re.compile(
     r"[ \t(]*0+(?:[xX]0+)?[uUlL]*[ \t)]*"
 )
@@ -509,7 +512,9 @@ def _blank_if0_regions(view: str) -> str:
     direction for receipt consumers). Line lengths are preserved, so
     offsets keep mapping 1:1.
     """
-    if type(view) is str and "#" not in view:
+    if type(view) is str and (
+        "#" not in view or _PP_ZERO_IF_START_RE.search(view) is None
+    ):
         return view
     lines = view.split("\n")  # line-model: view text derives from \n-model audit reads; lengths kept 1:1
     out: list[str] = []
