@@ -17,6 +17,8 @@ LLM, no network.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
+
 import contextlib
 import json
 import math
@@ -579,9 +581,11 @@ class TestOrphanCancel:
         abandonment audited and the error row tied to it. Poll
         interval is the caller's (injected fast path, or the real
         env-floor path for the slow-tier canary)."""
-        upstream = _CaptiveUpstream("sse_stall", stall_s=20.0)
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _CaptiveUpstream("sse_stall", stall_s=20.0)
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token = _worker_token(d)
             s = _raw_worker_request(d, token)
             assert _SSE_CHUNK_ONE in _recv_until(s, _SSE_CHUNK_ONE)
@@ -611,9 +615,6 @@ class TestOrphanCancel:
             assert upstream.stall_outcome == "disconnect"
             assert upstream.disconnect_after_s is not None
             assert upstream.disconnect_after_s < 6.0
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_worker_disconnect_mid_stream_cancels_upstream(
         self, fake_creds, tmp_path, monkeypatch,
@@ -647,11 +648,13 @@ class TestOrphanCancel:
         # Gap = 8 poll intervals (the original ran 2.5 intervals'
         # worth of polls mid-gap): MORE no-misdetect polls than
         # before, at a fraction of the wall clock.
-        upstream = _CaptiveUpstream(
-            "sse_slow_complete", gap_s=_FAST_POLL_S * 8,
-        )
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _CaptiveUpstream(
+                "sse_slow_complete", gap_s=_FAST_POLL_S * 8,
+            )
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token = _worker_token(d)
             transport = httpx.HTTPTransport(uds=str(d.socket_path))
             received = b""
@@ -669,9 +672,6 @@ class TestOrphanCancel:
             assert _wait_audit(d, "request.dispatch", timeout=5.0)
             assert not _audit_events(d, "request.orphan_cancel")
             assert not _audit_events(d, "request.error")
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_worker_close_after_full_response_is_normal_completion(
         self, fake_creds, tmp_path, monkeypatch,
@@ -679,9 +679,11 @@ class TestOrphanCancel:
         """A worker that closes once it holds the complete response is
         a healthy close, never an orphan."""
         _inject_fast_poll(monkeypatch)
-        upstream = _CaptiveUpstream("json_quick")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _CaptiveUpstream("json_quick")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token = _worker_token(d)
             s = _raw_worker_request(d, token)
             raw = _recv_until(s, b'{"ok": true}')
@@ -694,9 +696,6 @@ class TestOrphanCancel:
             time.sleep(_FAST_POLL_S * 3)
             assert not _audit_events(d, "request.orphan_cancel")
             assert not _audit_events(d, "request.error")
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_worker_close_during_post_body_dwell_is_normal_completion(
         self, fake_creds, tmp_path, monkeypatch,
@@ -721,9 +720,11 @@ class TestOrphanCancel:
         monkeypatch.setattr(
             httpx.Response, "iter_raw", _dwelling_iter_raw,
         )
-        upstream = _CaptiveUpstream("json_quick")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _CaptiveUpstream("json_quick")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token = _worker_token(d)
             s = _raw_worker_request(d, token)
             raw = _recv_until(s, b'{"ok": true}')
@@ -733,9 +734,6 @@ class TestOrphanCancel:
             time.sleep(_FAST_POLL_S * 3)
             assert not _audit_events(d, "request.orphan_cancel")
             assert not _audit_events(d, "request.error")
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_final_chunk_is_held_until_watcher_stop_returns(
         self, fake_creds, tmp_path, monkeypatch,
@@ -759,9 +757,11 @@ class TestOrphanCancel:
             real_stop(watcher_self)
 
         monkeypatch.setattr(_OrphanWatcher, "stop", _dwelling_stop)
-        upstream = _CaptiveUpstream("json_quick")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _CaptiveUpstream("json_quick")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token = _worker_token(d)
             s = _raw_worker_request(d, token)
             raw = _recv_until(s, b'{"ok": true}')
@@ -771,9 +771,6 @@ class TestOrphanCancel:
             time.sleep(_FAST_POLL_S * 3)
             assert not _audit_events(d, "request.orphan_cancel")
             assert not _audit_events(d, "request.error")
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_worker_disconnect_during_head_dwell_aborts_at_head(
         self, fake_creds, tmp_path, monkeypatch,
@@ -788,9 +785,11 @@ class TestOrphanCancel:
         # with MORE slack than the original (3s dwell / 2.5s budget
         # at a 1s poll) while the dwell itself shrinks 3x.
         head_delay_s = _FAST_POLL_S * 20
-        upstream = _CaptiveUpstream("slow_head", head_delay_s=head_delay_s)
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _CaptiveUpstream("slow_head", head_delay_s=head_delay_s)
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token = _worker_token(d)
             s = _raw_worker_request(d, token)
             # Close only after the request provably reached the
@@ -813,9 +812,6 @@ class TestOrphanCancel:
             assert errors[0]["reason"] == "WorkerDisconnected"
             assert errors[0]["response_started"] is False
             assert errors[0]["worker_disconnected"] is True
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
 
 @pytest.mark.upstream_forward
@@ -838,9 +834,11 @@ class TestAcquireFailureRetiresWatcher:
         self, fake_creds, tmp_path, monkeypatch,
     ):
         _inject_fast_poll(monkeypatch)
-        upstream = _CaptiveUpstream("json_quick")
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _CaptiveUpstream("json_quick")
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token = _worker_token(d)
             # Close the pool out from under the relay: the cached
             # shards object survives (same proxy env), so the relay's
@@ -870,9 +868,6 @@ class TestAcquireFailureRetiresWatcher:
             # 2.5s at a 1s poll) — before asserting audit silence.
             time.sleep(_FAST_POLL_S * 2 + 0.1)
             assert not _audit_events(d, "request.orphan_cancel")
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
 
 class TestWatcherAbortIsNotShardEvidence:
@@ -892,9 +887,11 @@ class TestWatcherAbortIsNotShardEvidence:
         # being asserted on.
         monkeypatch.delenv("RAPTOR_HTTP2", raising=False)
         monkeypatch.delenv("RAPTOR_HTTP2_SHARDS", raising=False)
-        upstream = _CaptiveUpstream("sse_stall", stall_s=20.0)
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _CaptiveUpstream("sse_stall", stall_s=20.0)
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token = _worker_token(d)
             shards = d._upstream_client_shards()
             assert len(shards.clients) == 1
@@ -926,6 +923,3 @@ class TestWatcherAbortIsNotShardEvidence:
             )
             assert shards.clients[0] is pooled
             assert not pooled.is_closed
-        finally:
-            upstream.shutdown()
-            d.shutdown()

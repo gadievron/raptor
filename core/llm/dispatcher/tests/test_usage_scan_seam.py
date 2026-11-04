@@ -23,6 +23,8 @@ shape is scripted, real jail where the happy path is asserted.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
+
 import http.server
 import json
 import logging
@@ -184,9 +186,11 @@ class TestAdmissionGate:
         # reference, not the jail module's.
         monkeypatch.setattr(server_mod, "get_usage_scan_jail",
                             _UnavailableJail)
-        upstream = _EchoUpstream()
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _EchoUpstream()
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token, info = d.allocate_child("cc-gate", budget_usd=1.0)
             resp = _post(d, token)
             assert resp.status_code == 503
@@ -199,9 +203,6 @@ class TestAdmissionGate:
                     if r["event"] == "usage_scan.unavailable"]
             assert rows and rows[-1]["status"] == "reject"
             assert rows[-1]["token_id"] == info["token_id"]
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_worker_token_relays_when_jail_unavailable(
         self, fake_creds, tmp_path, monkeypatch,
@@ -210,18 +211,17 @@ class TestAdmissionGate:
         # jail gate must not touch them.
         monkeypatch.setattr(server_mod, "get_usage_scan_jail",
                             _UnavailableJail)
-        upstream = _EchoUpstream()
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _EchoUpstream()
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             _sock_path, token_fd = d.allocate_worker("worker-gate")
             token = os.read(token_fd, 256).decode("ascii")
             os.close(token_fd)
             resp = _post(d, token)
             assert resp.status_code == 200
             assert len(upstream.requests) == 1
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
 
 class TestBookingLoudness:
