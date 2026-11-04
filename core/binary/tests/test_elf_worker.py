@@ -143,9 +143,15 @@ def test_descriptor_input_reads_pinned_inode_without_reopening_alias(tmp_path):
         replacement = tmp_path / 'replacement'
         replacement.write_bytes(b'replacement input')
         replacement.replace(target)
-        argument = _DescriptorInput(os.dup(fd))
-        assert os.fspath(argument) == 'input.elf'
-        with open(argument, 'rb') as parsed:
+        from contextlib import ExitStack
+        with ExitStack() as pending:
+            duplicate = os.dup(fd)
+            pending.callback(os.close, duplicate)
+            argument = _DescriptorInput(duplicate)
+            assert os.fspath(argument) == 'input.elf'
+            parsed = open(argument, 'rb')
+            pending.pop_all()
+        with parsed as parsed:
             assert parsed.read() == b'validated input'
         # Closing the parser's duplicate does not close the validation fd.
         assert os.fstat(fd).st_size == len(b'validated input')

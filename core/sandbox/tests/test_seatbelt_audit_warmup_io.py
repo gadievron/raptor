@@ -11,23 +11,19 @@ from unittest.mock import Mock
 import pytest
 
 from core.sandbox import probes, seatbelt_audit as audit
+from core.testing.streams import pipe_streams
 
 
 @pytest.fixture
 def gate(tmp_path, monkeypatch):
     streamer = audit.LogStreamer(tmp_path)
-    read_fd, write_fd = os.pipe()
-    stream = os.fdopen(read_fd, "r")
-    streamer._proc = SimpleNamespace(stdout=stream)
-    warmup = Mock(pid=4242)
-    warmup.wait.return_value = 0
-    monkeypatch.setattr(probes, "_find_sandbox_binary", lambda name: sys.executable)
-    monkeypatch.setattr(audit.subprocess, "Popen", Mock(return_value=warmup))
-    try:
-        yield streamer, stream, write_fd, warmup
-    finally:
-        stream.close()
-        os.close(write_fd)
+    with pipe_streams() as (stream, writer):
+        streamer._proc = SimpleNamespace(stdout=stream)
+        warmup = Mock(pid=4242)
+        warmup.wait.return_value = 0
+        monkeypatch.setattr(probes, "_find_sandbox_binary", lambda name: sys.executable)
+        monkeypatch.setattr(audit.subprocess, "Popen", Mock(return_value=warmup))
+        yield streamer, stream, writer.fileno(), warmup
 
 
 def message():
@@ -102,10 +98,9 @@ def test_early_generator_close_restores_original_mode(gate, blocking):
 
 
 def test_final_unterminated_line_is_preserved(tmp_path):
-    read_fd, write_fd = os.pipe()
-    os.write(write_fd, message())
-    os.close(write_fd)
-    with os.fdopen(read_fd, "r") as stream:
+    with pipe_streams() as (stream, writer):
+        os.write(writer.fileno(), message())
+        writer.close()
         assert list(audit._warm_up_log_lines(stream, time.monotonic() + 1)) == [
             message().decode(),
         ]
