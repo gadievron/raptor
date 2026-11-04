@@ -838,18 +838,23 @@ def _read_marker_bytes(path: Path) -> bytes | None:
         if st.st_size > _MARKER_MAX_BYTES:
             return None
         chunks = []
-        remaining = _MARKER_MAX_BYTES
+        # Read one extra byte to distinguish exact-limit content from growth.
+        remaining = _MARKER_MAX_BYTES + 1
         while remaining > 0:
             chunk = os.read(fd, min(remaining, 1 << 20))
             if not chunk:
                 break
             chunks.append(chunk)
             remaining -= len(chunk)
-        return b"".join(chunks)
+        data = b"".join(chunks)
+        return data if len(data) <= _MARKER_MAX_BYTES else None
     except OSError:
         return None
     finally:
-        os.close(fd)
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 
 
 def reassert_audit_degraded(run_dir: Path) -> bool:
