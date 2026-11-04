@@ -356,6 +356,12 @@ def test_e2e_real_compiler_finds_uaf(tmp_path, sandbox_spy):
     assert uaf["file"] == "uaf.c"
     assert uaf["cwe"] in ("CWE-416", "CWE-415", "CWE-401")
     assert uaf["line"] > 0
+    if uaf["compiler"] == "gcc":
+        assert uaf["code_flows"]
+        sarif = _cs.to_sarif(result)
+        raw = next(r for r in sarif["runs"][0]["results"] if r["ruleId"] == uaf["rule_id"])
+        assert raw["codeFlows"]
+        assert raw["properties"]["code_flow_kind"] == "compiler-control-flow"
 
     # Sandbox posture: every compile went through the sandbox with the
     # network blocked and Landlock target/output confinement.
@@ -1420,3 +1426,39 @@ def test_incomplete_aliasing_cannot_promote_partial_proofs(tmp_path, monkeypatch
         scalar_aliasing.AliasingResult(proofs=[{"unvalidated": "partial"}], limitations=["interrupted"]))
     result = _cs.scan_target(tmp_path)
     assert not result.findings and result.review_candidates == [candidate]
+
+
+def test_duplicate_compiler_diagnostics_keep_alternative_paths(tmp_path, monkeypatch):
+    _fake_toolchain(monkeypatch)
+    for name in ("a.c", "b.c"): (tmp_path / name).write_text("int a;\n")
+    def analyze(target, rel, **kw):
+        event = {"location": {"physicalLocation": {"artifactLocation": {"uri": rel}, "region": {"startLine": 1}},
+                              "message": {"text": f"entry via {rel}"}}}
+        return _cs.TuDiagnostics(rel, ok=True, compiler="gcc", diagnostics=[{
+            "rule_id": "-Wanalyzer-use-after-free", "file": "common.h", "line": 3,
+            "message": "use after free", "compiler": "gcc", "tu": rel, "cwe": "CWE-416",
+            "code_flows": [{"threadFlows": [{"locations": [event]}]}]}])
+    monkeypatch.setattr(_cs, "analyze_tu", analyze)
+    result = _cs.scan_target(tmp_path)
+    assert len(result.findings) == 1
+    assert len(result.findings[0]["code_flows"]) == 2
+    sarif = _cs.to_sarif(result)
+    assert len(sarif["runs"][0]["results"][0]["codeFlows"]) == 2
+
+
+def test_scan_path_budget_omits_context_without_losing_the_warning(tmp_path, monkeypatch):
+    from core.detectors.compiler_paths import PathBudget
+    _fake_toolchain(monkeypatch)
+    (tmp_path / "a.c").write_text("int a;\n")
+    event = {"location": {"physicalLocation": {"artifactLocation": {"uri": "a.c"}, "region": {"startLine": 1}},
+                          "message": {"text": "error path"}}}
+    diagnostic = {"rule_id": "-Wanalyzer-use-after-free", "file": "a.c", "line": 1,
+                  "message": "use after free", "compiler": "gcc", "tu": "a.c", "cwe": "CWE-416",
+                  "code_flows": [{"threadFlows": [{"locations": [event]}]}]}
+    monkeypatch.setattr(_cs, "analyze_tu", lambda *a, **kw: _cs.TuDiagnostics(
+        "a.c", ok=True, compiler="gcc", diagnostics=[diagnostic]))
+    monkeypatch.setattr(_cs, "PathBudget", lambda *a: PathBudget(1))
+    result = _cs.scan_target(tmp_path)
+    assert result.ok and len(result.findings) == 1
+    assert not result.findings[0].get("code_flows")
+    assert result.findings[0]["compiler_path_notes"]

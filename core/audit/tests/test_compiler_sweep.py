@@ -3616,3 +3616,15 @@ def test_incomplete_aliasing_attempt_is_not_memoized(tmp_path, sandbox_spy, monk
     assert sweep().outcome == "confirmed"
     assert sweep().outcome == "confirmed"
     assert len(attempts) == 2
+
+
+@needs_gcc
+def test_gcc_control_path_survives_audit_receipt(tmp_path, sandbox_spy):
+    result = _sweep(tmp_path, "uaf.c", "CWE-416", "use-after-free of `p` in use_after_free",
+                    function_name="use_after_free", line_start=3, line_end=9)
+    assert result.outcome == "confirmed"
+    paths = result.matches[0]["code_flows"]
+    events = paths[0]["threadFlows"][0]["locations"]
+    assert len(events) >= 2
+    assert all(e["location"]["physicalLocation"]["artifactLocation"]["uri"] == "uaf.c" for e in events)
+    assert any("free" in e["location"]["message"]["text"] for e in events)

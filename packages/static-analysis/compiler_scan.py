@@ -67,6 +67,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from core.detectors.compiler_families import compiler_diagnostic_is_candidate
+from core.detectors.compiler_paths import attach_paths, PATH_KIND, PathBudget
 
 from core.audit.compiler_sweep import (
     _COMPILE_TIMEOUT_S,
@@ -314,6 +315,9 @@ def _suppression_vet(
 def _scan_diagnostics(raw, target_path: Path, full_path: Path, compiler_name: str, rel_path: str,
                       *, review_candidates: bool = False):
     kept: list[dict[str, Any]] = []
+    @lru_cache(maxsize=256)
+    def locate_event(name):
+        return _rel_under_target(name, target_path, full_path.parent)
     for d in raw:
         if "error" in str(d.get("kind", "")):
             continue
@@ -338,6 +342,7 @@ def _scan_diagnostics(raw, target_path: Path, full_path: Path, compiler_name: st
             "compiler": compiler_name,
             "tu": rel_path,
         })
+        attach_paths(kept[-1], d, locate_event)
     return kept
 
 
@@ -593,8 +598,11 @@ def scan_target(
     include_dirs_memo = setup.include_dirs_memo
     budget = WorkBudget(max_seconds)
     sandbox_run = budget.runner(sandbox_run)
+    path_budget = PathBudget(8 * 1024 * 1024)
+    def retain_path_context(diagnostic):
+        path_budget.retain(diagnostic, diagnostic.get("code_flows", []), diagnostic.get("compiler_path_notes", []))
     seen_candidates: set[tuple[str, str, int]] = set()
-    seen: set[tuple[str, str, int]] = set()
+    seen: dict[tuple[str, str, int], dict[str, Any]] = {}
     workers = max(1, min(max_workers, len(tus)))
     per_tu: dict[str, TuDiagnostics] = {}
     def analyze(rel):
@@ -603,6 +611,8 @@ def scan_target(
     for rel, future in bounded_futures(tus, analyze, workers=workers, budget=budget):
         try:
             per_tu[rel] = future.result()
+            for diagnostic in (*per_tu[rel].diagnostics, *per_tu[rel].review_candidates):
+                retain_path_context(diagnostic)
         except Exception as exc:  # one failed TU must not erase completed work
             per_tu[rel] = TuDiagnostics(rel, ok=False, reason=f"unexpected failure: {exc}")
     result.tus_skipped_budget = len(tus) - len(per_tu)
@@ -641,9 +651,10 @@ def scan_target(
                 "tu": item["tu"], "reason": _relativise(item["reason"], target_path),
             } for item in extra.limitations)
             for rel, raw in extra.diagnostics.items():
-                per_tu[rel].diagnostics.extend(
-                    _scan_diagnostics(raw, target_path, target_path / rel, "gcc", rel),
-                )
+                kept = _scan_diagnostics(raw, target_path, target_path / rel, "gcc", rel)
+                for diagnostic in kept:
+                    retain_path_context(diagnostic)
+                per_tu[rel].diagnostics.extend(kept)
         except Exception as exc:  # additive detector failures cannot erase baseline findings
             result.detector_limitations.append({
                 "tu": "", "reason": f"memcpy overlap detector failed: {type(exc).__name__}",
@@ -809,8 +820,9 @@ def scan_target(
             # dedup on (rule, file, line).
             key = (diag["rule_id"], diag["file"], diag["line"])
             if key in seen:
+                attach_paths(seen[key], diag)
                 continue
-            seen.add(key)
+            seen[key] = diag
             result.findings.append(diag)
 
     return result
@@ -859,12 +871,24 @@ def to_sarif(result: CompilerScanResult) -> dict[str, Any]:
             res_props["aliasing_proof"] = f["aliasing_proof"]
         if f.get("preprocessed_by"):
             res_props["preprocessed_by"] = f["preprocessed_by"]
-        sarif_results.append(emit.result(
+        evidence: dict[str, Any] = {}
+        def export_event(name):
+            path = Path(name)
+            return name if path.parts and not path.is_absolute() and ".." not in path.parts else None
+        attach_paths(evidence, f, export_event)
+        if evidence:
+            res_props["code_flow_kind"] = PATH_KIND
+        if evidence.get("compiler_path_notes"):
+            res_props["compiler_path_notes"] = evidence["compiler_path_notes"]
+        entry = emit.result(
             rule_id,
             f.get("message") or f"{rule_id} diagnostic",
             [emit.location(f["file"], {"startLine": f["line"]})],
             properties=res_props,
-        ))
+        )
+        if evidence.get("code_flows"):
+            entry["codeFlows"] = evidence["code_flows"]
+        sarif_results.append(entry)
 
     run = emit.run(
         _TOOL_NAME, rule_index.rules(), sarif_results,

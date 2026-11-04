@@ -44,6 +44,7 @@ _ANALYSIS_BLOCK_PRIORITIES: dict[str, int] = {
     "flow-trace-context": 2,
     "caller-call-sites": 2,
     "ghidra-context": 2,
+    "compiler-control-flow": 2,
     "verified-exemplars": 2,
 }
 
@@ -541,6 +542,7 @@ def build_analysis_prompt_bundle(
     file_includes: Iterable[str] = (),
     function_calls_made: Iterable[str] = (),
     ast_view: dict[str, Any] | None = None,
+    compiler_evidence: dict[str, Any] | None = None,
     allow_unreachable: bool = False,
     verified_outcomes: Iterable[Any] = (),
     budget_tokens: int = 0,
@@ -691,6 +693,18 @@ def build_analysis_prompt_bundle(
                 content=surrounding_context,
                 kind="surrounding-context",
                 origin=file_path,
+            ))
+
+    if isinstance(compiler_evidence, dict):
+        from core.detectors.compiler_paths import attach_paths
+        from core.json import dumps_display
+        bounded: dict[str, Any] = {}
+        attach_paths(bounded, compiler_evidence)
+        if bounded:
+            blocks.append(UntrustedBlock(
+                content=("Compiler diagnostic control-flow assumptions. Check caller contracts and feasibility; "
+                         "this is not a taint trace or proof of exploitability.\n" + dumps_display(bounded)),
+                kind="compiler-control-flow", origin="compiler diagnostic",
             ))
 
     # Caller-supplied extra blocks (e.g. RetryTask prior-reasoning + contradictions).
@@ -977,6 +991,7 @@ def build_analysis_prompt_bundle_from_finding(
         repo_path=finding.get("repo_path"),
         profile=profile,
         extra_blocks=extra_blocks,
+        compiler_evidence=finding.get("compiler_evidence"),
         # Strategy picker inputs — pull what we have from finding +
         # inventory-enriched metadata. Missing fields just lower the
         # picker's signal; the CWE pin (heavy-weighted) usually
