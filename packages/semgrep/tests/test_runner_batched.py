@@ -85,14 +85,14 @@ class TestSandboxScratch:
         assert len(captured) == 2
         assert captured[0] != captured[1]
         for out in captured:
-            assert Path(out).is_dir()
+            assert not Path(out).exists()
         # The second invocation started from an empty dir — nothing
         # the first call's child wrote persists into it.
         assert not (Path(captured[1]) / ".home" / "poison").exists()
 
     def test_invocation_dirs_share_one_atexit_parent(self, tmp_path: Path):
-        """The process-shared parent amortises cleanup: one atexit
-        rmtree reclaims every per-invocation subdir."""
+        """Invocations share an empty parent while per-call scratch is
+        reclaimed immediately; atexit owns only the final backstop."""
         captured: list[str] = []
 
         def fake_sandbox_run(cmd, **kwargs):
