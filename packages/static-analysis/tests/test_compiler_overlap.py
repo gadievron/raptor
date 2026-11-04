@@ -90,7 +90,7 @@ def test_supplemental_failures_leave_baseline_evidence(tmp_path, harness, failur
     assert notes
     if failure in ("probe", "candidates"):
         assert "locations" not in notes[0]  # Global failures have no source location.
-    assert "overlap check limitation" in result.summary_line()
+    assert "additional analyzer limitation" in result.summary_line()
 
 
 def test_failed_baseline_never_runs_supplement(tmp_path, harness, monkeypatch):

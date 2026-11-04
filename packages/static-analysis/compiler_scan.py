@@ -52,6 +52,7 @@ import os
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import lru_cache
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -79,12 +80,17 @@ from core.audit.compiler_sweep import (
     _parse_analyzer_output,
     _suppression_witness,
     _witness_kind,
+    _resolve_bounded,
+    _VetLimitExceeded,
 )
 from core.inventory.exclusions import DEFAULT_EXCLUDES, should_exclude
 from core.detectors.compiler import (
     CompilerInvocationError, CompilerRequest, run_compiler_analysis,
 )
 from core.detectors.memcpy_overlap import OVERLAP_ID, run_memcpy_overlap
+from core.detectors.stack_return import (
+    CANDIDATE_ID as STACK_RETURN_ID, RULE_ID as STACK_RETURN_RULE_ID, run_stack_return,
+)
 from core.sarif import emit
 from core.source import read_text_capped
 
@@ -156,6 +162,10 @@ def _keep_diag_id(diag_id: str) -> bool:
     """
     if not diag_id:
         return False
+    # This frontend warning also fires in dead arms. It is input to the
+    # corroborating detector, never a scan finding by itself.
+    if diag_id.rstrip("=") == STACK_RETURN_ID:
+        return False
     if _cwe_for_diag_id(diag_id) is not None:
         return True
     if diag_id.startswith("-Wanalyzer-"):
@@ -210,6 +220,7 @@ class TuDiagnostics:
     # include closure, or why the closure could not be vetted.
     suppression_witness: str = ""
     suppression_unvetted: str = ""
+    stack_return_candidates: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _rel_under_target(diag_file: str, target_path: Path, tu_dir: Path) -> str | None:
@@ -387,6 +398,9 @@ def analyze_tu(
         return TuDiagnostics(
             rel_path, ok=True, compiler=compiler_name, diagnostics=kept,
             suppression_witness=witness, suppression_unvetted=unvetted,
+            stack_return_candidates=[d for d in record["diags"]
+                                     if compiler_name == "gcc" and d.get("id") == STACK_RETURN_ID
+                                     and d.get("kind") == "warning"],
         )
 
     try:
@@ -494,7 +508,7 @@ class CompilerScanResult:
                 f"analyzer suppression — silence there is not evidence"
             )
         if self.detector_limitations:
-            parts.append(f"{len(self.detector_limitations)} memcpy overlap check limitation(s)")
+            parts.append(f"{len(self.detector_limitations)} additional analyzer limitation(s)")
         return "; ".join(parts)
 
 
@@ -605,6 +619,78 @@ def scan_target(
                 "tu": "", "reason": f"memcpy overlap detector failed: {type(exc).__name__}",
             })
 
+    stack_seeds = {rel: item.stack_return_candidates for rel, item in per_tu.items()
+                   if item.ok and item.compiler == "gcc" and item.stack_return_candidates}
+    if stack_seeds:
+        from core.audit.preprocessor_view import expand_translation_unit
+
+        clang = _clang_path()
+        gcc = _gcc_analyzer()
+
+        @lru_cache(maxsize=512)
+        def stack_file(name, tu):
+            # A compiler #line name is still target-controlled. Reuse the
+            # bounded resolver, and cache both accepted and refused names.
+            if not name or name.startswith("<") or len(name) > 4096:
+                return None
+            path = Path(name)
+            if not path.is_absolute():
+                path = (target_path / tu).parent / path
+            try:
+                rel = _resolve_bounded(path).relative_to(_resolve_bounded(target_path))
+            except (OSError, ValueError, RuntimeError, _VetLimitExceeded):
+                return None
+            return rel.as_posix() if rel != Path(".") else None
+
+        def locate_stack(diagnostic, tu):
+            line, name = diagnostic.get("line", 0), diagnostic.get("file", "")
+            if (not isinstance(line, int) or isinstance(line, bool) or line <= 0
+                    or not isinstance(name, str)):
+                return None
+            rel = stack_file(name, tu)
+            return (rel, line) if rel is not None else None
+
+        def prepare_stack(tu, scratch):
+            assert gcc is not None
+            return expand_translation_unit(
+                target_path=target_path, file_path=tu, out_dir=scratch,
+                preprocessor=(gcc[0], "-fanalyzer", *_union_flags("gcc_flags"), "-E", "-x", "c"),
+            )
+
+        def stack_request(tu, source):
+            assert clang is not None
+            return CompilerRequest(
+                command=(clang, "--analyze", "--analyzer-output", "text", "-x", "c", str(source)),
+                target=source.parent, timeout=_COMPILE_TIMEOUT_S,
+                caller_label="compiler-scan", scratch_prefix="stack_clang_", scratch_root=str(source.parent),
+                parse=lambda workdir, stderr: _parse_analyzer_output(
+                    workdir, stderr, compiler_name="clang", mode="analyze", full_path=source,
+                ),
+            )
+
+        try:
+            extra_stack = run_stack_return(
+                target_path, stack_seeds, request_for=stack_request if clang and gcc else None,
+                sandbox_run=sandbox_run, locate=locate_stack, prepare_view=prepare_stack,
+                scratch_root=scratch_root, max_workers=workers,
+            ).value
+            result.detector_limitations.extend({
+                "tu": item["tu"], "reason": _relativise(item["reason"], target_path),
+                "detector": "stack_return",
+            } for item in extra_stack.limitations)
+            for rel, raw in extra_stack.diagnostics.items():
+                for diagnostic in _scan_diagnostics(raw, target_path, target_path / rel, "clang", rel):
+                    diagnostic["rule_id"] = STACK_RETURN_RULE_ID
+                    diagnostic["cwe"] = "CWE-562"
+                    diagnostic["corroborated_by"] = ["gcc", "clang"]
+                    diagnostic["preprocessed_by"] = "gcc"
+                    per_tu[rel].diagnostics.append(diagnostic)
+        except Exception as exc:
+            result.detector_limitations.append({
+                "tu": "", "reason": f"stack-return detector failed: {type(exc).__name__}",
+                "detector": "stack_return",
+            })
+
     # Deterministic aggregation order regardless of completion order.
     for rel in tus:
         tu = per_tu.get(rel)
@@ -672,6 +758,10 @@ def to_sarif(result: CompilerScanResult) -> dict[str, Any]:
         }
         if cwe:
             res_props["cwe"] = cwe
+        if f.get("corroborated_by"):
+            res_props["corroborated_by"] = f["corroborated_by"]
+        if f.get("preprocessed_by"):
+            res_props["preprocessed_by"] = f["preprocessed_by"]
         sarif_results.append(emit.result(
             rule_id,
             f.get("message") or f"{rule_id} diagnostic",
@@ -707,7 +797,7 @@ def to_sarif(result: CompilerScanResult) -> dict[str, Any]:
         )
         for u in result.unvetted_tus
     ] + [
-        _limitation_note(item["tu"], "memcpy_overlap", item["reason"])
+        _limitation_note(item["tu"], item.get("detector", "memcpy_overlap"), item["reason"])
         for item in result.detector_limitations
     ]
     if notifications:
