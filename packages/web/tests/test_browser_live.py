@@ -9,7 +9,6 @@ The dedicated wrapper-acceptance lane provisions Chromium and rejects skips.
 
 from __future__ import annotations
 
-import threading
 import sys
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -18,6 +17,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 import pytest
 
 from packages.web.browser import BrowserEngine, browser_available
+from packages.web.tests.http_server import start_http_server
 
 pytestmark = [pytest.mark.slow, pytest.mark.integration,
               pytest.mark.linux_native, pytest.mark.darwin_native]
@@ -101,16 +101,8 @@ class TestBrowserEngineLive(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), _FixtureHandler)
+        cls.thread = start_http_server(cls.server, cls.addClassCleanup)
         cls.base = f"http://127.0.0.1:{cls.server.server_port}"
-        cls.thread = threading.Thread(
-            target=cls.server.serve_forever, daemon=True,
-        )
-        cls.thread.start()
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.server.shutdown()
-        cls.thread.join(timeout=5)
 
     def test_rendered_crawl_sees_js_built_dom_and_blocks_off_origin(self):
         with BrowserEngine(self.base, allow_unsandboxed_chromium=_INNER_WAIVER) as engine:
@@ -221,22 +213,11 @@ class TestOriginGateHardening(unittest.TestCase):
 
         cls.evil_handler = _EvilHandler
         cls.evil = ThreadingHTTPServer(("127.0.0.1", 0), _EvilHandler)
+        cls.threads = [start_http_server(cls.evil, cls.addClassCleanup)]
         _TargetHandler.evil_port = cls.evil.server_port
         cls.target = ThreadingHTTPServer(("127.0.0.1", 0), _TargetHandler)
+        cls.threads.append(start_http_server(cls.target, cls.addClassCleanup))
         cls.base = f"http://127.0.0.1:{cls.target.server_port}"
-        cls.threads = [
-            threading.Thread(target=s.serve_forever, daemon=True)
-            for s in (cls.evil, cls.target)
-        ]
-        for t in cls.threads:
-            t.start()
-
-    @classmethod
-    def tearDownClass(cls):
-        for s in (cls.evil, cls.target):
-            s.shutdown()
-        for t in cls.threads:
-            t.join(timeout=5)
 
     def test_redirect_hop_cannot_leave_origin(self):
         """continue_() lets Chromium follow redirects internally where
