@@ -1453,6 +1453,9 @@ def _get_or_build_index(
 
     # Pass 2: walk every call site, resolve to a callee FunctionId
     # (Internal or External), record forward + reverse edges.
+    from ._included_c import implementation_includes
+
+    included_implementations = implementation_includes(inventory)
     for file_record in inventory.get("files", []):
         if not isinstance(file_record, dict):
             continue
@@ -1529,7 +1532,13 @@ def _get_or_build_index(
             if len(chain) == 1:
                 # Sub-case (b): bare-name call. If this file defines
                 # a function with that name, record an internal edge.
-                local_defs = idx.definitions.get((path, tail))
+                local_defs = set(idx.definitions.get((path, tail), ()))
+                if not local_defs:
+                    # A wrapper that textually includes an implementation
+                    # shares its static helpers. Do not infer cross-file
+                    # linkage from a bare name without an explicit include.
+                    for included in included_implementations.get(path, ()):
+                        local_defs.update(idx.definitions.get((included, tail), ()))
                 if local_defs:
                     for d in local_defs:
                         idx.forward.setdefault(caller_node, set()).add(d)
