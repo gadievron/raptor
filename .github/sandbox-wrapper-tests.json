@@ -1137,6 +1137,20 @@
           "reason": "Linux namespace-root cleanup and Landlock-confined sibling race."
         }
       }
+    },
+    {
+      "id": "linux-fake-home-boundary",
+      "platforms": {
+        "linux": {
+          "tests": [
+            "core/sandbox/tests/test_fake_home_boundaries.py::test_confined_sibling_cannot_redirect_fake_home_parent"
+          ],
+          "expected": 4
+        },
+        "darwin": {
+          "reason": "Confined-sibling proof uses Linux Landlock; portable fake-HOME swap tests also exercise macOS filesystem operations."
+        }
+      }
     }
   ]
 }
