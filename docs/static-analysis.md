@@ -382,18 +382,20 @@ findings can be excluded via `--exclude-dir` globs.
 ### Overlapping memory copies
 
 With `--compiler-scan`, C files containing direct or macro-wrapped `memcpy`
-calls also receive an overlap check when Semgrep and a GCC analyzer supporting
+calls also receive an overlap check when a GCC analyzer supporting
 `-Wanalyzer-overlapping-buffers` (GCC 14 or newer) are available. Candidate
 matches select files; only compiler overlap warnings become findings. Candidate
 discovery scans only the capped C files whose ordinary compiler analysis
-succeeded, rather than scanning the entire project. Large file lists are batched
-within a shared 30-second raw-scan budget. For files not selected by the raw
-rule, the compiler expands macros and RAPTOR checks for live `memcpy` identifiers
+succeeded, rather than scanning the entire project. A bounded source scan
+checks up to 1,048,576 characters per file within a shared 30-second budget.
+Semgrep is not required for this check. For files not selected from source,
+the compiler expands macros and RAPTOR checks for live `memcpy` identifiers
 at original source locations, including lowercase wrappers and header-defined
-aliases. This fallback does not require Semgrep to parse expanded compiler
-extensions. Comments, quoted text and identifiers originating only in header
+aliases. Neither candidate path needs a language parser. Comments, quoted text
+and identifiers originating only in expanded header
 bodies are excluded. An identifier selects a file for analysis; it is not itself
-a finding.
+a finding. Declarations and function-pointer references can also select files;
+only the compiler's overlap diagnostic can produce a finding.
 
 The fallback expands at most 50 files and processes at most 32 MiB of expanded
 text, keeping one view at a time. It shares an overall 60-second candidate

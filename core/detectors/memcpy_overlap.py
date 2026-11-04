@@ -1,4 +1,4 @@
-"""Compose internal Semgrep candidates with a supplemental GCC overlap pass.
+"""Compose bounded identifier candidates with a supplemental GCC overlap pass.
 
 The ordinary compiler pass remains authoritative for its own diagnostics. This
 pass disables memcpy builtin lowering so GCC's analyzer can see the copy call;
@@ -8,33 +8,27 @@ hypothesis. Candidate errors and unsupported compilers limit this pass only.
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 import os
-import math
 import re
 from time import monotonic
 
 from core.audit.run_memo import BoundedMemo
 from .setup import AnalysisSetup
 from core.run.scratch import scratch_dir
+from core.source import read_text_capped
 from core.source.strip import blank_c_noncode
 
 from .compiler import CompilerRequest, run_compiler_analysis
 from .pipeline import Detector, DetectorResult, Stage, StageResult, run_detector
-from .semgrep import PreparedInput, define_semgrep_detector, run_semgrep_analysis
 
-_RULE = Path(__file__).parent / "rules" / "memcpy_candidates.yaml"
-_CANDIDATES = define_semgrep_detector("memcpy-overlap-candidates", "1")
-# Leave argv headroom for the sandbox launcher and environment on small-ARG_MAX
-# platforms. Each batch shares the original overall candidate-scan deadline.
-_CANDIDATE_ARG_BYTES = 32_768
 _CANDIDATE_SECONDS = 60
 _RAW_CANDIDATE_SECONDS = 30
+_RAW_SOURCE_CHARS = 1024 * 1024
 OVERLAP_ID = "-Wanalyzer-overlapping-buffers"
 
 
@@ -54,22 +48,6 @@ class OverlapAnalysis:
 
 def _limited(state: OverlapAnalysis, reason: str, *, tu: str = "") -> None:
     state.limitations.append({"tu": tu, "reason": reason})
-
-
-def _target_batches(paths: list[Path]) -> Iterator[tuple[Path, ...]]:
-    batch: list[Path] = []
-    used = 0
-    for path in paths:
-        size = len(os.fsencode(path)) + 1
-        if size > _CANDIDATE_ARG_BYTES:
-            raise ValueError("candidate path exceeds argument budget")
-        if batch and used + size > _CANDIDATE_ARG_BYTES:
-            yield tuple(batch)
-            batch, used = [], 0
-        batch.append(path)
-        used += size
-    if batch:
-        yield tuple(batch)
 
 
 _EXPANDED_BYTE_BUDGET = 32 * 1024 * 1024
@@ -120,10 +98,11 @@ def _expanded_candidates(state: OverlapAnalysis, paths: set[Path], deadline: flo
                 # removed inactive arms and spliced escaped newlines. Do not
                 # remove header declarations or reparse the translation unit:
                 # compiler extensions must not hide a later candidate token.
+                origins = {rel, (root / rel).resolve().relative_to(root).as_posix()}
                 code = blank_c_noncode(view.text, allow_digit_separators=True)
                 for lineno, line in enumerate(code.split("\n"), 1):  # line-model: cpp output and its map use literal \n
                     origin = view.origin_of(lineno)
-                    if origin is not None and origin[0] == rel and _MEMCPY_TOKEN.search(line):
+                    if origin is not None and origin[0] in origins and _MEMCPY_TOKEN.search(line):
                         state.candidates.add(rel)
                         break
                 del code, view
@@ -142,60 +121,50 @@ def _candidates(state: OverlapAnalysis) -> StageResult:
     if state.request_for is None:
         _limited(state, "memcpy overlap check requires the GCC analyzer")
         return StageResult("skipped", "GCC analyzer unavailable")
-    from packages.semgrep.runner import is_available
-    if not is_available():
-        _limited(state, "memcpy overlap candidate check requires Semgrep")
-        return StageResult("skipped", "Semgrep unavailable")
-
     allowed = set(state.files)
     root = state.target.resolve()
 
-    def select(findings):
-        matches = set()
-        for finding in findings:
-            path = Path(finding.file)
-            if not path.is_absolute():
-                path = state.target / path
-            try:
-                rel = path.resolve().relative_to(root).as_posix()
-            except (ValueError, OSError):
-                continue
-            if rel in allowed:
-                matches.add(rel)
-        return [{"file": rel} for rel in sorted(matches)], 0
-
     paths = set()
+    resolved_inputs = {}
     incomplete = False
     for rel in sorted(allowed):
         try:
             if Path(rel).is_absolute() or ".." in Path(rel).parts:
                 raise ValueError("not a repository-relative path")
-            path = (root / rel).resolve(strict=True)
-            path.relative_to(root)
-            if not path.is_file():
+            path = root / rel
+            resolved = path.resolve(strict=True)
+            resolved.relative_to(root)
+            if not resolved.is_file():
                 raise ValueError("not a regular source file")
             paths.add(path)
+            resolved_inputs[path] = resolved
         except (ValueError, OSError, RuntimeError):
             _limited(state, "memcpy candidate input is unavailable or outside the target", tu=rel)
             incomplete = True
     deadline = monotonic() + _CANDIDATE_SECONDS
     raw_deadline = min(deadline, monotonic() + _RAW_CANDIDATE_SECONDS)
-    for batch in _target_batches(sorted(paths)):
-        remaining = raw_deadline - monotonic()
-        if remaining <= 0:
+    for path in sorted(paths):
+        if monotonic() >= raw_deadline:
+            _limited(state, "memcpy source candidate budget exhausted")
             incomplete = True
             break
-        prepared = PreparedInput(batch[0], select, extra_targets=batch[1:], target_root=root)
-
-        def prepare(item: PreparedInput = prepared) -> nullcontext[PreparedInput]:
-            return nullcontext(item)
-
-        execution = run_semgrep_analysis(
-            detector=_CANDIDATES, prepare=prepare,
-            rule_config=str(_RULE), timeout=math.ceil(remaining),
-        )
-        state.candidates.update(m["file"] for m in execution.value.matches)
-        incomplete |= execution.status != "complete" or execution.value.coverage_incomplete
+        got = read_text_capped(resolved_inputs[path], _RAW_SOURCE_CHARS)
+        rel = path.relative_to(root).as_posix()
+        if got is None:
+            _limited(state, "memcpy source candidate input unreadable", tu=rel)
+            incomplete = True
+            continue
+        text, truncated = got
+        # C line splicing precedes comment/string handling. This also keeps
+        # identifiers split by escaped newlines visible without a parser.
+        spliced = text.replace("\\\n", "")
+        if (_MEMCPY_TOKEN.search(spliced) is not None
+                and _MEMCPY_TOKEN.search(blank_c_noncode(spliced, allow_digit_separators=True)) is not None):
+            state.candidates.add(rel)
+        elif truncated:
+            _limited(state, "memcpy source candidate input exceeds the read budget", tu=rel)
+            incomplete = True
+        del text, spliced, got
     incomplete |= _expanded_candidates(state, paths, deadline)
     if incomplete:
         _limited(state, "memcpy overlap candidate scan was incomplete")
@@ -247,7 +216,7 @@ def _compile(state: OverlapAnalysis) -> StageResult:
 
 
 DETECTOR = Detector(
-    "memcpy-overlap", "1",
+    "memcpy-overlap", "2",
     (Stage("candidates", _candidates), Stage("compiler", _compile)),
 )
 

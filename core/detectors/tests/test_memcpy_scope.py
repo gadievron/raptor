@@ -1,5 +1,4 @@
-"""Candidate inputs, containment and one shared wall budget across batches."""
-from pathlib import Path
+"""Candidate scope, bounded source reads and parser-independent selection."""
 from types import SimpleNamespace
 import os
 
@@ -14,30 +13,25 @@ def setup(tmp_path, monkeypatch):
     root = tmp_path / "repo"
     root.mkdir()
     for name in ("a.c", "b.c", "c.c", "not-selected.c"):
-        (root / name).write_text("void f(void) {}\n")
+        (root / name).write_text("void f(void) { memcpy(d,s,n); }\n")
     calls = []
-    monkeypatch.setattr("packages.semgrep.runner.is_available", lambda: True)
-
-    def run(first, config, **kwargs):
-        paths = (first, *kwargs.get("extra_targets", ()))
-        calls.append((paths, kwargs))
-        return SimpleNamespace(findings=[SimpleNamespace(file=str(p)) for p in paths], errors=[])
-
-    monkeypatch.setattr("packages.semgrep.runner.run_rule", run)
-
+    original = overlap.read_text_capped
+    def read(path, *args, **kwargs):
+        calls.append(path)
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(overlap, 'read_text_capped', read)
+    monkeypatch.setattr("packages.semgrep.runner.run_rule",
+                        lambda *a, **kw: pytest.fail('candidate discovery must not launch Semgrep'))
     def state(files=("a.c", "b.c")):
         return overlap.OverlapAnalysis(root, files, lambda rel: None, lambda *a, **kw: None)
-
     return root, calls, state
 
 
-def test_only_eligible_files_are_positional_inputs(setup):
+def test_only_eligible_files_are_read(setup):
     root, calls, make = setup
     state = make()
     assert overlap._candidates(state).status == "complete"
-    assert calls[0][0] == (root / "a.c", root / "b.c")
-    assert calls[0][1]["target_root"] == root
-    assert root not in calls[0][0]
+    assert calls == [root / "a.c", root / "b.c"]
     assert state.candidates == {"a.c", "b.c"}
 
 
@@ -45,26 +39,33 @@ def test_literal_file_names_and_duplicate_inputs(setup):
     root, calls, make = setup
     names = ("space [*]?.c", "--option.c", "snow-雪.c")
     for name in names:
-        (root / name).write_text("void f(void) {}\n")
+        (root / name).write_text("memcpy(d,s,n);\n")
     state = make((*names, names[0]))
     overlap._candidates(state)
-    assert set(calls[0][0]) == {root / name for name in names}
-    assert len(calls[0][0]) == len(names)
-    assert state.candidates == set(names)
+    assert set(calls) == {root / name for name in names}
+    assert len(calls) == len(names) and state.candidates == set(names)
 
 
-@pytest.mark.parametrize("invalid", ["../outside.c", "link.c", "missing.c", "directory.c"])
+@pytest.mark.parametrize("invalid", ["../outside.c", "link.c", "missing.c", "directory.c", "fifo.c"])
 def test_invalid_inputs_never_grant_an_outside_read(setup, tmp_path, invalid):
     root, calls, make = setup
     outside = tmp_path / "outside.c"
     outside.write_text("secret\n")
     (root / "link.c").symlink_to(outside)
     (root / "directory.c").mkdir()
+    os.mkfifo(root / 'fifo.c')
     state = make(("a.c", invalid))
     assert overlap._candidates(state).status == "partial"
-    assert calls[0][0] == (root / "a.c",)
-    assert state.candidates == {"a.c"}
+    assert calls == [root / "a.c"] and state.candidates == {"a.c"}
     assert state.limitations
+
+
+def test_contained_alias_preserves_eligible_tu_identity(setup):
+    root, calls, make = setup
+    (root / 'alias.c').symlink_to(root / 'a.c')
+    state = make(('alias.c',))
+    assert overlap._candidates(state).status == 'complete'
+    assert calls == [root / 'a.c'] and state.candidates == {'alias.c'}
 
 
 def test_all_unavailable_inputs_do_not_scan_the_root(setup):
@@ -76,62 +77,57 @@ def test_all_unavailable_inputs_do_not_scan_the_root(setup):
 
 def test_deadline_is_shared_and_keeps_prior_candidates(setup, monkeypatch):
     root, calls, make = setup
-    size = max(len(os.fsencode(root / f"{name}.c")) + 1 for name in "abc")
-    monkeypatch.setattr(overlap, "_CANDIDATE_ARG_BYTES", size)
     now = [0.0]
     monkeypatch.setattr(overlap, "monotonic", lambda: now[0])
-
-    def run(first, config, **kw):
-        calls.append(((first, *kw.get("extra_targets", ())), kw))
+    original = overlap.read_text_capped
+    def read(*args, **kwargs):
         now[0] += 20
-        return SimpleNamespace(findings=[SimpleNamespace(file=str(first))], errors=[])
-
-    monkeypatch.setattr("packages.semgrep.runner.run_rule", run)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(overlap, 'read_text_capped', read)
     state = make(("a.c", "b.c", "c.c"))
     assert overlap._candidates(state).status == "partial"
-    assert [kw["timeout"] for _, kw in calls] == [30, 10]
-    assert state.candidates == {"a.c", "b.c"}
-    assert state.limitations
+    assert calls == [root / 'a.c', root / 'b.c']
+    assert state.candidates == {"a.c", "b.c"} and state.limitations
 
 
-def test_failed_batch_does_not_hide_later_valid_candidates(setup, monkeypatch):
+def test_unreadable_input_does_not_hide_later_candidates(setup, monkeypatch):
     root, calls, make = setup
-    size = max(len(os.fsencode(root / f"{name}.c")) + 1 for name in "ab")
-    monkeypatch.setattr(overlap, "_CANDIDATE_ARG_BYTES", size)
-
-    def run(first, config, **kw):
-        calls.append(((first,), kw))
-        if first.name == "a.c":
-            return SimpleNamespace(findings=[], errors=["parse error"])
-        return SimpleNamespace(findings=[SimpleNamespace(file=str(first))], errors=[])
-
-    monkeypatch.setattr("packages.semgrep.runner.run_rule", run)
+    original = overlap.read_text_capped
+    monkeypatch.setattr(overlap, 'read_text_capped', lambda path, *a, **kw:
+                        None if path.name == 'a.c' else original(path, *a, **kw))
     state = make()
     assert overlap._candidates(state).status == "partial"
-    assert state.candidates == {"b.c"} and len(calls) == 2
+    assert state.candidates == {"b.c"} and calls == [root / 'b.c']
 
 
-def test_argument_budget_counts_encoded_bytes(monkeypatch):
-    paths = [Path("/雪/first.c"), Path("/雪/second.c")]
-    size = max(len(os.fsencode(p)) + 1 for p in paths)
-    monkeypatch.setattr(overlap, "_CANDIDATE_ARG_BYTES", size)
-    batches = list(overlap._target_batches(paths))
-    assert batches == [(paths[0],), (paths[1],)]
-    assert all(sum(len(os.fsencode(p)) + 1 for p in b) <= size for b in batches)
-    with pytest.raises(ValueError, match="argument budget"):
-        list(overlap._target_batches([Path("/" + "a" * size)]))
-
-
-def test_raw_parser_coverage_failures_are_reported_but_keep_candidates(setup, monkeypatch):
+@pytest.mark.parametrize('content,expected,limited', [
+    ('memcpy(d,s,n);\n' + 'x' * 100, True, False),
+    ('x' * 100 + '\nmemcpy(d,s,n);', False, True),
+])
+def test_capped_read_selects_known_candidates_and_reports_unknown_tail(setup, monkeypatch, content, expected, limited):
     root, _, make = setup
-    monkeypatch.setattr('packages.semgrep.runner.run_rule', lambda *a, **kw: SimpleNamespace(
-        findings=[SimpleNamespace(file=str(root / 'a.c'))], errors=[],
-        skipped_summary={'total': 1},
-    ))
+    (root / 'a.c').write_text(content)
+    monkeypatch.setattr(overlap, '_RAW_SOURCE_CHARS', 20)
     state = make(('a.c',))
-    assert overlap._candidates(state).status == 'partial'
-    assert state.candidates == {'a.c'} and state.limitations
+    overlap._candidates(state)
+    assert ('a.c' in state.candidates) is expected
+    assert bool(state.limitations) is limited
 
+
+@pytest.mark.parametrize('content,expected', [
+    ('memcpy(d,s,n);', True), ('(memcpy)(d,s,n);', True), ('copy = &memcpy;', True),
+    ('mem\\\ncpy(d,s,n);', True), ('// continuation\\\nmemcpy(d,s,n);', False),
+    ("int n=1'000; memcpy(d,s,n);", True),
+    ("typedef __typeof__(nullptr) nullptr_t; memcpy(d,s,n);", True), ('/* memcpy(d,s,n) */', False),
+    ('const char *s="memcpy(d,s,n)";', False), ('memcpy_prefix(d,s,n);', False),
+    ('$memcpy(d,s,n); memcpy$(d,s,n);', False),
+])
+def test_raw_identifier_gate_is_conservative_and_lexically_aware(setup, content, expected):
+    root, _, make = setup
+    (root / 'a.c').write_text(content)
+    state = make(('a.c',))
+    overlap._candidates(state)
+    assert ('a.c' in state.candidates) is expected and not state.limitations
 
 
 @pytest.fixture
@@ -235,15 +231,27 @@ def test_macro_resource_limits_preserve_raw_candidates(macro_setup, monkeypatch,
     if prepared: assert not prepared[0]['out_dir'].exists()
 
 
-@pytest.mark.parametrize('version', ['1.79.0', '', '1.177.0'])
-def test_raw_engine_failure_does_not_disable_expanded_candidates(macro_setup, monkeypatch, version):
+@pytest.mark.parametrize('available', [False, True])
+def test_expanded_candidates_do_not_depend_on_semgrep_availability(macro_setup, monkeypatch, available):
     state, prepared, _, _ = macro_setup
     state.files = ('macro.c', 'clean.c')
     state.candidates.clear()
-    monkeypatch.setattr('packages.semgrep.runner.is_available', lambda: True)
-    monkeypatch.setattr('packages.semgrep.runner.run_rule', lambda *a, **kw: SimpleNamespace(
-        findings=[], errors=['rule or parser unsupported'], semgrep_version=version,
-    ))
-    assert overlap._candidates(state).status == 'partial'
+    monkeypatch.setattr('packages.semgrep.runner.is_available', lambda: available)
+    assert overlap._candidates(state).status == 'complete'
     assert state.candidates == {'macro.c'} and len(prepared) == 2
-    assert state.limitations and not state.diagnostics
+    assert not state.limitations and not state.diagnostics
+
+
+def test_expanded_alias_keeps_the_supplied_tu_identity(macro_setup, monkeypatch):
+    state, _, _, pv = macro_setup
+    (state.target / 'alias.c').symlink_to(state.target / 'macro.c')
+    state.files = ('alias.c',)
+    state.candidates.clear()
+    seen = []
+    def expand(**kwargs):
+        seen.append(kwargs['file_path'])
+        return pv.ExpandedView(ok=True, file_path=kwargs['file_path'],
+                               text='memcpy(p,b,16);', line_map=(('macro.c', 4),))
+    monkeypatch.setattr(pv, 'expand_translation_unit', expand)
+    assert overlap._candidates(state).status == 'complete'
+    assert state.candidates == {'alias.c'} and seen == ['alias.c']
