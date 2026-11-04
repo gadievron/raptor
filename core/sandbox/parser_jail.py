@@ -168,7 +168,7 @@ def _validate_verdict(payload: bytes) -> "ParsedRequestLine | ParseRefusal":
     """
     try:
         obj = json.loads(payload)
-    except (ValueError, UnicodeDecodeError) as exc:
+    except (ValueError, UnicodeDecodeError, RecursionError) as exc:
         raise _ProtocolError(f"verdict frame is not valid JSON: {exc}") from exc
     if not isinstance(obj, dict):
         raise _ProtocolError("verdict frame is not a JSON object")
@@ -184,7 +184,7 @@ def _validate_verdict(payload: bytes) -> "ParsedRequestLine | ParseRefusal":
                 or len(reason) > _MAX_REASON_LEN):
             raise _ProtocolError("reason field violates type/length contract")
         census = obj.get("census")
-        if census not in CENSUS_VALUES:
+        if not isinstance(census, str) or census not in CENSUS_VALUES:
             # Strict enum check (missing field included): the census
             # drives the proxy's requests_connect/requests_non_connect
             # counters, so a worker that stops classifying — or stamps
@@ -447,27 +447,42 @@ class ParserJail:
                     self._reap_locked(proc)
 
     def _read_ready_frame(self, sock: socket.socket) -> dict:
+        deadline = time.monotonic() + _READY_TIMEOUT_S
         length, frame_id = FRAME_HEADER.unpack(
-            self._recv_exact(sock, FRAME_HEADER.size))
+            self._recv_exact(sock, FRAME_HEADER.size, deadline=deadline))
         if frame_id != READY_FRAME_ID or length > MAX_FRAME_PAYLOAD:
             raise _ProtocolError("malformed ready frame header")
         try:
-            obj = json.loads(self._recv_exact(sock, length))
-        except (ValueError, UnicodeDecodeError) as exc:
+            obj = json.loads(self._recv_exact(sock, length, deadline=deadline))
+        except (ValueError, UnicodeDecodeError, RecursionError) as exc:
             raise _ProtocolError("ready frame is not valid JSON") from exc
         if not isinstance(obj, dict):
             raise _ProtocolError("ready frame is not a JSON object")
         return obj
 
     @staticmethod
-    def _recv_exact(sock: socket.socket, n: int) -> bytes:
-        buf = b""
-        while len(buf) < n:
-            chunk = sock.recv(n - len(buf))
-            if not chunk:
-                raise OSError("parser worker closed the socket")
-            buf += chunk
-        return buf
+    def _recv_exact(sock: socket.socket, n: int, *, deadline: float) -> bytes:
+        # Socket timeouts apply to individual recv calls. Recompute the
+        # remaining budget so fragmented input cannot extend the frame's
+        # deadline, and share that deadline across header and payload.
+        timeout = sock.gettimeout()
+        buf = bytearray()
+        try:
+            while len(buf) < n:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise socket.timeout("parser worker frame deadline exceeded")
+                sock.settimeout(remaining)
+                chunk = sock.recv(n - len(buf))
+                if not chunk:
+                    raise OSError("parser worker closed the socket")
+                buf.extend(chunk)
+            return bytes(buf)
+        finally:
+            try:
+                sock.settimeout(timeout)
+            except OSError:
+                pass
 
     @staticmethod
     def _new_req_id() -> int:
@@ -495,16 +510,18 @@ class ParserJail:
         # (a pre-queued frame or stream garbage): kill, deny, respawn.
         # Zero-timeout readability probe, then a peek to distinguish
         # data from EOF (a worker that died between requests).
-        readable, _, _ = select.select([sock], [], [], 0)
-        if readable:
+        poller = select.poll()
+        poller.register(sock, select.POLLIN)
+        if poller.poll(0):
             if sock.recv(1, socket.MSG_PEEK):
                 raise _ProtocolError(
                     "unsolicited bytes from worker before request")
             raise OSError("parser worker closed the socket")
         req_id = self._new_req_id()
+        deadline = time.monotonic() + _ROUNDTRIP_TIMEOUT_S
         try:
             sock.sendall(FRAME_HEADER.pack(len(raw), req_id) + raw)
-            header = self._recv_exact(sock, FRAME_HEADER.size)
+            header = self._recv_exact(sock, FRAME_HEADER.size, deadline=deadline)
         except socket.timeout as exc:
             # Wedged worker: kill via the OSError path in parse().
             raise OSError("parser worker round-trip timed out") from exc
@@ -517,7 +534,7 @@ class ParserJail:
             # can be attributed safely.
             raise _ProtocolError("verdict frame id desync")
         try:
-            payload = self._recv_exact(sock, length)
+            payload = self._recv_exact(sock, length, deadline=deadline)
         except socket.timeout as exc:
             raise OSError("parser worker round-trip timed out") from exc
         return _validate_verdict(payload)
