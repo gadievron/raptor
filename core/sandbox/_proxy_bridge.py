@@ -313,18 +313,24 @@ def _run_bridges(bridges, death_r, ready_cb=None) -> None:
                     # accumulating unbounded fds.
                     client_sock.close()
                     continue
-                client_sock.setblocking(False)
-
-                unix_sock = socket.socket(
-                    socket.AF_UNIX, socket.SOCK_STREAM,
-                )
+                unix_sock = None
                 try:
+                    client_sock.setblocking(False)
+                    unix_sock = socket.socket(
+                        socket.AF_UNIX, socket.SOCK_STREAM,
+                    )
                     unix_sock.connect(unix_socket_path)
+                    unix_sock.setblocking(False)
                 except OSError:
-                    client_sock.close()
-                    unix_sock.close()
+                    # Resource pressure or a failed upstream affects
+                    # this connection only; keep existing relays alive.
+                    for sock in (client_sock, unix_sock):
+                        if sock is not None:
+                            try:
+                                sock.close()
+                            except OSError:
+                                pass
                     continue
-                unix_sock.setblocking(False)
 
                 c_fd = client_sock.detach()
                 u_fd = unix_sock.detach()
