@@ -149,7 +149,9 @@ def _read_existing_key(path: Path):
     permission bits on an own-uid file — states no honest writer
     produces; the caller quarantines and re-keys)."""
     try:
-        fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW)
+        # O_NONBLOCK lets fstat reject a FIFO without waiting for a
+        # writer. It has no effect on regular-file reads.
+        fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError:
         return None
     except OSError as exc:
@@ -368,7 +370,12 @@ def _load_or_create_key() -> bytes | None:
                 )
             return None
         try:
-            os.write(fd, key)
+            remaining = memoryview(key)
+            while remaining:
+                written = os.write(fd, remaining)
+                if written <= 0:
+                    raise OSError(errno.EIO, "telemetry key write made no progress")
+                remaining = remaining[written:]
         finally:
             os.close(fd)
         return key
