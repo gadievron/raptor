@@ -252,6 +252,29 @@ class TestGetReviewedSet:
         assert "src/a.c:reviewed" in get_reviewed_set(tmp_path)
 
 
+def _review_contract_config(**overrides):
+    """Keep canned-review contracts out of unrelated tool/model phases.
+
+    Actual verification, refinement, discovery and recall wiring have
+    dedicated classes below; these cases pin loop and persistence behavior.
+    """
+    options = dict(
+        max_workers=1,
+        joern_overrides={"enabled": False},
+        prefilter=False,
+        validate=False,
+        immediate_verify=False,
+        sweep_validate_findings=False,
+        max_refinements=0,
+        deepen_suspicious=False,
+        open_discovery=False,
+        sage_recall=False,
+        iris=False,
+    )
+    options.update(overrides)
+    return OrchestratorConfig(**options)
+
+
 @pytest.fixture
 def _no_native_review_tools(monkeypatch):
     """Keep fake-review contracts independent of installed native tools.
@@ -272,9 +295,32 @@ def _no_native_review_tools(monkeypatch):
     monkeypatch.setattr(
         "core.audit.orchestrator._study_consumer", lambda *a, **k: None,
     )
+    # Client construction itself discovers host backends. Keep it local,
+    # and fail if an auxiliary phase tries to bypass the fake reviewer.
+    from types import SimpleNamespace
+
+    attempted_model_calls = []
+
+    def unexpected_model_call(*args, **kwargs):
+        attempted_model_calls.append(True)
+        pytest.fail("fake-review contract attempted an auxiliary model call")
+
+    client = SimpleNamespace(generate=unexpected_model_call)
+    monkeypatch.setattr(
+        "core.audit.orchestrator._run_llm_client", lambda config: client,
+    )
+    # These cases assert error counts/journal verdicts, not provider error
+    # taxonomy (covered by test_error_retry and test_timeout_recovery).
+    monkeypatch.setattr(
+        "core.audit.orchestrator._classify_error", lambda *a, **k: "internal",
+    )
+    monkeypatch.setattr(
+        "core.audit.environment.note_dispatch_failure", lambda *a, **k: None,
+    )
+    yield
+    assert not attempted_model_calls, "an auxiliary model-call failure was swallowed"
 
 
-@pytest.mark.slow
 @pytest.mark.usefixtures("_no_native_review_tools")
 class TestRunOrchestrator:
     """Review-loop contracts with fake reviews; live Joern has dedicated tests."""
@@ -291,7 +337,7 @@ class TestRunOrchestrator:
                 model="test-model",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             target_path=target, out_dir=out, resume=False,
             joern_overrides={"enabled": False},
         )
@@ -311,7 +357,7 @@ class TestRunOrchestrator:
                 body="ok",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             target_path=target, out_dir=out, budget=1, resume=False,
             joern_overrides={"enabled": False},
         )
@@ -337,7 +383,7 @@ class TestRunOrchestrator:
                 body="ok",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             target_path=target, out_dir=out, resume=True,
             joern_overrides={"enabled": False},
         )
@@ -359,7 +405,7 @@ class TestRunOrchestrator:
                 body="ok",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             target_path=target, out_dir=out, resume=False,
             joern_overrides={"enabled": False},
         )
@@ -379,7 +425,7 @@ class TestRunOrchestrator:
                 cost_usd=1.0,
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             target_path=target, out_dir=out,
             max_cost_usd=0.5,
             resume=False,
@@ -393,7 +439,7 @@ class TestRunOrchestrator:
     def test_time_budget_terminates(self, tmp_path: Path):
         target, out = _setup_target(tmp_path)
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             target_path=target, out_dir=out,
             max_seconds=0.001,
             resume=False,
@@ -429,7 +475,7 @@ class TestRunOrchestrator:
                 body="ok",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             target_path=target, out_dir=out, resume=False,
             joern_overrides={"enabled": False},
         )
@@ -460,7 +506,7 @@ class TestRunOrchestrator:
                 body="test",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             # hermetic: findings survive to post-loop — without the pin,
             # config.validate (default True) dispatches the real validation
             # pipeline on hosts with a Claude CLI (live spend, minutes).
@@ -493,7 +539,7 @@ class TestRunOrchestrator:
                 body="ok",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             target_path=target, out_dir=out, resume=False,
             max_refinements=0,
             joern_overrides={"enabled": False},
@@ -509,7 +555,7 @@ class TestRunOrchestrator:
         out = tmp_path / "out"
         out.mkdir()
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             target_path=target, out_dir=out,
         )
         result = run_orchestrator(config, lambda c, cfg: None)
@@ -545,7 +591,7 @@ class TestRunOrchestrator:
                 body="ok",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             target_path=target, out_dir=out,
             scope="src/", resume=False,
             joern_overrides={"enabled": False},
@@ -566,7 +612,7 @@ class TestRunOrchestrator:
                 cost_usd=0.01,
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             target_path=target, out_dir=out, resume=False,
             joern_overrides={"enabled": False},
         )
@@ -598,7 +644,7 @@ class TestRunOrchestrator:
                 body="ok",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             target_path=target, out_dir=out, resume=False,
             joern_overrides={"enabled": False},
         )
@@ -653,7 +699,6 @@ def _setup_varied_sloc(tmp_path: Path):
     return target, out
 
 
-@pytest.mark.slow
 @pytest.mark.usefixtures("_no_native_review_tools")
 class TestBatching:
     def test_trivial_functions_batched(self, tmp_path: Path):
@@ -669,7 +714,7 @@ class TestBatching:
                 body="ok",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             open_discovery=False,  # batching uses only the supplied fake reviewer
             joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
@@ -693,7 +738,7 @@ class TestBatching:
                 body="ok",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             open_discovery=False,  # batching uses only the supplied fake reviewer
             joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
@@ -734,7 +779,7 @@ class TestBatching:
                 body="ok",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             open_discovery=False,  # batching uses only the supplied fake reviewer
             joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
@@ -745,7 +790,6 @@ class TestBatching:
         assert len(batch_contexts) == 0
 
 
-@pytest.mark.slow
 @pytest.mark.usefixtures("_no_native_review_tools")
 class TestContentFilter:
     def test_content_filter_records_error(self, tmp_path: Path):
@@ -763,7 +807,7 @@ class TestContentFilter:
                 body="ok",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
             batch_sloc_threshold=0,
@@ -775,7 +819,6 @@ class TestContentFilter:
         assert "content filter" in error_outcome.body
 
 
-@pytest.mark.slow
 @pytest.mark.usefixtures("_no_native_review_tools")
 class TestCheckedByLabels:
     def test_checked_by_written_to_journal(self, tmp_path: Path):
@@ -790,7 +833,7 @@ class TestCheckedByLabels:
                 model="gpt-test",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
             batch_sloc_threshold=0,
@@ -814,7 +857,7 @@ class TestCheckedByLabels:
             call_count[0] += 1
             raise RuntimeError("boom")
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
             batch_sloc_threshold=0,
@@ -838,7 +881,7 @@ class TestCheckedByLabels:
                 model="test-m",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
             batch_sloc_threshold=0,
@@ -856,7 +899,6 @@ class TestCheckedByLabels:
         assert check_pw.producer == "audit"
 
 
-@pytest.mark.slow
 @pytest.mark.usefixtures("_no_native_review_tools")
 class TestFuzzCoverage:
     def test_fuzz_data_passed_to_context(self, tmp_path: Path):
@@ -886,7 +928,7 @@ class TestFuzzCoverage:
                 body="ok",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
             batch_sloc_threshold=0,
@@ -922,7 +964,7 @@ class TestFuzzCoverage:
                 body="ok",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
             batch_sloc_threshold=0,
@@ -942,7 +984,7 @@ class TestFuzzCoverage:
                 body="ok",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
             batch_sloc_threshold=0,
@@ -951,7 +993,6 @@ class TestFuzzCoverage:
         assert result.reviewed == 2
 
 
-@pytest.mark.slow
 @pytest.mark.usefixtures("_no_native_review_tools")
 class TestConstraintWiring:
     def test_constraints_extracted_and_saved(self, tmp_path: Path):
@@ -974,7 +1015,7 @@ class TestConstraintWiring:
                 },
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
             propagate_constraints=True,
@@ -1005,7 +1046,7 @@ class TestConstraintWiring:
                 },
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
             propagate_constraints=False,
@@ -1025,7 +1066,7 @@ class TestConstraintWiring:
                 body="ok",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
             propagate_constraints=True,

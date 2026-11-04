@@ -2692,7 +2692,7 @@ def review_one_function(
     contains "budget exceeded") when the LLM client exhausts its cost
     cap — the caller is expected to catch this and break the loop.
     """
-    from core.llm.client import LLMBudgetExceededError
+    from core.llm.budget_errors import LLMBudgetExceededError
 
     from .negative_space import check_negative_space
 
@@ -3843,7 +3843,7 @@ def review_one_function(
                 body="blocked by content filter",
             )
         except Exception as exc:
-            from core.llm.client import is_budget_exceeded_error
+            from core.llm.budget_errors import is_budget_exceeded_error
 
             result.cost_tracker.record_failed_attempt(
                 "review", cost_usd=0.0,
@@ -14579,7 +14579,7 @@ def _is_budget_exceeded(exc: Exception) -> bool:
     per-function 'error' outcome (or dispatching another fallback
     pass) hides the stop signal and keeps spending past the cap.
     """
-    from core.llm.client import is_budget_exceeded_error
+    from core.llm.budget_errors import is_budget_exceeded_error
     return isinstance(exc, RuntimeError) and is_budget_exceeded_error(exc)
 
 
@@ -14938,7 +14938,7 @@ def _classify_error(
     # model-chosen content, and the "budget" class drops the row from
     # the recoverable retry lanes — the classifier vetoes shape
     # failures on the causal chain.
-    from core.llm.client import is_budget_exceeded_error
+    from core.llm.budget_errors import is_budget_exceeded_error
     if is_budget_exceeded_error(exc):
         return "budget"
     # Environmental failures (see environment.marks_row_environment:
@@ -15073,7 +15073,7 @@ def _timeout_reduced_retry(
     try:
         outcome = review_fn(ctx, config)
     except Exception as retry_exc:
-        from core.llm.client import is_budget_exceeded_error
+        from core.llm.budget_errors import is_budget_exceeded_error
 
         if is_budget_exceeded_error(retry_exc):
             raise
@@ -15167,7 +15167,7 @@ def _retry_error_outcomes(
         try:
             new_outcome = review_fn(ctx, config)
         except Exception as exc:  # noqa: BLE001
-            from core.llm.client import is_budget_exceeded_error
+            from core.llm.budget_errors import is_budget_exceeded_error
 
             if is_budget_exceeded_error(exc):
                 # Terminal: every remaining retry would fail the same
@@ -16282,7 +16282,7 @@ def _is_config_shaped_study_failure(exc: BaseException) -> bool:
     """Chain-walked probe for the study phase's deterministic-config
     marker (persistent output truncation past the phase cap)."""
     try:
-        from core.llm.client import _exception_chain
+        from core.llm.budget_errors import _exception_chain
         return any(
             getattr(e, "config_shaped", False)
             for e in _exception_chain(exc)
@@ -19585,7 +19585,7 @@ def _review_items(
     same post-review verification (sweep validation, proactive validation,
     refinement, chain injection, etc.) as individually reviewed functions.
     """
-    from core.llm.client import LLMBudgetExceededError
+    from core.llm.budget_errors import LLMBudgetExceededError
 
     siblings = [
         f"{g['name']} (L{g.get('line_start', '?')}-{g.get('line_end', '?')})"
@@ -26927,7 +26927,7 @@ def _deepen_suspicious(
         _, prior_outcome, gap, ctx = idx_to_prepared[idx]
 
         if exc is not None:
-            from core.llm.client import is_budget_exceeded_error
+            from core.llm.budget_errors import is_budget_exceeded_error
 
             if is_budget_exceeded_error(exc):
                 # Terminal — the client-aware _check_budget above stops
@@ -27579,7 +27579,7 @@ def _iterative_re_review(
             _, gap, ctx = idx_to_prepared[idx]
 
             if exc is not None:
-                from core.llm.client import is_budget_exceeded_error
+                from core.llm.budget_errors import is_budget_exceeded_error
 
                 if is_budget_exceeded_error(exc):
                     # Terminal — keep the original outcome; do not

@@ -223,6 +223,27 @@ class TestBudgetClassifierContentGate:
         "required": ["verdict"],
     }
 
+    def test_client_exports_keep_type_identity_and_legacy_pickles(self):
+        import pickle
+        from core.llm import budget_errors, client
+
+        assert client.is_budget_exceeded_error is budget_errors.is_budget_exceeded_error
+        for name in (
+            "LLMBudgetExceededError", "LLMDegradedModeError", "LLMGovernorExceededError",
+        ):
+            error_type = getattr(budget_errors, name)
+            assert getattr(client, name) is error_type
+            error = error_type("fixture cap")
+            assert type(pickle.loads(pickle.dumps(error))) is error_type
+            # Protocol 0 encodes GLOBAL names as newline-delimited text:
+            # reproduce the old public module path without changing args.
+            legacy = pickle.dumps(error, protocol=0).replace(
+                b"ccore.llm.budget_errors\n", b"ccore.llm.client\n",
+            )
+            restored = pickle.loads(legacy)
+            assert type(restored) is error_type
+            assert str(restored) == "fixture cap"
+
     def test_typed_budget_error_classifies(self) -> None:
         from core.llm.client import (
             LLMBudgetExceededError,
