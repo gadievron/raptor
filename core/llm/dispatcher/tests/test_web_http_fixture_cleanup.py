@@ -22,7 +22,7 @@ _CASES = [
 @pytest.mark.parametrize(
     "module_name,name,kind,argument", _CASES, ids=[f"{m}.{n}" for m, n, _, _ in _CASES]
 )
-@pytest.mark.parametrize("fault", ["construction", "start", "none"])
+@pytest.mark.parametrize("fault", ["construction", "start", "after-start", "none"])
 def test_http_fixture_owns_listener(
     module_name,
     name,
@@ -48,12 +48,24 @@ def test_http_fixture_owns_listener(
 
     class StartFailure(real_thread):
         def start(self):
+            if fault == "after-start":
+                ready = threading.Event()
+                server = self._target.__self__
+                action = server.service_actions
+
+                def observe():
+                    action()
+                    ready.set()
+
+                server.service_actions = observe
+                super().start()
+                assert ready.wait(3), "HTTP serving loop did not start"
             raise RuntimeError("injected HTTP thread start failure")
 
     def thread(*args, **kwargs):
         if fault == "construction":
             raise RuntimeError("injected HTTP thread construction failure")
-        cls = StartFailure if fault == "start" else real_thread
+        cls = StartFailure if fault in ("start", "after-start") else real_thread
         instance = cls(*args, **kwargs)
         threads.append(instance)
         return instance
