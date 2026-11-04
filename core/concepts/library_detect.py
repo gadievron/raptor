@@ -19,8 +19,17 @@ import logging
 import os
 import re
 import subprocess
+import stat
 import tarfile
+import uuid
 from pathlib import Path
+
+from core.atomic_fs import rmtree_hardened
+from core.atomic_fs.fs_lock import artifact_lock
+from core.json import loads, save_json
+from core.run.scratch import scratch_dir
+from core.source import open_regular_gated, read_bytes_gated
+from core.tar.extract import _TAR_CORRUPTION_ERRORS
 
 _glob_escape = _glob_mod.escape
 
@@ -374,6 +383,13 @@ def _detect_resolver() -> _PackageResolver | None:
 
 # Per-member size cap for library source extraction (256 MiB).
 _EXTRACT_MAX_MEMBER_BYTES = 256 * 1024 * 1024
+# Aggregate limits bound disk/inodes across many individually small members.
+# Raising them admits larger source packages at higher resource cost;
+# lowering them can refuse legitimate large library distributions.
+_EXTRACT_MAX_TOTAL_BYTES = 8 * 1024**3
+_EXTRACT_MAX_ENTRIES = 500_000
+_EXTRACT_STAMP = ".raptor-extract-state.json"
+_EXTRACT_ERRORS = _TAR_CORRUPTION_ERRORS + (ValueError, RuntimeError)
 
 
 def _is_safe_for_extraction(
@@ -413,97 +429,134 @@ def _is_safe_for_extraction(
     return reason.value
 
 
-def _extract_tarball(
-    tarball: Path,
-    cache_dir: Path,
-) -> Path | None:
-    """Extract *tarball* into *cache_dir*, returning the extracted root.
+def _archive_identity(info: os.stat_result) -> dict[str, int]:
+    return {"device": info.st_dev, "inode": info.st_ino,
+            "size": info.st_size, "mtime_ns": info.st_mtime_ns,
+            "ctime_ns": info.st_ctime_ns}
 
-    Extracts only once — if the destination already exists and is
-    non-empty, returns it directly.  Uses RAPTOR's hardened tar
-    safety predicate for all member checks.
+
+def _cache_directory_id(path: Path) -> tuple[int, int] | None:
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISDIR(info.st_mode):
+        raise ValueError("library cache root must be a real directory")
+    return info.st_dev, info.st_ino
+
+
+def _same_archive(stream, tarball: Path, identity: dict[str, int]) -> bool:
+    return (_archive_identity(os.fstat(stream.fileno())) == identity
+            and _archive_identity(tarball.stat()) == identity)
+
+
+def _extract_tarball(tarball: Path, cache_dir: Path) -> Path | None:
+    """Publish a complete, bounded library extraction or keep the old cache.
+
+    A completion manifest binds the cache to the opened archive identity;
+    legacy/unmarked directories are rebuilt. Writers share a required lock.
+    Temporary extraction stays private and on the cache's filesystem.
     """
-    cache_dir.mkdir(parents=True, exist_ok=True)
-
     try:
-        with tarfile.open(tarball, "r:*") as tf:
-            first = tf.getmembers()[0]
-            top_dir = first.name.split("/")[0]
-    except (tarfile.TarError, IndexError, OSError):
-        logger.warning(
-            "library_detect: failed to read tarball %s", tarball,
-            exc_info=True,
-        )
-        return None
-
-    dest = cache_dir / top_dir
-    if dest.is_dir() and any(dest.iterdir()):
-        stamp = dest / ".raptor-extract-mtime"
-        try:
-            tarball_mtime = tarball.stat().st_mtime
-        except OSError:
-            tarball_mtime = 0.0
-        if stamp.is_file():
-            try:
-                cached_mtime = float(stamp.read_text().strip())
-            except (ValueError, OSError):
-                cached_mtime = -1.0
-            if cached_mtime == tarball_mtime:
-                logger.info(
-                    "library_detect: using cached extraction at %s", dest,
-                )
-                return dest
-            logger.info(
-                "library_detect: tarball mtime changed — re-extracting %s",
-                tarball.name,
-            )
-            import shutil
-            shutil.rmtree(dest, ignore_errors=True)
-        else:
-            logger.info(
-                "library_detect: using cached extraction at %s (no stamp)",
-                dest,
-            )
-            return dest
-
-    logger.info(
-        "library_detect: extracting %s → %s", tarball.name, cache_dir,
-    )
-    try:
-        with tarfile.open(tarball, "r:*") as tf:
-            cache_resolved = str(cache_dir.resolve())
-            safe_members = []
-            for member in tf.getmembers():
-                reject = _is_safe_for_extraction(member, cache_resolved)
-                if reject is not None:
-                    logger.warning(
-                        "library_detect: rejecting tarball member %r "
-                        "(%s) — aborting extraction",
-                        member.name, reject,
-                    )
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        with open_regular_gated(tarball) as stream:
+            identity = _archive_identity(os.fstat(stream.fileno()))
+            with tarfile.open(fileobj=stream, mode="r:*") as tf:
+                iterator = iter(tf)
+                first = next(iterator, None)
+                if first is None:
                     return None
-                safe_members.append(member)
-            tf.extractall(cache_dir, members=safe_members, filter="data")
-    except (tarfile.TarError, OSError):
-        logger.warning(
-            "library_detect: extraction failed for %s",
-            tarball, exc_info=True,
-        )
+                while first.name.startswith("./"):
+                    first.name = first.name[2:]
+                top = first.name.split("/", 1)[0]
+                if not top or top in (".", "..") or "\\" in top:
+                    return None
+                if _is_safe_for_extraction(first, str(cache_dir.resolve())) is not None:
+                    return None
+                dest = cache_dir / top
+                # Never retire a tree containing the source archive itself.
+                if tarball.resolve().is_relative_to(dest.resolve()):
+                    return None
+                expected = {"version": 1, "source": identity, "root": top}
+                with artifact_lock(cache_dir / ".library-cache", required=True,
+                                   subject="library source extraction"):
+                    original = _cache_directory_id(dest)
+                    if original is not None:
+                        try:
+                            stamp = loads(read_bytes_gated(
+                                dest / _EXTRACT_STAMP, 4096, follow_symlinks=False))
+                        except (OSError, ValueError, RecursionError):
+                            stamp = None
+                        if (isinstance(stamp, dict) and type(stamp.get("version")) is int
+                                and stamp == expected and _same_archive(stream, tarball, identity)
+                                and _cache_directory_id(dest) == original):
+                            logger.info("library_detect: using cached extraction at %r", dest)
+                            return dest
+                    with scratch_dir(".library-extract-", dir=cache_dir) as scratch:
+                        members = []
+                        total = 0
+                        regular_files = 0
+                        member = first
+                        while member is not None:
+                            while member.name.startswith("./"):
+                                member.name = member.name[2:]
+                            total += max(0, member.size)
+                            if len(members) >= _EXTRACT_MAX_ENTRIES or total > _EXTRACT_MAX_TOTAL_BYTES:
+                                logger.warning(
+                                    "library_detect: archive exceeds extraction quotas "
+                                    "(%d bytes, %d entries)",
+                                    _EXTRACT_MAX_TOTAL_BYTES, _EXTRACT_MAX_ENTRIES,
+                                )
+                                return None
+                            if member.name != top and not member.name.startswith(top + "/"):
+                                logger.warning("library_detect: archive has multiple source roots")
+                                return None
+                            reject = _is_safe_for_extraction(member, str(scratch.resolve()))
+                            if reject is not None:
+                                logger.warning("library_detect: rejecting member %r (%s)",
+                                               member.name[:256], reject)
+                                return None
+                            members.append(member)
+                            regular_files += int(member.isfile())
+                            member = next(iterator, None)
+                        if not regular_files:
+                            return None
+                        tf.extractall(scratch, members=members, filter="data")
+                        tree = scratch / top
+                        if (tree.is_symlink() or not tree.is_dir()
+                                or not _verify_no_escaping_symlinks(tree, tree)):
+                            return None
+                        if not _same_archive(stream, tarball, identity):
+                            logger.warning("library_detect: archive changed during extraction")
+                            return None
+                        save_json(tree / _EXTRACT_STAMP, expected)
+                        if _cache_directory_id(dest) != original:
+                            logger.warning("library_detect: cache slot changed during extraction")
+                            return None
+                        backup = None
+                        try:
+                            if original is not None:
+                                backup = cache_dir / (".library-stale-" + uuid.uuid4().hex)
+                                os.rename(dest, backup)
+                            os.rename(tree, dest)
+                        except BaseException:
+                            if backup is not None and os.path.lexists(backup):
+                                try:
+                                    if not os.path.lexists(dest):
+                                        os.rename(backup, dest)
+                                    else:
+                                        logger.warning("previous library source retained at %r", backup)
+                                except OSError:
+                                    logger.warning("cannot restore library source; retained at %r",
+                                                   backup, exc_info=True)
+                            raise
+                        if backup is not None and not rmtree_hardened(backup):
+                            logger.warning("library_detect: retired source cleanup incomplete: %r", backup)
+                        return dest
+    except _EXTRACT_ERRORS:
+        logger.warning("library_detect: extraction refused or failed for %r", tarball,
+                       exc_info=True)
         return None
-
-    if dest.is_dir() and not _verify_no_escaping_symlinks(dest, cache_dir):
-        import shutil
-        shutil.rmtree(dest, ignore_errors=True)
-        return None
-
-    if dest.is_dir():
-        try:
-            tarball_mtime = tarball.stat().st_mtime
-            (dest / ".raptor-extract-mtime").write_text(str(tarball_mtime))
-        except OSError:
-            pass
-        return dest
-    return None
 
 
 def _verify_no_escaping_symlinks(root: Path, boundary: Path) -> bool:
@@ -516,21 +569,22 @@ def _verify_no_escaping_symlinks(root: Path, boundary: Path) -> bool:
     ``os.walk`` does not follow symlinked directories, so directory
     symlinks are checked as entries in their parent's dir listing.
     """
-    boundary_resolved = str(boundary.resolve()) + os.sep
+    boundary_root = str(boundary.resolve())
+    boundary_resolved = boundary_root + os.sep
     try:
         for dirpath, dirs, files in os.walk(root):
             for name in (*files, *dirs):
                 fpath = Path(dirpath) / name
                 if fpath.is_symlink():
                     target = str(fpath.resolve())
-                    if not target.startswith(boundary_resolved):
+                    if target != boundary_root and not target.startswith(boundary_resolved):
                         logger.warning(
                             "library_detect: symlink chain escape: "
                             "%s → %s (outside %s)",
                             fpath, target, boundary,
                         )
                         return False
-    except OSError:
+    except (OSError, RuntimeError):
         logger.warning(
             "library_detect: symlink verification failed for %s",
             root, exc_info=True,
