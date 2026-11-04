@@ -155,13 +155,19 @@ class TestOrchestratorPanelEntry:
         (out / "checklist.json").write_text(json.dumps(checklist))
         return target, out
 
-    def test_both_models_reviewed_with_single_pass(self, tmp_path: Path):
+    def test_both_models_reviewed_with_single_pass(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setattr(
+            "core.audit.orchestrator._run_mechanical_detectors",
+            lambda *a, **k: ({}, set()),
+        )
         target, out = self._setup_target(tmp_path)
         calls: dict = {}
         config = OrchestratorConfig(
             target_path=target, out_dir=out, resume=False,
             models=["model-a", "model-b"], multi_model=True,
             review_passes=1,
+            # Model dispatch does not require a live Joern server.
+            joern_overrides={"enabled": False},
             review_fns_by_model={
                 "model-a": _make_recording_fn("model-a", "clean", calls),
                 "model-b": _make_recording_fn("model-b", "clean", calls),

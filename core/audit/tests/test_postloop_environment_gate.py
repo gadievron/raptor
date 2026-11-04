@@ -1009,6 +1009,10 @@ def _binding_run(tmp_path, monkeypatch, *, before_run=None,
     from core.audit.orchestrator import run_orchestrator
 
     monkeypatch.setattr(env_mod, "EnvironmentGuard", guard_cls)
+    # Preserve the real dispatch/preparation gates, without executing
+    # unrelated native detectors before fake reviews can reach them.
+    monkeypatch.setattr(_orch, "_run_mechanical_detectors",
+                        lambda *a, **k: ({}, set()))
     guard_cls.last = None
     target, out = _binding_target(tmp_path)
 
@@ -1020,6 +1024,8 @@ def _binding_run(tmp_path, monkeypatch, *, before_run=None,
 
     config = OrchestratorConfig(
         target_path=target, out_dir=out, resume=False,
+        # The dispatch gate is exercised with fake reviews, without a JVM.
+        joern_overrides={"enabled": False},
     )
     if before_run is not None:
         before_run(config)

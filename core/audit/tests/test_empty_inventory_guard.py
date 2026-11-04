@@ -229,8 +229,14 @@ class TestEmptyInventoryRefusal:
         monkeypatch.setattr(
             ppv, "augment_checklist_with_macro_functions", _fake_augment,
         )
+        monkeypatch.setattr(
+            "core.audit.orchestrator._run_mechanical_detectors",
+            lambda *a, **k: ({}, set()),
+        )
         config = OrchestratorConfig(
             target_path=target, out_dir=out, resume=False,
+            # Guard ordering depends on macro recovery, not a live JVM.
+            joern_overrides={"enabled": False},
         )
         result = run_orchestrator(config, _clean_review)
         assert result.terminated_by == "complete"
@@ -254,8 +260,14 @@ class TestEmptyInventoryRefusal:
 @pytest.mark.slow
 class TestFullCoverageZeroGapsStillCompletes:
     def test_second_run_over_reviewed_inventory_completes(
-        self, tmp_path: Path,
+        self, tmp_path: Path, monkeypatch,
     ):
+        # Keep real journal/coverage handling; detector findings are not
+        # involved in the distinction between empty and fully reviewed.
+        monkeypatch.setattr(
+            "core.audit.orchestrator._run_mechanical_detectors",
+            lambda *a, **k: ({}, set()),
+        )
         # Items exist; coverage (run 1's review journal) accounts for
         # all of them, so run 2 legitimately computes ZERO gaps. That
         # run must keep presenting as today: terminated_by="complete"
@@ -281,7 +293,8 @@ class TestFullCoverageZeroGapsStillCompletes:
 
         first = run_orchestrator(
             OrchestratorConfig(target_path=target, out_dir=out,
-                               resume=False),
+                               resume=False,
+                               joern_overrides={"enabled": False}),
             _clean_review,
         )
         assert first.terminated_by == "complete"
@@ -289,7 +302,8 @@ class TestFullCoverageZeroGapsStillCompletes:
 
         second = run_orchestrator(
             OrchestratorConfig(target_path=target, out_dir=out,
-                               resume=False),
+                               resume=False,
+                               joern_overrides={"enabled": False}),
             _clean_review,
         )
         assert second.terminated_by == "complete"

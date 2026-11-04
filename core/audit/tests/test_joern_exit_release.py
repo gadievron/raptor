@@ -162,6 +162,11 @@ class TestExitReleaseWiring:
     """Real run_orchestrator invocations (multi-second prep) — slow
     tier, like the other stubbed-loop orchestrator tests."""
 
+    @pytest.fixture(autouse=True)
+    def _no_unrelated_detector_battery(self, monkeypatch):
+        monkeypatch.setattr(orch, "_run_mechanical_detectors",
+                            lambda *a, **k: ({}, set()))
+
     def _run(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
              review_fn, **cfg_kw) -> tuple[_StubServer, list]:
         target, out = _setup_target(tmp_path)

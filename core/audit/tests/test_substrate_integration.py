@@ -132,6 +132,18 @@ class TestPhpTreeWithStrayCFile:
     def run(self, tmp_path, monkeypatch):
         _reset_substrate_caches()
         target, out = _write_target(tmp_path)
+        from core.audit import capabilities
+
+        # Only the fixture's canned channels participate; unrelated host
+        # tools and model-backed study/probing have separate integration tests.
+        monkeypatch.setattr(
+            capabilities, "probe_capabilities",
+            lambda *a, **k: capabilities.AuditCapabilities(
+                coccinelle=True, semgrep=True,
+            ),
+        )
+        monkeypatch.setattr(orch, "_study_consumer", lambda *a, **k: None)
+        monkeypatch.setattr(orch, "_run_dark_verification", lambda *a, **k: None)
 
         spatch_targets: list[str] = []
         monkeypatch.setattr(cocci_runner, "is_available", lambda: True)
@@ -147,6 +159,13 @@ class TestPhpTreeWithStrayCFile:
         # server changes gate-resolution activation between hosts).
         monkeypatch.setattr(
             orch, "_start_joern_server_raw", lambda *a, **kw: None,
+        )
+        # The dispatch substrate seam is exercised below through real
+        # sweep dispatch and the stubbed spatch runner. A separate
+        # whole-tree detector presweep is unrelated and would populate
+        # the SARIF cache this fixture deliberately keeps empty.
+        monkeypatch.setattr(
+            orch, "_run_mechanical_detectors", lambda *a, **kw: ({}, set()),
         )
 
         # Neutralize the lanes that are not under test so the run is
@@ -191,11 +210,19 @@ class TestPhpTreeWithStrayCFile:
         config = OrchestratorConfig(
             target_path=target, out_dir=out, resume=False,
             inventory=checklist,
+            joern_overrides={"enabled": False},
             # Every function takes the full review path — the trivial
             # glance batch would bypass the per-function stub
             # transport this fixture keys its hypotheses on.
             batch_sloc_threshold=0,
             immediate_verify=False,
+            # The initial mechanical dispatch is the subject. These
+            # later model-backed phases must not create another client
+            # outside the supplied canned review transport.
+            open_discovery=False,
+            deepen_suspicious=False,
+            max_refinements=0,
+            validate=False,
         )
         result = run_orchestrator(config, _review_fn)
         return result, out, spatch_targets

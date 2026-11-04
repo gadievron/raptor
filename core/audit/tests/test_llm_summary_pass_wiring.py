@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -217,8 +218,14 @@ def wired_run(tmp_path_factory):
         verdict_reuse=False,
         include_stale=False,
         max_workers=1,
+        # Exercise summary/client wiring without starting an unrelated JVM.
+        joern_overrides={"enabled": False},
     )
-    result = run_orchestrator(config, make_review_fn(review_client))
+    # The real summary discovery, context merge, clients and ledger stay
+    # wired. The unrelated detector battery has dedicated integration tests.
+    with patch("core.audit.orchestrator._run_mechanical_detectors",
+               return_value=({}, set())):
+        result = run_orchestrator(config, make_review_fn(review_client))
     return result, budget_client, review_client
 
 
