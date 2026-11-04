@@ -139,3 +139,57 @@ def test_failed_startup_closes_listener(monkeypatch, fault):
     finally:
         for listener in listeners:
             listener.close()
+
+
+@pytest.mark.parametrize("fault", ["construction", "start"])
+def test_failed_handler_start_releases_connection(monkeypatch, fault):
+    from types import SimpleNamespace
+    from core.llm.tests import mock_upstream
+
+    finished = threading.Event()
+    errors = []
+    connections = []
+    real_thread = threading.Thread
+
+    class StartFailure(real_thread):
+        def start(self):
+            raise RuntimeError("injected handler start failure")
+
+    def thread(*args, **kwargs):
+        if "args" not in kwargs:
+            return real_thread(*args, **kwargs)
+        connections.append(kwargs["args"][0])
+        if fault == "construction":
+            raise RuntimeError("injected handler construction failure")
+        return StartFailure(*args, **kwargs)
+
+    class ObservedUpstream(MockUpstream):
+        def _accept_loop(self):
+            try:
+                super()._accept_loop()
+            except RuntimeError as error:
+                errors.append(str(error))
+            finally:
+                finished.set()
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(mock_upstream, "threading", SimpleNamespace(
+            Event=threading.Event, Lock=threading.Lock, Thread=thread,
+        ))
+        server = ObservedUpstream()
+        try:
+            with socket.create_connection(("127.0.0.1", server.port), timeout=5):
+                assert finished.wait(5), "accept loop did not report injected failure"
+                assert errors == [f"injected handler {fault} failure"]
+                assert len(connections) == 1
+                assert connections[0].fileno() == -1, "failed handler left its socket open"
+                assert not server._clients
+                assert not server._threads, "unstarted handler remained registered"
+                server.shutdown()
+                _assert_stopped(server)
+        finally:
+            # Contain the regression even when shutdown cannot join a failed handler.
+            for conn in connections:
+                conn.close()
+            server._listener.close()
+            server._accept_thread.join(timeout=5)
