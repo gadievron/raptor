@@ -17,10 +17,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from core.atomic_fs import write_text_atomically
+from core.atomic_fs import rmtree_hardened, write_text_atomically
 from core.config import RaptorConfig
 from core.json import load_json
 from core.logging import get_logger
+from core.run.scratch import scratch_dir
 
 # Budget for OpenAnt's pipeline_output.json (produced over a hostile
 # repo) — same ceiling as the run-artifact readers.
@@ -1605,19 +1606,18 @@ def _stage_llm_config(
     # chmods the victim). Remove whatever sits at the stage path
     # without following it, then build from nothing — the chmod then
     # only ever lands on a directory this call just created.
+    _scrub_stage(out_dir)
     if os.path.lexists(xdg_home):
-        if xdg_home.is_symlink() or not xdg_home.is_dir():
-            xdg_home.unlink()
-        else:
-            import shutil
-            shutil.rmtree(xdg_home)
-    cfg_dir = xdg_home / "openant"
-    cfg_dir.mkdir(parents=True)
-    os.chmod(xdg_home, 0o700)
-    dest = cfg_dir / "config.json"
-    # Atomic write (tempfile + rename) so a concurrent reader never
-    # sees a torn file; 0600 before content lands.
-    write_text_atomically(dest, json.dumps(raw, indent=2), mode=0o600)
+        raise OSError(f"could not remove previous OpenAnt config stage {xdg_home}")
+    with scratch_dir("raptor-openant-config-", dir=out_dir) as scratch:
+        tree = scratch / "xdg"
+        tree.mkdir(mode=0o700)
+        cfg_dir = tree / "openant"
+        cfg_dir.mkdir()
+        # Private directory before any content lands, then 0600 atomic
+        # file write. Setup failure also removes partial credentials.
+        write_text_atomically(cfg_dir / "config.json", json.dumps(raw, indent=2), mode=0o600)
+        os.rename(tree, xdg_home)
     return xdg_home
 
 
@@ -1634,11 +1634,10 @@ def _scrub_stage(out_dir: Path) -> None:
     """
     stage = out_dir / _XDG_STAGE_DIRNAME
     try:
-        if stage.is_symlink():
+        if stage.is_symlink() or (os.path.lexists(stage) and not stage.is_dir()):
             stage.unlink()
         elif stage.exists():
-            import shutil
-            shutil.rmtree(stage, ignore_errors=True)
+            rmtree_hardened(stage)
     except OSError:
         pass
     if os.path.lexists(stage):
