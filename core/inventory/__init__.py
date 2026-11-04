@@ -586,46 +586,104 @@ def _shard_file_name(label: str, seq: int) -> str:
     return f"shard-{sanitized}-{seq:03d}.json"
 
 
-def _sweep_retired_dirs(parent: "Path") -> None:
-    """Best-effort removal of orphaned swap directories.
+def _remove_retired_entry(path: "Path") -> bool:
+    """Reclaim an owned retired entry without following symlinks."""
+    import stat
+    from core.atomic_fs import rmtree_hardened
 
-    Safe under the held flock: every sharded write runs locked, so a
-    ``.checklist-tmp-*`` / ``.checklist-stale-*`` sibling visible now
-    is a crashed writer's leftover, never a live one's workspace.
-    """
-    import shutil
-    import time
-    # Age gate: a crash BETWEEN the two swap renames leaves the
-    # previous form's ONLY copy under a retired name — sweeping it on
-    # the very next write would destroy the recovery evidence while
-    # an operator could still rescue it. One hour bounds accumulation
-    # without touching a same-incident copy; the dirs are small
-    # relative to the artifact they back up and every writer sweeps.
-    cutoff = time.time() - 3600
     try:
-        leftovers = [
-            p for p in parent.iterdir()
-            if p.name.startswith((".checklist-tmp-", ".checklist-stale-"))
-            and p.is_dir() and not p.is_symlink()
-        ]
+        info = path.lstat()
+        if stat.S_ISDIR(info.st_mode):
+            removed = rmtree_hardened(path)
+        else:
+            path.unlink()
+            removed = True
+    except FileNotFoundError:
+        return True
+    except OSError:
+        logger.warning("checklist cleanup failed for %s", path, exc_info=True)
+        return False
+    if not removed:
+        logger.warning("checklist cleanup incomplete for %s", path)
+    return removed
+
+
+def _sweep_retired_dirs(parent: "Path") -> None:
+    """Reclaim up to 16 old swap entries under the held checklist lock.
+
+    Age starts at retirement (ctime), with a one-hour recovery grace.
+    Fresh entries and failed removals do not consume the reclaim quota.
+    """
+    import math
+    import time
+
+    now = time.time()
+    if not math.isfinite(now):
+        return
+    cutoff = now - 3600
+    try:
+        entries = list(parent.iterdir())
     except OSError:
         return
-    for p in leftovers[:16]:
+    retired = []
+    for path in entries:
+        if not path.name.startswith((".checklist-tmp-", ".checklist-stale-")):
+            continue
         try:
-            # ctime, not mtime: the rename that retired the dir
-            # updates its ctime, so the clock starts at the swap even
-            # when the CONTENTS were written long before.
-            if p.stat().st_ctime > cutoff:
-                continue
+            age = path.lstat().st_ctime
         except OSError:
             continue
-        shutil.rmtree(p, ignore_errors=True)
+        if math.isfinite(age) and age <= cutoff:
+            retired.append((age, path.name, path))
+    removed = 0
+    for _, _, path in sorted(retired):
+        if _remove_retired_entry(path):
+            removed += 1
+            if removed >= 16:
+                break
 
 
 def _retired_name(parent: "Path", kind: str) -> "Path":
     import time
     return parent / (
         f".checklist-{kind}-{os.getpid()}-{time.monotonic_ns():x}")
+
+
+def _publish_checklist_form(
+    checklist_path: "Path", staged: "Path", *, sharded: bool,
+) -> None:
+    """Publish a staged form, restoring the old directory on failure.
+
+    Readers and writers hold the same lock across the retirement and
+    publication renames. Cleanup after publication is best-effort: residue
+    must not turn a committed checklist into a reported write failure.
+    """
+    final_dir = _sharded_dir_for(checklist_path)
+    stale = None
+    try:
+        if os.path.lexists(final_dir):
+            stale = _retired_name(checklist_path.parent, "stale")
+            os.rename(final_dir, stale)
+        os.replace(staged, final_dir if sharded else checklist_path)
+    except BaseException:
+        if stale is not None and os.path.lexists(stale):
+            try:
+                if not os.path.lexists(final_dir):
+                    os.rename(stale, final_dir)
+                else:
+                    logger.warning("previous checklist retained at %s", stale)
+            except OSError:
+                logger.warning("could not restore previous checklist at %s", stale,
+                               exc_info=True)
+        raise
+    if sharded:
+        try:
+            checklist_path.unlink(missing_ok=True)
+        except OSError:
+            logger.warning("could not remove superseded checklist file %s",
+                           checklist_path, exc_info=True)
+    if stale is not None:
+        _remove_retired_entry(stale)
 
 
 def _write_sharded_checklist(
@@ -640,7 +698,6 @@ def _write_sharded_checklist(
     the instant the staged dir lands). Callers hold the flock.
     """
     import hashlib
-    import shutil
     import tempfile
     from datetime import datetime, timezone
     from pathlib import Path
@@ -730,27 +787,9 @@ def _write_sharded_checklist(
             tmp_prefix=".~shard-",
         )
 
-        final_dir = _sharded_dir_for(checklist_path)
-        stale: "Path | None" = None
-        if final_dir.exists() or final_dir.is_symlink():
-            stale = _retired_name(parent, "stale")
-            # Crash window note: between this rename and the next, no
-            # sharded dir is visible at the slot. The previous form
-            # survives under the stale name (and the checklist is
-            # rebuildable from the target); the window is two renames
-            # wide and every writer/reader serialises on the flock.
-            os.rename(final_dir, stale)
-        os.rename(tmp_dir, final_dir)
-        # Retire the single-file form AFTER the dir swap: from the
-        # moment index.json is visible it wins the discriminator, so
-        # a crash here leaves a coherent (sharded) artifact plus a
-        # dead file, never two live ones.
-        checklist_path.unlink(missing_ok=True)
-        if stale is not None:
-            shutil.rmtree(stale, ignore_errors=True)
+        _publish_checklist_form(checklist_path, tmp_dir, sharded=True)
     finally:
-        if tmp_dir.exists():
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+        _remove_retired_entry(tmp_dir)
     _sweep_retired_dirs(parent)
 
 
@@ -763,7 +802,7 @@ def _write_checklist_locked(
     retired so ``index.json`` presence stays an unambiguous
     discriminator.
     """
-    import shutil
+    import stat
 
     from core.atomic_fs import write_text_atomically
     from core.json import dumps_artifact
@@ -801,20 +840,23 @@ def _write_checklist_locked(
     # Within budget: the measured serialisation IS save_json's exact
     # output (same encoder arms + newline), so write it directly —
     # no second serialisation pass.
-    write_text_atomically(checklist_path, content,
-                          tmp_prefix=".~savejson-")
     shard_dir = _sharded_dir_for(checklist_path)
-    if shard_dir.exists() or shard_dir.is_symlink():
-        # Switch-back: retire the sharded form so its index cannot
-        # shadow the fresh single file. Rename first (atomic
-        # disappearance of index.json), then remove.
-        stale = _retired_name(checklist_path.parent, "stale")
+    if os.path.lexists(shard_dir):
+        from core.run.scratch import scratch_dir
         try:
-            os.rename(shard_dir, stale)
-        except OSError:
-            shutil.rmtree(shard_dir, ignore_errors=True)
-        else:
-            shutil.rmtree(stale, ignore_errors=True)
+            previous = checklist_path.lstat()
+        except FileNotFoundError:
+            previous = None
+        mode = (stat.S_IMODE(previous.st_mode) if previous is not None
+                and stat.S_ISREG(previous.st_mode) else None)
+        with scratch_dir(".checklist-tmp-", dir=checklist_path.parent) as scratch:
+            staged = scratch / "checklist.json"
+            write_text_atomically(staged, content, mode=mode,
+                                  tmp_prefix=".~savejson-")
+            _publish_checklist_form(checklist_path, staged, sharded=False)
+    else:
+        write_text_atomically(checklist_path, content,
+                              tmp_prefix=".~savejson-")
     _sweep_retired_dirs(checklist_path.parent)
 
 
