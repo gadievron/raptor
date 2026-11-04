@@ -24,6 +24,8 @@ import time
 import warnings
 from pathlib import Path
 
+from core.security.capped_read import read_capped_text
+
 from . import state
 from ._fork_safe_warn import warn_post_fork
 from .exit_codes import SANDBOX_EXIT_RLIMIT_CORE_FAIL
@@ -139,42 +141,16 @@ def _load_user_limits() -> dict:
                 <= _FAIL_TTL_S):
             return state._user_limits_cache
 
-        if not _CONFIG_PATH.exists():
-            state._user_limits_cache = {}  # type: ignore[assignment]
-            state._user_limits_cache_decided_at = time.time()
-            return state._user_limits_cache  # type: ignore[return-value]
         try:
-            # `is_file()` check before read_text. Pre-fix
-            # `_CONFIG_PATH.exists()` returned True for FIFO,
-            # device file, named pipe, or symlink-to-FIFO at the
-            # config path. `read_text()` on a FIFO BLOCKS waiting
-            # for a writer, hanging the import indefinitely.
-            # An attacker (or operator misconfiguration) creating
-            # `~/.config/raptor/sandbox.json` as a FIFO via
-            # `mkfifo` would cause every RAPTOR process to hang
-            # at startup. Treat non-regular files as missing.
-            if not _CONFIG_PATH.is_file():
-                state._user_limits_cache = {}  # type: ignore[assignment]
-                state._user_limits_cache_decided_at = time.time()
-                return state._user_limits_cache  # type: ignore[return-value]
-            # Size cap before read — config is JSON metadata (key/int
-            # pairs); 64 KiB is generous and catches a hostile or
-            # mis-edited file ballooning to multi-MiB at module-load
-            # time when the rest of the process can't yet log.
-            _CONFIG_MAX_BYTES = 64 * 1024
-            try:
-                if _CONFIG_PATH.stat().st_size > _CONFIG_MAX_BYTES:
-                    state._user_limits_cache = {}  # type: ignore[assignment]
-                    state._user_limits_cache_decided_at = time.time()
-                    return state._user_limits_cache  # type: ignore[return-value]
-            except OSError:
-                state._user_limits_cache = {}  # type: ignore[assignment]
-                state._user_limits_cache_decided_at = time.time()
-                return state._user_limits_cache  # type: ignore[return-value]
-            # UnicodeDecodeError is possible if config isn't valid UTF-8 —
-            # catching it alongside JSON/OS errors keeps module import safe
-            # against a malformed config file.
-            data = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))  # raw-open: operator config under the user config dir; is_file + size gates above
+            # This is operator-owned config: preserve symlink support,
+            # but bind the type, size, and actual read to one descriptor.
+            # Nonblocking open lets a FIFO replacement fail validation
+            # without parking sandbox startup.
+            raw = read_capped_text(
+                _CONFIG_PATH, 64 * 1024, errors="strict",
+                follow_symlinks=True, raise_on_refusal=True,
+            )
+            data = json.loads(raw)
             if isinstance(data, dict):
                 # Accept non-negative ints; 0 is a valid "skip this rlimit"
                 # sentinel (see _set_limits guards: `if mem > 0:` etc.).
@@ -202,7 +178,9 @@ def _load_user_limits() -> dict:
                 # mistaken for the failure sentinel above.
                 state._user_limits_cache_decided_at = float("inf")
                 return state._user_limits_cache  # type: ignore[return-value]
-        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
+        except FileNotFoundError:
+            pass  # Missing operator config is the normal default-limits case.
+        except (OSError, ValueError, RecursionError) as e:
             logger.warning(
                 "Sandbox: could not parse %s: %s — using default limits.", _CONFIG_PATH, e.__class__.__name__)
         state._user_limits_cache = {}  # type: ignore[assignment]
