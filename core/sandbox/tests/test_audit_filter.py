@@ -1389,15 +1389,17 @@ class TestEndToEndAuditVsAuditVerbose:
             path.write_bytes(b"owned read")
         write = source / "would-block-write"
         program = """
-import os, sys
+import errno, os, sys
 for path in sys.argv[1:-1]:
     fd = os.open(path, os.O_RDONLY)
     assert os.read(fd, 64) == b'owned read'
     os.close(fd)
 try:
     fd = os.open(sys.argv[-1], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-except PermissionError:
-    pass  # Filesystem confinement can still deny the attempted write.
+except OSError as error:
+    # A read-only bind reports EROFS; Landlock reports EACCES/EPERM.
+    if error.errno not in (errno.EACCES, errno.EPERM, errno.EROFS):
+        raise
 else:
     os.write(fd, b'owned write')
     os.close(fd)
@@ -1424,8 +1426,8 @@ else:
 
         r1 = _run(run_filtered, verbose=False)
         r2 = _run(run_verbose, verbose=True)
-        assert r1.returncode == 0, f"filtered workload failed: {r1.stderr!r}"
-        assert r2.returncode == 0, f"verbose workload failed: {r2.stderr!r}"
+        assert r1.returncode == 0, f"filtered workload failed: setup={getattr(r1, '_setup_status', None)!r}; stderr={r1.stderr!r}"
+        assert r2.returncode == 0, f"verbose workload failed: setup={getattr(r2, '_setup_status', None)!r}; stderr={r2.stderr!r}"
 
         def syscall_records(directory):
             path = (directory / evidence_mod.AUDIT_SUBDIR
