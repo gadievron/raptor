@@ -95,6 +95,35 @@ def _attribution_items(
     return None
 
 
+class _AttributionItemsMemo:
+    """Normalised items for one privately owned checklist snapshot.
+
+    The caller must keep that checklist unchanged for this operation.
+    Persistence loads it afresh and never shares this memo across calls.
+    Source fallback reads and failed normalisations are never cached.
+    Admission bounds only retention, never attribution coverage.
+    """
+
+    def __init__(self, checklist: dict[str, Any] | None) -> None:
+        self.checklist = checklist
+        self.by_file: dict[str, list[dict[str, Any]] | None] = {}
+        self.item_count = 0
+
+    def items_for(
+        self, checklist: dict[str, Any], file_path: str,
+    ) -> list[dict[str, Any]] | None:
+        if checklist is not self.checklist or type(file_path) is not str:
+            return _attribution_items(checklist, file_path)
+        if file_path in self.by_file:
+            return self.by_file[file_path]
+        items = _attribution_items(checklist, file_path)
+        count = len(items) if items is not None else 0
+        if len(self.by_file) < 128 and self.item_count + count <= 8192:
+            self.by_file[file_path] = items
+            self.item_count += count
+        return items
+
+
 def _innermost(items: list[dict[str, Any]]) -> dict[str, Any]:
     """The most specific (latest-starting, then shortest) span."""
     return max(
@@ -162,6 +191,7 @@ def resolve_function_attribution(
     line: int,
     *,
     target_path: Path | None = None,
+    _items_memo: _AttributionItemsMemo | None = None,
 ) -> tuple[str, str]:
     """Validate a finding's claimed function name against the run's
     checklist and return ``(resolved_name, disposition)``.
@@ -199,7 +229,8 @@ def resolve_function_attribution(
     claimed = str(claimed or "")
     if not file_path or not isinstance(checklist, dict):
         return claimed, "no_basis"
-    items = _attribution_items(checklist, file_path)
+    items = (_attribution_items(checklist, file_path) if _items_memo is None
+             else _items_memo.items_for(checklist, file_path))
     if items is None:
         return claimed, "no_basis"
     try:
@@ -260,6 +291,7 @@ def stamp_function_attribution(
     checklist: dict[str, Any] | None,
     *,
     target_path: Path | None = None,
+    _items_memo: _AttributionItemsMemo | None = None,
 ) -> dict[str, Any]:
     """Validate/correct ``finding["function"]`` in place (chokepoint
     for every findings.json writer).
@@ -280,6 +312,7 @@ def stamp_function_attribution(
             claimed,
             finding.get("line") or 0,
             target_path=target_path,
+            _items_memo=_items_memo,
         )
         if disposition == "corrected" and resolved and resolved != claimed:
             finding["function"] = resolved
