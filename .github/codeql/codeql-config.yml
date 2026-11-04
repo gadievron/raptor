@@ -11,48 +11,18 @@
 name: RAPTOR CodeQL config
 
 paths-ignore:
-  # Native CodeQL regression fixtures deliberately contain unsafe C/C++
-  # and Java patterns. Their dedicated query tests still run separately.
-  - engine/codeql/tests/**
-  # IRIS Tier 1 dataflow-validation fixtures (intentionally vulnerable
-  # Flask + sys.argv command-injection patterns; CodeQL flags them
-  # because they ARE vulnerable, by design).
-  - packages/llm_analysis/tests/fixtures/iris_e2e/**
-  # core/sandbox tests plant sensitive-named fixtures on purpose
-  # (e.g. `real_secret = Path.home() / ".raptor_fake_home_regression.txt"`,
-  # `restricted_file.write_text("SECRET-CREDENTIAL\n")`, `SECRET-IN-DEV-SHM`)
-  # to verify the sandbox blocks reads of host secrets. CodeQL's
-  # heuristic-named sensitive-data sources taint-track these
-  # fixtures through `run_untrusted(cmd, ...)` into shared production
-  # sandbox code, surfacing `py/clear-text-logging-sensitive-data`
-  # alerts on every operator-visibility logger in `core/sandbox/` that
-  # interpolates `cmd[:3]`. The findings are FPs by construction — the
-  # "secret" is a test variable named to assert isolation, not a real
-  # credential. Excluding only this tests directory; other tests/ trees
-  # stay scanned.
-  - core/sandbox/tests/**
-  # Generic test-fixture exclusion for any other deliberately-bad
-  # samples a future test adds.
-  - "**/tests/fixtures/**"
+  # Test code includes synthetic URLs, planted secrets, and deliberately
+  # vulnerable fixtures. Apply this consistently, including .github/tests,
+  # instead of adding per-suite exceptions after each fixture alert.
+  # Dedicated test/query jobs still exercise these files.
+  - "**/tests/**"
+  - "**/test/**"
   - "**/test_fixtures/**"
-  # Several test suites assert URL substrings or hostname membership
-  # against allowlists (e.g. ``assert "registry.npmjs.org" in
-  # kwargs["proxy_hosts"]``, ``assert "bigquery.googleapis.com" in
-  # hosts``).  CodeQL's ``py/incomplete-url-substring-sanitization``
-  # query reads these as host-validation checks — they aren't, they're
-  # shape assertions in tests.
-  - packages/sca/**/tests/**
-  - core/llm/tests/**
-  - core/git/tests/**
-  - core/forensics/tests/**
   # sandbox helpers_test.c sets directory permissions then calls
   # validate_exec_target — inherently TOCTOU by test design.
   # The write_file_mode TOCTOU is fixed (fchmod on fd), but the
   # chmod→validate pairs are the test exercising the security check.
   - core/sandbox/helpers/*_test*
-  # Intentionally vulnerable testbeds used by /scan and /codeql self-tests
-  # (python_sql_injection.py, javascript_xss.js, smt_codeql_testbench.c).
-  - test/data/**
   # Git worktree mirrors — duplicates of in-tree source that would cause
   # double-counted alerts if scanned.
   - .claude/worktrees/**
