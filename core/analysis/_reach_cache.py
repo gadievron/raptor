@@ -103,7 +103,9 @@ logger = logging.getLogger(__name__)
 # persisted under the full-toolchain fingerprint and served to later
 # full-toolchain runs. Bump flushes any entry persisted under an
 # over-claimed identity.
-_CACHE_VERSION = 12
+# V13: direct C implementation includes contribute caller/callee edges.
+# An older index silently omits wrapper callers of included static helpers.
+_CACHE_VERSION = 13
 
 # Test-override seam: when set (tests monkeypatch a tmp dir here) it
 # wins over the env-derived default. Production leaves it None so
@@ -128,7 +130,7 @@ def _cache_dir() -> Path:
 # entry of the same name. Also doubles as a cheap "is this a raptor
 # cache file" check before handing bytes to the JSON decoder. The
 # numeric suffix tracks ``_CACHE_VERSION``.
-_HEADER_MAGIC = b"RAPTOR-REACHABILITY-CACHE-V12\n"
+_HEADER_MAGIC = b"RAPTOR-REACHABILITY-CACHE-V13\n"
 
 # Suffix of current-format entries. Legacy ``.pickle`` entries are
 # never loaded, but eviction / clearing still sweeps them so retired
