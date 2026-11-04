@@ -19,6 +19,7 @@ import logging
 import operator
 import re
 from collections import OrderedDict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from core.inventory.macro_resolve import (
@@ -41,6 +42,10 @@ logger = logging.getLogger(__name__)
 # on blank-line runs (identical match set per line).
 _IF_RE = re.compile(r"^[^\S\n]*#\s*(?:if|ifdef|ifndef)\b", re.MULTILINE)
 _ENDIF_RE = re.compile(r"^[^\S\n]*#\s*endif\b", re.MULTILINE)
+# A literal prefix lets the regex search skip long non-directive lines.
+# Indentation is checked separately; whitespace after '#' cannot cross LF.
+_CONDITIONAL_DIRECTIVE_RE = re.compile(r"#[^\S\n]*(if|ifdef|ifndef|endif)\b")
+_CONDITIONAL_INDENT_RE = re.compile(r"[^\S\n]*")
 
 _IDENT_RE = re.compile(r"[a-zA-Z_]")
 _SAFE_ARITH_RE = re.compile(
@@ -229,7 +234,7 @@ def _scan_definitions(target_path: Path) -> dict[str, list[_RawDefinition]]:
         text = sanitized_view(raw_text, str(p))
 
         text_joined = text.replace("\\\n", " ")
-        cond_depth = _compute_conditional_depths(text)
+        depth_at_line = _conditional_depth_lookup(text)
 
         # Build a mapping from joined-text position to original line number.
         # Each "\\\n" removed shifts subsequent positions by 1 (2-char seq
@@ -284,14 +289,14 @@ def _scan_definitions(target_path: Path) -> dict[str, list[_RawDefinition]]:
             if not body:
                 continue
             line = _original_line(m.start())
-            depth = cond_depth.get(line, 0)
+            depth = depth_at_line(line)
             defs.setdefault(name, []).append(
                 _RawDefinition(name, params, body, rel, line, depth)
             )
 
         for block_start, body in _iter_enum_bodies(text_joined):
             block_line = _original_line(block_start)
-            block_depth = cond_depth.get(block_line, 0)
+            block_depth = depth_at_line(block_line)
             # Enumerator offsets advance: count only the intervening range.
             enum_line = block_line
             enum_offset = 0
@@ -329,6 +334,72 @@ def _compute_conditional_depths(text: str) -> dict[int, int]:
                 depth = max(0, depth - 1)
         depths[i] = depth
     return depths
+
+
+def _conditional_depth_lookup(text: str) -> Callable[[int], int]:
+    """Equivalent of dense_depths.get(line, 0), scoped to one text.
+
+    Ordinary source stores depth changes; directive-heavy files retain
+    dense construction. Each directive updates its own line. LF alone
+    separates lines. A final line containing only CR is dropped by
+    split_lines after trimming CR and removing its trailing empty line.
+    """
+    if type(text) is not str:
+        depths = _compute_conditional_depths(text)
+        return lambda line: depths.get(line, 0)
+    if _CONDITIONAL_DIRECTIVE_RE.search(text) is None:
+        return lambda line: 0
+    change_lines: list[int] = []
+    change_depths: list[int] = []
+    line = 1
+    line_offset = 0
+    search_offset = 0
+    line_count = 0
+    sparse_admitted = False
+    depth = 0
+    while True:
+        offset = text.find("#", search_offset)
+        if offset < 0:
+            break
+        # Only the first '#' can follow an all-whitespace prefix. Skip
+        # the rest of its line even when it appears inside an expression.
+        line_end = text.find("\n", offset)
+        search_offset = line_end + 1 if line_end >= 0 else len(text)
+        if offset and text[offset - 1] != "\n":
+            line_start = text.rfind("\n", 0, offset) + 1
+            if _CONDITIONAL_INDENT_RE.fullmatch(text, line_start, offset) is None:
+                continue
+        match = _CONDITIONAL_DIRECTIVE_RE.match(text, offset)
+        if match is None:
+            continue
+        if not sparse_admitted:
+            last_line_present = bool(
+                text and text != "\r" and not text.endswith(("\n", "\n\r"))
+            )
+            line_count = text.count("\n") + last_line_present
+            # Keep dense construction when most lines carry preprocessor
+            # markers; avoid per-directive Python overhead on those files.
+            if text.count("#") > max(32, line_count // 2):
+                depths = _compute_conditional_depths(text)
+                return lambda line: depths.get(line, 0)
+            sparse_admitted = True
+        line += text.count("\n", line_offset, offset)
+        line_offset = offset
+        next_depth = max(0, depth - 1) if match.group(1) == "endif" else depth + 1
+        if next_depth != depth:
+            change_lines.append(line)
+            change_depths.append(next_depth)
+        depth = next_depth
+    if not change_lines:
+        return lambda line: 0
+
+    def lookup(line: int) -> int:
+        if line < 1 or line > line_count:
+            return 0
+        index = bisect.bisect_right(change_lines, line) - 1
+        return change_depths[index] if index >= 0 else 0
+
+    return lookup
 
 
 def build_unique_constants(target_path: Path) -> ConstantTable:

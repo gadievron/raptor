@@ -628,7 +628,7 @@ def _constants_for_root(
         )
 
         from .constant_resolution import (
-            _compute_conditional_depths,
+            _conditional_depth_lookup,
             _try_evaluate,
         )
     except ImportError:
@@ -648,7 +648,7 @@ def _constants_for_root(
         if got is None:
             continue
         text = _strip_include_guard(got[0])
-        depths = _compute_conditional_depths(text)
+        depth_at_line = _conditional_depth_lookup(text)
         # Matches advance in source order: count each intervening range
         # once instead of rescanning the entire prefix for every match.
         line = 1
@@ -660,7 +660,7 @@ def _constants_for_root(
             offset = m.start()
             line += text.count("\n", line_offset, offset)
             line_offset = offset
-            if depths.get(line, 0) != 0:
+            if depth_at_line(line) != 0:
                 continue
             value = _try_evaluate(m.group(3).strip())
             if value is not None:
@@ -671,7 +671,7 @@ def _constants_for_root(
         for block_start, body in _iter_enum_bodies(text):
             line += text.count("\n", line_offset, block_start)
             line_offset = block_start
-            if depths.get(line, 0) != 0:
+            if depth_at_line(line) != 0:
                 continue
             for ev in _ENUMERATOR_NAME_RE.finditer(body):
                 name = ev.group(1).strip()
