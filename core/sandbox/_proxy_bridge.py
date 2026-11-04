@@ -50,6 +50,28 @@ _WRITE_STALL_TIMEOUT_S = 60.0
 _MAX_PENDING_BYTES = 256 * 1024
 
 
+def _poll_ready(read_fds, write_fds, timeout):
+    """Wait without select(2)'s fixed descriptor-number ceiling."""
+    poller = select.poll()
+    masks = {fd: select.POLLIN for fd in read_fds}
+    for fd in write_fds:
+        masks[fd] = masks.get(fd, 0) | select.POLLOUT
+    for fd, mask in masks.items():
+        poller.register(fd, mask)
+    events = dict(poller.poll(int(timeout * 1000)))
+    if any(mask & select.POLLNVAL for mask in events.values()):
+        raise OSError(errno.EBADF, "invalid bridge descriptor")
+    # EOF and errors must wake I/O too: the read/write handles them
+    # through the same teardown paths as ordinary readiness.
+    terminal = select.POLLHUP | select.POLLERR
+    return (
+        [fd for fd in read_fds
+         if events.get(fd, 0) & (select.POLLIN | terminal)],
+        [fd for fd in write_fds
+         if events.get(fd, 0) & (select.POLLOUT | terminal)],
+    )
+
+
 def _bring_up_loopback() -> None:
     """SIOCSIFFLAGS to set IFF_UP on lo inside the current netns."""
     SIOCSIFFLAGS = 0x8914
@@ -196,8 +218,8 @@ def _run_bridges(bridges, death_r, ready_cb=None) -> None:
             write_fds = [fd for fd in pairs if pending.get(fd)]
 
             try:
-                readable, writable, _ = select.select(
-                    read_fds, write_fds, [], _SELECT_TIMEOUT,
+                readable, writable = _poll_ready(
+                    read_fds, write_fds, _SELECT_TIMEOUT,
                 )
             except (ValueError, OSError):
                 break
