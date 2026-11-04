@@ -186,6 +186,20 @@ print('READY',flush=True)
 sys.stdin.readline()
 sys.exit(7)
 '''
+        # Hold entry to _wait until the payload has received Ctrl-C.
+        # This forces the launch-gate signal window without relying on
+        # the relative scheduling of the supervisor and payload.
+        original_wait = supervisor._wait
+
+        def wait_after_interrupt(*args, **kwargs):
+            deadline = time.monotonic() + 5
+            while not report.exists():
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("payload did not receive terminal interrupt")
+                time.sleep(.01)
+            return original_wait(*args, **kwargs)
+
+        supervisor._wait = wait_after_interrupt
         try:
             result = supervisor._spawn([sys.executable, '-I', '-c', code, str(report)])
             os._exit(supervisor._result(result))
@@ -212,7 +226,8 @@ sys.exit(7)
             done, status = os.waitpid(pid, os.WNOHANG)
             if done:
                 reaped = True
-                assert os.waitstatus_to_exitcode(status) == 7
+                exit_code = os.waitstatus_to_exitcode(status)
+                assert exit_code == 7, (exit_code, data)
                 break
             time.sleep(.02)
         assert reaped, 'supervisor did not preserve terminal completion'

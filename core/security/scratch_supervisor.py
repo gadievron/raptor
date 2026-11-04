@@ -108,20 +108,26 @@ def _spawn(command: list[str], scope=None, *, service_scratch: Path | None = Non
             os.write(2, b'raptor: unable to start supervised command\n')
             os._exit(126)
     os.close(read)
-    released = False
+    # The payload can become terminal-ready as soon as its gate opens.
+    # Protect the supervisor before that release, not only inside _wait.
+    previous_int = signal.signal(signal.SIGINT, signal.SIG_IGN)
     try:
-        if scope is not None:
-            scope.attach(child)
-        os.write(write, b'1')
-        released = True
-    except (OSError, ValueError) as exc:
-        raise LaunchNotStarted('scope attachment failed before payload execution') from exc
+        released = False
+        try:
+            if scope is not None:
+                scope.attach(child)
+            os.write(write, b'1')
+            released = True
+        except (OSError, ValueError) as exc:
+            raise LaunchNotStarted('scope attachment failed before payload execution') from exc
+        finally:
+            os.close(write)
+            if not released:
+                # Closing the gate makes the child exit without executing payload.
+                os.waitpid(child, 0)
+        return _wait(child)
     finally:
-        os.close(write)
-        if not released:
-            # Closing the gate makes the child exit without executing payload.
-            os.waitpid(child, 0)
-    return _wait(child)
+        signal.signal(signal.SIGINT, previous_int)
 
 
 def _result(code: int) -> int:
