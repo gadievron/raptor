@@ -15,7 +15,8 @@ from core.oci.evidence import capture, read_catalogue, subject
 from core.oci.evidence_source import layout_reader, registry_reader
 from core.security.capped_read import read_capped
 
-MAX_CATALOGUE_BYTES = 50 * 1024 * 1024
+# All-file hashing enlarges inventories; keep the reporter's bounded 64 MiB ceiling.
+MAX_CATALOGUE_BYTES = 64 * 1024 * 1024
 
 
 def main(argv=None) -> int:

@@ -210,3 +210,93 @@ def test_empty_file_inventory_does_not_report_zero_unidentified_executables(tmp_
     report = tool.collect(tmp_path, digest)
     assert report.metrics.unidentified_executables is None
     assert report.inventory_errors and tool.annotations(report)
+
+
+def ownership_fixture():
+    raw_digest = hashlib.sha256(b"installed executable").digest()
+    digest = raw_digest.hex()
+    location = {"path": "/usr/local/lib/python3.14/site-packages/example-1.dist-info/METADATA", "layerID": "layer"}
+    artifact = {"id": "example", "name": "example", "version": "1", "type": "python",
+                "locations": [location], "metadata": {"files": [
+                    {"path": "../../../bin/example", "digest": {"algorithm": "sha256", "value": base64.urlsafe_b64encode(raw_digest).rstrip(b"=").decode()}}]}}
+    entry = {"location": {"path": "/usr/local/bin/example", "layerID": "layer"},
+             "metadata": {"type": "RegularFile"}, "digests": [{"algorithm": "sha256", "value": digest}]}
+    candidate = {"path": entry["location"]["path"], "layer_id": "layer", "reasons": ["no package identified"]}
+    return {"artifacts": [artifact], "files": [entry]}, [candidate]
+
+
+def test_checksum_record_resolves_normalised_script_path_without_directory_guess():
+    native, candidates = ownership_fixture()
+    resolved, pending = tool.match_inventory_ownership(native, candidates)
+    assert not pending and len(resolved) == 1
+    assert resolved[0]["package_id"] == "example"
+    assert resolved[0]["sha256"] == resolved[0]["expected_sha256"]
+
+
+@pytest.mark.parametrize("change,reason", [
+    ("mismatch", "package_file_checksum_mismatch"),
+    ("missing_hash", "file_sha256_unavailable"),
+    ("other_layer", "no_sha256_package_file_record"),
+    ("no_record", "no_sha256_package_file_record"),
+    ("invalid_base64", "no_sha256_package_file_record"),
+    ("directory_only", "no_sha256_package_file_record"),
+    ("ambiguous_owner", "ambiguous_package_file_records"),
+    ("duplicate_inventory", "ambiguous_file_inventory"),
+    ("symlink", "non_regular_file_requires_identity_verification"),
+])
+def test_insufficient_or_conflicting_evidence_never_hides_candidates(change, reason):
+    import copy
+    native, candidates = ownership_fixture()
+    artifact = native["artifacts"][0]
+    if change == "mismatch":
+        native["files"][0]["digests"][0]["value"] = "0" * 64
+    elif change == "missing_hash":
+        native["files"][0].pop("digests")
+    elif change == "other_layer":
+        artifact["locations"][0]["layerID"] = "different"
+    elif change == "no_record":
+        artifact["metadata"]["files"] = []
+    elif change == "invalid_base64":
+        artifact["metadata"]["files"][0]["digest"]["value"] = "!" * 43
+    elif change == "directory_only":
+        artifact["metadata"]["files"][0]["path"] = "../../../bin/unrelated"
+    elif change == "ambiguous_owner":
+        second = copy.deepcopy(artifact)
+        second["id"] = "other"
+        native["artifacts"].append(second)
+    elif change == "duplicate_inventory":
+        native["files"] *= 2
+    else:
+        native["files"][0]["metadata"]["type"] = "SymbolicLink"
+    resolved, pending = tool.match_inventory_ownership(native, candidates)
+    assert not resolved and len(pending) == 1
+    assert pending[0]["ownership_gap"] == reason
+
+
+def test_report_keeps_raw_count_and_checksum_proof_after_resolving_warning(tmp_path):
+    native, provenance, digest = inputs(tmp_path)
+    claim, candidates = ownership_fixture()
+    artifact = claim["artifacts"][0]
+    artifact["id"] = "package"
+    artifact["licenses"] = [{"value": "MIT"}]
+    native["artifacts"] = [artifact]
+    native["files"] = claim["files"]
+    native["files"][0]["unknowns"] = candidates[0]["reasons"]
+    raw = json.dumps(native).encode()
+    (tmp_path / "syft.json").write_bytes(raw)
+    provenance["inputs"][0]["sha256"] = hashlib.sha256(raw).hexdigest()
+    save(tmp_path, provenance)
+    report = tool.collect(tmp_path, digest)
+    assert report.metrics.scanner_unidentified_executables == 1
+    assert report.metrics.checksum_matched_executables == 1
+    assert report.metrics.unidentified_executables == 0
+    assert report.inventory_ownership[0]["sha256"]
+    assert not report.inventory_candidates and not tool.annotations(report)
+
+
+def test_pipeline_collects_sha256_for_files_outside_package_catalogue():
+    workflow = (ROOT / ".github/workflows/dockerhub-publish.yml").read_text()
+    step = workflow.split("      - name: Generate container inventories\n", 1)[1].split("      - name:", 1)[0]
+    assert "SYFT_FILE_METADATA_SELECTION: all" in step
+    assert "SYFT_FILE_METADATA_DIGESTS: sha256" in step
+    assert "continue-on-error: true" in step

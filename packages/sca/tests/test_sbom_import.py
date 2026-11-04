@@ -361,7 +361,7 @@ def test_oversized_sbom_is_refused_with_size_error(tmp_path: Path) -> None:
     """An SBOM over the read cap fails closed with a size-naming error."""
     import os
 
-    from packages.sca.parsers import _safe_read
+    from packages.sca.sbom_import import _MAX_SBOM_BYTES
 
     sbom = _write_cyclonedx(
         tmp_path / "bom.json",
@@ -376,7 +376,7 @@ def test_oversized_sbom_is_refused_with_size_error(tmp_path: Path) -> None:
 
     # Sparse-extend past the real cap: the stat gate fires BEFORE any
     # read, so no 50 MB of data is ever written or buffered.
-    oversize = _safe_read._MAX_PARSER_BYTES + 1
+    oversize = _MAX_SBOM_BYTES + 1
     os.truncate(sbom, oversize)
     with pytest.raises(ValueError, match=rf"{oversize} bytes.*read cap"):
         parse_cyclonedx(sbom)

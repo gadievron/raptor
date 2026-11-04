@@ -176,6 +176,8 @@ jobs:
         env:
           SYFT_CHECK_FOR_APP_UPDATE: "false"
           SYFT_PARALLELISM: "4"
+          SYFT_FILE_METADATA_SELECTION: all
+          SYFT_FILE_METADATA_DIGESTS: sha256
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/container-sbom" "${RUNNER_TEMP}/syft-scratch"

@@ -111,20 +111,25 @@ def read_cyclonedx(path: Path) -> ImportedBom:
     return _read_cyclonedx(_read_document(path), path)
 
 
+# Full image inventories include file hashes as well as packages. Keep this
+# bound independent of smaller tree-discovered manifest reads.
+_MAX_SBOM_BYTES = 96 * 1024 * 1024
+
+
 def _read_document(path: Path) -> dict:
     # Bounded read: an SBOM is target/operator-supplied input, and an
-    # unbounded read_text is a memory-exhaustion primitive. The 50 MB
-    # package cap comfortably covers legitimate monorepo SBOMs.
+    # unbounded read_text is a memory-exhaustion primitive. A separate
+    # SBOM budget accommodates complete image inventories.
     # follow_symlinks=True is deliberate: this path is OPERATOR-NAMED
     # (--sbom on the CLI), not discovered in the scanned tree,
     # and build-emitted SBOMs legitimately sit behind build-dir
     # symlinks. Tree-discovered manifests keep the hardened default.
     try:
-        text = _safe_read.read_bounded(path, follow_symlinks=True, strict_utf8=True)
+        text = _safe_read.read_bounded(path, max_bytes=_MAX_SBOM_BYTES, follow_symlinks=True, strict_utf8=True)
     except UnicodeDecodeError as exc:
         raise ValueError("SBOM must contain valid UTF-8") from exc
     if text is None:
-        cap = _safe_read._MAX_PARSER_BYTES
+        cap = _MAX_SBOM_BYTES
         try:
             size = path.stat().st_size
         except OSError as e:
