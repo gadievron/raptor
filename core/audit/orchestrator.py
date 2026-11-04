@@ -54,6 +54,7 @@ from packages.checker_synthesis.library import RuleLibrary
 
 from ._util import extract_context_map_set
 from ._util import is_valid_identifier as _jv_is_valid_identifier
+from .claim_verification import ClaimVerification, supported_claims
 from .codeql_backend import (
     build_sink_results as _build_sink_results_raw,
 )
@@ -24517,7 +24518,7 @@ def _extract_all_hypotheses(
     """
     review = outcome.review_result or {}
     primary_text = (review.get("hypothesis") or outcome.hypothesis or "").strip()
-    primary_cwe = (review.get("cwe") or "").strip()
+    primary_cwe = (review.get("cwe_class") or review.get("cwe") or "").strip()
 
     hypotheses_raw = getattr(outcome, "hypotheses", None) or []
     if not hypotheses_raw and review:
@@ -24527,7 +24528,13 @@ def _extract_all_hypotheses(
     seen: set[str] = set()
 
     if primary_text:
+        primary_entry = next((
+            h for h in hypotheses_raw
+            if isinstance(h, dict)
+            and (h.get("mechanism") or "").strip().lower() == primary_text.lower()
+        ), {})
         result.append({
+            **primary_entry,
             "mechanism": primary_text,
             "cwe": primary_cwe,
             "confidence": "high",
@@ -24549,6 +24556,7 @@ def _extract_all_hypotheses(
             continue
         seen.add(norm)
         result.append({
+            **h,
             "mechanism": mech,
             "cwe": h.get("cwe", primary_cwe) or primary_cwe,
             "confidence": conf,
@@ -24618,11 +24626,10 @@ def _verify_hypotheses_immediate(
     cwe = hypotheses[0].get("cwe", "")
     language = _inventory_language_hint(config, file_path)
 
-    confirmed_tools: list[str] = []
-    confirmed_hypotheses: list[dict[str, Any]] = []
-    refuted_count = 0
+    verifications: list[ClaimVerification] = []
 
     for hyp in hypotheses:
+        verifications.append(ClaimVerification(hyp))
         mechanism = hyp["mechanism"]
         hyp_cwe = hyp.get("cwe", cwe) or cwe
 
@@ -24631,8 +24638,7 @@ def _verify_hypotheses_immediate(
             outcome, mechanism, hyp_cwe, mechanical_findings,
         )
         if mech_tool:
-            confirmed_tools.append(mech_tool)
-            confirmed_hypotheses.append(hyp)
+            verifications[-1] = ClaimVerification(hyp, (mech_tool,))
             logger.info(
                 "ihv: %s:%s — prep-phase correlation %s for '%s'",
                 file_path, function_name, mech_tool, mechanism[:60],
@@ -24659,10 +24665,12 @@ def _verify_hypotheses_immediate(
             # Not dominated → synthesis needed.
             # Cap exhaustion = untested (not refuted) — don't increment.
             if synthesis_counter is not None and synthesis_counter.try_reserve():
-                _try_ihv_synthesis(
+                stamp = _try_ihv_synthesis(
                     outcome, config, result, hyp, hyp_cwe,
-                    source, confirmed_tools, confirmed_hypotheses,
+                    source,
                 )
+                if stamp:
+                    verifications[-1] = ClaimVerification(hyp, (stamp,))
             continue
 
         # Dominated → run standing tool chain
@@ -24674,10 +24682,12 @@ def _verify_hypotheses_immediate(
             # No tools available — try synthesis as fallback.
             # Cap exhaustion = untested (not refuted) — don't increment.
             if synthesis_counter is not None and synthesis_counter.try_reserve():
-                _try_ihv_synthesis(
+                stamp = _try_ihv_synthesis(
                     outcome, config, result, hyp, hyp_cwe,
-                    source, confirmed_tools, confirmed_hypotheses,
+                    source,
                 )
+                if stamp:
+                    verifications[-1] = ClaimVerification(hyp, (stamp,))
             continue
 
         # Strip Joern from the immediate chain (design: Joern exclusion).
@@ -24729,8 +24739,7 @@ def _verify_hypotheses_immediate(
             ) | _skipped
 
         if tools_confirmed:
-            confirmed_tools.extend(tools_confirmed)
-            confirmed_hypotheses.append(hyp)
+            verifications[-1] = ClaimVerification(hyp, tuple(tools_confirmed))
             logger.info(
                 "ihv: %s:%s — tool confirmed '%s' via %s",
                 file_path, function_name,
@@ -24739,12 +24748,12 @@ def _verify_hypotheses_immediate(
         else:
             _ran_clean = _dispatched - _errored - _inconclusive
             if _ran_clean:
-                refuted_count += 1
+                verifications[-1] = ClaimVerification(hyp, refuted=True)
 
     # Step 4: aggregate (context gates run inside)
     return _aggregate_ihv_verdicts(
         outcome, result, hypotheses,
-        confirmed_tools, confirmed_hypotheses, refuted_count,
+        verifications,
         config,
         joern_server=joern_server,
     )
@@ -24777,15 +24786,17 @@ def _try_ihv_synthesis(
     hyp: dict[str, Any],
     cwe: str,
     source: str | None,
-    confirmed_tools: list[str],
-    confirmed_hypotheses: list[dict[str, Any]],
-) -> None:
+) -> str | None:
     """Attempt on-demand synthesis for an IHV hypothesis."""
     try:
         from .checker_synthesis import synthesize_verification_rule
 
+        review = dict(outcome.review_result or {})
+        review["hypothesis"] = hyp["mechanism"]
+        review["cwe"] = review["cwe_class"] = cwe
+        candidate = replace(outcome, hypothesis=hyp["mechanism"], review_result=review)
         synth = synthesize_verification_rule(
-            outcome, config, cwe=cwe,
+            candidate, config, cwe=cwe,
             source_snippet=source or "",
             synthesis_count=result.ondemand_synthesized,
         )
@@ -24798,13 +24809,12 @@ def _try_ihv_synthesis(
                 )
                 with result._lock:
                     result.total_cost_usd += synth.cost_usd
-            confirmed_tools.append(synth.stamp)
-            confirmed_hypotheses.append(hyp)
             logger.info(
                 "ihv: %s:%s — synthesis confirmed '%s' via %s",
                 outcome.file, outcome.function,
                 hyp.get("mechanism", "")[:60], synth.stamp,
             )
+            return synth.stamp
         elif synth is not None and synth.cost_usd:
             result.cost_tracker.record_call(
                 "checker_synthesis_ihv", cost_usd=synth.cost_usd,
@@ -24816,15 +24826,14 @@ def _try_ihv_synthesis(
             "ihv: synthesis failed for %s:%s",
             outcome.file, outcome.function, exc_info=True,
         )
+    return None
 
 
 def _aggregate_ihv_verdicts(
     outcome: ReviewOutcome,
     result: OrchestratorResult,
     hypotheses: list[dict[str, Any]],
-    confirmed_tools: list[str],
-    confirmed_hypotheses: list[dict[str, Any]],
-    refuted_count: int,
+    verifications: list[ClaimVerification],
     config: OrchestratorConfig,
     *,
     joern_server=None,
@@ -24842,47 +24851,79 @@ def _aggregate_ihv_verdicts(
     if outcome.review_result is None:
         outcome.review_result = {}
 
-    if confirmed_tools:
-        best_tool = confirmed_tools[0]
-        best_hyp = confirmed_hypotheses[0]
+    outcome.review_result.pop("immediate_verified", None)
+    outcome.review_result.pop("ihv_all_refuted", None)
+    tools = [receipt for v in verifications for receipt in v.receipts]
+    supports = supported_claims(
+        verifications, receipt_can_promote=_promotion_grade_receipt,
+        aggregate=_aggregate_channel_confirmations,
+    )
+    if tools:
+        outcome.review_result["ihv_tools"] = tools
+        outcome.review_result["ihv_hypotheses_confirmed"] = len(supports)
+        outcome.review_result["ihv_hypotheses_total"] = len(hypotheses)
 
-        # Context validation gates — block promotion, not verification
-        gate_block = _ihv_context_gate(
-            outcome, config, joern_server=joern_server,
-        )
+    blocked = None
+    for support in supports:
+        hyp = support.verification.hypothesis
+        review = dict(outcome.review_result)
+        review["hypothesis"] = hyp["mechanism"]
+        if hyp.get("cwe"):
+            review["cwe"] = review["cwe_class"] = hyp["cwe"]
+        candidate = replace(outcome, status="suspicious", hypothesis=hyp["mechanism"], review_result=review)
+        # Check the claim actually supported by these receipts, not
+        # whichever hypothesis happened to be primary in the review.
+        if _premise_blocks_confirm(hyp, list(support.receipts)):
+            _note_premise_blocked_validation(
+                candidate, hyp, list(support.receipts), config, result.tier_counters,
+                lane="immediate verification",
+            )
+            gate_block = "cross-function-premise"
+        else:
+            gate_block = _ihv_context_gate(
+                candidate, config, joern_server=joern_server,
+            )
         if gate_block:
-            # NOT stamped immediate_verified — the slow path should see
-            # these and can use the tool evidence we collected.
-            outcome.review_result["ihv_tools"] = confirmed_tools
-            outcome.review_result["ihv_gate_blocked"] = gate_block
-            outcome.review_result["ihv_hypotheses_confirmed"] = len(
-                confirmed_hypotheses)
-            outcome.review_result["ihv_hypotheses_total"] = len(hypotheses)
+            candidate.review_result["ihv_gate_blocked"] = gate_block
+            # A blocked proposal must not relabel an existing verdict
+            # or pair its original evidence with the proposed claim.
+            candidate.status = outcome.status
+            candidate.hypothesis = outcome.hypothesis
+            for key in ("hypothesis", "cwe", "cwe_class"):
+                if key in outcome.review_result:
+                    candidate.review_result[key] = outcome.review_result[key]
+                else:
+                    candidate.review_result.pop(key, None)
+            if blocked is None:
+                blocked = candidate
             logger.info(
                 "ihv: %s:%s — tool confirmed but gate blocked: %s "
                 "(evidence preserved for slow path)",
                 outcome.file, outcome.function, gate_block,
             )
-            return outcome
+            continue
 
-        # No gate blocks → promote to finding
-        outcome.status = "finding"
-        outcome.evidence_tool = best_tool
-        outcome.hypothesis = best_hyp.get("mechanism", outcome.hypothesis)
-        outcome.review_result["immediate_verified"] = True
-        outcome.review_result["ihv_tools"] = confirmed_tools
-        outcome.review_result["ihv_hypotheses_confirmed"] = len(
-            confirmed_hypotheses)
-        outcome.review_result["ihv_hypotheses_total"] = len(hypotheses)
+        candidate.status = "finding"
+        candidate.evidence_tool = "+".join(support.receipts)
+        candidate.review_result.pop("ihv_gate_blocked", None)
+        candidate.review_result["immediate_verified"] = True
+        if support.channels:
+            _record_aggregated_promotion(
+                candidate, list(support.channels), support.posterior_mean,
+                list(support.receipts),
+            )
         with result._lock:
             result.immediate_verified += 1
         logger.info(
             "ihv: %s:%s → finding (tool=%s, %d/%d confirmed)",
-            outcome.file, outcome.function, best_tool,
-            len(confirmed_hypotheses), len(hypotheses),
+            outcome.file, outcome.function, candidate.evidence_tool,
+            len(supports), len(hypotheses),
         )
-        return outcome
+        return candidate
 
+    if blocked is not None:
+        return blocked
+    refuted_count = sum(v.refuted for v in verifications)
     if refuted_count == len(hypotheses) and hypotheses:
         outcome.status = "clean"
         outcome.review_result["immediate_verified"] = True
