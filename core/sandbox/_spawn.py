@@ -178,9 +178,17 @@ def _open_capture_pipes() -> tuple[int, int, int, int]:
     concurrent spawn's intermediate transiently holds inherited
     copies) — see ``_POST_EXIT_DRAIN_SECONDS``.
     """
-    out_r, out_w = os.pipe()
-    err_r, err_w = os.pipe()
-    return out_r, out_w, err_r, err_w
+    out_r = out_w = err_r = err_w = None
+    try:
+        out_r, out_w = os.pipe()
+        err_r, err_w = os.pipe()
+        return out_r, out_w, err_r, err_w
+    except BaseException:
+        for fd in (out_r, out_w, err_r, err_w):
+            if fd is not None:
+                with contextlib.suppress(OSError):
+                    os.close(fd)
+        raise
 
 
 def open_death_pipe() -> tuple[int, int]:
@@ -192,8 +200,17 @@ def open_death_pipe() -> tuple[int, int]:
     """
     with _DEATH_W_LOCK:
         death_r, death_w = os.pipe()
-        _LIVE_DEATH_W.add(death_w)
-    return death_r, death_w
+        try:
+            _LIVE_DEATH_W.add(death_w)
+            return death_r, death_w
+        except BaseException:
+            # Roll back under the same lock used by sibling forks:
+            # no closed descriptor number may remain registered.
+            _LIVE_DEATH_W.discard(death_w)
+            for fd in (death_r, death_w):
+                with contextlib.suppress(OSError):
+                    os.close(fd)
+            raise
 
 
 def close_death_w(fd: int) -> bool:
