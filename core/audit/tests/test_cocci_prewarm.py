@@ -620,3 +620,33 @@ class TestLiveSpatchParity:
         assert memo.get(
             _leg_key(root, rule_hash, "src/quiet.c"),
         ).outcome == "refuted"
+
+
+def test_lazy_rule_materializes_only_for_a_real_burst(tmp_path, monkeypatch):
+    from core.audit import cocci_prewarm
+    from packages.coccinelle import runner
+
+    paths = ["src/a.c", "src/b.c", "src/c.c"]
+    root = _tree(tmp_path, paths)
+    rule = tmp_path / "r.cocci"
+    rule.write_text("@r@\n@@\nfree(...);\n")
+    cfg = _Cfg(SweepMemo(), _inventory(paths))
+    calls = []
+    monkeypatch.setattr(runner, "run_rule", _stub_run_rule(calls, set()))
+    resolved = []
+
+    def materialize():
+        resolved.append(1)
+        return str(rule)
+
+    for fp in paths[:cocci_prewarm.TRIGGER_DISTINCT_FILES - 1]:
+        maybe_prewarm(cfg, effective_target=root, file_path=fp,
+                      rule_source=str(rule), exec_rule=materialize, rule_hash="rh")
+    assert not resolved
+    maybe_prewarm(cfg, effective_target=root, file_path=paths[-1],
+                  rule_source=str(rule), exec_rule=materialize, rule_hash="rh")
+    assert resolved == [1]
+    assert calls and all(call["rule"] == str(rule) for call in calls)
+    maybe_prewarm(cfg, effective_target=root, file_path=paths[-1],
+                  rule_source=str(rule), exec_rule=materialize, rule_hash="rh")
+    assert resolved == [1]

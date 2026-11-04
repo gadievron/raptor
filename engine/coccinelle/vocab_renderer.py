@@ -17,6 +17,8 @@ Supported constructs (auto-detected from the line after the marker):
 
 from __future__ import annotations
 
+import hashlib
+import io
 import logging
 import re
 import tempfile
@@ -258,11 +260,10 @@ def _warn_if_dead(
         )
 
 
-def render(rule_path: Path, vocab: Any) -> Path | None:
+def render_text(rule_path: Path, vocab: Any) -> str | None:
     """Render a ``.cocci`` rule with vocab extensions.
 
-    Returns a Path to a tempfile with the rendered rule, or None if the
-    rule has no ``@vocab`` markers or vocab is empty/None.
+    Returns rendered text, or None when no vocabulary was spliced.
     """
     if vocab is None:
         return None
@@ -374,6 +375,14 @@ def render(rule_path: Path, vocab: Any) -> Path | None:
         )
         return None
 
+    return rendered
+
+
+def render(rule_path: Path, vocab: Any) -> Path | None:
+    """Render to a caller-owned tempfile, or None when no splice is needed."""
+    rendered = render_text(rule_path, vocab)
+    if rendered is None:
+        return None
     tmp = tempfile.NamedTemporaryFile(
         mode="w", suffix=".cocci", prefix=rule_path.stem + "_vocab_",
         delete=False,
@@ -381,3 +390,56 @@ def render(rule_path: Path, vocab: Any) -> Path | None:
     tmp.write(rendered)
     tmp.close()
     return Path(tmp.name)
+
+
+class PreparedRule:
+    """Exact output bytes, materialized only when a tool needs the file.
+
+    Each dispatch owns this object and its tempfile. Failed materialization
+    is sticky within the dispatch, preserving the normal renderer retry in
+    the sweep fallback instead of adding attempts through prewarm.
+    """
+
+    def __init__(self, source: Path, text: str):
+        self.source = source
+        # Match NamedTemporaryFile(mode="w")'s default encoding and newline
+        # conversion, including non-UTF-8 locales and Windows line endings.
+        with io.BytesIO() as buffer:
+            with io.TextIOWrapper(buffer) as writer:
+                writer.write(text)
+                writer.flush()
+                self.data = buffer.getvalue()
+        self.digest = hashlib.sha256(self.data).hexdigest()
+        self.path: Path | None = None
+        self.error: OSError | ValueError | None = None
+
+    def materialize(self) -> Path:
+        if self.error is not None:
+            raise self.error
+        if self.path is not None:
+            return self.path
+        path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb", suffix=".cocci", prefix=self.source.stem + "_vocab_",
+                delete=False,
+            ) as tmp:
+                path = Path(tmp.name)
+                tmp.write(self.data)
+        except (OSError, ValueError) as exc:
+            self.error = exc
+            if path is not None:
+                path.unlink(missing_ok=True)
+            raise
+        self.path = path
+        return path
+
+    def close(self) -> None:
+        if self.path is not None:
+            self.path.unlink(missing_ok=True)
+
+
+def prepare(rule_path: Path, vocab: Any) -> PreparedRule | None:
+    """Render and hash exact bytes without creating a temporary file."""
+    text = render_text(rule_path, vocab)
+    return PreparedRule(rule_path, text) if text is not None else None

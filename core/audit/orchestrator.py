@@ -23298,39 +23298,30 @@ def _run_tool_chain(
                     # file content) serves every function in the file,
                     # and the per-function range filter + outcome
                     # classification run AFTER retrieval.
-                    _cc_rendered: Path | None = None
+                    _cc_prepared: Any = None
                     _cc_pass_vocab: Any = None
                     if domain_vocab is None:
                         _cc_rule_hash = _memo_hash_file(tool_cfg["rule"])
                     else:
-                        # Render ONCE up front so the rendered bytes
-                        # (seed rule + spliced vocabulary) become the
-                        # memo's rule identity: dispatches sharing a
-                        # vocabulary hash alike, a vocabulary change
-                        # misses. The rendered tempfile is passed down
-                        # so the sweep does not render a second time.
+                        # Compute exact rendered-file bytes in memory. A memo
+                        # or checkpoint hit needs no temporary rule on disk.
                         try:
-                            from engine.coccinelle.vocab_renderer import (
-                                render as _render_cocci_rule,
-                            )
-                            _cc_rendered = _render_cocci_rule(
-                                Path(tool_cfg["rule"]), domain_vocab,
-                            )
+                            from engine.coccinelle.vocab_renderer import prepare
+                            _cc_prepared = prepare(Path(tool_cfg["rule"]), domain_vocab)
                         except (OSError, ValueError):
-                            # Render failed here — run unmemoized and
-                            # let the sweep retry its own render (its
-                            # failure path runs the seed rule).
                             _cc_rule_hash = None
                             _cc_pass_vocab = domain_vocab
                         else:
-                            # render() returns None when the rule has
-                            # no @vocab marker or nothing spliced —
-                            # the seed rule runs as-is.
-                            _cc_rule_hash = _memo_hash_file(
-                                _cc_rendered
-                                if _cc_rendered is not None
-                                else tool_cfg["rule"],
+                            _cc_rule_hash = (
+                                _cc_prepared.digest if _cc_prepared is not None
+                                else _memo_hash_file(tool_cfg["rule"])
                             )
+
+                    def _cc_exec_rule() -> str:
+                        return (
+                            str(_cc_prepared.materialize())
+                            if _cc_prepared is not None else tool_cfg["rule"]
+                        )
 
                     def _run_cocci_file() -> Any:
                         return run_coccinelle_file_sweep(
@@ -23339,8 +23330,8 @@ def _run_tool_chain(
                             cocci_rule=tool_cfg["rule"],
                             domain_vocab=_cc_pass_vocab,
                             rendered_rule=(
-                                str(_cc_rendered)
-                                if _cc_rendered is not None
+                                _cc_exec_rule()
+                                if _cc_prepared is not None
                                 else None
                             ),
                             language=_cc_language,
@@ -23365,11 +23356,7 @@ def _run_tool_chain(
                                 effective_target=effective_target,
                                 file_path=file_path,
                                 rule_source=tool_cfg["rule"],
-                                exec_rule=(
-                                    str(_cc_rendered)
-                                    if _cc_rendered is not None
-                                    else tool_cfg["rule"]
-                                ),
+                                exec_rule=_cc_exec_rule,
                                 rule_hash=_cc_rule_hash,
                             )
                         except Exception:  # noqa: BLE001
@@ -23399,13 +23386,23 @@ def _run_tool_chain(
                             },
                             _run_cocci_file,
                         )
+                    except (OSError, ValueError) as exc:
+                        if _cc_prepared is None or _cc_prepared.error is not exc:
+                            raise
+                        # Materialization failed on a cold dispatch. Preserve
+                        # the original unmemoized render retry / seed fallback.
+                        _cc_file_result = run_coccinelle_file_sweep(
+                            target_path=effective_target, file_path=file_path,
+                            cocci_rule=tool_cfg["rule"], domain_vocab=domain_vocab,
+                            language=_cc_language,
+                        )
                     finally:
                         # The rendered tempfile never outlives this
                         # step: the memoized result records only the
                         # source rule path (rule_id), so a later memo
                         # hit never dereferences a dead tempfile.
-                        if _cc_rendered is not None:
-                            _cc_rendered.unlink(missing_ok=True)
+                        if _cc_prepared is not None:
+                            _cc_prepared.close()
 
                     cocci_result = scope_coccinelle_result(
                         _cc_file_result,

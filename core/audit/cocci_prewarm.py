@@ -46,6 +46,7 @@ prewarm bug is the pre-existing serial behaviour.
 import logging
 import threading
 import weakref
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -296,7 +297,7 @@ def maybe_prewarm(
     effective_target: Path,
     file_path: str,
     rule_source: str,
-    exec_rule: str,
+    exec_rule: str | Callable[[], str],
     rule_hash: str | None,
 ) -> None:
     """Advisory lookahead prewarm for one coccinelle-leg dispatch.
@@ -314,7 +315,8 @@ def maybe_prewarm(
         rule_source: The SOURCE .cocci path (memo/rule_id identity).
         exec_rule: The rule file to actually run — the leg's rendered
             tempfile when vocabulary was spliced, else the source
-            path. Must outlive this (synchronous) call, which the
+            path, or a callable that materializes it only for a real burst.
+            Must outlive this (synchronous) call, which the
             leg's unlink-in-finally ordering guarantees.
         rule_hash: The leg's rendered-bytes hash (memo key part);
             None means the leg is running unmemoized — no prewarm.
@@ -338,7 +340,7 @@ def _maybe_prewarm(
     effective_target: Path,
     file_path: str,
     rule_source: str,
-    exec_rule: str,
+    exec_rule: str | Callable[[], str],
     rule_hash: str | None,
 ) -> None:
     memo = getattr(config, "sweep_memo", None)
@@ -385,7 +387,7 @@ def _warm_burst(
     *,
     root: Path,
     rule_source: str,
-    exec_rule: str,
+    exec_rule: str | Callable[[], str],
     rule_hash: str,
     start_chunk: int,
 ) -> None:
@@ -415,6 +417,8 @@ def _warm_burst(
     if not jobs:
         return
 
+    # Resolve on the caller thread only after a burst has actual work.
+    exec_rule = exec_rule() if callable(exec_rule) else exec_rule
     workers = min(derive_batch_workers(), len(jobs))
     pinned = 0
     # Synchronous burst: submit-all then wait — no worker thread ever
