@@ -8,13 +8,15 @@ import http.server
 import socket
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 
 import pytest
 import requests
 
 import packages.web.client as client_module
 from packages.web.client import WebClient
+
+from packages.web.tests.http_server import start_http_server
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
@@ -37,19 +39,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
 @contextmanager
 def _server(handler_class):
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler_class)
-    try:
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-    except BaseException:
-        server.server_close()
-        raise
-    try:
+    with ExitStack() as cleanup:
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler_class)
+        start_http_server(server, cleanup.callback)
         yield server
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
 
 
 def _base_url(server) -> str:
@@ -365,22 +358,16 @@ def test_drip_fed_body_is_cut_at_the_wall_clock_deadline(monkeypatch):
     class _Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
         daemon_threads = True
 
-    server = _Server(("127.0.0.1", 0), DripHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        client = WebClient(
+    with ExitStack() as cleanup:
+        server = _Server(("127.0.0.1", 0), DripHandler)
+        start_http_server(server, cleanup.callback)
+        with WebClient(
             _base_url(server), timeout=2, rate_limit=0,
             block_private_ips=False,
-        )
-        start = time.monotonic()
-        response = client.get("/")
-        wall = time.monotonic() - start
-        client.close()
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
+        ) as client:
+            start = time.monotonic()
+            response = client.get("/")
+            wall = time.monotonic() - start
 
     assert wall < 4.0, f"get() held for {wall:.1f}s past the deadline"
     assert response.status_code == 200

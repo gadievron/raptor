@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import http.server
 import json
-import threading
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 from packages.web.scanner import WebScanner
 from packages.web.discovery import DiscoveryResult
+
+from packages.web.tests.http_server import start_http_server
 
 
 class _FakeTargetHandler(http.server.BaseHTTPRequestHandler):
@@ -35,20 +36,11 @@ class _FakeTargetHandler(http.server.BaseHTTPRequestHandler):
 @contextmanager
 def _fake_target():
     handler = type("FakeTargetHandler", (_FakeTargetHandler,), {"hits": []})
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    try:
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-    except BaseException:
-        server.server_close()
-        raise
-    try:
+    with ExitStack() as cleanup:
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        start_http_server(server, cleanup.callback)
         host, port = server.server_address
         yield f"http://{host}:{port}", handler
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
 
 
 def test_scanner_threads_crawl_limits_to_fake_target(tmp_path: Path, monkeypatch):

@@ -1,12 +1,15 @@
 """Native browser and driver boundaries; owned loopback pages/processes only."""
+
+from contextlib import ExitStack
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 import socket
 import sys
-import threading
 
 import pytest
+
+from packages.web.tests.http_server import start_http_server
 
 pytestmark = [pytest.mark.slow, pytest.mark.integration,
               pytest.mark.linux_native, pytest.mark.darwin_native]
@@ -102,14 +105,13 @@ def test_real_browser_javascript_and_explicit_inner_policy(tmp_path, monkeypatch
     public = tmp_path/'public'
     public.mkdir()
     (public/'index.html').write_text('<html><body><script>let a=document.createElement("a");a.href="/owned-js";a.textContent="owned";document.body.appendChild(a)</script></body></html>')
-    server = ThreadingHTTPServer(('127.0.0.1', 0), partial(SimpleHTTPRequestHandler, directory=str(public)))
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    # Owned target: never use an operator proxy or network account.
-    for name in ('HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy'):
-        monkeypatch.delenv(name, raising=False)
-    base = f'http://127.0.0.1:{server.server_port}'
-    try:
+    with ExitStack() as cleanup:
+        server = ThreadingHTTPServer(('127.0.0.1', 0), partial(SimpleHTTPRequestHandler, directory=str(public)))
+        start_http_server(server, cleanup.callback)
+        # Owned target: never use an operator proxy or network account.
+        for name in ('HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy'):
+            monkeypatch.delenv(name, raising=False)
+        base = f'http://127.0.0.1:{server.server_port}'
         with BrowserEngine(base, allow_unsandboxed_chromium=waived) as engine:
             rendered = engine.render(base+'/index.html')
             assert rendered is not None
@@ -117,7 +119,3 @@ def test_real_browser_javascript_and_explicit_inner_policy(tmp_path, monkeypatch
             cdp = engine._browser.new_browser_cdp_session()
             arguments = cdp.send('Browser.getBrowserCommandLine')['arguments']
             assert ('--no-sandbox' in arguments) is waived
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)

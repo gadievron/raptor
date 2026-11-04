@@ -10,12 +10,13 @@ prompt context (param_name, param_type, vuln_type).
 from __future__ import annotations
 
 import http.server
-import threading
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+
+from packages.web.tests.http_server import start_http_server
 
 
 class _RecordingFuzzer:
@@ -99,22 +100,13 @@ class _ParamTargetHandler(http.server.BaseHTTPRequestHandler):
 
 @contextmanager
 def _fake_target():
-    server = http.server.ThreadingHTTPServer(
-        ("127.0.0.1", 0), _ParamTargetHandler,
-    )
-    try:
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-    except BaseException:
-        server.server_close()
-        raise
-    try:
+    with ExitStack() as cleanup:
+        server = http.server.ThreadingHTTPServer(
+            ("127.0.0.1", 0), _ParamTargetHandler,
+        )
+        start_http_server(server, cleanup.callback)
         host, port = server.server_address
         yield f"http://{host}:{port}"
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
 
 
 class TestParamScopedFuzzing:

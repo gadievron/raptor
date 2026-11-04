@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import http.server
 import threading
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 
 import pytest
 
 from core.sandbox.tests.socket_server import SocketServer
 from packages.web.checks.information import VerboseHttpMethodsCheck
+
+from packages.web.tests.http_server import start_http_server
 
 
 @pytest.fixture(autouse=True)
@@ -46,20 +48,11 @@ class _StubClient:
 
 @contextmanager
 def _listener(handler_class):
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler_class)
-    try:
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-    except BaseException:
-        server.server_close()
-        raise
-    try:
+    with ExitStack() as cleanup:
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler_class)
+        start_http_server(server, cleanup.callback)
         host, port = server.server_address
         yield f"http://{host}:{port}"
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
 
 
 def _handler(status: int = 200, headers: dict | None = None):
