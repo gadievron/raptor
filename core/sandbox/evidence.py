@@ -281,7 +281,7 @@ class EvidenceFile:
         """JSON-encode ``record`` and append it as one line."""
         try:
             line = dumps_artifact(record, indent=None, ensure_ascii=True) + "\n"
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, RecursionError):
             logger.warning("evidence record not serialisable", exc_info=True)
             return False
         return self.write_line(line)
