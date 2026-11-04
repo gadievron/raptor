@@ -12,6 +12,7 @@ Hermetic: loopback sockets and sub-second timeouts only.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 import asyncio
 import socket
 import threading
@@ -20,6 +21,7 @@ import time
 import pytest
 
 from core.sandbox import proxy as proxy_mod
+from core.sandbox.tests.socket_server import SocketServer
 
 
 def _supervisor_only_proxy(total: float, idle: float):
@@ -194,18 +196,14 @@ def test_mid_tunnel_idle_widening_applies():
 
 
 def _echo_upstream():
-    """One-connection loopback echo server. Returns (sock, port, thread)."""
+    """Loopback echo backend; return its listener, port, and cleanup owner."""
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    srv.bind(("127.0.0.1", 0))
-    srv.listen(1)
-    port = srv.getsockname()[1]
+    try:
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        port = srv.getsockname()[1]
 
-    def serve():
-        try:
-            conn, _ = srv.accept()
-        except OSError:
-            return
-        with conn:
+        def serve(conn):
             while True:
                 try:
                     data = conn.recv(4096)
@@ -218,25 +216,30 @@ def _echo_upstream():
                 except OSError:
                     return
 
-    t = threading.Thread(target=serve, daemon=True)
-    t.start()
-    return srv, port, t
+        server = SocketServer(srv, serve)
+    except BaseException:
+        srv.close()
+        raise
+    return srv, port, server
 
 
 def _connect_through(proxy, up_port: int) -> socket.socket:
-    s = socket.create_connection(("127.0.0.1", proxy.port), timeout=5.0)
-    s.sendall(
-        f"CONNECT 127.0.0.1:{up_port} HTTP/1.1\r\n"
-        f"Host: 127.0.0.1:{up_port}\r\n\r\n".encode("latin-1")
-    )
-    buf = b""
-    while b"\r\n\r\n" not in buf:
-        chunk = s.recv(4096)
-        if not chunk:
-            break
-        buf += chunk
-    assert b" 200 " in buf.split(b"\r\n", 1)[0]
-    return s
+    with ExitStack() as cleanup:
+        s = socket.create_connection(("127.0.0.1", proxy.port), timeout=5.0)
+        cleanup.callback(s.close)
+        s.sendall(
+            f"CONNECT 127.0.0.1:{up_port} HTTP/1.1\r\n"
+            f"Host: 127.0.0.1:{up_port}\r\n\r\n".encode("latin-1")
+        )
+        buf = b""
+        while b"\r\n\r\n" not in buf:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+        assert b" 200 " in buf.split(b"\r\n", 1)[0]
+        cleanup.pop_all()
+        return s
 
 
 def test_tunnel_with_steady_progress_survives_past_old_cap(monkeypatch):
@@ -246,32 +249,28 @@ def test_tunnel_with_steady_progress_survives_past_old_cap(monkeypatch):
     # Gate 2 blocks loopback IPs by design; the captive upstream in
     # this test lives on loopback, so stand the gate down for it.
     monkeypatch.setattr(proxy_mod, "_ip_is_blocked", lambda ip: False)
-    srv, up_port, thread = _echo_upstream()
-    proxy = proxy_mod.EgressProxy(
-        # This case tests the absolute cap; the separate stalled-tunnel
-        # case tests idle expiry. Give scheduling stalls idle headroom.
-        allowed_hosts={"127.0.0.1"}, idle_timeout=5.0, total_timeout=0.2,
-    )
-    try:
+    with ExitStack() as cleanup:
+        _listener, up_port, server = _echo_upstream()
+        cleanup.callback(server.close)
+        proxy = proxy_mod.EgressProxy(
+            # This case tests the absolute cap; the separate stalled-tunnel
+            # case tests idle expiry. Give scheduling stalls idle headroom.
+            allowed_hosts={"127.0.0.1"}, idle_timeout=5.0, total_timeout=0.2,
+        )
+        cleanup.callback(proxy.stop)
         s = _connect_through(proxy, up_port)
+        cleanup.callback(s.close)
         s.settimeout(5.0)
-        try:
-            # Six round trips span more than two absolute-cap windows.
-            # A fixed count also cannot pass after just one delayed echo.
-            for _ in range(6):
-                s.sendall(b"x")
-                echoed = s.recv(16)
-                assert echoed, (
-                    "tunnel severed mid-transfer — the absolute cap "
-                    "fired on a tunnel with steady progress"
-                )
-                time.sleep(0.1)
-        finally:
-            s.close()
-    finally:
-        proxy.stop()
-        srv.close()
-        thread.join(timeout=5.0)
+        # Six round trips span more than two absolute-cap windows.
+        # A fixed count also cannot pass after just one delayed echo.
+        for _ in range(6):
+            s.sendall(b"x")
+            echoed = s.recv(16)
+            assert echoed, (
+                "tunnel severed mid-transfer — the absolute cap "
+                "fired on a tunnel with steady progress"
+            )
+            time.sleep(0.1)
 
 
 def test_stalled_tunnel_still_dies_at_idle(monkeypatch):
@@ -284,25 +283,21 @@ def test_stalled_tunnel_still_dies_at_idle(monkeypatch):
     # production peek timeout to this test's wall time. Keep it above
     # zero — the peek path must still run and expire on its own.
     monkeypatch.setattr(proxy_mod, "_TLS_PEEK_TIMEOUT_S", 0.2)
-    srv, up_port, thread = _echo_upstream()
-    proxy = proxy_mod.EgressProxy(
-        allowed_hosts={"127.0.0.1"}, idle_timeout=0.3, total_timeout=60.0,
-    )
-    try:
+    with ExitStack() as cleanup:
+        _listener, up_port, server = _echo_upstream()
+        cleanup.callback(server.close)
+        proxy = proxy_mod.EgressProxy(
+            allowed_hosts={"127.0.0.1"}, idle_timeout=0.3, total_timeout=60.0,
+        )
+        cleanup.callback(proxy.stop)
         s = _connect_through(proxy, up_port)
+        cleanup.callback(s.close)
         s.settimeout(10.0)
-        try:
-            t0 = time.monotonic()
-            # No bytes in either direction: both relay directions hit
-            # the idle read timeout and the tunnel closes (client sees
-            # EOF). Far before total_timeout=60.
-            got = s.recv(16)
-            elapsed = time.monotonic() - t0
-            assert got == b"", "expected EOF from idle-close"
-            assert elapsed < 8.0, f"idle close took {elapsed:.1f}s"
-        finally:
-            s.close()
-    finally:
-        proxy.stop()
-        srv.close()
-        thread.join(timeout=5.0)
+        t0 = time.monotonic()
+        # No bytes in either direction: both relay directions hit
+        # the idle read timeout and the tunnel closes (client sees
+        # EOF). Far before total_timeout=60.
+        got = s.recv(16)
+        elapsed = time.monotonic() - t0
+        assert got == b"", "expected EOF from idle-close"
+        assert elapsed < 8.0, f"idle close took {elapsed:.1f}s"
