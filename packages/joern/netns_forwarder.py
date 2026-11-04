@@ -310,8 +310,9 @@ class Forwarder:
         t = threading.Thread(
             target=self._accept_loop, name="joern-uds-accept", daemon=True,
         )
-        _start_signal_shielded(t)
+        # Retain ownership before start or mask restoration can raise.
         self._accept_thread = t
+        _start_signal_shielded(t)
 
     def stop(self) -> None:
         self._stopping.set()
@@ -342,7 +343,8 @@ class Forwarder:
             with contextlib.suppress(OSError):
                 sock.close()
         if self._accept_thread is not None:
-            self._accept_thread.join(timeout=5)
+            if self._accept_thread.ident is not None:
+                self._accept_thread.join(timeout=5)
             self._accept_thread = None
 
     def _track(self, sock: socket.socket) -> None:
