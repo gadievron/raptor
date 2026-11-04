@@ -371,8 +371,8 @@ class AuditBudget:
         # accepting new records). LRU-evict past this many entries —
         # evicted PIDs lose their per-PID accounting and rejoin the
         # admission flow as if newly seen, which is fine: their
-        # records still count against the GLOBAL cap so the budget
-        # remains bounded. _pid_marker_emitted is also evicted in
+        # records remain bounded by the global and sampled-keep
+        # ceilings. _pid_marker_emitted is also evicted in
         # lock-step so a re-seen PID can re-emit its marker if it
         # again hits the per-PID cap.
         self._pid_dict_cap = 10_000
@@ -423,6 +423,7 @@ class AuditBudget:
 
     @property
     def pid_counts(self) -> dict[int, int]:
+        """All kept records for tracked PIDs, including sampled keeps."""
         return dict(self._pid_counts)
 
     # ----- core decision -------------------------------------------
@@ -506,6 +507,7 @@ class AuditBudget:
                     # second hard ceiling) isn't spent yet.
                     if self._sampled_keeps < self.global_cap:
                         self._sampled_keeps += 1
+                        self._record_pid_keep(pid)
                         return KEEP, marker
                     marker = self._sampled_budget_marker(marker)
                 # Not the sampled one (or the sampled-keep budget is
@@ -557,6 +559,7 @@ class AuditBudget:
                 if self._sampling_counters[cat] % sample_n == 0:
                     if self._sampled_keeps < self.global_cap:
                         self._sampled_keeps += 1
+                        self._record_pid_keep(pid)
                         self._global_cap_notified = True
                         return KEEP, marker
                     marker = self._sampled_budget_marker(marker)
@@ -572,6 +575,13 @@ class AuditBudget:
         # Allowed. Bump counters.
         self._record_count += 1
         self._category_counts[cat] = self._category_counts.get(cat, 0) + 1
+        self._record_pid_keep(pid)
+        return KEEP, marker
+
+    # ----- helpers --------------------------------------------------
+
+    def _record_pid_keep(self, pid: int) -> None:
+        """Charge every kept record to the bounded per-PID tracker."""
         # Move PID to end of insertion order so LRU eviction (below)
         # discards the genuinely-oldest entries when the cap is hit.
         # `d[k] += 1` does NOT update insertion order — pop+reinsert does.
@@ -590,9 +600,6 @@ class AuditBudget:
                 # Drop the marker-emitted memory too so a re-seen
                 # PID can re-emit its cap-exceeded marker.
                 self._pid_marker_emitted.discard(oldest)
-        return KEEP, marker
-
-    # ----- helpers --------------------------------------------------
 
     def _take_token(self, cat: str, capacity: int,
                     refill_rate: float) -> bool:
