@@ -465,7 +465,6 @@ class AuditBudget:
         cap = self.category_caps.get(cat, self.global_cap)
         refill = self.refill_rates.get(cat, self.global_cap / 600.0)
         if not self._take_token(cat, cap, refill):
-            self._dropped[cat] = self._dropped.get(cat, 0) + 1
             # Sampling: 1-in-N once the bucket is empty. Emits a
             # trickle even at full throttle so operators see "still
             # happening" without flooding. When sampling is
@@ -513,6 +512,7 @@ class AuditBudget:
                 # spent) — drop, but the marker (if any was just
                 # generated) still flushes so operators see the
                 # state-change event in-line.
+                self._dropped[cat] = self._dropped.get(cat, 0) + 1
                 return DROP, marker
             # No sampling configured: emit the "no sampling" marker
             # on the first drop.
@@ -525,6 +525,7 @@ class AuditBudget:
                           f"post-cap sampling rate is configured; "
                           f"further records dropped silently."),
                 )
+            self._dropped[cat] = self._dropped.get(cat, 0) + 1
             return DROP, marker
 
         # Global cap — hits when many small-cap categories
@@ -534,6 +535,12 @@ class AuditBudget:
         # (e.g., if an operator-side process raises the global cap
         # mid-run, or sampling kicks in for this category later).
         if self._record_count >= self.global_cap:
+            # Both sampled keeps and drops were refused by the global
+            # budget; neither should spend a category token.
+            tokens, last_ts = self._buckets[cat]
+            self._buckets[cat] = (
+                min(float(cap), tokens + 1.0), last_ts,
+            )
             # Post-cap sampling applies here too — the module
             # contract is that once the global cap is hit, EVERY
             # record is evaluated through sampling (un-sampled
@@ -554,14 +561,6 @@ class AuditBudget:
                         return KEEP, marker
                     marker = self._sampled_budget_marker(marker)
             self._dropped[cat] = self._dropped.get(cat, 0) + 1
-            # Refund the token we just consumed in _take_token —
-            # this drop is global-cap, not category-cap. Without
-            # the refund, category buckets stay drained even when
-            # the actual constraint is global.
-            tokens, last_ts = self._buckets[cat]
-            self._buckets[cat] = (
-                min(float(cap), tokens + 1.0), last_ts,
-            )
             # Set the once-only notification flag so the caller can
             # surface a stderr warning. Markers in JSONL are nice
             # but easy to miss — the legacy tracer's stderr line
