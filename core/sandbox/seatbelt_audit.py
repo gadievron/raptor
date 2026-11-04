@@ -459,6 +459,62 @@ def _now_iso() -> str:
 
 
 
+
+_WARM_UP_READ_CHUNK = 64 * 1024
+_MAX_WARM_UP_LINE_BYTES = 1 * 1024 * 1024
+
+
+def _warm_up_log_lines(stream, deadline):
+    """Yield complete bounded lines without blocking past the gate deadline."""
+    import selectors
+
+    fd = stream.fileno()
+    was_blocking = os.get_blocking(fd)
+    selector = None
+    pending = bytearray()
+    discarding = False
+    try:
+        os.set_blocking(fd, False)
+        selector = selectors.DefaultSelector()
+        selector.register(stream, selectors.EVENT_READ)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not selector.select(timeout=remaining):
+                return
+            try:
+                chunk = os.read(fd, _WARM_UP_READ_CHUNK)
+            except BlockingIOError:
+                continue
+            if not chunk:
+                if (pending and not discarding
+                        and len(pending) <= _MAX_WARM_UP_LINE_BYTES
+                        and time.monotonic() < deadline):
+                    yield pending.decode("utf-8", errors="replace")
+                return
+            pending.extend(chunk)
+            while True:
+                end = pending.find(b"\n")
+                if end < 0:
+                    break
+                if time.monotonic() >= deadline:
+                    return
+                if not discarding and end <= _MAX_WARM_UP_LINE_BYTES:
+                    yield pending[:end].decode("utf-8", errors="replace")
+                del pending[:end + 1]
+                discarding = False
+            if len(pending) > _MAX_WARM_UP_LINE_BYTES:
+                pending.clear()
+                discarding = True
+    finally:
+        try:
+            if selector is not None:
+                with contextlib.suppress(Exception):
+                    selector.close()
+        finally:
+            with contextlib.suppress(OSError):
+                os.set_blocking(fd, was_blocking)
+
+
 def _reap_warm_up(proc: subprocess.Popen) -> None:
     """Bound cleanup of the owned synthetic warm-up process."""
     try:
@@ -1017,8 +1073,6 @@ class LogStreamer:
         return, so caller-relevant events flow through ``_read_loop``
         as designed.
         """
-        import selectors as _selectors
-
         # Trusted-dirs resolution, never the inherited PATH: the
         # warm-up executes this binary in the UNSANDBOXED parent, so a
         # PATH-planted sandbox-exec stub (direnv/.envrc-compatible
@@ -1076,66 +1130,50 @@ class LogStreamer:
             )
             return False
 
-        sel = None
         seen = False
         try:
             target_pid = warm_up.pid
-            # Explicit guard rather than assert — survives python -O.
             if self._proc is None:
                 raise RuntimeError(
                     "seatbelt_audit: internal invariant — log-stream proc not started")
             if self._proc.stdout is None:
                 return False
-            sel = _selectors.DefaultSelector()
-            sel.register(self._proc.stdout, _selectors.EVENT_READ)
             deadline = time.monotonic() + _WARM_UP_TIMEOUT_S
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                events = sel.select(timeout=remaining)
-                if not events:
-                    break
-                line = self._proc.stdout.readline()
-                if not line:
-                    # `log stream` died — let caller handle in
-                    # best-effort fallback.
-                    break
-                line = line.strip()
-                if not line:
-                    continue
-                entry = _decode_log_entry(line)
-                if entry is None:
-                    continue
-                msg = entry.get("eventMessage", "")
-                parsed = _parse_kext_message(msg)
-                if parsed is None:
-                    continue
-                # Index 1 of each arm's groups is its PID candidate.
-                # The warm-up workload's name is ours (sandbox-exec,
-                # fixed SBPL), so ambiguity is not expected here —
-                # but "did an event with our PID arrive" is answered
-                # honestly by accepting a match from either arm.
-                lazy_groups, greedy_groups = parsed
-                pid_candidates = [lazy_groups[1]]
-                if greedy_groups is not None:
-                    pid_candidates.append(greedy_groups[1])
-                try:
-                    if any(int(p) == target_pid
-                           for p in pid_candidates):
-                        seen = True
-                        break
-                except ValueError:
-                    continue
+            # No reader thread exists yet, so the TextIOWrapper has no
+            # buffered input. Read its fd directly; the workload starts
+            # only after this gate, so surplus warm-up bytes are discardable.
+            with contextlib.closing(
+                _warm_up_log_lines(self._proc.stdout, deadline),
+            ) as lines:
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    entry = _decode_log_entry(line)
+                    if entry is None:
+                        continue
+                    msg = entry.get("eventMessage", "")
+                    parsed = _parse_kext_message(msg)
+                    if parsed is None:
+                        continue
+                    # Index 1 of each arm's groups is its PID candidate.
+                    # The warm-up workload's name is ours (sandbox-exec,
+                    # fixed SBPL), so ambiguity is not expected here —
+                    # but "did an event with our PID arrive" is answered
+                    # honestly by accepting a match from either arm.
+                    lazy_groups, greedy_groups = parsed
+                    pid_candidates = [lazy_groups[1]]
+                    if greedy_groups is not None:
+                        pid_candidates.append(greedy_groups[1])
+                    try:
+                        if any(int(p) == target_pid
+                               for p in pid_candidates):
+                            seen = True
+                            break
+                    except ValueError:
+                        continue
         finally:
-            try:
-                if sel is not None:
-                    # close() releases registrations too; unregister can
-                    # itself fail after partial setup or descriptor loss.
-                    with contextlib.suppress(Exception):
-                        sel.close()
-            finally:
-                _reap_warm_up(warm_up)
+            _reap_warm_up(warm_up)
 
         return seen
 
