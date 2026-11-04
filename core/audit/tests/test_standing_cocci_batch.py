@@ -21,6 +21,9 @@ def case(tmp_path, monkeypatch):
     monkeypatch.setattr(cwe_dispatch, "CWE_TO_TOOL_DISPATCH", {"CWE-X": {"cocci": ["z.cocci", "a.cocci"]}})
     monkeypatch.setattr(runner, "is_available", lambda: True)
     monkeypatch.setattr(detector_cache, "spatch_marker", lambda: "test-spatch")
+    # Detector implementation identity has its own cache tests. Keep this
+    # routing fixture independent of a cold scan of the installed source tree.
+    monkeypatch.setattr(detector_cache, "detector_set_fingerprint", lambda: "test-detector-set")
     config = orchestrator.OrchestratorConfig(target_path=target, out_dir=tmp_path / "out")
     gaps = [{"file": "a.c", "name": "first", "line_start": 1, "line_end": 3},
             {"file": "a.c", "name": "overlap", "line_start": 1, "line_end": 3},
