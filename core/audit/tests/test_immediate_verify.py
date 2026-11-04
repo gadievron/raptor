@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+from core.audit.claim_verification import ClaimVerification
+
 from core.audit.orchestrator import (
     AtomicSynthesisCounter,
     ReviewOutcome,
@@ -327,6 +329,7 @@ class TestIHVSynthesis:
 
             with patch(
                 "core.audit.orchestrator._try_ihv_synthesis",
+                return_value=None,
             ) as mock_synth:
                 _verify_hypotheses_immediate(
                     o, cfg, result,
@@ -501,9 +504,7 @@ class TestAggregateWithGates:
         out = _aggregate_ihv_verdicts(
             outcome, result,
             hypotheses=[{"mechanism": "caller bug", "confidence": "high"}],
-            confirmed_tools=["semgrep"],
-            confirmed_hypotheses=[{"mechanism": "caller bug"}],
-            refuted_count=0,
+            verifications=[ClaimVerification({"mechanism": "caller bug"}, ("semgrep",))],
             config=_Config(),
         )
         # Gate blocked → status NOT promoted to finding
@@ -527,9 +528,7 @@ class TestAggregateWithGates:
         out = _aggregate_ihv_verdicts(
             outcome, result,
             hypotheses=[{"mechanism": "overflow", "confidence": "high"}],
-            confirmed_tools=["semgrep"],
-            confirmed_hypotheses=[{"mechanism": "overflow"}],
-            refuted_count=0,
+            verifications=[ClaimVerification({"mechanism": "overflow"}, ("semgrep",))],
             config=_Config(),
         )
         assert out.status == "finding"
@@ -551,9 +550,7 @@ class TestAggregateWithGates:
             out = _aggregate_ihv_verdicts(
                 outcome, result,
                 hypotheses=[{"mechanism": "overflow"}],
-                confirmed_tools=["coccinelle"],
-                confirmed_hypotheses=[{"mechanism": "overflow"}],
-                refuted_count=0,
+                verifications=[ClaimVerification({"mechanism": "overflow"}, ("coccinelle",))],
                 config=_Config(),
             )
         assert out.status != "finding"
