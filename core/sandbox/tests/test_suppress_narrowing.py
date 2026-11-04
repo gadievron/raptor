@@ -22,13 +22,17 @@ from core.sandbox.host import HostRPCError, SandboxHost
 def _make_host() -> SandboxHost:
     """Minimal SandboxHost with real (unconnected) pipe fds and a
     finished worker thread — enough state for close() to run."""
-    host = SandboxHost.__new__(SandboxHost)
-    host._closed = False
-    host._daemon_fds = None
-    host._read_fd, host._write_fd = os.pipe()
-    host._thread = threading.Thread(target=lambda: None)
-    host._thread.start()
-    host._thread.join()
+    read_fd, write_fd = os.pipe()
+    thread = threading.Thread(target=lambda: None)
+    thread.start()
+    thread.join()
+    host = SandboxHost(
+        _thread=thread,
+        _read_fd=read_fd,
+        _write_fd=write_fd,
+        _daemon_fds=None,
+        _lock=threading.Lock(),
+    )
     return host
 
 
