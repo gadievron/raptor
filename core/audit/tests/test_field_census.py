@@ -476,3 +476,26 @@ class TestFunctionSpansHostileRuns:
         by_name = {s.name: s for s in spans}
         assert "spread" in by_name
         assert by_name["spread"].is_static
+
+
+@requires_ts
+def test_nested_and_compound_assignments_preserve_access_order():
+    source = (
+        "void change(struct Obj *obj, struct Obj *peer) {\n"
+        "    obj->target = peer->target;\n"
+        "    obj->target += obj->delta;\n"
+        "    obj->other = (peer->target = obj->target);\n"
+        "}\n"
+    )
+    census = build_field_census(
+        {"change.c": source}, priority_fields=frozenset({"target"}),
+    )
+    target = census.fields["target"]
+    # The reverse-child tree walk defines site order, including the
+    # extra read attached to a compound assignment's left-hand side.
+    assert [(w.line, w.owner) for w in target.writes] == [
+        (4, "peer"), (3, "obj"), (2, "obj"),
+    ]
+    assert [(r.line, r.owner) for r in target.reads] == [
+        (4, "obj"), (3, "obj"), (2, "peer"),
+    ]
