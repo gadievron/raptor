@@ -9,14 +9,13 @@ sides extending together.
 
 from __future__ import annotations
 
-import json
 import shutil
-import subprocess
-import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
+
+from engine.coccinelle.tests._rule_runner import run_rule
 
 from engine.coccinelle.vocab_renderer import render
 
@@ -43,18 +42,7 @@ class _FakeVocab:
 def _run_rule(
     tmp_path: Path, source: str, rule: Path = _RULE,
 ) -> list[dict]:
-    src = tmp_path / "target.c"
-    src.write_text(textwrap.dedent(source), encoding="utf-8")
-    proc = subprocess.run(  # noqa: S603 — fixed local binary, fixture input
-        ["spatch", "--sp-file", str(rule), str(src), "--no-show-diff"],
-        capture_output=True, text=True, timeout=120,
-    )
-    results = []
-    for stream in (proc.stdout, proc.stderr):
-        for line in stream.splitlines():
-            if line.startswith("COCCIRESULT:"):
-                results.append(json.loads(line[len("COCCIRESULT:"):]))
-    return results
+    return run_rule(tmp_path, source, rule)
 
 
 class TestSeedRule:
