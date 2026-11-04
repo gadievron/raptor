@@ -21,8 +21,8 @@ name: CI deps image
 #
 # Uses the plain `docker` CLI (preinstalled on ubuntu runners) rather than
 # docker/* marketplace actions, to keep the third-party action surface to
-# just actions/checkout and actions/delete-package-versions (both pinned
-# to the same SHAs the rest of the repo uses).
+# just actions/checkout (pinned to the SHA the rest of the repo uses).
+# Package retention uses the preinstalled GitHub CLI.
 
 on:
   push:
@@ -46,15 +46,6 @@ concurrency:
 permissions:
   contents: read
   packages: write
-
-env:
-  # actions/delete-package-versions@v5.0.0 (the GHCR pruning step) still
-  # declares ``runs.using: node20`` and upstream has published no Node 24
-  # release yet, so without this opt-in the runner emits a Node 20
-  # deprecation warning for that step. Every other JS action pinned in
-  # this repo already declares node24. Lift this once
-  # actions/delete-package-versions ships a Node 24 release.
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build-push:
@@ -142,12 +133,30 @@ jobs:
       # weekly rebuild alone accrues ~52 dangling versions/year.
       # delete-only-untagged + a small floor never risks a rollback anchor.
       - name: Prune superseded (untagged) image versions
-        uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55  # was v5.0.0
-        with:
-          package-name: raptor-ci-deps
-          package-type: container
-          delete-only-untagged-versions: true
-          min-versions-to-keep: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+          PKG: raptor-ci-deps
+        run: |
+          set -euo pipefail
+          base="orgs/${OWNER}/packages/container/${PKG}"
+          gh api "${base}" >/dev/null 2>&1 \
+            || base="users/${OWNER}/packages/container/${PKG}"
+          # Enumerate before deleting so pagination cannot skip shifted rows.
+          # Keep the newest five untagged versions; tagged anchors are untouched.
+          gh api --paginate "${base}/versions?per_page=100" \
+            --jq '.[] | select(.metadata.container.tags | length == 0) | [(.id|tostring), .created_at] | @tsv' \
+            > /tmp/untagged-versions.tsv
+          sort -t$'\t' -k2,2r /tmp/untagged-versions.tsv \
+            | tail -n +6 > /tmp/prune-untagged.tsv
+          echo "== untagged retention plan (keeping newest five):"
+          cat /tmp/prune-untagged.tsv
+          while IFS=$'\t' read -r id created; do
+            # DELETE succeeds with an empty response body; do not parse JSON.
+            gh api -X DELETE "${base}/versions/${id}" \
+              || { echo "::error::failed to delete untagged version ${id} of ${PKG}"; exit 1; }
+            echo "== deleted ${id} (${created})"
+          done < /tmp/prune-untagged.tsv
 
       # Tagged-anchor retention: keep the newest 10 tagged versions.
       # Bounded both ways deliberately (churn-prone limit): pruning an

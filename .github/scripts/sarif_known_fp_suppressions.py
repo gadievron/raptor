@@ -31,9 +31,11 @@ a paired regression test in test_sarif_known_fp_suppressions.
 
 from __future__ import annotations
 
+import ast
 import json
 import sys
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 
@@ -235,36 +237,57 @@ def _result_sink_uri(result: dict) -> str | None:
     return uri if isinstance(uri, str) else None
 
 
-def _flow_passes_through(result: dict, file_substr: str, func_name: str) -> bool:
-    """True if any codeFlow or relatedLocations step references the sanitiser.
+@lru_cache(maxsize=128)
+def _sanitizer_lines(file_name: str, func_name: str) -> tuple[int, int] | None:
+    """Resolve the reviewed function in the analyzed checkout without importing it."""
+    path = Path(__file__).resolve().parents[2] / file_name
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, SyntaxError):
+        return None
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
+            return node.lineno, node.end_lineno
+    return None
 
-    Matching is on file URI alone: CodeQL flow steps inside a function
-    body reference interior lines whose message/snippet text rarely
-    contains the function name (e.g. ``result = _redact_with_patterns(...)``
-    inside ``redact_secrets()``).  The ``SanitizerFP`` entry already
-    constrains to a specific ``(rule_id, file, function)`` tuple, so a
-    flow step through the sanitiser file is specific enough.  The
-    ``func_name`` is recorded for audit/documentation but not required
-    in the step's text.
+
+def _flow_passes_through(result: dict, file_name: str, func_name: str) -> bool:
+    """Require every reported flow to pass through the reviewed function.
+
+    Related locations are context, not proof of data flow. A step elsewhere
+    in the same module, or one sanitized path alongside an unsafe path,
+    must not remove the entire result from the upload.
     """
-    for cf in result.get("codeFlows") or []:
-        for tf in cf.get("threadFlows") or []:
-            for loc_wrapper in tf.get("locations") or []:
-                loc = loc_wrapper.get("location") or {}
-                if _loc_file_matches(loc, file_substr):
-                    return True
-    for rl in result.get("relatedLocations") or []:
-        if _loc_file_matches(rl, file_substr):
-            return True
-    return False
+    bounds = _sanitizer_lines(file_name, func_name)
+    if bounds is None:
+        return False
+    flows = result.get("codeFlows") or []
+    if not flows:
+        return False
+    for cf in flows:
+        threads = cf.get("threadFlows") or []
+        if not threads:
+            return False
+        for tf in threads:
+            sanitized = False
+            for wrapper in tf.get("locations") or []:
+                loc = wrapper.get("location") or {}
+                line = (loc.get("physicalLocation") or {}).get("region", {}).get("startLine")
+                if (_loc_file_matches(loc, file_name) and type(line) is int
+                        and bounds[0] <= line <= bounds[1]):
+                    sanitized = True
+                    break
+            if not sanitized:
+                return False
+    return True
 
 
 def _loc_file_matches(loc: dict, file_substr: str) -> bool:
-    """True if the location's URI contains the file substring."""
+    """Match the reviewed repository-relative file, not similarly named files."""
     phys = loc.get("physicalLocation") or {}
     artifact = phys.get("artifactLocation") or {}
     uri = artifact.get("uri") or ""
-    return file_substr in uri
+    return uri == file_substr
 
 
 def _matches_known_fp(result: dict) -> KnownFP | SanitizerFP | None:
@@ -279,7 +302,7 @@ def _matches_known_fp(result: dict) -> KnownFP | SanitizerFP | None:
         for entry in KNOWN_FP_RULES:
             if entry.rule_id != rule_id:
                 continue
-            if any(uri.startswith(p) for p in entry.sink_file_prefixes):
+            if uri in entry.sink_file_prefixes:
                 return entry
 
     # Check sanitiser-based suppressions (code flow must pass through).

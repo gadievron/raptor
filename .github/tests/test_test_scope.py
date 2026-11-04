@@ -783,13 +783,22 @@ class TestOnRealRepo:
         in each test.
         """
         import test_scope as _ts
-        cached = _ts.build_graph(_ts.discover_py_files(repo), repo)
+        references = {
+            literal: set() for root in (repo / "bin", repo / "libexec")
+            for script in root.rglob("*") if script.is_file()
+            for literal in (str(script.relative_to(repo)), script.name)
+        }
+        cached = _ts.build_graph(
+            _ts.discover_py_files(repo), repo, literal_references=references,
+        )
         real_build_graph = _ts.build_graph
 
-        def _build_graph_cached(all_py, repo_arg):
+        def _build_graph_cached(all_py, repo_arg, **kwargs):
             if repo_arg == repo:
+                for literal, paths in kwargs.get("literal_references", {}).items():
+                    paths.update(references.get(literal, ()))
                 return cached
-            return real_build_graph(all_py, repo_arg)
+            return real_build_graph(all_py, repo_arg, **kwargs)
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(_ts, "build_graph", _build_graph_cached)
@@ -1112,3 +1121,29 @@ def test_sbom_preparation_inputs_dispatch_dependency_equipped_sca_tier(mini_repo
     result = compute_tier_dispatch([changed], mini_repo)
     assert result["sca"]["run"]
     assert Path("packages/sca/tests/test_shape.py") in result["sca"]["files"]
+
+
+class TestEntryScriptDispatch:
+    def test_script_change_reaches_its_cli_tests_without_running_unrelated_tests(self, tmp_path):
+        tests = tmp_path / 'core/demo/tests'
+        tests.mkdir(parents=True)
+        (tests / 'test_cli.py').write_text('SCRIPT = ROOT / "libexec" / "raptor-demo"\n')
+        (tests / 'test_other.py').write_text('def test_other(): pass\n')
+        result = compute_tier_dispatch(['libexec/raptor-demo'], tmp_path)
+        assert result['python']['run']
+        assert result['python']['files'] == [Path('core/demo/tests/test_cli.py')]
+
+    def test_script_reference_in_source_reaches_importing_tests(self, tmp_path):
+        package = tmp_path / 'core/demo'
+        (package / 'tests').mkdir(parents=True)
+        (package / 'driver.py').write_text('SCRIPT = "bin/raptor-demo"\n')
+        (package / 'tests/test_driver.py').write_text('from core.demo import driver\n')
+        result = compute_tier_dispatch(['bin/raptor-demo'], tmp_path)
+        assert Path('core/demo/tests/test_driver.py') in result['python']['files']
+
+    def test_unknown_or_deleted_script_does_not_silently_skip_tests(self, tmp_path):
+        tests = tmp_path / 'core/demo/tests'
+        tests.mkdir(parents=True)
+        (tests / 'test_cli.py').write_text('def test_cli(): pass\n')
+        result = compute_tier_dispatch(['libexec/renamed-away'], tmp_path)
+        assert all(info['run'] for tier, info in result.items() if not tier.startswith('_'))

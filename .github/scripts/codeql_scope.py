@@ -230,6 +230,7 @@ def extract_imports(
     path: Path,
     repo: Path,
     root_modules: frozenset[str] | None = None,
+    literal_references: dict[str, set[Path]] | None = None,
 ) -> list[str] | None:
     """Parse a .py file and return the dotted module names it imports.
 
@@ -269,6 +270,9 @@ def extract_imports(
     own_package = ".".join(path.parts[:-1]) if len(path.parts) > 1 else ""
 
     for node in ast.walk(tree):
+        if (literal_references is not None and isinstance(node, ast.Constant)
+                and isinstance(node.value, str) and node.value in literal_references):
+            literal_references[node.value].add(path)
         if isinstance(node, ast.Import):
             modules.extend(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
@@ -319,7 +323,8 @@ def extract_imports(
 
 
 def build_graph(
-    py_files: list[Path], repo: Path
+    py_files: list[Path], repo: Path,
+    *, literal_references: dict[str, set[Path]] | None = None,
 ) -> tuple[dict[Path, set[Path]], int]:
     """Build a reverse dependency graph: file → files that depend on it.
 
@@ -337,7 +342,7 @@ def build_graph(
 
     root_modules = frozenset(p.stem for p in discover_root_modules(repo))
     for f in py_files:
-        imports = extract_imports(f, repo, root_modules)
+        imports = extract_imports(f, repo, root_modules, literal_references)
         if imports is None:
             parse_failures += 1
             continue

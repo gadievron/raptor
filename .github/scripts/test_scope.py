@@ -502,6 +502,43 @@ def build_data_file_map(
     return dict(data_to_tests)
 
 
+def script_reference_seeds(
+    changed_files: list[str], all_py: list[Path], repo: Path,
+    *, references: dict[str, set[Path]] | None = None,
+) -> tuple[set[Path], list[str]]:
+    """Map bin/libexec changes to Python consumers using literal script paths.
+
+    These entry points are executed/read rather than imported, so the import
+    graph cannot seed their CLI tests. Match both a complete relative path
+    and a basename in Path division chains. If a script has no references,
+    callers must fall back to a full dispatch rather than assume no impact.
+    """
+    scripts = {f for f in changed_files if f.startswith(("bin/", "libexec/"))}
+    if not scripts:
+        return set(), []
+    if references is None:
+        references = {literal: set() for script in scripts
+                      for literal in (script, Path(script).name)}
+        for path in all_py:
+            try:
+                tree = ast.parse((repo / path).read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, SyntaxError, ValueError):
+                continue
+            for node in ast.walk(tree):
+                if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                        and node.value in references):
+                    references[node.value].add(path)
+    seeds: set[Path] = set()
+    missing = []
+    for script in sorted(scripts):
+        consumers = references.get(script, set()) | references.get(Path(script).name, set())
+        if consumers:
+            seeds.update(consumers)
+        else:
+            missing.append(script)
+    return seeds, missing
+
+
 def _owning_package_seeds(path: Path, all_py: list[Path]) -> set[Path]:
     """The .py files of the package that owns a resource file.
 
@@ -801,9 +838,37 @@ def compute_tier_dispatch(
     changed_py |= init_imports(changed_py, all_py)
 
     print(f"Building import graph for {total} Python files...")
-    reverse_graph, parse_failures = build_graph(all_py, repo)
+    script_literals = {
+        literal: set() for path in changed_files
+        if path.startswith(("bin/", "libexec/"))
+        for literal in (path, Path(path).name)
+    }
+    if script_literals:
+        # Collect references during the existing AST walk: reparsing the tree
+        # here costs tens of seconds on this repository's complete source set.
+        reverse_graph, parse_failures = build_graph(
+            all_py, repo, literal_references=script_literals,
+        )
+    else:
+        reverse_graph, parse_failures = build_graph(all_py, repo)
     if parse_failures:
         print(f"  Parse failures: {parse_failures}")
+
+    script_seeds, unmapped_scripts = script_reference_seeds(
+        changed_files, all_py, repo, references=script_literals,
+    )
+    if unmapped_scripts:
+        print(
+            f"Changed entry scripts with no Python consumers "
+            f"({', '.join(unmapped_scripts)}) — full tier dispatch"
+        )
+        result = _force_all_dispatch(repo)
+        result["_stats"] = {
+            "closure": total, "total": total,
+            "changed": len(changed_files), "dependents": 0,
+        }
+        return result
+    changed_py |= script_seeds
 
     # Non-Python resource files under the scan roots are runtime
     # inputs (detector data lists, parser packs, templates, fixtures)

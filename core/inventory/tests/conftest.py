@@ -27,11 +27,13 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.tempdirs import isolated_test_dir
+
 
 @pytest.fixture(autouse=True)
 def _isolated_home_stores(tmp_path: Path,
                           tmp_path_factory: pytest.TempPathFactory,
                           monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("inventory-home")))
+    monkeypatch.setenv("HOME", str(isolated_test_dir(tmp_path_factory, "inventory-home")))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg-cache"))

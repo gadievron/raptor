@@ -30,9 +30,6 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   feature-matrix:
     runs-on: ubuntu-latest

@@ -270,7 +270,7 @@ jobs:
 
       - name: Initialize CodeQL
         if: steps.gate.outputs.run == 'true'
-        uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d  # v4.38.3
+        uses: github/codeql-action/init@1fc58d04a4d4374f921bdac573c3811c240f9c26  # v4.39.2
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
@@ -296,7 +296,7 @@ jobs:
       # left default-on).
       - name: Perform CodeQL Analysis (no upload — deferred to barrier job)
         if: steps.gate.outputs.run == 'true'
-        uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d  # v4.38.3
+        uses: github/codeql-action/analyze@1fc58d04a4d4374f921bdac573c3811c240f9c26  # v4.39.2
         with:
           category: "/language:${{matrix.language}}"
           upload: never
@@ -543,7 +543,7 @@ jobs:
       # the multi-run file as one batch and the meta-check fires with
       # all three configs visible.
       - name: Upload combined SARIF
-        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d  # v4.38.3
+        uses: github/codeql-action/upload-sarif@1fc58d04a4d4374f921bdac573c3811c240f9c26  # v4.39.2
         with:
           sarif_file: combined.sarif
           # No `category:` here — each run carries its own
