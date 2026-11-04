@@ -45,10 +45,12 @@ from __future__ import annotations
 import contextlib
 import ctypes
 import ctypes.util
+import errno
 import json
 import logging
 import os
 import select
+import signal
 import subprocess
 import sys
 import time
@@ -242,29 +244,60 @@ def _close_safely(fd: int) -> None:
 
 
 def _kill_and_reap(pid: int, timeout_s: float = 2.0) -> None:
-    """Kill (TERM → KILL) and reap a child. Idempotent."""
-    import time
-    try:
-        os.kill(pid, 15)
-    except ProcessLookupError:
+    """TERM then KILL an owned child, with bounded waits for each phase."""
+    if pid <= 0:
         return
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
+    pidfd = None
+    if hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"):
         try:
-            done, _ = os.waitpid(pid, os.WNOHANG)
-        except (ChildProcessError, OSError):
-            return
-        if done != 0:
-            return
-        time.sleep(0.02)
+            pidfd = os.pidfd_open(pid)
+        except OSError:
+            pass  # Older kernels / descriptor pressure: verify the PID below.
+
+    def finished():
+        try:
+            waited, status = os.waitpid(pid, os.WNOHANG)
+        except InterruptedError:
+            return None  # Retry without assuming child ownership.
+        except OSError as exc:
+            if not isinstance(exc, ChildProcessError) and exc.errno != errno.ECHILD:
+                logger.warning("audit cleanup: child %d wait failed: %s", pid, exc)
+            return True  # Lost or unknown ownership: never signal a bare PID.
+        if waited == pid:
+            return os.WIFEXITED(status) or os.WIFSIGNALED(status)
+        return waited != 0
+
     try:
-        os.kill(pid, 9)
-    except ProcessLookupError:
-        return
-    try:
-        os.waitpid(pid, 0)
-    except (ChildProcessError, OSError):
-        pass
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            deadline = time.monotonic() + max(0.0, timeout_s)
+            state = finished()
+            while state is None:
+                if time.monotonic() >= deadline:
+                    logger.warning("audit cleanup: could not verify child %d", pid)
+                    return
+                state = finished()
+            if state:
+                return
+            try:
+                if pidfd is not None:
+                    signal.pidfd_send_signal(pidfd, sig)
+                else:
+                    os.kill(pid, sig)
+            except ProcessLookupError:
+                pass  # The wait below must still collect any terminal status.
+            except OSError as exc:
+                logger.warning("audit cleanup: child %d signal failed: %s", pid, exc)
+            while True:
+                if finished():
+                    return
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                time.sleep(min(0.02, remaining))
+        logger.warning("audit cleanup: child %d did not reap after SIGKILL", pid)
+    finally:
+        if pidfd is not None:
+            _close_safely(pidfd)
 
 
 def _drain_pipes_until_eof(
