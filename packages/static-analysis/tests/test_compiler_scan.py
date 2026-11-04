@@ -927,6 +927,7 @@ def test_e2e_suppressed_spellings(tmp_path, sandbox_spy, _clang_only, name):
     )
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("name", sorted(_E2E_UNVETTED))
 def test_e2e_laundering_line_is_unvetted(
     tmp_path, sandbox_spy, _clang_only, name,
