@@ -467,6 +467,10 @@ missing or truncated `-E` output, resolution limits) are listed
 separately as "not vetted".  Findings that clang still reports on a
 flagged TU are always kept — the annotation is additive.
 
+When `/audit` checks a hypothesis with a compiler analyzer, a warning from
+a recognized checker whose wording cannot be classified remains inconclusive.
+It is not treated as analyzer silence or as confirmation of the hypothesis.
+
 ## Output
 
 ### SARIF Files

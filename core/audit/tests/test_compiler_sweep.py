@@ -3646,3 +3646,52 @@ def test_cpp_leak_checker_and_cleanup_controls(tmp_path, sandbox_spy, source, ex
     if expected == "confirmed":
         assert result.rule_id == "compiler:cplusplus.NewDeleteLeaks"
         assert is_tool_evidence(result.rule_id)
+
+
+@pytest.mark.parametrize(('message', 'location', 'returncode', 'expected'), [
+    ('Allocation lifetime classification changed', 'here', 0, 'inconclusive'),
+    ("Potential leak of memory pointed to by 'p'", 'here', 0, 'refuted'),
+    ('Use of memory after it is freed', 'here', 0, 'confirmed'),
+    ('Allocation lifetime classification changed', 'elsewhere', 0, 'refuted'),
+    ('Allocation lifetime classification changed', 'outside', 0, 'refuted'),
+    ('Allocation lifetime classification changed', 'here', 1, 'inconclusive'),
+])
+def test_shared_clang_checker_unknown_wording(
+    tmp_path, monkeypatch, message, location, returncode, expected,
+):
+    """Simulate analyzer protocol changes without depending on installed Clang."""
+    from types import SimpleNamespace
+
+    target = tmp_path / 'repo'
+    target.mkdir()
+    source = target / 'a.cpp'
+    source.write_text('void f() { int *p = nullptr; }\n')
+    monkeypatch.setattr(compiler_sweep, '_clang_path', lambda: '/owned/clang')
+    diag = {
+        'id': 'unix.Malloc', 'message': message, 'kind': 'warning',
+        'file': str(source if location != 'elsewhere' else target / 'b.cpp'),
+        'line': 1 if location != 'outside' else 20,
+    }
+    monkeypatch.setattr(
+        compiler_sweep, 'run_compiler_analysis',
+        lambda *a, **kw: SimpleNamespace(value=SimpleNamespace(record={
+            'returncode': returncode, 'diags': [diag], 'raw': message,
+        })),
+    )
+    # Supply a complete clean preprocessor image for the negative path;
+    # an unavailable closure must not accidentally make this test pass.
+    monkeypatch.setattr(
+        'core.sandbox.context.run',
+        lambda *a, **kw: subprocess.CompletedProcess(
+            a[0], 0, f'# 1 "{source}"\n{source.read_text()}', '',
+        ),
+    )
+    result = run_compiler_analyzer_sweep(
+        target_path=target, file_path='a.cpp', function_name='f',
+        cwe='CWE-416', hypothesis='memory misuse', line_start=1, line_end=1,
+        out_dir=tmp_path,
+    )
+    assert result.outcome == expected, result.details
+    assert result.raw_output == message
+    if expected == 'inconclusive' and returncode == 0:
+        assert result.details['unclassified_checker_diagnostics'][0]['message'] == message

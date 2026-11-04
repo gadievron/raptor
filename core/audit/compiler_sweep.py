@@ -88,7 +88,8 @@ _CXX_SUFFIXES = frozenset({".cc", ".cpp", ".cxx", ".C"})
 
 from core.detectors.compiler_families import (
     COMPILER_CWE_MAP, FamilySpec as FamilySpec, _id_matches, _normalise_cwe, compiler_reported_cwe,
-    compiler_applicable as compiler_applicable, get_compiler_check_role as get_compiler_check_role,
+    compiler_applicable as compiler_applicable, diagnostic_cwe,
+    get_compiler_check_role as get_compiler_check_role,
 )
 
 
@@ -2076,16 +2077,19 @@ def run_compiler_analyzer_sweep(
     )
     details["hypothesis_identifiers"] = identifiers
 
-    family_in_range = [
+    checker_in_range = [
         d for d in diags
         if _id_matches(d["id"], spec.gcc_ids + spec.clang_ids)
-        and (
+        and _same_file(d["file"], full_path)
+        and _in_range(d["line"], line_start, line_end)
+    ]
+    family_in_range = [
+        d for d in checker_in_range
+        if (
             compiler_name == "gcc"
             or not spec.clang_message_re
             or re.search(spec.clang_message_re, d["message"], re.IGNORECASE)
         )
-        and _same_file(d["file"], full_path)
-        and _in_range(d["line"], line_start, line_end)
     ]
     attributed = [
         d for d in family_in_range
@@ -2190,6 +2194,29 @@ def run_compiler_analyzer_sweep(
             file_path, function_name,
             "family diagnostics in range do not implicate the "
             "hypothesised identifier(s)",
+            details=details,
+        )
+        result.raw_output = raw
+        return result
+
+    # Shared Clang checkers report several bug families. Unknown wording
+    # is an interpretation gap, not analyzer silence. A clearly classified
+    # report for another family still permits the normal negative path.
+    unclassified = [
+        d for d in checker_in_range
+        if compiler_name == "clang"
+        and diagnostic_cwe(d["id"], d["message"]) is None
+        and _diag_implicates(d, identifiers, source_lines)
+    ]
+    if unclassified:
+        details["unclassified_checker_diagnostics"] = [
+            {"line": d["line"], "id": d["id"], "message": d["message"]}
+            for d in unclassified[:5]
+        ]
+        result = _inconclusive(
+            file_path, function_name,
+            "recognized checker reported an unclassified diagnostic; "
+            "cannot refute from analyzer silence",
             details=details,
         )
         result.raw_output = raw
