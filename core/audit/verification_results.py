@@ -2,6 +2,8 @@
 
 from dataclasses import asdict, dataclass
 
+from .refutation_source import SourceIdentity
+
 
 @dataclass(frozen=True)
 class ProbeOutcome:
@@ -18,12 +20,14 @@ class ClaimRefutation:
     line_start: int
     hypothesis: str
     checks: tuple[ProbeOutcome, ...]
+    source_identity: SourceIdentity | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "checks", tuple(self.checks))
 
-    def matches(self, *, file, function, line_start, hypothesis) -> bool:
-        return (self.file, self.function, self.line_start, self.hypothesis) == (
+    def matches(self, *, file, function, line_start, hypothesis, source_identity) -> bool:
+        return isinstance(self.source_identity, SourceIdentity) and self.source_identity == source_identity and (
+            self.file, self.function, self.line_start, self.hypothesis) == (
             file, function, line_start or 0, hypothesis,
         ) and bool(self.checks) and all(
             isinstance(check, ProbeOutcome) and check.verdict == "refuted" and check.rule_id
@@ -33,10 +37,11 @@ class ClaimRefutation:
     def to_record(self, *, action="claim_refutation") -> dict:
         return {"action": action, "file": self.file, "function": self.function,
                 "line_start": self.line_start, "hypothesis": self.hypothesis,
+                "source_identity": asdict(self.source_identity) if self.source_identity else None,
                 "checks": [asdict(check) for check in self.checks]}
 
 
-def claims_refuted(outcome, hypotheses: list[str]) -> bool:
+def claims_refuted(outcome, hypotheses: list[str], *, source_identity) -> bool:
     """Every active claim needs its own pipeline-created scoped receipt."""
     receipts = getattr(outcome, "claim_refutations", ()) or ()
     if not isinstance(receipts, (tuple, list)):
@@ -45,6 +50,7 @@ def claims_refuted(outcome, hypotheses: list[str]) -> bool:
         isinstance(receipt, ClaimRefutation) and receipt.matches(
             file=outcome.file, function=outcome.function,
             line_start=outcome.line, hypothesis=hypothesis,
+            source_identity=source_identity,
         ) for receipt in receipts
     ) for hypothesis in hypotheses)
 
@@ -56,9 +62,10 @@ class ToolChainResult(list[str]):
     explicit ``refuted`` outcome on this exact claim can supply it.
     """
 
-    def __init__(self, receipts=(), *, file="", function="", line_start=0, hypothesis=""):
+    def __init__(self, receipts=(), *, file="", function="", line_start=0, hypothesis="", source_identity=None):
         super().__init__(receipts)
         self.scope = (file, function, line_start or 0, hypothesis)
+        self.source_identity = source_identity
         self.outcomes: list[ProbeOutcome] = []
 
     def observe(self, tool: str, verdict: str, rule_id: str, reason: str = "") -> None:
@@ -80,4 +87,4 @@ class ToolChainResult(list[str]):
         outcomes = self.refutations(file=file, function=function, line_start=line_start, hypothesis=hypothesis)
         if not outcomes:
             return None
-        return ClaimRefutation(file, function, line_start or 0, hypothesis, outcomes)
+        return ClaimRefutation(file, function, line_start or 0, hypothesis, outcomes, self.source_identity)

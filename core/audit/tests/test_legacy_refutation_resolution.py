@@ -8,6 +8,7 @@ import pytest
 from core.audit import orchestrator as orch
 from core.audit.sweep import SweepResult
 from core.audit.verification_results import ClaimRefutation, ToolChainResult
+from core.audit.refutation_source import capture_source_identity
 
 
 def case(tmp_path, monkeypatch):
@@ -28,7 +29,8 @@ def case(tmp_path, monkeypatch):
 def retain(outcome, config, *, hypothesis=None):
     hypothesis = hypothesis or outcome.hypothesis
     results = ToolChainResult(file=outcome.file, function=outcome.function,
-                              line_start=outcome.line, hypothesis=hypothesis)
+                              line_start=outcome.line, hypothesis=hypothesis,
+                              source_identity=capture_source_identity(config.target_path, outcome.file))
     results.observe("semgrep", "refuted", "query-bound", "query excludes the claimed path")
     assert orch._retain_claim_refutation(outcome, results, config, hypothesis=hypothesis, phase="test")
 
@@ -112,7 +114,8 @@ def test_failed_write_does_not_attach_refutation(tmp_path, monkeypatch):
         raise OSError("output unavailable")
     monkeypatch.setattr(orch, "append_audit_log", fail)
     results = ToolChainResult(file=outcome.file, function=outcome.function,
-                              line_start=outcome.line, hypothesis=outcome.hypothesis)
+                              line_start=outcome.line, hypothesis=outcome.hypothesis,
+                              source_identity=capture_source_identity(config.target_path, outcome.file))
     results.observe("semgrep", "refuted", "query-bound")
     assert not orch._retain_claim_refutation(outcome, results, config,
                                             hypothesis=outcome.hypothesis, phase="test")

@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 from core.audit.claim_verification import ClaimVerification
 from core.audit.verification_results import ToolChainResult
+from core.audit.refutation_source import capture_source_identity
 
 from core.audit.orchestrator import (
     AtomicSynthesisCounter,
@@ -247,12 +248,15 @@ class TestVerifyImmediate:
         ]
         def negative_result(chain, **kwargs):
             result = ToolChainResult(file=kwargs["file_path"], function=kwargs["function_name"],
-                                     line_start=kwargs["line_start"], hypothesis=kwargs["hypothesis"])
+                                     line_start=kwargs["line_start"], hypothesis=kwargs["hypothesis"],
+                                     source_identity=capture_source_identity(tmp_path, kwargs["file_path"]))
             result.observe("smt", "refuted", "check-oob", "no out-of-bounds path")
             return result
 
         mock_run.side_effect = negative_result
-        cfg = _Config(out_dir=tmp_path)
+        (tmp_path / "net").mkdir()
+        (tmp_path / "net/tls.c").write_text("int Read(int n) { return n; }\n")
+        cfg = _Config(target_path=tmp_path, out_dir=tmp_path)
         o = self._make_outcome()
         result = _Result()
         out = _verify_hypotheses_immediate(o, cfg, result)

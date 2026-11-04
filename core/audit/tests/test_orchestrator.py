@@ -325,6 +325,25 @@ def _no_native_review_tools(monkeypatch):
 class TestRunOrchestrator:
     """Review-loop contracts with fake reviews; live Joern has dedicated tests."""
 
+    def test_immediate_verification_receives_the_source_that_was_reviewed(self, tmp_path, monkeypatch):
+        target, out = _setup_target(tmp_path)
+        reviewed = {}
+        checked = {}
+
+        def review_fn(ctx, config):
+            reviewed[ctx["function"]] = ctx["source"]
+            return ReviewOutcome(file=ctx["file"], function=ctx["function"], status="clean", body="reviewed")
+
+        def verify(outcome, config, result, **kwargs):
+            checked[outcome.function] = kwargs["source"]
+            return outcome
+
+        monkeypatch.setattr("core.audit.orchestrator._verify_hypotheses_immediate", verify)
+        config = _review_contract_config(target_path=target, out_dir=out, resume=False, immediate_verify=True)
+        run_orchestrator(config, review_fn)
+        assert checked == reviewed
+        assert all(checked.values())
+
     @pytest.mark.parametrize("receipt", ["", "smt:check-overflow"])
     def test_consistency_leads_reach_verification_before_final_resolution(
         self, tmp_path, monkeypatch, receipt,

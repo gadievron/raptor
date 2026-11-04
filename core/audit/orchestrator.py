@@ -55,6 +55,7 @@ from packages.checker_synthesis.library import RuleLibrary
 from ._util import extract_context_map_set
 from ._util import is_valid_identifier as _jv_is_valid_identifier
 from .claim_verification import ClaimVerification, supported_claims
+from .refutation_source import capture_source_identity
 from .verification_results import ClaimRefutation, ToolChainResult, claims_refuted
 from .codeql_backend import (
     build_sink_results as _build_sink_results_raw,
@@ -4133,7 +4134,7 @@ def review_one_function(
             mechanical_findings=mechanical_findings,
             synthesis_counter=shared.synthesis_counter,
             gap=gap,
-            source=gap.get("source"),
+            source=ctx.get("source"),
         )
     elif outcome.status == "finding" and config.sweep_validate_findings:
         outcome = _sweep_validate(
@@ -22113,16 +22114,25 @@ def _run_tool_chain(
     confirmed = ToolChainResult(
         file=file_path, function=function_name, line_start=line_start,
         hypothesis=hypothesis,
+        source_identity=capture_source_identity(effective_target, file_path, excerpt=source, line_start=line_start),
     )
 
     def _observe_sweep(sweep_result) -> str:
         verdict = _classify_sweep_outcome(sweep_result)
         if verdict == "refuted" and getattr(sweep_result, "errors", None):
             verdict = "error"  # partial/failed analysis cannot establish absence
+        source_changed = verdict == "refuted" and (
+            confirmed.source_identity is None
+            or confirmed.source_identity != capture_source_identity(effective_target, file_path)
+        )
+        if source_changed:
+            verdict = "inconclusive"
         details = getattr(sweep_result, "details", None) or {}
         rule = (getattr(sweep_result, "rule_id", None)
                 or tool_cfg.get("rule") or tool_cfg.get("verb") or tool_type)
         reason = details.get("reason") or getattr(sweep_result, "reason", "") or ""
+        if source_changed:
+            reason = "refutation source changed, was unavailable, or did not match the checker excerpt"
         confirmed.observe(tool_type, verdict, str(rule), str(reason))
         return verdict
     # Per-type entry counts for *inconclusive_types*: every leg books
@@ -23268,12 +23278,11 @@ def _run_tool_chain(
                 _record_invariant_receipt(
                     config, file_path, function_name, inv_res,
                 )
-                confirmed.observe(
-                    tool_type,
-                    {"violable": "confirmed", "preserved": "refuted"}.get(inv_res.outcome, "inconclusive"),
-                    "smt:invariant-preservation", inv_res.reason,
-                )
-                if inv_res.outcome == "violable":
+                _inv_oc = _observe_sweep(SimpleNamespace(
+                    outcome={"violable": "confirmed", "preserved": "refuted"}.get(inv_res.outcome, "inconclusive"),
+                    rule_id="smt:invariant-preservation", reason=inv_res.reason,
+                ))
+                if _inv_oc == "confirmed":
                     # A model breaks the stated invariant at a concrete
                     # mutation site — detection-role confirmation (see
                     # sweep._SMT_VERB_ROLES: promotion still needs LLM
@@ -23283,7 +23292,7 @@ def _run_tool_chain(
                         _increment_tier_dict(
                             tier_counters, "smt_invariant", "confirmed",
                         )
-                elif inv_res.outcome == "preserved":
+                elif _inv_oc == "refuted":
                     logger.info(
                         "invariant preserved %s:%s — %s (%s)",
                         file_path, function_name,
@@ -24614,7 +24623,10 @@ def _retain_claim_refutation(outcome, results, config, *, hypothesis, phase) -> 
         file=outcome.file, function=outcome.function,
         line_start=outcome.line, hypothesis=hypothesis,
     )
-    if receipt is None:
+    if receipt is None or not receipt.matches(
+        file=outcome.file, function=outcome.function, line_start=outcome.line, hypothesis=hypothesis,
+        source_identity=capture_source_identity(config.target_path, outcome.file),
+    ):
         return False
     existing = getattr(outcome, "claim_refutations", ()) or ()
     if not isinstance(existing, (tuple, list)):
@@ -24632,16 +24644,24 @@ def _retain_claim_refutation(outcome, results, config, *, hypothesis, phase) -> 
     return True
 
 
-def _retain_probe_refutation(outcome, probe, config, *, tool, rule_id, hypothesis, phase) -> bool:
+def _retain_probe_refutation(outcome, probe, config, *, tool, rule_id, hypothesis, phase, source_identity) -> bool:
     """Adapt direct legacy checker calls to the same scoped-result policy."""
     if _classify_sweep_outcome(probe) != "refuted" or getattr(probe, "errors", None):
         return False
     details = getattr(probe, "details", None) or {}
     results = ToolChainResult(file=outcome.file, function=outcome.function,
-                              line_start=outcome.line, hypothesis=hypothesis)
+                              line_start=outcome.line, hypothesis=hypothesis, source_identity=source_identity)
     results.observe(tool, "refuted", getattr(probe, "rule_id", None) or rule_id,
                     details.get("reason") or getattr(probe, "reason", "") or "")
     return _retain_claim_refutation(outcome, results, config, hypothesis=hypothesis, phase=phase)
+
+
+def _refutations_match_current_source(outcome, config) -> bool:
+    hypotheses = [h["mechanism"] for h in _extract_all_hypotheses(outcome)]
+    if outcome.hypothesis and outcome.hypothesis not in hypotheses:
+        hypotheses.append(outcome.hypothesis)
+    return claims_refuted(outcome, hypotheses,
+                           source_identity=capture_source_identity(config.target_path, outcome.file))
 
 
 def _verify_hypotheses_immediate(
@@ -24993,7 +25013,10 @@ def _aggregate_ihv_verdicts(
 
     if blocked is not None:
         return blocked
-    refuted_count = sum(v.refuted for v in verifications)
+    current_source = capture_source_identity(config.target_path, outcome.file)
+    refuted_count = sum(v.refuted and claims_refuted(
+        outcome, [v.hypothesis["mechanism"]], source_identity=current_source,
+    ) for v in verifications)
     if refuted_count == len(hypotheses) and hypotheses:
         outcome.status = "clean"
         outcome.review_result["immediate_verified"] = True
@@ -25588,6 +25611,8 @@ def _proactive_validate(
                 config.target_path, outcome.file,
             ) or ""
             ran.add("smt")
+            _pv_source = capture_source_identity(config.target_path, outcome.file, excerpt=source_text,
+                                                  line_start=outcome.line)
             smt_result = run_smt_verb_direct(
                 verb=smt_verb,
                 file_path=outcome.file,
@@ -25597,10 +25622,13 @@ def _proactive_validate(
                 target_path=str(config.target_path),
             )
             _pv_smt_oc = _classify_sweep_outcome(smt_result)
-            _retain_probe_refutation(
+            _pv_retained = _retain_probe_refutation(
                 outcome, smt_result, config, tool="smt", rule_id=smt_verb,
                 hypothesis=outcome.hypothesis or "", phase="proactive",
+                source_identity=_pv_source,
             )
+            if _pv_smt_oc == "refuted" and not _pv_retained:
+                _pv_smt_oc = "inconclusive"
             if _pv_smt_oc == "confirmed":
                 confirmed_tools.append(f"smt:{smt_verb}")
                 if tier_counters:
@@ -25770,6 +25798,7 @@ def _proactive_validate(
         if cocci_rule:
             try:
                 ran.add("coccinelle")
+                _cc_source = capture_source_identity(config.target_path, outcome.file)
                 cocci_result = run_coccinelle_sweep(
                     target_path=config.target_path,
                     file_path=outcome.file,
@@ -25788,11 +25817,15 @@ def _proactive_validate(
                         config, outcome.file,
                     ),
                 )
-                _retain_probe_refutation(
+                _cc_retained = _retain_probe_refutation(
                     outcome, cocci_result, config, tool="coccinelle", rule_id=str(cocci_rule),
                     hypothesis=outcome.hypothesis or "", phase="proactive",
+                    source_identity=_cc_source,
                 )
-                if cocci_result.outcome == "confirmed":
+                _pv_cc_oc = _classify_sweep_outcome(cocci_result)
+                if _pv_cc_oc == "refuted" and not _cc_retained:
+                    _pv_cc_oc = "inconclusive"
+                if _pv_cc_oc == "confirmed":
                     confirmed_tools.append(f"coccinelle:{Path(cocci_rule).stem}")
                     if tier_counters:
                         _increment_tier_dict(tier_counters, "coccinelle", "confirmed")
@@ -25809,11 +25842,11 @@ def _proactive_validate(
                                     "consistency violation at"
                                     f" {m_file}:{match.get('line', '?')}",
                                 )
-                elif _classify_sweep_outcome(cocci_result) == "error":
+                elif _pv_cc_oc == "error":
                     errored.add("coccinelle")
                     if tier_counters:
                         _increment_tier_dict(tier_counters, "coccinelle", "errors")
-                elif cocci_result.outcome == "skipped":
+                elif _pv_cc_oc == "skipped":
                     # Substrate license withheld in the sweep layer —
                     # the leg entered the dispatch record before the
                     # run, so scrub it (same rule as the joern leg's
@@ -25837,13 +25870,13 @@ def _proactive_validate(
                         _increment_tier_dict(
                             tier_counters, "coccinelle", "skipped",
                         )
-                elif cocci_result.outcome == "inconclusive":
+                elif _pv_cc_oc == "inconclusive":
                     _book_inconclusive("coccinelle")
                     if tier_counters:
                         _increment_tier_dict(
                             tier_counters, "coccinelle", "inconclusive",
                         )
-                elif cocci_result.outcome == "refuted" and tier_counters:
+                elif _pv_cc_oc == "refuted" and tier_counters:
                     _increment_tier_dict(tier_counters, "coccinelle", "refuted")
             except Exception:
                 logger.debug("proactive Coccinelle failed for %s", cwe, exc_info=True)
@@ -32725,8 +32758,6 @@ def _resolve_gate_demoted(
     from .promotion_alarm import is_reuse_exempt
 
     for i, outcome in enumerate(result.outcomes):
-        if outcome.status != "suspicious":
-            continue
         if is_reuse_exempt(outcome):
             # Cross-run reused verdict: the origin run's already-gated
             # suspicious, re-asserted at $0 with its evidence
@@ -32737,6 +32768,24 @@ def _resolve_gate_demoted(
             # suspicious toward clean/dark on each import — the same
             # one-way decay the promotion-alarm chokepoints exempt
             # reuse for, and no lane in this run adjudicated the row.
+            continue
+        proof_derived_clean = outcome.status == "clean" and (
+            (outcome.review_result or {}).get("ihv_all_refuted") or outcome.clean_basis == "gate_resolved"
+        )
+        if proof_derived_clean:
+            if not _refutations_match_current_source(outcome, config):
+                review = dict(outcome.review_result or {})
+                review.pop("immediate_verified", None)
+                review.pop("ihv_all_refuted", None)
+                result.outcomes[i] = replace(
+                    outcome, status="dark", clean_basis="", review_result=review,
+                    body="Refutation no longer matches the current source or active claims.\n\n" + outcome.body,
+                )
+                result.clean -= 1
+                result.dormant += 1
+                logger.info("stale scoped refutation: %s:%s needs re-verification", outcome.file, outcome.function)
+            continue
+        if outcome.status != "suspicious":
             continue
         gate_demoted = outcome.body.startswith(_GATE_DEMOTED_PREFIXES)
         if not gate_demoted and _is_machine_raised(outcome):
@@ -32794,10 +32843,7 @@ def _resolve_gate_demoted(
                 outcome.function,
             )
             continue
-        hypotheses = [h["mechanism"] for h in _extract_all_hypotheses(outcome)]
-        if outcome.hypothesis and outcome.hypothesis not in hypotheses:
-            hypotheses.append(outcome.hypothesis)
-        fully_refuted = claims_refuted(outcome, hypotheses)
+        fully_refuted = _refutations_match_current_source(outcome, config)
         if not gate_demoted:
             if _is_verification_evidence_for_gate(outcome):
                 continue
