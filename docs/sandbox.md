@@ -432,6 +432,15 @@ on with less isolation. On macOS, the strict profile adds
 probe-validated Seatbelt denies (cross-process signals, nvram, a
 curated mach-lookup allowlist) on top of `full`.
 
+Every generated macOS Seatbelt policy denies lookup and registration of known
+host brokers for application launching, keychain access, preference writes,
+filesystem events and distributed notifications. AppleEvent sends, preference
+writes and notification posts remain denied even in audit mode. Debugger and
+browser exceptions preserve their required capabilities without reopening
+these broker channels. This is a targeted broker boundary, not a complete Mach
+service allowlist for specialized profiles. Explicitly disabling the sandbox
+still bypasses Seatbelt entirely.
+
 **Read-denial recovery:** `--sandbox-readable-path PATH` (repeatable;
 file or directory) extends the read allowlist of every read-restricting
 sandbox in the run, and `--sandbox-tool-path DIR` (repeatable) makes an

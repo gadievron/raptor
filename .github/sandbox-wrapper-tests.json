@@ -1094,6 +1094,20 @@
           "expected": 12
         }
       }
+    },
+    {
+      "id": "macos-broker-boundary",
+      "platforms": {
+        "linux": {
+          "reason": "Seatbelt Mach broker decisions are macOS-only."
+        },
+        "darwin": {
+          "tests": [
+            "core/sandbox/tests/test_macos_broker_boundary.py::test_native_broker_denials_survive_specialized_profiles"
+          ],
+          "expected": 10
+        }
+      }
     }
   ]
 }

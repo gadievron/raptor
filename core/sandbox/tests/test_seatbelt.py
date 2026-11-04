@@ -880,7 +880,9 @@ def test_mach_allowlist_excludes_capability_daemons():
         "com.apple.FSEvents",
         "com.apple.system.notification_center",
     ):
-        assert banned not in p, banned
+        allowlists = '\n'.join(line for line in p.splitlines()
+                               if '(deny mach-lookup (require-not' in line or '(allow mach-lookup' in line)
+        assert banned not in allowlists, banned
         assert banned not in seatbelt.MACOS_BASE_MACH_SERVICES
     # The lookup-only infrastructure services survive.
     for kept in seatbelt.MACOS_BASE_MACH_SERVICES:
@@ -952,9 +954,7 @@ def test_full_profile_daemon_proxy_denies():
 
 
 def test_hardening_absent_from_permissive_profiles():
-    """The hardening set engages ONLY for seccomp_profile='full'
-    (which full/strict/target_run all map to). debug keeps debugger
-    primitives; none/network-only stay Linux-parity permissive."""
+    """Debugger/introspection exceptions do not remove the broker floor."""
     for kwargs in (
         {},
         {"seccomp_profile": "debug"},
@@ -964,17 +964,13 @@ def test_hardening_absent_from_permissive_profiles():
         p = seatbelt.build_profile(**kwargs)
         for fragment in (
             "process-info", "iokit-open", "(deny signal", "nvram",
-            "mach-lookup", "sysctl-read", "ipc-posix-shm", "ipc-sysv",
-            "darwin-notification-post", "appleevent-send",
-            "user-preference-write",
+            "sysctl-read", "ipc-posix-shm", "ipc-sysv",
         ):
             assert fragment not in p, (kwargs, fragment)
 
 
 def test_hardening_audit_duals_report_every_denied_family():
-    """Audit mode observes instead of blocking: every family the
-    enforcement branch denies must appear as (allow X (with report)),
-    and no hardening deny may survive into the audit profile."""
+    """Audit reports ordinary operations but retains hard broker denials."""
     p = seatbelt.build_profile(seccomp_profile="full", audit_mode=True,
                                output="/tmp/x")
     for family in (
@@ -986,9 +982,7 @@ def test_hardening_audit_duals_report_every_denied_family():
         assert f"(allow {family} (with report))" in p, family
     for fragment in (
         "(deny process-info", "(deny iokit-open", "(deny signal",
-        "(deny nvram", "(deny mach-lookup", "(deny sysctl-read",
-        "(deny ipc-", "(deny darwin-notification-post",
-        "(deny appleevent-send", "(deny user-preference-write",
+        "(deny nvram", "(deny sysctl-read", "(deny ipc-",
     ):
         assert fragment not in p, fragment
 
@@ -1033,7 +1027,8 @@ def test_strict_extras_report_under_audit():
     p = seatbelt.build_profile(seccomp_profile="full",
                                profile_name="strict", audit_mode=True)
     assert "(allow mach-lookup (with report))" in p
-    assert "(deny mach-lookup" not in p
+    assert "(deny mach-lookup (require-not" not in p
+    assert "(deny mach-lookup (require-any" in p
     assert "(allow signal (with report))" in p
 
 
@@ -1131,7 +1126,8 @@ def test_audit_verbose_off_omits_extended_audit():
     """Default (audit_mode=False, audit_verbose=False) → no extended
     audit category clauses. Regression catch."""
     p = seatbelt.build_profile()
-    assert "mach-lookup" not in p
+    assert "(allow mach-lookup (with report))" not in p
+    assert "(deny mach-lookup (require-any" in p
     assert "process-exec" not in p
     assert "process-fork" not in p
     assert "signal" not in p
@@ -1246,14 +1242,14 @@ class TestFileTrustAnchorEnv:
             seccomp_profile="full",
         ) == {"NIX_SSL_CERT_FILE": str(bundle)}
 
-    def test_unrestricted_mach_gets_nothing(self, monkeypatch, tmp_path):
+    def test_broker_restricted_profiles_get_bundle(self, monkeypatch, tmp_path):
         bundle = tmp_path / "cert.pem"
         bundle.write_text("x")
         monkeypatch.setattr(seatbelt, "MACOS_FILE_TRUST_ANCHORS",
                             str(bundle))
         for kw in ({}, {"seccomp_profile": "debug"},
                    {"seccomp_profile": "full", "audit_mode": True}):
-            assert seatbelt.file_trust_anchor_env(**kw) == {}, kw
+            assert seatbelt.file_trust_anchor_env(**kw) == {"NIX_SSL_CERT_FILE": str(bundle)}, kw
 
     def test_missing_bundle_gets_nothing(self, monkeypatch, tmp_path):
         monkeypatch.setattr(seatbelt, "MACOS_FILE_TRUST_ANCHORS",
@@ -1487,3 +1483,26 @@ def test_selected_xcode_framework_grants_are_contained(tmp_path, monkeypatch, es
     assert (str(shared.resolve()) in roots) is not escape
     assert str(contents.resolve()) not in roots
     assert str(outside.resolve()) not in roots
+
+
+@pytest.mark.parametrize('profile', [None, 'none', 'full', 'debug', 'frida', 'chromium', 'rr'])
+@pytest.mark.parametrize('audit', [False, True])
+def test_broker_floor_survives_profile_exceptions_and_audit(profile, audit):
+    policy = seatbelt.build_profile(seccomp_profile=profile, audit_mode=audit, audit_verbose=audit)
+    lines = policy.splitlines()
+    lookup = next(line for line in lines if line.startswith('(deny mach-lookup (require-any'))
+    register = next(line for line in lines if line.startswith('(deny mach-register (require-any'))
+    for service in seatbelt.MACOS_BLOCKED_BROKER_SERVICES:
+        assert f'(global-name "{service}")' in lookup
+        assert f'(global-name "{service}")' in register
+    for denial in ('(deny appleevent-send)', '(deny user-preference-write)', '(deny darwin-notification-post)'):
+        assert denial in lines
+        if audit:
+            family = denial[len('(deny '):-1]
+            allow = f'(allow {family} (with report))'
+            if allow in lines:
+                assert lines.index(allow) < max(i for i, line in enumerate(lines) if line == denial)
+    if audit:
+        assert lines.index('(allow mach-lookup (with report))') < lines.index(lookup)
+    if profile in ('debug', 'frida', 'chromium'):
+        assert '(deny process-info*)' not in policy

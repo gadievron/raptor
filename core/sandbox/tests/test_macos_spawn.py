@@ -457,8 +457,10 @@ def test_tmpdir_not_steered_without_write_isolation(tmp_path,
     ("full", None, "BUNDLE"),
     # The fixed bundle overrides a caller-controlled trust root.
     ("full", "/caller/ca.pem", "BUNDLE"),
-    # mach-lookup unrestricted → nothing injected.
-    (None, None, "unset"),
+    # Broker floor also closes the keychain in specialized policies.
+    (None, None, "BUNDLE"),
+    ("debug", None, "BUNDLE"),
+    ("chromium", None, "BUNDLE"),
 ])
 def test_file_trust_anchors_injected_under_mach_restriction(
         tmp_path, monkeypatch, seccomp_profile, caller_value, expected):
@@ -570,7 +572,9 @@ def test_file_trust_anchors_readable_under_hardened_read_restriction(
 
 
 @pytest.mark.darwin_native
-def test_file_trust_override_stripped_without_mach_restriction(tmp_path):
+def test_file_trust_override_replaced_under_broker_floor(tmp_path):
+    from core.sandbox import seatbelt
+
     r = _macos_spawn.run_sandboxed(
         ["/bin/sh", "-c", 'printf %s "${NIX_SSL_CERT_FILE-unset}"'],
         output=str(tmp_path), block_network=True, strict_env=True,
@@ -581,7 +585,8 @@ def test_file_trust_override_stripped_without_mach_restriction(tmp_path):
         capture_output=True, text=True, timeout=20,
     )
     assert r.returncode == 0, r.stderr
-    assert r.stdout == "unset"
+    expected = seatbelt.file_trust_anchor_env().get("NIX_SSL_CERT_FILE", "unset")
+    assert r.stdout == expected
 
 
 # --- Darwin-only behavioural tests ------------------------------------
