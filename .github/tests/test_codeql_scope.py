@@ -433,3 +433,13 @@ class TestOnRealRepo:
         changed |= init_imports(changed, files)
         closure = transitive_dependents(changed, reverse)
         assert len(closure) > len(files) * 0.3
+
+
+def test_preparsed_import_extraction_matches_disk_tree(tmp_path):
+    import ast
+    path = Path("core/example.py")
+    (tmp_path / path).parent.mkdir()
+    text = 'from .json import loads\nimport importlib\nimportlib.import_module("packages.web.browser")\n'
+    (tmp_path / path).write_text(text)
+    expected = extract_imports(path, tmp_path)
+    assert extract_imports(path, tmp_path, source_tree=ast.parse(text)) == expected

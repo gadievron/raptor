@@ -1,0 +1,333 @@
+"""Select registered wrapper contracts and native families conservatively.
+
+The full registration census always runs first. Python dependencies include
+parent initializers, conftests, literal dynamic imports and repo-local paths.
+Computed imports without static targets broaden selection for runtime edits;
+resources broaden to their owning component. Unknown history and parse errors
+run everything. Selection never relies on a nightly run to repair a missing edge.
+"""
+from __future__ import annotations
+
+import ast
+from collections import deque
+import json
+import os
+import re
+from pathlib import Path
+
+from ci_change_scope import changed_paths
+from codeql_scope import discover_root_modules, extract_imports
+from sandbox_wrapper_tests import load_registry, registry_errors
+
+GLOBAL_INPUTS = {'tuning.json', 'conftest.py', 'pytest.ini', 'pyproject.toml', 'uv.lock',
+                 '.github/sandbox-wrapper-tests.json', '.github/workflows/sandbox-wrappers.yml',
+                 '.github/scripts/run_sandbox_wrapper_tests.py', '.github/scripts/sandbox_wrapper_tests.py',
+                 '.github/scripts/sandbox_wrapper_scope.py', '.github/scripts/ci_change_scope.py',
+                 '.github/scripts/codeql_scope.py'}
+GLOBAL_DIRS = ('core/sandbox/', 'bin/', 'libexec/', 'test/', '.github/actions/setup-venv/', '.github/actions/enable-userns/')
+PLATFORMS = {'linux': 'ubuntu-24.04', 'darwin': 'macos-latest'}
+
+
+def component(path: str) -> str:
+    parts = Path(path).parts
+    return '/'.join(parts[:2]) if len(parts) > 1 and parts[0] in {'core', 'packages', 'engine'} else str(Path(path).parent)
+
+
+def lazy_exports(path: str, tree: ast.Module) -> tuple[dict[str, str], set[int]]:
+    """Recognize finite PEP 562 export tables; custom loaders stay opaque.
+
+    Only a literal map, a guarded lookup, and the standard import/getattr/cache
+    handler are accepted. Never execute a module to discover dependencies.
+    """
+    if not path.endswith('/__init__.py'):
+        return {}, set()
+    getters = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == '__getattr__']
+    if len(getters) != 1:
+        return {}, set()
+    getter = getters[0]
+    for assignment in tree.body:
+        if not isinstance(assignment, ast.Assign) or len(assignment.targets) != 1:
+            continue
+        target = assignment.targets[0]
+        if not isinstance(target, ast.Name) or not any(k in target.id for k in ('EXPORT', 'LAZY')):
+            continue
+        try:
+            table = ast.literal_eval(assignment.value)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(table, dict) or not table or not all(isinstance(k, str) for k in table):
+            continue
+        calls = [n for n in ast.walk(getter) if isinstance(n, ast.Call)]
+        lookups = [n for n in ast.walk(getter) if isinstance(n, ast.Assign)
+                   and isinstance(n.value, ast.Call) and isinstance(n.value.func, ast.Attribute)
+                   and isinstance(n.value.func.value, ast.Name) and n.value.func.value.id == target.id
+                   and n.value.func.attr == 'get' and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name)]
+        imports = [n for n in calls if (getattr(n.func, 'attr', '') == 'import_module'
+                                       or isinstance(n.func, ast.Name) and n.func.id == 'import_module')]
+        if len(lookups) != 1 or len(imports) != 1 or len(imports[0].args) != 1:
+            continue
+        lookup_name = lookups[0].targets[0].id
+        imported = imports[0].args[0]
+        module_name = None
+        if all(isinstance(v, tuple) and len(v) == 2 and all(isinstance(x, str) for x in v) for v in table.values()):
+            for node in ast.walk(getter):
+                if (isinstance(node, ast.Assign) and isinstance(node.value, ast.Name)
+                        and node.value.id == lookup_name and len(node.targets) == 1
+                        and isinstance(node.targets[0], ast.Tuple) and len(node.targets[0].elts) == 2
+                        and isinstance(node.targets[0].elts[0], ast.Name)):
+                    module_name = node.targets[0].elts[0].id
+            valid_import = isinstance(imported, ast.Name) and imported.id == module_name
+            exports = {k: v[0] for k, v in table.items()}
+        elif all(isinstance(v, str) for v in table.values()):
+            valid_import = (isinstance(imported, ast.JoinedStr) and len(imported.values) == 3
+                            and isinstance(imported.values[0], ast.FormattedValue)
+                            and isinstance(imported.values[0].value, ast.Name)
+                            and imported.values[0].value.id == '__name__'
+                            and isinstance(imported.values[1], ast.Constant) and imported.values[1].value == '.'
+                            and isinstance(imported.values[2], ast.FormattedValue)
+                            and isinstance(imported.values[2].value, ast.Name)
+                            and imported.values[2].value.id == lookup_name)
+            exports = {k: path[:-12].replace('/', '.') + '.' + v for k, v in table.items()}
+        else:
+            continue
+        if not valid_import:
+            continue
+        assigned = {lookup_name} | ({module_name} if module_name else set())
+        if any(sum(isinstance(n, ast.Name) and n.id == name and isinstance(n.ctx, ast.Store)
+                   for n in ast.walk(getter)) != 1 for name in assigned):
+            continue
+        if len(lookups[0].value.args) != 1 or lookups[0].value.keywords:
+            continue
+        if any(isinstance(n, ast.Subscript) and isinstance(n.ctx, ast.Store)
+               and isinstance(n.value, ast.Name) and n.value.id == target.id for n in ast.walk(tree)):
+            continue
+        allowed = {'getattr', 'globals', 'AttributeError', 'import_module'}
+        if any(not ((isinstance(n.func, ast.Name) and n.func.id in allowed)
+                    or (isinstance(n.func, ast.Attribute) and n.func.attr == 'get'
+                        and isinstance(n.func.value, ast.Name) and n.func.value.id == target.id)
+                    or (isinstance(n.func, ast.Attribute) and n.func.attr == 'import_module'
+                        and isinstance(n.func.value, ast.Name) and n.func.value.id == 'importlib')) for n in calls):
+            continue
+        if any(isinstance(n, (ast.Import, ast.ImportFrom))
+               and ((isinstance(n, ast.Import) and any(a.name != 'importlib' for a in n.names))
+                    or isinstance(n, ast.ImportFrom) and n.module != 'importlib') for n in ast.walk(getter)):
+            continue
+        # Reassignment or mutation invalidates a literal table's bound.
+        writes = [n for n in ast.walk(tree) if isinstance(n, ast.Name)
+                  and n.id == target.id and isinstance(n.ctx, ast.Store)]
+        if len(writes) != 1 or any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                                  and isinstance(n.func.value, ast.Name) and n.func.value.id == target.id
+                                  and n.func.attr != 'get' for n in ast.walk(tree)):
+            continue
+        return exports, {id(assignment), id(getter)}
+    return {}, set()
+
+
+class StripDocumentation(ast.NodeTransformer):
+    def visit_Expr(self, node):
+        return None if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str) else node
+
+
+class Dependencies:
+    def __init__(self, repo: Path):
+        self.repo = repo
+        self.roots = frozenset(p.stem for p in discover_root_modules(repo))
+        self.edges = {}
+        self.packages = {}
+
+    def package_exports(self, prefix: str) -> dict[str, str]:
+        if prefix not in self.packages:
+            path = prefix + '/__init__.py'
+            if (self.repo / path).is_file():
+                tree = ast.parse((self.repo / path).read_text())
+                self.packages[prefix] = lazy_exports(path, tree)[0]
+            else:
+                self.packages[prefix] = {}
+        return self.packages[prefix]
+
+    def resolve(self, module: str) -> set[str]:
+        deps = set()
+        pieces = module.split('.')
+        for i in range(1, len(pieces) + 1):
+            prefix = '/'.join(pieces[:i])
+            for candidate in (prefix + '.py', prefix + '/__init__.py'):
+                if (self.repo / candidate).is_file():
+                    deps.add(candidate)
+            if i < len(pieces):
+                exported = self.package_exports(prefix).get(pieces[i])
+                if exported and exported != module:
+                    # Export targets are plain literal module names, not another
+                    # attribute expression. Their own imports are walked later.
+                    target = exported.replace('.', '/')
+                    for candidate in (target + '.py', target + '/__init__.py'):
+                        if (self.repo / candidate).is_file():
+                            deps.add(candidate)
+        return deps
+
+    def direct(self, path: str) -> tuple[set[str], bool]:
+        if path in self.edges:
+            return self.edges[path]
+        text = (self.repo / path).read_text()
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            if path.startswith('libexec/') and not path.endswith('.py'):
+                self.edges[path] = set(), True
+                return self.edges[path]
+            raise
+        exports, ignored = lazy_exports(path, tree)
+        if path.endswith('/__init__.py'):
+            self.packages[path[:-12]] = exports
+        tree.body = [node for node in tree.body if id(node) not in ignored]
+        tree = StripDocumentation().visit(tree)
+        modules = extract_imports(Path(path), self.repo, self.roots, source_tree=tree)
+        if modules is None:
+            raise ValueError('unreadable dependency: ' + path)
+        deps = set()
+        literals = [node.value for node in ast.walk(tree)
+                    if isinstance(node, ast.Constant) and isinstance(node.value, str)]
+        for value in literals:
+            modules.extend(re.findall(r'\b(?:core|packages|engine)(?:\.[A-Za-z_]\w*)+', value))
+        aliases = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    aliases[alias.asname or alias.name.split('.')[0]] = alias.name if alias.asname else alias.name.split('.')[0]
+                    modules.extend(self.package_exports(alias.name.replace('.', '/')).values())
+            elif isinstance(node, ast.ImportFrom):
+                base = node.module or ''
+                if node.level:
+                    parent = Path(path).parts[:-node.level]
+                    base = '.'.join((*parent, base)) if base else '.'.join(parent)
+                for alias in node.names:
+                    if alias.name == '*':
+                        modules.extend(self.package_exports(base.replace('.', '/')).values())
+                    else:
+                        aliases[alias.asname or alias.name] = base + '.' + alias.name
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'getattr' and node.args:
+                if isinstance(node.args[0], ast.Name) and node.args[0].id in aliases:
+                    base = aliases[node.args[0].id]
+                    if len(node.args) > 1 and isinstance(node.args[1], ast.Constant) and isinstance(node.args[1].value, str):
+                        modules.append(base + '.' + node.args[1].value)
+                    else:
+                        modules.extend(self.package_exports(base.replace('.', '/')).values())
+            if isinstance(node, ast.Attribute):
+                parts = ast.unparse(node).split('.')
+                if parts[0] in aliases:
+                    modules.append('.'.join([aliases[parts[0]], *parts[1:]]))
+        for module in modules:
+            deps.update(self.resolve(module))
+        for value in literals:
+            if value.startswith(('core/', 'packages/', 'engine/', 'libexec/')):
+                if (self.repo / value).exists():
+                    deps.add(value)
+        opaque = False
+        aliases = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module in {'importlib', 'importlib.util', 'runpy'}:
+                aliases.update({alias.asname or alias.name: alias.name for alias in node.names})
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, 'attr', '')
+                name = aliases.get(name, name)
+                if name in {'import_module', '__import__', 'spec_from_file_location', 'run_path'}:
+                    index = 1 if name == 'spec_from_file_location' else 0
+                    if len(node.args) <= index or not isinstance(node.args[index], ast.Constant):
+                        opaque = True
+                    elif name in {'import_module', '__import__'} and isinstance(node.args[index].value, str):
+                        deps.update(self.resolve(node.args[index].value))
+        for parent in Path(path).parents:
+            for name in ('__init__.py', 'conftest.py'):
+                candidate = (parent / name).as_posix()
+                if candidate != path and (self.repo / candidate).is_file():
+                    deps.add(candidate)
+        self.edges[path] = deps, opaque
+        return deps, opaque
+
+    def closure(self, seeds: set[str], *, stop_on_opaque=False) -> tuple[set[str], bool]:
+        seen, todo, opaque = set(), deque(sorted(seeds)), False
+        while todo:
+            path = todo.popleft()
+            if path in seen:
+                continue
+            seen.add(path)
+            if not path.endswith('.py') and not path.startswith('libexec/'):
+                continue
+            deps, dynamic = self.direct(path)
+            opaque |= dynamic
+            if opaque and stop_on_opaque:
+                return seen, True
+            todo.extend(sorted(deps - seen))
+        return seen, opaque
+
+
+def select(repo: Path, registry: dict, changed: list[str] | None) -> dict:
+    full = changed is None or any(p in GLOBAL_INPUTS or p.startswith(GLOBAL_DIRS) for p in changed)
+    # Deleted modules can no longer supply the old dependency graph.
+    full |= bool(changed and any(p.endswith('.py') and p.startswith(('core/', 'packages/', 'engine/'))
+                                and not (repo / p).is_file() for p in changed))
+    bound = {row['source'] for row in registry['wrappers']}
+    bound.update(selector.split('::', 1)[0] for row in registry['wrappers']
+                 for selector in row['contracts'])
+    relevant = lambda p: (p.startswith(('core/', 'packages/', 'engine/', '.github/scripts/')) or p in bound
+                          or ('/' not in p and not p.endswith(('.md', '.txt'))))
+    if not full and not any(relevant(p) for p in changed):
+        return {'include': []}
+    graph = Dependencies(repo)
+    runtime = bool(changed and any(relevant(p) for p in changed))
+    if not full and runtime and (repo / 'conftest.py').is_file():
+        try:
+            _, shared_opaque = graph.closure({'conftest.py'}, stop_on_opaque=True)
+        except (OSError, ValueError, SyntaxError, RecursionError):
+            shared_opaque = True
+        if shared_opaque:
+            return select(repo, registry, None)
+    def affected(seeds):
+        if full:
+            return True
+        closure, opaque = graph.closure(set(seeds), stop_on_opaque=runtime)
+        if runtime and opaque:
+            return True
+        owners = {component(p) for p in closure}
+        return any(p in closure or ((not p.endswith('.py') or {'fixtures', 'testdata'} & set(Path(p).parts)) and component(p) in owners) for p in changed)
+    matrix = []
+    try:
+        for platform, runner in PLATFORMS.items():
+            contracts = set()
+            for row in registry['wrappers']:
+                selectors = row.get('contract_platforms', {}).get(platform, row['contracts'])
+                for selector in selectors:
+                    if affected([row['source'], selector.split('::', 1)[0]]):
+                        contracts.add(selector)
+            families = []
+            for family in registry['native']:
+                cell = family['platforms'][platform]
+                if cell.get('tests') and not cell.get('manual') and affected(s.split('::', 1)[0] for s in cell['tests']):
+                    families.append(family['id'])
+            if contracts or families:
+                matrix.append(dict(os=runner, platform=platform, contracts=sorted(contracts), families=families, full=full))
+    except (OSError, ValueError, SyntaxError, RecursionError):
+        if full:
+            raise
+        return select(repo, registry, None)
+    return {'include': matrix}
+
+
+def main() -> None:
+    repo = Path.cwd()
+    registry = load_registry(repo / '.github/sandbox-wrapper-tests.json')
+    errors = registry_errors(repo, registry)
+    if errors:
+        raise SystemExit('\n'.join(errors))
+    event = os.environ.get('EVENT', '')
+    changes = None if event in {'schedule', 'workflow_dispatch', 'merge_group'} else changed_paths(repo, os.environ.get('BASE_SHA', ''))
+    matrix = select(repo, registry, changes)
+    with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+        output.write('run=' + str(bool(matrix['include'])).lower() + '\n')
+        output.write('matrix=' + json.dumps(matrix) + '\n')
+    print(json.dumps(matrix, indent=2))
+
+
+if __name__ == '__main__':
+    main()

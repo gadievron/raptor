@@ -206,6 +206,7 @@ TIERS: dict[str, dict] = {
         "extra_triggers": [
             ".github/scripts",
             ".github/workflows",
+            ".devcontainer",
             "CLAUDE.md",
             ".claude",
             "README.md",

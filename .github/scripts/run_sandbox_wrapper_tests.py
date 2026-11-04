@@ -41,10 +41,35 @@ def interpreter_tool_path(executable: str, inherited: str) -> str:
     return str(Path(executable).absolute().parent) + os.pathsep + inherited
 
 
+def selected_targets(registry: dict, selection: dict, platform: str):
+    """Reject empty, stale or cross-platform selection instead of running zero tests."""
+    if not isinstance(selection, dict) or selection.get('platform') != platform:
+        raise ValueError('selection platform does not match this runner')
+    contracts, families = selection.get('contracts'), selection.get('families')
+    for values in (contracts, families):
+        if (not isinstance(values, list) or any(not isinstance(v, str) for v in values)
+                or len(set(values)) != len(values)):
+            raise ValueError('selection targets must be unique string lists')
+    eligible_contracts = {selector for row in registry['wrappers']
+                          for selector in row.get('contract_platforms', {}).get(platform, row['contracts'])}
+    eligible_families = {family['id'] for family in registry['native']
+                         if family['platforms'][platform].get('tests')
+                         and not family['platforms'][platform].get('manual')}
+    if not set(contracts) <= eligible_contracts or not set(families) <= eligible_families:
+        raise ValueError('selection contains unregistered targets')
+    full = selection.get('full')
+    if type(full) is not bool:
+        raise ValueError('selection must explicitly declare full or scoped coverage')
+    if full and (set(contracts) != eligible_contracts or set(families) != eligible_families):
+        raise ValueError('full selection omits registered targets')
+    return contracts, None if full else families
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--lane', choices=('contracts', 'native'), required=True)
     parser.add_argument('--report-dir', type=Path, required=True)
+    parser.add_argument('--selection-json', help='validated per-platform CI selection')
     parser.add_argument('--family', action='append', default=[])
     parser.add_argument('--include-manual', action='store_true', help='require hardware/operator-tool cells too; no skip waiver')
     parser.add_argument('--list', action='store_true')
@@ -66,10 +91,28 @@ def main():
         return 1
     if sys.platform not in ('linux', 'darwin'):
         parser.error('native Linux or macOS required')
+    selected_contracts = selected_families = None
+    if args.selection_json:
+        if args.family:
+            parser.error('--selection-json and --family cannot be combined')
+        try:
+            selected_contracts, selected_families = selected_targets(
+                registry, json.loads(args.selection_json), sys.platform,
+            )
+        except (ValueError, TypeError, KeyError) as error:
+            parser.error(str(error))
+        if args.lane == 'contracts' and not selected_contracts:
+            parser.error('contract selection is empty')
+        if args.lane == 'native' and selected_families == []:
+            parser.error('native selection is empty')
+        if selected_families is not None:
+            args.family = selected_families
     runs, unavailable = [], []
     if args.lane == 'contracts':
         selectors = sorted({selector for row in registry['wrappers']
                             for selector in row.get('contract_platforms', {}).get(sys.platform, row['contracts'])})
+        if selected_contracts is not None:
+            selectors = sorted(selected_contracts)
         runs.append(('contracts', selectors, None, {}, len(selectors)))
     else:
         known = {family['id'] for family in registry['native']}

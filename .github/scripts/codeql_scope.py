@@ -231,6 +231,8 @@ def extract_imports(
     repo: Path,
     root_modules: frozenset[str] | None = None,
     literal_references: dict[str, set[Path]] | None = None,
+    *,
+    source_tree: ast.Module | None = None,
 ) -> list[str] | None:
     """Parse a .py file and return the dotted module names it imports.
 
@@ -242,15 +244,19 @@ def extract_imports(
     ``root_modules`` is the set of repo-root module names (raptor,
     raptor_agentic, ...) whose imports must be kept alongside the
     SCAN_ROOTS ones; when None it is derived from the tree. Callers
-    looping over many files (``build_graph``) pass it once.
+    looping over many files (``build_graph``) pass it once. ``source_tree``
+    lets a caller reuse an already parsed tree without reading/parsing twice.
     """
     if root_modules is None:
         root_modules = frozenset(
             p.stem for p in discover_root_modules(repo)
         )
     try:
-        source = (repo / path).read_text(encoding="utf-8", errors="replace")
-        tree = ast.parse(source, filename=str(path))
+        if source_tree is None:
+            source = (repo / path).read_text(encoding="utf-8", errors="replace")
+            tree = ast.parse(source, filename=str(path))
+        else:
+            tree = source_tree
     except (SyntaxError, ValueError):
         return None
     except OSError:
