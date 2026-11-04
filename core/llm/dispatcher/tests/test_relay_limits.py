@@ -102,16 +102,60 @@ class _Upstream:
                     return
 
         self._server = http.server.HTTPServer(("127.0.0.1", 0), _H)
-        self.mode = mode
-        self.base_url = f"http://127.0.0.1:{self._server.server_address[1]}"
-        self._thread = threading.Thread(
-            target=self._server.serve_forever, daemon=True,
-        )
-        self._thread.start()
+        try:
+            self.mode = mode
+            self.base_url = f"http://127.0.0.1:{self._server.server_address[1]}"
+            self._thread = threading.Thread(
+                target=self._server.serve_forever, daemon=True,
+            )
+            self._thread.start()
+        except BaseException:
+            # No serving loop exists to acknowledge shutdown() on this path.
+            self._server.server_close()
+            raise
 
     def shutdown(self):
         self._server.shutdown()
         self._server.server_close()
+
+
+@pytest.mark.parametrize("fault", ["construction", "start"])
+def test_upstream_failed_startup_closes_http_listener(monkeypatch, fault):
+    import sys
+    from types import SimpleNamespace
+
+    servers = []
+    real_server = http.server.HTTPServer
+
+    def server(*args, **kwargs):
+        instance = real_server(*args, **kwargs)
+        servers.append(instance)
+        return instance
+
+    class StartFailure(threading.Thread):
+        def start(self):
+            raise RuntimeError("injected thread start failure")
+
+    def thread(*args, **kwargs):
+        if fault == "construction":
+            raise RuntimeError("injected thread construction failure")
+        return StartFailure(*args, **kwargs)
+
+    module = sys.modules[__name__]
+    try:
+        with monkeypatch.context() as patcher:
+            patcher.setattr(module, "http", SimpleNamespace(server=SimpleNamespace(
+                HTTPServer=server, BaseHTTPRequestHandler=http.server.BaseHTTPRequestHandler,
+            )))
+            patcher.setattr(module, "threading", SimpleNamespace(Thread=thread))
+            with pytest.raises(RuntimeError, match="injected thread .* failure"):
+                _Upstream("firehose")
+        assert len(servers) == 1
+        assert servers[0].socket.fileno() == -1, "failed startup left its HTTP listener open"
+    finally:
+        # shutdown() waits forever if serve_forever() never started.
+        for instance in servers:
+            instance.server_close()
 
 
 def _make_dispatcher(fake_creds, tmp_path, upstream):
