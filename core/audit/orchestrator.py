@@ -8772,6 +8772,7 @@ def _run_audit_body(
         set_joern_server(joern_server)
 
     _empty_inventory = False
+    _prep = None
     try:
         _prep = _compute_audit_prep(
             config, joern_server=joern_server, on_progress=on_progress,
@@ -35422,7 +35423,7 @@ def _run_weakness_chains(result, config) -> None:
                             model_id=_wc_model or "",
                         )
                         if cs_result is not None:
-                            status, stamp = "finding", "checker_synthesis"
+                            status, stamp = "finding", "semgrep:chain-checker"
                         else:
                             status, stamp = "suspicious", "weakness_chain"
                     else:
