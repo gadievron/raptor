@@ -416,6 +416,24 @@ def build_state_field_index(
                     bucket = fields.setdefault(
                         fld, {"writes": [], "reads": []},
                     )
+                    terminal = depth == len(idents) - 1
+                    if terminal and wm is not None:
+                        kind = "writes"
+                        op = wm.group(1)
+                    elif terminal and prefix_incdec:
+                        kind = "writes"
+                        op = ""
+                    else:
+                        kind = "reads"
+                    if len(bucket[kind]) >= MAX_SITES_PER_FIELD:
+                        skipped = True
+                        if (kind == "reads" or op == "="
+                                or len(bucket["reads"]) >= MAX_SITES_PER_FIELD):
+                            continue
+                        # A compound update's write is capped, but its
+                        # independent read still has room. Keep only that
+                        # read; no RHS classification is needed.
+                        kind = "reads"
                     if site_code is None:
                         site_code = raw.strip()[:200]
                     site: dict[str, Any] = {
@@ -426,41 +444,22 @@ def build_state_field_index(
                         "base": idents[depth - 1],
                         "field": fld,
                     }
-                    terminal = depth == len(idents) - 1
-                    if terminal and wm:
-                        kind = "writes"
-                        op = wm.group(1)
-                        rhs_end = code.find(";", wm.end())
-                        if rhs_end < 0:
-                            rhs_end = len(code)
-                        rhs = code[wm.end():rhs_end].strip()
-                        site["rhs"] = rhs[:200]
-                        site["rhs_class"] = (
-                            "unknown" if op in ("++", "--")
-                            else _classify_rhs(rhs)
-                        )
-                        if op != "=":
-                            # Compound assignment reads the field too.
-                            ro = dict(site)
-                            ro.pop("rhs", None)
-                            ro.pop("rhs_class", None)
-                            if len(bucket["reads"]) < MAX_SITES_PER_FIELD:
-                                bucket["reads"].append(ro)
-                    elif terminal and prefix_incdec:
-                        kind = "writes"
-                        site["rhs"] = ""
-                        site["rhs_class"] = "unknown"
-                        # Increment reads the field too.
-                        ro = dict(site)
-                        ro.pop("rhs", None)
-                        ro.pop("rhs_class", None)
-                        if len(bucket["reads"]) < MAX_SITES_PER_FIELD:
-                            bucket["reads"].append(ro)
-                    else:
-                        kind = "reads"
-                    if len(bucket[kind]) >= MAX_SITES_PER_FIELD:
-                        skipped = True
-                        continue
+                    if kind == "writes":
+                        if op != "=" and len(bucket["reads"]) < MAX_SITES_PER_FIELD:
+                            bucket["reads"].append(dict(site))
+                        if wm is not None:
+                            rhs_end = code.find(";", wm.end())
+                            if rhs_end < 0:
+                                rhs_end = len(code)
+                            rhs = code[wm.end():rhs_end].strip()
+                            site["rhs"] = rhs[:200]
+                            site["rhs_class"] = (
+                                "unknown" if op in ("++", "--")
+                                else _classify_rhs(rhs)
+                            )
+                        else:
+                            site["rhs"] = ""
+                            site["rhs_class"] = "unknown"
                     bucket[kind].append(site)
 
     return {"fields": fields, "tier": "regex", "skipped": skipped}
