@@ -384,7 +384,10 @@ findings can be excluded via `--exclude-dir` globs.
 With `--compiler-scan`, C files containing written `memcpy` calls also receive
 an overlap check when Semgrep and a GCC analyzer supporting
 `-Wanalyzer-overlapping-buffers` (GCC 14 or newer) are available. Candidate
-matches select files; only compiler overlap warnings become findings.
+matches select files; only compiler overlap warnings become findings. Candidate
+discovery scans only the capped C files whose ordinary compiler analysis
+succeeded, rather than scanning the entire project. Large file lists are batched
+within the same 30-second candidate budget.
 
 The check adds at most one compiler invocation per selected translation unit,
 plus one capability probe per scan. It shares the TU cap and worker limit and

@@ -427,7 +427,7 @@ def _reset_sandbox_scratch() -> None:
         _scratch_parent = None
 
 
-def _default_sandbox_runner(target: Path, config: str, *, extra_targets=(), output_dir=None):
+def _default_sandbox_runner(target: Path, config: str, *, extra_targets=(), output_dir=None, target_root=None):
     """subprocess.run-shaped wrapper over core.sandbox.run, or None.
 
     Returns None when core.sandbox is unavailable on this host — the
@@ -495,10 +495,15 @@ def _default_sandbox_runner(target: Path, config: str, *, extra_targets=(), outp
         tool_paths.extend(options.pop("tool_paths", []) or [])
         # A single-file scan needs an exact read-only bind, not its parent:
         # scanning ~/file.py must not expose sibling credentials in HOME.
-        sandbox_target = str(target) if target.is_dir() else None
-        if sandbox_target is None:
-            tool_paths.append(str(target.absolute()))
-        tool_paths.extend(str(Path(path).absolute()) for path in extra_targets)
+        if target_root is not None:
+            # Keep the declared project scope even if its filesystem type
+            # changes after validation; never promote source paths to tools.
+            sandbox_target = str(target_root)
+        else:
+            sandbox_target = str(target) if target.is_dir() else None
+            if sandbox_target is None:
+                tool_paths.append(str(target.absolute()))
+            tool_paths.extend(str(Path(path).absolute()) for path in extra_targets)
         return sandbox_run(
             cmd,
             target=sandbox_target,
@@ -536,6 +541,7 @@ def run_rule(
     subprocess_runner=None,
     unsandboxed: bool = False,
     extra_targets: "Sequence[Path]" = (),
+    target_root: Path | None = None,
 ) -> SemgrepResult:
     """Run semgrep with one config against a target.
 
@@ -565,6 +571,9 @@ def run_rule(
             The result's findings cover ALL targets (each finding's
             ``file`` names its origin) and the returncode follows the
             combined scan — callers split per target themselves.
+        target_root: Optional caller-owned project directory containing every
+            explicit target. It bounds sandbox reads while argv still names only
+            those files. Outside targets are refused, not granted tool-path access.
 
     Returns:
         SemgrepResult with parsed findings, files_examined, files_failed,
@@ -580,6 +589,18 @@ def run_rule(
     if not str(config).startswith(("p/", "category/")) and Path(config).exists():
         config = str(Path(config).absolute())
     name = name or _config_to_name(config)
+    if target_root is not None:
+        try:
+            target_root = Path(target_root).resolve(strict=True)
+            if not target_root.is_dir():
+                raise ValueError("target_root is not a directory")
+            for path in (target, *extra_targets):
+                path.resolve(strict=True).relative_to(target_root)
+        except (OSError, ValueError, RuntimeError) as exc:
+            return SemgrepResult(
+                name=name, config=config, target=str(target), returncode=-1,
+                errors=[f"Explicit Semgrep target escapes or cannot be resolved under target_root: {exc}"],
+            )
     from core.config import RaptorConfig
     if RaptorConfig.SEMGREP_OFFLINE:
         try:
@@ -651,8 +672,13 @@ def run_rule(
             if unsandboxed:
                 runner = subprocess.run
             else:
-                runner = _default_sandbox_runner(target, config, extra_targets=extra_targets,
-                                                 output_dir=sandbox_output)
+                # With a project root, source arguments remain inside that
+                # read-only scope. Do not promote target-derived file paths to
+                # tool_paths: a symlink swap must not grant outside reads.
+                runner = _default_sandbox_runner(
+                    target, config, extra_targets=extra_targets,
+                    output_dir=sandbox_output, target_root=target_root,
+                )
                 if runner is None:
                     return SemgrepResult(
                         name=name, config=config, target=str(target),

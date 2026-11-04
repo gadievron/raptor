@@ -8,13 +8,15 @@ hypothesis. Candidate errors and unsupported compilers limit this pass only.
 """
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 import os
+import math
+from time import monotonic
 
 from .compiler import CompilerRequest, run_compiler_analysis
 from .pipeline import Detector, DetectorResult, Stage, StageResult, run_detector
@@ -22,6 +24,10 @@ from .semgrep import PreparedInput, define_semgrep_detector, run_semgrep_analysi
 
 _RULE = Path(__file__).parent / "rules" / "memcpy_candidates.yaml"
 _CANDIDATES = define_semgrep_detector("memcpy-overlap-candidates", "1")
+# Leave argv headroom for the sandbox launcher and environment on small-ARG_MAX
+# platforms. Each batch shares the original overall candidate-scan deadline.
+_CANDIDATE_ARG_BYTES = 32_768
+_CANDIDATE_SECONDS = 30
 OVERLAP_ID = "-Wanalyzer-overlapping-buffers"
 
 
@@ -39,6 +45,22 @@ class OverlapAnalysis:
 
 def _limited(state: OverlapAnalysis, reason: str, *, tu: str = "") -> None:
     state.limitations.append({"tu": tu, "reason": reason})
+
+
+def _target_batches(paths: list[Path]) -> Iterator[tuple[Path, ...]]:
+    batch: list[Path] = []
+    used = 0
+    for path in paths:
+        size = len(os.fsencode(path)) + 1
+        if size > _CANDIDATE_ARG_BYTES:
+            raise ValueError("candidate path exceeds argument budget")
+        if batch and used + size > _CANDIDATE_ARG_BYTES:
+            yield tuple(batch)
+            batch, used = [], 0
+        batch.append(path)
+        used += size
+    if batch:
+        yield tuple(batch)
 
 
 def _candidates(state: OverlapAnalysis) -> StageResult:
@@ -69,15 +91,41 @@ def _candidates(state: OverlapAnalysis) -> StageResult:
                 matches.add(rel)
         return [{"file": rel} for rel in sorted(matches)], 0
 
-    execution = run_semgrep_analysis(
-        detector=_CANDIDATES,
-        prepare=lambda: nullcontext(PreparedInput(state.target, select)),
-        rule_config=str(_RULE), timeout=30,
-    )
-    state.candidates = {m["file"] for m in execution.value.matches}
-    if execution.status != "complete":
+    paths = set()
+    incomplete = False
+    for rel in sorted(allowed):
+        try:
+            if Path(rel).is_absolute() or ".." in Path(rel).parts:
+                raise ValueError("not a repository-relative path")
+            path = (root / rel).resolve(strict=True)
+            path.relative_to(root)
+            if not path.is_file():
+                raise ValueError("not a regular source file")
+            paths.add(path)
+        except (ValueError, OSError, RuntimeError):
+            _limited(state, "memcpy candidate input is unavailable or outside the target", tu=rel)
+            incomplete = True
+    deadline = monotonic() + _CANDIDATE_SECONDS
+    for batch in _target_batches(sorted(paths)):
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            incomplete = True
+            break
+        prepared = PreparedInput(batch[0], select, extra_targets=batch[1:], target_root=root)
+
+        def prepare(item: PreparedInput = prepared) -> nullcontext[PreparedInput]:
+            return nullcontext(item)
+
+        execution = run_semgrep_analysis(
+            detector=_CANDIDATES, prepare=prepare,
+            rule_config=str(_RULE), timeout=math.ceil(remaining),
+        )
+        state.candidates.update(m["file"] for m in execution.value.matches)
+        incomplete |= execution.status != "complete"
+    if incomplete:
         _limited(state, "memcpy overlap candidate scan was incomplete")
-        return StageResult("partial" if state.candidates else "error", execution.reason)
+        return StageResult("partial" if state.candidates else "error", "candidate scan incomplete")
+
     if not state.candidates:
         return StageResult("skipped", "no memcpy candidates in eligible C files")
     return StageResult()

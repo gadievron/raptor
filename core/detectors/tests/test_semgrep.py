@@ -158,3 +158,21 @@ def test_engine_failure_result_does_not_keep_traceback_artifacts_alive(tmp_path,
     assert result.value.invocation_error == "tool crashed"
     gc.collect()
     assert references[0]() is None
+
+
+def test_explicit_targets_and_project_scope_are_forwarded(tmp_path, monkeypatch):
+    calls = []
+    first, second = tmp_path / "a.c", tmp_path / "sub/b.c"
+
+    @contextmanager
+    def prepare():
+        yield PreparedInput(first, lambda findings: ([], 0), extra_targets=(second,), target_root=tmp_path)
+
+    def run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return SimpleNamespace(findings=[], errors=[])
+
+    monkeypatch.setattr("packages.semgrep.runner.run_rule", run)
+    result = run_analysis(prepare=prepare, rule_config="x", timeout=7)
+    assert result.status == "complete"
+    assert calls == [((first, "x"), {"timeout": 7, "extra_targets": (second,), "target_root": tmp_path})]

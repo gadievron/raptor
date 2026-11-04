@@ -1216,6 +1216,34 @@ class TestSandboxMetadataIntegration:
             assert str(tmp_path) not in scope.get("writable_paths", [])
 
 
+    def test_explicit_files_keep_project_scope_and_do_not_scan_siblings(self, tmp_path, monkeypatch):
+        import core.sandbox.context as context
+        actual_run = context.run
+        root = tmp_path / "project"
+        (root / "nested").mkdir(parents=True)
+        first, second = root / "chosen [*].py", root / "nested/second.py"
+        for path in (first, second, root / "unselected.py", root / "chosen x.py"):
+            path.write_text("foo()\n")
+        rule = tmp_path / "selection.yml"
+        rule.write_text("rules:\n- id: selection\n  languages: [python]\n  pattern: foo()\n  message: candidate\n  severity: INFO\n")
+        scopes = []
+
+        def scoped(command, **kwargs):
+            if "scan" in command:
+                scopes.append((command, kwargs))
+            return actual_run(command, **kwargs)
+
+        monkeypatch.setattr(context, "run", scoped)
+        result = run_rule(first, str(rule), extra_targets=(second,), target_root=root, timeout=60)
+        assert result.ok, result.errors
+        assert {Path(f.file) for f in result.findings} == {first, second}
+        assert set(result.files_examined) == {str(first), str(second)}
+        command, scope = scopes[0]
+        assert command[-2:] == [str(first), str(second)]
+        assert scope["target"] == str(root)
+        assert str(first) not in scope["tool_paths"] and str(second) not in scope["tool_paths"]
+
+
 class TestSandboxSidecarSafety:
     @pytest.mark.parametrize("mode", ["scanner-symlink", "destination-symlink", "save-error"])
     def test_parent_refuses_unsafe_sidecar_and_keeps_explicit_destination_confined(self, tmp_path, monkeypatch, mode):
