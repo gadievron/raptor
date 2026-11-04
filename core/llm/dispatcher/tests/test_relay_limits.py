@@ -168,21 +168,26 @@ def _make_dispatcher(fake_creds, tmp_path, upstream):
         audit_path=tmp_path / "audit.jsonl",
         token_ttl_s=3600, token_budget=100,
     )
-    original = d._rules["anthropic"]
-    d._rules["anthropic"] = ProviderRule(
-        name=original.name,
-        upstream_base_url=upstream.base_url,
-        inject_headers=original.inject_headers,
-        strip_request_headers=original.strip_request_headers,
-    )
+    try:
+        original = d._rules["anthropic"]
+        d._rules["anthropic"] = ProviderRule(
+            name=original.name,
+            upstream_base_url=upstream.base_url,
+            inject_headers=original.inject_headers,
+            strip_request_headers=original.strip_request_headers,
+        )
+    except BaseException:
+        d.shutdown()
+        raise
     return d
 
 
 def _worker_token(d: LLMDispatcher) -> str:
     _, fd = d.allocate_worker(label="test-worker")
-    token = os.read(fd, 64).decode().strip()
-    os.close(fd)
-    return token
+    try:
+        return os.read(fd, 64).decode().strip()
+    finally:
+        os.close(fd)
 
 
 def _post(d: LLMDispatcher, token: str) -> bytes:
@@ -387,3 +392,70 @@ def test_dispatcher_setup_failure_stops_upstream(
         # Reclaim the actual server even when the regression assertion fails.
         for instance in upstreams:
             instance.shutdown()
+
+
+
+def test_failed_rule_setup_stops_dispatcher(fake_creds, tmp_path, monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    dispatchers = []
+    real_dispatcher = LLMDispatcher
+
+    def dispatcher(*args, **kwargs):
+        instance = real_dispatcher(*args, **kwargs)
+        dispatchers.append(instance)
+        return instance
+
+    def rule(**kwargs):
+        raise RuntimeError("injected provider-rule setup failure")
+
+    module = sys.modules[__name__]
+    try:
+        with monkeypatch.context() as patcher:
+            patcher.setattr(module, "LLMDispatcher", dispatcher)
+            patcher.setattr(module, "ProviderRule", rule)
+            with pytest.raises(RuntimeError, match="injected provider-rule setup failure"):
+                _make_dispatcher(fake_creds, tmp_path, SimpleNamespace(base_url="http://127.0.0.1:1"))
+        assert len(dispatchers) == 1
+        assert not dispatchers[0]._thread.is_alive(), "failed rule setup left dispatcher running"
+        assert dispatchers[0]._server.socket.fileno() == -1
+        assert not dispatchers[0].socket_path.exists()
+    finally:
+        for instance in dispatchers:
+            instance.shutdown()
+
+
+@pytest.mark.parametrize("fault", ["read", "decode"])
+def test_failed_token_read_closes_descriptor(monkeypatch, fault):
+    import errno
+    import sys
+    from types import SimpleNamespace
+
+    read_fd, write_fd = os.pipe()
+    try:
+        os.write(write_fd, b"\xff")
+    finally:
+        os.close(write_fd)
+
+    def read(fd, size):
+        raise OSError("injected token read failure")
+
+    try:
+        with monkeypatch.context() as patcher:
+            if fault == "read":
+                patcher.setattr(sys.modules[__name__], "os", SimpleNamespace(
+                    read=read, close=os.close,
+                ))
+            dispatcher = SimpleNamespace(allocate_worker=lambda **kwargs: ("worker", read_fd))
+            error = OSError if fault == "read" else UnicodeDecodeError
+            with pytest.raises(error):
+                _worker_token(dispatcher)
+        with pytest.raises(OSError) as error:
+            os.fstat(read_fd)
+        assert error.value.errno == errno.EBADF
+    finally:
+        try:
+            os.close(read_fd)
+        except OSError:
+            pass
