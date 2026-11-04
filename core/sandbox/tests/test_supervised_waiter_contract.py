@@ -77,12 +77,18 @@ def _launch_supervised_waiter(script: str, *, live_w_preclosed: bool = False):
     live_r, live_w = os.pipe()
     if live_w_preclosed:
         os.close(live_w)
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore", category=DeprecationWarning,
-            message=r".*fork.*may lead to deadlocks.*",
-        )
-        pid = os.fork()
+    try:
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", category=DeprecationWarning,
+                message=r".*fork.*may lead to deadlocks.*",
+            )
+            pid = os.fork()
+    except BaseException:
+        os.close(live_r)
+        if not live_w_preclosed:
+            os.close(live_w)
+        raise
     if pid == 0:
         try:
             if not live_w_preclosed:

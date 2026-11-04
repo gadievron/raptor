@@ -102,12 +102,17 @@ def _rules_for(resolve_overrides: dict[str, int],
         fn = seccomp._make_seccomp_preexec("default", **builder_kwargs)
     assert fn is not None
     r, w = os.pipe()
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore", category=DeprecationWarning,
-            message=r".*fork.*may lead to deadlocks.*",
-        )
-        pid = os.fork()
+    try:
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", category=DeprecationWarning,
+                message=r".*fork.*may lead to deadlocks.*",
+            )
+            pid = os.fork()
+    except BaseException:
+        os.close(r)
+        os.close(w)
+        raise
     if pid == 0:
         try:
             os.close(r)
