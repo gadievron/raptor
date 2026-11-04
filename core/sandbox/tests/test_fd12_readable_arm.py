@@ -22,6 +22,7 @@ stdout=/stderr=):
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import fcntl
 import os
 import socket
@@ -33,27 +34,19 @@ from pathlib import Path
 from unittest.mock import patch
 
 from core.sandbox.tests.capability import requires_userns
+from core.testing.fds import preserved_fds
 
 REPO = Path(__file__).resolve().parents[3]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 
-class _Fd1Swap:
+@contextmanager
+def _Fd1Swap(fd: int):
     """Temporarily install *fd* as this process's fd 1."""
-
-    def __init__(self, fd: int):
-        self.fd = fd
-
-    def __enter__(self):
-        self.saved = os.dup(1)
-        os.dup2(self.fd, 1)
-        return self
-
-    def __exit__(self, *exc):
-        os.dup2(self.saved, 1)
-        os.close(self.saved)
-        return False
+    with preserved_fds(1):
+        os.dup2(fd, 1)
+        yield
 
 
 @requires_userns

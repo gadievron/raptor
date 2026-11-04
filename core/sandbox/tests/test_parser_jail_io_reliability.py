@@ -163,5 +163,7 @@ def test_high_descriptor_worker_still_parses(monkeypatch):
             host="example.com", port=443,
         )
     finally:
-        jail.stop()
-        resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
+        try:
+            jail.stop()
+        finally:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))

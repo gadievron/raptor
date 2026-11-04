@@ -23,6 +23,7 @@ from types import FrameType
 
 import pytest
 
+from core.testing.fds import preserved_fds
 from core.testing.pipes import pipes_for_setup
 
 from core.inventory.builder import (
@@ -411,21 +412,24 @@ def test_init_inventory_worker_resets_sigterm() -> None:
     disposition — inherited parent handlers must never run inside an
     extractor worker."""
     prior = signal.getsignal(signal.SIGTERM)
+    # The initializer also unblocks SIGTERM; its mask is separate state.
+    prior_mask = (signal.pthread_sigmask(signal.SIG_BLOCK, set())
+                  if hasattr(signal, "pthread_sigmask") else None)
     # The initializer also detaches fd 1/2 — running it IN-PROCESS
     # would point the test runner's own stdio at /dev/null and
     # swallow everything pytest prints afterwards (including failure
     # reports under -s). Save and restore the real descriptors.
-    saved_out, saved_err = os.dup(1), os.dup(2)
     try:
-        signal.signal(signal.SIGTERM, _blocking_handler)
-        _init_inventory_worker(*_INIT_ARGS)
-        assert signal.getsignal(signal.SIGTERM) is signal.SIG_DFL
+        with preserved_fds(1, 2):
+            signal.signal(signal.SIGTERM, _blocking_handler)
+            _init_inventory_worker(*_INIT_ARGS)
+            assert signal.getsignal(signal.SIGTERM) is signal.SIG_DFL
     finally:
-        os.dup2(saved_out, 1)
-        os.dup2(saved_err, 2)
-        os.close(saved_out)
-        os.close(saved_err)
-        signal.signal(signal.SIGTERM, prior)
+        try:
+            signal.signal(signal.SIGTERM, prior)
+        finally:
+            if prior_mask is not None:
+                signal.pthread_sigmask(signal.SIG_SETMASK, prior_mask)
 
 
 def _write_to_inherited_stdio() -> None:

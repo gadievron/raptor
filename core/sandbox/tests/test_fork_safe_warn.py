@@ -11,6 +11,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from core.testing.fds import preserved_fds
+
 
 # Anchor the subprocess sys.path to the SAME tree these tests run from
 # rather than `os.environ["RAPTOR_DIR"]`. The env-var form silently
@@ -34,57 +36,37 @@ def _read_fd(fd: int) -> bytes:
     return b"".join(chunks)
 
 
-def test_warn_post_fork_writes_prefixed_line():
+def _capture_warn(message):
     from core.sandbox._fork_safe_warn import warn_post_fork
 
     r, w = os.pipe()
-    saved = os.dup(2)
     try:
-        os.dup2(w, 2)
-        os.close(w)
-        warn_post_fork(b"sandbox: landlock: SYS_create returned -1\n")
+        with preserved_fds(2):
+            os.dup2(w, 2)
+            os.close(w)
+            w = None
+            warn_post_fork(message)
+        return _read_fd(r)
     finally:
-        os.dup2(saved, 2)
-        os.close(saved)
+        try:
+            os.close(r)
+        finally:
+            if w is not None:
+                os.close(w)
 
-    out = _read_fd(r)
-    os.close(r)
+
+def test_warn_post_fork_writes_prefixed_line():
+    out = _capture_warn(b"sandbox: landlock: SYS_create returned -1\n")
     assert out == b"sandbox: landlock: SYS_create returned -1\n"
 
 
 def test_warn_post_fork_auto_prepends_prefix_when_missing():
-    from core.sandbox._fork_safe_warn import warn_post_fork
-
-    r, w = os.pipe()
-    saved = os.dup(2)
-    try:
-        os.dup2(w, 2)
-        os.close(w)
-        warn_post_fork(b"bare_event\n")
-    finally:
-        os.dup2(saved, 2)
-        os.close(saved)
-
-    out = _read_fd(r)
-    os.close(r)
+    out = _capture_warn(b"bare_event\n")
     assert out == b"sandbox: bare_event\n"
 
 
 def test_warn_post_fork_no_double_prefix():
-    from core.sandbox._fork_safe_warn import warn_post_fork
-
-    r, w = os.pipe()
-    saved = os.dup(2)
-    try:
-        os.dup2(w, 2)
-        os.close(w)
-        warn_post_fork(b"RAPTOR: legacy_prefixed\n")
-    finally:
-        os.dup2(saved, 2)
-        os.close(saved)
-
-    out = _read_fd(r)
-    os.close(r)
+    out = _capture_warn(b"RAPTOR: legacy_prefixed\n")
     # A legacy-branded message is rewritten: the framework
     # name must not reach the target-visible stream.
     assert out == b"sandbox: legacy_prefixed\n"
