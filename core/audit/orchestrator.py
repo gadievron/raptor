@@ -32430,7 +32430,10 @@ def _post_loop_receipt_rescue(
     backstop for receipts that did not reach (or survive to) the
     review-time gate. Fired rescues mutate the outcome in place; the
     corrective journal/audit-log passes that run afterwards propagate
-    the new status to every last-row-wins consumer.
+    the new status to every last-row-wins consumer. Only a receipt
+    matching the dismissed hypothesis can re-arm the verdict here:
+    verification has already finished, so an unverified cross-function
+    guarantee or a CWE family alone is no longer a reason to escalate.
 
     Returns the number of outcomes flipped.
     """
@@ -32521,6 +32524,7 @@ def _post_loop_receipt_rescue(
                 target_path=config.target_path,
                 out_dir=config.out_dir,
                 repo_trusted=config.repo_trusted,
+                require_receipt=True,
             )
         except Exception:
             logger.debug(

@@ -2746,6 +2746,91 @@ class TestPostLoopReceiptRescue:
             "cwe": "CWE-306",
         }
 
+    @pytest.mark.parametrize("mechanism,counter", [
+        (
+            "Buffer overread via missing bounds check on tmp parameter",
+            "The caller allocates sufficient space for tmp",
+        ),
+        (
+            "Null pointer dereference on task parameter",
+            "The caller always passes a non-NULL task",
+        ),
+        (
+            "CWE-362 race on shared state",
+            "The caller serializes access",
+        ),
+    ])
+    def test_unverified_counter_cannot_rearm_resolved_clean(
+        self, tmp_path: Path, mechanism: str, counter: str,
+    ):
+        """Verification resolves the early escalation; unrelated
+        post-loop receipts must not undo that decision (corpus:
+        esp_ssg_unref and __waiter_prio)."""
+        from core.audit.orchestrator import _post_loop_receipt_rescue
+        from core.audit.record import load_audit_log
+        from core.audit.refutation import rescue_self_refuted
+
+        config = self._setup(tmp_path)
+        outcome = self._clean_outcome()
+        outcome.hypotheses = [{
+            "mechanism": mechanism,
+            "confidence": "refuted",
+            "counter": counter,
+            "counter_scope": "cross_function",
+        }]
+        early = rescue_self_refuted(outcome)
+        assert early is not None
+        outcome.status = early.demote_to
+        outcome.body = f"[{early.gate}: {early.reason}]\n\nreviewed clean"
+        result = OrchestratorResult()
+        result.outcomes = [outcome]
+        result.suspicious = 1
+        _resolve_gate_demoted(result, config)
+        resolved = result.outcomes[0]
+        assert resolved.status == "clean"
+
+        flipped = _post_loop_receipt_rescue(
+            result, [self._receipt()], config,
+        )
+        assert flipped == 0
+        assert resolved.status == "clean"
+        assert result.clean == 1
+        assert result.suspicious == 0
+        assert not any(
+            row.get("action") == "refutation_gate"
+            for row in load_audit_log(config.out_dir)
+        )
+
+    def test_matching_race_receipt_still_rearms_clean(self, tmp_path: Path):
+        """Requiring a receipt must not skip structural matches for
+        hypotheses also covered by the early CWE-only escalation."""
+        from core.audit.orchestrator import _post_loop_receipt_rescue
+        from core.audit.record import load_audit_log
+
+        config = self._setup(tmp_path)
+        outcome = self._clean_outcome()
+        outcome.hypotheses = [{
+            "mechanism": "CWE-362 shared_writer_race on output",
+            "confidence": "refuted",
+            "counter": "The caller holds a lock",
+            "counter_scope": "cross_function",
+        }]
+        result = OrchestratorResult()
+        result.outcomes = [outcome]
+        result.clean = 1
+        flipped = _post_loop_receipt_rescue(
+            result, [self._receipt("shared_writer_race")], config,
+        )
+        assert flipped == 1
+        assert outcome.status == "suspicious"
+        assert result.clean == 0
+        assert result.suspicious == 1
+        rows = [
+            row for row in load_audit_log(config.out_dir)
+            if row.get("action") == "refutation_gate"
+        ]
+        assert "active shared_writer_race receipt" in rows[0]["reason"]
+
     def test_strong_stem_floors_without_call_overlap(
         self, tmp_path: Path,
     ):
