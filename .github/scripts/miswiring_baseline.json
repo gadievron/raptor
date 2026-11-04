@@ -118,6 +118,9 @@
   "artifacts:orphan_reader::layer0-findings.json": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },
+  "artifacts:orphan_reader::license_identifications.json": {
+   "note": "Committed source corpus at packages/sca/data/license_identifications.json. sbom_license_evidence.py reads versioned license-identification rules shipped with RAPTOR; this is not a run artifact and has no runtime producer."
+  },
   "artifacts:orphan_reader::lifecycle.log": {
    "note": "externally produced input: written by libexec/raptor-run-lifecycle (shell), read by run tooling"
   },
