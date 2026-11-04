@@ -1657,8 +1657,15 @@ def _trailing_span_members() -> dict[tuple[str, str], dict]:
     import hashlib
 
     members: dict[tuple[str, str], dict] = {}
+    # Structural rules depend only on pattern text and flags. Repeated
+    # call sites still receive their own keys, digests and coordinates.
+    rules: dict[tuple[str, int], tuple[bool, bool]] = {}
     for site in _all_runtime_sites():
-        rule_c, rule_r, _pairs, _entries = _site_rules(site)
+        pattern_key = (site.pattern, site.flags)
+        if pattern_key not in rules:
+            rule_c, rule_r, _pairs, _entries = _site_rules(site)
+            rules[pattern_key] = (rule_c, rule_r)
+        rule_c, rule_r = rules[pattern_key]
         if not (rule_c or rule_r):
             continue
         digest = hashlib.sha256(
