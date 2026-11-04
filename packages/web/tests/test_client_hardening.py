@@ -38,8 +38,12 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 @contextmanager
 def _server(handler_class):
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler_class)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    try:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+    except BaseException:
+        server.server_close()
+        raise
     try:
         yield server
     finally:

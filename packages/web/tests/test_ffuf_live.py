@@ -95,12 +95,17 @@ class _RecordingHandler(BaseHTTPRequestHandler):
 def fixture_server():
     _RecordingHandler.records = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), _RecordingHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    try:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+    except BaseException:
+        server.server_close()
+        raise
     try:
         yield f"http://127.0.0.1:{server.server_port}", _RecordingHandler.records
     finally:
         server.shutdown()
+        server.server_close()
         thread.join(timeout=5)
 
 
