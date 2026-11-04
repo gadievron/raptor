@@ -1181,8 +1181,12 @@ def _load_jsonl_stream(path: Path) -> tuple[list[dict], bool]:
 
 
 def _parse_jsonl_line(line: bytes, out: list[dict]) -> None:
+    # Bound the original record bytes, matching the incomplete-line guard.
+    # Stripping first made admission depend on how reads split the line.
+    if len(line) > _MAX_EVENT_LINE_BYTES:
+        return
     line = line.strip()
-    if not line or len(line) > _MAX_EVENT_LINE_BYTES:
+    if not line:
         return
     try:
         record = json.loads(line.decode("utf-8", errors="replace"))
