@@ -32,6 +32,7 @@ import httpx
 import pytest
 
 import core.llm.dispatcher.server as dispatcher_server
+from core.sandbox.tests.socket_server import SocketServer
 from core.llm.dispatcher.auth import CredentialStore, ProviderRule
 from core.llm.dispatcher.server import (
     _ORPHAN_POLL_INTERVAL_DEFAULT_S,
@@ -108,59 +109,20 @@ class _CaptiveUpstream:
         self.disconnect_after_s: float | None = None
         self.stall_outcome: str | None = None
         self._stop = threading.Event()
-        self._lock = threading.Lock()
-        self._clients: set[socket.socket] = set()
-        self._threads: list[threading.Thread] = []
-
         self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._listener.bind(("127.0.0.1", 0))
-        self._listener.listen(8)
-        self._listener.settimeout(0.1)
-        self.base_url = f"http://127.0.0.1:{self._listener.getsockname()[1]}"
-        self._accept_thread = threading.Thread(target=self._accept_loop, daemon=True)
-        self._accept_thread.start()
+        try:
+            self._listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self._listener.bind(("127.0.0.1", 0))
+            self._listener.listen(8)
+            self.base_url = f"http://127.0.0.1:{self._listener.getsockname()[1]}"
+            self._server = SocketServer(self._listener, self._handle)
+        except BaseException:
+            self._listener.close()
+            raise
 
     def shutdown(self) -> None:
         self._stop.set()
-        with contextlib.suppress(OSError):
-            self._listener.shutdown(socket.SHUT_RDWR)
-        with contextlib.suppress(OSError):
-            self._listener.close()
-        self._accept_thread.join(timeout=2)
-        with self._lock:
-            clients = list(self._clients)
-        # Wake reads/select without invalidating descriptors while handlers use them.
-        for conn in clients:
-            with contextlib.suppress(OSError):
-                conn.shutdown(socket.SHUT_RDWR)
-        for thread in self._threads:
-            thread.join(timeout=2)
-        for conn in clients:
-            with contextlib.suppress(OSError):
-                conn.close()
-        alive = [t.name for t in (self._accept_thread, *self._threads) if t.is_alive()]
-        if alive:
-            raise RuntimeError(f"Captive upstream threads did not stop: {alive}")
-
-    def _accept_loop(self) -> None:
-        while not self._stop.is_set():
-            try:
-                conn, _addr = self._listener.accept()
-            except TimeoutError:
-                continue
-            except OSError:
-                return
-            if self._stop.is_set():
-                conn.close()
-                return
-            thread = threading.Thread(
-                target=self._handle, args=(conn,), daemon=True,
-            )
-            with self._lock:
-                self._clients.add(conn)
-                self._threads.append(thread)
-            thread.start()
+        self._server.close()
 
     @staticmethod
     def _read_request(conn: socket.socket) -> bytes | None:
@@ -229,16 +191,15 @@ class _CaptiveUpstream:
         finally:
             with contextlib.suppress(OSError):
                 conn.close()
-            with self._lock:
-                self._clients.discard(conn)
 
 
 class TestCaptiveUpstreamShutdown:
     @staticmethod
     def _assert_stopped(upstream):
-        assert not upstream._accept_thread.is_alive()
-        assert all(not t.is_alive() for t in upstream._threads)
-        assert not upstream._clients
+        server = upstream._server
+        assert not server._accept_thread.is_alive()
+        assert all(not t.is_alive() for t in server._threads)
+        assert not server._clients
 
     def test_idle_listener_shutdown_is_idempotent(self):
         upstream = _CaptiveUpstream("json_quick")

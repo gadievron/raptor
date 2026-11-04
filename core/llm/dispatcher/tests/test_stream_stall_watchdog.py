@@ -29,6 +29,9 @@ Hermetic — captive loopback upstream, no LLM, no network.
 
 from __future__ import annotations
 
+from core.sandbox.tests.socket_server import SocketServer
+from contextlib import ExitStack
+
 import contextlib
 import json
 import os
@@ -87,28 +90,26 @@ class _WedgedUpstream:
         self.quiet_s = quiet_s
         self.connections = 0
         self._lock = threading.Lock()
+        self._stop = threading.Event()
         self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._listener.bind(("127.0.0.1", 0))
-        self._listener.listen(8)
-        self.base_url = f"http://127.0.0.1:{self._listener.getsockname()[1]}"
-        threading.Thread(target=self._accept_loop, daemon=True).start()
+        try:
+            self._listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self._listener.bind(("127.0.0.1", 0))
+            self._listener.listen(8)
+            self.base_url = f"http://127.0.0.1:{self._listener.getsockname()[1]}"
+            self._server = SocketServer(self._listener, self._serve)
+        except BaseException:
+            self._listener.close()
+            raise
 
     def shutdown(self) -> None:
-        with contextlib.suppress(OSError):
-            self._listener.close()
+        self._stop.set()
+        self._server.close()
 
-    def _accept_loop(self) -> None:
-        while True:
-            try:
-                conn, _addr = self._listener.accept()
-            except OSError:
-                return
-            with self._lock:
-                self.connections += 1
-            threading.Thread(
-                target=self._handle, args=(conn,), daemon=True,
-            ).start()
+    def _serve(self, conn: socket.socket) -> None:
+        with self._lock:
+            self.connections += 1
+        self._handle(conn)
 
     def _handle(self, conn: socket.socket) -> None:
         try:
@@ -137,7 +138,8 @@ class _WedgedUpstream:
             if self.mode in ("slow_start", "slow_body"):
                 if self.mode == "slow_body":
                     conn.sendall(sse_head)  # head flushes immediately
-                time.sleep(self.quiet_s)    # silent slow start
+                if self._stop.wait(self.quiet_s):  # Silent until complete or stopped.
+                    return
                 if self.mode == "slow_start":
                     conn.sendall(sse_head)  # head withheld too
                 conn.sendall(
@@ -149,7 +151,7 @@ class _WedgedUpstream:
             if self.mode == "sse_wedge":
                 conn.sendall(sse_head + _chunked(_SSE_CHUNK_ONE))
             # Wedge: hold the connection open, send nothing more.
-            time.sleep(self.wedge_s)
+            self._stop.wait(self.wedge_s)
         except OSError:
             pass
         finally:
@@ -634,9 +636,11 @@ class TestWatchdogTrips:
         re-sending a mid-generation request double-bills)."""
         monkeypatch.setenv(_STALL_ENV, "5")
         monkeypatch.setenv(_FIRST_EVENT_ENV, "30")
-        upstream = _WedgedUpstream("sse_wedge", wedge_s=30.0)
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _WedgedUpstream("sse_wedge", wedge_s=30.0)
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token = _worker_token(d)
             transport = httpx.HTTPTransport(uds=str(d.socket_path))
             received = b""
@@ -665,9 +669,6 @@ class TestWatchdogTrips:
             # the stall phrasing (sentence case, never ALL-CAPS).
             assert b"stream stall" in received
             assert upstream.connections == 1  # no transparent retry
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_head_wedge_trips_and_is_not_retried(
         self, fake_creds, tmp_path, monkeypatch,
@@ -678,9 +679,11 @@ class TestWatchdogTrips:
         retry — the request may already be generating upstream."""
         monkeypatch.setenv(_STALL_ENV, "5")
         monkeypatch.setenv(_FIRST_EVENT_ENV, "5")
-        upstream = _WedgedUpstream("head_wedge", wedge_s=30.0)
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _WedgedUpstream("head_wedge", wedge_s=30.0)
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token = _worker_token(d)
             transport = httpx.HTTPTransport(uds=str(d.socket_path))
             start = time.monotonic()
@@ -703,9 +706,6 @@ class TestWatchdogTrips:
             assert errors[0]["stall_abort"] is False
             assert upstream.connections == 1  # retry-excluded
             assert not _audit_events(d, "request.retry")
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_slow_start_stream_survives_past_stall_window(
         self, fake_creds, tmp_path, monkeypatch,
@@ -716,9 +716,11 @@ class TestWatchdogTrips:
         budget — no trip, no error row, no retry."""
         monkeypatch.setenv(_STALL_ENV, "5")
         monkeypatch.setenv(_FIRST_EVENT_ENV, "30")
-        upstream = _WedgedUpstream("slow_start", quiet_s=8.0)
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _WedgedUpstream("slow_start", quiet_s=8.0)
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token = _worker_token(d)
             transport = httpx.HTTPTransport(uds=str(d.socket_path))
             received = b""
@@ -737,9 +739,6 @@ class TestWatchdogTrips:
             time.sleep(1.0)  # outlast audit write + watcher poll
             assert not _audit_events(d, "request.error")
             assert upstream.connections == 1
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
     def test_slow_head_start_survives_past_stall_window(
         self, fake_creds, tmp_path, monkeypatch,
@@ -752,9 +751,11 @@ class TestWatchdogTrips:
         alone."""
         monkeypatch.setenv(_STALL_ENV, "5")
         monkeypatch.setenv(_FIRST_EVENT_ENV, "30")
-        upstream = _WedgedUpstream("slow_body", quiet_s=8.0)
-        d = _make_dispatcher(fake_creds, tmp_path, upstream)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _WedgedUpstream("slow_body", quiet_s=8.0)
+            cleanup.callback(upstream.shutdown)
+            d = _make_dispatcher(fake_creds, tmp_path, upstream)
+            cleanup.callback(d.shutdown)
             token = _worker_token(d)
             transport = httpx.HTTPTransport(uds=str(d.socket_path))
             received = b""
@@ -773,9 +774,6 @@ class TestWatchdogTrips:
             time.sleep(1.0)  # outlast audit write + watcher poll
             assert not _audit_events(d, "request.error")
             assert upstream.connections == 1
-        finally:
-            upstream.shutdown()
-            d.shutdown()
 
 
 class _FakeNetStream:
