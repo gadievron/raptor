@@ -11,6 +11,33 @@ import re
 
 logger = logging.getLogger(__name__)
 
+
+def receipt_override(
+    outcome, *, config, receipts, detector_findings=None,
+    pre_evidence=None, source=None,
+):
+    """Evaluate the post-verification receipt decision without mutating
+    the verdict. Shared by orchestration and offline regression replay.
+    Callers supply the same-function receipts and captured source; this
+    function does not dispatch tools or call an LLM.
+    """
+    from .refutation import rescue_self_refuted
+
+    if outcome.status != "clean":
+        return None
+    verdict = rescue_self_refuted(
+        outcome, config=config, negative_space=receipts,
+        detector_findings=detector_findings, pre_evidence=pre_evidence,
+        source=source, target_path=config.target_path,
+        out_dir=config.out_dir, repo_trusted=config.repo_trusted,
+        require_receipt=True,
+    )
+    if verdict is None and receipts:
+        verdict = _receipt_corroborated_hypothesis(
+            outcome, receipts, config=config, source=source,
+        )
+    return verdict
+
 # Structural negative-space checkers whose receipts are precise enough
 # to outrank an unverified self-refutation (the same families the
 # review-time gate consumes via ctx["negative_space"]).

@@ -32213,7 +32213,7 @@ def _promote_outcome(
 # Compatibility imports keep existing callers working while receipt policy
 # lives outside the orchestration module.
 from .receipt_resolution import (
-    _receipt_corroborated_hypothesis,
+    _receipt_corroborated_hypothesis as _receipt_corroborated_hypothesis,
     _STRUCTURAL_RECEIPT_CHECKS,
 )
 
@@ -32263,7 +32263,7 @@ def _post_loop_receipt_rescue(
     ):
         return 0
 
-    from .refutation import rescue_self_refuted
+    from .receipt_resolution import receipt_override
 
     # Keyed by line as well: a file can hold several same-named
     # functions (Go methods named after their interface — five
@@ -32318,17 +32318,13 @@ def _post_loop_receipt_rescue(
             # whose synthetic context lacks the injections — the
             # receipts themselves are deterministic, so this pass
             # re-applies them to whatever verdict is current.
-            rv = rescue_self_refuted(
+            rv = receipt_override(
                 outcome,
                 config=config,
-                negative_space=receipts or [],
+                receipts=receipts or [],
                 detector_findings=detectors or None,
                 pre_evidence=pre_evidence,
                 source=_rescue_src or None,
-                target_path=config.target_path,
-                out_dir=config.out_dir,
-                repo_trusted=config.repo_trusted,
-                require_receipt=True,
             )
         except Exception:
             logger.debug(
@@ -32336,11 +32332,6 @@ def _post_loop_receipt_rescue(
                 outcome.file, outcome.function, exc_info=True,
             )
             continue
-        if rv is None and receipts:
-            rv = _receipt_corroborated_hypothesis(
-                outcome, receipts,
-                config=config, source=_rescue_src or None,
-            )
         if rv is None:
             continue
         append_audit_log(config.out_dir, {
