@@ -386,3 +386,24 @@ def test_agentic_budget_forwarding_respects_compiler_opt_in(enabled, disabled, e
         'semgrep_cmd': command,
     })
     assert command == expected
+
+
+def test_candidates_sidecar_is_separate_and_cleared_on_clean_run(tmp_path, monkeypatch, capsys):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.c").write_text("int a;\n")
+    out = tmp_path / "scan"
+    out.mkdir()
+    cs = _load_cs()
+    result = cs.CompilerScanResult(ok=True, tus_total=1, tus_analyzed=1, review_candidates=[{
+        "rule_id": "-Wstrict-aliasing", "file": "a.c", "line": 1,
+        "message": "might break aliasing", "compiler": "gcc", "cwe": "CWE-843", "tu": "a.c"}])
+    monkeypatch.setattr(cs, "scan_target", lambda *a, **kw: result)
+    paths = _scanner.run_compiler_scan_stage(repo, out)
+    assert paths == [str(out / "compiler.sarif")]
+    sidecar = out / "compiler-review-candidates.json"
+    assert len(json.loads(sidecar.read_text())["candidates"]) == 1
+    assert "review candidate" in capsys.readouterr().err
+    result.review_candidates.clear()
+    _scanner.run_compiler_scan_stage(repo, out)
+    assert json.loads(sidecar.read_text())["candidates"] == []

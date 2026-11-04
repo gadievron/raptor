@@ -66,6 +66,8 @@ _REPO_ROOT = os.environ["RAPTOR_DIR"]
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
+from core.detectors.compiler_families import compiler_diagnostic_is_candidate
+
 from core.audit.compiler_sweep import (
     _COMPILE_TIMEOUT_S,
     _MAX_CLOSURE_FILE_BYTES,
@@ -163,7 +165,7 @@ def _keep_diag_id(diag_id: str) -> bool:
     compiler warnings outside the family map (``-Wunused-variable``
     etc.) are style noise for a security pipeline and are dropped.
     """
-    if not diag_id:
+    if not diag_id or compiler_diagnostic_is_candidate(diag_id):
         return False
     # This frontend warning also fires in dead arms. It is input to the
     # corroborating detector, never a scan finding by itself.
@@ -224,6 +226,7 @@ class TuDiagnostics:
     suppression_witness: str = ""
     suppression_unvetted: str = ""
     stack_return_candidates: list[dict[str, Any]] = field(default_factory=list)
+    review_candidates: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _rel_under_target(diag_file: str, target_path: Path, tu_dir: Path) -> str | None:
@@ -308,13 +311,15 @@ def _suppression_vet(
     )
 
 
-def _scan_diagnostics(raw, target_path: Path, full_path: Path, compiler_name: str, rel_path: str):
+def _scan_diagnostics(raw, target_path: Path, full_path: Path, compiler_name: str, rel_path: str,
+                      *, review_candidates: bool = False):
     kept: list[dict[str, Any]] = []
     for d in raw:
         if "error" in str(d.get("kind", "")):
             continue
         diag_id = d.get("id") or ""
-        if not _keep_diag_id(diag_id):
+        candidate = compiler_diagnostic_is_candidate(diag_id)
+        if candidate != review_candidates or (not candidate and not _keep_diag_id(diag_id)):
             continue
         rel = _rel_under_target(
             d.get("file", ""), target_path, full_path.parent,
@@ -406,6 +411,8 @@ def analyze_tu(
             stack_return_candidates=[d for d in record["diags"]
                                      if compiler_name == "gcc" and d.get("id") == STACK_RETURN_ID
                                      and d.get("kind") == "warning"],
+            review_candidates=_scan_diagnostics(record["diags"], target_path, full_path,
+                                                 compiler_name, rel_path, review_candidates=True),
         )
 
     try:
@@ -479,6 +486,7 @@ class CompilerScanResult:
     detector_limitations: list[dict[str, str]] = field(default_factory=list)
     tus_skipped_budget: int = 0  # never submitted before the analysis deadline
     budget_exhausted: bool = False
+    review_candidates: list[dict[str, Any]] = field(default_factory=list)
 
     def summary_line(self) -> str:
         """One-line operator-facing summary (LOUD about skips)."""
@@ -488,6 +496,8 @@ class CompilerScanResult:
                 f"{self.tus_analyzed}/{self.tus_total} TU(s)"
             )
         ]
+        if self.review_candidates:
+            parts.append(f"{len(self.review_candidates)} compiler review candidate(s) require corroboration")
         if self.tus_failed:
             parts.append(f"{self.tus_failed} TU(s) failed to compile")
         if self.tus_skipped_cap:
@@ -583,6 +593,7 @@ def scan_target(
     include_dirs_memo = setup.include_dirs_memo
     budget = WorkBudget(max_seconds)
     sandbox_run = budget.runner(sandbox_run)
+    seen_candidates: set[tuple[str, str, int]] = set()
     seen: set[tuple[str, str, int]] = set()
     workers = max(1, min(max_workers, len(tus)))
     per_tu: dict[str, TuDiagnostics] = {}
@@ -746,6 +757,11 @@ def scan_target(
                 "tu": rel, "reason": _relativise(
                     tu.suppression_unvetted, target_path),
             })
+        for candidate in tu.review_candidates:
+            key = (candidate["rule_id"], candidate["file"], candidate["line"])
+            if key not in seen_candidates:
+                seen_candidates.add(key)
+                result.review_candidates.append(candidate)
         for diag in tu.diagnostics:
             # Same header pulled into many TUs repeats its diagnostics —
             # dedup on (rule, file, line).
@@ -776,6 +792,8 @@ def to_sarif(result: CompilerScanResult) -> dict[str, Any]:
 
     for f in result.findings:
         rule_id = f["rule_id"]
+        if compiler_diagnostic_is_candidate(rule_id):
+            continue
         cwe = f.get("cwe")
         props: dict[str, Any] = {}
         if cwe:
@@ -835,12 +853,25 @@ def to_sarif(result: CompilerScanResult) -> dict[str, Any]:
         _limitation_note(item["tu"], item.get("detector", "memcpy_overlap"), item["reason"])
         for item in result.detector_limitations
     ]
+    if result.review_candidates:
+        notifications.append(_limitation_note("", "review_candidates",
+            f"{len(result.review_candidates)} compiler review candidate(s) require independent corroboration; "
+            "see compiler-review-candidates.json"))
     if notifications:
         run["invocations"] = [{
             "executionSuccessful": True,
             "toolExecutionNotifications": notifications,
         }]
     return emit.document([run], schema_uri=_SARIF_SCHEMA_URI)
+
+
+def review_candidates_report(result: CompilerScanResult) -> dict[str, Any]:
+    """Operator-only data, deliberately excluded from automatic finding imports."""
+    return {"schema_version": 1, "kind": "compiler-review-candidates",
+            "candidates": [{"status": "needs_review", "family_hint": c.get("cwe"),
+                            "rule_id": c["rule_id"], "file": c["file"], "line": c["line"],
+                            "message": c["message"], "compiler": c["compiler"]}
+                           for c in result.review_candidates]}
 
 
 def _relativise(text: str, target_path: Path) -> str:
