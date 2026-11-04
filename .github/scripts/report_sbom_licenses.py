@@ -197,6 +197,9 @@ def collect(audit, image_digest):
                     counts = [dependency_notices.get(key) for key in ("candidates", "captured", "metadata_only", "unavailable")]
                     if any(type(value) is not int or value < 0 or value > 5000 for value in counts) or counts[0] != sum(counts[1:]):
                         raise ValueError("inconsistent native dependency notice counts")
+                    distributor = dependency_notices.get("distributor_notices", 0)
+                    if type(distributor) is not int or not 0 <= distributor <= counts[1]:
+                        raise ValueError("invalid distributor notice count")
                 toolchain = receipt.get("toolchain_notices")
                 if toolchain is not None:
                     if not isinstance(toolchain, dict) or toolchain.get("status") not in {"unavailable", "release_library_notices_captured"}:
@@ -339,13 +342,13 @@ def markdown(report):
     if dependencies:
         lines += ["### Native dependency notice candidates", "",
                   "These are external source-lock entries, including build, development and other-platform dependencies. They are not confirmed installed components.", "",
-                  "| Tool | External entries | With original notice candidates | Metadata only | Unavailable |",
-                  "| --- | ---: | ---: | ---: | ---: |"]
+                  "| Tool | External entries | Source notice candidates | Distributor notices | Metadata only | Unavailable |",
+                  "| --- | ---: | ---: | ---: | ---: | ---: |"]
         for row in dependencies:
             counts = row["dependency_notices"]
             lines.append("| " + " | ".join(_cell(value) for value in (
-                row.get("name", "unknown"), counts["candidates"], counts["captured"], counts["metadata_only"], counts["unavailable"])) + " |")
-        lines += ["", "The collected source inventory records package names, versions, archive checksums, publisher license declarations and notice origins. Runtime membership and Rust standard-library completeness require separate evidence.", ""]
+                row.get("name", "unknown"), counts["candidates"], counts["captured"] - counts.get("distributor_notices", 0), counts.get("distributor_notices", 0), counts["metadata_only"], counts["unavailable"])) + " |")
+        lines += ["", "The collected source inventory records package names, versions, archive checksums, publisher license declarations and notice origins. Distributor notices remain distinct from upstream-authored text and include their source checksum or source-file matching evidence. Runtime membership and Rust standard-library completeness require separate evidence.", ""]
     toolchains = [row for row in report.native_notice_collections if row.get("toolchain_notices")]
     if toolchains:
         lines += ["### Rust standard-library notice candidates", "",
