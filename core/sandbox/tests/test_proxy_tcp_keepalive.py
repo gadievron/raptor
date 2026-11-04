@@ -10,6 +10,7 @@ skipped.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 import socket
 
 import pytest
@@ -35,16 +36,17 @@ class _FakeWriter:
 def tcp_pair():
     """A connected AF_INET socket pair (real kernel sockets — the
     keepalive options only make sense on those)."""
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.bind(("127.0.0.1", 0))
-    server.listen(1)
-    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    client.connect(server.getsockname())
-    accepted, _ = server.accept()
-    yield client, accepted
-    client.close()
-    accepted.close()
-    server.close()
+    with ExitStack() as cleanup:
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        cleanup.callback(server.close)
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        cleanup.callback(client.close)
+        client.connect(server.getsockname())
+        accepted, _ = server.accept()
+        cleanup.callback(accepted.close)
+        yield client, accepted
 
 
 def test_enables_so_keepalive_on_tcp(tcp_pair):
@@ -72,13 +74,12 @@ def test_sets_idle_time_on_linux(tcp_pair):
 def test_unix_socket_leg_is_skipped():
     """Sandbox lanes ride AF_UNIX — no middlebox, no keepalive, and
     the TCP options would error there."""
-    left, right = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
-    try:
+    with ExitStack() as cleanup:
+        left, right = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        cleanup.callback(right.close)
+        cleanup.callback(left.close)
         _enable_tcp_keepalive(_FakeWriter(left))  # must not raise
         assert left.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE) == 0
-    finally:
-        left.close()
-        right.close()
 
 
 def test_missing_socket_info_is_tolerated():

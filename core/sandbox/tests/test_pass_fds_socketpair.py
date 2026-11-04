@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import shutil
+from contextlib import ExitStack
 import socket
 import subprocess
 import sys
@@ -66,17 +67,16 @@ def pathname_socket_dir(tmp_path: Path) -> Iterator[Path]:
 class TestQualifyingShape:
     @_needs_peercred
     def test_own_socketpair_half_qualifies(self):
-        a, b = socket.socketpair()
-        try:
+        with ExitStack() as cleanup:
+            a, b = socket.socketpair()
+            cleanup.callback(b.close)
+            cleanup.callback(a.close)
             assert _anon_socketpair_problem(a.fileno()) is None
             assert _anon_socketpair_problem(b.fileno()) is None
             # Inspection is via a dup-wrapped socket — the caller's
             # descriptor keeps its state and stays usable.
             a.send(b"ping")
             assert b.recv(4) == b"ping"
-        finally:
-            a.close()
-            b.close()
 
 
 class TestRefusedShapes:
@@ -90,14 +90,13 @@ class TestRefusedShapes:
             s.close()
 
     def test_datagram_pair_refused(self):
-        a, b = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
-        try:
+        with ExitStack() as cleanup:
+            a, b = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+            cleanup.callback(b.close)
+            cleanup.callback(a.close)
             problem = _anon_socketpair_problem(a.fileno())
             assert problem is not None
             assert "SOCK_STREAM" in problem
-        finally:
-            a.close()
-            b.close()
 
     def test_unconnected_unix_socket_refused(self):
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

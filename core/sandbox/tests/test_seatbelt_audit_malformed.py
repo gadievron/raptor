@@ -1,5 +1,6 @@
 """A malformed log line must not suppress subsequent audit evidence."""
 
+from contextlib import ExitStack
 import io
 import json
 import socket
@@ -64,15 +65,17 @@ def test_warmup_continues_after_malformed_entries(tmp_path, monkeypatch, malform
     warmup = SimpleNamespace(pid=4242, wait=lambda timeout: 0)
     monkeypatch.setattr(probes, "_find_sandbox_binary", lambda name: sys.executable)
     monkeypatch.setattr(seatbelt_audit.subprocess, "Popen", lambda *a, **kw: warmup)
-    reader, writer = socket.socketpair()
-    reader.settimeout(5)
-    writer.settimeout(5)
+    with ExitStack() as cleanup:
+        reader, writer = socket.socketpair()
+        cleanup.callback(writer.close)
+        cleanup.callback(reader.close)
+        reader.settimeout(5)
+        writer.settimeout(5)
 
-    def send_lines():
-        writer.sendall(("\n".join(malformed_lines + [json.dumps(entry())]) + "\n").encode())
-        writer.shutdown(socket.SHUT_WR)
+        def send_lines():
+            writer.sendall(("\n".join(malformed_lines + [json.dumps(entry())]) + "\n").encode())
+            writer.shutdown(socket.SHUT_WR)
 
-    try:
         # Drain concurrently: the malformed payload can exceed the
         # socket buffer (notably on macOS), blocking a prefilled sendall.
         with ThreadPoolExecutor(max_workers=1) as executor:
@@ -82,6 +85,3 @@ def test_warmup_continues_after_malformed_entries(tmp_path, monkeypatch, malform
                 assert streamer._warm_up_until_attached() is True
                 assert stream.read() == ""
             sent.result(timeout=5)
-    finally:
-        reader.close()
-        writer.close()
