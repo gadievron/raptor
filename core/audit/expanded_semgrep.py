@@ -41,6 +41,7 @@ import os
 import re
 import tempfile
 import threading
+from time import monotonic
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -395,6 +396,10 @@ def build_expanded_corpus(
     max_tus: int = _AUGMENT_FILE_CAP,
     macro_config: Any = None,
     out_dir: Path | None = None,
+    files: tuple[str, ...] | None = None,
+    timeout: float | None = None,
+    preprocessor: tuple[str, ...] | None = None,
+    max_bytes: int | None = None,
 ) -> ExpandedCorpus:
     """Expand macro-heavy TUs into *scratch_root* for a corpus scan.
 
@@ -404,7 +409,13 @@ def build_expanded_corpus(
     Expanded copies preserve the relative layout and suffix so semgrep
     language detection and result paths stay predictable.  Best-effort
     per file; preprocess failures are counted, never raised.
+
+    Explicit *files* bypass inventory discovery and the uppercase macro gate;
+    the caller supplies its eligible translation units. Optional time and byte
+    budgets bound preparation, and *preprocessor* pins a trusted argv prefix.
+    Existing discovery callers retain their normal tool selection and limits.
     """
+    deadline = monotonic() + timeout if timeout is not None else None
     target_path = Path(target_path)
     scratch_root = Path(scratch_root)
     scratch_root.mkdir(parents=True, exist_ok=True)
@@ -425,31 +436,38 @@ def build_expanded_corpus(
     corpus = ExpandedCorpus(root=scratch_root)
 
     budget = max_tus
-    for rel in _iter_candidate_tus(target_path):
+    stored_bytes = 0
+    candidates = _iter_candidate_tus(target_path) if files is None else sorted(set(files))
+    for rel in candidates:
         resolved = safe_join(target_path, rel)
-        if resolved is None or not resolved.is_file():
+        if (Path(rel).is_absolute() or Path(rel).suffix not in _TU_SUFFIXES
+                or resolved is None or not resolved.is_file()):
+            if files is not None:
+                corpus.failed += 1
             continue
-        # Capped like every migrated core/audit sibling: the
-        # candidate gate buffered whole files, so a planted
-        # multi-hundred-MB "source" cost its full size in peak
-        # memory before being screened. An oversized file is not a
-        # sensible expansion candidate — skip it.
-        got = read_text_capped(resolved, errors="replace")
-        if got is None:
-            continue
-        raw, truncated = got
-        if truncated or not has_macro_invocation(raw):
-            continue
+        # Explicit inputs have already been selected by their caller. Do not
+        # reapply the uppercase heuristic: lowercase/header aliases matter too.
+        if files is None:
+            got = read_text_capped(resolved, errors="replace")
+            if got is None:
+                continue
+            raw, truncated = got
+            if truncated or not has_macro_invocation(raw):
+                continue
         corpus.candidates_total += 1
-        if budget <= 0:
+        remaining = deadline - monotonic() if deadline is not None else None
+        if budget <= 0 or (remaining is not None and remaining <= 0):
             corpus.skipped_budget += 1
             continue
         budget -= 1
+        options: dict[str, Any] = {}
+        if remaining is not None:
+            options["timeout"] = remaining
+        if preprocessor is not None:
+            options["preprocessor"] = preprocessor
         view = expand_translation_unit(
-            target_path=target_path,
-            file_path=rel,
-            macro_config=macro_config,
-            out_dir=out_dir,
+            target_path=target_path, file_path=rel,
+            macro_config=macro_config, out_dir=out_dir, **options,
         )
         if not view.ok:
             corpus.failed += 1
@@ -457,6 +475,10 @@ def build_expanded_corpus(
                 "expanded corpus: %s failed to preprocess: %s",
                 rel, "; ".join(str(e) for e in view.errors),
             )
+            continue
+        view_bytes = len(view.text.encode("utf-8", errors="replace"))
+        if max_bytes is not None and stored_bytes + view_bytes > max_bytes:
+            corpus.skipped_budget += 1
             continue
         dest = scratch_root / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -472,6 +494,7 @@ def build_expanded_corpus(
             corpus.failed += 1
             logger.debug("expanded corpus: could not write %s: %s", dest, exc)
             continue
+        stored_bytes += view_bytes
         corpus.expanded += 1
         corpus.tus[rel] = ExpandedTu(original_rel=rel, view=view)
 

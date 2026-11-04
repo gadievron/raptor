@@ -381,19 +381,25 @@ findings can be excluded via `--exclude-dir` globs.
 
 ### Overlapping memory copies
 
-With `--compiler-scan`, C files containing written `memcpy` calls also receive
-an overlap check when Semgrep and a GCC analyzer supporting
+With `--compiler-scan`, C files containing direct or macro-wrapped `memcpy`
+calls also receive an overlap check when Semgrep and a GCC analyzer supporting
 `-Wanalyzer-overlapping-buffers` (GCC 14 or newer) are available. Candidate
 matches select files; only compiler overlap warnings become findings. Candidate
 discovery scans only the capped C files whose ordinary compiler analysis
 succeeded, rather than scanning the entire project. Large file lists are batched
-within the same 30-second candidate budget.
+within a shared 30-second raw-scan budget. Files not selected by the direct
+rule are checked together using preprocessor-expanded views, including lowercase
+wrappers and aliases defined in headers. This fallback reuses the same compiler,
+expands at most 50 files, and retains at most 32 MiB of expanded text. It shares
+an overall 60-second candidate deadline; unavailable or unfinished views produce
+coverage limitations. Matches originating only in header bodies are excluded.
 
-The check adds at most one compiler invocation per selected translation unit,
-plus one capability probe per scan. It shares the TU cap and worker limit and
+The fallback adds one preprocessor invocation per attempted expansion. Selected
+files receive at most one supplemental analyzer invocation each, plus one
+capability probe per scan. It shares the TU cap and worker limit and
 runs only after the ordinary compiler analysis succeeds. Its compiler settings
 preserve copy calls for analysis; the ordinary pass also runs to retain other
-warnings. C++ files, macro-only call sites and unresolved compiler paths are
+warnings. C++ files and unresolved compiler paths are
 outside this additional check's coverage.
 
 Unavailable tools, failed candidate scans and failed supplemental compiles are

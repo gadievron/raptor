@@ -41,6 +41,7 @@ class SemgrepAnalysis:
     dropped: int = 0
     errors: list[str] = field(default_factory=list)
     invocation_error: str | None = None
+    coverage_incomplete: bool = False
     _resources: ExitStack = field(default_factory=ExitStack, repr=False)
     _input: PreparedInput | None = field(default=None, repr=False)
     _raw: Any = field(default=None, repr=False)
@@ -73,6 +74,10 @@ def _match(state: SemgrepAnalysis) -> StageResult:
         state.invocation_error = str(exc)
         return StageResult("error", "semgrep invocation failed")
     state.errors = list(state._raw.errors)
+    state.coverage_incomplete = bool(
+        getattr(state._raw, "files_failed", ())
+        or (getattr(state._raw, "skipped_summary", None) or {}).get("total", 0)
+    )
     if state.errors:
         if not state._raw.findings:
             return StageResult("error", "semgrep returned errors without findings")

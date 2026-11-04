@@ -22,6 +22,7 @@ _spec.loader.exec_module(cs)
 def harness(tmp_path, monkeypatch):
     for name in ("a.c", "b.c", "extra.c"):
         (tmp_path / name).write_text("void f(void) { memcpy(d,s,n); }\n")
+    monkeypatch.setattr(memcpy_overlap, "_expanded_candidates", lambda *args: False)
     monkeypatch.setattr(cs, "_gcc_analyzer", lambda: ("/trusted/gcc", "json"))
     monkeypatch.setattr(cs, "_clang_path", lambda: None)
     monkeypatch.setattr(cs, "_suppression_vet", lambda *a: ("", ""))
@@ -236,3 +237,70 @@ def test_candidate_filter_only_receives_successful_capped_tus(tmp_path, harness,
     assert {d["file"] for d in result.findings} == {"a.c"}
     compiles = [cmd for cmd, _ in harness["calls"] if "-c" in cmd]
     assert len(compiles) == 1 and str(tmp_path / "a.c") in compiles[0]
+
+
+@pytest.mark.slow
+def test_native_header_macros_reach_compiler_without_exporting_candidates(tmp_path, monkeypatch):
+    import shutil
+    from core.audit import compiler_sweep
+
+    compiler_sweep._reset_probe_cache()
+    gcc = cs._gcc_analyzer()
+    if gcc is None or shutil.which('semgrep') is None:
+        pytest.skip('requires GCC analyzer and Semgrep')
+    options = subprocess.run([gcc[0], '-Q', '--help=warnings'], capture_output=True, text=True, timeout=30)
+    if memcpy_overlap.OVERLAP_ID not in options.stdout:
+        pytest.skip('requires GCC overlap warning (GCC 14+)')
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    (repo / 'copy.h').write_text(
+        '#include <string.h>\n#define alias memcpy\n'
+        '#define lower_copy(d,s,n) alias(d,s,n)\n'
+        'static inline void header_only(char *p) { memcpy(p+1,p,8); }\n'
+    )
+    source = (
+        '#include "copy.h"\n'
+        'void overlap(void) { char b[64]={0}; char *p=b+4; lower_copy(p,b,16); }\n'
+        'void adjacent(void) { char b[64]={0}; lower_copy(b+16,b,16); }\n'
+        'void move(void) { char b[64]={0}; memmove(b+4,b,16); }\n'
+        '#if 0\nvoid dead(void) { char b[64]; lower_copy(b+4,b,16); }\n#endif\n'
+    )
+    (repo / 'macro.c').write_text(source)
+    (repo / 'safe.c').write_text('#include "copy.h"\nvoid safe(void) { char b[64]={0}; lower_copy(b+16,b,16); }\n')
+    (repo / 'header_only.c').write_text('#include "copy.h"\nvoid plain(void) {}\n')
+    calls = []
+
+    def run(cmd, **kw):
+        calls.append((cmd, kw))
+        return subprocess.run(cmd, check=False, **{
+            k: kw[k] for k in ('capture_output', 'text', 'timeout', 'cwd', 'env') if k in kw
+        })
+
+
+    monkeypatch.setattr(cs, '_sandbox_runner', lambda: run)
+    monkeypatch.setattr('core.sandbox.context.run', run)
+    executions = []
+    original = cs.run_memcpy_overlap
+
+    def detector(*args, **kw):
+        execution = original(*args, **kw)
+        executions.append(execution)
+        return execution
+
+    monkeypatch.setattr(cs, 'run_memcpy_overlap', detector)
+    result = cs.scan_target(repo, out_dir=tmp_path / 'out')
+    assert result.ok and result.tus_analyzed == 3 and result.tus_failed == 0
+    assert not result.detector_limitations, result.detector_limitations
+    assert executions[0].value.candidates == {'macro.c', 'safe.c'}, executions[0]
+    overlaps = [d for d in result.findings if d['rule_id'] == memcpy_overlap.OVERLAP_ID]
+    assert len(overlaps) == 1, overlaps
+    assert overlaps[0]['file'] == 'macro.c'
+    assert 'void overlap' in source.splitlines()[overlaps[0]['line'] - 1]
+    extra = [cmd for cmd, _ in calls if '-fno-builtin-memcpy' in cmd]
+    assert len(extra) == 2
+    assert {Path(cmd[cmd.index('-c') + 1]).name for cmd in extra} == {'macro.c', 'safe.c'}
+    preprocessed = [cmd for cmd, kw in calls if kw.get('caller_label') == 'audit-preprocessor-view']
+    assert len(preprocessed) == 3 and all(cmd[0] == gcc[0] for cmd in preprocessed)
+    semgrep = [cmd for cmd, _ in calls if 'scan' in cmd]
+    assert len(semgrep) == 2  # one raw scan and one batch of prepared views
+    assert all(kw['block_network'] for _, kw in calls)

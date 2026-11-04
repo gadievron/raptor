@@ -18,6 +18,8 @@ import os
 import math
 from time import monotonic
 
+from core.run.scratch import scratch_dir
+
 from .compiler import CompilerRequest, run_compiler_analysis
 from .pipeline import Detector, DetectorResult, Stage, StageResult, run_detector
 from .semgrep import PreparedInput, define_semgrep_detector, run_semgrep_analysis
@@ -27,7 +29,8 @@ _CANDIDATES = define_semgrep_detector("memcpy-overlap-candidates", "1")
 # Leave argv headroom for the sandbox launcher and environment on small-ARG_MAX
 # platforms. Each batch shares the original overall candidate-scan deadline.
 _CANDIDATE_ARG_BYTES = 32_768
-_CANDIDATE_SECONDS = 30
+_CANDIDATE_SECONDS = 60
+_RAW_CANDIDATE_SECONDS = 30
 OVERLAP_ID = "-Wanalyzer-overlapping-buffers"
 
 
@@ -61,6 +64,56 @@ def _target_batches(paths: list[Path]) -> Iterator[tuple[Path, ...]]:
         used += size
     if batch:
         yield tuple(batch)
+
+
+def _expanded_candidates(state: OverlapAnalysis, paths: set[Path], deadline: float) -> bool:
+    """Batch prepared views for still-unselected TUs; return incomplete coverage."""
+    from core.audit.expanded_semgrep import build_expanded_corpus, translate_corpus_findings
+
+    root = state.target.resolve()
+    files = tuple(sorted(path.relative_to(root).as_posix() for path in paths
+                         if path.relative_to(root).as_posix() not in state.candidates))
+    if not files:
+        return False
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        _limited(state, "memcpy macro candidate time budget exhausted")
+        return True
+    assert state.request_for is not None
+    request = state.request_for(files[0])
+    # The baseline already used this pinned compiler successfully. Reuse it
+    # rather than discovering/probing another executable for preprocessing.
+    try:
+        with scratch_dir("memcpy_candidates_", dir=request.scratch_root) as scratch:
+            corpus = build_expanded_corpus(
+                root, scratch / "views", files=files, timeout=remaining / 2,
+                preprocessor=(request.command[0], "-E", "-x", "c"),
+                out_dir=scratch, max_bytes=32 * 1024 * 1024,
+            )
+            incomplete = bool(corpus.failed or corpus.skipped_budget)
+            if incomplete:
+                _limited(state, f"memcpy macro preparation incomplete: {corpus.failed} failed, "
+                         f"{corpus.skipped_budget} skipped by preparation budget")
+            if not corpus.tus:
+                return incomplete
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                _limited(state, "memcpy macro candidate time budget exhausted")
+                return True
+            prepared = PreparedInput(corpus.root, lambda findings: translate_corpus_findings(corpus, findings))
+            execution = run_semgrep_analysis(
+                detector=_CANDIDATES, prepare=lambda: nullcontext(prepared),
+                rule_config=str(_RULE), timeout=math.ceil(remaining),
+            )
+            state.candidates.update(match["file"] for match in execution.value.matches
+                                    if match["file"] in files)
+            if execution.status != "complete" or execution.value.coverage_incomplete:
+                _limited(state, "memcpy macro candidate scan was incomplete")
+                incomplete = True
+            return incomplete
+    except (OSError, ValueError):
+        _limited(state, "memcpy macro preparation or matching was unavailable")
+        return True
 
 
 def _candidates(state: OverlapAnalysis) -> StageResult:
@@ -106,8 +159,9 @@ def _candidates(state: OverlapAnalysis) -> StageResult:
             _limited(state, "memcpy candidate input is unavailable or outside the target", tu=rel)
             incomplete = True
     deadline = monotonic() + _CANDIDATE_SECONDS
+    raw_deadline = min(deadline, monotonic() + _RAW_CANDIDATE_SECONDS)
     for batch in _target_batches(sorted(paths)):
-        remaining = deadline - monotonic()
+        remaining = raw_deadline - monotonic()
         if remaining <= 0:
             incomplete = True
             break
@@ -121,7 +175,8 @@ def _candidates(state: OverlapAnalysis) -> StageResult:
             rule_config=str(_RULE), timeout=math.ceil(remaining),
         )
         state.candidates.update(m["file"] for m in execution.value.matches)
-        incomplete |= execution.status != "complete"
+        incomplete |= execution.status != "complete" or execution.value.coverage_incomplete
+    incomplete |= _expanded_candidates(state, paths, deadline)
     if incomplete:
         _limited(state, "memcpy overlap candidate scan was incomplete")
         return StageResult("partial" if state.candidates else "error", "candidate scan incomplete")
