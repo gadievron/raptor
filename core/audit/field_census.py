@@ -449,7 +449,13 @@ def _node_text(node: Any, src: bytes) -> str:
 
 
 def _function_spans_ts(tree: Any, source: str) -> list[FunctionSpan]:
-    src = source.encode("utf-8", errors="replace")
+    return _function_spans_from_bytes_ts(
+        tree, source.encode("utf-8", errors="replace"),
+    )
+
+
+def _function_spans_from_bytes_ts(tree: Any, src: bytes) -> list[FunctionSpan]:
+    """Extract spans from the same immutable bytes used by the field scan."""
     spans: list[FunctionSpan] = []
 
     def _declarator_name(node: Any) -> str:
@@ -935,7 +941,11 @@ def _scan_file_ts(
     keep: Any,
 ) -> list[FunctionSpan]:
     src = source.encode("utf-8", errors="replace")
-    spans = _function_spans_ts(tree, source)
+    # Subclasses may override encode; preserve their original second call.
+    spans = (
+        _function_spans_from_bytes_ts(tree, src)
+        if type(source) is str else _function_spans_ts(tree, source)
+    )
     span_for_line = (
         _span_lookup(spans) if len(spans) >= _SPAN_LOOKUP_MIN_SPANS else None
     )
