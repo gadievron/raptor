@@ -1,6 +1,6 @@
 """Every post-spawn warm-up exit owns bounded child cleanup."""
 
-import io
+import os
 import select
 import selectors
 import subprocess
@@ -16,7 +16,10 @@ from core.sandbox import probes, seatbelt_audit as audit
 @pytest.fixture
 def warmup_setup(tmp_path, monkeypatch):
     streamer = audit.LogStreamer(tmp_path)
-    streamer._proc = SimpleNamespace(stdout=io.StringIO())
+    read_fd, write_fd = os.pipe()
+    os.close(write_fd)
+    stream = os.fdopen(read_fd, "r")
+    streamer._proc = SimpleNamespace(stdout=stream)
     proc = Mock(pid=4242)
     proc.wait.return_value = 0
     selector = Mock()
@@ -25,7 +28,10 @@ def warmup_setup(tmp_path, monkeypatch):
     monkeypatch.setattr(probes, "_find_sandbox_binary", lambda name: sys.executable)
     monkeypatch.setattr(audit.subprocess, "Popen", Mock(return_value=proc))
     monkeypatch.setattr(selectors, "DefaultSelector", factory)
-    return streamer, proc, selector, factory
+    try:
+        yield streamer, proc, selector, factory
+    finally:
+        stream.close()
 
 
 @pytest.mark.parametrize("stage", ["missing_streamer", "create", "register", "select"])
