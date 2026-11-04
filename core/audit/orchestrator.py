@@ -55,7 +55,7 @@ from packages.checker_synthesis.library import RuleLibrary
 from ._util import extract_context_map_set
 from ._util import is_valid_identifier as _jv_is_valid_identifier
 from .claim_verification import ClaimVerification, supported_claims
-from .verification_results import ToolChainResult
+from .verification_results import ClaimRefutation, ToolChainResult, claims_refuted
 from .codeql_backend import (
     build_sink_results as _build_sink_results_raw,
 )
@@ -1298,6 +1298,9 @@ class ReviewOutcome:
     provisional: bool = False
     verification_tier: str = "speculative"
     tools_dispatched: set | None = field(default=None, repr=False)
+    # Pipeline-created objects, never model dictionaries. Copies may
+    # retain them, but the claim and source occurrence must still match.
+    claim_refutations: tuple[ClaimRefutation, ...] = field(default=(), repr=False)
     # Chain step types that errored or timed out while verifying THIS
     # function. A channel that errored did not meaningfully run — the
     # gate-resolution pass must not count it as class coverage (a
@@ -1325,8 +1328,9 @@ class ReviewOutcome:
     tools_inconclusive: set | None = field(default=None, repr=False)
     # On a clean: what it was minted FROM (journaled as
     # ``ReviewJournalEntry.clean_basis``). Empty = the producing pass's
-    # own verdict; ``gate_resolved`` / ``propagated`` = inferred from
-    # tool silence; ``sarif_clean`` = the sarif-clean gate's file-level
+    # own verdict; ``gate_resolved`` = legacy resolver basis (now
+    # requires scoped negatives, still not reusable across runs);
+    # ``propagated`` = inferred from another clean; ``sarif_clean`` = file-level
     # silence; ``unknown`` = imported from a pre-field journal row;
     # ``dark_verify_refuted`` = one executed witness did not fire. The
     # first four (``CLEAN_BASIS_NOT_REUSABLE``) are never tool_backed
@@ -24602,6 +24606,44 @@ def _extract_all_hypotheses(
     return result
 
 
+def _retain_claim_refutation(outcome, results, config, *, hypothesis, phase) -> bool:
+    """Persist a scoped refutation before granting it verdict authority."""
+    if not isinstance(results, ToolChainResult):
+        return False
+    receipt = results.refutation(
+        file=outcome.file, function=outcome.function,
+        line_start=outcome.line, hypothesis=hypothesis,
+    )
+    if receipt is None:
+        return False
+    existing = getattr(outcome, "claim_refutations", ()) or ()
+    if not isinstance(existing, (tuple, list)):
+        existing = ()
+    if receipt in existing:
+        return True
+    record = receipt.to_record(action="ihv_refutation" if phase == "ihv" else "claim_refutation")
+    record["phase"] = phase
+    try:
+        append_audit_log(Path(config.out_dir), record)
+    except Exception as exc:
+        logger.warning("could not persist refutation for %s:%s: %s", outcome.file, outcome.function, exc)
+        return False
+    outcome.claim_refutations = (*existing, receipt)
+    return True
+
+
+def _retain_probe_refutation(outcome, probe, config, *, tool, rule_id, hypothesis, phase) -> bool:
+    """Adapt direct legacy checker calls to the same scoped-result policy."""
+    if _classify_sweep_outcome(probe) != "refuted" or getattr(probe, "errors", None):
+        return False
+    details = getattr(probe, "details", None) or {}
+    results = ToolChainResult(file=outcome.file, function=outcome.function,
+                              line_start=outcome.line, hypothesis=hypothesis)
+    results.observe(tool, "refuted", getattr(probe, "rule_id", None) or rule_id,
+                    details.get("reason") or getattr(probe, "reason", "") or "")
+    return _retain_claim_refutation(outcome, results, config, hypothesis=hypothesis, phase=phase)
+
+
 def _verify_hypotheses_immediate(
     outcome: ReviewOutcome,
     config: OrchestratorConfig,
@@ -24773,18 +24815,10 @@ def _verify_hypotheses_immediate(
                 file_path, function_name,
                 mechanism[:60], tools_confirmed,
             )
-        elif isinstance(tools_confirmed, ToolChainResult):
-            record = tools_confirmed.refutation_record(
-                file=file_path, function=function_name,
-                line_start=outcome.line, hypothesis=mechanism,
-            )
-            if record is not None:
-                try:
-                    append_audit_log(Path(config.out_dir), record)
-                except Exception as exc:
-                    logger.warning("ihv: could not persist refutation for %s:%s: %s", file_path, function_name, exc)
-                else:
-                    verifications[-1] = ClaimVerification(hyp, refuted=True)
+        elif _retain_claim_refutation(
+            outcome, tools_confirmed, config, hypothesis=mechanism, phase="ihv",
+        ):
+            verifications[-1] = ClaimVerification(hyp, refuted=True)
 
     # Step 4: aggregate (context gates run inside)
     return _aggregate_ihv_verdicts(
@@ -25230,6 +25264,7 @@ def _sweep_validate(
             skipped_types=skipped,
             inconclusive_types=inconclusive,
         )
+        _retain_claim_refutation(outcome, confirmed, config, hypothesis=hypothesis, phase="sweep_validate")
         # A skipped channel did not look — it must not claim class
         # coverage in the gate-resolution pass.
         dispatched -= skipped
@@ -25562,6 +25597,10 @@ def _proactive_validate(
                 target_path=str(config.target_path),
             )
             _pv_smt_oc = _classify_sweep_outcome(smt_result)
+            _retain_probe_refutation(
+                outcome, smt_result, config, tool="smt", rule_id=smt_verb,
+                hypothesis=outcome.hypothesis or "", phase="proactive",
+            )
             if _pv_smt_oc == "confirmed":
                 confirmed_tools.append(f"smt:{smt_verb}")
                 if tier_counters:
@@ -25748,6 +25787,10 @@ def _proactive_validate(
                     language=_inventory_language_hint(
                         config, outcome.file,
                     ),
+                )
+                _retain_probe_refutation(
+                    outcome, cocci_result, config, tool="coccinelle", rule_id=str(cocci_rule),
+                    hypothesis=outcome.hypothesis or "", phase="proactive",
                 )
                 if cocci_result.outcome == "confirmed":
                     confirmed_tools.append(f"coccinelle:{Path(cocci_rule).stem}")
@@ -28621,6 +28664,7 @@ def _promote_suspicious_one(
         skipped_types=_sweep_skipped,
         errored_types=_sweep_errored,
     )
+    _retain_claim_refutation(outcome, confirmed, config, hypothesis=hypothesis, phase="sweep_promotion")
     if not confirmed:
         _chain_types = {entry.get("type") for entry in chain}
         if _chain_types and _chain_types <= (
@@ -28950,6 +28994,7 @@ def _resweep_zero_dispatch_suspicious(
             dispatched = {
                 step.get("type") for step in chain if step.get("type")
             } - skipped
+            _retain_claim_refutation(outcome, confirmed, config, hypothesis=hypothesis, phase="resweep")
             _fold_inconclusive_record(
                 outcome, ran=dispatched, inconclusive=inconclusive,
                 errored=errored,
@@ -32275,6 +32320,7 @@ def _promote_outcome(
     promoted.tools_errored = outcome.tools_errored
     promoted.tools_inconclusive = outcome.tools_inconclusive
     promoted.tools_skipped = outcome.tools_skipped
+    promoted.claim_refutations = getattr(outcome, "claim_refutations", ()) or ()
     promoted.semantic_confidence = outcome.semantic_confidence
     promoted.function_qualified = getattr(
         outcome, "function_qualified", "",
@@ -32667,31 +32713,14 @@ def _resolve_gate_demoted(
     available_tools: dict[str, bool] | None = None,
     mechanical_findings: dict[str, list[dict[str, Any]]] | None = None,
 ) -> None:
-    """Resolve gate-demoted AND evidence-free suspicious outcomes.
+    """Resolve unsupported outcomes using scoped checker refutations.
 
-    Gate demotions (G2 no-evidence, self-contradiction) catch LLM
-    hallucinations.  But they leave the outcome as "suspicious" with no
-    path to resolution — deepen and sweep both skip them.  Plain
-    suspicious outcomes without verification evidence used to be
-    demoted to clean by an in-loop gate whenever Joern was up — class-
-    and error-blind; they are resolved here instead (only when Joern
-    was available this run, preserving the old gate's activation
-    condition, and only AFTER deepen/sweep had their chance).
-
-    This pass checks whether ANY mechanical tool independently flags the
-    same function.  If nothing corroborates the LLM's retracted claim:
-    - If a tool that covers the class actually RAN for this function
-      and answered probatively (dispatch record minus errored and
-      inconclusive channels) → resolved to clean (a tool looked and
-      stayed silent — disconfirmed).
-    - Otherwise → resolved to dark (no tool ever looked, the class is
-      tool-blind, or the covering channel errored or answered only
-      inconclusive — needs concrete verification). A tool that errored
-      or timed out did NOT run: converting a Joern timeout into a clean
-      verdict is a failure mode masquerading as a refutation. File-level
-      SARIF presence is not a run for this function.
-
-    No LLM calls.
+    Tool availability, class coverage, and dispatch names are not
+    negative evidence. Every active claim needs a pipeline-created
+    refutation of the exact function occurrence and hypothesis.
+    Without it the outcome remains unresolved. Machine escalations
+    separately restore the completed model-clean verdict when they
+    fail to earn confirmation; that is not a checker refutation.
     """
     from .promotion_alarm import is_reuse_exempt
 
@@ -32765,10 +32794,14 @@ def _resolve_gate_demoted(
                 outcome.function,
             )
             continue
+        hypotheses = [h["mechanism"] for h in _extract_all_hypotheses(outcome)]
+        if outcome.hypothesis and outcome.hypothesis not in hypotheses:
+            hypotheses.append(outcome.hypothesis)
+        fully_refuted = claims_refuted(outcome, hypotheses)
         if not gate_demoted:
-            if not bool((available_tools or {}).get("joern")):
-                continue
             if _is_verification_evidence_for_gate(outcome):
+                continue
+            if not fully_refuted and not bool((available_tools or {}).get("joern")):
                 continue
 
         if _has_mechanical_corroboration(
@@ -32810,69 +32843,11 @@ def _resolve_gate_demoted(
             )
             continue
 
-        # Determine if a tool covering the vulnerability class actually
-        # RAN for this function with a probative answer. The dispatch
-        # record comes from sweep/proactive validation; errored
-        # channels did not run, inconclusive-only channels may not
-        # refute.
-        class_covered = False
-        if available_tools is not None:
-            try:
-                from .tool_coverage import is_class_covered
-
-                # The dispatch record is the only coverage oracle. A
-                # prior SARIF result anywhere in the FILE (any rule, any
-                # function) used to alias to a semgrep run here — one
-                # unrelated stock-rule hit "covered" every class claim
-                # in the file and resolved it clean. File-level,
-                # rule-blind presence never covers a function claim;
-                # a correlated in-range cache hit still reaches the
-                # record as a chain confirm (sarif_cache:semgrep).
-                ran: set = set(outcome.tools_dispatched or set())
-                errored = set(outcome.tools_errored or set())
-                if errored:
-                    logger.debug(
-                        "gate resolution %s:%s — channels errored (%s), "
-                        "excluded from coverage",
-                        outcome.file, outcome.function,
-                        ",".join(sorted(errored)),
-                    )
-                ran -= errored
-                # A channel that looked but answered only inconclusive
-                # (vacuous SAT, capped match, unwitnessed scan, keyword
-                # regex silence) "may not refute" — it is not a
-                # covering channel that ran silent.
-                inconclusive = set(outcome.tools_inconclusive or set())
-                if inconclusive & ran:
-                    logger.debug(
-                        "gate resolution %s:%s — channels inconclusive "
-                        "(%s), excluded from coverage",
-                        outcome.file, outcome.function,
-                        ",".join(sorted(inconclusive & ran)),
-                    )
-                ran -= inconclusive
-
-                rr = outcome.review_result or {}
-                class_covered = is_class_covered(
-                    cwe_field=rr.get("cwe", ""),
-                    mechanism=rr.get("mechanism", outcome.hypothesis or ""),
-                    hypothesis=outcome.hypothesis or "",
-                    available_tools=available_tools,
-                    ran_tools=ran,
-                )
-            except Exception:
-                logger.warning(
-                    "tool_coverage check failed for %s:%s",
-                    outcome.file,
-                    outcome.function,
-                    exc_info=True,
-                )
-
         marker = "" if gate_demoted else (
             "[suspicious-resolution: no verification evidence]\n\n"
         )
 
-        if class_covered:
+        if fully_refuted:
             if outcome.semantic_confidence == "high":
                 logger.info(
                     "gate-resolved %s:%s → stays suspicious "
@@ -32896,19 +32871,20 @@ def _resolve_gate_demoted(
                 review_result=outcome.review_result,
                 line=outcome.line,
             )
+            resolved.claim_refutations = outcome.claim_refutations
             resolved.tools_dispatched = outcome.tools_dispatched
             resolved.tools_errored = outcome.tools_errored
             resolved.tools_inconclusive = outcome.tools_inconclusive
             resolved.tools_skipped = outcome.tools_skipped
-            # Silence-derived: journaled so cross-run reuse re-reviews
-            # it instead of importing it at $0, and never tool_backed.
+            # Keep cross-run reuse conservative until scoped refutations
+            # have their own source-hash-bound journal representation.
             resolved.clean_basis = "gate_resolved"
             result.outcomes[i] = resolved
             result.suspicious -= 1
             result.clean += 1
             logger.info(
                 "gate-resolved %s:%s → clean "
-                "(no mechanical corroboration, covering channel ran silent)",
+                "(every active claim has an explicit scoped refutation)",
                 outcome.file,
                 outcome.function,
             )
@@ -32930,6 +32906,7 @@ def _resolve_gate_demoted(
                 review_result=outcome.review_result,
                 line=outcome.line,
             )
+            resolved.claim_refutations = outcome.claim_refutations
             resolved.tools_dispatched = outcome.tools_dispatched
             resolved.tools_errored = outcome.tools_errored
             resolved.tools_inconclusive = outcome.tools_inconclusive
@@ -32939,7 +32916,7 @@ def _resolve_gate_demoted(
             result.dormant += 1
             logger.info(
                 "gate-resolved %s:%s → %s "
-                "(no mechanical corroboration, no covering channel ran%s)",
+                "(no complete scoped refutation%s)",
                 outcome.file,
                 outcome.function,
                 dark_status,
@@ -34022,6 +33999,7 @@ def _demote_outcome(outcome: ReviewOutcome, reason: str) -> ReviewOutcome:
     demoted.tools_errored = outcome.tools_errored
     demoted.tools_inconclusive = outcome.tools_inconclusive
     demoted.tools_skipped = outcome.tools_skipped
+    demoted.claim_refutations = getattr(outcome, "claim_refutations", ()) or ()
     demoted.semantic_confidence = outcome.semantic_confidence
     demoted.provenance_all_trusted = outcome.provenance_all_trusted
     demoted.function_qualified = getattr(

@@ -628,14 +628,15 @@ class ReviewJournalEntry:
     # ``clean_basis``: on ``verdict == "clean"`` rows, what the clean
     # was minted FROM. ``verdict`` — the producing pass decided it (a
     # review, a structural gate, a /validate correction);
-    # ``gate_resolved`` — end-of-run gate resolution read a covering
-    # channel's silence; ``propagated`` — inherited from another
+    # ``gate_resolved`` — end-of-run gate resolution (historically
+    # covering-channel silence, now scoped refutations); ``propagated`` — inherited from another
     # function's clean via confidence propagation; ``sarif_clean`` —
     # the sarif-clean gate read a file's zero-alert SARIF;
     # ``dark_verify_refuted`` — one executed witness failed to fire;
     # ``unknown`` — imported from a pre-field row whose basis cannot be
-    # known. The three silence bases (:data:`CLEAN_BASIS_SILENCE`) are
-    # verdicts about tool SILENCE, not reviews: with ``unknown``
+    # known. The historical silence bases (:data:`CLEAN_BASIS_SILENCE`)
+    # remain conservative: scoped refutations are not yet represented
+    # in this journal, so even new gate-resolved rows need re-review. With ``unknown``
     # (:data:`CLEAN_BASIS_NOT_REUSABLE`) cross-run verdict reuse refuses
     # them (re-review) and evidence grading never calls them
     # tool_backed.

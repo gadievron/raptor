@@ -2099,7 +2099,7 @@ class TestSuspiciousPromotion:
 
 
 class TestResolveGateDemoted:
-    """Gate-demoted suspicious → clean when no mechanical tool corroborates."""
+    """Gate-demoted claims resolve only with scoped refutation evidence."""
 
     def _make_result(self, *outcomes):
         r = OrchestratorResult()
@@ -2253,7 +2253,7 @@ class TestResolveGateDemoted:
         assert result.outcomes[0].status == "suspicious"
         assert result.suspicious == 1
 
-    def test_semantic_confidence_low_still_resolved_to_clean(self, tmp_path: Path):
+    def test_dispatch_without_refutation_resolves_dark(self, tmp_path: Path):
         target = tmp_path / "target"
         target.mkdir()
         (target / "a.c").write_text("int f(int x) { return x + 1; }\n")
@@ -2272,15 +2272,14 @@ class TestResolveGateDemoted:
             hypothesis="integer overflow in addition",
             line=1,
         )
-        # SMT actually RAN for this function and stayed silent —
-        # covered==ran semantics require the dispatch record.
+        # Dispatch without an explicit negative result is not a refutation.
         outcome.tools_dispatched = {"smt"}
         result = self._make_result(outcome)
         _resolve_gate_demoted(
             result, config, sarif_cache=None, checklist=checklist,
             available_tools={"prefilter": True, "smt": True},
         )
-        assert result.outcomes[0].status == "clean"
+        assert result.outcomes[0].status == "dark"
 
     def test_covered_class_without_dispatch_record_resolves_dark(self, tmp_path: Path):
         """Installed-but-never-ran is NOT coverage: the same outcome
@@ -2370,7 +2369,7 @@ class TestResolveGateDemoted:
         assert result.outcomes[0].status == "dark"
         assert result.outcomes[0].body.startswith("[suspicious-resolution:")
 
-    def test_plain_suspicious_with_silent_covering_channel_resolves_clean(
+    def test_plain_suspicious_without_refutation_resolves_dark(
         self, tmp_path: Path,
     ):
         target = tmp_path / "target"
@@ -2397,7 +2396,7 @@ class TestResolveGateDemoted:
             result, config, sarif_cache=None, checklist=checklist,
             available_tools={"joern": True, "smt": True},
         )
-        assert result.outcomes[0].status == "clean"
+        assert result.outcomes[0].status == "dark"
 
     def test_plain_suspicious_with_verification_evidence_untouched(
         self, tmp_path: Path,
@@ -2457,8 +2456,8 @@ class TestResolveGateDemoted:
             available_tools={"prefilter": True, "codeql": True},
         )
         # Prefilter would normally corroborate (strcpy), but provenance
-        # override lets it fall through to covered-and-ran → clean.
-        assert result.outcomes[0].status == "clean"
+        # override removes that prior; no refutation still means unresolved.
+        assert result.outcomes[0].status == "dark"
 
     def test_provenance_smt_evidence_not_overridden(self, tmp_path: Path):
         """SMT evidence is never overridden by provenance."""
