@@ -509,7 +509,10 @@ the entry is scrubbed, so the exec fails with ENOENT (exit 127).
 If a tool genuinely needs a config file from your real home, copy it
 into the sandbox's fake home (`<output>/.home/`) before the run. Git is
 the exception: internal git runs with global/system config disabled
-unconditionally, no matter what is placed in the fake home.
+unconditionally, no matter what is placed in the fake home. Parent-side
+HOME/XDG directory creation and fake-HOME intake reads use pinned directory
+descriptors. A sibling's directory-to-symlink swap cannot redirect those
+operations onto outside host files; a symlinked intake root is refused.
 
 ---
 

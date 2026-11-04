@@ -36,6 +36,8 @@ from . import probes as _probes
 from . import errors as _errors
 from . import tiers as _tiers
 from ._env_quarantine import ENV_RESTORE_KEY as _ENV_RESTORE_KEY
+from ._fake_home import open_home as _open_fake_home
+from ._fake_home import prepare_home as _prepare_fake_home
 from ._pathpin import canonical_bind_path
 from . import seccomp as _seccomp
 from . import state
@@ -1313,25 +1315,27 @@ def _stage_fake_home_intake(
         # refuse-and-fall-back path (the except below).
         raise err
 
+    home_fd = None
     try:
-        for dirpath, dirnames, filenames in os.walk(
-                fake_home_path, onerror=_raise, followlinks=False):
-            rel = os.path.relpath(dirpath, fake_home_path)
+        home_fd = _open_fake_home(fake_home_path)
+        for rel, dirnames, filenames, dir_fd in os.fwalk(
+                '.', dir_fd=home_fd, onerror=_raise, follow_symlinks=False):
+            rel = os.path.normpath(rel)
             in_sbx_dir = (_TMP_FAKE_HOME if rel == "."
                           else os.path.join(_TMP_FAKE_HOME, rel))
             for name in dirnames:
-                st = os.lstat(os.path.join(dirpath, name))
+                st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
                 if not stat.S_ISDIR(st.st_mode):
                     return None
                 stage_dirs.append(os.path.join(in_sbx_dir, name))
             for name in filenames:
-                host_path = os.path.join(dirpath, name)
                 if len(stage_files) >= _FAKE_HOME_INGEST_MAX_FILES:
                     return None
                 # O_NOFOLLOW + fstat: the lstat/open race is real in
                 # a dir an earlier sandboxed child could write.
-                fd = os.open(host_path,
-                             os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                fd = os.open(name,
+                             os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                             dir_fd=dir_fd)
                 try:
                     st = os.fstat(fd)
                     if not stat.S_ISREG(st.st_mode):
@@ -1356,6 +1360,9 @@ def _stage_fake_home_intake(
                 stage_files[os.path.join(in_sbx_dir, name)] = data
     except OSError:
         return None
+    finally:
+        if home_fd is not None:
+            os.close(home_fd)
     return stage_files, stage_dirs
 
 
@@ -1957,49 +1964,17 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             )
             raise ValueError(msg)
         fake_home_path = os.path.join(output, ".home")
-        # Symlink-TOCTOU defence. A sandboxed child has write access
-        # to `output`; in a callsite that reuses `output` across
-        # multiple sandbox() calls, an earlier child could have
-        # deleted `.home` (plus its XDG subdirs — all empty after
-        # initial creation) and replaced it with a symlink pointing
-        # at a user-writable location outside `output`. Without this
-        # check, the parent-side os.makedirs() below would follow the
-        # symlink and create `.config`, `.cache`, `.local/share`,
-        # `.local/state` inside the attacker-chosen directory (e.g.
-        # under `~/.ssh`, `~/Documents`, a backup root) — a bounded
-        # but real "write outside the sandbox" escape. We refuse to
-        # proceed if any of the paths we would materialise is already
-        # a symlink, forcing the caller to clean up `output` between
-        # runs or use a fresh dir.
-        _fake_home_paths = [
-            fake_home_path,
-            os.path.join(fake_home_path, ".config"),
-            os.path.join(fake_home_path, ".cache"),
-            os.path.join(fake_home_path, ".local"),
-            os.path.join(fake_home_path, ".local", "share"),
-            os.path.join(fake_home_path, ".local", "state"),
-        ]
-        for _p in _fake_home_paths:
-            try:
-                _st = os.lstat(_p)
-            except FileNotFoundError:
-                continue
-            # Anything that's not a regular directory is suspect: a
-            # prior sandboxed child could have replaced the expected
-            # dir with a symlink (→ parent mkdirs into attacker-chosen
-            # dir outside `output`), a FIFO (→ parent's chmod/stat
-            # hangs), a socket, or a device node. Refuse to proceed.
-            if not stat.S_ISDIR(_st.st_mode) or stat.S_ISLNK(_st.st_mode):
-                msg = (
-                    f"fake_home refuses to materialise: {_p!r} exists "
-                    f"but is not a regular directory "
-                    f"(mode=0o{_st.st_mode:o}). A prior sandboxed "
-                    f"process may have replaced it to redirect "
-                    f"parent-side file operations or cause a hang. "
-                    f"Clean the output dir or use a fresh one."
-                )
-                raise ValueError(msg)
-        os.makedirs(fake_home_path, mode=0o700, exist_ok=True)
+        # The output is writable by previous/sibling children. Pin every
+        # directory used for creation instead of checking with lstat and
+        # later resolving the same names again through os.makedirs.
+        try:
+            _prepare_fake_home(output)
+        except OSError as exc:
+            raise ValueError(
+                f"fake_home refuses to materialise: {fake_home_path!r} "
+                "or an XDG component is not a regular directory or cannot "
+                "be opened safely. Clean the output dir or use a fresh one."
+            ) from exc
         # Override HOME and the XDG base dirs so that tools which
         # resolve ~ or $XDG_CONFIG_HOME etc. land inside the fake
         # home. We deliberately DO NOT override XDG_RUNTIME_DIR —
@@ -2019,14 +1994,6 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             "USER": "sandbox",
             "LOGNAME": "sandbox",
         }
-        # Pre-create the XDG subdirs so tools that stat them first
-        # (rather than mkdir-on-write) behave correctly.
-        for xdg_dir in ("XDG_CONFIG_HOME", "XDG_CACHE_HOME",
-                        "XDG_DATA_HOME", "XDG_STATE_HOME"):
-            try:
-                os.makedirs(fake_home_env[xdg_dir], mode=0o700, exist_ok=True)
-            except OSError:
-                pass
 
     # The launcher's per-session temp dir names the framework AND the
     # host (<base>/raptor-<uid>/session-<pid>-<rand>): a target that
