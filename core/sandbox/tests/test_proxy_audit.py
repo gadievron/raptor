@@ -35,8 +35,10 @@ def reset_proxy():
     let each test be hermetic.
     """
     proxy_mod._reset_for_tests()
-    yield
-    proxy_mod._reset_for_tests()
+    try:
+        yield
+    finally:
+        proxy_mod._reset_for_tests()
 
 
 @pytest.fixture

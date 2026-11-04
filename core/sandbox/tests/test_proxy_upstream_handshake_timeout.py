@@ -22,8 +22,10 @@ from core.sandbox.proxy import (
 @pytest.fixture
 def reset_proxy():
     proxy_mod._reset_for_tests()
-    yield
-    proxy_mod._reset_for_tests()
+    try:
+        yield
+    finally:
+        proxy_mod._reset_for_tests()
 
 
 def test_default_is_per_io_budget(monkeypatch):

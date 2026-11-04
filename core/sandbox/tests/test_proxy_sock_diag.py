@@ -401,8 +401,10 @@ class TestForcedMissChurnVerdicts:
     @pytest.fixture
     def reset_proxy(self):
         proxy_mod._reset_for_tests()
-        yield
-        proxy_mod._reset_for_tests()
+        try:
+            yield
+        finally:
+            proxy_mod._reset_for_tests()
 
     def test_same_uid_peer_served_under_forced_miss(
             self, reset_proxy, monkeypatch):
@@ -462,8 +464,10 @@ class TestGateEndToEnd:
     @pytest.fixture
     def reset_proxy(self):
         proxy_mod._reset_for_tests()
-        yield
-        proxy_mod._reset_for_tests()
+        try:
+            yield
+        finally:
+            proxy_mod._reset_for_tests()
 
     def test_wrong_uid_from_sock_diag_is_dropped(self, reset_proxy,
                                                  monkeypatch):

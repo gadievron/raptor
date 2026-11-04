@@ -38,8 +38,10 @@ def _confined_parser_floor(confined_parser_floor: None) -> None:
 @pytest.fixture
 def reset_proxy():
     proxy_mod._reset_for_tests()
-    yield
-    proxy_mod._reset_for_tests()
+    try:
+        yield
+    finally:
+        proxy_mod._reset_for_tests()
 
 
 # ---------------------------------------------------------------------------
