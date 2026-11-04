@@ -2026,10 +2026,13 @@ def run_compiler_scan_stage(
 
     sarif_path = out_dir / "compiler.sarif"
     save_json(sarif_path, cs.to_sarif(result))
+    # Always replace the sidecar so a later clean scan cannot leave stale leads.
+    review_path = out_dir / "compiler-review-candidates.json"
+    save_json(review_path, cs.review_candidates_report(result))
 
     summary = result.summary_line()
-    logger.info("%s; SARIF at %s", summary, sarif_path)
-    if (result.tus_skipped_cap or result.tus_failed or result.budget_exhausted
+    logger.info("%s; SARIF at %s; review candidates at %s", summary, sarif_path, review_path)
+    if (result.tus_skipped_cap or result.tus_failed or result.budget_exhausted or result.review_candidates
             or result.suppressed_tus or result.unvetted_tus or result.detector_limitations):
         # Cap skips, failed TUs and suppression-limited TUs must reach
         # the operator without log-level spelunking — same posture as

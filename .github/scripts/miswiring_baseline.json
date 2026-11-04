@@ -289,6 +289,9 @@
   "artifacts:write_only_artifact::cocci.sarif": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },
+  "artifacts:write_only_artifact::compiler-review-candidates.json": {
+   "note": "Operator-facing compiler leads retained for independent corroboration. Deliberately excluded from automatic findings and paid analysis; documented in docs/static-analysis.md."
+  },
   "artifacts:write_only_artifact::compiler.sarif": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },

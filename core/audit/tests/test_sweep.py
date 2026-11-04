@@ -2805,3 +2805,47 @@ class TestExtractPathConditionsOperatorRun:
         # No operator inside the quotes: falls through, same as before.
         assert _extract_path_conditions("call `foo` then x < y", "") \
             == ["x < y"]
+
+
+def test_legacy_aliasing_sarif_is_neither_positive_nor_clean(tmp_path):
+    import json
+    from core.sarif.parser import parse_sarif_findings, load_sarif
+    raw = {"ruleId": "-Wstrict-aliasing", "message": {"text": "might break aliasing"},
+           "locations": [{"physicalLocation": {"artifactLocation": {"uri": "a.c"}, "region": {"startLine": 2}}}]}
+    directory = tmp_path / "scan"
+    directory.mkdir()
+    path = directory / "compiler.sarif"
+    path.write_text(json.dumps({"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "gcc"}},
+        "artifacts": [{"location": {"uri": "a.c"}}], "results": [raw]}]}))
+    cache = SarifCache.from_directory(tmp_path)
+    assert not cache.lookup("a.c")
+    assert "a.c" not in cache.scanned_files
+    assert parse_sarif_findings(path) == []
+    assert load_sarif(path)["runs"][0]["results"] == [raw]
+    assert cache.ingest("a.c", dict(raw, ruleId="independent-aliasing-proof")) == "a.c"
+
+
+@pytest.mark.parametrize("indexed", [False, True])
+def test_candidate_files_cannot_regain_clean_coverage(tmp_path, indexed):
+    import json
+    from core.audit.sweep import _ingest_sarif_file
+    from core.sarif.parser import parse_sarif_findings
+    cache = SarifCache()
+    result = {"locations": [{"physicalLocation": {"artifactLocation": {"uri": "a.c"}}}]}
+    result.update({"ruleIndex": 0} if indexed else {"ruleId": "compiler:-Wstrict-aliasing=1"})
+    run = {"tool": {"driver": {"name": "compiler", "rules": [{"id": "-Wstrict-aliasing"}]}},
+           "artifacts": [{"location": {"uri": "a.c"}}], "results": [result]}
+    path = tmp_path / "old.sarif"
+    path.write_text(json.dumps({"version": "2.1.0", "runs": [run]}))
+    assert _ingest_sarif_file(cache, path) == 0
+    assert parse_sarif_findings(path) == []
+    run["results"] = []
+    path.write_text(json.dumps({"version": "2.1.0", "runs": [run]}))
+    _ingest_sarif_file(cache, path)
+    assert "a.c" not in cache.scanned_files
+
+
+def test_direct_cache_ingest_rejects_conflicting_candidate_identity():
+    cache = SarifCache()
+    assert cache.ingest("a.c", {"ruleId": "other", "rule_id": "-Wstrict-aliasing"}) is None
+    assert not cache.lookup("a.c")

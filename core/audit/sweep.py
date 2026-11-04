@@ -275,6 +275,7 @@ class SarifCache:
     hit_count: int = 0
     miss_count: int = 0
     _counter_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _candidate_files: set[str] = field(default_factory=set, repr=False)
 
     def __bool__(self) -> bool:
         return bool(self._by_file)
@@ -322,6 +323,12 @@ class SarifCache:
         """
         normalized = _normalize_sarif_path(uri)
         if not normalized:
+            return None
+        from core.detectors.compiler_families import compiler_diagnostic_is_candidate
+        if any(compiler_diagnostic_is_candidate(result.get(key, ""))
+               for key in ("ruleId", "rule_id")):
+            self._candidate_files.add(normalized)
+            self.scanned_files.discard(normalized)
             return None
         self._by_file.setdefault(normalized, []).append(result)
         return normalized
@@ -454,7 +461,7 @@ def _ingest_sarif_file(
                 continue
             art_uri = (artifact.get("location") or {}).get("uri", "")
             art_norm = _normalize_sarif_path(art_uri)
-            if art_norm and _coverage_fresh(art_norm):
+            if art_norm and art_norm not in cache._candidate_files and _coverage_fresh(art_norm):
                 cache.scanned_files.add(art_norm)
         for result in run.get("results", []):
             locs = result.get("locations") or [{}]
@@ -466,10 +473,16 @@ def _ingest_sarif_file(
                 continue
             if not _fresh(normalized):
                 continue
+            from core.detectors.compiler_families import compiler_diagnostic_is_candidate
+            from core.sarif.parser import get_result_rule
+            if compiler_diagnostic_is_candidate(get_result_rule(run, result).get("id", "")):
+                cache._candidate_files.add(normalized)
+                cache.scanned_files.discard(normalized)
+                continue
             result["_sarif_source"] = "codeql" if is_codeql else "semgrep"
             _annotate_sarif_result(result, run_label=run_label)
-            cache._by_file.setdefault(normalized, []).append(result)
-            ingested += 1
+            if cache.ingest(normalized, result) is not None:
+                ingested += 1
     return ingested
 
 

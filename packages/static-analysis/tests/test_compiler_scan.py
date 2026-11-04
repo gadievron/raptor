@@ -1338,3 +1338,29 @@ print(json.dumps([{'kind':'warning','option':'-Wanalyzer-use-after-free','messag
     assert [f['rule_id'] for f in result.findings] == ['-Wanalyzer-use-after-free']
     assert len([call for call in sandbox_spy if '-c' in call['cmd']]) == 2
     assert not list(out.glob('compiler_scan_*'))
+
+
+def test_aliasing_candidates_are_retained_outside_findings(tmp_path):
+    raw = [{"id": "-Wstrict-aliasing", "file": str(tmp_path / "a.c"),
+            "line": 2, "message": "might break strict-aliasing", "kind": "warning"}]
+    assert _cs._scan_diagnostics(raw, tmp_path, tmp_path / "a.c", "gcc", "a.c") == []
+    candidates = _cs._scan_diagnostics(raw, tmp_path, tmp_path / "a.c", "gcc", "a.c", review_candidates=True)
+    result = _cs.CompilerScanResult(ok=True, review_candidates=candidates)
+    report = _cs.review_candidates_report(result)
+    assert report["candidates"][0]["status"] == "needs_review"
+    assert report["candidates"][0]["rule_id"] == "-Wstrict-aliasing"
+    assert not _cs.to_sarif(result)["runs"][0]["results"]
+    assert "1 compiler review candidate" in result.summary_line()
+
+
+def test_review_candidates_deduplicate_across_translation_units(tmp_path, monkeypatch):
+    for name in ("a.c", "b.c"):
+        (tmp_path / name).write_text("int x;\n")
+    _fake_toolchain(monkeypatch)
+    candidate = {"rule_id": "-Wstrict-aliasing", "file": "shared.h", "line": 4,
+                 "message": "might break aliasing", "cwe": "CWE-843", "compiler": "gcc", "tu": ""}
+    monkeypatch.setattr(_cs, "analyze_tu", lambda target, rel, **kw: _cs.TuDiagnostics(
+        rel, ok=True, compiler="gcc", review_candidates=[dict(candidate, tu=rel)]))
+    result = _cs.scan_target(tmp_path)
+    assert len(result.review_candidates) == 1
+    assert not result.findings

@@ -191,6 +191,7 @@ _TOOL_NAMESPACES = frozenset(VALID_EVIDENCE_TOOLS | {
 # ``-naming`` stamps passed as full tool evidence for exactly that
 # reason).
 _DETECTION_CLASSIFIER_MODULES: dict[str, str] = {
+    "compiler": "core.detectors.compiler_families",
     "consistency": "core.audit.peer_evidence",
     "fail_open": "core.audit.fail_open_verify",
     "lock_region": "core.audit.lock_region",

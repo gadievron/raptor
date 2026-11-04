@@ -525,8 +525,9 @@ class TestMappingEdges:
         assert not compiler_applicable("")
 
     def test_role_verification_for_mapped_only(self):
-        for cwe in COMPILER_CWE_MAP:
-            assert get_compiler_check_role(cwe) == "verification"
+        for cwe, spec in COMPILER_CWE_MAP.items():
+            expected = "verification" if spec.positive_evidence else "detection"
+            assert get_compiler_check_role(cwe) == expected
         assert get_compiler_check_role("CWE-89") == "detection"
         assert get_compiler_check_role("") == "detection"
 
@@ -3508,3 +3509,33 @@ def test_constant_oob_remains_confirmed_with_clang(tmp_path, sandbox_spy, monkey
                     gcc_probed=False)
     assert result.outcome == 'confirmed', vars(result)
     assert any('-Wfortify-source' in call['cmd'] for call in sandbox_spy)
+
+
+@pytest.mark.parametrize("rule", ["-Wstrict-aliasing", "compiler:-Wstrict-aliasing", "compiler:-Wstrict-aliasing=3"])
+def test_aliasing_warning_cannot_supply_evidence(rule):
+    from core.detectors.compiler_families import compiler_diagnostic_is_candidate
+    assert compiler_diagnostic_is_candidate(rule)
+    assert not is_tool_evidence("compiler:" + rule.removeprefix("compiler:"))
+    assert not is_tool_evidence("clean-refuted:compiler:" + rule.removeprefix("compiler:"))
+    assert is_tool_evidence("compiler:-Wanalyzer-use-after-free")
+
+
+@needs_gcc
+@pytest.mark.parametrize("body", [
+    "return (int*)&value;",
+    "if (0) return *(int*)&value; return 0;",
+    "int *p=(int*)&value; return *p;",
+])
+def test_aliasing_safe_and_unsafe_warnings_remain_inconclusive(tmp_path, sandbox_spy, body):
+    target = tmp_path / "repo"
+    target.mkdir()
+    source = "void *f(float value) { " + body + " }\n" if body.startswith("return (") else "int f(float value) { " + body + " }\n"
+    (target / "a.c").write_text(source)
+    result = run_compiler_analyzer_sweep(
+        target_path=target, file_path="a.c", function_name="f",
+        line_start=1, line_end=1, cwe="CWE-843",
+        hypothesis="incompatible access",
+    )
+    assert result.outcome == "inconclusive"
+    assert result.matches
+    assert result.details["candidate_only"]

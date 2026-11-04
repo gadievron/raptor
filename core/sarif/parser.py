@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
+from core.detectors.compiler_families import compiler_diagnostic_is_candidate
 from core.config import RaptorConfig
 from core.json import load_json, loads
 from core.logging import get_logger
@@ -923,6 +924,10 @@ def parse_sarif_findings(
                     run_idx + 1,
                 )
                 continue
+            if (compiler_diagnostic_is_candidate(result.get("ruleId", ""))
+                    or compiler_diagnostic_is_candidate(get_result_rule(run, result).get("id", ""))):
+                continue
+
             # finding_id resolution:
             #   1. SARIF tool-supplied fingerprint (best — survives
             #      reformatting / line-shifts that the tool tracked).

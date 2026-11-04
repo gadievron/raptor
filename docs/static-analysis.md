@@ -572,3 +572,13 @@ invocations when `codeql_threads` is `auto`.
 
 Pass `--sequential` for a fully serial run: packs one at a time AND
 stages in order (no Semgrep/CodeQL overlap).
+
+### Compiler review candidates
+
+Strict-aliasing warnings can also describe safe pointer conversions or unreachable
+code. Compiler scanning preserves these warnings in
+`scan/compiler-review-candidates.json` with status `needs_review`. They require
+independent corroboration and are excluded from normal findings and automatic
+finding analysis. The scan summary reports their count. In `/audit`, these
+warnings alone produce an inconclusive result, even when they match the hypothesis.
+A clean run does not refute an aliasing hypothesis.
