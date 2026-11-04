@@ -102,11 +102,15 @@ class _CannedUpstream:
                 self.wfile.write(body)
 
         self._server = http.server.HTTPServer(("127.0.0.1", 0), _H)
-        host, port = self._server.server_address
-        self.base_url = f"http://{host}:{port}"
-        threading.Thread(
-            target=self._server.serve_forever, daemon=True,
-        ).start()
+        try:
+            host, port = self._server.server_address
+            self.base_url = f"http://{host}:{port}"
+            threading.Thread(
+                target=self._server.serve_forever, daemon=True,
+            ).start()
+        except BaseException:
+            self._server.server_close()
+            raise
 
     def shutdown(self) -> None:
         self._server.shutdown()

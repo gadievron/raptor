@@ -95,12 +95,16 @@ class _AbortSSEUpstream:
                 self.connection.close()
 
         self._server = http.server.HTTPServer(("127.0.0.1", 0), _H)
-        self.base_url = (
-            "http://127.0.0.1:%d" % self._server.server_address[1]
-        )
-        threading.Thread(
-            target=self._server.serve_forever, daemon=True,
-        ).start()
+        try:
+            self.base_url = (
+                "http://127.0.0.1:%d" % self._server.server_address[1]
+            )
+            threading.Thread(
+                target=self._server.serve_forever, daemon=True,
+            ).start()
+        except BaseException:
+            self._server.server_close()
+            raise
 
     def shutdown(self) -> None:
         self._server.shutdown()
