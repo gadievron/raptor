@@ -11,18 +11,20 @@ artefact, not a trust boundary (triage owns that).
 
 from __future__ import annotations
 
+import io
 import json
 import logging
-import os
-import stat
 from pathlib import Path
 from typing import Any
 
 from core.sandbox.proxy import PROXY_EVENTS_FILENAME
+from core.security.capped_read import read_capped
 
 EGRESS_SUMMARY_FILE = "egress-summary.json"
 
 _MAX_LINES = 200_000
+_MAX_INPUT_BYTES = 64 * 1024 * 1024
+_MAX_LINE_CHARS = 1 * 1024 * 1024
 
 _CONTROL_PLANE_RESULTS = frozenset({"buffer_overflow", "parser_jail_degraded"})
 
@@ -37,38 +39,30 @@ log = logging.getLogger(__name__)
 
 
 def _read_proxy_events(run_dir: Path) -> list[dict[str, Any]]:
-    """Minimal JSONL reader — no MAC verification (not a trust surface)."""
-    path = run_dir / PROXY_EVENTS_FILENAME
-    try:
-        fd = os.open(
-            str(path),
-            os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
-        )
-    except OSError:
+    """Read bounded JSONL; this convenience summary does not verify MACs."""
+    data = read_capped(run_dir / PROXY_EVENTS_FILENAME, _MAX_INPUT_BYTES)
+    if data is None:
         return []
     events: list[dict[str, Any]] = []
-    try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            return []
-        with os.fdopen(fd, "r", encoding="utf-8", errors="replace") as fh:
-            fd = -1  # fdopen owns it now
-            for i, line in enumerate(fh):
-                if i >= _MAX_LINES:
-                    break
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                    if isinstance(obj, dict):
-                        events.append(obj)
-                except (ValueError, RecursionError):
-                    continue
-    finally:
-        if fd >= 0:
-            os.close(fd)
+    # TextIOWrapper preserves the previous universal-newline and UTF-8
+    # replacement behavior. The input cap bounds even a single long line;
+    # the separate character cap keeps it out of the JSON decoder.
+    with io.TextIOWrapper(io.BytesIO(data), encoding="utf-8", errors="replace") as fh:
+        for i, line in enumerate(fh):
+            if i >= _MAX_LINES:
+                break
+            if len(line) > _MAX_LINE_CHARS:
+                continue
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+                if isinstance(obj, dict):
+                    events.append(obj)
+            except (ValueError, RecursionError):
+                continue
     return events
-
 
 
 def _valid_proxy_event(event: dict[str, Any]) -> bool:
