@@ -24,10 +24,11 @@ binary blob.
 
 from __future__ import annotations
 
-import shutil
 import sys
 import tempfile
 from pathlib import Path
+
+from core.atomic_fs import rmtree_hardened
 
 
 def describe_main(
@@ -107,7 +108,7 @@ def describe_main(
         return 0
     finally:
         if tmp_extract_root is not None:
-            shutil.rmtree(tmp_extract_root, ignore_errors=True)
+            rmtree_hardened(tmp_extract_root)
 
 
 def _describe_binary(
@@ -226,25 +227,23 @@ def _resolve_archive(
     # w.r.t. the project — does NOT write into ``_sources/`` (the
     # cache is /scan's to populate; describing alone shouldn't
     # create persistent project state).
-    tmp_extract_root = Path(tempfile.mkdtemp(prefix="raptor-describe-"))
+    tmp_extract_root = None
+    transferred = False
     try:
+        tmp_extract_root = Path(tempfile.mkdtemp(prefix="raptor-describe-"))
         extract_to_dir(raw_path, tmp_extract_root)
-    except Exception as e:  # noqa: BLE001
-        # Broad on purpose: extraction runs on attacker-controlled
-        # input. ArchiveError, OSError, ValueError, MemoryError
-        # on oversized archives — any of them must fail gracefully
-        # rather than crash /describe.
-        stderr.write(
-            f"✗ archive extraction failed for {raw_path}: {e}\n"
-        )
-        shutil.rmtree(tmp_extract_root, ignore_errors=True)
+        result = (_descend_single_subdir(tmp_extract_root), tmp_extract_root,
+                  archive_label)
+        transferred = True
+        return result
+    except Exception as exc:  # noqa: BLE001 — refuse failed acquisition
+        stderr.write(f"✗ archive extraction failed for {raw_path}: {exc}\n")
         return None
-
-    return (
-        _descend_single_subdir(tmp_extract_root),
-        tmp_extract_root,
-        archive_label,
-    )
+    finally:
+        # The caller only owns a successfully resolved result. Cancellation,
+        # diagnostics, and descent failures must reclaim our allocation too.
+        if tmp_extract_root is not None and not transferred:
+            rmtree_hardened(tmp_extract_root)
 
 
 def _find_cached_extraction(
@@ -270,6 +269,7 @@ def _find_cached_extraction(
     location is content-bound to exactly these archive bytes.
     """
     try:
+        from core.archive.cache import is_cached_extraction
         from core.config import RaptorConfig
         from core.run.output import _resolve_active_project
         from core.run.provenance import archive_snapshot
@@ -296,7 +296,7 @@ def _find_cached_extraction(
     for root in roots:
         candidate = root / "_sources" / cache_name
         try:
-            if candidate.is_dir():
+            if is_cached_extraction(candidate):
                 return candidate
         except OSError:
             continue

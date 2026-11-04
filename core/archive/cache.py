@@ -14,6 +14,9 @@ two consumers proves the abstraction.
 
 from __future__ import annotations
 
+import stat
+from pathlib import Path
+
 _CACHE_NAME_ALLOWED = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
 
@@ -33,4 +36,16 @@ def safe_cache_name(archive_name: str, sha: str) -> str:
     return f"{base}-{sha}"
 
 
-__all__ = ["safe_cache_name"]
+def is_cached_extraction(path: Path) -> bool:
+    """Whether the cache slot itself is a real directory, without following links.
+
+    Published cache directories remain compatible with existing runs. Missing
+    slots are misses; unexpected I/O errors propagate to the caller.
+    """
+    try:
+        return stat.S_ISDIR(path.lstat().st_mode)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+
+
+__all__ = ["is_cached_extraction", "safe_cache_name"]
