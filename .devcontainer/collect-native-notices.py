@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import io
 import json
 from pathlib import Path, PurePosixPath
@@ -28,7 +29,7 @@ def download(url, *, max_bytes=MAX_ARCHIVE):
     return data
 
 
-def release_notices(data):
+def release_notices(data, definitions=()):
     """Inspect bounded regular files without extracting upstream paths."""
     records = []
     contents = {}
@@ -46,7 +47,8 @@ def release_notices(data):
             if path.is_absolute() or ".." in path.parts or member.name in seen:
                 raise ValueError("ambiguous release archive path")
             seen.add(member.name)
-            if not NOTICE.fullmatch(path.name):
+            declaration = len(path.parts) == 2 and path.parts[1] in definitions
+            if not NOTICE.fullmatch(path.name) and not declaration:
                 continue
             if not member.isfile() or member.size > MAX_TEXT:
                 raise ValueError("release notice is not a bounded regular file")
@@ -59,10 +61,13 @@ def release_notices(data):
                 raise ValueError("invalid release notice text")
             text.decode("utf-8")
             digest = hashlib.sha256(text).hexdigest()
-            filename = "LICENSE-" + digest + ".txt"
+            filename = ("NOTICE-BUILD-DECLARATION-" if declaration else "LICENSE-") + digest + ".txt"
             contents[filename] = text
-            records.append({"source_member": member.name, "file": filename, "sha256": digest})
-    if not records:
+            record = {"source_member": member.name, "file": filename, "sha256": digest}
+            if declaration:
+                record["content_kind"] = "build_declaration"
+            records.append(record)
+    if not any(row.get("content_kind") != "build_declaration" for row in records):
         raise ValueError("release has no notice candidates")
     return records, contents
 
@@ -123,7 +128,7 @@ def verify_python_source(sbom, version, archive_url, archive_sha):
         raise ValueError("Python source SBOM does not match the selected release archive")
 
 
-def collect(name, binary, args, pattern, repository, tag_prefix, output, *, python_source=False):
+def collect(name, binary, args, pattern, repository, tag_prefix, output, *, python_source=False, build_inventory=False):
     record = {"name": name, "binary": str(binary), "status": "unavailable", "files": [],
               "limitations": ["Release notice candidates do not prove exact build-source correspondence.",
                               "Statically linked and bundled dependency completeness is not established."]}
@@ -145,7 +150,8 @@ def collect(name, binary, args, pattern, repository, tag_prefix, output, *, pyth
             record["source_sbom_url"] = url + ".spdx.json"
             sbom = download(record["source_sbom_url"], max_bytes=MAX_SOURCE_SBOM)
             verify_python_source(sbom, version, url, record["source_archive_sha256"])
-        record["files"], contents = release_notices(archive)
+        definitions = ("Makefile",) if name == "git" else ("build.conf",) if name == "subversion" else ()
+        record["files"], contents = release_notices(archive, definitions if build_inventory else ())
         if sbom is not None:
             sha = hashlib.sha256(sbom).hexdigest()
             filename = "NOTICE-SOURCE-SBOM-" + sha + ".json"
@@ -153,16 +159,32 @@ def collect(name, binary, args, pattern, repository, tag_prefix, output, *, pyth
             record["files"].append({"file": filename, "sha256": sha,
                                     "source_url": record["source_sbom_url"], "content_kind": "source_sbom"})
             contents[filename] = sbom
+        if build_inventory:
+            try:
+                from native_build_inventory import collect_build_inventory
+                sources = {PurePosixPath(row["source_member"]).name: contents[row["file"]].decode("utf-8")
+                           for row in record["files"] if row.get("content_kind") == "build_declaration"}
+                inventory = collect_build_inventory(name, binary, version, sources)
+                source_hashes = [row["sha256"] for row in record["files"] if row.get("content_kind") == "build_declaration"]
+                for claim in inventory.claims:
+                    claim["source_definition_sha256"] = source_hashes
+                record["declared_files"] = inventory.claims
+                record["inventory_gaps"] = inventory.gaps
+                record["files"].extend(inventory.records)
+                contents.update(inventory.contents)
+            except (OSError, ValueError, KeyError, TypeError, UnicodeError, subprocess.SubprocessError) as exc:
+                record["declared_files"] = []
+                record["inventory_gaps"] = [type(exc).__name__ + ": " + str(exc)[:500]]
         record["status"] = "release_notice_candidates_captured"
     except (OSError, ValueError, UnicodeError, RecursionError, tarfile.TarError, EOFError,
-            subprocess.SubprocessError, urllib.error.URLError) as exc:
+            subprocess.SubprocessError, urllib.error.URLError, http.client.HTTPException) as exc:
         record["error"] = type(exc).__name__ + ": " + str(exc)[:500]
         print("Native notice collection warning; inspect /usr/share/doc/raptor-native-notices.")
     destination = output / name
     destination.mkdir(parents=True, exist_ok=True)
     # This directory belongs only to this collector. Never leave old texts
     # looking current after a version change or failed retrieval.
-    for pattern in ("LICENSE-*.txt", "NOTICE-SOURCE-SBOM-*.json"):
+    for pattern in ("LICENSE-*.txt", "NOTICE-SOURCE-SBOM-*.json", "NOTICE-BUILD-DECLARATION-*.txt", "NOTICE-INSTALLED-METADATA-*.txt"):
         for old in destination.glob(pattern):
             old.unlink()
     for filename, text in contents.items():
@@ -179,12 +201,12 @@ def main():
     collect("uv", Path("/usr/local/bin/uv"), ["--version"],
             r"uv ([0-9]+\.[0-9]+\.[0-9]+)(?: \([^\r\n]*\))?", "astral-sh/uv", "", args.output)
     collect("git", Path("/usr/local/bin/git"), ["--version"],
-            r"git version ([0-9]+\.[0-9]+\.[0-9]+)", "git/git", "v", args.output)
+            r"git version ([0-9]+\.[0-9]+\.[0-9]+)", "git/git", "v", args.output, build_inventory=True)
     collect("subversion", Path("/usr/bin/svn"), ["--version", "--quiet"],
-            r"([0-9]+\.[0-9]+\.[0-9]+)", "apache/subversion", "", args.output)
+            r"([0-9]+\.[0-9]+\.[0-9]+)", "apache/subversion", "", args.output, build_inventory=True)
     collect("cpython", Path("/usr/local/bin/python3"), ["--version"],
             r"Python ([0-9]+\.[0-9]+\.[0-9]+)", "python/cpython", "v", args.output,
-            python_source=True)
+            python_source=True, build_inventory=True)
 
 
 if __name__ == "__main__":

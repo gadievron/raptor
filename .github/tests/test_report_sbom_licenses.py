@@ -363,3 +363,57 @@ def test_report_matches_native_receipt_only_after_notice_bytes_are_validated(tmp
     assert report.metrics.native_identity_matched_executables == 0
     assert report.metrics.unidentified_executables == 2
     assert report.inventory_errors
+
+
+def test_report_grades_build_declarations_and_rejects_changed_install_metadata(tmp_path):
+    native, provenance, digest = inputs(tmp_path)
+    layer = "layer"
+    metadata = {"/usr/lib/python/config/Makefile": b"declared modules", "/usr/include/python/patchlevel.h": b"3.14.10"}
+    hashes = {path: hashlib.sha256(body).hexdigest() for path, body in metadata.items()}
+    native["files"] = [
+        {"location": {"path": "/usr/bin/python3", "layerID": layer}, "metadata": {"type": "RegularFile"},
+         "digests": [{"algorithm": "sha256", "value": "a" * 64}]},
+        {"location": {"path": "/usr/lib/python/_example.so", "layerID": layer}, "metadata": {"type": "RegularFile"},
+         "digests": [{"algorithm": "sha256", "value": "e" * 64}], "unknowns": ["no package identified"]}]
+    for path, sha in hashes.items():
+        native["files"].append({"location": {"path": path, "layerID": layer}, "metadata": {"type": "RegularFile"},
+                                "digests": [{"algorithm": "sha256", "value": sha}]})
+    raw = json.dumps(native).encode()
+    (tmp_path / "syft.json").write_bytes(raw)
+    provenance["inputs"][0]["sha256"] = hashlib.sha256(raw).hexdigest()
+    directory = tmp_path / "prepared/notices/sha256"
+    directory.mkdir(parents=True)
+    prefix = "/usr/share/doc/raptor-native-notices/cpython/"
+    records, evidence = [], []
+    for path, body in metadata.items():
+        sha = hashes[path]
+        filename = "NOTICE-INSTALLED-METADATA-" + sha + ".txt"
+        (directory / sha).write_bytes(body)
+        records.append({"file": filename, "sha256": sha, "image_path": path, "content_kind": "installed_build_metadata"})
+        evidence.append({"path": prefix + filename, "sha256": sha, "content_kind": "notice_candidate", "catalogue_layer_diff_id": layer})
+    text = b"upstream release license"
+    sha = hashlib.sha256(text).hexdigest()
+    (directory / sha).write_bytes(text)
+    records.append({"file": "LICENSE.txt", "sha256": sha})
+    evidence.append({"path": prefix + "LICENSE.txt", "sha256": sha, "content_kind": "notice_candidate", "catalogue_layer_diff_id": layer})
+    receipt = {"name": "cpython", "version": "3.14.10", "binary": "/usr/bin/python3", "binary_sha256": "a" * 64,
+               "status": "release_notice_candidates_captured", "files": records,
+               "declared_files": [{"path": "/usr/lib/python/_example.so", "sha256": "e" * 64,
+                                   "basis": "cpython_installed_module_build_inventory", "metadata_sha256": list(hashes.values())}]}
+    raw = json.dumps(receipt).encode()
+    sha = hashlib.sha256(raw).hexdigest()
+    (directory / sha).write_bytes(raw)
+    evidence.append({"path": prefix + "NOTICE-PROVENANCE.json", "sha256": sha, "content_kind": "notice_candidate", "catalogue_layer_diff_id": layer})
+    provenance["notice_evidence"]["unassociated_files"] = evidence
+    save(tmp_path, provenance)
+    report = tool.collect(tmp_path, digest)
+    assert report.metrics.build_declared_executables == 1 and report.metrics.unidentified_executables == 0
+    assert report.native_declaration_matches[0]["evidence_kind"] == "installed_build_declaration"
+    assert report.metrics.checksum_matched_executables == report.metrics.native_identity_matched_executables == 0
+    native["files"][-1]["digests"][0]["value"] = "f" * 64
+    raw = json.dumps(native).encode()
+    (tmp_path / "syft.json").write_bytes(raw)
+    provenance["inputs"][0]["sha256"] = hashlib.sha256(raw).hexdigest()
+    save(tmp_path, provenance)
+    report = tool.collect(tmp_path, digest)
+    assert report.metrics.build_declared_executables == 0 and report.metrics.unidentified_executables == 1

@@ -162,3 +162,28 @@ def test_python_source_supports_official_spdx_describes_relationship():
     document["SPDXID"] = "SPDXRef-DOCUMENT"
     document["relationships"] = [{"spdxElementId": "SPDXRef-DOCUMENT", "relationshipType": "DESCRIBES", "relatedSpdxElement": "python"}]
     tool.verify_python_source(json.dumps(document).encode(), "3.14.10", "https://example.invalid/Python.tgz", "a" * 64)
+
+
+def test_build_definitions_are_retained_and_bound_to_file_claims(tmp_path, monkeypatch):
+    import hashlib
+    import sys
+    from types import SimpleNamespace
+    binary = tmp_path / "git"
+    binary.write_bytes(b"installed Git")
+    source = b"PROGRAM_OBJS += shell.o\n"
+    data = archive([("git/LICENSE", b"project license"), ("git/Makefile", source)])
+    monkeypatch.setattr(tool, "identify", lambda *args: "2.56.0")
+    monkeypatch.setattr(tool, "download", lambda *args, **kwargs: data)
+
+    def inventory(name, path, version, definitions):
+        assert name == "git" and path == binary and version == "2.56.0"
+        assert definitions == {"Makefile": source.decode()}
+        return SimpleNamespace(claims=[{"path": "/usr/local/bin/git-shell", "sha256": "a" * 64,
+                                        "basis": "git_release_target_and_elf_version", "metadata_sha256": []}],
+                               records=[], contents={}, gaps=[])
+
+    monkeypatch.setitem(sys.modules, "native_build_inventory", SimpleNamespace(collect_build_inventory=inventory))
+    result = tool.collect("git", binary, [], "unused", "git/git", "v", tmp_path / "out", build_inventory=True)
+    assert result["status"] == "release_notice_candidates_captured"
+    assert result["declared_files"][0]["source_definition_sha256"] == [hashlib.sha256(source).hexdigest()]
+    assert any(item.get("content_kind") == "build_declaration" for item in result["files"])

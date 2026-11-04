@@ -73,3 +73,57 @@ def test_primary_symlink_is_resolved_only_using_same_layer_catalogue():
     assert resolved[0]["identity"]["resolved_anchor_path"] == "/usr/local/bin/git-real"
     native["files"][-1]["location"]["layerID"] = "different"
     assert not match_native_identities(native, candidates, identities)[0]
+
+
+def declaration_fixture():
+    native, candidates, identities = fixture()
+    native["files"][1]["digests"][0]["value"] = "e" * 64
+    native["files"].extend([entry("/usr/lib/python/Makefile", "c" * 64), entry("/usr/include/python/patchlevel.h", "d" * 64)])
+    identities[0]["name"] = "cpython"
+    identities[0]["installed_metadata"] = [{"image_path": "/usr/lib/python/Makefile", "sha256": "c" * 64},
+                                            {"image_path": "/usr/include/python/patchlevel.h", "sha256": "d" * 64}]
+    identities[0]["declared_files"] = [{"path": candidates[0]["path"], "sha256": "e" * 64,
+                                         "basis": "cpython_installed_module_build_inventory", "metadata_sha256": ["c" * 64, "d" * 64]}]
+    return native, candidates, identities
+
+
+def test_build_declarations_are_separate_from_native_alias_proofs():
+    from core.oci.file_ownership import match_native_declarations
+    native, candidates, identities = declaration_fixture()
+    assert not match_native_identities(native, candidates, identities)[0]
+    resolved, pending = match_native_declarations(native, candidates, identities)
+    assert not pending and resolved[0]["evidence_kind"] == "installed_build_declaration"
+
+
+@pytest.mark.parametrize("change", ["payload", "metadata", "missing_metadata", "layer", "unknown_basis", "ambiguous"])
+def test_build_claims_fail_closed_on_changed_or_incomplete_evidence(change):
+    from core.oci.file_ownership import match_native_declarations
+    native, candidates, identities = declaration_fixture()
+    if change == "payload":
+        native["files"][1]["digests"][0]["value"] = "f" * 64
+    elif change == "metadata":
+        native["files"][2]["digests"][0]["value"] = "f" * 64
+    elif change == "missing_metadata":
+        identities[0]["installed_metadata"] = []
+    elif change == "layer":
+        native["files"][2]["location"]["layerID"] = "different"
+    elif change == "unknown_basis":
+        identities[0]["declared_files"][0]["basis"] = "directory_name_guess"
+    else:
+        other = deepcopy(identities[0])
+        other["name"] = "other"
+        identities.append(other)
+    resolved, pending = match_native_declarations(native, candidates, identities)
+    assert not resolved and len(pending) == 1
+
+
+def test_version_signatures_require_retained_release_target_definition():
+    from core.oci.file_ownership import match_native_declarations
+    native, candidates, identities = declaration_fixture()
+    claim = identities[0]["declared_files"][0]
+    claim.update(basis="git_release_target_and_elf_version", metadata_sha256=[])
+    assert not match_native_declarations(native, candidates, identities)[0]
+    claim["source_definition_sha256"] = ["f" * 64]
+    identities[0]["source_definitions"] = ["f" * 64]
+    resolved, pending = match_native_declarations(native, candidates, identities)
+    assert not pending and resolved[0]["evidence_kind"] == "release_target_and_version"

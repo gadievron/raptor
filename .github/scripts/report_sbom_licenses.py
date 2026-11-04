@@ -17,6 +17,7 @@ LIMITATIONS = [
     "Coverage describes catalogued packages and retained notice candidates.",
     "Standard license reference copies remain distinct from upstream-authored notices.",
     "Source/build notes cover only explicitly assessed packages.",
+    "Package checksum proofs, native identities and build-declared ownership are distinct evidence types.",
     "Nested payload completeness, legal review and exact build-source correspondence are separate checks.",
     "Gaps and unavailable audit evidence are warnings; they do not block publication.",
 ]
@@ -34,6 +35,8 @@ class Metrics:
     scanner_unidentified_executables: int | None = None
     checksum_matched_executables: int | None = None
     native_identity_matched_executables: int | None = None
+    build_declared_executables: int | None = None
+    version_identified_executables: int | None = None
 
 
 @dataclass
@@ -57,6 +60,7 @@ class Report:
     inventory_candidates: list[dict] = field(default_factory=list)
     inventory_ownership: list[dict] = field(default_factory=list)
     native_identity_matches: list[dict] = field(default_factory=list)
+    native_declaration_matches: list[dict] = field(default_factory=list)
     inventory_errors: list[str] = field(default_factory=list)
     native_notice_collections: list[dict] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
@@ -189,11 +193,14 @@ def collect(audit, image_digest):
                             raise ValueError("native release notice hash mismatch")
                 report.native_notice_collections.append(receipt)
                 if (receipt["status"] == "release_notice_candidates_captured"
-                        and any(item.get("content_kind") != "source_sbom" for item in receipt["files"])):
+                        and any(item.get("content_kind") not in {"source_sbom", "build_declaration", "installed_build_metadata", "registry_metadata"} for item in receipt["files"])):
                     native_identities.append({"name": receipt["name"], "version": receipt.get("version"),
                                               "anchor_path": receipt.get("binary"), "sha256": receipt.get("binary_sha256"),
                                               "layer_id": evidence["catalogue_layer_diff_id"],
-                                              "evidence_path": path, "evidence_sha256": digest})
+                                              "evidence_path": path, "evidence_sha256": digest,
+                                              "declared_files": receipt.get("declared_files", []),
+                                              "installed_metadata": [item for item in receipt["files"] if item.get("content_kind") == "installed_build_metadata"],
+                                              "source_definitions": [item["sha256"] for item in receipt["files"] if item.get("content_kind") == "build_declaration"]})
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 report.inventory_errors.append("Native notice receipt unavailable: " + str(exc))
         indexed_files = native.get("files")
@@ -216,6 +223,11 @@ def collect(audit, image_digest):
             from core.oci.file_ownership import match_native_identities
             report.native_identity_matches, report.inventory_candidates = match_native_identities(
                 native, report.inventory_candidates, native_identities)
+            from core.oci.file_ownership import match_native_declarations
+            report.native_declaration_matches, report.inventory_candidates = match_native_declarations(
+                native, report.inventory_candidates, native_identities)
+            report.metrics.build_declared_executables = sum(row["evidence_kind"] == "installed_build_declaration" for row in report.native_declaration_matches)
+            report.metrics.version_identified_executables = sum(row["evidence_kind"] == "release_target_and_version" for row in report.native_declaration_matches)
             report.metrics.native_identity_matched_executables = len(report.native_identity_matches)
             report.metrics.scanner_unidentified_executables = len(raw_candidates)
             report.metrics.checksum_matched_executables = len(report.inventory_ownership)
@@ -229,6 +241,7 @@ def collect(audit, image_digest):
         report.inventory_candidates = []
         report.inventory_ownership = []
         report.native_identity_matches = []
+        report.native_declaration_matches = []
         report.inventory_errors = []
         report.native_notice_collections = []
         report.errors = [str(exc)]
@@ -255,6 +268,8 @@ def markdown(report):
                   f"| Executables without scanner package identification | {metrics.scanner_unidentified_executables if metrics.scanner_unidentified_executables is not None else 'unknown'} |",
                   f"| Files matched to package records by SHA-256 | {metrics.checksum_matched_executables if metrics.checksum_matched_executables is not None else 'unknown'} |",
                   f"| Files matched to collected native identities by SHA-256 | {metrics.native_identity_matched_executables if metrics.native_identity_matched_executables is not None else 'unknown'} |",
+                  f"| Files associated through installed build declarations | {metrics.build_declared_executables if metrics.build_declared_executables is not None else 'unknown'} |",
+                  f"| Files identified by release targets and version signatures | {metrics.version_identified_executables if metrics.version_identified_executables is not None else 'unknown'} |",
                   f"| Executable files needing ownership checks | {metrics.unidentified_executables if metrics.unidentified_executables is not None else 'unknown'} |", ""]
         if report.issues:
             lines += ["| Package | Missing evidence |", "| --- | --- |"]

@@ -141,19 +141,7 @@ def _anchor(indexed, path, layer):
     return None
 
 
-def match_native_identities(native, candidates, identities):
-    """Recognize primary binaries and byte-identical aliases, not whole trees.
-
-    Each identity carries a source reference already checked by the caller
-    (for example a digest-bound notice receipt). Its anchor must resolve to
-    exactly one regular file whose actual SHA-256 matches in the same layer.
-    Distinct identities claiming identical bytes stay ambiguous.
-    """
-    indexed = {}
-    for entry in native["files"]:
-        key = entry["location"]["path"], entry["location"].get("layerID")
-        indexed.setdefault(key, []).append(entry)
-    claims = {}
+def _verified_identities(indexed, identities):
     for identity in identities:
         if (not isinstance(identity.get("name"), str) or not identity["name"]
                 or not isinstance(identity.get("version"), str) or not identity["version"]
@@ -169,7 +157,24 @@ def match_native_identities(native, candidates, identities):
         if anchor is None or anchor[1] != identity["sha256"]:
             continue
         claim = {**identity, "resolved_anchor_path": anchor[0]}
-        claims.setdefault((layer, anchor[1]), {})[(identity["name"], identity["version"])] = claim
+        yield claim
+
+
+def match_native_identities(native, candidates, identities):
+    """Recognize primary binaries and byte-identical aliases, not whole trees.
+
+    Each identity carries a source reference already checked by the caller
+    (for example a digest-bound notice receipt). Its anchor must resolve to
+    exactly one regular file whose actual SHA-256 matches in the same layer.
+    Distinct identities claiming identical bytes stay ambiguous.
+    """
+    indexed = {}
+    for entry in native["files"]:
+        key = entry["location"]["path"], entry["location"].get("layerID")
+        indexed.setdefault(key, []).append(entry)
+    claims = {}
+    for claim in _verified_identities(indexed, identities):
+        claims.setdefault((claim["layer_id"], claim["sha256"]), {})[(claim["name"], claim["version"])] = claim
     resolved, pending = [], []
     for candidate in candidates:
         key = candidate["path"], candidate["layer_id"]
@@ -183,4 +188,73 @@ def match_native_identities(native, candidates, identities):
         else:
             pending.append({**candidate, "native_identity_gap":
                             "ambiguous_native_identities" if owners else "no_verified_native_identity"})
+    return resolved, pending
+
+
+def match_native_declarations(native, candidates, identities):
+    """Associate build-declared files separately from publisher checksum proofs.
+
+    The trusted collector checks build manifests or program version signatures;
+    this matcher binds those declarations and their retained metadata to the
+    frozen image. It does not claim a reproducible source-to-binary build.
+    """
+    installed = {"cpython_installed_module_build_inventory", "cpython_installed_abi_build_inventory",
+                 "subversion_pkgconfig_and_libtool_inventory"}
+    signatures = {"git_release_target_and_elf_version", "subversion_release_target_and_runtime_version"}
+    indexed = {}
+    for entry in native["files"]:
+        key = entry["location"]["path"], entry["location"].get("layerID")
+        indexed.setdefault(key, []).append(entry)
+    claims = {}
+    for identity in _verified_identities(indexed, identities):
+        metadata = {}
+        for item in identity.get("installed_metadata", []):
+            key = item.get("image_path"), identity["layer_id"]
+            rows = indexed.get(key, [])
+            if len(rows) == 1 and _sha256(rows[0]) == item.get("sha256"):
+                metadata[item["sha256"]] = item["image_path"]
+        declarations = identity.get("declared_files", [])
+        if not isinstance(declarations, list) or len(declarations) > 4096:
+            continue
+        for declaration in declarations:
+            if not isinstance(declaration, dict):
+                continue
+            basis = declaration.get("basis")
+            if not isinstance(basis, str) or basis not in installed | signatures:
+                continue
+            path, sha = declaration.get("path"), declaration.get("sha256")
+            try:
+                image_path(path)
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(sha, str) or not re.fullmatch(r"[a-f0-9]{64}", sha):
+                continue
+            evidence = declaration.get("metadata_sha256", [])
+            if not isinstance(evidence, list) or any(not isinstance(value, str) or value not in metadata for value in evidence):
+                continue
+            if basis in installed and len(set(evidence)) < 2:
+                continue
+            source = declaration.get("source_definition_sha256", [])
+            if (not isinstance(source, list) or any(not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value) or value not in identity.get("source_definitions", []) for value in source)
+                    or (not basis.startswith("cpython_") and not source)):
+                continue
+            proof = {"name": identity["name"], "version": identity["version"],
+                     "evidence_path": identity["evidence_path"], "evidence_sha256": identity["evidence_sha256"],
+                     "basis": basis, "metadata_sha256": evidence, "source_definition_sha256": source,
+                     "version_signature": declaration.get("version_signature"), "declaration": declaration.get("declaration")}
+            key = path, identity["layer_id"]
+            claims.setdefault(key, {})[(identity["name"], identity["version"], sha)] = (sha, proof)
+    resolved, pending = [], []
+    for candidate in candidates:
+        key = candidate["path"], candidate["layer_id"]
+        rows = indexed.get(key, [])
+        actual = _sha256(rows[0]) if len(rows) == 1 else None
+        owners = list(claims.get(key, {}).values())
+        if len(owners) == 1 and actual == owners[0][0]:
+            proof = owners[0][1]
+            resolved.append({"path": key[0], "layer_id": key[1], "sha256": actual, "identity": proof,
+                             "evidence_kind": "installed_build_declaration" if proof["basis"] in installed else "release_target_and_version"})
+        else:
+            pending.append({**candidate, "build_inventory_gap":
+                            "ambiguous_build_declarations" if len(owners) > 1 else "missing_or_mismatched_build_declaration"})
     return resolved, pending

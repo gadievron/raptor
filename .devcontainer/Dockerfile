@@ -212,8 +212,12 @@ COPY .devcontainer/prune-windows-helpers.py /usr/local/libexec/prune-windows-hel
 RUN python3 /usr/local/libexec/prune-windows-helpers.py
 
 # Retain version-matched release notices for tools outside package metadata.
+COPY LICENSE /usr/share/doc/raptor/LICENSE
+COPY .devcontainer/native_build_inventory.py /usr/local/libexec/native_build_inventory.py
 COPY .devcontainer/collect-native-notices.py /usr/local/libexec/collect-native-notices.py
 RUN python3 /usr/local/libexec/collect-native-notices.py
+COPY .devcontainer/collect-npm-native-notices.py /usr/local/libexec/collect-npm-native-notices.py
+RUN python3 /usr/local/libexec/collect-npm-native-notices.py
 
 # ============================================================================
 # ENVIRONMENT CONFIGURATION
