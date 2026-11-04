@@ -3,6 +3,8 @@ from pathlib import Path
 import re
 import subprocess
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -56,7 +58,8 @@ def publication_script():
     return "\n".join(line[10:] if line.startswith("          ") else line for line in block.splitlines())
 
 
-def test_publication_allows_gap_reports_but_rejects_changed_image_bytes(tmp_path):
+@pytest.mark.parametrize("input_tag,scope_status", [("", 0), ("v1.2.3", 2), ("", 1), ("", 2)])
+def test_publication_allows_gap_reports_but_rejects_changed_image_bytes(tmp_path, input_tag, scope_status):
     import hashlib
     import json
     import os
@@ -66,6 +69,10 @@ def test_publication_allows_gap_reports_but_rejects_changed_image_bytes(tmp_path
     skopeo = binary_dir / "skopeo"
     skopeo.write_text("#!/bin/sh\nset -eu\ncase \"$1\" in\ninspect) cat \"$TEST_MANIFEST\" ;;\ncopy) printf '%s\\n' \"$*\" >> \"$TEST_COPIES\" ;;\n*) exit 42 ;;\nesac\n")
     skopeo.chmod(0o755)
+    # Stub the freshness boundary, preserving the workflow's own branching.
+    python = binary_dir / "python3"
+    python.write_text("#!/bin/sh\nset -eu\ntest \"$#\" -eq 2\ntest \"$1\" = .github/scripts/dockerhub_scope.py\ntest \"$2\" = --check-main\ntest \"$IMAGE_INPUTS\" = \"$TEST_FINGERPRINT\"\nprintf '%s\\n' \"$*\" >> \"$TEST_SCOPE_CALLS\"\nexit \"$TEST_SCOPE_STATUS\"\n")
+    python.chmod(0o755)
     runtime = tmp_path / "runner"
     evidence = runtime / "container-sbom"
     evidence.mkdir(parents=True)
@@ -73,15 +80,26 @@ def test_publication_allows_gap_reports_but_rejects_changed_image_bytes(tmp_path
     (evidence / "image-digest.txt").write_text("sha256:" + hashlib.sha256(raw).hexdigest() + "\n")
     manifest = tmp_path / "manifest.json"
     copied = tmp_path / "copied.txt"
+    scope_calls = tmp_path / "scope-calls.txt"
     env = dict(os.environ, PATH=str(binary_dir) + os.pathsep + os.environ["PATH"],
                RUNNER_TEMP=str(runtime), TAGS="example.invalid/image:a,example.invalid/image:b",
-               DOCKER_CONFIG=str(tmp_path / "docker-auth"),
+               DOCKER_CONFIG=str(tmp_path / "docker-auth"), INPUT_TAG=input_tag,
+               IMAGE_INPUTS="a" * 64, TEST_FINGERPRINT="a" * 64,
+               TEST_SCOPE_CALLS=str(scope_calls), TEST_SCOPE_STATUS=str(scope_status),
                TEST_MANIFEST=str(manifest), TEST_COPIES=str(copied))
     for status in ("gaps", "unavailable", "changed-image"):
         copied.unlink(missing_ok=True)
+        scope_calls.unlink(missing_ok=True)
         (evidence / "license-report.json").write_text(json.dumps({"status": status}))
         manifest.write_bytes(raw + b"\n" if status == "changed-image" else raw)
         result = subprocess.run(["bash", "-c", publication_script()], env=env, text=True, capture_output=True)
+        assert scope_calls.exists() is (not bool(input_tag))
+        if not input_tag:
+            assert scope_calls.read_text().splitlines() == [".github/scripts/dockerhub_scope.py --check-main"]
+        if not input_tag and scope_status:
+            assert result.returncode == (0 if scope_status == 1 else scope_status), result.stderr
+            assert not copied.exists()
+            continue
         if status == "changed-image":
             assert result.returncode != 0
             assert not copied.exists()
