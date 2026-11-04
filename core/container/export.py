@@ -18,7 +18,10 @@ gets them from the sandbox's per-namespace /dev anyway.
 
 from __future__ import annotations
 
+import errno
 import json
+import os
+import stat
 import logging
 import tarfile
 import tempfile
@@ -26,6 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from core.run.scratch import scratch_dir
 from core.container.failures import classify_docker_stderr
 from core.container.proc import run_cli
 
@@ -117,6 +121,11 @@ def parse_image_config(inspect_json: str) -> ImageRuntimeConfig | None:
     )
 
 
+def _validate_quota(name: str, value: int) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{name} must be a nonnegative integer")
+
+
 def extract_rootfs_tar(
     tar_path: str | Path,
     dest_dir: str | Path,
@@ -124,38 +133,57 @@ def extract_rootfs_tar(
     max_total_bytes: int = DEFAULT_MAX_ROOTFS_BYTES,
     max_entry_count: int = DEFAULT_MAX_ROOTFS_ENTRIES,
 ) -> tuple[int, int]:
-    """Extract an image-export tarball into ``dest_dir`` safely.
+    """Extract under quotas and atomically publish a complete rootfs.
 
-    Returns ``(extracted, skipped)``. Members PEP 706's ``data`` filter
-    refuses (device nodes, absolute paths, traversal, unsafe links) are
-    skipped and counted — never trusted. Cumulative header-declared
-    bytes and member count are quota-checked BEFORE each extract (a
-    hostile image must not fill host disk/inodes mid-walk); breach
-    raises :class:`RootfsQuotaExceeded`. Raises ``tarfile.TarError`` /
-    ``OSError`` only for whole-archive failures.
+    The destination must be absent or an empty real directory. Scratch
+    lives on its filesystem and is reclaimed on every failure, including
+    interruption. Returns (extracted, skipped); data-filter refusals and
+    unsupported members may be skipped, but storage failures abort.
     """
+    _validate_quota("max_total_bytes", max_total_bytes)
+    _validate_quota("max_entry_count", max_entry_count)
     dest = Path(dest_dir)
-    dest.mkdir(parents=True, exist_ok=True)
-    extracted = 0
-    skipped = 0
-    total_bytes = 0
-    with tarfile.open(tar_path) as tf:
-        for count, member in enumerate(tf, start=1):
-            if count > max_entry_count:
-                raise RootfsQuotaExceeded(
-                    f"rootfs tar exceeds {max_entry_count} entries; refusing")
-            total_bytes += member.size
-            if total_bytes > max_total_bytes:
-                raise RootfsQuotaExceeded(
-                    f"rootfs tar exceeds {max_total_bytes} bytes; refusing")
-            try:
-                tf.extract(member, dest, filter="data")
-                extracted += 1
-            except tarfile.FilterError:
-                skipped += 1
-            except OSError:
-                # e.g. hardlink target skipped earlier, exotic perms.
-                skipped += 1
+    try:
+        previous = dest.lstat()
+    except FileNotFoundError:
+        previous = None
+    if previous is not None:
+        if not stat.S_ISDIR(previous.st_mode) or any(dest.iterdir()):
+            raise FileExistsError(f"rootfs destination must be absent or empty: {dest}")
+    extracted = skipped = total_bytes = 0
+    storage_errors = {
+        errno.ENOSPC, errno.EDQUOT, errno.EIO, errno.EROFS,
+        errno.ENOMEM, errno.EMFILE, errno.ENFILE,
+    }
+    with scratch_dir("raptor-rootfs-extract-", dir=dest.parent) as scratch:
+        tree = scratch / "rootfs"
+        tree.mkdir()
+        if previous is not None:
+            tree.chmod(stat.S_IMODE(previous.st_mode))
+        with tarfile.open(tar_path) as tf:
+            for count, member in enumerate(tf, start=1):
+                if count > max_entry_count:
+                    raise RootfsQuotaExceeded(
+                        f"rootfs tar exceeds {max_entry_count} entries; refusing")
+                total_bytes += member.size
+                if total_bytes > max_total_bytes:
+                    raise RootfsQuotaExceeded(
+                        f"rootfs tar exceeds {max_total_bytes} bytes; refusing")
+                try:
+                    tf.extract(member, tree, filter="data")
+                    extracted += 1
+                except tarfile.FilterError:
+                    skipped += 1
+                except OSError as exc:
+                    if exc.errno in storage_errors:
+                        raise
+                    # Missing hardlink targets and unsupported metadata can
+                    # degrade a rootfs; disk/resource exhaustion cannot.
+                    skipped += 1
+        if extracted:
+            # replace refuses a populated directory or non-directory that
+            # appeared during extraction; never merge into another tree.
+            os.replace(tree, dest)
     if skipped:
         logger.debug("rootfs extract: %d members skipped by the data filter",
                      skipped)
@@ -173,7 +201,7 @@ def _image_size_bytes(inspect_json: str) -> int | None:
     if not isinstance(data, dict):
         return None
     size = data.get("Size")
-    return size if isinstance(size, int) else None
+    return size if type(size) is int and size >= 0 else None
 
 
 def export_rootfs(
@@ -204,6 +232,9 @@ def export_rootfs(
     sandbox tier an empty tree, and a high skip ratio is flagged
     ``rootfs_degraded``.
     """
+    _validate_quota("max_image_bytes", max_image_bytes)
+    _validate_quota("max_rootfs_bytes", max_rootfs_bytes)
+    _validate_quota("max_rootfs_entries", max_rootfs_entries)
     create_cmd = ["docker", "create"]
     if platform:
         create_cmd.extend(["--platform", platform])
