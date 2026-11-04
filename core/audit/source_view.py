@@ -1504,6 +1504,16 @@ def _string_end(
     """
     n = len(source)
     i = start + 1
+    # Raw literals have no escapes or newline boundary. Native search
+    # preserves the character loop's behavior for a single-character quote.
+    if (raw and not doubling and type(source) is str and type(quote) is str
+            and len(quote) == 1 and type(start) is int and start >= 0):
+        close = source.find(quote, i)
+        if close >= 0:
+            return close + 1
+        if on_eof is not None:
+            on_eof()
+        return n
     while i < n:
         ch = source[i]
         if ch == "\\" and not raw and escapes:
