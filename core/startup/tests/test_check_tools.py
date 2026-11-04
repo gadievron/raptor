@@ -127,6 +127,8 @@ class TestGroupMemberWarnings:
 class TestSemgrepVersion:
     def test_prefers_importlib_metadata(self):
         with mock.patch(
+            "shutil.which", return_value=None,
+        ), mock.patch(
             "importlib.metadata.version", return_value="1.172.0",
         ), mock.patch(
             "core.startup.init._cached_cli_version",
@@ -138,6 +140,8 @@ class TestSemgrepVersion:
         from importlib.metadata import PackageNotFoundError
 
         with mock.patch(
+            "shutil.which", return_value=None,
+        ), mock.patch(
             "importlib.metadata.version",
             side_effect=PackageNotFoundError("semgrep"),
         ), mock.patch(
@@ -145,6 +149,18 @@ class TestSemgrepVersion:
             return_value="1.160.0",
         ) as cli:
             assert startup_init._semgrep_version() == "1.160.0"
+        cli.assert_called_once_with("semgrep")
+
+    def test_external_path_binary_uses_its_own_version(self, tmp_path):
+        with mock.patch(
+            "shutil.which", return_value=str(tmp_path / "semgrep"),
+        ), mock.patch(
+            "importlib.metadata.version",
+        ) as metadata, mock.patch(
+            "core.startup.init._cached_cli_version", return_value="1.177.0",
+        ) as cli:
+            assert startup_init._semgrep_version() == "1.177.0"
+        metadata.assert_not_called()
         cli.assert_called_once_with("semgrep")
 
 
