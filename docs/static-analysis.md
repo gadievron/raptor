@@ -412,6 +412,24 @@ reported as coverage limitations. Existing compiler findings are retained.
 No overlap warning means no finding from this check; it does not establish that
 the file is safe.
 
+### Returning stack addresses
+
+With `--compiler-scan`, GCC warnings about returning a local address select C
+files for a targeted Clang analysis. A finding requires Clang's path-sensitive
+stack-return diagnostic at the same original source location. A frontend warning
+alone is not enough: it can also fire in an unreachable branch.
+
+Clang analyzes a source view preprocessed by GCC, preserving the original macro
+decisions. This avoids treating a different compiler-specific branch as proof.
+Corroborated findings use `raptor.compiler.stack-return`, carry CWE-562 and record
+both compilers and the GCC preprocessing context in their SARIF properties.
+Existing compiler findings remain.
+
+Only candidate files get the additional preprocessing and analysis, with at most
+50 candidate translation units and 256 candidate locations per unit, with the
+existing worker and tool timeout limits. Missing Clang or an incompatible source view limits this additional check
+and is reported as a coverage warning; it does not disable the compiler scan.
+
 ### Compiler-scan coverage limitations
 
 `--compiler-scan` treats analyzer silence on a TU as evidence only

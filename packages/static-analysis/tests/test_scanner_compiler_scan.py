@@ -262,3 +262,19 @@ def test_stage_runs_shared_detector_and_exports_its_findings(tmp_path, monkeypat
     assert finding["ruleId"] == "-Wanalyzer-null-dereference"
     assert finding["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] == "main.c"
     assert not Path(calls[0]["output"]).exists()
+
+
+def test_additional_detector_limitation_is_reported_on_stderr(tmp_path, monkeypatch, capsys):
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    (repo / 'a.c').write_text('void f(void) {}\n')
+    out = tmp_path / 'out'
+    out.mkdir()
+    cs = _load_cs()
+    monkeypatch.setattr(cs, 'scan_target', lambda *a, **kw: cs.CompilerScanResult(
+        ok=True, tus_total=1, tus_analyzed=1, detector_limitations=[{
+            'tu': 'a.c', 'reason': 'Clang unavailable', 'detector': 'stack_return',
+        }],
+    ))
+    _scanner.run_compiler_scan_stage(repo, out)
+    assert 'additional analyzer limitation' in capsys.readouterr().err
