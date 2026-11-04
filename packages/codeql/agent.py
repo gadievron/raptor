@@ -23,6 +23,7 @@ from pathlib import Path
 if __name__ == "__main__":
     sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
+from core.build.artifacts import cleanup_build_paths
 from core.build.build_detector import BuildDetector, BuildSystem
 from core.config import RaptorConfig
 from core.json import load_json_bounded, save_json
@@ -353,6 +354,7 @@ class CodeQLAgent:
             CodeQLWorkflowResult with complete analysis results
         """
         errors = []
+        build_cleanup_paths: list[Path] = []
 
         sage_build_cmd: str | None = None
         sage_build_langs: str | None = None
@@ -533,6 +535,7 @@ class CodeQLAgent:
                     # Auto-detect build system
                     build_system = self.build_detector.detect_build_system(lang)
                     if build_system:
+                        build_cleanup_paths.extend(build_system.cleanup_paths)
                         # Validate build system
                         valid = self.build_detector.validate_build_command(build_system)
                         if not valid:
@@ -543,6 +546,8 @@ class CodeQLAgent:
                     else:
                         # Try to synthesise a build command for compiled languages
                         build_system = self.build_detector.synthesise_build_command(lang)
+                        if build_system:
+                            build_cleanup_paths.extend(build_system.cleanup_paths)
                         _sage_lang_set = {
                             s.strip()
                             for s in (sage_build_langs or "").split(",")
@@ -609,38 +614,9 @@ class CodeQLAgent:
                     traced_languages=traced_languages,
                 )
             finally:
-                # Clean up synthesised build artifacts. In a `finally`
-                # because the cleanup paths live UNDER the scanned
-                # repo (.raptor_build_* script + build dir): an
-                # exception escaping database creation would otherwise
-                # leak them into the target tree, and the next scan
-                # inventories RAPTOR's own build script as project
-                # source. Per-path try / except so one cleanup failure
-                # doesn't abort the whole sweep, and `is_dir()` /
-                # `is_file()` short-circuit if the path was already
-                # removed (idempotent under retry). `is_*` follows
-                # symlinks by default — use
-                # `follow_symlinks=False`-equivalent behaviour via
-                # `is_symlink()` short-circuit so we DELETE the
-                # symlink itself rather than its target (which could
-                # be in the user's repo or somewhere else entirely
-                # that we never put data into).
-                import shutil
-                for bs in language_build_map.values():
-                    for p in getattr(bs, 'cleanup_paths', None) or []:
-                        try:
-                            # Symlink → unlink the link, never follow.
-                            if p.is_symlink():
-                                p.unlink()
-                            elif p.is_dir():
-                                shutil.rmtree(p)
-                            elif p.is_file():
-                                p.unlink()
-                        except OSError as e:
-                            logger.debug(
-                                "cleanup of %s failed: %s — continuing",
-                                p, e,
-                            )
+                # Release scratch as soon as database creation finishes.
+                # The outer finally covers failures in build detection too.
+                cleanup_build_paths(build_cleanup_paths)
 
             # Check for failures
             successful_dbs = {
@@ -864,6 +840,11 @@ class CodeQLAgent:
                 sarif_files=[],
                 errors=[str(e)] + errors,
             )
+        finally:
+            # Acquired builds belong to this invocation, even if a later
+            # language fails before database creation or cancellation escapes.
+            # Only failed removals remain after the earlier sweep.
+            cleanup_build_paths(build_cleanup_paths)
 
     def _run_source_summaries_pass(self, successful_dbs) -> dict | None:
         """Derive Java source-wrapper summaries and stage their
