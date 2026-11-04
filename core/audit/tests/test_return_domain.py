@@ -640,3 +640,35 @@ class TestCacheLifecycle:
             d.mkdir()
             rd._constants_for_root(d, rd._Budget(20.0))
         assert len(rd._CONSTANTS_CACHE) <= rd._MAX_CONSTANTS_CACHE
+
+
+@pytest.mark.parametrize("guarded", [False, True])
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_constant_line_cursors_preserve_conditional_and_enum_selection(
+    tmp_path, guarded, newline,
+):
+    from core.audit import return_domain as rd
+
+    source = (
+        "#define ANCHOR -42\n"
+        "#if VARIANT_BUILD\n"
+        "enum { ENUM_VARIANT = -2 };\n"
+        "#define MACRO_VARIANT -3\n"
+        "#endif\n"
+        "enum { ENUM_ALWAYS = -4 };\n"
+        "#define FUNCTION_LIKE(x) ((x) + 1)\n"
+        "#define UNEVALUABLE missing_name\n"
+        "#define ALWAYS -5\n"
+        "#if OTHER_BUILD\n"
+        "#define MACRO_OTHER -6\n"
+        "#endif\n"
+        "#define DUPLICATE -7\n"
+        "#define DUPLICATE -8\n"
+        "enum { ENUM_TAIL = -9 };\n"
+    )
+    if guarded:
+        source = "#ifndef ERRORS_H\n#define ERRORS_H\n" + source + "#endif\n"
+    (tmp_path / "errors.h").write_bytes(source.replace("\n", newline).encode())
+    assert rd._constants_for_root(tmp_path, rd._Budget(60.0)) == {
+        "ANCHOR": -42, "ALWAYS": -5, "ENUM_ALWAYS": -4, "ENUM_TAIL": -9,
+    }

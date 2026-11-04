@@ -649,18 +649,28 @@ def _constants_for_root(
             continue
         text = _strip_include_guard(got[0])
         depths = _compute_conditional_depths(text)
+        # Matches advance in source order: count each intervening range
+        # once instead of rescanning the entire prefix for every match.
+        line = 1
+        line_offset = 0
         for m in _MACRO_DEF_RE.finditer(text):
             name = m.group(1)
             if name in _SKIP_IDENTS_C or m.group(2):
                 continue
-            line = text.count("\n", 0, m.start()) + 1
+            offset = m.start()
+            line += text.count("\n", line_offset, offset)
+            line_offset = offset
             if depths.get(line, 0) != 0:
                 continue
             value = _try_evaluate(m.group(3).strip())
             if value is not None:
                 defs.setdefault(name, []).append(value)
+        # Enum discovery is a separate ordered pass over the same text.
+        line = 1
+        line_offset = 0
         for block_start, body in _iter_enum_bodies(text):
-            line = text.count("\n", 0, block_start) + 1
+            line += text.count("\n", line_offset, block_start)
+            line_offset = block_start
             if depths.get(line, 0) != 0:
                 continue
             for ev in _ENUMERATOR_NAME_RE.finditer(body):
