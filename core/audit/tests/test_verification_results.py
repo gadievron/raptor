@@ -76,6 +76,7 @@ def test_positive_list_compatibility_and_copy_isolation():
 
 @pytest.mark.parametrize("verdict", ["refuted", "inconclusive", "error", "skipped", "novel"])
 def test_real_dispatcher_retains_the_actual_checker_outcome(tmp_path, monkeypatch, verdict):
+    (tmp_path / SCOPE["file"]).write_text("\n" * 7 + "int Read(void) { return 0; }\n")
     monkeypatch.setattr(orch, "run_smt_verb_direct", lambda **kw: SweepResult(
         tool="smt", file_path=SCOPE["file"], function_name=SCOPE["function"],
         outcome=verdict, rule_id="check-overflow", details={"reason": "checker result"},

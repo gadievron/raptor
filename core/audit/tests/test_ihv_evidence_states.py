@@ -4,10 +4,12 @@ import pytest
 
 from core.audit import orchestrator as orch
 from core.audit.verification_results import ToolChainResult
+from core.audit.refutation_source import capture_source_identity
 
 
 def run_case(tmp_path, monkeypatch, *, status, state):
     (tmp_path / "out").mkdir(exist_ok=True)
+    (tmp_path / "record.c").write_text("int Read(int n) { return n; }\n")
     config = orch.OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path / "out")
     config.immediate_verify = True
     outcome = orch.ReviewOutcome(
@@ -29,7 +31,8 @@ def run_case(tmp_path, monkeypatch, *, status, state):
             kwargs[slot].add("smt")
         if state == "negative":
             result = ToolChainResult(file=kwargs["file_path"], function=kwargs["function_name"],
-                                     line_start=kwargs["line_start"], hypothesis=kwargs["hypothesis"])
+                                     line_start=kwargs["line_start"], hypothesis=kwargs["hypothesis"],
+                                     source_identity=capture_source_identity(tmp_path, kwargs["file_path"]))
             result.observe("smt", "refuted", "check-overflow", "overflow condition is unsatisfiable")
             return result
         return []

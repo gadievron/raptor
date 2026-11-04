@@ -244,7 +244,8 @@ class TestFileLevelSarifIsNotCoverage:
         outcome = _php_claim()
         outcome.tools_dispatched = {"semgrep"}
         results = ToolChainResult(file=outcome.file, function=outcome.function,
-                                  line_start=outcome.line, hypothesis=outcome.hypothesis)
+                                  line_start=outcome.line, hypothesis=outcome.hypothesis,
+                                  source_identity=orch.capture_source_identity(tgt, outcome.file))
         results.observe("semgrep", "refuted", "query-bound", "claimed query path excluded")
         assert orch._retain_claim_refutation(outcome, results, config,
                                              hypothesis=outcome.hypothesis, phase="test")
