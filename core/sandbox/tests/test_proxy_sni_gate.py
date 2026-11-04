@@ -19,6 +19,7 @@ the loopback backend as in test_proxy_tcp_keepalive.py.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 import socket
 import threading
 
@@ -103,17 +104,20 @@ def loopback_ok(monkeypatch):
 
 
 def _open_tunnel(proxy_port: int, target: str) -> socket.socket:
-    s = socket.create_connection(("127.0.0.1", proxy_port), timeout=5)
-    s.sendall(f"CONNECT {target} HTTP/1.1\r\n"
-              f"Host: {target}\r\n\r\n".encode("latin-1"))
-    buf = b""
-    while b"\r\n\r\n" not in buf:
-        chunk = s.recv(4096)
-        if not chunk:
-            break
-        buf += chunk
-    assert b" 200 " in buf.split(b"\r\n", 1)[0], buf
-    return s
+    with ExitStack() as cleanup:
+        s = socket.create_connection(("127.0.0.1", proxy_port), timeout=5)
+        cleanup.callback(s.close)
+        s.sendall(f"CONNECT {target} HTTP/1.1\r\n"
+                  f"Host: {target}\r\n\r\n".encode("latin-1"))
+        buf = b""
+        while b"\r\n\r\n" not in buf:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+        assert b" 200 " in buf.split(b"\r\n", 1)[0], buf
+        cleanup.pop_all()
+        return s
 
 
 @pytest.fixture(autouse=True)
