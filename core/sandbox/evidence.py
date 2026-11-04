@@ -261,7 +261,16 @@ class EvidenceFile:
         if self._closed:
             return False
         try:
-            os.write(self.fd, line.encode("utf-8"))
+            data = line.encode("utf-8")
+            written = os.write(self.fd, data)
+            if written != len(data):
+                # Do not retry fragments: another appender may have
+                # written a record after this partial write.
+                logger.warning(
+                    "evidence append incomplete for %s: wrote %s of %s bytes",
+                    self.path, written, len(data),
+                )
+                return False
             return True
         except OSError:
             logger.warning("evidence append failed for %s", self.path,
