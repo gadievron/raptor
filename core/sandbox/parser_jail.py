@@ -287,8 +287,13 @@ class ParserJail:
     def _ensure_worker_locked(self) -> None:
         if self._stopped:
             raise ParserJailUnavailable("parser jail is stopped")
-        if (self._proc is not None and self._proc.poll() is None
-                and self._sock is not None):
+        try:
+            worker_alive = self._proc is not None and self._proc.poll() is None
+        except OSError:
+            logger.warning("parser-jail: worker status check failed; replacing worker",
+                           exc_info=True)
+            worker_alive = False
+        if worker_alive and self._sock is not None:
             return
         self._kill_worker_locked()
         now = time.monotonic()
