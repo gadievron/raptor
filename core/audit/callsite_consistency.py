@@ -695,47 +695,45 @@ _NO_OCCURRENCES: list[tuple[int, bool, bool]] = []
 
 
 class _ScopeReadIndex:
-    """Identifier-occurrence index for one subtree (usually the file).
+    """Document-ordered identifier occurrences, classified only on demand.
 
-    A single pre-order walk records, for every identifier leaf, its
-    start byte plus the two anchor-independent predicates the binding
-    scan needs (is it an assignment target? does the read feed a
-    condition?), grouped by identifier text in document order. Each
-    captured-binding classification is then a bisect plus a short
-    forward scan per bound name instead of a fresh descendant walk of
-    the enclosing scope per call site — O(file) once per file instead
-    of O(sites × file).
-
-    Built lazily: a file whose sites never reach a binding
-    classification pays nothing.
+    Index names once per file, then compute immutable usage facts only for
+    names actually queried by captured bindings. Each name is classified
+    once; unqueried identifiers need no write-target or condition walk.
     """
 
-    __slots__ = ("_root", "_src", "_by_name")
+    __slots__ = ("_root", "_src", "_nodes_by_name", "_by_name")
 
     def __init__(self, root: Node, src: bytes) -> None:
         self._root = root
         self._src = src
-        self._by_name: dict[str, list[tuple[int, bool, bool]]] | None = None
+        self._nodes_by_name: dict[str, list[Node]] | None = None
+        self._by_name: dict[str, list[tuple[int, bool, bool]]] = {}
 
     def occurrences(self, name: str) -> list[tuple[int, bool, bool]]:
-        """Document-ordered ``(start_byte, is_write, is_tested)`` rows
-        for every occurrence of *name* under the indexed root."""
-        if self._by_name is None:
-            by_name: dict[str, list[tuple[int, bool, bool]]] = (
-                defaultdict(list)
-            )
-            # Pre-order yields leaves in document order, so each
-            # per-name list arrives already sorted by start byte.
-            for n in _walk_descendants(self._root):
-                if n.type not in _ID_NODE_TYPES:
-                    continue
-                is_write = _is_write_target(n)
-                is_tested = (not is_write) and _read_is_tested(n)
-                by_name[_node_text(n, self._src)].append(
-                    (n.start_byte, is_write, is_tested),
-                )
-            self._by_name = dict(by_name)
-        return self._by_name.get(name, _NO_OCCURRENCES)
+        """Document-ordered ``(start_byte, is_write, is_tested)`` rows."""
+        cached = self._by_name.get(name)
+        if cached is not None:
+            return cached
+        if self._nodes_by_name is None:
+            nodes: dict[str, list[Node]] = defaultdict(list)
+            for node in _walk_descendants(self._root):
+                if node.type in _ID_NODE_TYPES:
+                    nodes[_node_text(node, self._src)].append(node)
+            self._nodes_by_name = dict(nodes)
+        pending = self._nodes_by_name.get(name, ())
+        if not pending:
+            return self._by_name.get(name, _NO_OCCURRENCES)
+        rows = []
+        for node in pending:
+            is_write = _is_write_target(node)
+            is_tested = (not is_write) and _read_is_tested(node)
+            rows.append((node.start_byte, is_write, is_tested))
+        self._by_name[name] = rows
+        # Publish facts before releasing nodes: overlapping readers may
+        # duplicate pure work, but must never observe a false empty row.
+        self._nodes_by_name.pop(name, None)
+        return rows
 
 
 def _classify_binding_usage(
