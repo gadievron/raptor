@@ -11,6 +11,7 @@ SIGKILL remains uncatchable — that residual is documented on the hook.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 import os
 import signal
 import subprocess
@@ -31,10 +32,11 @@ def sigterm_state():
     module's one-shot install flag."""
     prev = signal.getsignal(signal.SIGTERM)
     prev_flag = proxy_mod._sigterm_hook_installed
-    proxy_mod._sigterm_hook_installed = False
-    yield
-    signal.signal(signal.SIGTERM, prev)
-    proxy_mod._sigterm_hook_installed = prev_flag
+    with ExitStack() as cleanup:
+        cleanup.callback(setattr, proxy_mod, "_sigterm_hook_installed", prev_flag)
+        cleanup.callback(signal.signal, signal.SIGTERM, prev)
+        proxy_mod._sigterm_hook_installed = False
+        yield
 
 
 class _StopRecorder:

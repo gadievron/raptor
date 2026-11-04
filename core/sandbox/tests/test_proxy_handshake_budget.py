@@ -33,8 +33,10 @@ from core.sandbox import proxy as proxy_mod
 @pytest.fixture
 def reset_proxy():
     proxy_mod._reset_for_tests()
-    yield
-    proxy_mod._reset_for_tests()
+    try:
+        yield
+    finally:
+        proxy_mod._reset_for_tests()
 
 
 def _read_status(sock: socket.socket, timeout: float) -> int | None:

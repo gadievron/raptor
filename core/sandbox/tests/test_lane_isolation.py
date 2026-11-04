@@ -44,8 +44,10 @@ _DENIED = "denied.invalid:443"
 @pytest.fixture
 def reset_proxy():
     proxy_mod._reset_for_tests()
-    yield
-    proxy_mod._reset_for_tests()
+    try:
+        yield
+    finally:
+        proxy_mod._reset_for_tests()
 
 
 def _drive_connect(s: socket.socket, target: str) -> bytes:
