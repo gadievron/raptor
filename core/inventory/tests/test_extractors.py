@@ -598,9 +598,9 @@ class TestNoReservedIdentitiesInTreeCorpus:
         # reserved-word function identities.
         repo = Path(__file__).resolve().parents[3]
         files = sorted(
-            p for ext in ("*.c", "*.h", "*.cc", "*.cpp")
-            for p in repo.rglob(ext)
-            if ".git" not in p.parts
+            p for p in repo.rglob("*")
+            if p.name.endswith((".c", ".h", ".cc", ".cpp"))
+            and ".git" not in p.parts
         )
         assert len(files) > 50  # the corpus actually loaded
         offenders = []
