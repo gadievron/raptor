@@ -385,11 +385,17 @@ class ParserJail:
                 # microseconds, so give it a short beat to become
                 # reapable; a genuinely wedged child (ready timeout) is
                 # still alive and says so.
+                status_unknown = False
                 try:
                     exit_status: "int | None" = proc.wait(timeout=0.5)
                 except subprocess.TimeoutExpired:
                     exit_status = None
-                if exit_status is None:
+                except OSError:
+                    status_unknown = True
+                    exit_status = None
+                if status_unknown:
+                    exit_note = "worker exit status unavailable"
+                elif exit_status is None:
                     exit_note = "worker was still alive; parent killed it"
                 elif exit_status < 0:
                     exit_note = f"worker died to signal {-exit_status}"
@@ -540,23 +546,40 @@ class ParserJail:
         return _validate_verdict(payload)
 
     def _kill_worker_locked(self) -> None:
-        if self._sock is not None:
-            try:
-                self._sock.close()
-            except OSError:
-                pass
-            self._sock = None
-        if self._proc is not None:
-            self._reap_locked(self._proc)
-            self._proc = None
+        sock, proc = self._sock, self._proc
+        self._sock = None
+        self._proc = None
+        try:
+            if sock is not None:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+        finally:
+            if proc is not None:
+                self._reap_locked(proc)
 
     @staticmethod
     def _reap_locked(proc: subprocess.Popen) -> None:
         """Kill + wait one worker we spawned (verified-pid: our handle)."""
-        if proc.poll() is None:
-            proc.kill()
+        try:
+            if proc.poll() is None:
+                proc.kill()
+        except OSError:
+            # Still attempt the bounded reap: the child may have exited
+            # while signaling failed. Cleanup must not replace a startup
+            # error or prevent parse() from returning its refusal.
+            logger.warning(
+                "parser-jail: could not inspect or kill worker pid %d",
+                proc.pid, exc_info=True,
+            )
         try:
             proc.wait(timeout=_READY_TIMEOUT_S)
+        except OSError:
+            logger.error(
+                "parser-jail: could not reap worker pid %d",
+                proc.pid, exc_info=True,
+            )
         except subprocess.TimeoutExpired:
             # SIGKILL is unblockable; a non-reaped zombie here means
             # the host is in serious trouble — log and move on rather
