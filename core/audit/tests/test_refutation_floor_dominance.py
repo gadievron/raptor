@@ -497,7 +497,7 @@ class TestReceiptCorroborationGateDominance:
     def test_proof_refuter_overrides_corroboration_floor(
         self, tmp_path: Path,
     ):
-        from core.audit.orchestrator import (
+        from core.audit.receipt_resolution import (
             _receipt_corroborated_hypothesis,
         )
         cfg = _Config(out_dir=tmp_path)
@@ -516,7 +516,7 @@ class TestReceiptCorroborationGateDominance:
         assert recs[0]["dropped"] is False
 
     def test_race_witness_corroborates_dismissal(self, tmp_path: Path):
-        from core.audit.orchestrator import (
+        from core.audit.receipt_resolution import (
             _receipt_corroborated_hypothesis,
         )
         cfg = _Config(out_dir=tmp_path)
@@ -536,7 +536,7 @@ class TestReceiptCorroborationGateDominance:
         assert recs[0]["dropped"] is False
 
     def test_unprotected_source_keeps_floor(self):
-        from core.audit.orchestrator import (
+        from core.audit.receipt_resolution import (
             _receipt_corroborated_hypothesis,
         )
         o = self._outcome(
@@ -551,7 +551,7 @@ class TestReceiptCorroborationGateDominance:
         assert rv.demote_to == "suspicious"
 
     def test_no_source_keeps_floor(self):
-        from core.audit.orchestrator import (
+        from core.audit.receipt_resolution import (
             _receipt_corroborated_hypothesis,
         )
         o = self._outcome(
