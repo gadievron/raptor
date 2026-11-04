@@ -124,8 +124,7 @@ def _wait_forwarders_installed(pid: int, timeout: float = _WAIT_S) -> None:
 
 def _wait_target_execed(waiter: int, comm: bytes,
                         timeout: float = _WAIT_S) -> None:
-    """Second handshake edge: the waiter forks the target BEFORE
-    installing forwarders, so SigCgt alone does not prove the target
+    """Second handshake edge: SigCgt alone does not prove the target
     has exec'd — poll /proc for a child of ``waiter`` whose comm is
     already ``comm`` so the forwarded signal lands on the real target,
     not a pre-exec fork child."""
@@ -309,3 +308,86 @@ class TestFailClosedBoot:
         # And distinct from the mirror-space values the supervisor
         # reads for post-boot exits it synthesizes (137 collapse).
         assert 137 not in codes
+
+
+@pytest.mark.parametrize('implementation', ['supervised', 'spawn'])
+def test_target_waits_for_forwarders_before_publishing_readiness(reap, implementation):
+    """Hold B after fork; observe whether C waits at the readiness gate.
+
+    The first child-side read announces the gate before blocking. A target
+    that bypasses it announces T instead. No scheduling sleep is needed.
+    """
+    from core.sandbox import _spawn
+    live_r, live_w = os.pipe()
+    release_r, release_w = os.pipe()
+    event_r, event_w = os.pipe()
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore', category=DeprecationWarning,
+                                message=r'.*fork.*may lead to deadlocks.*')
+        waiter = os.fork()
+    if waiter == 0:
+        try:
+            os.close(live_w)
+            os.close(release_w)
+            os.close(event_r)
+            _set_subreaper()
+            waiter_pid = os.getpid()
+            real_fork, real_read = os.fork, os.read
+
+            def held_fork():
+                child = real_fork()
+                if child:
+                    real_read(release_r, 1)
+                return child
+
+            def observed_read(fd, count):
+                if os.getpid() != waiter_pid:
+                    os.write(event_w, b'G')
+                return real_read(fd, count)
+
+            def target():
+                os.write(event_w, b'T')
+                with open(f'/proc/{os.getppid()}/status') as stream:
+                    caught = next(int(line.split()[1], 16) for line in stream
+                                  if line.startswith('SigCgt:'))
+                expected = sum(1 << (int(sig) - 1) for sig in
+                               (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT))
+                os._exit(0 if caught & expected == expected else 90)
+
+            os.fork, os.read = held_fork, observed_read
+            if implementation == 'supervised':
+                sup._run_ns_init_waiter(live_r, target)
+            else:
+                _spawn._pid1_split_for_waiter()
+                target()
+        except BaseException:
+            pass
+        os._exit(97)
+    os.close(live_r)
+    os.close(release_r)
+    os.close(event_w)
+    released = False
+    try:
+        import select
+        poller = select.poll()
+        poller.register(event_r, select.POLLIN)
+        assert poller.poll(_WAIT_S * 1000), 'target never reached startup gate'
+        first = os.read(event_r, 1)
+        os.write(release_w, b'R')
+        released = True
+        code = reap(waiter)
+        assert first == b'G', 'target ran before waiter installed signal forwarding'
+        assert code == 0, 'target observed missing waiter signal handlers'
+        assert os.read(event_r, 1) == b'T'
+    finally:
+        if not released:
+            try:
+                os.write(release_w, b'R')
+            except OSError:
+                pass
+            try:
+                reap(waiter)
+            except (ChildProcessError, AssertionError):
+                pass
+        for fd in (live_w, release_w, event_r):
+            os.close(fd)

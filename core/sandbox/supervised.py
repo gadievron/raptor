@@ -274,13 +274,25 @@ def _run_ns_init_waiter(
         os._exit(NS_INIT_EXIT_PARENT_GONE)
 
     try:
+        forward_r, forward_w = os.pipe()
         child = os.fork()
     except OSError:
         os._exit(NS_INIT_EXIT_TARGET_FORK_FAILED)
     if child == 0:
+        os.close(forward_w)
+        # C can exec and publish readiness before B is scheduled again.
+        # Do not let the supervisor report ready until B can forward TERM.
+        try:
+            ready = os.read(forward_r, 1)
+        except OSError:
+            os._exit(_TARGET_EXEC_FAILED_EXIT)
+        os.close(forward_r)
+        if ready != b"R":
+            os._exit(_TARGET_EXEC_FAILED_EXIT)
         target()
         os._exit(_TARGET_EXEC_FAILED_EXIT)  # target() must not return
 
+    os.close(forward_r)
     for fd in (live_r, *post_fork_close):
         with contextlib.suppress(OSError):
             os.close(fd)
@@ -291,6 +303,8 @@ def _run_ns_init_waiter(
 
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT):
         signal.signal(sig, _forward)
+    os.write(forward_w, b"R")
+    os.close(forward_w)
 
     while True:
         try:
