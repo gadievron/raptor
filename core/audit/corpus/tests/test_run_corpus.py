@@ -1600,6 +1600,40 @@ class TestExcerptIncludeClosure:
         finally:
             run_corpus._release_excerpt_trees(dirs)
 
+    def test_implementation_keeps_wrapper_callers_and_headers(self, tmp_path):
+        src = self._repo(tmp_path)
+        (src / "drivers" / "api.c").write_text(
+            '#include "d.c"\n#include "api.h"\n'
+            'int caller(void) { return f(); }\n',
+        )
+        (src / "drivers" / "api.h").write_text("int caller(void);\n")
+        (src / "drivers" / "unrelated.c").write_text("int other;\n")
+        dirs = run_corpus._build_excerpt_tree(
+            [_label(repo="r", file="drivers/d.c", fid="drivers/d.c:f")],
+            {"r": src},
+        )
+        try:
+            tree = dirs["r"]
+            assert "caller" in (tree / "drivers" / "api.c").read_text()
+            assert (tree / "drivers" / "api.h").is_file()
+            assert not (tree / "drivers" / "unrelated.c").exists()
+        finally:
+            run_corpus._release_excerpt_trees(dirs)
+
+    def test_wrapper_symlink_outside_source_is_not_copied(self, tmp_path):
+        src = self._repo(tmp_path)
+        outside = tmp_path / "outside.c"
+        outside.write_text('#include "d.c"\nint external;\n')
+        (src / "drivers" / "api.c").symlink_to(outside)
+        dirs = run_corpus._build_excerpt_tree(
+            [_label(repo="r", file="drivers/d.c", fid="drivers/d.c:f")],
+            {"r": src},
+        )
+        try:
+            assert not (dirs["r"] / "drivers" / "api.c").exists()
+        finally:
+            run_corpus._release_excerpt_trees(dirs)
+
     def test_unresolvable_closure_is_best_effort(self, tmp_path):
         src = tmp_path / "repo"
         src.mkdir()

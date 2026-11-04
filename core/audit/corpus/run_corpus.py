@@ -518,7 +518,7 @@ def _build_excerpt_tree(
     labels: list[Any],
     source_dirs: dict[str, Path],
 ) -> dict[str, Path]:
-    """Build minimal source trees containing only labelled files.
+    """Build minimal source trees containing labelled files and context.
 
     Returns a mapping repo_key -> temp directory.  Caller must clean up.
     """
@@ -551,8 +551,12 @@ def _build_excerpt_tree(
                 shutil.copy2(str(src), str(dst))
                 copied += 1
 
+        from .excerpt import copy_c_translation_unit_owners
+
+        owners = copy_c_translation_unit_owners(tmp, src_dir, files)
+        copied += len(owners)
         copied += _copy_perlasm_drivers(tmp, src_dir)
-        copied += _copy_c_include_closure(tmp, src_dir, files)
+        copied += _copy_c_include_closure(tmp, src_dir, files | owners)
         excerpt_dirs[repo_key] = tmp
         print(f"  Excerpt: {repo_key} — {copied} file(s)", flush=True)
 
