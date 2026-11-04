@@ -940,6 +940,15 @@ hook fires:
    libexec/raptor-sandbox-summary --sweep <project_dir>
    ```
 
+If finalisation cannot open/read the claimed denial log or persist its
+summary, the warning names a retained `.sandbox-denials.jsonl.summarising.*`
+file. It stays beside the original log (normally under `.audit/`; older
+runs may use the run root). Each attempt uses a distinct name so later
+failures cannot overwrite earlier snapshots. Successful finalisation
+removes its snapshot after writing the summary. Retained snapshots are
+for inspection and manual recovery; the summary command and sweep do
+not replay them or replace newer evidence with them.
+
 ### Sandbox triage and live escalation
 
 On every terminal-state transition the lifecycle also runs a
