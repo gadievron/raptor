@@ -341,8 +341,10 @@ def _run_bridges(bridges, death_r, ready_cb=None) -> None:
                     unix_sock = socket.socket(
                         socket.AF_UNIX, socket.SOCK_STREAM,
                     )
-                    unix_sock.connect(unix_socket_path)
+                    # A full Unix accept queue must fail this client
+                    # promptly, not block every relay and the death pipe.
                     unix_sock.setblocking(False)
+                    unix_sock.connect(unix_socket_path)
                 except OSError:
                     # Resource pressure or a failed upstream affects
                     # this connection only; keep existing relays alive.
