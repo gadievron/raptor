@@ -23,16 +23,21 @@ def _make_host() -> SandboxHost:
     """Minimal SandboxHost with real (unconnected) pipe fds and a
     finished worker thread — enough state for close() to run."""
     read_fd, write_fd = os.pipe()
-    thread = threading.Thread(target=lambda: None)
-    thread.start()
-    thread.join()
-    host = SandboxHost(
-        _thread=thread,
-        _read_fd=read_fd,
-        _write_fd=write_fd,
-        _daemon_fds=None,
-        _lock=threading.Lock(),
-    )
+    try:
+        thread = threading.Thread(target=lambda: None)
+        host = SandboxHost(
+            _thread=thread,
+            _read_fd=read_fd,
+            _write_fd=write_fd,
+            _daemon_fds=None,
+            _lock=threading.Lock(),
+        )
+        thread.start()
+        thread.join()
+    except BaseException:
+        os.close(read_fd)
+        os.close(write_fd)
+        raise
     return host
 
 

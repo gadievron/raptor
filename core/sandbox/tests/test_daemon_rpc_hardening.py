@@ -270,17 +270,24 @@ class _FakeDaemonHost:
 
     def __init__(self, reply_fn) -> None:
         self._in_r, in_w = os.pipe()
-        out_r, self._out_w = os.pipe()
-        self.thread = threading.Thread(target=self._serve,
-                                       args=(reply_fn,), daemon=True)
-        self.thread.start()
-        self.host = SandboxHost(
-            _thread=self.thread,
-            _write_fd=in_w,
-            _read_fd=out_r,
-            _daemon_fds=None,
-            _lock=threading.Lock(),
-        )
+        owned = [self._in_r, in_w]
+        try:
+            out_r, self._out_w = os.pipe()
+            owned.extend((out_r, self._out_w))
+            self.thread = threading.Thread(target=self._serve,
+                                           args=(reply_fn,), daemon=True)
+            self.host = SandboxHost(
+                _thread=self.thread,
+                _write_fd=in_w,
+                _read_fd=out_r,
+                _daemon_fds=None,
+                _lock=threading.Lock(),
+            )
+            self.thread.start()
+        except BaseException:
+            for fd in owned:
+                os.close(fd)
+            raise
 
     def _serve(self, reply_fn) -> None:
         try:

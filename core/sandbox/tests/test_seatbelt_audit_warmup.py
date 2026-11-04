@@ -47,9 +47,14 @@ class _FakeStdout:
         # selectors needs a real fd — back the BytesIO with a pipe.
         import os
         self._read_fd, self._write_fd = os.pipe()
-        os.write(self._write_fd, b"".join(lines))
-        os.close(self._write_fd)
-        self._reader = open(self._read_fd, "r", encoding="utf-8")
+        try:
+            os.write(self._write_fd, b"".join(lines))
+            self._reader = open(self._read_fd, "r", encoding="utf-8")
+        except BaseException:
+            os.close(self._read_fd)
+            raise
+        finally:
+            os.close(self._write_fd)
 
     def fileno(self):
         return self._reader.fileno()
