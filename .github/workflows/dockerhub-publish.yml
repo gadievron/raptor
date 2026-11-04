@@ -239,6 +239,16 @@ jobs:
           set -euo pipefail
           audit_container=$(sudo buildah from localhost/raptor-publish:checked)
           trap 'sudo buildah rm "$audit_container"' EXIT
+          # Download source evidence separately; inventory verification stays offline.
+          if ! sudo buildah run --cap-drop ALL --user 0 \
+            --volume "${GITHUB_WORKSPACE}:/workspaces/raptor:ro" \
+            --volume "${RUNNER_TEMP}/container-sbom:/audit:rw" \
+            "$audit_container" -- python3 .github/scripts/prepare_sbom.py \
+              --syft /audit/syft.json --cyclonedx /audit/raw.cdx.json \
+              --spdx /audit/raw.spdx.json --out /audit/prepared \
+              --fetch-upstream-sources /audit/nvm-source-cache.json; then
+            echo "::warning::NVM source download unavailable; offline reporting will retain its provenance warning."
+          fi
           sudo buildah run --network none --cap-drop ALL --user 0 \
             --volume "${GITHUB_WORKSPACE}:/workspaces/raptor:ro" \
             --volume "${RUNNER_TEMP}/container-sbom:/audit:rw" \
@@ -250,7 +260,7 @@ jobs:
               python3 .github/scripts/prepare_sbom.py \
                 --syft /audit/syft.json --cyclonedx /audit/raw.cdx.json \
                 --spdx /audit/raw.spdx.json --notice-evidence /audit/capture \
-                --owner-oci-layout /image \
+                --owner-oci-layout /image --upstream-source-cache /audit/nvm-source-cache.json \
                 --out /audit/prepared
             '
 
