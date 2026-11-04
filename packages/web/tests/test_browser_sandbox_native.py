@@ -13,7 +13,9 @@ pytestmark = [pytest.mark.slow, pytest.mark.integration,
 
 
 @pytest.fixture(autouse=True)
-def native_host():
+def native_host(monkeypatch):
+    from packages.web import _browser_sandbox
+    monkeypatch.setattr(_browser_sandbox, '_DRIVER_DIAGNOSTICS', True)
     if sys.platform == 'linux':
         from core.sandbox.probes import check_mount_available
         from core.sandbox.landlock import check_landlock_available, _get_landlock_abi
@@ -84,7 +86,16 @@ if sys.platform == 'linux':
 
 
 @pytest.mark.parametrize('waived', [False, True])
-def test_real_browser_javascript_and_explicit_inner_policy(tmp_path, monkeypatch, waived):
+def test_real_browser_javascript_and_explicit_inner_policy(tmp_path, monkeypatch, waived, record_property):
+    from packages.web._browser_sandbox import macos_nested_seatbelt_available
+    if sys.platform == 'darwin' and not waived and not macos_nested_seatbelt_available():
+        from packages.web.browser import BrowserEngine
+        with pytest.raises(RuntimeError, match='macOS refuses nested Seatbelt'):
+            with BrowserEngine('http://127.0.0.1'):
+                pytest.fail('required inner sandbox was silently waived')
+        record_property('chromium_inner_policy', 'required-refused-nesting-unavailable')
+        return
+    record_property('chromium_inner_policy', 'explicit-waiver' if waived else 'required-enabled')
     from packages.web.browser import BrowserEngine
     public = tmp_path/'public'
     public.mkdir()

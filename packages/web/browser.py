@@ -137,7 +137,8 @@ class BrowserEngine:
     def __enter__(self) -> "BrowserEngine":
         from playwright.sync_api import sync_playwright
 
-        from packages.web._browser_sandbox import confined_driver
+        from packages.web._browser_sandbox import confined_driver, require_inner_sandbox_compatibility
+        require_inner_sandbox_compatibility(self._launch_kwargs["chromium_sandbox"])
         launch_kwargs = dict(self._launch_kwargs)
         proxy = self._proxy_settings()
         if proxy:

@@ -18,7 +18,8 @@ def selected_nonroot_driver(monkeypatch):
 
 
 @pytest.mark.parametrize('waived', [False, True])
-def test_inner_sandbox_is_explicit_and_outer_policy_is_unchanged(tmp_path, monkeypatch, waived):
+@pytest.mark.parametrize('diagnostics', [False, True])
+def test_inner_sandbox_is_explicit_and_outer_policy_is_unchanged(tmp_path, monkeypatch, waived, diagnostics):
     from core import sandbox
     from core.sandbox import landlock
     from packages.web.browser import _launch_options
@@ -27,6 +28,7 @@ def test_inner_sandbox_is_explicit_and_outer_policy_is_unchanged(tmp_path, monke
     monkeypatch.setenv('NODE_OPTIONS', '--require=/hostile/entry.js')
     monkeypatch.setenv('_RAPTOR_TRUSTED', '1')
     monkeypatch.setenv('SECRET_KEY', 'owned-secret')
+    monkeypatch.setenv('DEBUG', 'operator:*')
     seen = []
     def run(command, **options):
         seen.append(options)
@@ -42,11 +44,12 @@ def test_inner_sandbox_is_explicit_and_outer_policy_is_unchanged(tmp_path, monke
         assert options['strict_env'] and options['strip_trust_markers']
         assert options['stdin'] == 0 and options['capture_output'] is False
         assert options['allowed_tcp_ports'] == [443]
+        assert options['env'].get('DEBUG') == ('pw:browser' if diagnostics else None)
         assert not {'NODE_OPTIONS', '_RAPTOR_TRUSTED', 'SECRET_KEY'} & options['env'].keys()
         assert options['cwd'] == str(tmp_path)
         return subprocess.CompletedProcess(command, 0)
     monkeypatch.setattr(sandbox, 'run', run)
-    config = dict(node='/owned/playwright/driver/node', cli='/owned/cli.js', work=str(tmp_path), reads=[], ports=[443])
+    config = dict(node='/owned/playwright/driver/node', cli='/owned/cli.js', work=str(tmp_path), reads=[], ports=[443], diagnostics=diagnostics)
     assert _launch_options(allow_unsandboxed_chromium=waived)['chromium_sandbox'] is not waived
     assert driver.run_driver(config, ['/owned/cli.js', 'run-driver']) == 0
     assert len(seen) == 1
@@ -63,6 +66,7 @@ def test_launcher_restores_environment_and_keeps_controls_outside_work(tmp_path,
     module.compute_driver_executable = lambda: (str(node), str(cli))
     monkeypatch.setitem(sys.modules, 'playwright._impl._driver', module)
     monkeypatch.setattr(boundary, '_require_browser_containment', lambda: None)
+    monkeypatch.setattr(boundary, '_DRIVER_DIAGNOSTICS', True)
     monkeypatch.setattr(boundary, 'browser_runtime_paths', lambda *a: [str(tmp_path/'cache')])
     if previous is None:
         monkeypatch.delenv('PLAYWRIGHT_NODEJS_PATH', raising=False)
@@ -83,6 +87,7 @@ def test_launcher_restores_environment_and_keeps_controls_outside_work(tmp_path,
             assert Path(config['work']).parent == launcher.parent
             assert not launcher.is_relative_to(Path(config['work']))
             assert config['ports'] == sorted([proxy_port, 8443])
+            assert config['diagnostics'] is True
             raise RuntimeError('owned startup refusal')
         def __exit__(self, *args):
             closed.append(True)
@@ -226,3 +231,64 @@ def test_live_browser_suite_does_not_launch_during_collection(monkeypatch):
     spec = importlib.util.spec_from_file_location('owned_browser_collection', path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+
+
+@pytest.mark.parametrize('returncode', [0, 71])
+def test_nested_seatbelt_probe_uses_only_trusted_true_and_minimal_environment(monkeypatch, returncode):
+    from types import SimpleNamespace
+    seen = []
+    def run(command, **options):
+        seen.append(command)
+        assert command == ['/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)',
+                           '/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)', '/usr/bin/true']
+        assert options['env'] == {'PATH': os.defpath, 'LC_ALL': 'C'}
+        assert options['timeout'] == 5 and options['check'] is False
+        return subprocess.CompletedProcess(command, returncode)
+    monkeypatch.setattr(boundary, 'subprocess', SimpleNamespace(
+        run=run, DEVNULL=subprocess.DEVNULL, PIPE=subprocess.PIPE, TimeoutExpired=subprocess.TimeoutExpired))
+    boundary.macos_nested_seatbelt_available.cache_clear()
+    try:
+        assert boundary.macos_nested_seatbelt_available() is (returncode == 0)
+        assert boundary.macos_nested_seatbelt_available() is (returncode == 0)
+        assert len(seen) == 1
+    finally:
+        boundary.macos_nested_seatbelt_available.cache_clear()
+
+
+@pytest.mark.parametrize('error', [PermissionError('owned'), subprocess.TimeoutExpired('owned', 5)])
+def test_nested_seatbelt_probe_refuses_errors_and_timeouts(monkeypatch, error):
+    from types import SimpleNamespace
+    def run(*args, **kwargs):
+        raise error
+    monkeypatch.setattr(boundary, 'subprocess', SimpleNamespace(
+        run=run, DEVNULL=subprocess.DEVNULL, PIPE=subprocess.PIPE, TimeoutExpired=subprocess.TimeoutExpired))
+    boundary.macos_nested_seatbelt_available.cache_clear()
+    try:
+        assert boundary.macos_nested_seatbelt_available() is False
+    finally:
+        boundary.macos_nested_seatbelt_available.cache_clear()
+
+
+@pytest.mark.parametrize('available', [False, True])
+def test_required_mac_inner_policy_tracks_kernel_nesting_capability(monkeypatch, available):
+    from types import SimpleNamespace
+    from core.sandbox import probes
+    monkeypatch.setattr(boundary, 'sys', SimpleNamespace(platform='darwin'))
+    monkeypatch.setattr(probes, 'check_seatbelt_available', lambda: True)
+    monkeypatch.setattr(boundary, 'macos_nested_seatbelt_available', lambda: available)
+    if available:
+        boundary.require_inner_sandbox_compatibility(True)
+    else:
+        with pytest.raises(RuntimeError, match='--allow-unsandboxed-chromium'):
+            boundary.require_inner_sandbox_compatibility(True)
+
+
+def test_explicit_mac_inner_waiver_does_not_probe_or_waive_outer_policy(monkeypatch):
+    from types import SimpleNamespace
+    from core.sandbox import probes
+    monkeypatch.setattr(boundary, 'sys', SimpleNamespace(platform='darwin'))
+    monkeypatch.setattr(boundary, 'macos_nested_seatbelt_available', lambda: pytest.fail('inner probe under explicit waiver'))
+    boundary.require_inner_sandbox_compatibility(False)
+    monkeypatch.setattr(probes, 'check_seatbelt_available', lambda: False)
+    with pytest.raises(RuntimeError, match='requires usable Seatbelt'):
+        boundary._require_browser_containment()

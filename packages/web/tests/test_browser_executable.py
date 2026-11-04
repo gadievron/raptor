@@ -27,6 +27,7 @@ def driver(monkeypatch):
     def confined(*args, **kwargs):
         yield lambda factory: factory().start()
     monkeypatch.setattr(_browser_sandbox, 'confined_driver', confined)
+    monkeypatch.setattr(_browser_sandbox, 'require_inner_sandbox_compatibility', lambda enabled: None)
     monkeypatch.setattr(BrowserEngine, "_proxy_settings", lambda self: None)
     monkeypatch.delenv("RAPTOR_WEB_BROWSER_EXECUTABLE", raising=False)
     return runtime, controller
@@ -99,3 +100,17 @@ def test_probe_refusal_redacts_and_escapes_diagnostics(driver, caplog):
     assert 'owned-password' not in caplog.text
     assert '\x1b' not in caplog.text
     assert 'owned diagnostic tail' in caplog.text
+
+
+def test_incompatible_inner_policy_refuses_before_starting_transport(driver, monkeypatch):
+    from packages.web import _browser_sandbox
+    runtime, controller = driver
+    def refused(enabled):
+        assert enabled is True
+        raise RuntimeError('owned nested Seatbelt refusal')
+    monkeypatch.setattr(_browser_sandbox, 'require_inner_sandbox_compatibility', refused)
+    with pytest.raises(RuntimeError, match='nested Seatbelt'):
+        with BrowserEngine('https://target.invalid'):
+            pytest.fail('incompatible browser started')
+    controller.start.assert_not_called()
+    runtime.chromium.launch.assert_not_called()

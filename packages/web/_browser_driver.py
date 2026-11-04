@@ -26,6 +26,8 @@ def run_driver(config, argv):
     # (the namespace tmpfs is deliberately outside the writable allowlist).
     for name in ('HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME'):
         Path(env[name]).mkdir(mode=0o700, parents=True, exist_ok=True)
+    if config.get('diagnostics') is True:
+        env['DEBUG'] = 'pw:browser'
     if config.get('browsers'):
         env['PLAYWRIGHT_BROWSERS_PATH'] = config['browsers']
     # Protocol annotations only: no credentials, user Node options or trust markers.
