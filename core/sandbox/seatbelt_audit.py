@@ -873,6 +873,11 @@ class LogStreamer:
 
     def _pid_in_scope_locked(self, pid: int) -> bool:
         """Attribution for one PID. Caller holds ``_scope_lock``."""
+        # pid_t is a signed 32-bit integer on supported platforms. Zero
+        # selects the caller in process-group APIs; oversized values raise
+        # OverflowError before a syscall and must not kill audit capture.
+        if type(pid) is not int or not 0 < pid <= 0x7fffffff:
+            return False
         if pid in self._scope_pids:
             return True
         if pid in self._foreign_pid_cache:
