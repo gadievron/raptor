@@ -567,8 +567,9 @@ class TestInconclusiveRecordSurvivesCopies:
                     for s in window
                 ):
                     missing.append((stmt.lineno, dst))
-        # Anti-vacuity: the ten copy sites the record has today.
-        assert copies >= 10
+        # Nine manual sites remain; machine-escalation resolution now
+        # uses dataclasses.replace, which retains every record field.
+        assert copies >= 9
         assert missing == []
 
     def test_demote_outcome_carries_inconclusive(self):

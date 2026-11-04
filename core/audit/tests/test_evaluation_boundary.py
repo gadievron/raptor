@@ -11,6 +11,7 @@ ENGINE_MODULES = (
     "audit/orchestrator.py", "audit/refutation.py", "audit/receipt_resolution.py",
     "audit/context.py", "audit/caller_context.py", "audit/go_type_context.py",
     "audit/llm_review.py", "audit/sweep.py", "audit/claim_verification.py",
+    "audit/verification_results.py",
     "analysis/reachability.py", "analysis/_included_c.py",
 )
 
