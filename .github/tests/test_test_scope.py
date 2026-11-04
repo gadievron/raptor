@@ -590,6 +590,16 @@ class TestDispatchFailsOpen:
         result = compute_tier_dispatch(["docs/guide.md"], mini_repo)
         assert _active(result) == []
 
+    @pytest.mark.parametrize("changed", ["README.md", "docs/guide.md", ".github/workflows/lint.yml"])
+    def test_metadata_change_does_not_parse_python_tree(self, mini_repo, monkeypatch, changed):
+        def unexpected_graph(*args, **kwargs):
+            pytest.fail("metadata-only dispatch must not parse the Python tree")
+
+        monkeypatch.setattr("test_scope.build_graph", unexpected_graph)
+        result = compute_tier_dispatch([changed], mini_repo)
+        assert not result["python"]["run"]
+        assert result["ci_lint"]["run"] == (changed == "README.md" or changed.startswith(".github/"))
+
     def test_dangling_symlink_tree_still_dispatches(self, tmp_path):
         # A dangling .py symlink anywhere under a scan root used to
         # crash graph construction (FileNotFoundError), reddening the
@@ -1142,3 +1152,28 @@ class TestEntryScriptDispatch:
         (tests / 'test_cli.py').write_text('def test_cli(): pass\n')
         result = compute_tier_dispatch(['libexec/renamed-away'], tmp_path)
         assert all(info['run'] for tier, info in result.items() if not tier.startswith('_'))
+
+
+def test_workflow_rebalance_preserves_selected_cases(tmp_path, monkeypatch):
+    """Execute the workflow's optional timing step: selected files stay exact."""
+    import textwrap
+
+    repo = Path(__file__).resolve().parents[2]
+    workflow = (repo / ".github/workflows/tests.yml").read_text()
+    block = workflow.split("      - id: balance\n", 1)[1].split("\n  deps:", 1)[0]
+    code = textwrap.dedent(block.split("<<'PYTHON'\n", 1)[1].split("          PYTHON", 1)[0])
+    durations = tmp_path / "durations.json"
+    durations.write_text(json.dumps({"a.py": 100, "b.py": 1, "c.py": 2}))
+    output = tmp_path / "outputs"
+    monkeypatch.setenv("SELECTED_MATRIX", json.dumps([
+        {"batch": 1, "files": "a.py b.py"}, {"batch": 2, "files": "c.py"},
+    ]))
+    monkeypatch.setenv("RAPTOR_TEST_DURATIONS", str(durations))
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    exec(compile(code, "workflow-balance", "exec"), {})
+    matrix = json.loads(output.read_text().split("=", 1)[1])
+    assert sorted(path for batch in matrix for path in batch["files"].split()) == [
+        "a.py", "b.py", "c.py",
+    ]

@@ -837,20 +837,29 @@ def compute_tier_dispatch(
     # __init__.py expansion.
     changed_py |= init_imports(changed_py, all_py)
 
-    print(f"Building import graph for {total} Python files...")
+    resource_files = [
+        f for f in changed_non_py
+        if any(f.startswith(r + "/") for r in SCAN_ROOTS)
+    ] + [f for f in changed_files if in_data_root(f)]
     script_literals = {
         literal: set() for path in changed_files
         if path.startswith(("bin/", "libexec/"))
         for literal in (path, Path(path).name)
     }
+    if changed_py or resource_files or script_literals:
+        print(f"Building import graph for {total} Python files...")
     if script_literals:
         # Collect references during the existing AST walk: reparsing the tree
         # here costs tens of seconds on this repository's complete source set.
         reverse_graph, parse_failures = build_graph(
             all_py, repo, literal_references=script_literals,
         )
-    else:
+    elif changed_py or resource_files:
         reverse_graph, parse_failures = build_graph(all_py, repo)
+    else:
+        # Metadata-only changes have no graph seeds. Tier-specific extra
+        # triggers below still run (for example workflow lint checks).
+        reverse_graph, parse_failures = {}, 0
     if parse_failures:
         print(f"  Parse failures: {parse_failures}")
 
@@ -877,10 +886,6 @@ def compute_tier_dispatch(
     # routing wholesale (see DATA_ROOTS). Route each one through the
     # first mapping that claims it; a file NO mapping claims cannot be
     # scoped, so fail toward full dispatch rather than toward zero.
-    resource_files = [
-        f for f in changed_non_py
-        if any(f.startswith(r + "/") for r in SCAN_ROOTS)
-    ] + [f for f in changed_files if in_data_root(f)]
     forced_tiers: set[str] = set()
     resource_seeds: set[Path] = set()
     data_map: dict[Path, set[Path]] | None = None

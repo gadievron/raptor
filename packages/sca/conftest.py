@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import pytest
 
+from core.testing.tempdirs import isolated_test_dir
+
 # Genuine top packages per ecosystem. Ecosystems absent here resolve to an
 # empty list (matching "unsupported ecosystem → no typosquat findings").
 _CURATED_POPULAR = {
@@ -39,7 +41,7 @@ def _isolated_sca_home(monkeypatch, tmp_path_factory):
     # sca_cache_root() uses HOME/.raptor/cache/sca, not XDG_CACHE_HOME.
     # Keep persistent inventories and metadata out of the operator's store.
     # A sibling allocation also stays outside a test's walked source tree.
-    monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("sca-home")))
+    monkeypatch.setenv("HOME", str(isolated_test_dir(tmp_path_factory, "sca-home")))
 
 
 @pytest.fixture(autouse=True)

@@ -144,6 +144,8 @@ jobs:
   # full dispatch internally — every gate is set to true and every
   # file list is populated from disk.
   changes:
+    needs: pre_check
+    if: needs.pre_check.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     # 5 rather than 2: the best-effort durations step downloads the
     # shuffled-nightly junit artifacts, and a job-level timeout kill
@@ -166,7 +168,7 @@ jobs:
       source_intel: ${{ steps.scope.outputs.source_intel }}
       engine: ${{ steps.scope.outputs.engine }}
       # Dynamic batch matrix for the fast tier (JSON for fromJSON()).
-      python_matrix: ${{ steps.scope.outputs.python_matrix }}
+      python_matrix: ${{ steps.balance.outputs.python_matrix || steps.scope.outputs.python_matrix }}
       # Per-tier affected file lists (space-separated paths).
       sandbox_files: ${{ steps.scope.outputs.sandbox_files }}
       exploit_feasibility_files: ${{ steps.scope.outputs.exploit_feasibility_files }}
@@ -267,6 +269,21 @@ jobs:
             cat "$out"
           fi
 
+      # Import-graph-based test dispatch. Builds the reverse import
+      # graph with stdlib ast, walks outward from changed files, and
+      # maps affected test files to their CI tier. Falls back to full
+      # dispatch (all gates true, all file lists populated) when no
+      # changed-file list is available — covers force_full, first
+      # push to a new branch, and API truncation.
+      - id: scope
+        run: |
+          python3 .github/scripts/test_scope.py \
+            ${CHANGED_FILES_LIST:+--changed-files "$CHANGED_FILES_LIST"} \
+            --repo .
+        env:
+          CHANGED_FILES_LIST: ${{ steps.changed_files.outputs.list }}
+
+      # Scope first: docs and non-fast tiers do not need nightly artifacts.
       # Best-effort per-test durations for the batch partitioner: pull
       # the latest successful shuffled-nightly junit artifacts and
       # convert them to a durations file so test_scope.py can balance
@@ -278,6 +295,7 @@ jobs:
       # dispatch (scope falls back to its no-durations behaviour on an
       # empty path).
       - id: durations
+        if: steps.scope.outputs.python == 'true'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -303,22 +321,28 @@ jobs:
             "$durations_path" $xmls
           echo "path=$durations_path" >> "$GITHUB_OUTPUT"
 
-      # Import-graph-based test dispatch. Builds the reverse import
-      # graph with stdlib ast, walks outward from changed files, and
-      # maps affected test files to their CI tier. Falls back to full
-      # dispatch (all gates true, all file lists populated) when no
-      # changed-file list is available — covers force_full, first
-      # push to a new branch, and API truncation.
-      - id: scope
-        run: |
-          python3 .github/scripts/test_scope.py \
-            ${CHANGED_FILES_LIST:+--changed-files "$CHANGED_FILES_LIST"} \
-            --repo .
+      - id: balance
+        if: steps.scope.outputs.python == 'true' && steps.durations.outputs.path != ''
+        continue-on-error: true
         env:
-          CHANGED_FILES_LIST: ${{ steps.changed_files.outputs.list }}
-          # Empty when the durations step skipped or failed — the
-          # partitioner treats an unset/empty path as "no durations".
+          SELECTED_MATRIX: ${{ steps.scope.outputs.python_matrix }}
           RAPTOR_TEST_DURATIONS: ${{ steps.durations.outputs.path }}
+        run: |
+          python3 - <<'PYTHON'
+          import json
+          import os
+          from pathlib import Path
+          import sys
+
+          sys.path.insert(0, ".github/scripts")
+          from test_scope import batch_matrix
+
+          selected = json.loads(os.environ["SELECTED_MATRIX"])
+          files = [Path(path) for batch in selected for path in batch["files"].split()]
+          matrix = batch_matrix(files)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write("python_matrix=" + json.dumps(matrix) + "\n")
+          PYTHON
 
   deps:
     needs: [pre_check, changes]
