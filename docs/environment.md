@@ -936,6 +936,7 @@ the JVM-installer caveat.
 
 | Variable | RAPTOR-specific behavior |
 |----------|--------------------------|
+| `DEPENDENCIES_OUTPUT`, `SUNPRO_DEPENDENCIES` | Compiler dependency-output settings. When either is set, Raptor reruns preprocessing for later checks instead of reusing prepared source. The existing sandbox policy still applies. |
 | `SDKROOT` | macOS compiler children receive the installed macOS SDK path when their child environment has no explicit value. RAPTOR resolves fixed Apple developer tools and SDK metadata before sandbox entry; compilation remains sandboxed. The resolved compiler directory is prepended to the child’s `PATH` so linking avoids the system launcher’s host-cache writes. |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Required for `/oss-forensics` BigQuery; also a Vertex credential path in the LLM key table. Its absence is reported in the startup banner. |
 | `GITHUB_TOKEN` | Used by cve-diff/forensics tooling to raise GitHub API limits; forwarded to the relevant children only. |

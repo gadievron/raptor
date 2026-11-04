@@ -697,3 +697,164 @@ def test_shared_include_memo_does_not_share_preprocessor_macro_context(tmp_path,
     assert 'int value = 1;' in one.text and 'int value = 2;' in two.text
     assert one.line_map == two.line_map
     assert len(walks) == 1 and memo.hit_count == 1
+
+
+@pytest.fixture
+def prepared_reuse(tmp_path, monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    from core.detectors.setup import AnalysisSetup, PreparedViews
+    source = tmp_path / 'reuse.c'
+    source.write_text('int value = VALUE;\n')
+    calls = []
+    prefix = [sys.executable, '-E', '-x', 'c']
+    monkeypatch.setattr(pv, '_preprocessor_for', lambda _: prefix)
+    def run(command, **kwargs):
+        calls.append(command)
+        value = next((a.partition('=')[2] if '=' in a else '1' for a in command
+                      if a == '-DVALUE' or a.startswith('-DVALUE=')), '0')
+        output = Path(command[command.index('-o')+1])
+        output.write_text(f'# 1 "{source}"\n'+source.read_text().replace('VALUE', value))
+        return SimpleNamespace(returncode=0, stderr='')
+    monkeypatch.setattr('core.sandbox.context.run', run)
+    setup = AnalysisSetup(preprocessed_views=PreparedViews())
+    def expand(**kwargs):
+        return pv.expand_translation_unit(target_path=tmp_path, file_path=source.name,
+                                          setup=kwargs.pop('setup', setup), **kwargs)
+    return source, setup, calls, prefix, expand
+
+
+def test_prepared_view_reuse_preserves_mapping_and_isolates_mutable_view(prepared_reuse):
+    source, setup, calls, _, expand = prepared_reuse
+    first = expand(macro_config=['-DVALUE=1'])
+    text, mapping = first.text, first.line_map
+    first.text = 'consumer edit'
+    first.errors.append('consumer error')
+    second = expand(macro_config=['-DVALUE=1'])
+    assert first.ok and second.ok and len(calls) == 1
+    assert second.text == text and second.line_map == mapping and not second.errors
+    assert second.origin_of(1) == (source.name, 1)
+    assert setup.preprocessed_views.hit_count == 1
+
+
+def test_prepared_views_separate_macro_environment_source_and_run(prepared_reuse, monkeypatch):
+    from core.detectors.setup import AnalysisSetup
+    source, _, calls, _, expand = prepared_reuse
+    one = expand(macro_config=['-DVALUE=1'])
+    two = expand(macro_config=['-DVALUE=2'])
+    monkeypatch.setenv('RAPTOR_PREPARED_VIEW_TEST', 'different environment')
+    expand(macro_config=['-DVALUE=2'])
+    source.write_text('int changed = VALUE;\n')
+    changed = expand(macro_config=['-DVALUE=2'])
+    expand(setup=AnalysisSetup(), macro_config=['-DVALUE=2'])
+    assert len(calls) == 5
+    assert 'value = 1' in one.text and 'value = 2' in two.text and 'changed = 2' in changed.text
+
+
+def test_analyzer_prefix_remains_independent_of_ordinary_view(prepared_reuse):
+    _, _, calls, prefix, expand = prepared_reuse
+    expand()
+    analyzer = (prefix[0], '-fanalyzer', *prefix[1:])
+    expand(preprocessor=analyzer)
+    expand(preprocessor=analyzer)
+    expand()
+    assert len(calls) == 3  # only the ordinary view is reused
+
+
+def test_prepared_view_byte_budget_bypasses_cache_without_losing_results(prepared_reuse):
+    from core.detectors.setup import PreparedViews
+    _, setup, calls, _, expand = prepared_reuse
+    setup.preprocessed_views = PreparedViews(max_bytes=1)
+    one, two = expand(), expand()
+    assert one.ok and two.ok and one.text == two.text and len(calls) == 2
+    assert setup.preprocessed_views.retained_bytes == 0
+
+
+def test_failed_preparation_is_retried_and_not_replayed(prepared_reuse, monkeypatch):
+    from types import SimpleNamespace
+    from core.sandbox import context
+    _, _, calls, _, expand = prepared_reuse
+    original = context.run
+    attempts = []
+    def fail_once(command, **kwargs):
+        attempts.append(command)
+        if len(attempts) == 1:
+            return SimpleNamespace(returncode=1, stderr='missing generated header')
+        return original(command, **kwargs)
+    monkeypatch.setattr(context, 'run', fail_once)
+    failed, success, reused = expand(), expand(), expand()
+    assert not failed.ok and success.ok and reused.ok
+    assert len(attempts) == 2 and len(calls) == 1
+
+
+def test_tool_identity_and_include_order_separate_prepared_views(prepared_reuse, monkeypatch):
+    source, _, calls, prefix, expand = prepared_reuse
+    tool = source.parent / 'compiler'
+    tool.write_text('first executable identity')
+    prefix[0] = str(tool)
+    expand()
+    tool.write_text('a replacement executable with another size')
+    expand()
+    monkeypatch.setattr(pv, '_cached_include_dirs', lambda *a: [str(source.parent), '/first'])
+    expand()
+    monkeypatch.setattr(pv, '_cached_include_dirs', lambda *a: ['/first', str(source.parent)])
+    expand()
+    assert len(calls) == 4
+
+
+def test_expired_request_does_not_serve_a_cached_success(prepared_reuse):
+    _, _, calls, _, expand = prepared_reuse
+    assert expand().ok
+    assert not expand(timeout=0).ok
+    assert len(calls) == 1
+
+
+def test_relative_compiler_search_path_bypasses_reuse(prepared_reuse, monkeypatch):
+    _, _, calls, _, expand = prepared_reuse
+    monkeypatch.setenv('CPATH', '..')
+    assert expand().ok and expand().ok
+    assert len(calls) == 2
+
+
+def test_oversized_source_and_view_are_not_retained(prepared_reuse):
+    from core.detectors.setup import PreparedViews
+    source, _, calls, _, expand = prepared_reuse
+    source.write_text('/*' + 'x' * (1024 * 1024) + '*/\n')
+    assert expand().ok and expand().ok and len(calls) == 2
+    cache = PreparedViews()
+    assert not cache.put(('large',), ExpandedView(ok=True, file_path='a.c', text='x' * (3 * 1024 * 1024)))
+    assert cache.retained_bytes == 0
+
+
+def test_concurrent_miss_does_not_wait_past_its_deadline(prepared_reuse, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from core.sandbox import context
+    _, _, _, _, expand = prepared_reuse
+    original = context.run
+    started, release = Event(), Event()
+    def held(command, **kwargs):
+        started.set()
+        assert release.wait(8)
+        return original(command, **kwargs)
+    monkeypatch.setattr(context, 'run', held)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(expand)
+        try:
+            assert started.wait(5)
+            second = pool.submit(expand, timeout=0)
+            assert not second.result(timeout=5).ok
+        finally:
+            release.set()
+        assert first.result(timeout=5).ok
+
+
+def test_single_consumer_does_not_hash_or_retain_prepared_views(prepared_reuse, monkeypatch):
+    from core.detectors.setup import AnalysisSetup
+    _, _, calls, _, expand = prepared_reuse
+    def unexpected(*args):
+        raise AssertionError('unnecessary preparation hash for a single consumer')
+    monkeypatch.setattr(pv, '_prepared_view_key', unexpected)
+    setup = AnalysisSetup()
+    assert expand(setup=setup).ok and expand(setup=setup).ok
+    assert len(calls) == 2 and setup.preprocessed_views is None

@@ -3462,8 +3462,10 @@ def main() -> None:
         # compiler_sweep, opposite direction — per-TU gcc -fanalyzer /
         # clang --analyze diagnostics become scan findings. --no wins
         # over --on, mirroring the codeql flag pair.
-        from core.detectors.setup import AnalysisSetup
+        from core.detectors.setup import AnalysisSetup, PreparedViews
         analysis_setup = AnalysisSetup()
+        if args.compiler_scan and not args.no_compiler_scan and args.expanded_semgrep:
+            analysis_setup.preprocessed_views = PreparedViews()
         compiler_sarifs = []
         if args.compiler_scan and not args.no_compiler_scan:
             compiler_sarifs = run_compiler_scan_stage(

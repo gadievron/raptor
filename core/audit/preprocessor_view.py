@@ -52,15 +52,18 @@ from time import monotonic
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from core.run.scratch import scratch_dir
-from core.source import read_text_capped
+from core.source import read_text_capped, open_regular
 
 from ._util import safe_join
 from .compiler_sweep import _derive_include_dirs, _cached_include_dirs
 from .run_memo import BoundedMemo
 from core.security.env_sanitisation import safe_subprocess_env
+
+if TYPE_CHECKING:
+    from core.detectors.setup import AnalysisSetup
 
 logger = logging.getLogger(__name__)
 
@@ -411,6 +414,45 @@ def _degraded(file_path: str, msg: str, *, tool: str = "") -> ExpandedView:
     return ExpandedView(ok=False, file_path=file_path, tool=tool, errors=[msg])
 
 
+def _prepared_view_key(target_path, full_path, pre, macro_flags, include_flags):
+    """Pin the supported ordinary preprocessing context within a read-only run.
+
+    Other prefixes (including analyzer-mode flags) deliberately bypass reuse.
+    Header closures must remain immutable for the owner's entire lifetime, just
+    like the existing per-run compiler memo; this is not a persistent cache.
+    """
+    import hashlib
+    import os
+    if tuple(pre[1:]) not in (("-E", "-x", "c"), ("-E", "-x", "c++")):
+        return None
+    if not target_path.is_absolute() or not full_path.is_absolute() or not Path(pre[0]).is_absolute():
+        return None
+    # Relative compiler search paths depend on the private scratch cwd, which
+    # differs between consumers. Do not equate those environments.
+    for name in ("CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH", "OBJC_INCLUDE_PATH",
+                 "GCC_EXEC_PREFIX", "COMPILER_PATH"):
+        value = os.environ.get(name)
+        if value is not None and any(not Path(part).is_absolute() for part in value.split(os.pathsep)):
+            return None
+    if os.environ.get("DEPENDENCIES_OUTPUT") or os.environ.get("SUNPRO_DEPENDENCIES"):
+        return None
+    try:
+        tool = Path(pre[0]).stat()
+        fh = open_regular(full_path, "rb")
+        if fh is None:
+            return None
+        with fh:
+            data = fh.read(1024 * 1024 + 1)
+        if len(data) > 1024 * 1024:
+            return None
+        environment = hashlib.sha256(repr(sorted(os.environ.items())).encode()).digest()
+        return (str(target_path), str(full_path), tuple(pre), tuple(macro_flags), tuple(include_flags),
+                (tool.st_dev, tool.st_ino, tool.st_size, tool.st_mtime_ns, tool.st_ctime_ns),
+                hashlib.sha256(data).digest(), environment)
+    except (OSError, ValueError):
+        return None
+
+
 def expand_translation_unit(
     *,
     target_path: Path,
@@ -420,6 +462,7 @@ def expand_translation_unit(
     timeout: float = _PREPROCESS_TIMEOUT_S,
     preprocessor: tuple[str, ...] | None = None,
     include_dirs_memo: BoundedMemo[list[str]] | None = None,
+    setup: AnalysisSetup | None = None,
 ) -> ExpandedView:
     """Run the preprocessor on one TU and return the fidelity-3 view.
 
@@ -436,7 +479,11 @@ def expand_translation_unit(
             the same GCC executable used by an already successful compile).
             Never load this prefix from target build metadata.
         include_dirs_memo: Optional bounded, caller-owned scan/run memo.
-            Share directory discovery only; compiler output is never cached here.
+            This memo shares directory discovery only.
+        setup: Optional run owner for bounded successful ordinary preprocessing
+            snapshots. All source/header inputs must stay read-only during its
+            lifetime; use a fresh owner after edits. Analyzer-mode prefixes and
+            oversized inputs/views bypass reuse.
 
     Returns:
         ExpandedView.  ``ok=False`` (degraded, never an exception, never
@@ -465,11 +512,21 @@ def expand_translation_unit(
             file_path, "no C preprocessor available (need gcc, g++ or cpp)",
         )
 
+    if setup is not None and include_dirs_memo is None:
+        include_dirs_memo = setup.include_dirs_memo
     include_dirs = (_derive_include_dirs(target_path, full_path.parent)
                     if include_dirs_memo is None else
                     _cached_include_dirs(target_path, full_path.parent, include_dirs_memo))
     include_flags = [f"-I{d}" for d in include_dirs]
     macro_flags = _macro_flags(macro_config)
+    view_cache = setup.preprocessed_views if setup is not None else None
+    key = (_prepared_view_key(target_path, full_path, pre, macro_flags, include_flags)
+           if view_cache is not None else None)
+    if view_cache is not None and key is not None:
+        key = (key, file_path)
+        cached = view_cache.get(key)
+        if cached is not None and deadline > monotonic():
+            return cached
 
     scratch_root = str(out_dir) if out_dir else None
     with scratch_dir("preproc_view_", dir=scratch_root) as workdir:
@@ -546,13 +603,16 @@ def expand_translation_unit(
             )
 
         text, line_map = _parse_linemarked_output(output, target_path, workdir)
-        return ExpandedView(
+        view = ExpandedView(
             ok=True,
             file_path=file_path,
             text=text,
             line_map=line_map,
             tool=Path(pre[0]).name,
         )
+        if view_cache is not None and key is not None:
+            view_cache.put(key, view)
+        return view
 
 
 # ---------------------------------------------------------------------------
