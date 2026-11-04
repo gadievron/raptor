@@ -88,6 +88,7 @@ from __future__ import annotations
 
 from collections.abc import Buffer, Iterable
 
+import logging
 import os
 import secrets
 import shutil
@@ -158,6 +159,18 @@ def _resolve_effective_mode(
     if _stat.S_ISREG(st.st_mode):
         return _stat.S_IMODE(st.st_mode)
     return 0o644
+
+
+def _close_write_fd(fd: int, *, write_failed: bool) -> None:
+    """Keep this write's failure authoritative if closing also fails."""
+    try:
+        os.close(fd)
+    except OSError:
+        if not write_failed:
+            raise
+        logging.getLogger(__name__).warning(
+            "atomic write descriptor cleanup failed", exc_info=True,
+        )
 
 
 def write_text_atomically(
@@ -251,6 +264,7 @@ def write_bytes_atomically(
         # the open succeeds, so every exception path — including a
         # BaseException raised inside the fchmod window — closes the
         # fd before the outer handler unlinks the tempfile.
+        write_failed = False
         try:
             try:
                 # O_CREAT + mode gets umask-adjusted. Explicit fchmod
@@ -286,8 +300,11 @@ def write_bytes_atomically(
                         )
                     written += n
             os.fsync(fd)
+        except BaseException:
+            write_failed = True
+            raise
         finally:
-            os.close(fd)
+            _close_write_fd(fd, write_failed=write_failed)
         # Atomic rename. Same-FS on POSIX is atomic by spec; the
         # tempfile sits in the same directory to guarantee that.
         # Cross-FS raises EXDEV — but tmp lives in path.parent so
@@ -308,7 +325,7 @@ def write_bytes_atomically(
         # Catch BaseException (which includes KeyboardInterrupt)
         # explicitly — that's the exact scenario a torn write would
         # otherwise happen in. Best-effort clean up of the tempfile.
-        # The fd is always closed before we get here: the inner
+        # Descriptor close is attempted before we get here: the inner
         # try/finally spans everything from the successful os.open
         # (fchmod included) through the fsync, and on the O_EXCL
         # failure path the fd never existed.
@@ -316,6 +333,10 @@ def write_bytes_atomically(
             tmp.unlink()
         except FileNotFoundError:
             pass
+        except OSError:
+            logging.getLogger(__name__).warning(
+                "atomic write temporary cleanup failed for %s", tmp, exc_info=True,
+            )
         raise
 
 
@@ -505,15 +526,41 @@ def rmtree_hardened(path: str | Path) -> bool:
     only governs entries found during the descent — so walking a
     link root would chmod the link TARGET's subtree.
 
-    Never raises. Returns ``True`` when nothing remains at *path*
-    (including the was-never-there case) so callers can log honestly.
+    Reject non-directory roots, invalid paths, and root/current/parent
+    markers without changing permissions. Filesystem errors report False;
+    cancellation still propagates. Returns True only when absence can be
+    confirmed (including the was-never-there case), never on an inspection
+    refusal, so callers can log honestly.
     """
-    p = str(path)
-    if os.path.islink(p):
-        return False
-    shutil.rmtree(p, ignore_errors=True)
-    if not os.path.lexists(p):
+    try:
+        node = Path(path)
+        # An empty/current-directory marker, parent marker, or filesystem
+        # root cannot be an exclusively allocated scratch directory.
+        if not node.name or node.name == "..":
+            return False
+        p = str(node)
+        original = os.lstat(p)
+    except FileNotFoundError:
         return True
+    except (OSError, ValueError, TypeError):
+        return False
+    if not _stat.S_ISDIR(original.st_mode):
+        return False
+    try:
+        shutil.rmtree(p, ignore_errors=True)
+    except (OSError, ValueError):
+        return False
+    try:
+        current = os.lstat(p)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    # Refuse changed targets before permission restoration. lstat on the
+    # normalized spelling also refuses root links with a trailing / or /.
+    if (not _stat.S_ISDIR(current.st_mode)
+            or (current.st_dev, current.st_ino) != (original.st_dev, original.st_ino)):
+        return False
     try:
         os.chmod(p, 0o700)
     except OSError:
@@ -530,8 +577,18 @@ def rmtree_hardened(path: str | Path) -> bool:
                     pass
     except OSError:
         pass
-    shutil.rmtree(p, ignore_errors=True)
-    return not os.path.lexists(p)
+    try:
+        shutil.rmtree(p, ignore_errors=True)
+    except (OSError, ValueError):
+        return False
+    try:
+        os.lstat(p)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        pass
+    return False
+
 
 
 __all__ = [
