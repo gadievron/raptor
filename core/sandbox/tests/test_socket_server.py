@@ -78,3 +78,26 @@ def test_close_wakes_blocked_writer(listener):
             assert ready.wait(5), "writer did not start"
             server.close()
             _assert_stopped(server)
+
+
+@pytest.mark.parametrize("fault", ["thread-construction", "thread-start"])
+def test_failed_startup_closes_listener(listener, monkeypatch, fault):
+    from types import SimpleNamespace
+    from core.sandbox.tests import socket_server
+
+    class StartFailure(threading.Thread):
+        def start(self):
+            raise RuntimeError("injected thread-start failure")
+
+    def thread(*args, **kwargs):
+        if fault == "thread-construction":
+            raise RuntimeError("injected thread-construction failure")
+        return StartFailure(*args, **kwargs)
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(socket_server, "threading", SimpleNamespace(
+            Event=threading.Event, Lock=threading.Lock, Thread=thread,
+        ))
+        with pytest.raises(RuntimeError, match="injected .* failure"):
+            SocketServer(listener, lambda conn: None)
+    assert listener.fileno() == -1, "failed startup left its listener open"

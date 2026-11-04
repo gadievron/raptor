@@ -18,9 +18,9 @@ class SocketServer:
         self._lock = threading.Lock()
         self._clients: set[socket.socket] = set()
         self._threads: list[threading.Thread] = []
-        listener.settimeout(0.1)
-        self._accept_thread = threading.Thread(target=self._accept, daemon=True)
         try:
+            listener.settimeout(0.1)
+            self._accept_thread = threading.Thread(target=self._accept, daemon=True)
             self._accept_thread.start()
         except BaseException:
             listener.close()
