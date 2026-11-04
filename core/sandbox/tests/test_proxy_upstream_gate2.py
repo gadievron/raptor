@@ -30,6 +30,7 @@ import threading
 import pytest
 
 from core.sandbox import proxy as proxy_mod
+from core.sandbox.tests.socket_server import SocketServer
 
 
 @pytest.fixture
@@ -39,12 +40,12 @@ def reset_proxy():
     proxy_mod._reset_for_tests()
 
 
-class _FakeUpstream(threading.Thread):
+class _FakeUpstream:
     """Minimal CONNECT-accepting upstream proxy on 127.0.0.1."""
 
     def __init__(self):
-        super().__init__(daemon=True)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._server = None
         try:
             self.sock.bind(("127.0.0.1", 0))
             self.sock.listen(8)
@@ -56,49 +57,47 @@ class _FakeUpstream(threading.Thread):
             self.sock.close()
             raise
 
-    def run(self):
-        while not self._stop.is_set():
-            try:
-                conn, _ = self.sock.accept()
-            except socket.timeout:
-                continue
-            except OSError:
-                break
-            try:
-                conn.settimeout(2.0)
-                data = b""
-                while b"\r\n\r\n" not in data:
-                    chunk = conn.recv(4096)
-                    if not chunk:
-                        break
-                    data += chunk
-                self.requests.append(data)
-                conn.sendall(
-                    b"HTTP/1.1 200 Connection established\r\n\r\n"
-                )
-            except OSError:
-                pass
-            finally:
-                try:
-                    conn.close()
-                except OSError:
-                    pass
+    def start(self):
+        if self._server is not None:
+            raise RuntimeError("upstream already started")
+        try:
+            self._server = SocketServer(self.sock, self._serve)
+        except BaseException:
+            self.sock.close()
+            raise
+
+    def _serve(self, conn):
+        try:
+            conn.settimeout(2.0)
+            data = b""
+            while b"\r\n\r\n" not in data:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+            self.requests.append(data)
+            conn.sendall(
+                b"HTTP/1.1 200 Connection established\r\n\r\n"
+            )
+        except OSError:
+            pass
 
     def stop(self):
         self._stop.set()
-        try:
+        if self._server is None:
             self.sock.close()
-        except OSError:
-            pass
-        self.join(timeout=2.0)
+        else:
+            self._server.close()
 
 
 @pytest.fixture
 def fake_upstream():
     up = _FakeUpstream()
-    up.start()
-    yield up
-    up.stop()
+    try:
+        up.start()
+        yield up
+    finally:
+        up.stop()
 
 
 def _send_connect(port: int, target: str, timeout: float = 5.0) -> tuple:

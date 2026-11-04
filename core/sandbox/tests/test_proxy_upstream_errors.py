@@ -16,6 +16,7 @@ CONNECT targets rides the stubbed resolver.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 import gc
 import os
 import socket
@@ -26,6 +27,7 @@ import time
 import pytest
 
 from core.sandbox import proxy as proxy_mod
+from core.sandbox.tests.socket_server import SocketServer
 
 
 @pytest.fixture
@@ -35,14 +37,14 @@ def reset_proxy():
     proxy_mod._reset_for_tests()
 
 
-class _RstUpstream(threading.Thread):
+class _RstUpstream:
     """Upstream proxy that answers the CONNECT with a 200 status line
     (no terminating blank line) and then hard-resets the connection —
     the mid-header-drain death of a flaky corporate upstream."""
 
     def __init__(self, rst_delay: float = 0.15):
-        super().__init__(daemon=True)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._server = None
         try:
             self.sock.bind(("127.0.0.1", 0))
             self.sock.listen(16)
@@ -54,55 +56,51 @@ class _RstUpstream(threading.Thread):
             self.sock.close()
             raise
 
-    def run(self):
-        while not self._stop.is_set():
-            try:
-                conn, _ = self.sock.accept()
-            except socket.timeout:
-                continue
-            except OSError:
-                break
-            try:
-                conn.settimeout(2.0)
-                data = b""
-                while b"\r\n\r\n" not in data:
-                    chunk = conn.recv(4096)
-                    if not chunk:
-                        break
-                    data += chunk
-                # Status line only — the proxy parses it, then blocks
-                # in the header-drain loop awaiting the blank line...
-                conn.sendall(b"HTTP/1.1 200 Connection established\r\n")
-                time.sleep(self.rst_delay)
-                # ...and gets an RST instead (SO_LINGER 0 close).
-                conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER,
-                                struct.pack("ii", 1, 0))
-            except OSError:
-                pass
-            finally:
-                try:
-                    conn.close()
-                except OSError:
-                    pass
+    def start(self):
+        if self._server is not None:
+            raise RuntimeError("upstream already started")
+        try:
+            self._server = SocketServer(self.sock, self._serve)
+        except BaseException:
+            self.sock.close()
+            raise
+
+    def _serve(self, conn):
+        try:
+            conn.settimeout(2.0)
+            data = b""
+            while b"\r\n\r\n" not in data:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+            # Status line only — the proxy parses it, then blocks
+            # in the header-drain loop awaiting the blank line...
+            conn.sendall(b"HTTP/1.1 200 Connection established\r\n")
+            time.sleep(self.rst_delay)
+            # ...and gets an RST instead (SO_LINGER 0 close).
+            conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER,
+                            struct.pack("ii", 1, 0))
+        except OSError:
+            pass
 
     def stop(self):
         self._stop.set()
-        try:
+        if self._server is None:
             self.sock.close()
-        except OSError:
-            pass
-        self.join(timeout=2.0)
+        else:
+            self._server.close()
 
 
-class _HoldingUpstream(threading.Thread):
+class _HoldingUpstream:
     """Upstream proxy that completes the CONNECT handshake fully and
     then holds the accepted connection open, exposing it so a test
     can observe whether the proxy closed its leg (EOF) or leaked it
     (recv blocks)."""
 
     def __init__(self):
-        super().__init__(daemon=True)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._server = None
         try:
             self.sock.bind(("127.0.0.1", 0))
             self.sock.listen(4)
@@ -114,43 +112,37 @@ class _HoldingUpstream(threading.Thread):
             self.sock.close()
             raise
 
-    def run(self):
-        while not self._stop.is_set():
-            try:
-                conn, _ = self.sock.accept()
-            except socket.timeout:
-                continue
-            except OSError:
-                break
-            try:
-                conn.settimeout(2.0)
-                data = b""
-                while b"\r\n\r\n" not in data:
-                    chunk = conn.recv(4096)
-                    if not chunk:
-                        break
-                    data += chunk
-                conn.sendall(
-                    b"HTTP/1.1 200 Connection established\r\n\r\n")
-                self.held.append(conn)
-            except OSError:
-                try:
-                    conn.close()
-                except OSError:
-                    pass
+    def start(self):
+        if self._server is not None:
+            raise RuntimeError("upstream already started")
+        try:
+            self._server = SocketServer(self.sock, self._serve)
+        except BaseException:
+            self.sock.close()
+            raise
+
+    def _serve(self, conn):
+        try:
+            conn.settimeout(2.0)
+            data = b""
+            while b"\r\n\r\n" not in data:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+            conn.sendall(
+                b"HTTP/1.1 200 Connection established\r\n\r\n")
+            self.held.append(conn)
+            self._stop.wait()
+        except OSError:
+            pass
 
     def stop(self):
         self._stop.set()
-        try:
+        if self._server is None:
             self.sock.close()
-        except OSError:
-            pass
-        for conn in self.held:
-            try:
-                conn.close()
-            except OSError:
-                pass
-        self.join(timeout=2.0)
+        else:
+            self._server.close()
 
 
 def _send_connect(port: int, target: str, timeout: float = 5.0) -> tuple:
@@ -184,13 +176,15 @@ def _open_fds() -> int:
 class TestUpstreamHeaderDrainReset:
     def test_reset_during_header_drain_yields_502(
             self, reset_proxy, hermetic_invalid_dns):
-        up = _RstUpstream()
-        up.start()
-        proxy = proxy_mod.EgressProxy(
-            allowed_hosts={"drain-reset.invalid"},
-            upstream_proxy=f"http://127.0.0.1:{up.port}",
-        )
-        try:
+        with ExitStack() as cleanup:
+            up = _RstUpstream()
+            cleanup.callback(up.stop)
+            up.start()
+            proxy = proxy_mod.EgressProxy(
+                allowed_hosts={"drain-reset.invalid"},
+                upstream_proxy=f"http://127.0.0.1:{up.port}",
+            )
+            cleanup.callback(proxy.stop)
             token = proxy.register_sandbox(caller_label="test")
             try:
                 status, _ = _send_connect(
@@ -200,9 +194,6 @@ class TestUpstreamHeaderDrainReset:
                     f"as 502, got {status}")
             finally:
                 events = proxy.unregister_sandbox(token)
-        finally:
-            proxy.stop()
-            up.stop()
 
         failed = [e for e in events if e["result"] == "upstream_failed"]
         assert len(failed) == 1, \
@@ -217,13 +208,15 @@ class TestUpstreamHeaderDrainReset:
         (its fd stays registered with the event loop, so not even GC
         reaps it). Pace a dozen and require the fd count to settle
         back to baseline."""
-        up = _RstUpstream(rst_delay=0.05)
-        up.start()
-        proxy = proxy_mod.EgressProxy(
-            allowed_hosts={"drain-reset.invalid"},
-            upstream_proxy=f"http://127.0.0.1:{up.port}",
-        )
-        try:
+        with ExitStack() as cleanup:
+            up = _RstUpstream(rst_delay=0.05)
+            cleanup.callback(up.stop)
+            up.start()
+            proxy = proxy_mod.EgressProxy(
+                allowed_hosts={"drain-reset.invalid"},
+                upstream_proxy=f"http://127.0.0.1:{up.port}",
+            )
+            cleanup.callback(proxy.stop)
             gc.collect()
             baseline = _open_fds()
             for _ in range(12):
@@ -240,9 +233,6 @@ class TestUpstreamHeaderDrainReset:
             assert grown <= slack, (
                 f"fd count grew by {grown} after 12 upstream resets "
                 f"(baseline {baseline}) — upstream legs leaked")
-        finally:
-            proxy.stop()
-            up.stop()
 
 
 class TestPost200EscapeClosesUpstreamLeg:
@@ -258,13 +248,15 @@ class TestPost200EscapeClosesUpstreamLeg:
 
         monkeypatch.setattr(proxy_mod.EgressProxy, "_peek_tls_identity",
                             _peek_boom)
-        up = _HoldingUpstream()
-        up.start()
-        proxy = proxy_mod.EgressProxy(
-            allowed_hosts={"post200.invalid"},
-            upstream_proxy=f"http://127.0.0.1:{up.port}",
-        )
-        try:
+        with ExitStack() as cleanup:
+            up = _HoldingUpstream()
+            cleanup.callback(up.stop)
+            up.start()
+            proxy = proxy_mod.EgressProxy(
+                allowed_hosts={"post200.invalid"},
+                upstream_proxy=f"http://127.0.0.1:{up.port}",
+            )
+            cleanup.callback(proxy.stop)
             status, _ = _send_connect(proxy.port, "post200.invalid:443")
             assert status == 200  # tunnel was acknowledged first
             deadline = time.monotonic() + 3.0
@@ -280,6 +272,3 @@ class TestPost200EscapeClosesUpstreamLeg:
                     "upstream leg still open 2s after the tunnel "
                     "handler died — up_writer leaked")
             assert got == b"", "expected EOF on the upstream leg"
-        finally:
-            proxy.stop()
-            up.stop()
