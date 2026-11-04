@@ -111,3 +111,33 @@ def test_zero_cap(tmp_path, raw):
     assert windows.read_line_window_capped(
         path, 0, 1, max_bytes=0,
     ) == ([], bool(raw))
+
+
+@pytest.mark.parametrize("chunk_bytes", [512, 8192, 65536])
+@pytest.mark.parametrize("bounds", [(250, 260), (990, 1010), (1999, 2003)])
+def test_late_window_prefix_and_chunk_boundaries(tmp_path, monkeypatch, chunk_bytes, bounds):
+    raw = b"row\r\nutf8:\xc3\xa9\npartial:\xf0\x9f\nseparator:\xe2\x80\xa8\n" * 700
+    path = tmp_path / "many-lines.c"
+    path.write_bytes(raw)
+    monkeypatch.setattr(windows, "_CHUNK_BYTES", chunk_bytes)
+    expected = split_lines(raw.decode("utf-8", errors="replace"))
+    assert windows.read_line_window_capped(path, *bounds, max_bytes=len(raw)) == (expected[slice(*bounds)], False)
+
+
+def test_late_selected_window_still_rejects_tail_failure(monkeypatch):
+    class FailingStream(io.BytesIO):
+        def read(self, size):
+            if self.tell():
+                raise OSError("tail read failed")
+            return super().read(size)
+
+    monkeypatch.setattr(windows, "_CHUNK_BYTES", 10)
+    monkeypatch.setattr(windows, "open_regular", lambda *_: FailingStream(b"a\nb\nc\nd\ne\ntail"))
+    assert windows.read_line_window_capped(None, 2, 3, max_bytes=30) is None
+
+
+def test_late_selected_window_still_rejects_oversize_file(tmp_path, monkeypatch):
+    path = tmp_path / "late.c"
+    path.write_bytes(b"a\nb\nc\nd\ne\ntail")
+    monkeypatch.setattr(windows, "_CHUNK_BYTES", 10)
+    assert windows.read_line_window_capped(path, 2, 3, max_bytes=12) == ([], True)

@@ -11,8 +11,7 @@ _CHUNK_BYTES = 64 * 1024
 _CHUNK_CHARS = 64 * 1024
 
 
-def _after_newlines(chunk: bytes, count: int) -> int:
-    offset = 0
+def _after_newlines(chunk: bytes, count: int, offset: int = 0) -> int:
     for _ in range(count):
         offset = chunk.index(b"\n", offset) + 1
     return offset
@@ -51,7 +50,8 @@ def read_line_window_capped(
                 if line < start:
                     lower = (_after_newlines(chunk, start - line)
                              if line + breaks >= start else len(chunk))
-                upper = (_after_newlines(chunk, end - line)
+                # Reuse the lower offset instead of rescanning its prefix.
+                upper = (_after_newlines(chunk, end - max(line, start), lower)
                          if line + breaks >= end else len(chunk))
                 if lower < upper:
                     selected.extend(chunk[lower:upper])
@@ -61,8 +61,7 @@ def read_line_window_capped(
     return split_lines(selected.decode("utf-8", errors="replace")), False
 
 
-def _after_text_newlines(chunk: str, count: int) -> int:
-    offset = 0
+def _after_text_newlines(chunk: str, count: int, offset: int = 0) -> int:
     for _ in range(count):
         offset = chunk.index("\n", offset) + 1
     return offset
@@ -103,7 +102,8 @@ def read_text_line_window_capped(
                     if line < start:
                         lower = (_after_text_newlines(chunk, start - line)
                                  if line + breaks >= start else len(chunk))
-                    upper = (_after_text_newlines(chunk, end - line)
+                    # Reuse the lower offset instead of rescanning its prefix.
+                    upper = (_after_text_newlines(chunk, end - max(line, start), lower)
                              if line + breaks >= end else len(chunk))
                     if lower < upper:
                         parts.append(chunk[lower:upper])
