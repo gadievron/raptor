@@ -165,6 +165,7 @@ jobs:
       sage: ${{ steps.scope.outputs.sage }}
       orchestration: ${{ steps.scope.outputs.orchestration }}
       sca: ${{ steps.scope.outputs.sca }}
+      sca_matrix: ${{ steps.sca_matrix.outputs.matrix }}
       source_intel: ${{ steps.scope.outputs.source_intel }}
       engine: ${{ steps.scope.outputs.engine }}
       # Dynamic batch matrix for the fast tier (JSON for fromJSON()).
@@ -282,6 +283,11 @@ jobs:
             --repo .
         env:
           CHANGED_FILES_LIST: ${{ steps.changed_files.outputs.list }}
+
+      - id: sca_matrix
+        run: python3 .github/scripts/sca_test_matrix.py
+        env:
+          SCA_FILES: ${{ steps.scope.outputs.sca_files }}
 
       # Scope first: docs and non-fast tiers do not need nightly artifacts.
       # Best-effort per-test durations for the batch partitioner: pull
@@ -559,7 +565,8 @@ jobs:
   # the calibration substrate. The size class (≈30% of the broad ``python``
   # fast tier's collected count) is why it gets carved out — a single
   # cluster of that magnitude blew out one shard of the 4-way pytest-split
-  # before this carve-out. Internally 4-way split (same shape as fast tier).
+  # before this carve-out. Small measured selections consolidate runners;
+  # unknown costs retain the historical four-way split.
   python-unit-tests-sca:
     needs: [pre_check, changes, deps]
     if: |
@@ -570,7 +577,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        group: [1, 2, 3, 4]
+        include: ${{ fromJSON(needs.changes.outputs.sca_matrix) }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -594,14 +601,14 @@ jobs:
       - name: Restore or rebuild venv
         uses: ./.github/actions/setup-venv
 
-      - name: Run SCA tests (group ${{ matrix.group }} of 4)
+      - name: Run SCA tests (group ${{ matrix.group }} of ${{ matrix.groups }})
         env:
           SCA_FILES: ${{ needs.changes.outputs.sca_files }}
         run: |
           source $VENV_PATH/bin/activate
           set -f  # word-split $SCA_FILES without glob expansion
           rc=0
-          python -m pytest -n auto --splits 4 --group ${{ matrix.group }} \
+          python -m pytest -n auto --splits ${{ matrix.groups }} --group ${{ matrix.group }} \
             --durations-path packages/sca/test-durations.json $SCA_FILES \
             || rc=$?
           # Exit 5 = "no tests collected" — legitimate when path filtering
