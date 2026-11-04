@@ -137,8 +137,8 @@ def _load_user_limits() -> dict:
         # the success path below, so this window never expires for
         # it — session-cached, not re-parsed as if it had failed.
         if (state._user_limits_cache is not None
-            and (time.time() - state._user_limits_cache_decided_at)
-                <= _FAIL_TTL_S):
+            and (time.monotonic() - state._user_limits_cache_decided_at)
+                < _FAIL_TTL_S):
             return state._user_limits_cache
 
         try:
@@ -184,7 +184,7 @@ def _load_user_limits() -> dict:
             logger.warning(
                 "Sandbox: could not parse %s: %s — using default limits.", _CONFIG_PATH, e.__class__.__name__)
         state._user_limits_cache = {}  # type: ignore[assignment]
-        state._user_limits_cache_decided_at = time.time()
+        state._user_limits_cache_decided_at = time.monotonic()
         return state._user_limits_cache  # type: ignore[return-value]
 
 
