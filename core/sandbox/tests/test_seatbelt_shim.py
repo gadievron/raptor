@@ -23,6 +23,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.pipes import pipes_for_setup
+
 # seatbelt-shim POSIX-core tests use /proc (real-Linux binding);
 # integration is darwin-only and lives in test_macos_spawn.py.
 pytestmark = pytest.mark.linux_native
@@ -100,14 +102,13 @@ class TestSeatbeltShim:
         """outer shim -> (trampoline stands in for sandbox-exec) -> target.
         The shim wires the status pipe to fd 3; the trampoline writes the
         readiness byte there, and the shim mirrors the target's exit code."""
-        sr, sw = os.pipe()
-        dr, dw = os.pipe()
-        p = subprocess.Popen(
-            _outer(["/bin/sh", "-c", "echo DEEP; exit 5"]),
-            pass_fds=(sw, dr),
-            env=_env(_RAPTOR_STATUS_FD=str(sw), _RAPTOR_DEATH_FD=str(dr)),
-            stdout=subprocess.PIPE, text=True,
-        )
+        with pipes_for_setup(2) as ((sr, sw), (dr, dw)):
+            p = subprocess.Popen(
+                _outer(["/bin/sh", "-c", "echo DEEP; exit 5"]),
+                pass_fds=(sw, dr),
+                env=_env(_RAPTOR_STATUS_FD=str(sw), _RAPTOR_DEATH_FD=str(dr)),
+                stdout=subprocess.PIPE, text=True,
+            )
         os.close(sw)
         os.close(dr)
         out, _ = p.communicate(timeout=10)
@@ -127,15 +128,15 @@ class TestSeatbeltShim:
     def test_target_does_not_inherit_status_fd(self):
         """The trampoline closes fd 3 (`exec 3>&-`) before exec'ing the
         target, so the untrusted target must NOT hold the status pipe."""
-        sr, sw = os.pipe()
-        # Target prints whether fd 3 is open to it.
-        probe = "import os\ntry:\n os.fstat(3); print('FD3_OPEN')\nexcept OSError:\n print('FD3_CLOSED')"
-        p = subprocess.Popen(
-            _outer([sys.executable, "-c", probe]),
-            pass_fds=(sw,),
-            env=_env(_RAPTOR_STATUS_FD=str(sw)),
-            stdout=subprocess.PIPE, text=True,
-        )
+        with pipes_for_setup(1) as ((sr, sw),):
+            # Target prints whether fd 3 is open to it.
+            probe = "import os\ntry:\n os.fstat(3); print('FD3_OPEN')\nexcept OSError:\n print('FD3_CLOSED')"
+            p = subprocess.Popen(
+                _outer([sys.executable, "-c", probe]),
+                pass_fds=(sw,),
+                env=_env(_RAPTOR_STATUS_FD=str(sw)),
+                stdout=subprocess.PIPE, text=True,
+            )
         os.close(sw)
         out, _ = p.communicate(timeout=10)
         data = _drain(sr)
@@ -148,17 +149,17 @@ class TestSeatbeltShim:
         """The shim strips _RAPTOR_* markers before exec'ing into the sandbox,
         so the untrusted target must NOT see the trust marker (which authorizes
         the outer dispatch shim only) or the fd markers."""
-        sr, sw = os.pipe()
-        probe = ("import os;"
-                 "print('TRUST=' + os.environ.get('_RAPTOR_TRUSTED','<unset>'));"
-                 "print('SFD=' + os.environ.get('_RAPTOR_STATUS_FD','<unset>'));"
-                 "print('DFD=' + os.environ.get('_RAPTOR_DEATH_FD','<unset>'))")
-        p = subprocess.Popen(
-            _outer([sys.executable, "-c", probe]),
-            pass_fds=(sw,),
-            env=_env(_RAPTOR_STATUS_FD=str(sw)),
-            stdout=subprocess.PIPE, text=True,
-        )
+        with pipes_for_setup(1) as ((sr, sw),):
+            probe = ("import os;"
+                     "print('TRUST=' + os.environ.get('_RAPTOR_TRUSTED','<unset>'));"
+                     "print('SFD=' + os.environ.get('_RAPTOR_STATUS_FD','<unset>'));"
+                     "print('DFD=' + os.environ.get('_RAPTOR_DEATH_FD','<unset>'))")
+            p = subprocess.Popen(
+                _outer([sys.executable, "-c", probe]),
+                pass_fds=(sw,),
+                env=_env(_RAPTOR_STATUS_FD=str(sw)),
+                stdout=subprocess.PIPE, text=True,
+            )
         os.close(sw)
         out, _ = p.communicate(timeout=10)
         data = _drain(sr)
@@ -172,13 +173,12 @@ class TestSeatbeltShim:
         """With a death pipe configured and a quick target, the shim reaps
         normally and mirrors exit — the death watch must not interfere with
         a healthy run."""
-        sr, sw = os.pipe()
-        dr, dw = os.pipe()
-        p = subprocess.Popen(
-            _outer(["/bin/sh", "-c", "exit 0"]),
-            pass_fds=(sw, dr),
-            env=_env(_RAPTOR_STATUS_FD=str(sw), _RAPTOR_DEATH_FD=str(dr)),
-        )
+        with pipes_for_setup(2) as ((sr, sw), (dr, dw)):
+            p = subprocess.Popen(
+                _outer(["/bin/sh", "-c", "exit 0"]),
+                pass_fds=(sw, dr),
+                env=_env(_RAPTOR_STATUS_FD=str(sw), _RAPTOR_DEATH_FD=str(dr)),
+            )
         os.close(sw)
         os.close(dr)
         rc = p.wait(timeout=10)
@@ -190,13 +190,12 @@ class TestSeatbeltShim:
         """When the death-pipe write end closes (orchestrator died), the
         shim SIGKILLs the whole sandbox process group and exits with the
         teardown code — leaving no descendant alive."""
-        sr, sw = os.pipe()
-        dr, dw = os.pipe()
-        p = subprocess.Popen(
-            _outer(["/bin/sh", "-c", "echo go; sleep 60"]),
-            pass_fds=(sw, dr),
-            env=_env(_RAPTOR_STATUS_FD=str(sw), _RAPTOR_DEATH_FD=str(dr)),
-        )
+        with pipes_for_setup(2) as ((sr, sw), (dr, dw)):
+            p = subprocess.Popen(
+                _outer(["/bin/sh", "-c", "echo go; sleep 60"]),
+                pass_fds=(sw, dr),
+                env=_env(_RAPTOR_STATUS_FD=str(sw), _RAPTOR_DEATH_FD=str(dr)),
+            )
         os.close(sw)
         os.close(dr)
         try:
@@ -261,23 +260,23 @@ class TestSeatbeltShim:
         payload = _json.dumps(
             {**{n: f"/pv/{n}" for n in names}, "PATH": "/evil"},
         )
-        sr, sw = os.pipe()
-        prints = ";".join(
-            f"print({n!r} + '=' + os.environ.get({n!r}, '<unset>'))"
-            for n in (*names, "_RAPTOR_ENV_RESTORE")
-        )
-        probe = (
-            "import os;"
-            f"{prints};"
-            "print('EVILPATH=' + str(os.environ.get('PATH') == '/evil'))"
-        )
-        p = subprocess.Popen(
-            _outer([sys.executable, "-c", probe]),
-            pass_fds=(sw,),
-            env=_env(_RAPTOR_STATUS_FD=str(sw),
-                     _RAPTOR_ENV_RESTORE=payload),
-            stdout=subprocess.PIPE, text=True,
-        )
+        with pipes_for_setup(1) as ((sr, sw),):
+            prints = ";".join(
+                f"print({n!r} + '=' + os.environ.get({n!r}, '<unset>'))"
+                for n in (*names, "_RAPTOR_ENV_RESTORE")
+            )
+            probe = (
+                "import os;"
+                f"{prints};"
+                "print('EVILPATH=' + str(os.environ.get('PATH') == '/evil'))"
+            )
+            p = subprocess.Popen(
+                _outer([sys.executable, "-c", probe]),
+                pass_fds=(sw,),
+                env=_env(_RAPTOR_STATUS_FD=str(sw),
+                         _RAPTOR_ENV_RESTORE=payload),
+                stdout=subprocess.PIPE, text=True,
+            )
         os.close(sw)
         out, _ = p.communicate(timeout=10)
         data = _drain(sr)
