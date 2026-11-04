@@ -212,8 +212,9 @@ def open_pinned(canonical_path: str) -> int:
         # than walk upward (or mask it behind a component ENOENT).
         msg = f"open_pinned: non-canonical path {canonical_path!r}"
         raise ValueError(msg)
-    fd = os.open("/", os.O_PATH | getattr(os, "O_CLOEXEC", 0))
+    fd = nxt = None
     try:
+        fd = os.open("/", os.O_PATH | getattr(os, "O_CLOEXEC", 0))
         for comp in canonical_path.split("/"):
             if not comp or comp == ".":
                 continue
@@ -223,16 +224,22 @@ def open_pinned(canonical_path: str) -> int:
             # both shapes uniformly: a symlink anywhere in the walk is
             # the post-canonicalisation swap and must refuse.
             if _stat.S_ISLNK(os.fstat(nxt).st_mode):
-                os.close(nxt)
                 raise OSError(
                     errno.ELOOP,
                     f"open_pinned: component {comp!r} of "
                     f"{canonical_path!r} is a symlink "
                     f"(post-canonicalisation swap); refusing",
                 )
-            os.close(fd)
-            fd = nxt
+            previous_fd, fd, nxt = fd, nxt, None
+            # Ownership has moved: a close error must not make cleanup
+            # close a descriptor number that may already be reused.
+            os.close(previous_fd)
         return fd
     except BaseException:
-        os.close(fd)
+        for owned in (nxt, fd):
+            if owned is not None:
+                try:
+                    os.close(owned)
+                except OSError:
+                    pass
         raise
