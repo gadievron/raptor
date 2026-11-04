@@ -152,6 +152,8 @@ def _postpass_record(out_dir: Path) -> dict:
         (out_dir / "validate-postpass.json").read_text(encoding="utf-8"))
 
 
+# These integration checks exercise the shipped lifecycle subprocesses.
+@pytest.mark.slow
 class TestPostpassReachesRunningValidate:
     def test_postpass_starts_and_completes_in_the_parents_project(
             self, seam):
