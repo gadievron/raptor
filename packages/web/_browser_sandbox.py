@@ -1,10 +1,12 @@
 """Private Playwright driver launcher: Node and Chromium share one outer jail."""
 from contextlib import contextmanager, suppress
+from functools import lru_cache
 import json
 import os
 from pathlib import Path
 import shlex
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -13,6 +15,41 @@ from urllib.parse import urlsplit
 from core.atomic_fs import write_new_text
 
 _ENV_LOCK = threading.RLock()
+# Enabled only by owned native-test fixtures; never inherit operator DEBUG.
+_DRIVER_DIAGNOSTICS = False
+
+
+@lru_cache(maxsize=1)
+def macos_nested_seatbelt_available():
+    """Probe applying a second inherited profile, without launching a browser.
+
+    Even allow-default profiles can be refused by the platform. This probes
+    kernel capability, not permission to relax the actual browser policy.
+    """
+    profile = '(version 1)(allow default)'
+    command = ['/usr/bin/sandbox-exec', '-p', profile,
+               '/usr/bin/sandbox-exec', '-p', profile, '/usr/bin/true']
+    try:
+        result = subprocess.run(command, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                env={'PATH': os.defpath, 'LC_ALL': 'C'},
+                                timeout=5, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
+def require_inner_sandbox_compatibility(enabled):
+    if enabled and sys.platform == 'darwin':
+        from core.sandbox.probes import check_seatbelt_available
+        if not check_seatbelt_available():
+            raise RuntimeError('Browser containment requires usable Seatbelt')
+        if not macos_nested_seatbelt_available():
+            raise RuntimeError(
+                'macOS refuses nested Seatbelt profiles, so Chromium cannot '
+                'enable its inner sandbox inside RAPTOR containment. '
+                'Use --allow-unsandboxed-chromium to explicitly waive only '
+                'the inner layer; RAPTOR outer confinement remains required.')
 
 
 def browser_runtime_paths(executable=None):
@@ -94,7 +131,7 @@ def confined_driver(base_url, executable=None, proxy=None):
             ports.add(parsed.port if parsed.port is not None else default_port)
         cache_paths = browser_runtime_paths(executable)
         config = dict(node=str(Path(node).resolve()), cli=str(Path(cli).resolve()),
-                      work=str(work), reads=cache_paths, ports=sorted(ports))
+                      work=str(work), reads=cache_paths, ports=sorted(ports), diagnostics=_DRIVER_DIAGNOSTICS)
         cache = os.environ.get('PLAYWRIGHT_BROWSERS_PATH')
         if cache == '0':
             config['browsers'] = '0'

@@ -10,6 +10,7 @@ The dedicated wrapper-acceptance lane provisions Chromium and rejects skips.
 from __future__ import annotations
 
 import threading
+import sys
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
@@ -22,12 +23,27 @@ pytestmark = [pytest.mark.slow, pytest.mark.integration,
               pytest.mark.linux_native, pytest.mark.darwin_native]
 
 
+_INNER_WAIVER = False
+
+
 @pytest.fixture(scope="module", autouse=True)
 def installed_native_browser():
-    # Never launch a driver/browser during collection or a deselected unit run.
-    # The explicit wrapper-acceptance lane provisions Chromium and rejects skips.
-    if not browser_available():
-        pytest.skip("playwright/chromium or required containment not available")
+    # Explicit waiver only in these owned functional cases when nesting fails.
+    # The native policy case separately requires default-mode refusal.
+    from packages.web import _browser_sandbox
+    global _INNER_WAIVER
+    previous = _INNER_WAIVER
+    with pytest.MonkeyPatch.context() as patch:
+        for name in ('HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy'):
+            patch.delenv(name, raising=False)
+        patch.setattr(_browser_sandbox, '_DRIVER_DIAGNOSTICS', True)
+        _INNER_WAIVER = sys.platform == 'darwin' and not _browser_sandbox.macos_nested_seatbelt_available()
+        try:
+            if not browser_available(allow_unsandboxed_chromium=_INNER_WAIVER):
+                pytest.skip("playwright/chromium or required outer containment not available")
+            yield
+        finally:
+            _INNER_WAIVER = previous
 
 
 class _FixtureHandler(BaseHTTPRequestHandler):
@@ -97,7 +113,7 @@ class TestBrowserEngineLive(unittest.TestCase):
         cls.thread.join(timeout=5)
 
     def test_rendered_crawl_sees_js_built_dom_and_blocks_off_origin(self):
-        with BrowserEngine(self.base) as engine:
+        with BrowserEngine(self.base, allow_unsandboxed_chromium=_INNER_WAIVER) as engine:
             rendered = engine.render(f"{self.base}/spa")
 
             self.assertIsNotNone(rendered)
@@ -109,7 +125,7 @@ class TestBrowserEngineLive(unittest.TestCase):
             self.assertGreaterEqual(engine.blocked_requests, 1)
 
     def test_reflected_xss_execution_proof(self):
-        with BrowserEngine(self.base) as engine:
+        with BrowserEngine(self.base, allow_unsandboxed_chromium=_INNER_WAIVER) as engine:
             proof = engine.prove_xss(f"{self.base}/echo-unsafe?q=1", "q")
 
             self.assertIsNotNone(proof)
@@ -119,31 +135,31 @@ class TestBrowserEngineLive(unittest.TestCase):
     def test_escaped_reflection_is_not_execution(self):
         """The whole point of the browser oracle: reflection alone must
         not count."""
-        with BrowserEngine(self.base) as engine:
+        with BrowserEngine(self.base, allow_unsandboxed_chromium=_INNER_WAIVER) as engine:
             self.assertIsNone(
                 engine.prove_xss(f"{self.base}/echo-escaped?q=1", "q"),
             )
 
     def test_dom_fragment_sink_detected_without_server_roundtrip(self):
-        with BrowserEngine(self.base) as engine:
+        with BrowserEngine(self.base, allow_unsandboxed_chromium=_INNER_WAIVER) as engine:
             proof = engine.prove_xss(f"{self.base}/dom-sink", None)
 
             self.assertIsNotNone(proof)
             self.assertEqual(proof.parameter, "#fragment")
 
     def test_plain_page_has_no_dom_sink(self):
-        with BrowserEngine(self.base) as engine:
+        with BrowserEngine(self.base, allow_unsandboxed_chromium=_INNER_WAIVER) as engine:
             self.assertIsNone(engine.prove_xss(f"{self.base}/plain", None))
 
     def test_off_origin_render_refused(self):
-        with BrowserEngine(self.base) as engine:
+        with BrowserEngine(self.base, allow_unsandboxed_chromium=_INNER_WAIVER) as engine:
             self.assertIsNone(engine.render("https://evil.example/"))
 
     def test_fragment_payload_survives_url_encoding(self):
         """prove_xss quotes the fragment; the fixture decodes it — the
         canary must round-trip exactly (regression for quote/decode
         mismatches)."""
-        with BrowserEngine(self.base) as engine:
+        with BrowserEngine(self.base, allow_unsandboxed_chromium=_INNER_WAIVER) as engine:
             proof = engine.prove_xss(f"{self.base}/dom-sink", None)
             self.assertIsNotNone(proof)
             self.assertIn("onerror", unquote(proof.payload))
@@ -227,7 +243,7 @@ class TestOriginGateHardening(unittest.TestCase):
         the gate never sees the hop; the fetch-and-fulfill gate makes
         every hop a fresh gated request."""
         self.evil_handler.hits.clear()
-        with BrowserEngine(self.base) as engine:
+        with BrowserEngine(self.base, allow_unsandboxed_chromium=_INNER_WAIVER) as engine:
             engine.render(f"{self.base}/redirect-out")
             blocked = engine.blocked_requests
 
@@ -238,7 +254,7 @@ class TestOriginGateHardening(unittest.TestCase):
 
     def test_websocket_cannot_leave_origin(self):
         self.evil_handler.hits.clear()
-        with BrowserEngine(self.base) as engine:
+        with BrowserEngine(self.base, allow_unsandboxed_chromium=_INNER_WAIVER) as engine:
             engine.render(f"{self.base}/ws-page")
             blocked = engine.blocked_requests
 

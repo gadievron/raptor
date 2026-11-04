@@ -1531,3 +1531,24 @@ work directory, rather than the staged namespace tmpfs home. Its 256-task limit
 includes Linux threads and accommodates the distro Chromium process tree.
 The image publication gate checks JavaScript execution and both inner-sandbox
 modes against the installed Debian browser with a read-only source mount.
+
+
+### Chromium sandbox nesting on macOS
+
+RAPTOR probes whether macOS can apply a second inherited Seatbelt profile
+before starting a browser with its inner sandbox required. The probe runs only
+`/usr/bin/true` under two minimal allow-default profiles; it grants no browser
+permissions. A failed probe refuses default browser startup with an actionable
+message. Other web checks can continue with the browser coverage gap recorded.
+
+On a host that cannot establish nested profiles, the operator must explicitly
+select `--allow-unsandboxed-chromium` to use browser checks under RAPTOR's outer
+Seatbelt confinement. There is no automatic retry or default waiver. Linux
+retains its existing two-layer path. A successful nesting probe is only a
+prerequisite: the actual browser still has to start and pass its policy checks.
+
+Native macOS acceptance records required-mode refusal when nesting is unavailable
+and exercises DOM/XSS/origin behavior with the waiver explicitly selected in the
+test fixture. This validates the available outer-only mode, not two-layer macOS
+compatibility. The required-mode test reports that distinction in its JUnit
+properties. The native boundary probe remains required in either case.
