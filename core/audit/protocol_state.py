@@ -67,6 +67,7 @@ from bisect import bisect_right
 # dataclasses helper is imported under an alias.
 from dataclasses import dataclass
 from dataclasses import field as dc_field
+from itertools import chain
 from pathlib import Path
 from typing import Any
 
@@ -391,8 +392,8 @@ def build_state_field_index(
         for line_no, raw in enumerate(split_lines(source), start=1):
             code = raw.split("//", 1)[0]
             site_code: str | None = None
-            for m in (*_FIELD_CHAIN_RE.finditer(code),
-                      *_FIELD_CHAIN_AFTER_CLOSER_RE.finditer(code)):
+            for m in chain(_FIELD_CHAIN_RE.finditer(code),
+                           _FIELD_CHAIN_AFTER_CLOSER_RE.finditer(code)):
                 idents = _CHAIN_IDENT_RE.findall(code, m.start(), m.end())
                 wm = _WRITE_TAIL_RE.match(code, m.end())
                 # Prefix increment/decrement writes the terminal field
