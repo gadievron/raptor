@@ -358,11 +358,12 @@ class TestMultiDefinition:
 
 
 class TestScanComplexity:
-    """The per-definition line mapping must be a bisect over
-    precomputed offsets, not a prefix rescan — O(file × definitions)
-    stalled minutes-scale on honest 80k-define generated headers and
-    is trivially hostile-triggerable, uninterruptible by the prepass
-    budget (checked before the scan, not during)."""
+    """Definition mapping must avoid repeated file/body prefix scans.
+
+    Generated macro and enum tables need linear mapping work rather
+    than O(source size × definitions), which can stall the prepass
+    between its file-level budget checks.
+    """
 
     def test_many_definition_header_scans_within_budget(self, tmp_path):
         from core.audit.constant_resolution import _scan_definitions
@@ -375,6 +376,19 @@ class TestScanComplexity:
         with cpu_budget(2.5, what="20k-define header scan"):
             defs = _scan_definitions(tmp_path)
         assert len(defs) == n
+
+    def test_many_enumerator_header_scans_within_budget(self, tmp_path):
+        from core.audit.constant_resolution import _scan_definitions
+
+        n = 20000
+        body = "enum generated {\n" + "".join(
+            f"    K_{i} = {i}, /* {'x' * 80} */\n" for i in range(n)
+        ) + "};\n"
+        _write_file(tmp_path, "big_enum.h", body)
+        with cpu_budget(4.0, what="20k-enumerator header scan"):
+            defs = _scan_definitions(tmp_path)
+        assert len(defs) == n
+        assert defs[f"K_{n - 1}"][0].line == n + 1
 
     def test_over_cap_file_is_skipped_not_buffered(
         self, tmp_path, monkeypatch,
@@ -561,3 +575,40 @@ class TestContractCompliance:
         )
         assert ev.source == "constant_resolution"
         assert ev.action == "inject_context"
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_enum_cursor_preserves_lines_across_blocks_and_skipped_names(
+    tmp_path, newline,
+):
+    from core.audit import constant_resolution as cr
+
+    source = (
+        "enum first {\n"
+        "    FIRST = (1 +\n"
+        "             2),\n"
+        "    NULL = 0,\n"
+        "    AFTER_SKIP = 4,\n"
+        "};\n"
+        "#if CHOICE\n"
+        "enum conditional {\n"
+        "    CONDITIONAL = 5,\n"
+        "};\n"
+        "#endif\n"
+        "enum last { INLINE = 6,\n"
+        "    LAST = 7,\n"
+        "};\n"
+    )
+    (tmp_path / "values.h").write_bytes(source.replace("\n", newline).encode())
+    definitions = cr._scan_definitions(tmp_path)
+    assert list(definitions) == [
+        "FIRST", "AFTER_SKIP", "CONDITIONAL", "INLINE", "LAST",
+    ]
+    assert {name: [(d.line, d.conditional_depth) for d in rows]
+            for name, rows in definitions.items()} == {
+        "FIRST": [(2, 0)], "AFTER_SKIP": [(5, 0)],
+        "CONDITIONAL": [(9, 1)], "INLINE": [(12, 0)], "LAST": [(13, 0)],
+    }
+    table = build_unique_constants(tmp_path)
+    assert table.as_int_dict() == {"FIRST": 3, "AFTER_SKIP": 4, "INLINE": 6, "LAST": 7}
+    assert table.rejected == {"CONDITIONAL": "conditional compilation"}
