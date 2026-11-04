@@ -24,9 +24,12 @@ import ctypes
 import ctypes.util
 import errno
 import logging
+import math
 import os
 import platform
+import select
 import stat
+import time
 from collections.abc import Callable
 
 from . import state
@@ -323,8 +326,12 @@ def _fork_and_run_selftest(libc: "ctypes.CDLL | None", abi: int,
     """Fork bookkeeping for the self-test: pipe, fork, verdict byte, reap."""
     import os
     import warnings
+    from .probes import _wait_for_probe_child
 
-    r, w = os.pipe()
+    try:
+        r, w = os.pipe()
+    except OSError:
+        return False
     try:
         # Suppress Python 3.12+ DeprecationWarning about multi-threaded
         # fork(). The hazard the warning targets is a forked child
@@ -335,9 +342,8 @@ def _fork_and_run_selftest(libc: "ctypes.CDLL | None", abi: int,
         # no new imports, resolves no libraries (libc arrived
         # pre-fork), and touches no logging/threading machinery before
         # os._exit. A child that dies anyway surfaces as pipe EOF →
-        # DEGRADED (fail-safe); a child that wedges blocks the
-        # parent's verdict read (pre-existing shape — hang, never a
-        # false 'available'). The standard guidance
+        # DEGRADED (fail-safe); a wedged child is bounded by the
+        # parent's shared verdict/exit deadline. The standard guidance
         # ("use multiprocessing.spawn") would drag a full interpreter
         # bootstrap into the availability probe.
         with warnings.catch_warnings():
@@ -346,19 +352,17 @@ def _fork_and_run_selftest(libc: "ctypes.CDLL | None", abi: int,
                 message=r".*fork.*may lead to deadlocks.*",
             )
             pid = os.fork()
-    except OSError:
-        # Both pipe ends leak unless we close them here — the finally
-        # below only covers `r` (it expects the child to have closed
-        # its inherited `r`, and the parent to have closed `w` right
-        # after a successful fork).
-        # Fork failures are rare (ENOMEM / nr-limit) but a leaked pipe
-        # pair is still two FDs gone until the Python process exits.
+    except BaseException as exc:
+        # No child lifecycle owns these descriptors yet. Release both
+        # on OS failure or cancellation, preserving the original error.
         for fd in (r, w):
             try:
                 os.close(fd)
             except OSError:
                 pass
-        return False
+        if isinstance(exc, OSError):
+            return False
+        raise
     if pid == 0:
         # Child — apply Landlock and test. The whole body is guarded:
         # an uncaught exception (ctypes.ArgumentError from the CDLL
@@ -376,27 +380,41 @@ def _fork_and_run_selftest(libc: "ctypes.CDLL | None", abi: int,
         except BaseException:  # noqa: BLE001 — post-fork child must never unwind
             pass
         os._exit(0)
-    os.close(w)
+    writer: int | None = w
+    data = b""
+
+    def read_verdict(deadline: float) -> None:
+        nonlocal writer, data
+        # Drop ownership before close: a failed close must not cause a
+        # retry against a descriptor number another thread could reuse.
+        fd, writer = writer, None
+        if fd is not None:
+            os.close(fd)
+        poller = select.poll()
+        poller.register(r, select.POLLIN)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Landlock self-test verdict timed out")
+            try:
+                if not poller.poll(math.ceil(remaining * 1000)):
+                    raise TimeoutError("Landlock self-test verdict timed out")
+                data = os.read(r, 1)
+                return
+            except InterruptedError:
+                continue
+
     try:
-        data = os.read(r, 1)
-        return data == b"\x01"
-    except OSError:
-        return False
+        status = _wait_for_probe_child(pid, "Landlock", before_wait=read_verdict)
+        return (data == b"\x01" and status is not None
+                and os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0)
     finally:
-        # Reap in the finally: an OSError from os.read used to jump
-        # straight to the except arm, skipping the waitpid and
-        # leaving the self-test child a zombie for the life of the
-        # process. The verdict is carried by the pipe byte, not the
-        # exit status, so reaping here is correct on every path (the
-        # child always _exit(0)s promptly).
-        try:
-            os.waitpid(pid, 0)
-        except OSError:
-            pass
-        try:
-            os.close(r)
-        except OSError:
-            pass
+        for fd in (r, writer):
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
 
 
 def _run_selftest_in_child(libc: "ctypes.CDLL | None", abi: int,
