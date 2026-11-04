@@ -8,9 +8,11 @@ validation, and cleanup.
 
 import errno
 import hashlib
+import math
 import os
 import re
 import secrets
+import stat
 import shutil
 import subprocess
 import sys
@@ -1099,44 +1101,59 @@ class DatabaseManager:
         except OSError:
             return ""
 
-    def _gc_stale_markers(self, repo_dir: Path, max_age_seconds: int = 3600) -> None:
-        """Best-effort cleanup of `.stale.*` and `.staging-*` markers older
-        than `max_age_seconds`, plus `.kept-*` fallback DBs on a 24h TTL.
-        Called on cache miss so the cache is self-healing without depending
-        on the manual `--cleanup` CLI being run on a schedule.
+    def _gc_stale_markers(
+        self, repo_dir: Path, max_age_seconds: float = 3600, *,
+        dry_run: bool = False,
+    ) -> list[str]:
+        """Reclaim abandoned staging, evicted, and fallback entries.
 
-        1 hour TTL is generous: any active reader will have finished using
-        an evicted DB by then; any abandoned staging from a crashed writer
-        is genuinely orphaned by then.
-
-        `.kept-*` entries are promote-failure fallback DBs that were handed
-        to a caller as its live database (see _detach_staging_from_gc) —
-        an in-flight analysis may still be lazily reading dataset chunks
-        from them well past the 1h staging TTL, so they get a 24h TTL:
-        long enough that no single analysis is still running, short enough
-        that abandoned fallbacks don't accumulate.
+        Cache-miss callers retain the 1h scratch / 24h fallback grace.
+        Full-cache maintenance can request a longer grace for BOTH pools.
+        Symlinks are aged and unlinked themselves, never traversed.
         """
-        if not repo_dir.is_dir():
-            return
+        if (isinstance(max_age_seconds, bool)
+                or not isinstance(max_age_seconds, (int, float))
+                or max_age_seconds < 0):
+            return []
+        try:
+            if not math.isfinite(max_age_seconds):
+                return []
+            if not stat.S_ISDIR(repo_dir.lstat().st_mode):
+                return []
+            entries = list(repo_dir.iterdir())
+        except (OSError, OverflowError):
+            return []
         now = time.time()
+        if not math.isfinite(now):
+            return []
         cutoff = now - max_age_seconds
-        kept_cutoff = now - 24 * 3600
-        for entry in repo_dir.iterdir():
+        kept_cutoff = now - max(24 * 3600, max_age_seconds)
+        deleted = []
+        for entry in entries:
             name = entry.name
             if name.startswith(".kept-"):
                 entry_cutoff = kept_cutoff
-            elif name.startswith(".staging-") or ".stale." in name:
+            elif (name.startswith(".staging-")
+                    or re.fullmatch(r".+-db\.stale\.[0-9]+\.[0-9]+", name)):
                 entry_cutoff = cutoff
             else:
                 continue
             try:
-                if entry.stat().st_mtime < entry_cutoff:
-                    if entry.is_dir():
-                        rmtree_hardened(entry)
+                info = entry.lstat()
+                if not math.isfinite(info.st_mtime) or info.st_mtime >= entry_cutoff:
+                    continue
+                if not dry_run:
+                    if stat.S_ISDIR(info.st_mode):
+                        if not rmtree_hardened(entry):
+                            continue
                     else:
-                        entry.unlink(missing_ok=True)
+                        entry.unlink()
+                logger.info("%s CodeQL cache scratch: %s",
+                            "Would delete" if dry_run else "Deleted", entry)
+                deleted.append(str(entry))
             except OSError:
-                pass  # best-effort
+                continue
+        return deleted
 
     def _detach_staging_from_gc(self, staging_path: Path, language: str) -> Path:
         """Move a kept-as-final staging DB out of the staging GC's scope.
@@ -2361,99 +2378,108 @@ class DatabaseManager:
             return 0
 
     def cleanup_old_databases(self, days: int | None = None, dry_run: bool = False) -> list[str]:
-        """
-        Clean up databases older than specified days.
+        """Reclaim expired databases, orphan metadata, and abandoned scratch.
 
-        Args:
-            days: Age threshold in days (default: the operator TTL
-                knob RaptorConfig.CODEQL_DB_CACHE_DAYS)
-            dry_run: If True, only report what would be deleted
-
-        Returns:
-            List of deleted database paths
+        ``days`` defaults to CODEQL_DB_CACHE_DAYS and must be finite,
+        nonnegative, and representable as a datetime interval. Global
+        scratch reclamation uses at least 24h and never less than this
+        cache TTL; cache-miss GC retains its existing shorter grace.
+        Return database/scratch paths removed (or proposed for dry-run).
         """
         if days is None:
             days = self._cache_ttl_days()
-        # Debug, not info: the auto-cleanup path runs this on every
-        # process start and it's usually a no-op — the per-deletion
-        # lines below surface actual reclaims at INFO.
+        try:
+            if (isinstance(days, bool) or not isinstance(days, (int, float))
+                    or not math.isfinite(days) or days < 0):
+                raise ValueError("cleanup days must be finite and nonnegative")
+            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        except (OverflowError, TypeError) as exc:
+            raise ValueError("cleanup days exceed the supported interval") from exc
         logger.debug("Cleaning up databases older than %s days...", days)
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         deleted = []
+        try:
+            root = self.db_root.resolve()
+            repos = list(self.db_root.iterdir())
+        except (OSError, RuntimeError):
+            return deleted
 
-        for repo_dir in self.db_root.iterdir():
-            if not repo_dir.is_dir():
+        for repo_dir in repos:
+            try:
+                if not stat.S_ISDIR(repo_dir.lstat().st_mode):
+                    continue
+                repo_root = repo_dir.resolve()
+                if repo_root.parent != root:
+                    continue
+                metadata_files = list(repo_dir.glob("*-metadata.json"))
+            except (OSError, RuntimeError):
                 continue
-
-            # Check all metadata files in this repo
-            for metadata_file in repo_dir.glob("*-metadata.json"):
+            for metadata_file in metadata_files:
                 try:
+                    if not stat.S_ISREG(metadata_file.lstat().st_mode):
+                        continue
                     data = load_json(metadata_file)
-                    if data is None:
+                    if not isinstance(data, dict):
                         continue
                     created_at = datetime.fromisoformat(data["created_at"])
-                    # Promote naive timestamps from pre-batch-396
-                    # metadata to UTC so the cutoff comparison
-                    # doesn't TypeError.
                     if created_at.tzinfo is None:
                         created_at = created_at.replace(tzinfo=timezone.utc)
-
-                    if created_at < cutoff:
-                        db_path = Path(data["database_path"])
-                        # Containment guard: db_path comes from the
-                        # JSON metadata file. Pre-fix `shutil.rmtree
-                        # (db_path)` blindly trusted that path. A
-                        # tampered or copy-pasted metadata file
-                        # naming `database_path: "/etc"` would have
-                        # had cleanup obliterate /etc.
-                        # Restrict to paths INSIDE self.db_root so
-                        # only databases this manager could have
-                        # created are eligible for deletion.
-                        try:
-                            db_resolved = db_path.resolve(strict=False)
-                            db_root_resolved = self.db_root.resolve(strict=False)
-                            db_resolved.relative_to(db_root_resolved)
-                        except (ValueError, OSError):
-                            logger.warning(
-                                "cleanup_old_databases: refusing to delete "
-                                "%r — outside db_root %r",
-                                db_path, self.db_root,
-                            )
-                            continue
-                        if db_path.exists():
-                            if not dry_run:
-                                if not rmtree_hardened(db_path):
-                                    raise OSError(f"could not remove database {db_path}")
-                                metadata_file.unlink()
-                                logger.info("Deleted old database: %s", db_path)
-                            else:
-                                logger.info("Would delete: %s", db_path)
-                            deleted.append(str(db_path))
-                        elif not dry_run:
-                            # Orphan metadata: the DB dir is already
-                            # gone (evicted / manually removed) but
-                            # the metadata file survived — pre-fix
-                            # the unlink only ran alongside the
-                            # rmtree, so orphans were re-parsed by
-                            # every future cleanup pass forever.
+                    if created_at >= cutoff:
+                        continue
+                    raw_path = data["database_path"]
+                    if not isinstance(raw_path, str) or not raw_path:
+                        continue
+                    db_path = Path(raw_path)
+                    language = metadata_file.name.removesuffix("-metadata.json")
+                    # Retain the pre-canonical <language> layout as well as
+                    # today's <language>-db; a sidecar cannot select another
+                    # language's database or unrelated files in this slot.
+                    if not language or db_path.name not in {language, f"{language}-db"}:
+                        continue
+                    # A sidecar may only retire a direct child of its OWN
+                    # repository slot, never a root, sibling repo, or subtree.
+                    db_resolved = db_path.resolve(strict=False)
+                    if db_path.parent.resolve() != repo_root or db_resolved.parent != repo_root:
+                        logger.warning(
+                            "cleanup_old_databases: refusing database outside "
+                            "its repository slot: %r", db_path)
+                        continue
+                    try:
+                        info = db_path.lstat()
+                    except FileNotFoundError:
+                        if not dry_run:
                             metadata_file.unlink(missing_ok=True)
-                            logger.info(
-                                "Deleted orphan metadata: %s",
-                                metadata_file,
-                            )
-                        else:
-                            logger.info(
-                                "Would delete orphan metadata: %s",
-                                metadata_file,
-                            )
-                except Exception as e:  # noqa: BLE001 — best-effort; never fail the run
-                    logger.warning("Error processing %s: %s", metadata_file, e)
+                        logger.info("%s orphan metadata: %s",
+                                    "Would delete" if dry_run else "Deleted", metadata_file)
+                        continue
+                    if not stat.S_ISDIR(info.st_mode):
+                        continue
+                    if dry_run:
+                        logger.info("Would delete: %s", db_path)
+                    else:
+                        if not rmtree_hardened(db_path):
+                            raise OSError(f"could not remove database {db_path}")
+                        # Record the completed removal before metadata cleanup:
+                        # an unlink failure must not erase this receipt.
+                        deleted.append(str(db_path))
+                        metadata_file.unlink(missing_ok=True)
+                        logger.info("Deleted old database: %s", db_path)
+                        continue
+                    deleted.append(str(db_path))
+                except Exception as exc:  # noqa: BLE001 — isolate damaged sidecars
+                    logger.warning("Error processing %s: %s", metadata_file, exc)
 
+            # Unlike cache-miss GC, this also reaches repositories which
+            # will never be scanned again, including ones with no sidecars.
+            deleted.extend(self._gc_stale_markers(
+                repo_dir, max_age_seconds=max(24 * 3600, days * 86400),
+                dry_run=dry_run,
+            ))
         if deleted:
-            logger.info("Cleaned up %d databases", len(deleted))
+            logger.info("%s %d database/cache entries",
+                        "Would clean up" if dry_run else "Cleaned up", len(deleted))
         else:
             logger.debug("Cleaned up 0 databases")
-        return deleted
+        return list(dict.fromkeys(deleted))
 
 
 def main() -> None:
