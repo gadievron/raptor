@@ -119,25 +119,29 @@ def serve_backend(request):
 def _serve_echo_forever() -> "tuple[int, Callable[[], None]]":
     """Multi-connection echo backend; returns (port, close_fn)."""
     lsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    lsock.bind(("127.0.0.1", 0))
-    lsock.listen(64)
-    port = lsock.getsockname()[1]
+    try:
+        lsock.bind(("127.0.0.1", 0))
+        lsock.listen(64)
+        port = lsock.getsockname()[1]
 
-    def echo(conn: socket.socket) -> None:
-        conn.settimeout(_DEADLINE * 2)
-        try:
-            while True:
-                data = conn.recv(65536)
-                if not data:
-                    return
-                conn.sendall(data)
-        except OSError:
-            pass
-        finally:
-            conn.close()
+        def echo(conn: socket.socket) -> None:
+            conn.settimeout(_DEADLINE * 2)
+            try:
+                while True:
+                    data = conn.recv(65536)
+                    if not data:
+                        return
+                    conn.sendall(data)
+            except OSError:
+                pass
+            finally:
+                conn.close()
 
-    server = SocketServer(lsock, echo)
-    return port, server.close
+        server = SocketServer(lsock, echo)
+        return port, server.close
+    except BaseException:
+        lsock.close()
+        raise
 
 
 def _open_tunnel(proxy_port: int, backend_port: int,

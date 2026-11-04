@@ -45,12 +45,16 @@ class _FakeUpstream(threading.Thread):
     def __init__(self):
         super().__init__(daemon=True)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.bind(("127.0.0.1", 0))
-        self.sock.listen(8)
-        self.sock.settimeout(0.2)
-        self.port = self.sock.getsockname()[1]
-        self.requests: list[bytes] = []
-        self._stop = threading.Event()
+        try:
+            self.sock.bind(("127.0.0.1", 0))
+            self.sock.listen(8)
+            self.sock.settimeout(0.2)
+            self.port = self.sock.getsockname()[1]
+            self.requests: list[bytes] = []
+            self._stop = threading.Event()
+        except BaseException:
+            self.sock.close()
+            raise
 
     def run(self):
         while not self._stop.is_set():
