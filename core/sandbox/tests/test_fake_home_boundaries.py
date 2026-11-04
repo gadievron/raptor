@@ -1,4 +1,5 @@
 """Parent HOME preparation/staging stays anchored during sibling swaps."""
+import errno
 import os
 from pathlib import Path
 import select
@@ -9,6 +10,14 @@ import pytest
 
 from core.sandbox import context
 from core.sandbox.tests.capability import requires_landlock
+
+
+@pytest.fixture(autouse=True)
+def parent_operations_only(monkeypatch):
+    def no_backend(*args, **kwargs):
+        pytest.fail('parent filesystem race fixture must not enter sandbox dispatch')
+
+    monkeypatch.setattr(context, 'sandbox', no_backend)
 
 
 def _exercise(tmp_path, monkeypatch, operation, level, swap):
@@ -40,10 +49,9 @@ def _exercise(tmp_path, monkeypatch, operation, level, swap):
             assert staged is None or b'OUTSIDE-SECRET' not in staged[0].values()
         else:
             try:
-                with context.sandbox(output=str(output), fake_home=True):
-                    pass
-            except ValueError as exc:
-                assert 'fake_home refuses' in str(exc)
+                context._prepare_fake_home(str(output))
+            except OSError as exc:
+                assert exc.errno in (errno.ELOOP, errno.ENOTDIR, errno.ENOENT)
     assert fired, 'the race hook did not reach the parent syscall boundary'
     assert (outside / 'payload').read_bytes() == b'OUTSIDE-SECRET'
     assert sorted(p.name for p in outside.iterdir()) == ['payload']
