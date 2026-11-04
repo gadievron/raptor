@@ -48,7 +48,6 @@ import ctypes.util
 import json
 import logging
 import os
-import resource
 import select
 import subprocess
 import sys
@@ -58,6 +57,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from . import evidence as _evidence_mod
+from ._fd_sweep import close_fds_except as _close_fds_except
 
 logger = logging.getLogger(__name__)
 
@@ -691,28 +691,7 @@ def run_landlock_audit(
                 # guaranteed; relying on CLOEXEC alone leaves the
                 # target a window onto whatever the parent had open.
                 # Nothing needs to survive this exec except stdio.
-                # Enumerate the ACTUALLY-open fds instead of sweeping
-                # a range bounded by RLIMIT_NOFILE: rlimit_preexec
-                # above already LOWERED that limit, and lowering
-                # NOFILE does not invalidate existing descriptors — a
-                # non-CLOEXEC fd numbered at/above the reduced soft
-                # limit survived the old range-based sweep and rode
-                # the exec into the target as an out-of-policy
-                # capability (same shape _spawn's grandchild sweep
-                # closes). Fall back to the bounded range only when
-                # /proc isn't listable.
-                _soft, _ = resource.getrlimit(resource.RLIMIT_NOFILE)
-                try:
-                    _open_fds = [int(_n)
-                                 for _n in os.listdir("/proc/self/fd")]
-                except (OSError, ValueError):
-                    _open_fds = list(range(3, min(_soft, 65536)))
-                for _fd in _open_fds:
-                    if _fd > 2:
-                        try:
-                            os.close(_fd)
-                        except OSError:
-                            pass
+                _close_fds_except(())
 
                 # Apply Landlock then seccomp(audit). Ordering:
                 # Landlock first (filesystem isolation in place),
@@ -776,19 +755,7 @@ def run_landlock_audit(
             # ============== TRACER CHILD ==============
             # Close every inherited fd except stdio + t_ready_w.
             try:
-                soft, _hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-                upper = min(soft, 65536)
-                # Keep the sync write end, the anonymous config fd,
-                # and the held evidence fd; closerange over the gaps.
-                _keep = sorted(
-                    fd for fd in (t_ready_w, config_fd, evidence_file.fd)
-                    if fd is not None and 3 <= fd < upper
-                )
-                _lo = 3
-                for _k in _keep:
-                    os.closerange(_lo, _k)
-                    _lo = _k + 1
-                os.closerange(_lo, upper)
+                _close_fds_except((t_ready_w, config_fd, evidence_file.fd))
                 # Clear CLOEXEC on config + evidence fds for the
                 # TRACER's exec only — the target child's exec keeps
                 # the default close-on-exec, so neither fd ever

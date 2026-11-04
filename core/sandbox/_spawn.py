@@ -84,6 +84,7 @@ from typing import TYPE_CHECKING
 from . import _pathpin, state
 from ._pathpin import canonical_bind_path as _canonical_bind_path
 from ._pathpin import is_per_process_procfs as _is_per_process_procfs
+from ._fd_sweep import close_fds_except as _close_fds_except
 from ._fork_safe_warn import warn_post_fork
 from ._unix_scope import UnixScopeSupervisor as _UnixScopeSupervisor
 from .landlock import _make_landlock_preexec
@@ -1499,25 +1500,6 @@ _POST_EXIT_DRAIN_SECONDS = 0.5
 #: same cross-spawn pin class as _POST_EXIT_DRAIN_SECONDS and the
 #: t_ready_r/pid_r waits — 15s matches those waits' deadline).
 _P_READY_DEADLINE_S = 15.0
-
-
-def _close_fds_except(keep):
-    """Drop ambient capabilities in a forked child, preserving stdio."""
-    keep = set(keep)
-    try:
-        opened = [int(name) for name in os.listdir("/proc/self/fd")]
-    except (OSError, ValueError):
-        try:
-            ceiling = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
-        except (ValueError, OSError):
-            ceiling = 1024
-        opened = range(3, min(ceiling, 65536))
-    for descriptor in opened:
-        if descriptor > 2 and descriptor not in keep:
-            try:
-                os.close(descriptor)
-            except OSError:
-                pass
 
 
 def _prepare_exec_fds(pass_fds, status_w):
@@ -4171,57 +4153,10 @@ def run_sandboxed(
                 # had open at N. Also defends against fd-table
                 # exhaustion across many sandbox calls.
                 #
-                # Bound the close range to the actual RLIMIT_NOFILE
-                # soft limit. A previous version hardcoded 1024,
-                # which leaked any inherited fd >= 1024 on long-
-                # running RAPTOR processes that had bumped their
-                # NOFILE soft limit (multi-fuzzer setups, daemon
-                # mode). Caps at 65536 to avoid pathological
-                # 4G-iteration loops on systems with hard=infinity.
-                #
-                # Use os.closerange() in two split ranges around
-                # the sync_fd we want to keep — single syscall per
-                # range on Linux (close_range(2) on 5.9+) instead
-                # of per-fd python-level close+EBADF-handling. ~1ms
-                # → ~10us per tracer fork.
-                soft, _hard = resource.getrlimit(
-                    resource.RLIMIT_NOFILE)
-                upper = min(soft, 65536)
-                # fds the tracer legitimately needs across its exec:
-                # the sync write end, the audit-config anonymous fd,
-                # and the held evidence fd. closerange over the gaps
-                # between them — one close_range(2) syscall per gap
-                # on Linux 5.9+.
-                _keep = sorted(
-                    fd for fd in (
-                        t_ready_w,
-                        _audit_config_fd,
-                        _evidence_file.fd if _evidence_file is not None
-                        else None,
-                    )
-                    if fd is not None and 3 <= fd < upper
-                )
-                _lo = 3
-                for _k in _keep:
-                    os.closerange(_lo, _k)
-                    _lo = _k + 1
-                os.closerange(_lo, upper)
-                # The range ceiling derives from the CURRENT soft
-                # limit; fds can legitimately exist at/above it (a
-                # caller that lowered NOFILE after opening them, or
-                # a >65536 table). Sweep the stragglers by
-                # enumeration — cheap, and the keep-set fds are all
-                # below `upper` by construction.
-                try:
-                    for _n in os.listdir("/proc/self/fd"):
-                        _f = int(_n)
-                        if _f >= upper:
-                            try:
-                                os.close(_f)
-                            except OSError:
-                                pass
-                except (OSError, ValueError):
-                    pass
+                _close_fds_except((
+                    t_ready_w, _audit_config_fd,
+                    _evidence_file.fd if _evidence_file is not None else None,
+                ))
                 # Clear CLOEXEC on the config + evidence fds so THEY
                 # survive the tracer's execvpe. Only ever done in
                 # this post-fork tracer branch — the target child's

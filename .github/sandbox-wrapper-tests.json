@@ -1108,6 +1108,21 @@
           "expected": 10
         }
       }
+    },
+    {
+      "id": "linux-descriptor-boundary",
+      "platforms": {
+        "linux": {
+          "tests": [
+            "core/sandbox/tests/test_fd_sweep.py::test_restricted_procfs_and_lowered_hard_limit_do_not_leak_at_exec",
+            "core/sandbox/tests/test_fd_sweep.py::test_native_namespace_sweep_closes_unlisted_high_fd"
+          ],
+          "expected": 4
+        },
+        "darwin": {
+          "reason": "Linux close_range, Landlock and mount/PID namespace descriptor boundary."
+        }
+      }
     }
   ]
 }
