@@ -107,11 +107,14 @@ class TestReadAchievedTier:
                 os.write(w, payload)
             if close:
                 os.close(w)
+                w = None
             return server_mod._read_achieved_tier(r, timeout_s=timeout_s)
         finally:
-            os.close(r)
-            if not close:
-                os.close(w)
+            try:
+                os.close(r)
+            finally:
+                if w is not None:
+                    os.close(w)
 
     def test_pidns_report_reads_pidns(self):
         assert self._read(b"supervision_tier=pidns\n") == "pidns"
