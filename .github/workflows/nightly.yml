@@ -157,7 +157,9 @@ jobs:
 
   slow-integration:
     if: github.event_name != 'workflow_dispatch' || inputs.suite == 'full'
-    runs-on: ubuntu-latest
+    # Playwright 1.60.0 has no Ubuntu 26 dependency/browser support.
+    # Keep the native browser lane on its supported LTS image.
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - name: Checkout repository
