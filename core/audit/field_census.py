@@ -513,7 +513,14 @@ def _function_spans_ts(tree: Any, source: str) -> list[FunctionSpan]:
                     plist = fn_decl.child_by_field_name("parameters")
                     if plist is not None:
                         params = _params(plist)
-                head = _node_text(node, src).split("(", 1)[0]
+                # ASCII '(' cannot be part of a multibyte UTF-8 sequence.
+                # Decode the same prefix without copying the function body.
+                head_end = src.find(b"(", node.start_byte, node.end_byte)
+                if head_end < 0:
+                    head_end = node.end_byte
+                head = src[node.start_byte:head_end].decode(
+                    "utf-8", errors="replace",
+                )
                 spans.append(FunctionSpan(
                     name=name,
                     start=node.start_point[0] + 1,
