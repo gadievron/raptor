@@ -423,7 +423,9 @@ def test_e2e_real_calibration_against_python3_binary(tmp_path,
     from core.sandbox import calibrated_hosts as _ch
     memo_keys = [k for k in _ch._CACHE if k[0] == real_python]
     assert memo_keys, "no memo entry for the probed binary"
-    cached = _ch._CACHE[memo_keys[0]]
+    entry = _ch._CACHE[memo_keys[0]]
+    assert entry.ready.is_set(), "calibration returned with an unfinished memo entry"
+    cached = entry.result
     if cached is not None:
         # Non-None cache means the probe succeeded. Sanity-check
         # the captured profile's shape: it has either some paths_read
