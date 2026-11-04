@@ -185,13 +185,22 @@ class MockUpstream:
                 conn.close()
                 return
             self._bump("connections")
-            t = threading.Thread(
-                target=self._handle, args=(conn,), daemon=True,
-            )
-            with self._lock:
-                self._clients.add(conn)
-                self._threads.append(t)
-            t.start()
+            t = None
+            try:
+                t = threading.Thread(
+                    target=self._handle, args=(conn,), daemon=True,
+                )
+                with self._lock:
+                    self._clients.add(conn)
+                    self._threads.append(t)
+                t.start()
+            except BaseException:
+                conn.close()
+                with self._lock:
+                    self._clients.discard(conn)
+                    if t in self._threads:
+                        self._threads.remove(t)
+                raise
 
     def _read_request(self, conn: socket.socket) -> bytes | None:
         """Read one full HTTP/1.1 request (headers + Content-Length
