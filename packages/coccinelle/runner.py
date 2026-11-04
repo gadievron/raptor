@@ -155,7 +155,9 @@ _RULE_MAX_BYTES = 1 * 1024 * 1024
 _CHAR_LITERAL_CAP = 11  # MUST stay < len("script:ocaml") — pinned by test
 
 
-def _lexical_scan(text: str) -> tuple[str, bool]:
+def _lexical_scan_uncached(
+    text: str, char_literal_cap: int,
+) -> tuple[str, bool]:
     """Normalise SmPL rule text the way spatch's lexer sees it.
 
     Returns ``(view, ambiguous)``. ``view`` is the text with comments
@@ -288,7 +290,7 @@ def _lexical_scan(text: str) -> tuple[str, bool]:
                 out.append(c)
                 i += 1
                 continue
-            if end - i > _CHAR_LITERAL_CAP:
+            if end - i > char_literal_cap:
                 # Over-cap multi-char constant: refuse to classify
                 # (see _CHAR_LITERAL_CAP). Emit the quote as a plain
                 # character so the view stays inspectable.
@@ -304,6 +306,20 @@ def _lexical_scan(text: str) -> tuple[str, bool]:
         out.append(c)
         i += 1
     return "".join(out), ambiguous
+
+
+# Keep at most 32 small rule bodies/views. Cache text, never a filename or
+# stat identity: callers still reread rules and enforce their size/version
+# gates, so edits, refusals and per-invocation nonces remain fresh.
+_cached_lexical_scan = functools.lru_cache(maxsize=32)(_lexical_scan_uncached)
+
+
+def _lexical_scan(text: str) -> tuple[str, bool]:
+    """Reuse immutable lexical results for identical, bounded rule text."""
+    if type(text) is str and len(text) <= 64 * 1024:
+        return _cached_lexical_scan(text, _CHAR_LITERAL_CAP)
+    # Do not retain large inputs or impose hashing on str subclasses.
+    return _lexical_scan_uncached(text, _CHAR_LITERAL_CAP)
 
 # Structured-refusal messages shared by run_rule / run_rules_batched.
 _SCRIPT_BLOCK_REFUSAL = (
