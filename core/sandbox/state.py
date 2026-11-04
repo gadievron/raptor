@@ -80,9 +80,9 @@ _seatbelt_available_cache = None
 # str = resolved absolute path to the binary (with CAP_SETGID confirmed).
 _gidmap_allow_cache = None
 # User-supplied rlimit overrides from ~/.config/raptor/sandbox.json.
-# `_user_limits_cache_decided_at` carries the wall-clock when the
+# `_user_limits_cache_decided_at` carries the monotonic time when the
 # cache decision was made. FAILURE paths (parse error, missing file,
-# non-regular file) stamp time.time(): pre-fix they stored `{}` and
+# non-regular file) stamp time.monotonic(): pre-fix they stored `{}` and
 # never re-read — operators correcting a malformed sandbox.json had
 # to restart every RAPTOR process to pick up the fix. `_FAIL_TTL_S`
 # bounds that negative cache so a corrected file is honoured within a
