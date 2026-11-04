@@ -15,6 +15,7 @@ import time
 import pytest
 
 from core.sandbox import _landlock_audit as mod
+from core.testing.pipes import pipes_for_setup
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux", reason="Landlock audit path is Linux-only",
@@ -48,17 +49,15 @@ def test_drain_survives_idle_gap_while_child_alive(monkeypatch):
     the pipes were never read again at all).
     """
     monkeypatch.setattr(mod, "_DRAIN_IDLE_POLL_S", 0.05)
-    out_r, out_w = os.pipe()
-    err_r, err_w = os.pipe()
-
-    # Child: silent for several poll intervals, then speak, then exit.
-    child = _spawn_child(
-        "import os, time\n"
-        "time.sleep(0.5)\n"
-        f"os.write({out_w}, b'late-stdout')\n"
-        f"os.write({err_w}, b'late-stderr')\n",
-        out_w, err_w,
-    )
+    with pipes_for_setup(2) as ((out_r, out_w), (err_r, err_w)):
+        # Child: silent for several poll intervals, then speak, then exit.
+        child = _spawn_child(
+            "import os, time\n"
+            "time.sleep(0.5)\n"
+            f"os.write({out_w}, b'late-stdout')\n"
+            f"os.write({err_w}, b'late-stderr')\n",
+            out_w, err_w,
+        )
     os.close(out_w)
     os.close(err_w)
     try:
@@ -75,9 +74,8 @@ def test_drain_does_not_reap_target(monkeypatch):
     """The liveness probe must leave the exit status for the caller's
     own waitpid (WNOWAIT semantics)."""
     monkeypatch.setattr(mod, "_DRAIN_IDLE_POLL_S", 0.05)
-    out_r, out_w = os.pipe()
-
-    child = _spawn_child(f"import os; os.write({out_w}, b'hi')", out_w)
+    with pipes_for_setup(1) as ((out_r, out_w),):
+        child = _spawn_child(f"import os; os.write({out_w}, b'hi')", out_w)
     os.close(out_w)
     try:
         drained = mod._drain_pipes_until_eof((out_r,), child.pid)
@@ -99,9 +97,8 @@ def test_drain_stops_when_child_exited_and_pipe_held_elsewhere(monkeypatch):
     (stray grandchild), the drain must stop after an idle tick instead
     of waiting for an EOF that never comes."""
     monkeypatch.setattr(mod, "_DRAIN_IDLE_POLL_S", 0.05)
-    out_r, out_w = os.pipe()
-
-    child = _spawn_child(f"import os; os.write({out_w}, b'gone')", out_w)
+    with pipes_for_setup(1) as ((out_r, out_w),):
+        child = _spawn_child(f"import os; os.write({out_w}, b'gone')", out_w)
     # Parent deliberately KEEPS out_w open — simulates an inherited
     # write end outliving the target.
     try:
@@ -131,20 +128,19 @@ def test_drain_stops_when_grandchild_chatters_after_target_exit(
     # raising=False: the constant does not exist on pre-fix code, and
     # the test must still reach (and demonstrate) the pre-fix hang.
     monkeypatch.setattr(mod, "_DRAIN_FINAL_SWEEP_S", 0.3, raising=False)
-    out_r, out_w = os.pipe()
-
-    # Target: fork a detached writer that inherits the pipe write end
-    # and chatters forever, then exit immediately.
-    child = _spawn_child(
-        "import os, time\n"
-        "pid = os.fork()\n"
-        "if pid == 0:\n"
-        "    while True:\n"
-        f"        os.write({out_w}, b'x' * 4096)\n"
-        "        time.sleep(0.005)\n"
-        "os._exit(0)\n",
-        out_w,
-    )
+    with pipes_for_setup(1) as ((out_r, out_w),):
+        # Target: fork a detached writer that inherits the pipe write end
+        # and chatters forever, then exit immediately.
+        child = _spawn_child(
+            "import os, time\n"
+            "pid = os.fork()\n"
+            "if pid == 0:\n"
+            "    while True:\n"
+            f"        os.write({out_w}, b'x' * 4096)\n"
+            "        time.sleep(0.005)\n"
+            "os._exit(0)\n",
+            out_w,
+        )
     os.close(out_w)
     # The pre-fix behaviour is an unbounded hang, so the drain runs on
     # a worker thread with a generous join budget; the main thread
@@ -185,8 +181,8 @@ def test_drain_detects_exit_when_deadline_shorter_than_poll_interval():
     runs on every wake; the production poll interval is deliberately
     NOT shrunk here.
     """
-    out_r, out_w = os.pipe()
-    child = _spawn_child(f"import os; os.write({out_w}, b'hello')", out_w)
+    with pipes_for_setup(1) as ((out_r, out_w),):
+        child = _spawn_child(f"import os; os.write({out_w}, b'hello')", out_w)
     # Parent deliberately KEEPS out_w open — the backgrounded-
     # grandchild shape that holds the pipe past the target's exit.
     try:
@@ -243,15 +239,14 @@ def test_drain_respects_deadline(monkeypatch):
     """A live-but-silent child must not pin the drain past the
     caller's deadline — the caller kills and raises TimeoutExpired."""
     monkeypatch.setattr(mod, "_DRAIN_IDLE_POLL_S", 0.05)
-    out_r, out_w = os.pipe()
-
-    # The child must HOLD the write end open while it sleeps (the old
-    # fork child inherited it implicitly) — otherwise the drain sees
-    # EOF at once and the deadline path is never exercised. Its sleep
-    # sits far past the assert bound: a drain that ignores the
-    # deadline pins until pipe EOF at child exit (120s), never inside
-    # the 20s window a loaded runner could legitimately reach.
-    child = _spawn_child("import time; time.sleep(120.0)", out_w)
+    with pipes_for_setup(1) as ((out_r, out_w),):
+        # The child must HOLD the write end open while it sleeps (the old
+        # fork child inherited it implicitly) — otherwise the drain sees
+        # EOF at once and the deadline path is never exercised. Its sleep
+        # sits far past the assert bound: a drain that ignores the
+        # deadline pins until pipe EOF at child exit (120s), never inside
+        # the 20s window a loaded runner could legitimately reach.
+        child = _spawn_child("import time; time.sleep(120.0)", out_w)
     os.close(out_w)
     try:
         deadline = time.monotonic() + 0.3
@@ -273,15 +268,14 @@ def test_drain_caps_per_fd_accumulation(monkeypatch):
     """A runaway writer must not balloon the parent: bytes past the
     per-fd cap are read (child stays unblocked) but discarded."""
     monkeypatch.setattr(mod, "_DRAIN_MAX_BYTES_PER_FD", 1024)
-    out_r, out_w = os.pipe()
-
-    child = _spawn_child(
-        "import os\n"
-        "payload = b'x' * 256\n"
-        "for _ in range(32):  # 8 KiB total, cap is 1 KiB\n"
-        f"    os.write({out_w}, payload)\n",
-        out_w,
-    )
+    with pipes_for_setup(1) as ((out_r, out_w),):
+        child = _spawn_child(
+            "import os\n"
+            "payload = b'x' * 256\n"
+            "for _ in range(32):  # 8 KiB total, cap is 1 KiB\n"
+            f"    os.write({out_w}, payload)\n",
+            out_w,
+        )
     os.close(out_w)
     try:
         drained = mod._drain_pipes_until_eof((out_r,), child.pid)

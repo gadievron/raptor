@@ -43,6 +43,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.pipes import pipes_for_setup
+
 from packages.joern import netns_forwarder
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "netns_forwarder.py"
@@ -200,11 +202,9 @@ def test_sigterm_at_ready_line_is_honoured(
     ``supervision_tier=group`` gets the documented shutdown, never the
     default disposition. (Pre-fix the line fired before both the
     listener and the handlers.)"""
-    r, w = os.pipe()
-    try:
+    with pipes_for_setup(1) as ((r, w),):
         proc, path = _spawn_supervisor(uds_dir, stub_marker, ready_fd=w)
-    finally:
-        os.close(w)
+    os.close(w)
     try:
         line = b""
         while not line.endswith(b"\n"):
