@@ -12,6 +12,7 @@ absent):
 
 from __future__ import annotations
 
+from contextlib import ExitStack, suppress
 import http.client
 import json
 import os
@@ -136,16 +137,21 @@ def uds_dir():
 
 def _forwarder_to(port: int, uds_dir: str) -> tuple[Forwarder, str]:
     path = os.path.join(uds_dir, "joern.sock")
-    fwd = Forwarder(create_listener(path), ("127.0.0.1", port),
-                    socket_path=path)
-    fwd.start()
+    with ExitStack() as cleanup:
+        listener = create_listener(path)
+        cleanup.callback(Path(path).unlink, missing_ok=True)
+        cleanup.callback(listener.close)
+        fwd = Forwarder(listener, ("127.0.0.1", port), socket_path=path)
+        cleanup.callback(fwd.stop)
+        fwd.start()
+        cleanup.pop_all()
     return fwd, path
 
 
 def _uds_client(path: str, timeout: float = 10.0) -> socket.socket:
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.settimeout(timeout)
     try:
+        s.settimeout(timeout)
         s.connect(path)
     except BaseException:
         s.close()
@@ -153,49 +159,73 @@ def _uds_client(path: str, timeout: float = 10.0) -> socket.socket:
     return s
 
 
+def _close_pair_end(sock):
+    with suppress(OSError):
+        sock.close()
+
+
+def _join_started(threads):
+    errors = []
+    for thread in threads:
+        if thread.ident is not None:
+            try:
+                thread.join(timeout=5)
+            except BaseException as exc:
+                errors.append(exc)
+    alive = [thread.name for thread in threads if thread.is_alive()]
+    if alive:
+        raise RuntimeError(f"client test threads did not stop: {alive}")
+    if errors:
+        raise errors[0]
+
+
 class TestForwarderSplice:
     def test_roundtrip_with_half_close(self, uds_dir):
         """Client half-close must reach the upstream as EOF (the echo
         server only responds after EOF), and the response must still
         flow back — the exact shape of an HTTP request over the UDS."""
-        upstream = _EchoServer()
-        fwd, path = _forwarder_to(upstream.port, uds_dir)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _EchoServer()
+            cleanup.callback(upstream.close)
+            fwd, path = _forwarder_to(upstream.port, uds_dir)
+            cleanup.callback(fwd.stop)
             c = _uds_client(path)
+            cleanup.callback(c.close)
             c.sendall(b"hello-through-the-namespace")
             c.shutdown(socket.SHUT_WR)
             got = b""
             while data := c.recv(65536):
                 got += data
             assert got == b"hello-through-the-namespace"
-            c.close()
-        finally:
-            fwd.stop()
-            upstream.close()
 
     def test_concurrent_connections(self, uds_dir) -> None:
-        upstream = _EchoServer()
-        fwd, path = _forwarder_to(upstream.port, uds_dir)
-        results: dict[int, bytes] = {}
-        errors: list[Exception] = []
+        with ExitStack() as cleanup:
+            threads = []
+            cleanup.callback(_join_started, threads)
+            upstream = _EchoServer()
+            cleanup.callback(upstream.close)
+            fwd, path = _forwarder_to(upstream.port, uds_dir)
+            cleanup.callback(fwd.stop)
+            results: dict[int, bytes] = {}
+            errors: list[Exception] = []
 
-        def one(i: int) -> None:
-            try:
-                c = _uds_client(path)
-                payload = f"conn-{i}-".encode() * 100
-                c.sendall(payload)
-                c.shutdown(socket.SHUT_WR)
-                got = b""
-                while data := c.recv(65536):
-                    got += data
-                results[i] = got
-                c.close()
-            except Exception as e:  # noqa: BLE001 — collected for assert
-                errors.append(e)
+            def one(i: int) -> None:
+                try:
+                    with ExitStack() as client_cleanup:
+                        c = _uds_client(path)
+                        client_cleanup.callback(c.close)
+                        payload = f"conn-{i}-".encode() * 100
+                        c.sendall(payload)
+                        c.shutdown(socket.SHUT_WR)
+                        got = b""
+                        while data := c.recv(65536):
+                            got += data
+                        results[i] = got
+                except Exception as e:  # noqa: BLE001 — collected for assert
+                    errors.append(e)
 
-        try:
-            threads = [threading.Thread(target=one, args=(i,))
-                       for i in range(8)]
+            threads.extend([threading.Thread(target=one, args=(i,))
+                            for i in range(8)])
             for t in threads:
                 t.start()
             for t in threads:
@@ -204,24 +234,20 @@ class TestForwarderSplice:
             assert set(results) == set(range(8))
             for i, got in results.items():
                 assert got == f"conn-{i}-".encode() * 100
-        finally:
-            fwd.stop()
-            upstream.close()
 
     def test_large_response_splice(self, uds_dir):
         size = 8 * 1024 * 1024
-        upstream = _BlastServer(size)
-        fwd, path = _forwarder_to(upstream.port, uds_dir)
-        try:
+        with ExitStack() as cleanup:
+            upstream = _BlastServer(size)
+            cleanup.callback(upstream.close)
+            fwd, path = _forwarder_to(upstream.port, uds_dir)
+            cleanup.callback(fwd.stop)
             c = _uds_client(path, timeout=30)
+            cleanup.callback(c.close)
             total = 0
             while data := c.recv(1 << 20):
                 total += len(data)
             assert total == size
-            c.close()
-        finally:
-            fwd.stop()
-            upstream.close()
 
     def test_upstream_down_drops_client(self, uds_dir):
         """Boot window: the socket exists before joern accepts — a
@@ -229,13 +255,12 @@ class TestForwarderSplice:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.bind(("127.0.0.1", 0))
             dead_port = s.getsockname()[1]
-        fwd, path = _forwarder_to(dead_port, uds_dir)
-        try:
+        with ExitStack() as cleanup:
+            fwd, path = _forwarder_to(dead_port, uds_dir)
+            cleanup.callback(fwd.stop)
             c = _uds_client(path)
+            cleanup.callback(c.close)
             assert c.recv(1) == b""  # EOF, promptly
-            c.close()
-        finally:
-            fwd.stop()
 
 
 class TestListenerPermissions:
@@ -267,36 +292,37 @@ class TestListenerPermissions:
 
 class TestForwarderStop:
     def test_stop_unlinks_socket_and_refuses_new_connections(self, uds_dir):
-        upstream = _EchoServer()
-        fwd, path = _forwarder_to(upstream.port, uds_dir)
-        assert os.path.exists(path)
-        fwd.stop()
-        upstream.close()
-        assert not os.path.exists(path)
-        with pytest.raises(OSError):
-            _uds_client(path, timeout=2)
+        with ExitStack() as cleanup:
+            upstream = _EchoServer()
+            cleanup.callback(upstream.close)
+            fwd, path = _forwarder_to(upstream.port, uds_dir)
+            cleanup.callback(fwd.stop)
+            assert os.path.exists(path)
+            fwd.stop()
+            upstream.close()
+            assert not os.path.exists(path)
+            with pytest.raises(OSError):
+                _uds_client(path, timeout=2)
 
     def test_track_after_stop_refuses_and_closes(self, uds_dir):
         # A connection accepted just before stop() can reach _track
         # just after stop()'s sweep of the active set; it must be
         # refused and closed, not registered where no sweep will ever
         # reach it (the peer would hang to its own timeout).
-        upstream = _EchoServer()
-        fwd, _path = _forwarder_to(upstream.port, uds_dir)
-        fwd.stop()
-        upstream.close()
-        a, b = socket.socketpair()
-        try:
+        with ExitStack() as cleanup:
+            upstream = _EchoServer()
+            cleanup.callback(upstream.close)
+            fwd, _path = _forwarder_to(upstream.port, uds_dir)
+            cleanup.callback(fwd.stop)
+            fwd.stop()
+            upstream.close()
+            a, b = socket.socketpair()
+            cleanup.callback(_close_pair_end, b)
+            cleanup.callback(_close_pair_end, a)
             with pytest.raises(OSError):
                 fwd._track(a)
             b.settimeout(2)
             assert b.recv(1) == b""  # refused socket was closed: EOF
-        finally:
-            for s in (a, b):
-                try:
-                    s.close()
-                except OSError:
-                    pass
 
     def test_handle_after_stop_returns_cleanly(self, uds_dir):
         # The accept loop can hand _handle a connection accepted just
@@ -305,36 +331,37 @@ class TestForwarderStop:
         # (observed as PytestUnhandledThreadExceptionWarning under
         # shuffled full runs). Called synchronously so a regression is
         # a direct test failure instead of a thread-exception warning.
-        upstream = _EchoServer()
-        fwd, _path = _forwarder_to(upstream.port, uds_dir)
-        fwd.stop()
-        upstream.close()
-        a, b = socket.socketpair()
-        try:
+        with ExitStack() as cleanup:
+            upstream = _EchoServer()
+            cleanup.callback(upstream.close)
+            fwd, _path = _forwarder_to(upstream.port, uds_dir)
+            cleanup.callback(fwd.stop)
+            fwd.stop()
+            upstream.close()
+            a, b = socket.socketpair()
+            cleanup.callback(_close_pair_end, b)
+            cleanup.callback(_close_pair_end, a)
             fwd._handle(a)  # must not raise
             b.settimeout(2)
             assert b.recv(1) == b""  # refused socket was closed: EOF
-        finally:
-            for s in (a, b):
-                try:
-                    s.close()
-                except OSError:
-                    pass
 
     def test_stop_closes_inflight_connections(self, uds_dir):
-        upstream = _EchoServer()
-        fwd, path = _forwarder_to(upstream.port, uds_dir)
-        c = _uds_client(path)
-        c.sendall(b"partial")  # no half-close: connection stays open
-        fwd.stop()
-        upstream.close()
-        # The forwarder closed its side; the client sees EOF (or a
-        # reset) instead of a hang.
-        try:
-            assert c.recv(65536) == b""
-        except OSError:
-            pass
-        c.close()
+        with ExitStack() as cleanup:
+            upstream = _EchoServer()
+            cleanup.callback(upstream.close)
+            fwd, path = _forwarder_to(upstream.port, uds_dir)
+            cleanup.callback(fwd.stop)
+            c = _uds_client(path)
+            cleanup.callback(c.close)
+            c.sendall(b"partial")  # no half-close: connection stays open
+            fwd.stop()
+            upstream.close()
+            # The forwarder closed its side; the client sees EOF (or a
+            # reset) instead of a hang.
+            try:
+                assert c.recv(65536) == b""
+            except OSError:
+                pass
 
 
 # ── full-script isolation mechanics (need user namespaces) ─────────
