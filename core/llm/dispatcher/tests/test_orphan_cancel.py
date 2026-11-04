@@ -308,21 +308,26 @@ def _make_dispatcher(
         audit_path=tmp_path / "audit.jsonl",
         token_ttl_s=3600, token_budget=100,
     )
-    original = d._rules["anthropic"]
-    d._rules["anthropic"] = ProviderRule(
-        name=original.name,
-        upstream_base_url=upstream.base_url,
-        inject_headers=original.inject_headers,
-        strip_request_headers=original.strip_request_headers,
-    )
+    try:
+        original = d._rules["anthropic"]
+        d._rules["anthropic"] = ProviderRule(
+            name=original.name,
+            upstream_base_url=upstream.base_url,
+            inject_headers=original.inject_headers,
+            strip_request_headers=original.strip_request_headers,
+        )
+    except BaseException:
+        d.shutdown()
+        raise
     return d
 
 
 def _worker_token(d: LLMDispatcher) -> str:
     _, fd = d.allocate_worker(label="test-worker")
-    token = os.read(fd, 64).decode().strip()
-    os.close(fd)
-    return token
+    try:
+        return os.read(fd, 64).decode().strip()
+    finally:
+        os.close(fd)
 
 
 def _raw_worker_request(d: LLMDispatcher, token: str) -> socket.socket:

@@ -304,13 +304,17 @@ def _make_dispatcher(fake_creds, tmp_path, upstream) -> LLMDispatcher:
         audit_path=tmp_path / "audit.jsonl",
         token_ttl_s=3600, token_budget=100,
     )
-    original = d._rules["anthropic"]
-    d._rules["anthropic"] = ProviderRule(
-        name=original.name,
-        upstream_base_url=upstream.base_url,
-        inject_headers=original.inject_headers,
-        strip_request_headers=original.strip_request_headers,
-    )
+    try:
+        original = d._rules["anthropic"]
+        d._rules["anthropic"] = ProviderRule(
+            name=original.name,
+            upstream_base_url=upstream.base_url,
+            inject_headers=original.inject_headers,
+            strip_request_headers=original.strip_request_headers,
+        )
+    except BaseException:
+        d.shutdown()
+        raise
     return d
 
 
