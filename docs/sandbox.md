@@ -127,6 +127,13 @@ Missing layers are reported. Untrusted runs proceed with fewer protections
 only when the chosen containment floor or explicit consent permits that
 posture; otherwise they fail closed.
 
+**Inherited descriptors:** Linux targets and audit tracers close all ambient
+descriptors before exec, retaining only standard streams and explicitly
+selected capabilities. The sweep covers existing descriptors above lowered
+file limits and does not require the target to read `/proc`. If the kernel
+range-close operation is unavailable, it enumerates actual open descriptors;
+if neither method is available, startup refuses rather than leaking them.
+
 **Landlock is fail-closed.** If installing the Landlock ruleset fails
 in the child (kernel drift, ABI mismatch), the run never continues
 unsandboxed. On the mount-ns spawn lane the failure reports through
