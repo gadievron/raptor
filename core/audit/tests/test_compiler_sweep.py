@@ -3695,3 +3695,71 @@ def test_shared_clang_checker_unknown_wording(
     assert result.raw_output == message
     if expected == 'inconclusive' and returncode == 0:
         assert result.details['unclassified_checker_diagnostics'][0]['message'] == message
+
+
+@pytest.mark.parametrize('output', [
+    '', 'not JSON', '[', '{}', '[null]', '[{}]',
+    '[{"message": "warning"}, null]',
+])
+def test_invalid_gcc_json_is_not_silence(output):
+    from core.detectors.compiler import CompilerDiagnosticError
+
+    with pytest.raises(CompilerDiagnosticError):
+        compiler_sweep._parse_gcc_json(output)
+
+
+@pytest.mark.parametrize('output', [
+    'null', '{}', '{"runs": []}', '{"runs": [null]}',
+    '{"runs": [{}]}', '{"runs": [{"results": [null]}]}',
+    '{"runs": [{"results": [{"message": {"text": "warning"}}, null]}]}',
+])
+def test_invalid_gcc_sarif_is_not_silence(tmp_path, output):
+    from core.detectors.compiler import CompilerDiagnosticError
+
+    path = tmp_path / 'a.c.sarif'
+    path.write_text(output)
+    with pytest.raises(CompilerDiagnosticError):
+        compiler_sweep._parse_gcc_sarif(path)
+
+
+def test_complete_empty_gcc_output_is_silence(tmp_path):
+    assert compiler_sweep._parse_gcc_json('[]\n') == []
+    path = tmp_path / 'a.c.sarif'
+    path.write_text('{"runs": [{"results": []}]}')
+    assert compiler_sweep._parse_gcc_sarif(path) == []
+
+
+def test_corrupt_gcc_output_errors_without_poisoning_audit_cache(tmp_path, monkeypatch):
+    target = tmp_path / 'repo'
+    target.mkdir()
+    source = target / 'a.c'
+    source.write_text('void f(void) {}\n')
+    monkeypatch.setattr(compiler_sweep, '_gcc_analyzer', lambda: ('/owned/gcc', 'json'))
+    monkeypatch.setattr(compiler_sweep, '_clang_path', lambda: None)
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        if '-E' in command:
+            return subprocess.CompletedProcess(command, 0, f'# 1 "{source}"\n{source.read_text()}', '')
+        return subprocess.CompletedProcess(command, 0, '', '[' if len(calls) == 1 else '[]')
+
+    monkeypatch.setattr('core.sandbox.context.run', run)
+    def sweep():
+        return run_compiler_analyzer_sweep(
+            target_path=target, file_path='a.c', function_name='f',
+            cwe='CWE-416', hypothesis='memory misuse', line_start=1, line_end=1,
+            out_dir=tmp_path,
+        )
+    first = sweep()
+    assert first.outcome == 'error'
+    assert 'diagnostics unavailable' in first.errors[0]
+    assert sweep().outcome == 'refuted'
+    assert len([c for c in calls if '-E' not in c]) == 2
+
+
+def test_missing_gcc_sarif_is_not_silence(tmp_path):
+    from core.detectors.compiler import CompilerDiagnosticError
+
+    with pytest.raises(CompilerDiagnosticError):
+        compiler_sweep._parse_gcc_sarif(tmp_path / 'absent.sarif')

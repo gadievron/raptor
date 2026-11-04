@@ -54,7 +54,7 @@ from typing import Any
 from core.detectors.compiler_paths import PathBudget, json_paths, normalize_paths, attach_paths
 
 from core.detectors.compiler import (
-    CompilerInvocationError, CompilerRequest, run_compiler_analysis,
+    CompilerDiagnosticError, CompilerInvocationError, CompilerRequest, run_compiler_analysis,
 )
 from core.json import load_json
 from core.run.scratch import scratch_dir
@@ -1704,16 +1704,16 @@ def _diag_implicates(
 
 def _parse_gcc_json(stderr: str) -> list[dict[str, Any]]:
     try:
-        data = json.loads(stderr or "[]")
-    except json.JSONDecodeError:
-        return []
+        data = json.loads(stderr)
+    except json.JSONDecodeError as exc:
+        raise CompilerDiagnosticError("invalid GCC JSON diagnostics") from exc
     if not isinstance(data, list):
-        return []
+        raise CompilerDiagnosticError("GCC JSON diagnostics must be an array")
     diags = []
     path_budget = PathBudget()
     for d in data:
-        if not isinstance(d, dict):
-            continue
+        if not isinstance(d, dict) or not isinstance(d.get("message"), str):
+            raise CompilerDiagnosticError("invalid GCC diagnostic record")
         locs = d.get("locations") or [{}]
         caret = (locs[0] or {}).get("caret", {}) if locs else {}
         diags.append({
@@ -1733,12 +1733,16 @@ def _parse_gcc_json(stderr: str) -> list[dict[str, Any]]:
 
 def _parse_gcc_sarif(sarif_path: Path) -> list[dict[str, Any]]:
     data = load_json(sarif_path, max_bytes=_MAX_SARIF_BYTES)
-    if not isinstance(data, dict):
-        return []
+    if not isinstance(data, dict) or not isinstance(data.get("runs"), list) or not data["runs"]:
+        raise CompilerDiagnosticError("GCC SARIF diagnostics require a run array")
     diags = []
     path_budget = PathBudget()
-    for run in data.get("runs", []):
-        for result in run.get("results", []):
+    for run in data["runs"]:
+        if not isinstance(run, dict) or not isinstance(run.get("results"), list):
+            raise CompilerDiagnosticError("GCC SARIF run requires a result array")
+        for result in run["results"]:
+            if not isinstance(result, dict) or not isinstance(result.get("message"), dict):
+                raise CompilerDiagnosticError("invalid GCC SARIF diagnostic record")
             locs = result.get("locations") or [{}]
             phys = (locs[0] or {}).get("physicalLocation", {}) if locs else {}
             region = phys.get("region", {})
@@ -2027,6 +2031,12 @@ def run_compiler_analyzer_sweep(
         return _error(
             file_path, function_name,
             f"analyzer killed by signal {exc.signal}",
+            rule_id=f"compiler:{norm_cwe.lower()}",
+        )
+    except CompilerDiagnosticError as exc:
+        return _error(
+            file_path, function_name,
+            f"analyzer diagnostics unavailable: {exc}",
             rule_id=f"compiler:{norm_cwe.lower()}",
         )
     except (subprocess.SubprocessError, OSError, ValueError,

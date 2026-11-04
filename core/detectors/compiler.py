@@ -19,6 +19,10 @@ from core.run.scratch import scratch_dir
 from .pipeline import Detector, DetectorResult, Stage, StageResult, run_detector
 
 
+class CompilerDiagnosticError(ValueError):
+    """Compiler output is unavailable or cannot establish a diagnostic census."""
+
+
 class CompilerInvocationError(Exception):
     """Distinguish tool invocation failures from parser/analysis failures."""
 

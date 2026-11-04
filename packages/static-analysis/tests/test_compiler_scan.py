@@ -1525,3 +1525,18 @@ def test_conflicting_merged_cwes_do_not_choose_one_by_order(tmp_path, monkeypatc
     result = _cs.scan_target(tmp_path)
     assert len(result.findings) == 1 and result.findings[0]["cwe"] is None
     assert result.findings[0]["compiler_reported_cwes"] == ["CWE-126", "CWE-787"]
+
+
+def test_corrupt_gcc_output_is_a_scan_limitation(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    (tmp_path / 'a.c').write_text('void f(void) {}\n')
+    monkeypatch.setattr(_cs, '_gcc_analyzer', lambda: ('/owned/gcc', 'json'))
+    monkeypatch.setattr(_cs, '_clang_path', lambda: None)
+    result = _cs.analyze_tu(
+        tmp_path, 'a.c',
+        sandbox_run=lambda *a, **kw: SimpleNamespace(returncode=0, stderr='['),
+    )
+    assert not result.ok
+    assert 'diagnostics unavailable' in result.reason
+    assert not result.diagnostics
